@@ -21,8 +21,8 @@ import { describeError, log } from '../utils/log.js';
 import { getTikTokAppConfig } from './appSettings.js';
 import { consumeOAuthState as consumeState, createOAuthState as createState, OAUTH_STATE_TTL_MS as STATE_TTL_MS } from './oauthState.js';
 import {
-    exchangeCode, getUserInfo, isTikTokReauthError, refreshTokens, revokeToken,
-    TikTokApiError, type TikTokTokenSet,
+    exchangeCode, getProfileInfo, getUserInfo, isTikTokReauthError, refreshTokens, revokeToken, TIKTOK_PROFILE_SCOPE,
+    TikTokApiError, type TikTokProfileFields, type TikTokTokenSet,
 } from './tiktok.js';
 
 /** Refresh an access token this close to expiry rather than risk it dying mid-upload. */
@@ -115,6 +115,39 @@ export function summariseConnection(row: PlatformConnectionRow | null): Connecti
 
 // ─── Connecting ─────────────────────────────────────────────────────────────────────────
 
+// ─── The profile fields (user.info.profile) ─────────────────────────────────────────────
+
+/**
+ * What a connection keeps of `user.info.profile`: the fields TikTok returned, and when. Stored in `platform_connections.profile` (v44),
+ * read by the onboarding draft (`ttMap.ts`), deleted with the row on a disconnect or an `authorization.removed` webhook. The display name
+ * and avatar are columns of their own (`user.info.basic`); the counts need `user.info.stats`, which is not requested.
+ */
+export interface StoredTikTokProfile extends TikTokProfileFields {
+    /** ISO time the fields were read. A re-draft months later can see how old the bio it is shown is. */
+    fetchedAt: string;
+}
+
+/** Whether a token set carries the profile scope: the only thing that makes asking for the profile fields safe. */
+export const hasProfileScope = (scopes: readonly string[]): boolean => scopes.includes(TIKTOK_PROFILE_SCOPE);
+
+/**
+ * A stored profile, read defensively: it is JSON that code wrote, but a column added by hand or by a later version must not be trusted to be
+ * the shape this one writes. Null when there is nothing usable (no column yet, nothing stored, nothing in it).
+ */
+export function readStoredProfile(value: unknown): StoredTikTokProfile | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const v = value as Record<string, unknown>;
+    const text = (x: unknown): string | null => (typeof x === 'string' && x.trim() ? x : null);
+    const profile: StoredTikTokProfile = {
+        username: text(v.username),
+        bio: text(v.bio),
+        profileLink: text(v.profileLink),
+        verified: typeof v.verified === 'boolean' ? v.verified : null,
+        fetchedAt: text(v.fetchedAt) ?? '',
+    };
+    return profile.username || profile.bio || profile.profileLink ? profile : null;
+}
+
 /** Raised when the TikTok account is already attached to a different tenant. */
 export class TikTokAccountInUseError extends Error {
     constructor() {
@@ -153,6 +186,17 @@ export async function completeConnection(input: {
         log('warn', 'tiktok.user_info_failed', describeError(err));
     }
 
+    // The profile fields, only when TikTok granted `user.info.profile` (a token set that lacks it is every connection made with the setting
+    // off). A separate request, so its failure costs these fields and nothing else. Never asked for otherwise: no request changes.
+    let profile: StoredTikTokProfile | null = null;
+    if (hasProfileScope(tokens.scopes)) {
+        try {
+            profile = readStoredProfile({ ...(await getProfileInfo(tokens.accessToken)), fetchedAt: new Date().toISOString() });
+        } catch (err) {
+            log('warn', 'tiktok.profile_info_failed', describeError(err));
+        }
+    }
+
     try {
         const row = await queryOne<PlatformConnectionRow>(
             `INSERT INTO platform_connections (
@@ -182,12 +226,38 @@ export async function completeConnection(input: {
             ]
         );
         if (!row) throw new Error('Saving the TikTok connection returned no row.');
-        return row;
+        return await saveProfile(row, profile);
     } catch (err: any) {
         // uq_platform_connections_account: the same open_id on another tenant. Webhooks name the
         // account by open_id, so one account cannot belong to two tenants.
         if (err?.code === '23505') throw new TikTokAccountInUseError();
         throw err;
+    }
+}
+
+/**
+ * Keep (or clear) the profile on a connection that was just written. Apart from the INSERT, so that a deployment that has not applied v44
+ * still connects (nothing here runs for it: its rows carry no `profile`, and with the scope off there is nothing to write), and so that the
+ * statement every connection has always made is the statement it still makes.
+ *
+ *   - fields read: written.
+ *   - none read, and the row holds a profile from an earlier connection (a reconnect with the scope off, or as another TikTok account:
+ *     `ON CONFLICT` keeps the old column): cleared. Another person's bio must never sit on this connection.
+ *   - none read, none held: no statement at all.
+ *
+ * A failure to save a profile is logged and the connection is returned as it was: the profile is decoration, the token exchange is spent.
+ */
+async function saveProfile(row: PlatformConnectionRow, profile: StoredTikTokProfile | null): Promise<PlatformConnectionRow> {
+    if (!profile && (row.profile === undefined || row.profile === null)) return row;
+    try {
+        const saved = await queryOne<PlatformConnectionRow>(
+            'UPDATE platform_connections SET profile = $2::jsonb WHERE id = $1 RETURNING *',
+            [row.id, profile ? JSON.stringify(profile) : null]
+        );
+        return saved ?? row;
+    } catch (err) {
+        log('warn', 'tiktok.profile_save_failed', describeError(err));
+        return row;
     }
 }
 

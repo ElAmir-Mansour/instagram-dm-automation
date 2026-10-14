@@ -163,7 +163,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.35">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.36">
 
     <style>
         * { box-sizing: border-box; }
@@ -1017,7 +1017,8 @@
                     <li>
                         <strong>إن ربطتَ حساباً على تيك توك</strong> (لأصحاب الحسابات فقط): معرّف
                         الحساب <span class="code" lang="en" dir="ltr">open_id</span> والاسم المعروض
-                        ورابط الصورة الرمزية، ورمزا الوصول والتحديث مشفّرَين، والفيديوهات والصور التي
+                        ورابط الصورة الرمزية، ونبذة الحساب واسم المستخدم والرابط وحالة التوثيق إن منحتَ
+                        الوصول إلى الملف الشخصي، ورمزا الوصول والتحديث مشفّرَين، والفيديوهات والصور التي
                         جدولتها مع أوصافها وإعدادات نشرها، وحالة نشرها. القسم 6 يشرح كيف تُزيلها.
                     </li>
                     <li>
@@ -1133,7 +1134,8 @@
                         لوحة التحكم وافصل تيك توك. يطلب التطبيق من تيك توك إلغاء رمزه، فيُسحَب الوصول
                         من جهة تيك توك أيضاً، ثم يحذف الاتصال المخزَّن سواء أجاب تيك توك أم لا: معرّف
                         <span class="code" lang="en" dir="ltr">open_id</span>، والاسم المعروض، ورابط
-                        الصورة الرمزية، ورمزي الوصول والتحديث المشفّرين.
+                        الصورة الرمزية، وحقول الملف الشخصي إن مُنحت (النبذة واسم المستخدم والرابط وحالة
+                        التوثيق)، ورمزي الوصول والتحديث المشفّرين.
                     </li>
                     <li>
                         <strong>أو أزِل التطبيق من تيك توك نفسه.</strong> في تطبيق تيك توك، أزِل هذا
@@ -1273,7 +1275,8 @@
                     <li>
                         <strong>If you connected a TikTok account</strong> (account owners only):
                         the account's <span class="code">open_id</span>, display name and avatar
-                        URL, the encrypted access and refresh tokens, the videos and photos you
+                        URL, its bio, username, profile link and verified status if you granted
+                        profile access, the encrypted access and refresh tokens, the videos and photos you
                         scheduled with their captions and post settings, and their publish status.
                         Section 6 explains how to remove it.
                     </li>
@@ -1397,8 +1400,9 @@
                         <strong>Settings</strong> in the dashboard and disconnect TikTok. The app
                         asks TikTok to revoke its token, so access is withdrawn at TikTok's end too,
                         and then deletes the stored connection whether or not TikTok answers: the
-                        <span class="code">open_id</span>, display name, avatar URL, and the
-                        encrypted access and refresh tokens.
+                        <span class="code">open_id</span>, display name, avatar URL, the profile
+                        fields if you granted profile access (bio, username, link, verified status),
+                        and the encrypted access and refresh tokens.
                     </li>
                     <li>
                         <strong>Or remove the app in TikTok itself.</strong> In the TikTok app,

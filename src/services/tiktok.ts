@@ -41,6 +41,14 @@ export const TIKTOK_API_BASE = 'https://open.tiktokapis.com';
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.upload'] as const;
 
 /**
+ * The scope that returns a creator's bio, profile link, username and verified flag (the draft engine reads them, docs/onboarding/03).
+ * Requested only when the operator has said the TikTok portal approved it (`tiktok.profile_scope_enabled`, default OFF), because a scope
+ * the app does not have fails the whole authorisation. Its fields are listed in `PROFILE_FIELDS`.
+ * @see https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info
+ */
+export const TIKTOK_PROFILE_SCOPE = 'user.info.profile';
+
+/**
  * The scopes to request.
  *
  *   - Direct Post off:                 user.info.basic + video.upload (inbox drafts only)
@@ -49,10 +57,16 @@ export const TIKTOK_SCOPES = ['user.info.basic', 'video.upload'] as const;
  *     that and a draft in their inbox — which needs `video.upload`.
  *   - Direct Post on, app audited:     user.info.basic + video.publish. Posts go out public, and
  *     a scope the app no longer uses has no business being requested.
+ *
+ * `profileScope` (off unless the operator switched it on) adds `user.info.profile` right after `user.info.basic`. Off, the list is exactly
+ * what it was before the scope existed: the authorisation request is byte for byte the one the portal already accepts.
  */
-export function tiktokScopes(directPostEnabled: boolean, audited = false): string[] {
-    if (!directPostEnabled) return [...TIKTOK_SCOPES];
-    return audited ? ['user.info.basic', 'video.publish'] : [...TIKTOK_SCOPES, 'video.publish'];
+export function tiktokScopes(directPostEnabled: boolean, audited = false, profileScope = false): string[] {
+    const base = !directPostEnabled
+        ? [...TIKTOK_SCOPES]
+        : audited ? ['user.info.basic', 'video.publish'] : [...TIKTOK_SCOPES, 'video.publish'];
+    if (!profileScope) return base;
+    return [base[0]!, TIKTOK_PROFILE_SCOPE, ...base.slice(1)];
 }
 
 /**
@@ -296,6 +310,62 @@ export async function getUserInfo(accessToken: string): Promise<TikTokProfile> {
         };
     } catch (err) {
         throw toTikTokError('TikTok user info', err);
+    }
+}
+
+/**
+ * What `user.info.profile` adds to a creator's profile. Display name and avatar come with `user.info.basic` (`getUserInfo`); the follower,
+ * following, likes and video counts belong to a third scope, `user.info.stats`, which this app does not request, so they are not here.
+ * @see https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info
+ */
+export interface TikTokProfileFields {
+    /** TikTok's `username` (the handle, without the @), when TikTok returns one. */
+    username: string | null;
+    /** `bio_description`: the creator's own words. Untrusted text. */
+    bio: string | null;
+    /** `profile_deep_link`: the creator's profile address. */
+    profileLink: string | null;
+    /** `is_verified`: TikTok verified the account. `null` when TikTok did not say. */
+    verified: boolean | null;
+}
+
+/** The fields asked of `GET /v2/user/info/` once `user.info.profile` has been granted: the ones that scope owns, and nothing else. */
+export const PROFILE_FIELDS = 'open_id,username,bio_description,profile_deep_link,is_verified';
+
+/** A string field that is there, trimmed, or null. */
+function textField(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** TikTok's `user` object as profile fields. Pure. A field TikTok did not return is null: nothing is guessed. */
+export function mapProfileFields(user: unknown): TikTokProfileFields {
+    const u = (user && typeof user === 'object' ? user : {}) as Record<string, unknown>;
+    return {
+        username: textField(u.username),
+        bio: textField(u.bio_description),
+        profileLink: textField(u.profile_deep_link),
+        verified: typeof u.is_verified === 'boolean' ? u.is_verified : null,
+    };
+}
+
+/**
+ * The creator's profile fields. A separate request from `getUserInfo` on purpose: that one is exactly what it has always been (so a
+ * connection made with the profile scope off is byte for byte the connection it was), and a refusal here (the portal does not have the
+ * scope after all) costs the profile fields only, never the display name or the connection. Throws; the caller decides it is decoration.
+ */
+export async function getProfileInfo(accessToken: string): Promise<TikTokProfileFields> {
+    try {
+        const res = await withRetry(
+            () => tiktokHttp.get(`${TIKTOK_API_BASE}/v2/user/info/`, {
+                params: { fields: PROFILE_FIELDS },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+            { label: 'tiktok.user_profile' }
+        );
+        const data = unwrap<{ user?: any }>('TikTok user profile', res.data, res.status);
+        return mapProfileFields(data?.user);
+    } catch (err) {
+        throw toTikTokError('TikTok user profile', err);
     }
 }
 

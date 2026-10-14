@@ -4,6 +4,7 @@
  *
  *   metaPublicRouter — mounted ABOVE `requireAuth` in api.ts
  *     GET  /callback        the Login redirect target; trusts only the single-use `state`, and the cookie that must equal it
+ *     POST /deauthorize     Meta's Deauthorize Callback: a person removed the app; trusts only the HMAC of its `signed_request`
  *
  *   metaRouter — mounted BELOW `resolveTenant`, so every route acts as the session's tenant
  *     GET  /connection      the Settings card: is it enabled, is the app set up, and the tenant's connection (never a token)
@@ -23,7 +24,7 @@
  * carries (`MetaLoginError.httpStatus`), where `code` is the reason in upper case. Neither ever contains a token: errors from
  * Graph are wrapped and scrubbed in the service, and the responses here are built from fixed strings and ids.
  */
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
@@ -41,6 +42,8 @@ import {
     readIntent, readMetaApp, readPickPayload, replacesConnection, WEBHOOK_FIELDS,
 } from '../services/metaLogin.js';
 import { readCommentCheck } from '../services/metaCommentCheck.js';
+import { DEAUTHORIZE_PATH, disconnectMetaUser, parseSignedRequest, SIGNED_REQUEST_MAX_CHARS } from '../services/metaDeauth.js';
+import { appSecrets } from '../utils/signature.js';
 import { describeError, log } from '../utils/log.js';
 
 /** Carries the state through Meta's round trip so it can only complete in the browser that began it. */
@@ -147,6 +150,49 @@ metaPublicRouter.get('/callback', async (req, res) => {
         // either: the user token and the code exist only inside `finishLogin`, whose callers never receive them.
         log(err instanceof MetaLoginError ? 'warn' : 'error', 'meta.oauth_callback_failed', { reason: reasonOf(err), ...describeError(err) });
         backTo(res, returnTo, 'error', { reason: reasonOf(err) });
+    }
+});
+
+/**
+ * Meta's Deauthorize Callback (P33): a person removed the app from their Facebook account, and Meta tells us with a form POST of
+ * `signed_request`. The only credential is that request's HMAC (`parseSignedRequest`), checked with every configured app secret before
+ * anything is read from it. Every tenant that person connected is disconnected; a tenant nobody connected with that id is never touched,
+ * and an id that matches no tenant is a 200 that does nothing (Meta would otherwise retry a request there is nothing to do for).
+ *
+ * The body is form-encoded, which the app-wide JSON parser does not read, so this route parses it itself, small. 400 for a request that is
+ * not a signed request, 403 for one whose signature is not ours, 503 when there is no app secret to check with, 500 when a tenant could not
+ * be cleared (Meta retries; the retry finds only what is left, because a cleared tenant no longer matches). Nothing about the request or the
+ * person is logged: the reason, and how many secrets were tried, which is what tells a wrong secret from no deliveries.
+ */
+metaPublicRouter.post('/deauthorize', express.urlencoded({ extended: false, limit: '16kb', parameterLimit: 20 }), async (req, res) => {
+    try {
+        const secrets = appSecrets();
+        const raw = (req.body as { signed_request?: unknown } | undefined)?.signed_request;
+        const parsed = parseSignedRequest(raw, { secrets });
+        if (!parsed.ok) {
+            log('warn', 'meta.deauthorize_rejected', {
+                // Not `secrets_tried`: the logger redacts any key with "secret" in it, which would print "[redacted]" where the count belongs.
+                reason: parsed.reason, app_keys_tried: parsed.secretsTried, has_signed_request: typeof raw === 'string' && raw.length > 0 && raw.length <= SIGNED_REQUEST_MAX_CHARS,
+            });
+            if (parsed.reason === 'no_secret') {
+                res.status(503).json({ error: 'The Meta app secret is not configured.' });
+                return;
+            }
+            res.status(parsed.reason === 'bad_signature' ? 403 : 400).json({ error: 'Invalid signed request.' });
+            return;
+        }
+
+        const outcome = await disconnectMetaUser(parsed.userId);
+        log('info', 'meta.deauthorize_handled', { matched: outcome.matched, disconnected: outcome.disconnected, failed: outcome.failed });
+        if (outcome.failed > 0) {
+            res.status(500).json({ error: 'Some connections could not be removed.' });
+            return;
+        }
+        res.status(200).json({ received: true });
+    } catch (err) {
+        // A 5xx makes Meta try again, which is right when OUR side failed (the database); the request itself was already verified.
+        log('error', 'meta.deauthorize_error', describeError(err));
+        res.status(500).json({ error: 'Failed to process the deauthorization.' });
     }
 });
 
@@ -379,8 +425,9 @@ metaRouter.get('/app-settings', requirePlatformAdmin, async (_req, res) => {
             mode: settings.configId ? 'configuration' : 'scope',
             app: { idSet: Boolean(app), secretSet: Boolean(app) },
             publicBaseUrl: base,
-            // What to register in Meta's dashboard: Facebook Login → Valid OAuth Redirect URIs.
-            register: base ? { redirectUri: `${base}${CALLBACK_PATH}` } : null,
+            // What to register in Meta's dashboard: Facebook Login → Valid OAuth Redirect URIs, and the Deauthorize Callback URL (the same
+            // settings page), which is how a person's removing the app disconnects their tenants here.
+            register: base ? { redirectUri: `${base}${CALLBACK_PATH}`, deauthorizeUrl: `${base}${DEAUTHORIZE_PATH}` } : null,
             scopes: [...LOGIN_SCOPES],
             coreScopes: [...CORE_SCOPES],
             webhookFields: [...WEBHOOK_FIELDS],

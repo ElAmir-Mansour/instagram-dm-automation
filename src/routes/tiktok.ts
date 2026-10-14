@@ -21,7 +21,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import {
-    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getTikTokAppConfig, getTikTokPostingFlags, maskValue,
+    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getTikTokAppConfig, getTikTokPostingFlags, getTikTokProfileScopeEnabled, maskValue,
     normaliseOrigin, saveVerificationFile, setSetting,
 } from '../services/appSettings.js';
 import {
@@ -281,11 +281,11 @@ tiktokRouter.post('/connect', canAdminister, async (req, res) => {
                 log('warn', 'tiktok.return_to_unsaved', describeError(err));
             }
         }
-        const { directPostEnabled, audited } = await getTikTokPostingFlags();
+        const [{ directPostEnabled, audited }, profileScope] = await Promise.all([getTikTokPostingFlags(), getTikTokProfileScopeEnabled()]);
         res.setHeader('Set-Cookie', stateCookie(state, Math.floor(OAUTH_STATE_TTL_MS / 1000)));
         res.json({
             url: buildAuthorizeUrl({
-                clientKey: app.clientKey, redirectUri, state, scopes: tiktokScopes(directPostEnabled, audited),
+                clientKey: app.clientKey, redirectUri, state, scopes: tiktokScopes(directPostEnabled, audited, profileScope),
             }),
         });
     } catch (err) {
@@ -317,7 +317,7 @@ tiktokRouter.post('/disconnect', canAdminister, async (req, res) => {
 
 tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
     try {
-        const [dbKey, dbSecret, baseUrl, verifyName, verifyContent, app, flags] = await Promise.all([
+        const [dbKey, dbSecret, baseUrl, verifyName, verifyContent, app, flags, profileScope] = await Promise.all([
             getSetting(APP_SETTING_KEYS.tiktokClientKey),
             getSetting(APP_SETTING_KEYS.tiktokClientSecret),
             getSetting(APP_SETTING_KEYS.publicBaseUrl),
@@ -325,6 +325,7 @@ tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
             getSetting(APP_SETTING_KEYS.tiktokVerificationContent),
             getTikTokAppConfig(),
             getTikTokPostingFlags(),
+            getTikTokProfileScopeEnabled(),
         ]);
         const base = await getPublicBaseUrl(requestOrigin(req));
         res.json({
@@ -354,9 +355,10 @@ tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
                 privacyUrl: `${base}/privacy`,
                 websiteUrl: `${base}/`,
             } : null,
-            scopes: tiktokScopes(flags.directPostEnabled, flags.audited),
+            scopes: tiktokScopes(flags.directPostEnabled, flags.audited, profileScope),
             directPostEnabled: flags.directPostEnabled,
             audited: flags.audited,
+            profileScopeEnabled: profileScope,
         });
     } catch (err) {
         log('error', 'api.tiktok_app_settings_read_failed', describeError(err));
@@ -420,6 +422,11 @@ tiktokRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
         if (typeof body.audited === 'boolean') {
             await setSetting(APP_SETTING_KEYS.tiktokAudited, body.audited ? 'true' : null, updatedBy);
             changed.push('audited');
+        }
+        // The portal has approved `user.info.profile`: Connect then asks for it. Off removes it from the request again, byte for byte.
+        if (typeof body.profileScopeEnabled === 'boolean') {
+            await setSetting(APP_SETTING_KEYS.tiktokProfileScopeEnabled, body.profileScopeEnabled ? 'true' : null, updatedBy);
+            changed.push('profile_scope_enabled');
         }
 
         if (changed.length === 0) {

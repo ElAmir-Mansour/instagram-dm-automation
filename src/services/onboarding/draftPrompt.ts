@@ -72,8 +72,8 @@ const TASK_LINE: Readonly<Record<DraftCall, string>> = {
     business: 'Task: list what this creator sells and what their customers ask. The sources and signals follow, then a reminder.',
 };
 
-const VOICE_KINDS: ReadonlySet<SourceKind> = new Set(['ig_bio', 'ig_caption', 'yt_description', 'yt_title', 'typed']);
-const BUSINESS_KINDS: ReadonlySet<SourceKind> = new Set(['site_page', 'link_hub', 'ig_bio', 'yt_description', 'yt_title', 'typed']);
+const VOICE_KINDS: ReadonlySet<SourceKind> = new Set(['ig_bio', 'ig_caption', 'yt_description', 'yt_title', 'tt_bio', 'typed']);
+const BUSINESS_KINDS: ReadonlySet<SourceKind> = new Set(['site_page', 'link_hub', 'ig_bio', 'yt_description', 'yt_title', 'tt_bio', 'typed']);
 
 /** The sources a call reads. The business call sees only the call-to-action lines of each caption, under the caption's own id. */
 export function sourcesForCall(call: DraftCall, sources: readonly DraftSource[]): DraftSource[] {

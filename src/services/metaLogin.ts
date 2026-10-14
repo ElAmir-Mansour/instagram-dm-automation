@@ -475,7 +475,7 @@ export interface CurrentConnection {
     connected: boolean;
 }
 
-async function readCurrent(creatorId: string): Promise<CurrentConnection | null> {
+export async function readCurrent(creatorId: string): Promise<CurrentConnection | null> {
     const row = await queryOne<{ facebook_page_id: string | null; instagram_page_id: string | null; connected: boolean }>(
         `SELECT facebook_page_id, instagram_page_id, (page_access_token IS NOT NULL) AS connected FROM creators WHERE id = $1`,
         [creatorId]
@@ -907,6 +907,45 @@ export async function getMetaConnection(creatorId: string): Promise<MetaConnecti
 }
 
 /**
+ * The removal itself, shared by a person pressing Disconnect (`disconnectMeta`) and Meta telling us a person removed the app
+ * (`metaDeauth.ts`): unsubscribe the Page from the webhook (best effort), then clear the ids, the token and the `meta_*` columns in one
+ * UPDATE. Writes no audit row: each caller says WHO did it.
+ *
+ * `onlyIfMetaUser` is the guard the deauthorize callback needs and a Disconnect does not: the UPDATE then matches only while the tenant's
+ * `meta_user_id` is still that person, so a tenant that was reconnected by somebody else between finding it and clearing it is left exactly
+ * as it is (`cleared: false`). Null (a Disconnect) means "this tenant, whoever connected it".
+ */
+export async function removeMetaConnection(
+    creatorId: string,
+    current: Pick<CurrentConnection, 'facebookPageId' | 'connected'>,
+    onlyIfMetaUser: string | null = null,
+): Promise<{ cleared: boolean; unsubscribed: boolean }> {
+    let unsubscribed = false;
+    if (current.connected && current.facebookPageId) {
+        // A token that cannot be read is a connection that can still be removed: it just cannot be unsubscribed first.
+        let token = '';
+        try {
+            token = (await getTenant(creatorId, ['id', 'page_access_token']))?.page_access_token ?? '';
+        } catch (err) {
+            log('warn', 'meta.disconnect_token_unreadable', { creator_id: creatorId, ...describeError(err) });
+        }
+        if (token) unsubscribed = await unsubscribePage(current.facebookPageId, token);
+    }
+
+    const cleared = await queryCount(
+        `UPDATE creators
+            SET instagram_page_id = NULL, facebook_page_id = NULL, page_access_token = NULL,
+                token_status = 'unknown', token_error = NULL, token_last_checked_at = NULL,
+                token_expires_at = NULL, token_data_access_expires_at = NULL,
+                meta_user_id = NULL, meta_page_name = NULL, meta_connected_at = NULL, meta_webhook_subscribed_at = NULL
+          WHERE id = $1 AND ($2::text IS NULL OR meta_user_id = $2)`,
+        [creatorId, onlyIfMetaUser]
+    );
+    invalidateTenantCache();
+    return { cleared: cleared > 0, unsubscribed };
+}
+
+/**
  * Remove a tenant's Meta connection: unsubscribe the Page from the webhook (best effort), then clear the ids, the token and the
  * `meta_*` columns in one UPDATE. Campaigns, posts and everything else the tenant made are kept. The Facebook user's permissions
  * are NOT revoked (`DELETE /{user}/permissions`): that would cut off every other tenant the same person connected.
@@ -918,28 +957,7 @@ export async function disconnectMeta(input: { creatorId: string; userId: string 
         throw new MetaLoginError('not_connected', 'Meta is not connected for this workspace.');
     }
 
-    let unsubscribed = false;
-    if (row.connected && row.facebookPageId) {
-        // A token that cannot be read is a connection that can still be removed: it just cannot be unsubscribed first.
-        let token = '';
-        try {
-            token = (await getTenant(input.creatorId, ['id', 'page_access_token']))?.page_access_token ?? '';
-        } catch (err) {
-            log('warn', 'meta.disconnect_token_unreadable', { creator_id: input.creatorId, ...describeError(err) });
-        }
-        if (token) unsubscribed = await unsubscribePage(row.facebookPageId, token);
-    }
-
-    await queryCount(
-        `UPDATE creators
-            SET instagram_page_id = NULL, facebook_page_id = NULL, page_access_token = NULL,
-                token_status = 'unknown', token_error = NULL, token_last_checked_at = NULL,
-                token_expires_at = NULL, token_data_access_expires_at = NULL,
-                meta_user_id = NULL, meta_page_name = NULL, meta_connected_at = NULL, meta_webhook_subscribed_at = NULL
-          WHERE id = $1`,
-        [input.creatorId]
-    );
-    invalidateTenantCache();
+    const { unsubscribed } = await removeMetaConnection(input.creatorId, row);
 
     await writeAudit(await actorFromSession({ userId: input.userId }), {
         action: AUDIT_ACTIONS.metaDisconnect,

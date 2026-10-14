@@ -236,6 +236,7 @@ Unauthenticated:
 | `POST` | `/api/invites/peek` | What an invite link is for (tenant, role, expiry); never uses the link up. The token is in the body, never the URL |
 | `POST` | `/api/invites/accept` | Use a link: create the account (or add a signed-in one, or reset a password) and answer a session. Single-use, one atomic claim |
 | `GET` | `/api/meta/callback` | Facebook Login for Business redirect target. Trusts only a single-use `state` that equals the cookie set by `POST /api/meta/connect`; answers with a redirect to the dashboard, never a token |
+| `POST` | `/api/meta/deauthorize` | Meta's **Deauthorize Callback URL** (register it under Facebook Login, Settings): a person removed the app, and Meta posts a form with `signed_request`. Trusts only that request's HMAC-SHA256 (checked with every app secret before anything is read from it); disconnects the tenants whose `creators.meta_user_id` is that person's, exactly, and nobody else's (the owner's pasted-token connection has none). 403 for a bad signature, 200 when nothing matches |
 
 Bearer `CRON_SECRET`:
 

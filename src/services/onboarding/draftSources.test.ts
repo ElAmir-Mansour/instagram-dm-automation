@@ -66,6 +66,7 @@ function deps(over: Partial<SourceDeps> = {}, net = storeNet()): Partial<SourceD
         ownInstagram: async () => { calls.push('own'); return sourceFail('instagram_own', 'not_configured', 'x'); },
         youtube: async (ref) => { calls.push(`youtube:${ref}`); return sourceOk(channel()); },
         connectedYouTube: async () => null,
+        tiktokProfile: async () => null,
         website: (input, signal) => { calls.push(`website:${input}`); return gatherWebsite(input, { signal, resolve: net.resolve, transport: net.transport }); },
         keywordsInUse: async () => ['تجربة'],
         ...over,

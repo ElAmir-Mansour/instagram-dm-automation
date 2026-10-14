@@ -74,6 +74,12 @@ export interface SourcesStatus {
     website: SourceReport;
     youtube: SourceReport;
     typed: SourceReport;
+    /**
+     * The tenant's connected TikTok account (P33): its profile fields, read from the connection, never from TikTok. Present only for a
+     * tenant that HAS a TikTok connection (ok with the fields, or skipped when the connection holds none), so every draft made before
+     * this existed, and every tenant without TikTok, has exactly the four above.
+     */
+    tiktok?: SourceReport;
 }
 
 /** What code found out, which the model is never asked to write. */

@@ -35,6 +35,9 @@
           tiktokScopes(), src/services/tiktok.ts:53-56 (Direct Post on, not
           audited: all three). After the audit it stops asking for
           video.upload; section 3 must then say two scopes.
+          A fourth, user.info.profile, ONLY while the operator setting
+          tiktok.profile_scope_enabled is on (P33; off by default): the page
+          says so in section 3. Switch it on only after the portal approves it.
       Direct Post of videos and photo carousels, or a draft in the inbox,
       decided per post when it is scheduled
           src/routes/api.ts:2240-2254; inits src/services/tiktok.ts:373-412,
@@ -135,7 +138,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.35">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.36">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1061,13 +1064,15 @@
                     إعداداتك. كل ما تُرسله الخدمة يُرسَل باسمك ومن حسابك.
                 </p>
                 <p>
-                    من تيك توك تُطلَب ثلاث صلاحيات، لا غير:
+                    من تيك توك تُطلَب ثلاث صلاحيات:
                     <span class="code" lang="en" dir="ltr">user.info.basic</span> (معرّف
                     <span class="code" lang="en" dir="ltr">open_id</span> واسمك المعروض وصورتك
                     الرمزية)، و<span class="code" lang="en" dir="ltr">video.upload</span> (إرسال
                     الفيديوهات والصور إلى مسودّاتك في تيك توك)،
                     و<span class="code" lang="en" dir="ltr">video.publish</span> (نشرها مباشرةً على
-                    حسابك).
+                    حسابك). وتُطلَب رابعةٌ هي <span class="code" lang="en" dir="ltr">user.info.profile</span>
+                    (نبذتك واسم المستخدم ورابط الملف وحالة التوثيق)، لكن فقط إذا شغّلها المشغّل بعد أن
+                    اعتمدتها تيك توك للتطبيق، ولا يُطلَب غير ذلك.
                 </p>
                 <p>
                     وإعدادات كل منشور مباشر على تيك توك بيدك: تختار قبل جدولته مَن يمكنه مشاهدته، وهل
@@ -1360,11 +1365,14 @@
                     Everything the service sends is sent as you, from your account.
                 </p>
                 <p>
-                    From TikTok, three scopes are requested, and no others:
+                    From TikTok, three scopes are requested:
                     <span class="code">user.info.basic</span> (your <span class="code">open_id</span>,
                     display name and avatar), <span class="code">video.upload</span> (sending videos
                     and photos to your TikTok drafts) and <span class="code">video.publish</span>
-                    (posting them straight to your account).
+                    (posting them straight to your account). Only if the operator has switched it
+                    on, after TikTok approved it for the app, a fourth is requested too:
+                    <span class="code">user.info.profile</span> (your bio, username, profile link and
+                    verified status). No others are.
                 </p>
                 <p>
                     The settings of each direct post to TikTok are yours: before it is scheduled you
