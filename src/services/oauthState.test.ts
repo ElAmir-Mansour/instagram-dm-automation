@@ -7,7 +7,7 @@
  * condition deleted from a statement is a condition the test sees missing.
  */
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { isEncrypted } from '../config/crypto.js';
 import { consumeOAuthState as consumeTikTok, createOAuthState as createTikTok } from './tiktokConnections.js';
 import { consumeOAuthState as consumeYouTube, createOAuthState as createYouTube } from './youtubeConnections.js';
@@ -30,9 +30,14 @@ beforeEach(() => {
     savedKey = process.env.TOKEN_ENCRYPTION_KEY;
     process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
     db = new FakeDb().install();
+    // One clock. `createOAuthState` stamps `expires_at` from `Date.now()`, and `NOW()` in FakeDb is `db.now`, frozen when the
+    // FakeDb was made. Left apart, the wall clock kept running between the two, and under the full run's load it ran 2 ms or more
+    // ahead, so a state moved "1 ms past its expiry" was still live and was spent.
+    mock.method(Date, 'now', () => db.now);
 });
 
 afterEach(() => {
+    mock.restoreAll();
     db.restore();
     if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
     else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
