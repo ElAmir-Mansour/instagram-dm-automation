@@ -460,7 +460,8 @@ describe('GET /conversations — search', () => {
         const { res, statements } = await list({ search: ' sara ', limit: '100' });
         assert.equal(res.statusCode, 200);
         const [rows, count] = statements;
-        assert.match(rows!.sql, /c\.creator_id = \$1 AND \(c\.username ILIKE \$2 OR c\.instagram_user_id ILIKE \$2\)/);
+        // The profile's display name (v40) is searched with the handle and the id: "sara" finds a customer whose name is Sara.
+        assert.match(rows!.sql, /c\.creator_id = \$1 AND \(c\.username ILIKE \$2 OR c\.instagram_user_id ILIKE \$2 OR c\.profile_name ILIKE \$2\)/);
         assert.deepEqual(rows!.params, [TENANT_A, '%sara%', 100, 0]);
         assert.match(count!.sql, /COUNT\(\*\).*c\.username ILIKE \$2/);
         assert.deepEqual(count!.params, [TENANT_A, '%sara%'], 'the total is the total of the MATCHES');

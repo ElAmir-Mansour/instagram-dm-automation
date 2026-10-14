@@ -628,6 +628,20 @@ the same person gets answered twice, which is worse than being answered a few mi
 because a transient failure releases its own claim explicitly (see
 [2.10](#210--failure-release-vs-record)).
 
+**Alongside the claim: the sender's profile (v40).** Once the inbound row is claimed, an *Instagram*
+thread starts `refreshSenderProfile` (`src/services/senderProfile.ts`), **not awaited yet**: it runs
+while the reply is being written and `processDm` awaits it in a `finally`, after the DM's outcome is
+decided. It is `GET /{IGSID}?fields=name,username,profile_pic,follower_count,is_user_follow_business,
+is_business_follow_user,is_verified_user` on `graph.facebook.com` with the Page token
+([the Instagram User Profile API](https://developers.facebook.com/docs/messenger-platform/instagram/features/user-profile)),
+and its answer is written to `conversations` (`username`, `profile_name`, `profile_pic_url`, …) so
+the inbox can say who is writing. **It can never change what happens to the DM**: it resolves
+whatever happened (`dm.profile_failed` at `warn` for a refusal or a database without v40) and
+nothing it does is read by the reply, the claim or the retry rules. It is throttled by one
+`UPDATE … RETURNING` that claims the attempt (`profile_checked_at`): first contact, then once a day,
+or once an hour while no lookup has ever succeeded. The inbox asks for the same thing on opening a
+thread (`POST /api/conversations/:id/refresh-profile`), through the same claim.
+
 ### 2.6 — The bot-paused check
 
 **`src/webhook/messaging.ts:294`** — `if (!conversation.is_bot_active)`. Logs `dm.bot_paused`,
@@ -2516,6 +2530,8 @@ error, and several write **no row at all**.
 | 2 | no creator — **`messaging.ts:257`** | `dm.no_creator` | no |
 | 2 | already handled / live claim — **`messaging.ts:286`** | `dm.duplicate_ignored` | inbound row only |
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
+| 2 | the sender's profile lookup (Instagram only) is refused, throttled, or cannot run on a database without v40 — **`senderProfile.ts`** `refreshSenderProfile` | `dm.profile_failed` (`warn`); a throttled one is silent | no (the reply is unaffected; the attempt is recorded in `conversations.profile_checked_at`) |
+| 2 | a **permanent** Meta refusal of the reply (a blocked recipient, a dead token) — the catch in **`messaging.ts`** (`isPermanentMetaError`) | `dm.pipeline_failed` | inbound row, `handled_at` set; **no outbound row, and nothing in `jobs`** (the job completes `done`): the inbox's "reply failed" chip cannot show it, only the logs can |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |

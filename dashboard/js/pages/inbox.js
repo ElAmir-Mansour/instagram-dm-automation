@@ -29,6 +29,22 @@
  * segmented filter (All · Needs reply · AI paused) is applied last, and is
  * seeded from `#/inbox?filter=waiting`, which is where the Overview links.
  *
+ * ─── The detail view ("I want to see everything in here in detail") ─────────
+ * What the server stores about a thread, drawn rather than left in the database:
+ *   - the header: the sender's picture or initials, their name and @handle, the platform, what they
+ *     are to you (follows you / you follow them / verified / followers) and how long and how much they
+ *     have written (`metaMarkup`). Each chip is shown only when it is known.
+ *   - a carousel or quick reply as its cards and pills, from `raw_payload`, which is JSONB and so
+ *     arrives as an OBJECT (`parsePayload`; the first version insisted on a string and drew nothing).
+ *     "[Structured Template]" is a placeholder and is never shown as words, in the log or the list.
+ *   - under a customer's bubble: the tap that produced it, what they attached, and a failing reply.
+ *     Under an AI reply: how long it took, which model, and "retried" (`pairReplies`).
+ *   - the sender's profile arrives lazily: the server looks it up when a DM comes in, and the inbox asks
+ *     for it when a thread is opened (and for the newest few when the page opens), through a throttle
+ *     that lives on the server. A failed lookup, or a picture link that has expired, leaves the initials.
+ * Everything drawn from a message or a payload is attacker-reachable: only the `html` tag, `safeUrl`
+ * and `linkUrl` ever put it in the page.
+ *
  * ─── Mobile ─────────────────────────────────────────────────────────────────
  * This is the screen the creator opens on a phone, and the one that used to be
  * least usable there. The layout is a single grid cell below 900px with the
@@ -47,6 +63,29 @@ const InboxPage = {
     FILTERS: Object.freeze(['all', 'waiting', 'paused']),
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
     RETURN_NOTICE_MS: 60 * 1000,
+
+    // ─── What the stored rows say, so a placeholder is never mistaken for words ──
+    /** The text the pipeline stores for a carousel (which has none) and for a story mention. */
+    STRUCTURED_PLACEHOLDER: '[Structured Template]',
+    STORY_MENTION_PLACEHOLDER: '[Story Mention]',
+    /**
+     * How close an AI reply's row and its inbound's `handled_at` are when the pipeline wrote one right after the other
+     * (it marks the inbound handled the moment the reply is stored). The pairing for "replied in 4 s".
+     */
+    HANDLED_MATCH_MS: 5000,
+    /**
+     * Most of each a message shows. Meta's own limits are 10 cards, 3 buttons and 13 quick replies; the numbers are
+     * here because this renders JSON an attacker can reach, and a payload with ten thousand cards is not a message.
+     */
+    MAX_CARDS: 10,
+    MAX_BUTTONS: 3,
+    MAX_QUICK_REPLIES: 13,
+    MAX_ATTACHMENTS: 6,
+    /** The server throttles a sender's lookup to one a day (`PROFILE_REFRESH_SECONDS`) and one an hour while none has worked. */
+    PROFILE_STALE_MS: 24 * 60 * 60 * 1000,
+    PROFILE_RETRY_MS: 60 * 60 * 1000,
+    /** How many of the newest threads get their profile looked up when the inbox opens; the rest fill in when opened. */
+    PROFILE_BACKFILL_PER_VISIT: 5,
 
     selectedConversationId: null,
     pollTimer: null,
@@ -72,6 +111,19 @@ const InboxPage = {
 
     /** id → the AI state the operator chose, until the server confirms it. */
     pendingBotState: new Map(),
+
+    /** Threads whose profile this visit has already asked the server about: once each, whatever the answer. */
+    _profileAsked: new Set(),
+    /** The visit's batch of lookups for the newest threads has run. */
+    _backfilled: false,
+    /** Picture links that failed to load (Meta's expire after a few days), so a repaint does not put the broken one back. */
+    _brokenPics: new Set(),
+    /** What the header's avatar and detail strip last wrote, so an idle poll writes nothing. */
+    _avatarMarkup: null,
+    _metaMarkup: null,
+    /** The chat pane the capturing `error` listener is on, and that listener (`bindImageGuard`). */
+    onImageError: null,
+    _imageGuardHost: null,
 
     _pendingSeq: 0,
     _searchRender: null,
@@ -154,6 +206,7 @@ const InboxPage = {
         this.filter = this.filterFromHash();
         this.syncFilterButtons();
         this.markStale(false);
+        this.bindImageGuard();
 
         this.loadThreads();
         this.startPolling();
@@ -204,6 +257,10 @@ const InboxPage = {
         this.messagesPainted = false;
         this._lastDayKey = null;
         this.pendingBotState = new Map();
+        this._profileAsked = new Set();
+        this._backfilled = false;
+        this._avatarMarkup = null;
+        this._metaMarkup = null;
         this.lastMessageStamp = null;
         this.searchTerm = '';
         this.searchMatches = null;
@@ -224,6 +281,7 @@ const InboxPage = {
      */
     destroy() {
         this.stopPolling();
+        this.unbindImageGuard();
         if (this.onVisibilityChange) {
             document.removeEventListener('visibilitychange', this.onVisibilityChange);
             this.onVisibilityChange = null;
@@ -305,10 +363,58 @@ const InboxPage = {
         `;
     },
 
-    threadName(thread) {
-        if (thread.username) return thread.username;
-        const id = String(thread.instagram_user_id || '');
+    /** `@sara_dev`, or '' when the sender's handle is not known. The "@" belongs to a handle and to nothing else. */
+    threadHandle(thread) {
+        const username = thread && typeof thread.username === 'string' ? thread.username.trim() : '';
+        return username ? `@${username}` : '';
+    },
+
+    /**
+     * The sender, as a person: the name on their profile, else their @handle, else "User 3051" (the last four of
+     * the id). The last used to be printed as "@User 3051": the "@" was part of the row's template, so a sender
+     * nobody had looked up read like a handle that does not exist.
+     */
+    threadTitle(thread) {
+        const name = thread && typeof thread.profile_name === 'string' ? thread.profile_name.trim() : '';
+        if (name) return name;
+        const handle = this.threadHandle(thread);
+        if (handle) return handle;
+        const id = String((thread && thread.instagram_user_id) || '');
         return t('inbox.anonUser', { id: id.slice(-4) });
+    },
+
+    /** Up to two letters for the avatar: first letters of the first two words, or the first two of one. '' when nothing is a letter. */
+    initialsOf(thread) {
+        const source = String((thread && (thread.profile_name || thread.username)) || '').trim().replace(/^@/, '');
+        const words = source.split(/[\s._-]+/u).map((w) => w.replace(/^[^\p{L}\p{N}]+/u, '')).filter(Boolean);
+        if (words.length === 0) return '';
+        const letters = (word) => Array.from(word);
+        const pair = words.length > 1 ? letters(words[0])[0] + letters(words[1])[0] : letters(words[0]).slice(0, 2).join('');
+        return pair.toLocaleUpperCase();
+    },
+
+    /**
+     * What a thread row says its last message was.
+     *
+     * Not `last_message_text` as it stands: a carousel is stored as the placeholder "[Structured Template]", which the
+     * operator saw in the list as if the customer had been sent those words. A carousel reads as its cards ("2 cards:
+     * Pricing"); a placeholder with no cards behind it (the stored body is pruned after a while) reads as what kind of
+     * message it was; a story mention reads as one.
+     */
+    threadPreview(thread) {
+        if (!thread) return t('inbox.noMessages');
+        const cards = Number(thread.last_message_cards);
+        if (Number.isFinite(cards) && cards > 0) {
+            const label = t('inbox.preview.cards', { count: cards });
+            const title = typeof thread.last_message_card_title === 'string' ? thread.last_message_card_title.trim() : '';
+            return title ? t('inbox.preview.withTitle', { label, title }) : label;
+        }
+        const text = typeof thread.last_message_text === 'string' ? thread.last_message_text : '';
+        if (text === this.STRUCTURED_PLACEHOLDER) {
+            return thread.last_message_type === 'carousel' ? t('inbox.preview.carousel') : t('inbox.preview.structured');
+        }
+        if (text === this.STORY_MENTION_PLACEHOLDER || (thread.last_message_type === 'story_mention' && !text)) return t('inbox.storyMention');
+        return text || t('inbox.noMessages');
     },
 
     // ─── Dates ───────────────────────────────────────────────────────────────
@@ -476,6 +582,8 @@ const InboxPage = {
             this.noteListChange(rows);
             this.renderThreads();
             this.reportWaiting();
+            // Not awaited, and never throws: the names of the newest threads fill in behind the list, one at a time.
+            this.backfillProfiles(rows);
 
             // Only refetch the open conversation when it actually changed.
             if (this.selectedConversationId) {
@@ -540,6 +648,7 @@ const InboxPage = {
         if (term) {
             const local = this.threads.filter((x) => {
                 const haystack = [
+                    x.profile_name,
                     x.username,
                     x.instagram_user_id,
                     x.last_message_text,
@@ -583,11 +692,11 @@ const InboxPage = {
         return html`
             <span class="thread-top">
                 <span class="thread-who">
-                    <span class="thread-name"><bdi dir="auto">@${this.threadName(x)}</bdi></span>${UI.platformTag(x.platform)}
+                    <span class="thread-name"><bdi dir="auto">${this.threadTitle(x)}</bdi></span>${UI.platformTag(x.platform)}
                 </span>
                 <span class="thread-time">${this.threadTime(x.last_message_at)}</span>
             </span>
-            <span class="thread-preview" dir="auto">${x.last_message_text || t('inbox.noMessages')}</span>
+            <span class="thread-preview" dir="auto">${this.threadPreview(x)}</span>
             <span class="thread-badges">
                 ${x.is_bot_active
                     ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
@@ -682,10 +791,10 @@ const InboxPage = {
             // appear in a username or a DM, so no two states collide. The time
             // is the TEXT shown, so "14:05" becomes "Yesterday 14:05" at midnight.
             signature: (x) => [
-                this.threadName(x),
+                this.threadTitle(x),
                 x.platform || '',
                 this.threadTime(x.last_message_at),
-                x.last_message_text,
+                this.threadPreview(x),
                 x.is_bot_active ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
@@ -781,6 +890,82 @@ const InboxPage = {
         this.renderThreads(); // highlight the active row
         this.loadMessages(id, { scroll: true });
         this.focusChatPane(trigger);
+        // A thread written before profiles were stored (or last looked up more than a day ago) is looked up now: its name and
+        // picture arrive a moment after it opens, and Meta's expiring picture link is replaced while it still works.
+        if (thread) this.maybeRefreshProfile(thread);
+    },
+
+    // ─── The sender's profile ────────────────────────────────────────────────
+    /**
+     * Should this thread's profile be looked up? Instagram only (the one network with a profile API wired); never looked up, or
+     * last looked up over a day ago; and not tried so recently that the server would refuse (an hour while none has worked, a
+     * day otherwise): it throttles for itself, but a request that is certain to be refused is not worth the round trip.
+     */
+    needsProfile(thread) {
+        if (!thread || thread.platform !== 'instagram') return false;
+        const now = Date.now();
+        const fetched = Date.parse(thread.profile_fetched_at || '');
+        if (Number.isFinite(fetched) && now - fetched <= this.PROFILE_STALE_MS) return false;
+        const checked = Date.parse(thread.profile_checked_at || '');
+        const wait = Number.isFinite(fetched) ? this.PROFILE_STALE_MS : this.PROFILE_RETRY_MS;
+        return !(Number.isFinite(checked) && now - checked < wait);
+    },
+
+    /** The first `limit` of `threads` that need a profile and have not been asked about this visit. Pure. */
+    profileCandidates(threads, limit) {
+        return (Array.isArray(threads) ? threads : [])
+            .filter((x) => x && !this._profileAsked.has(x.id) && this.needsProfile(x))
+            .slice(0, limit);
+    },
+
+    maybeRefreshProfile(thread) {
+        return this.needsProfile(thread) ? this.refreshProfile(thread.id) : Promise.resolve();
+    },
+
+    /**
+     * The newest few threads, once per visit. The rest are looked up when the operator opens them. Bounded on purpose: each one is a
+     * call to Meta, and a hundred of them in one go on opening the inbox is the kind of burst that gets an app throttled.
+     */
+    async backfillProfiles(rows) {
+        if (this._backfilled) return;
+        this._backfilled = true;
+        const epoch = this._epoch;
+        for (const row of this.profileCandidates(rows, this.PROFILE_BACKFILL_PER_VISIT)) {
+            if (epoch !== this._epoch) return;
+            await this.refreshProfile(row.id);
+        }
+    },
+
+    /**
+     * Ask the server to look one sender up. Best effort, and says nothing on failure: the thread keeps its initials and its "User
+     * 3051", exactly as it was. A viewer cannot ask (the server would refuse: it sends things to Meta), so does not.
+     */
+    async refreshProfile(id) {
+        if (!id || this._profileAsked.has(id)) return;
+        if (typeof App !== 'undefined' && typeof App.canOperate === 'function' && !App.canOperate()) return;
+        this._profileAsked.add(id);
+        const epoch = this._epoch;
+        try {
+            const result = await API.refreshConversationProfile(id);
+            if (epoch !== this._epoch || !result || !result.profile) return;
+            this.applyProfile(id, result.profile);
+        } catch (err) {
+            console.debug('Profile refresh skipped:', err && err.message);
+        }
+    },
+
+    /** The fields a refresh answers with, copied onto every copy of the thread this page holds, then repainted. */
+    applyProfile(id, profile) {
+        const keys = [
+            'username', 'profile_name', 'profile_pic_url', 'follower_count', 'is_user_follow_business',
+            'is_business_follow_user', 'is_verified_user', 'profile_fetched_at', 'profile_checked_at',
+        ];
+        this.threadCopies(id).forEach((copy) => {
+            keys.forEach((key) => { if (key in profile) copy[key] = profile[key]; });
+        });
+        this.renderThreads();
+        const thread = this.findThread(id);
+        if (thread) this.updateChatHeader(thread);
     },
 
     /**
@@ -865,8 +1050,13 @@ const InboxPage = {
         const chatPane = document.getElementById('chat-pane-container');
         if (!chatPane || !thread) return;
 
-        const username = this.threadName(thread);
+        const title = this.threadTitle(thread);
         const on = thread.is_bot_active !== false;
+        // Written once here and remembered, so the poll's repaint compares against what is on screen.
+        const avatar = this.avatarMarkup(thread);
+        const meta = this.metaMarkup(thread);
+        this._avatarMarkup = esc(avatar);
+        this._metaMarkup = esc(meta);
 
         chatPane.innerHTML = esc(html`
             <header class="chat-header">
@@ -874,16 +1064,18 @@ const InboxPage = {
                         aria-label="${t('inbox.backToThreads')}">
                     <i data-lucide="arrow-left" aria-hidden="true"></i>
                 </button>
+                <!-- The sender's picture, or their initials: both are painted, the picture over the initials, so a link that
+                     has expired (Meta's do, after a few days) or is slow simply leaves the initials showing. -->
+                <span class="avatar" id="chat-avatar" aria-hidden="true">${avatar}</span>
                 <div class="chat-header-info">
                     <!-- aria-level, not <h2>: the stylesheet scopes this rule to
                          the element (.chat-header h3), so changing the tag would
                          change the type size. This fixes the outline, not the
                          pixels. -->
-                    <h3 aria-level="2" data-chat-username><bdi dir="auto">@${username}</bdi></h3>
-                    <!-- I8: the platform, then the id. «المعرّف» / "ID", not
-                         "User ID": on Facebook it is a Page-scoped id, not an
-                         Instagram user's. -->
-                    <span class="chat-sub"><span data-chat-platform data-platform="${thread.platform || ''}">${UI.platformTag(thread.platform)}</span>${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
+                    <h3 aria-level="2" data-chat-username><bdi dir="auto">${title}</bdi></h3>
+                    <!-- I8: the platform, then the @handle (when the profile has been looked up), then the id.
+                         «المعرّف» / "ID", not "User ID": on Facebook it is a Page-scoped id, not an Instagram user's. -->
+                    <span class="chat-sub"><span data-chat-platform data-platform="${thread.platform || ''}">${UI.platformTag(thread.platform)}</span>${this.handleSlot(thread)}${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
                 </div>
                 <div class="chat-header-actions">
                     <!-- The switch already announces its state; this is the same
@@ -901,6 +1093,10 @@ const InboxPage = {
                     </span>
                 </div>
             </header>
+
+            <!-- Who they are and how long they have been talking to you: follows you / you follow them, followers, first
+                 message, message count. Only what is known is shown; the strip is empty (and hidden) until something is. -->
+            <div class="chat-meta" id="chat-meta">${meta}</div>
 
             <!-- The loader is a live region of its own (role="status") and it
                  used to be injected INSIDE the log, so opening a thread
@@ -938,6 +1134,124 @@ const InboxPage = {
         UI.icons(chatPane);
     },
 
+    /** The @handle for the header's sub-line: only when the title is the person's NAME, since otherwise the title already is the handle. */
+    handleText(thread) {
+        const named = thread && typeof thread.profile_name === 'string' && thread.profile_name.trim() !== '';
+        return named ? this.threadHandle(thread) : '';
+    },
+
+    /**
+     * The handle, in an LTR island inside a wrapper that keeps the line's own direction: the separator after it is drawn by the wrapper
+     * (`.chat-handle:has(…)::after`), so it falls between the handle and the id in both directions. Drawn inside the island it fell
+     * on the wrong side of the handle in Arabic.
+     */
+    handleSlot(thread) {
+        return html`<span class="chat-handle"><bdi class="ltr-text" dir="ltr" data-chat-handle>${this.handleText(thread)}</bdi></span>`;
+    },
+
+    /**
+     * The avatar's contents. Initials (or a person glyph when the sender has no name to take them from) are always painted; the
+     * picture sits on top of them. Meta's picture links expire after a few days, so a failed load is expected, not exceptional:
+     * `handleImageError` removes the broken <img> and remembers the link, and what is left is the initials.
+     */
+    avatarMarkup(thread) {
+        const pic = safeUrl(thread && thread.profile_pic_url);
+        const initials = this.initialsOf(thread);
+        const face = initials
+            ? html`<span class="avatar-initials"><bdi dir="auto">${initials}</bdi></span>`
+            : html`<i data-lucide="user" aria-hidden="true"></i>`;
+        const picture = pic && !this._brokenPics.has(pic)
+            ? html`<img class="avatar-img" src="${pic}" alt="" width="40" height="40" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+            : '';
+        return html`${face}${picture}`;
+    },
+
+    /** One chip of the detail strip. */
+    metaChip(label, { icon = '', accent = false } = {}) {
+        return html`<span class="chip${accent ? html.raw(' chip-accent') : ''}">${icon ? html`<i data-lucide="${icon}" aria-hidden="true"></i>` : ''}${label}</span>`;
+    },
+
+    /**
+     * What is known about the sender and the thread, as chips: whether they follow you, whether you follow them, their verification,
+     * their follower count, when they first wrote and how many messages there are. Each is shown only when it is known, so a
+     * Messenger thread, or an Instagram one whose profile has not been looked up yet, shows the two it has (the dates and the count).
+     */
+    metaMarkup(thread) {
+        if (!thread) return '';
+        const chips = [];
+        if (thread.is_user_follow_business === true) chips.push(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }));
+        else if (thread.is_user_follow_business === false) chips.push(this.metaChip(t('inbox.meta.notFollowsYou')));
+        if (thread.is_business_follow_user === true) chips.push(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
+        else if (thread.is_business_follow_user === false) chips.push(this.metaChip(t('inbox.meta.youDontFollow')));
+        if (thread.is_verified_user === true) chips.push(this.metaChip(t('inbox.meta.verified'), { accent: true }));
+        const followers = Number(thread.follower_count);
+        if (thread.follower_count !== null && thread.follower_count !== undefined && Number.isFinite(followers)) {
+            chips.push(this.metaChip(t('inbox.meta.followers', { count: followers, n: UI.formatNumber(followers) })));
+        }
+        if (thread.created_at) chips.push(this.metaChip(t('inbox.meta.since', { date: UI.formatDay(thread.created_at) })));
+        const messages = Number(thread.message_count);
+        if (thread.message_count !== null && thread.message_count !== undefined && Number.isFinite(messages)) {
+            chips.push(this.metaChip(t('inbox.meta.messages', { count: messages, n: UI.formatNumber(messages) })));
+        }
+        return chips.length ? html`${chips}` : '';
+    },
+
+    /** Poll-safe, like everything in the header: written only when the markup differs from what is on screen. */
+    paintAvatar(thread) {
+        const el = document.getElementById('chat-avatar');
+        if (!el) return;
+        const markup = esc(this.avatarMarkup(thread));
+        if (markup === this._avatarMarkup) return;
+        this._avatarMarkup = markup;
+        el.innerHTML = markup;
+        UI.icons(el);
+    },
+
+    paintMeta(thread) {
+        const el = document.getElementById('chat-meta');
+        if (!el) return;
+        const markup = esc(this.metaMarkup(thread));
+        if (markup === this._metaMarkup) return;
+        this._metaMarkup = markup;
+        el.innerHTML = markup;
+        UI.icons(el);
+    },
+
+    /**
+     * A picture that would not load, in the header or in a message. Error events do not bubble, so this is one capturing listener
+     * on the chat pane rather than an `onerror` on each image (which would be an inline handler, and this dashboard has none).
+     * The element is removed: an avatar falls back to the initials under it, an attachment to the chip beside it.
+     */
+    handleImageError(event) {
+        const img = event && event.target;
+        if (!img || !img.classList || typeof img.remove !== 'function') return;
+        if (img.classList.contains('avatar-img')) {
+            const src = typeof img.getAttribute === 'function' ? img.getAttribute('src') : '';
+            if (src) this._brokenPics.add(src);
+            this._avatarMarkup = null;
+            img.remove();
+        } else if (img.classList.contains('msg-attachment-img') || img.classList.contains('carousel-card-img')) {
+            img.remove();
+        }
+    },
+
+    bindImageGuard() {
+        this.unbindImageGuard();
+        const pane = document.getElementById('chat-pane-container');
+        if (!pane || typeof pane.addEventListener !== 'function') return;
+        this.onImageError = (event) => this.handleImageError(event);
+        pane.addEventListener('error', this.onImageError, true);
+        this._imageGuardHost = pane;
+    },
+
+    unbindImageGuard() {
+        if (this.onImageError && this._imageGuardHost && typeof this._imageGuardHost.removeEventListener === 'function') {
+            this._imageGuardHost.removeEventListener('error', this.onImageError, true);
+        }
+        this.onImageError = null;
+        this._imageGuardHost = null;
+    },
+
     /**
      * Poll-safe header refresh: text nodes only, never a re-render.
      *
@@ -949,7 +1263,12 @@ const InboxPage = {
     updateChatHeader(thread) {
         if (this.chatShellThreadId !== thread.id) return;
         const nameEl = document.querySelector('[data-chat-username] bdi');
-        if (nameEl) nameEl.textContent = `@${this.threadName(thread)}`;
+        if (nameEl) nameEl.textContent = this.threadTitle(thread);
+        // The @handle that arrives once the sender's profile has been looked up.
+        const handleEl = document.querySelector('[data-chat-handle]');
+        if (handleEl && handleEl.textContent !== this.handleText(thread)) handleEl.textContent = this.handleText(thread);
+        this.paintAvatar(thread);
+        this.paintMeta(thread);
         // A thread from before v26 gets its platform on its next DM; written
         // only when it changes, so an idle poll touches nothing.
         const platformEl = document.querySelector('[data-chat-platform]');
@@ -1016,6 +1335,8 @@ const InboxPage = {
 
         const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
         let appended = 0;
+        // Which inbound each AI reply answered, from the whole batch: the reply's detail line needs the message BEFORE it.
+        const replies = this.pairReplies(messages);
 
         messages.forEach((msg) => {
             const key = msg.id != null ? String(msg.id) : `${msg.created_at}|${msg.direction}|${msg.text}`;
@@ -1026,7 +1347,7 @@ const InboxPage = {
                 list.insertAdjacentHTML('beforeend', esc(this.dayDivider(msg.created_at)));
                 this._lastDayKey = day;
             }
-            list.insertAdjacentHTML('beforeend', esc(this.messageBubble(msg)));
+            list.insertAdjacentHTML('beforeend', esc(this.messageBubble(msg, msg.id != null ? replies.get(String(msg.id)) : undefined)));
             appended++;
         });
 
@@ -1073,11 +1394,33 @@ const InboxPage = {
         return '';
     },
 
-    messageBubble(msg) {
+    /**
+     * One bubble, and under it what is known about the message beyond its words.
+     *
+     * `reply` is `pairReplies`' answer for an AI reply: how long it took and how many attempts the message it answered needed. It is
+     * optional, and a bubble without it is exactly what it was before the detail view: the bubble tests call it with one argument.
+     */
+    messageBubble(msg, reply) {
         const isOut = msg.direction === 'outbound';
         const tag = this.senderTag(msg);
+        const detail = isOut ? this.outboundDetail(msg, reply) : this.inboundDetail(msg);
+        const text = typeof msg.text === 'string' ? msg.text : '';
+        const structure = this.structuredContent(msg);
+        const attachments = isOut ? '' : this.attachmentsMarkup(msg);
+
+        // A placeholder is not words. "[Structured Template]" is what a carousel is stored as; its cards are the message, and
+        // when they cannot be drawn (the stored body is pruned after a while) the bubble says what it was instead.
+        let shown = text;
+        let note = '';
+        if (text === this.STRUCTURED_PLACEHOLDER) {
+            shown = '';
+            if (!structure) note = t(msg.message_type === 'carousel' ? 'inbox.carouselGone' : 'inbox.structuredGone');
+        } else if (text === this.STORY_MENTION_PLACEHOLDER) {
+            shown = t('inbox.storyMention');
+        }
+
         return html`
-            <div class="message-row ${isOut ? 'row-outbound' : 'row-inbound'}${tag ? html.raw(' message-row--tagged') : ''}">
+            <div class="message-row ${isOut ? 'row-outbound' : 'row-inbound'}${tag ? html.raw(' message-row--tagged') : (detail ? html.raw(' message-row--stacked') : '')}">
                 ${tag}
                 <div class="message-bubble ${isOut ? 'bubble-outbound' : 'bubble-inbound'}">
                     <!-- lang on the OUTBOUND side only. What this account sends
@@ -1086,62 +1429,335 @@ const InboxPage = {
                          was reading it with an English voice. What arrives is
                          genuinely unknown, so an inbound bubble gets dir="auto"
                          and no lang claim. -->
-                    <p dir="auto" ${isOut ? html.raw('lang="ar"') : ''}>${msg.text}</p>
-                    ${this.structuredContent(msg)}
+                    ${shown ? html`<p dir="auto" ${isOut ? html.raw('lang="ar"') : ''}>${shown}</p>` : ''}
+                    ${note ? html`<p class="msg-note" dir="auto">${note}</p>` : ''}
+                    ${structure}
+                    ${attachments}
                     <span class="message-time">${UI.formatTime(msg.created_at)}</span>
                 </div>
+                ${detail}
             </div>
         `;
     },
 
-    /** Quick replies and carousels out of raw_payload — all attacker-reachable. */
-    structuredContent(msg) {
-        if (!msg.raw_payload || typeof msg.raw_payload !== 'string') return '';
+    // ─── The payload a message carries ───────────────────────────────────────
+    /**
+     * `messages.raw_payload` as an object, whatever shape it arrives in. The column is JSONB, so the API hands back an object; this
+     * used to insist on a string and so drew nothing for every carousel and quick reply the AI had ever sent. A string is still
+     * parsed (a row written before the column was JSONB, a double-encoded one, a fixture). Null for anything that is not a JSON
+     * object: pruned (`RAW_PAYLOAD_RETENTION_DAYS`), absent, an array, or unreadable.
+     */
+    parsePayload(raw) {
+        if (raw === null || raw === undefined || raw === '') return null;
+        let value = raw;
+        if (typeof raw === 'string') {
+            try { value = JSON.parse(raw); } catch { return null; }
+        }
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    },
 
-        let payload;
-        try { payload = JSON.parse(msg.raw_payload); } catch { return ''; }
-        if (!payload || typeof payload !== 'object') return '';
+    /** A string or a number as text; anything else (an object, null, a list) as nothing, so it cannot print "[object Object]". */
+    plainText(value) {
+        if (typeof value === 'string') return value.trim();
+        return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+    },
+
+    /** An http(s) link, for something the reader may open. `safeUrl` also lets a site-relative path and an image data: URI through: right for an <img>, wrong for a link out. */
+    linkUrl(value) {
+        const url = safeUrl(value);
+        return /^https?:\/\//i.test(url) ? url : '';
+    },
+
+    /** A URL as the short text of a link: no scheme, no query, no fragment, at most 48 characters. */
+    urlLabel(url) {
+        const bare = String(url).replace(/^https?:\/\//i, '').replace(/[?#].*$/, '').replace(/\/$/, '');
+        return bare.length > 48 ? `${bare.slice(0, 47)}…` : bare;
+    },
+
+    /**
+     * Quick replies and carousels out of raw_payload — all attacker-reachable.
+     *
+     * Returns one piece of markup, or '' when there is nothing to draw (no payload, or a plain text reply whose payload is `{ "text": … }`).
+     * Every value is text through `html`, every URL through `safeUrl`; the counts are capped.
+     */
+    structuredContent(msg) {
+        const payload = this.parsePayload(msg && msg.raw_payload);
+        if (!payload) return '';
 
         const parts = [];
 
         if (Array.isArray(payload.quick_replies)) {
-            parts.push(html`
-                <div class="msg-quick-replies">
-                    <!-- Quick-reply titles are authored by this account (the AI
-                         writes them from the Arabic prompt), so they carry lang. -->
-                    ${payload.quick_replies.map((qr) => html`<span class="qr-pill" dir="auto" lang="ar">${qr && qr.title}</span>`)}
-                </div>
-            `);
+            const titles = payload.quick_replies
+                .slice(0, this.MAX_QUICK_REPLIES)
+                .map((qr) => this.plainText(qr && qr.title))
+                .filter(Boolean);
+            if (titles.length) {
+                parts.push(html`
+                    <div class="msg-quick-replies">
+                        <!-- Quick-reply titles are authored by this account (the AI
+                             writes them from the Arabic prompt), so they carry lang. -->
+                        ${titles.map((title) => html`<span class="qr-pill" dir="auto" lang="ar">${title}</span>`)}
+                    </div>
+                `);
+            }
         }
 
         const elements = payload.attachment
             && payload.attachment.payload
             && payload.attachment.payload.elements;
 
-        if (Array.isArray(elements)) {
+        if (Array.isArray(elements) && elements.length > 0) {
             parts.push(html`
                 <div class="msg-carousel">
-                    ${elements.map((el) => {
-                        const image = safeUrl(el && el.image_url);
-                        const buttons = Array.isArray(el && el.buttons) ? el.buttons : [];
-                        return html`
-                            <div class="carousel-card">
-                                ${image ? html`<img src="${image}" class="carousel-card-img" alt="${(el && el.title) || ''}">` : ''}
-                                <div class="carousel-card-body">
-                                    <h4 class="carousel-card-title" dir="auto" lang="ar">${el && el.title}</h4>
-                                    ${el && el.subtitle ? html`<p class="carousel-card-desc" dir="auto" lang="ar">${el.subtitle}</p>` : ''}
-                                    <div class="stack gap-1">
-                                        ${buttons.map((btn) => html`<span class="carousel-btn" dir="auto" lang="ar">${btn && btn.title}</span>`)}
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-                    })}
+                    ${elements.slice(0, this.MAX_CARDS).map((el) => this.carouselCard(el))}
                 </div>
             `);
         }
 
-        return parts;
+        return parts.length ? html`${parts}` : '';
+    },
+
+    /** One card of a carousel: its picture, title, subtitle, and each button's title with where it goes. */
+    carouselCard(el) {
+        const card = el && typeof el === 'object' ? el : {};
+        const title = this.plainText(card.title);
+        const subtitle = this.plainText(card.subtitle);
+        const image = safeUrl(card.image_url);
+        const buttons = (Array.isArray(card.buttons) ? card.buttons : []).slice(0, this.MAX_BUTTONS);
+        return html`
+            <div class="carousel-card">
+                ${image ? html`<img src="${image}" class="carousel-card-img" alt="${title}" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}
+                <div class="carousel-card-body">
+                    <h4 class="carousel-card-title" dir="auto" lang="ar">${title}</h4>
+                    ${subtitle ? html`<p class="carousel-card-desc" dir="auto" lang="ar">${subtitle}</p>` : ''}
+                    <div class="stack gap-1">
+                        ${buttons.map((btn) => this.carouselButton(btn))}
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    /**
+     * A button as the customer saw it (a picture of it, see `.carousel-btn`) and, under it, what it does: a link out as a small real
+     * link, or a postback as the payload it sends back. Both are the AI's own output, and both are escaped.
+     */
+    carouselButton(btn) {
+        const b = btn && typeof btn === 'object' ? btn : {};
+        const title = this.plainText(b.title);
+        const url = this.linkUrl(b.url);
+        const payload = url ? '' : this.plainText(b.payload);
+        return html`
+            <div class="carousel-btn-wrap">
+                <span class="carousel-btn" dir="auto" lang="ar">${title}</span>
+                ${url ? html`<a class="carousel-btn-url" href="${url}" target="_blank" rel="noopener noreferrer" dir="ltr">${this.urlLabel(url)}<span class="sr-only"> ${t('help.link.newTab')}</span></a>` : ''}
+                ${payload ? html`<span class="carousel-btn-payload" dir="ltr">${payload}</span>` : ''}
+            </div>
+        `;
+    },
+
+    // ─── What came in: taps and attachments ──────────────────────────────────
+    /**
+     * Did this message come from a tap? `{ via, payload }` or null. The payload column is what was tapped (`OTHER_PLANS`); the stored
+     * event says which kind of tap it was (`message.quick_reply` or `postback`), and when that body has been pruned the payload still
+     * says that something was tapped, just not what kind.
+     */
+    tappedOf(msg) {
+        const payload = typeof msg.payload === 'string' ? msg.payload.trim() : '';
+        if (!payload) return null;
+        const raw = this.parsePayload(msg.raw_payload);
+        let via = 'generic';
+        if (raw && raw.postback) via = 'button';
+        else if (raw && raw.message && raw.message.quick_reply) via = 'quickReply';
+        return { via, payload: payload.slice(0, 120) };
+    },
+
+    /**
+     * Everything the stored event says the customer attached, as `{ kind, url }`: the attachments Meta listed, a reply to one of your
+     * stories, and a story mention (also when the stored body is pruned and only the message's type remains).
+     */
+    attachmentsOf(msg) {
+        const out = [];
+        const raw = this.parsePayload(msg && msg.raw_payload);
+        const message = raw && raw.message && typeof raw.message === 'object' ? raw.message : null;
+        if (message && Array.isArray(message.attachments)) {
+            message.attachments.forEach((att) => {
+                if (!att || typeof att !== 'object') return;
+                const type = this.plainText(att.type).toLowerCase();
+                out.push({ kind: this.attachmentKind(type), url: this.plainText(att.payload && att.payload.url) });
+            });
+        }
+        const story = message && message.reply_to && message.reply_to.story;
+        if (story && typeof story === 'object') out.push({ kind: 'storyReply', url: this.plainText(story.url) });
+        if (msg && msg.message_type === 'story_mention' && !out.some((a) => a.kind === 'storyMention')) {
+            out.push({ kind: 'storyMention', url: '' });
+        }
+        return out.slice(0, this.MAX_ATTACHMENTS);
+    },
+
+    /** Meta's attachment `type` as one of the kinds this screen words; anything it does not know is a plain "Attachment". */
+    attachmentKind(type) {
+        const KINDS = Object.assign(Object.create(null), {
+            image: 'image', video: 'video', audio: 'audio', file: 'file',
+            share: 'share', ig_post: 'share', ig_reel: 'reel', reel: 'reel', story_mention: 'storyMention',
+        });
+        return KINDS[type] || 'other';
+    },
+
+    /** Its glyph and its name, by kind. A lookup table, so a kind from the data can only ever name an icon this file lists. */
+    attachmentStyle(kind) {
+        const STYLES = Object.assign(Object.create(null), {
+            image: { icon: 'image', label: 'inbox.attach.image' },
+            video: { icon: 'play', label: 'inbox.attach.video' },
+            audio: { icon: 'music', label: 'inbox.attach.audio' },
+            file: { icon: 'file', label: 'inbox.attach.file' },
+            share: { icon: 'share-2', label: 'inbox.attach.share' },
+            reel: { icon: 'film', label: 'inbox.attach.reel' },
+            storyMention: { icon: 'history', label: 'inbox.attach.storyMention' },
+            storyReply: { icon: 'history', label: 'inbox.attach.storyReply' },
+            other: { icon: 'file', label: 'inbox.attach.other' },
+        });
+        return STYLES[kind] || STYLES.other;
+    },
+
+    /**
+     * What the customer attached, inside their bubble: a picture for an image, and for every kind a chip that names it, with an
+     * "Open" link when Meta gave a URL. Never blank: a voice note, a reel or a story reply is at least a chip, and an image that
+     * will not load (the picture is removed by `handleImageError`) leaves its chip.
+     */
+    attachmentsMarkup(msg) {
+        const list = this.attachmentsOf(msg);
+        if (list.length === 0) return '';
+        return html`
+            <div class="msg-attachments">
+                ${list.map((att) => {
+                    const style = this.attachmentStyle(att.kind);
+                    const label = t(style.label);
+                    const url = this.linkUrl(att.url);
+                    return html`
+                        <div class="msg-attachment">
+                            ${att.kind === 'image' && url ? html`<img class="msg-attachment-img" src="${url}" alt="${label}" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}
+                            <span class="badge badge-neutral"><i data-lucide="${style.icon}" aria-hidden="true"></i>${label}</span>
+                            ${url ? html`<a class="msg-attachment-link" href="${url}" target="_blank" rel="noopener noreferrer">${t('inbox.attach.open')}<span class="sr-only"> ${t('help.link.newTab')}</span></a>` : ''}
+                        </div>
+                    `;
+                })}
+            </div>
+        `;
+    },
+
+    // ─── Under the bubble ────────────────────────────────────────────────────
+    /** The tap the message came from, and the state of the reply to it when that reply is failing: chips, or '' when there is neither. */
+    inboundDetail(msg) {
+        const chips = [];
+        const tap = this.tappedOf(msg);
+        if (tap) {
+            const key = tap.via === 'button' ? 'inbox.detail.tappedButton' : tap.via === 'quickReply' ? 'inbox.detail.tappedQuickReply' : 'inbox.detail.tapped';
+            chips.push(html`<span class="badge badge-info"><i data-lucide="reply" aria-hidden="true"></i>${t(key)} <bdi class="ltr-text" dir="ltr">${tap.payload}</bdi></span>`);
+        }
+        const failing = this.deliveryChip(msg);
+        if (failing) chips.push(failing);
+        return chips.length ? html`<div class="msg-detail">${chips}</div>` : '';
+    },
+
+    /**
+     * A reply that did not go: from the queue's record of the message's job (the server's `delivery`). Red once it is out of
+     * attempts, amber while it will be tried again. A refusal Meta makes for good (a blocked recipient) is settled by the
+     * pipeline without a trace in the queue, so it cannot appear here: this shows what is stored and nothing else.
+     */
+    deliveryChip(msg) {
+        const d = msg && msg.delivery;
+        if (!d || (d.state !== 'failed' && d.state !== 'retrying')) return '';
+        const code = Number.isFinite(d.code) ? html` · <bdi class="ltr-text" dir="ltr">${t('inbox.detail.code', { code: d.code })}</bdi>` : '';
+        if (d.state === 'failed') {
+            return html`<span class="badge badge-danger"><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.detail.failed')}${code}</span>`;
+        }
+        const attempt = Number.isFinite(d.attempts) && Number.isFinite(d.max_attempts) && d.max_attempts > 0
+            ? t('inbox.detail.retryingAttempt', { n: d.attempts, max: d.max_attempts })
+            : t('inbox.detail.retrying');
+        return html`<span class="badge badge-warning"><i data-lucide="rotate-cw" aria-hidden="true"></i>${attempt}${code}</span>`;
+    },
+
+    /** "4 s", "2 min", "1.5 h": the reply's wait in the unit a person would say it in. */
+    durationText(ms) {
+        if (!Number.isFinite(ms) || ms < 0) return '';
+        if (ms < 1000) return t('inbox.detail.underSecond');
+        const seconds = Math.round(ms / 1000);
+        if (seconds < 120) return t('inbox.detail.seconds', { n: UI.formatNumber(seconds) });
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 120) return t('inbox.detail.minutes', { n: UI.formatNumber(minutes) });
+        return t('inbox.detail.hours', { n: UI.formatNumber(Math.round(ms / 360000) / 10) });
+    },
+
+    /**
+     * For each AI reply in a batch of messages: how long it took, and how many attempts the message it answered needed.
+     * `Map<reply id, { ms, attempts }>`; a reply whose inbound is not in the batch (the history is the newest 100) has no entry.
+     * Pure, and the arithmetic the reply's detail line is made of.
+     *
+     * Which inbound a reply answered: the pipeline marks the inbound handled the moment it stores the reply, so the inbound whose
+     * `handled_at` lies within `HANDLED_MATCH_MS` of the reply is the one (the nearest such, if two). Failing that (an old row, a
+     * clock that disagrees), the newest inbound before it that no earlier reply has taken. A reply takes one inbound and an inbound
+     * is taken once, so two messages sent together and answered one after the other get a time each and not the same one twice.
+     *
+     * `ms` is the reply's row minus the inbound's row: it includes any wait for a retry, which is why `attempts` is beside it.
+     */
+    pairReplies(messages) {
+        const result = new Map();
+        const taken = new Set();
+        const inbound = [];
+        (Array.isArray(messages) ? messages : []).forEach((msg) => {
+            if (!msg) return;
+            if (msg.direction === 'inbound') { inbound.push(msg); return; }
+            if (msg.direction !== 'outbound' || msg.sender !== 'ai' || msg.id === null || msg.id === undefined) return;
+            const repliedAt = Date.parse(msg.created_at);
+            if (!Number.isFinite(repliedAt)) return;
+
+            let match = null;
+            let nearest = Infinity;
+            inbound.forEach((candidate) => {
+                if (taken.has(candidate)) return;
+                const handledAt = Date.parse(candidate.handled_at);
+                if (!Number.isFinite(handledAt)) return;
+                const gap = Math.abs(handledAt - repliedAt);
+                if (gap <= this.HANDLED_MATCH_MS && gap < nearest) { nearest = gap; match = candidate; }
+            });
+            if (!match) {
+                for (let i = inbound.length - 1; i >= 0; i--) {
+                    if (!taken.has(inbound[i])) { match = inbound[i]; break; }
+                }
+            }
+            if (!match) return;
+            taken.add(match);
+
+            const askedAt = Date.parse(match.created_at);
+            if (!Number.isFinite(askedAt)) return;
+            result.set(String(msg.id), { ms: Math.max(0, repliedAt - askedAt), attempts: Number(match.reply_attempts) || 0 });
+        });
+        return result;
+    },
+
+    /**
+     * The line under an AI reply: how long it took, which model wrote it, and "retried" when the message it answered needed more
+     * than one attempt. Only the AI's replies carry it: the operator's own reply is not a measurement of the AI, and a row from before
+     * v26 cannot say which of the two wrote it.
+     *
+     * The model is `ai_usage`'s when a usage row matched the reply (the providers engine writes one) and otherwise the model the
+     * agent is set to now, which for a reply from before a change of model is a statement about today. The screen says "model" and no more.
+     */
+    outboundDetail(msg, reply) {
+        if (!msg || msg.direction !== 'outbound' || msg.sender !== 'ai') return '';
+        const items = [];
+        if (reply && Number.isFinite(reply.ms)) {
+            items.push(html`<span class="msg-detail-item"><i data-lucide="clock" aria-hidden="true"></i>${t('inbox.detail.repliedIn', { time: this.durationText(reply.ms) })}</span>`);
+        }
+        const model = msg.ai && typeof msg.ai.model === 'string' ? msg.ai.model.trim() : '';
+        if (model) {
+            items.push(html`<span class="msg-detail-item"><i data-lucide="bot" aria-hidden="true"></i><bdi class="ltr-text" dir="ltr">${model}</bdi></span>`);
+        }
+        if (reply && reply.attempts > 1) {
+            items.push(html`<span class="badge badge-warning"><i data-lucide="rotate-cw" aria-hidden="true"></i>${t('inbox.detail.retried', { count: reply.attempts, n: UI.formatNumber(reply.attempts) })}</span>`);
+        }
+        return items.length ? html`<div class="msg-detail">${items}</div>` : '';
     },
 
     // ─── Actions ─────────────────────────────────────────────────────────────

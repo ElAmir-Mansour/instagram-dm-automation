@@ -37,6 +37,8 @@ import { queryOne } from '../db/query.js';
 import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
+import { annotateMessages, conversationView, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
@@ -3162,6 +3164,41 @@ export function conversationSearchPattern(raw: unknown): string | null {
     return `%${term.replace(/[\\%_]/g, '\\$&')}%`;
 }
 
+/**
+ * The conversation list's query: each thread with what its row and its preview need of the newest message, and how many messages it has.
+ *
+ * One lateral per fact instead of a correlated subselect per column, so the newest message is read once. The preview needs more than its
+ * text: a carousel is stored as the placeholder "[Structured Template]" with its cards in `raw_payload`, so the card count and the first
+ * card's title are lifted out of the JSON here (paths, not the whole body: an inbound row's `raw_payload` is the entire Meta event).
+ * The message count is the thread header's.
+ */
+export function conversationsQuery(where: string, limitParam: number, offsetParam: number): string {
+    return `SELECT c.*,
+                lm.text AS last_message_text,
+                lm.direction AS last_message_direction,
+                lm.message_type AS last_message_type,
+                lm.cards AS last_message_cards,
+                lm.card_title AS last_message_card_title,
+                mc.n AS message_count
+         FROM conversations c
+         LEFT JOIN LATERAL (
+             SELECT m.text, m.direction, m.message_type,
+                    CASE WHEN jsonb_typeof(m.raw_payload #> '{attachment,payload,elements}') = 'array'
+                         THEN jsonb_array_length(m.raw_payload #> '{attachment,payload,elements}') END AS cards,
+                    m.raw_payload #>> '{attachment,payload,elements,0,title}' AS card_title
+               FROM messages m
+              WHERE m.conversation_id = c.id
+              ORDER BY m.created_at DESC
+              LIMIT 1
+         ) lm ON TRUE
+         LEFT JOIN LATERAL (
+             SELECT COUNT(m2.id)::int AS n FROM messages m2 WHERE m2.conversation_id = c.id
+         ) mc ON TRUE
+         WHERE ${where}
+         ORDER BY c.last_message_at DESC
+         LIMIT $${limitParam} OFFSET $${offsetParam}`;
+}
+
 router.get('/conversations', async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -3170,33 +3207,36 @@ router.get('/conversations', async (req, res) => {
 
         const tenantId = getTenantId(req);
         const pattern = conversationSearchPattern(req.query.search);
-        const params: unknown[] = [tenantId];
-        let where = 'c.creator_id = $1';
-        if (pattern) {
-            params.push(pattern);
-            where += ` AND (c.username ILIKE $${params.length} OR c.instagram_user_id ILIKE $${params.length})`;
+
+        // `profile_name` (v40) is searched too, so a customer is findable by the name on their profile. The column does not exist until
+        // `npm run migrate` has run, and a search is the only query that names it (the list reads `c.*`), so a search that fails with
+        // "undefined column" is asked again without it rather than turned into a 500.
+        const run = async (withName: boolean) => {
+            const params: unknown[] = [tenantId];
+            let where = 'c.creator_id = $1';
+            if (pattern) {
+                params.push(pattern);
+                const n = params.length;
+                where += ` AND (c.username ILIKE $${n} OR c.instagram_user_id ILIKE $${n}${withName ? ` OR c.profile_name ILIKE $${n}` : ''})`;
+            }
+            const rows = await pool.query(conversationsQuery(where, params.length + 1, params.length + 2), [...params, limit, offset]);
+            const count = await pool.query(`SELECT COUNT(*)::int as total FROM conversations c WHERE ${where}`, params);
+            return { rows, count };
+        };
+
+        let answered;
+        try {
+            answered = await run(Boolean(pattern));
+        } catch (err: any) {
+            if (!pattern || err?.code !== '42703') throw err;
+            answered = await run(false);
         }
-
-        const result = await pool.query(
-            `SELECT c.*,
-                    (SELECT text FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_text,
-                    (SELECT direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_direction
-             FROM conversations c
-             WHERE ${where}
-             ORDER BY c.last_message_at DESC
-             LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-            [...params, limit, offset]
-        );
-
-        const countRes = await pool.query(
-            `SELECT COUNT(*)::int as total FROM conversations c WHERE ${where}`,
-            params
-        );
+        const { rows: result, count: countRes } = answered;
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
-            // after v26 is applied.
-            data: result.rows.map((row) => ({ ...row, platform: conversationPlatformOf(row.platform) })),
+            // after v26 is applied. `conversationView` does the same for v40's profile columns.
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform))),
             pagination: {
                 page,
                 limit,
@@ -3240,10 +3280,65 @@ router.get('/conversations/:id/messages', async (req, res) => {
         );
         // Reversed back to chronological: the query takes the NEWEST 100, the client renders
         // oldest-first. `sender` (v26) is always present, null before v26 and on old rows.
-        res.json(messages.rows.reverse().map((row) => ({ ...row, sender: messageSenderOf(row.sender) })));
+        const rows = messages.rows.reverse().map((row) => ({ ...row, sender: messageSenderOf(row.sender) }));
+        // `ai` on the AI's replies (which model) and `delivery` on the customer's messages (is the reply failing): read-side extras that
+        // never fail the list. See src/services/inboxDetail.ts for where each comes from and how sure it is.
+        res.json(annotateMessages(rows, await loadMessageExtras(getTenantId(req), rows)));
     } catch (err) {
         log('error', 'api.messages_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch message history.' });
+    }
+});
+
+/**
+ * Look the sender up again, if the throttle allows: how the inbox fills in a thread written before v40, and refreshes a picture link
+ * (Meta's expire after a few days) the first time the operator opens the thread in a day. The same `refreshSenderProfile` the DM pipeline
+ * calls, so the same claim: one attempt per thread per day, one an hour while none has succeeded. An operator who opens fifty threads
+ * makes at most fifty lookups, once.
+ *
+ * Always 200 with `{ refreshed, reason }` for anything that is not a bad request: a lookup that fails is the normal outcome for a person who
+ * has blocked the account, and the dashboard's answer to it is to keep showing initials.
+ */
+router.post('/conversations/:id/refresh-profile', canOperate, async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        const found = await pool.query(
+            `SELECT c.id, c.instagram_user_id, c.platform, cr.page_access_token
+               FROM conversations c
+               JOIN creators cr ON cr.id = c.creator_id
+              WHERE c.id = $1 AND c.creator_id = $2`,
+            [id, getTenantId(req)]
+        );
+        const conv = found.rows[0];
+        if (!conv) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        // Only the Instagram User Profile API is wired: a Messenger sender has a different one, and a thread no DM has attributed yet
+        // (platform NULL, written before v26) is not guessed at.
+        if (conversationPlatformOf(conv.platform) !== 'instagram') {
+            res.json({ refreshed: false, reason: 'skipped' });
+            return;
+        }
+
+        const result = await refreshSenderProfile({
+            conversationId: id,
+            igsid: String(conv.instagram_user_id),
+            token: conv.page_access_token ? decryptSecret(conv.page_access_token) : null,
+        });
+        res.json({
+            refreshed: result.outcome === 'refreshed',
+            reason: result.outcome,
+            ...(result.profile ? { profile: profileView(result.profile as unknown as Record<string, unknown>) } : {}),
+        });
+    } catch (err) {
+        log('error', 'api.refresh_profile_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to refresh the profile.' });
     }
 });
 
