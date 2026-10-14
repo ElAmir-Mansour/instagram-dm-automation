@@ -167,22 +167,6 @@
     --brand-youtube-soft: rgba(255, 0, 51, 0.14);
     --brand-on-solid: #ffffff;
 
-    /* ─── The logo mark: FROZEN, and independent of the palette ──────────────
-       The dashboard's mark (.logo-mark, .login-mark) is Lucide's zap on a blue
-       tile, the same picture as public/favicon.svg. The app is in TikTok's review
-       with this logo, so it must not change when the palette does: the tile and
-       glyph are pinned here, the same in both themes, and nothing else paints
-       the mark. `--mark-tile-lit` is the lit gradient the dashboard has always
-       drawn on that tile, and the mark paints it as ONE background layer: a flat
-       colour under it shifts the antialiased edge by a few levels, and the mark
-       is pixel-for-pixel what it was. The favicon is the flat `--mark-tile`,
-       which is also the gradient's middle stop, so there is one blue.
-       Frozen until TikTok accepts the app; then the ر mark from DESIGN.md §4.
-       src/dashboard/design-md.test.ts pins these three values. */
-    --mark-tile: #0071e3;
-    --mark-tile-lit: linear-gradient(180deg, #0a7cf0, var(--mark-tile) 60%, #0064cc);
-    --mark-glyph: #ffffff;
-
     /* ─── Chart series ───────────────────────────────────────────────────────
        Read by js/charts.js through getComputedStyle, so the charts follow the
        theme instead of carrying their own duplicated hex values. */
@@ -298,6 +282,15 @@
        it is the fill; in light it is the deep olive, because a near-black line on a card reads as
        a default rather than a brand. A 3:1 shape against every ground a chart sits on. */
     --chart-accent: #bcde70;
+
+    /* ─── The logo mark: Kufi «رد» (DESIGN.md §4, IDENTITY.md §2) ────────────
+       The tile and the glyph of .logo-mark and .login-mark, and of the inline marks on the public pages. Dark UI is the
+       Cardamom colourway: a cardamom tile, an ink glyph (12.0:1). Light UI is the Ink colourway below. The icons are not
+       painted from here: favicon.svg, favicon.ico and the PNGs are the Cardamom colourway at every size, with no
+       light-mode swap, because CSS variables do not reach a favicon and the Ink tile at 16px vanishes on a dark tab strip
+       (1.07:1). scripts/build-brand-icons.mjs --check reads these six values against the kit's two colourway files. */
+    --mark-tile: #bcde70;
+    --mark-glyph: #141610;
 }
 
 
@@ -388,6 +381,10 @@
         --chart-grid: rgba(0, 0, 0, 0.07);
         --chart-tick: #66695c;
         --chart-accent: #3e5208;
+
+        /* The Ink colourway: an ink tile, a cardamom glyph (11.3:1), for the light UI only. */
+        --mark-tile: #1a1c15;
+        --mark-glyph: #bcde70;
     }
 }
 
@@ -476,6 +473,10 @@
     --chart-grid: rgba(0, 0, 0, 0.07);
     --chart-tick: #66695c;
     --chart-accent: #3e5208;
+
+    /* The Ink colourway: an ink tile, a cardamom glyph (11.3:1), for the light UI only. */
+    --mark-tile: #1a1c15;
+    --mark-glyph: #bcde70;
 }
 
 /* Latin UI runs tighter than Arabic at the same size. */

@@ -12,8 +12,9 @@
  *   - The tokenizer behind L6, on the inputs a regex gets wrong: a comment that mentions `<style>`, a `<!--` inside a script, a
  *     style string or an attribute, a conditional comment, `<pre>`.
  *
- * The frozen identity (favicon, manifest) is pinned by hash: they change when TikTok has accepted the app, on purpose, in the PR
- * that does it. Not before.
+ * The identity that stays put (the favicon file, the root routes that serve the icon set) is pinned: the Kufi «رد» mark replaced
+ * Lucide's zap in B5, and these change again only on purpose, in a PR that changes the logo. The icon files themselves are held to
+ * the pixel by `npm run check:brand-icons`.
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -493,11 +494,24 @@ describe('compactCss', () => {
 
 // ─── the identity that stays put ─────────────────────────────────────────────────────────────────────────────────────
 
-describe('the frozen mark, favicon and manifest are not touched by L5/L6', () => {
+describe('the mark\'s favicon and the routes that serve the icon set are not touched by L5/L6', () => {
     const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
-    it('favicon.svg and site.webmanifest are the files that shipped, byte for byte (edited on purpose after TikTok accepts the app, with these pins)', () => {
-        assert.equal(sha('public/favicon.svg'), 'a02eb3d94c25766bcbca5fdc76b7ba9fc8b0a9b7f49be7c5537859949eabf49f');
-        assert.equal(sha('public/site.webmanifest'), '5e92001cfc95f6163356b315746ffca5be71463a5b131fd0964ffa61662e5de5');
+    it('favicon.svg is the kit\'s 16px micro cut, byte for byte (edited on purpose, in a PR that changes the logo, with this pin)', () => {
+        assert.equal(sha('public/favicon.svg'), '3429ef12281c94d8885bc581d801c26fbff94d4669ca3b7fc7993ed3d681e4b0');
+    });
+
+    it('src/index.ts serves the four root files a browser asks for by name, from public/, with their own content types', () => {
+        const index = read('src/index.ts');
+        const routes: Array<[string, string]> = [
+            ['favicon.svg', 'image/svg+xml'],
+            ['favicon.ico', 'image/x-icon'],
+            ['apple-touch-icon.png', 'image/png'],
+            ['site.webmanifest', 'application/manifest+json'],
+        ];
+        for (const [file, type] of routes) {
+            const handler = `app.get('/${file}', (_req, res) => {\n    res.type('${type}');\n    res.sendFile(path.join(__dirname, '../public/${file}'), { maxAge: ROOT_ASSET_MAX_AGE });\n});`;
+            assert.ok(index.includes(handler), `/${file} is served from public/${file} as ${type}`);
+        }
     });
 
     it('no share card or page names the new «رد» mark: the cards are type only', () => {

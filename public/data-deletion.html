@@ -118,7 +118,9 @@
     <title data-lang-only="en">Data Deletion — AutoReply Pro</title>
     <meta name="description" data-lang-only="ar" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف.">
     <meta name="description" data-lang-only="en" content="How to have your data deleted from AutoReply Pro, and the limits of what deletion can reach.">
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
@@ -163,7 +165,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.37">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.38">
 
     <style>
         * { box-sizing: border-box; }
@@ -508,20 +510,21 @@
             min-height: var(--nav-h);
         }
 
-        /* The wordmark is a link, so it is a target: it measured 36.8px tall
-           before the min-block-size, which is under the 44px floor. Inline
-           links inside paragraphs are left alone deliberately — WCAG 2.5.8
-           exempts a target that is "in a sentence or block of text". */
+        /* The lockup (IDENTITY.md section 2, "Topbar"): the Kufi «رد» mark at the inline-start, 8px (2 modules of the 32px tile)
+           before the name, which is one line at 16px and takes the language the page is in (`.t-ar` / `.t-en`, as every link in the
+           bar does). The mark is the master, exact at 32px; its tile and glyph are painted from --mark-tile and --mark-glyph,
+           Cardamom in dark and Ink in light. Under 30rem the bar shows the mark alone and keeps the name for screen readers
+           (see the media query below). The name is Alexandria 600, with the Arabic name's width reserved: 6.3em is Alexandria's
+           measure of «أوتوريبلاي برو» at 600 (6.28em), so the fallback may overhang and nothing moves when the font arrives.
+           Change the name in the markup, change this.
+           The wordmark is a link, so it is a target: it measured 36.8px tall before the min-block-size, which is under the
+           44px floor. Inline links inside paragraphs are left alone deliberately — WCAG 2.5.8 exempts a target that is "in a
+           sentence or block of text". */
         .wordmark {
             display: flex;
-            flex-direction: column;
-            justify-content: center;
+            align-items: center;
+            gap: var(--space-2);
             min-block-size: var(--tap-target);
-            /* The Arabic name's width, reserved. The bar is full at 375px in English, so a wordmark that is 10px wider in the
-               fallback than in Alexandria wraps it to a second row, and everything below it moves 52px when the font arrives.
-               6.3em is Alexandria's measure of «أوتوريبلاي برو» at 600 (6.28em): the fallback may overhang the 12px gap beside it,
-               and nothing moves. Change the name in the markup, change this. */
-            inline-size: 6.3em;
             flex: none;
             white-space: nowrap;
             font-family: var(--font-display);
@@ -531,14 +534,13 @@
             line-height: 1.25;
             text-decoration: none;
         }
-        .wordmark .latin {
-            font-family: var(--font-latin);
-            font-size: 0.75rem;
-            font-weight: var(--fw-regular);
-            letter-spacing: 0.01em;
-            color: var(--text-muted);
-            line-height: 1.4;
-        }
+        .wordmark .arp-mark { inline-size: 32px; block-size: 32px; flex: none; }
+        /* The name's baseline is the mark's baseline (IDENTITY.md: 4.75 modules, 19px under the tile's top at 32px). Centred in a 32px
+           row, Alexandria 600 at 16px sits on 21px, in Arabic and in Latin alike (measured), so the name is lifted 2px: the open
+           "recheck with Alexandria" item of the kit's handover. */
+        .wordmark .wm-name { min-inline-size: 6.3em; position: relative; inset-block-start: -2px; }
+        .mark-tile { fill: var(--mark-tile); }
+        .mark-glyph { fill: var(--mark-glyph); }
 
         .headtools {
             display: flex;
@@ -721,25 +723,13 @@
             color: var(--text-muted);
         }
         .pagefoot .foot-top { margin-block-end: var(--space-5); }
+        /* The same lockup as the bar (it is also a `.wordmark`, which draws the mark and the name); this rule is what `.pagefoot a`
+           would otherwise win: the size, the colour, and no underline. Here the name stays under 30rem: there is room. */
         .pagefoot .foot-mark {
-            display: inline-flex;
-            flex-direction: column;
-            justify-content: center;
-            min-block-size: var(--tap-target);
             margin-block-end: var(--space-2);
             font-size: 1rem;
-            font-weight: var(--fw-semibold);
-            line-height: 1.25;
             color: var(--text-strong);
             text-decoration: none;
-        }
-        .pagefoot .foot-mark .latin {
-            font-family: var(--font-latin);
-            font-size: 0.75rem;
-            font-weight: var(--fw-regular);
-            letter-spacing: 0.01em;
-            color: var(--text-muted);
-            line-height: 1.4;
         }
         .pagefoot .foot-what { max-width: 54ch; }
 
@@ -892,6 +882,24 @@
                nothing is pressed, so both still show. */
             .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
+
+        /* The bar shows the mark alone (IDENTITY.md, "Topbar": "mark only"), and keeps the name for screen readers. The kit
+           says below 30rem, drawn before the bar's own measure was taken: the mark, the name, the three links and BOTH language
+           buttons (the pressed one is hidden only below 30rem) need 577px in English, so between 30rem and 36rem the bar broke
+           onto a second row, 123px tall and sticky. 37rem leaves room for the Arabic name in its fallback face. The link keeps
+           its 44px target, and the name is still its accessible name. */
+        @media (max-width: 37rem) {
+            .topbar .wordmark { min-inline-size: var(--tap-target); }
+            .topbar .wordmark .wm-name {
+                position: absolute;
+                inline-size: 1px;
+                block-size: 1px;
+                min-inline-size: 0;
+                margin: -1px;
+                overflow: hidden;
+                clip-path: inset(50%);
+            }
+        }
     </style>
 
     <script>
@@ -961,8 +969,8 @@
                  app's own settings, so a visitor who arrived from Meta, read
                  the policy and wanted the product had nowhere to go. -->
             <a class="wordmark" href="/">
-                <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
-                <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+                <svg class="arp-mark" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg>
+                <span class="wm-name"><bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></span>
             </a>
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
@@ -1545,9 +1553,9 @@
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
             <div class="foot-top">
-                <a class="foot-mark" href="/">
-                    <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
-                    <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+                <a class="wordmark foot-mark" href="/">
+                    <svg class="arp-mark" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg>
+                    <span class="wm-name"><bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></span>
                 </a>
                 <p class="foot-what">
                     <bdi class="t-ar" lang="ar" dir="rtl">استوديو نموّ مُدار لصنّاع المحتوى العرب: ريلز وكاروسيل وإنفوجرافيك، ونشرٌ على إنستجرام وفيسبوك وتيك توك ويوتيوب، ومن التعليق إلى الرسالة الخاصة.</bdi>

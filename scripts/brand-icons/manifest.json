@@ -1,0 +1,56 @@
+{
+  "renderer": "scripts/build-brand-icons.mjs: exact polygon coverage, node zlib",
+  "sources": {
+    "mark-cardamom.svg": "41e6d681da9ed1926969764933975a7965baba08d68f7ec6dcbe8c900e97e87b",
+    "mark-ink.svg": "4a71c969bcbbe45efd12e284508fee93bcc1281bb9f74c29886b14be21bf7991",
+    "mark-micro-16.svg": "3429ef12281c94d8885bc581d801c26fbff94d4669ca3b7fc7993ed3d681e4b0",
+    "mark-small-24.svg": "995dc0bc6a54e30a140f5e7f140f40402e9f663911985eb7540e1c6417d9feb9",
+    "mark-fullbleed-maskable.svg": "61dbf512be5550a2a3bfc498022e12249d5879b9f7e93a75dd1109d101496dd2"
+  },
+  "outputs": {
+    "favicon_svg": {
+      "file": "public/favicon.svg",
+      "sha256": "3429ef12281c94d8885bc581d801c26fbff94d4669ca3b7fc7993ed3d681e4b0",
+      "bytes": 429
+    },
+    "mark_svg": {
+      "file": "public/brand/mark.41e6d681.svg",
+      "sha256": "41e6d681da9ed1926969764933975a7965baba08d68f7ec6dcbe8c900e97e87b",
+      "bytes": 434
+    },
+    "favicon_ico": {
+      "file": "public/favicon.ico",
+      "sha256": "5a5ebab7eff30c720b5e80ad9d919946a0592bd891b10762ec3f0c544fb5a76e",
+      "bytes": 1287,
+      "layers": [
+        "19abc9b34641816994e920c05ebb7b8c612562fe951242cb4d5567fe2eed0bca",
+        "f86b5a5a5b3795ee9824abc32b0b57e5370c0399dd483e9f727a90eb859a09da",
+        "6b23d8023a0d5f913535a556a3e45121aae7e8f7859e6ef4ab04d815d5eeed90"
+      ]
+    },
+    "apple_touch": {
+      "file": "public/apple-touch-icon.png",
+      "sha256": "9d340a30e7f1ecbd923cc425c44d4c39a2726c1192d3c430c0f32df2df6ba37d",
+      "bytes": 691,
+      "pixels": "c3ca6593040f7fb6f1ab6c23d9c1c036148c87807b86d37a4f2537b4ac83228f"
+    },
+    "icon_192": {
+      "file": "public/brand/icon-192.2e9babd4.png",
+      "sha256": "2e9babd4587e6f97fee3450ee23c570d7f790c8c170d3515b015fe9f67066918",
+      "bytes": 2240,
+      "pixels": "16674c821580a95e35e6713cc79894c785404fe638279ee1903b5a301a288c10"
+    },
+    "icon_512": {
+      "file": "public/brand/icon-512.50d34119.png",
+      "sha256": "50d341190d1629d8989192954e3b5fd96933aa8de0e622d51f1d17eb8458ca49",
+      "bytes": 6934,
+      "pixels": "bbe89c6fe6251daa5f766ae6afb4e6a5444b8c555c113a3ef731bb6715c9c3f5"
+    },
+    "icon_maskable_512": {
+      "file": "public/brand/icon-maskable-512.2047fe85.png",
+      "sha256": "2047fe85b82d5cf5403497a6922102cfb1603be10688fad22267a77dc3cd1a3d",
+      "bytes": 1835,
+      "pixels": "f7586e4a45ff9454902ab03e3834acf40a96eb8ceb1ec51be0a654c23a2b9763"
+    }
+  }
+}

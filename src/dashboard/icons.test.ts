@@ -429,12 +429,13 @@ describe('icon subset — build-icons.mjs --check', () => {
     it('fails when an icon the dashboard uses is missing from it', () => {
         const stale = join(dir, 'missing.js');
         const source = readFileSync(ICONS_JS, 'utf8');
-        const line = source.split('\n').find((l) => l.startsWith('        "zap": '));
-        assert.ok(line, 'zap is in the subset');
+        // An icon the shell itself draws: the sidebar's. (This used to be `zap`, which was the logo until the Kufi mark replaced it.)
+        const line = source.split('\n').find((l) => l.startsWith('        "key-round": '));
+        assert.ok(line, 'key-round is in the subset');
         writeFileSync(stale, source.replace(`${line}\n`, '').replace(/\],\n( {4}\};)/, ']\n$1'));
         const run = check(stale);
         assert.notEqual(run.status, 0);
-        assert.match(run.stderr, /'zap' is used \(dashboard\/index\.html/);
+        assert.match(run.stderr, /'key-round' is used \(dashboard\/index\.html/);
     });
 
     it('fails when it carries an icon nothing uses', () => {

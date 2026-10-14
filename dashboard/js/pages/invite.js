@@ -52,7 +52,7 @@ const InvitePage = {
     header(title, subtitle) {
         return html`
             <div class="login-logo">
-                <div class="login-mark"><i data-lucide="zap" aria-hidden="true"></i></div>
+                <div class="login-mark">${UI.brandMark()}</div>
                 <h1 class="login-title" id="invite-title" tabindex="-1">${title}</h1>
                 ${subtitle ? html`<p class="login-subtitle">${subtitle}</p>` : ''}
             </div>

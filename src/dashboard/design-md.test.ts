@@ -7,10 +7,10 @@
  * parsed here and compared with the value tokens.css actually resolves to in that theme, and every
  * colour token in tokens.css must have a row. Edit one without the other and this fails.
  *
- * The second job is the logo. The app is in TikTok's review with the current mark (Lucide's zap on
- * a #0071e3 tile), so the palette swap must not be able to recolour it: the mark paints three pinned
- * tokens, the favicon is a pinned file, and the manifest's icon list is pinned. When TikTok accepts
- * the app and the ر mark replaces this one, the constants below are edited on purpose, in that PR.
+ * The second job is the logo. Since B5 it is the Kufi «رد» mark (IDENTITY.md section 2), which replaced Lucide's zap on a
+ * #0071e3 tile: the mark paints two tokens per theme, the favicon is a pinned file (the kit's 16px micro cut), the manifest's
+ * icon list is pinned, and the old picture may not come back anywhere. The constants below are edited on purpose, in a PR that
+ * changes the logo again; scripts/build-brand-icons.mjs --check holds the icon files themselves to the pixel.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -133,10 +133,11 @@ describe('DESIGN.md: shape', () => {
         ]);
     });
 
-    it('is no longer a draft, and says the logo is frozen and the ر mark is next', () => {
+    it('is no longer a draft, and says the logo is the Kufi «رد» mark and nothing is frozen', () => {
         assert.equal(/\bDRAFT\b/.test(design), false);
-        assert.ok(design.includes('FROZEN'));
-        assert.ok(design.includes('after TikTok accepts the app'));
+        assert.ok(design.includes('### Mark\n\n**Kufi «رد»**'));
+        assert.ok(design.includes('### The logo mark: Kufi «رد»'));
+        assert.equal(/FROZEN|frozen until|until TikTok accepts/i.test(design), false, 'the freeze is lifted: no section may still say the logo waits for TikTok');
     });
 });
 
@@ -201,99 +202,132 @@ describe('DESIGN.md §2 = tokens.css', () => {
     });
 });
 
-// ─── The logo is frozen ────────────────────────────────────────────────────────────────────────
+// ─── The logo: Kufi «رد» ───────────────────────────────────────────────────────────────────────
 //
 // Constants, not reads: the point is that changing any of them is a deliberate edit of this file.
-const FROZEN = {
-    markTile: '#0071e3',
-    markTileLit: 'linear-gradient(180deg, #0a7cf0, var(--mark-tile) 60%, #0064cc)',
-    /** What that gradient resolves to: the one main drew on the tile before the palette changed. */
-    markTileLitResolved: 'linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc)',
-    markGlyph: '#ffffff',
-    /** sha256 of public/favicon.svg as it stood on main before the Ink & Cardamom palette. */
-    faviconSha256: 'a02eb3d94c25766bcbca5fdc76b7ba9fc8b0a9b7f49be7c5537859949eabf49f',
+const MARK = {
+    /** IDENTITY.md section 2: Cardamom for dark UI and every icon, Ink for light UI. */
+    dark: { tile: '#bcde70', glyph: '#141610' },
+    light: { tile: '#1a1c15', glyph: '#bcde70' },
+    /** The master's glyph: the د and the ر, two subpaths, no dot. Ink 18.4% of the tile. */
+    glyph: 'M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z',
+    /** sha256 of public/favicon.svg: the kit's mark-micro-16.svg, the 16px cut, byte for byte. */
+    faviconSha256: '3429ef12281c94d8885bc581d801c26fbff94d4669ca3b7fc7993ed3d681e4b0',
+    /** The dark page, which is what the manifest's two colours are. */
+    manifestColour: '#111210',
 };
 
-describe('the logo mark is frozen until TikTok accepts the app', () => {
-    it('the three mark tokens hold their pinned values, in the theme-independent block only', () => {
-        assert.equal(base['mark-tile'], FROZEN.markTile);
-        assert.equal(base['mark-tile-lit'], FROZEN.markTileLit);
-        assert.equal((base['mark-tile-lit'] as string).replace('var(--mark-tile)', base['mark-tile'] as string), FROZEN.markTileLitResolved);
-        assert.equal(base['mark-glyph'], FROZEN.markGlyph);
-        for (const [name, block] of Object.entries({ dark: darkBlock, 'light (media)': lightMedia, 'light (pinned)': lightPinned })) {
-            for (const t of ['mark-tile', 'mark-tile-lit', 'mark-glyph']) {
-                assert.equal(block[t], undefined, `--${t} is overridden in the ${name} block: the mark must be the same in both themes`);
-            }
+describe('the logo mark is the Kufi «رد» drawing, in the colourways IDENTITY.md section 2 gives it', () => {
+    it('--mark-tile and --mark-glyph are Cardamom in dark and Ink in light, and the old lit gradient is gone', () => {
+        assert.equal(darkBlock['mark-tile'], MARK.dark.tile);
+        assert.equal(darkBlock['mark-glyph'], MARK.dark.glyph);
+        for (const [name, block] of Object.entries({ 'light (media)': lightMedia, 'light (pinned)': lightPinned })) {
+            assert.equal(block['mark-tile'], MARK.light.tile, `${name}: --mark-tile`);
+            assert.equal(block['mark-glyph'], MARK.light.glyph, `${name}: --mark-glyph`);
         }
+        // Not in the theme-independent block: a mark that is the same in both themes is the one the freeze pinned.
+        assert.equal(base['mark-tile'], undefined);
+        assert.equal(base['mark-glyph'], undefined);
+        for (const block of [base, darkBlock, lightMedia, lightPinned]) assert.equal(block['mark-tile-lit'], undefined, 'the new tile is flat: no gradient layer');
+        assert.equal(/--mark-tile-lit/.test(read('dashboard/css/styles.css')), false);
     });
 
-    it('.logo-mark and .login-mark paint the mark tokens, and no rule anywhere paints them from the accent', () => {
+    it('.logo-mark is 32px and .login-mark 64px: the sizes at which every edge of the master lands on a whole pixel', () => {
+        const css = read('dashboard/css/styles.css').replace(/\/\*[\s\S]*?\*\//g, '');
+        const rules = rulesIn(css);
+        const decl = (sel: string): string => rules.filter((r) => r.selectors.includes(sel)).map((r) => r.body).join(';');
+        assert.match(decl('.logo-mark'), /inline-size:\s*32px;\s*block-size:\s*32px/);
+        assert.match(decl('.login-mark'), /inline-size:\s*64px;\s*block-size:\s*64px/);
+        assert.equal(/(?:^|[;\s])(?:width|height):\s*(?:38|62)px/.test(decl('.logo-mark') + decl('.login-mark')), false, 'the old sizes put every edge between pixels');
+    });
+
+    it('the tile and the glyph are painted from the mark tokens, and no rule that can reach the mark paints it from the accent, a literal, a gradient or a shadow', () => {
         const css = read('dashboard/css/styles.css').replace(/\/\*[\s\S]*?\*\//g, '').replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
         const rules = rulesIn(css);
+        const paint = (sel: string): string => rules.filter((r) => r.selectors.includes(sel)).map((r) => r.body).join(';');
+        assert.match(paint('.mark-tile'), /(^|[;\s])fill:\s*var\(--mark-tile\)/, '.mark-tile paints --mark-tile');
+        assert.match(paint('.mark-glyph'), /(^|[;\s])fill:\s*var\(--mark-glyph\)/, '.mark-glyph paints --mark-glyph');
 
-        // 1. The base rules say what the mark is made of.
-        for (const sel of ['.logo-mark', '.login-mark']) {
-            const base = rules.filter((r) => r.selectors.includes(sel));
-            assert.ok(base.length >= 1, `${sel} has no rule`);
-            const tile = base.find((r) => /(^|[;\s])background:\s*var\(--mark-tile-lit\)/.test(r.body));
-            assert.ok(tile, `${sel}: no rule paints its background from --mark-tile-lit, as one layer`);
-            assert.doesNotMatch(tile.body, /background-color:/, `${sel}: a background-color under the gradient shifts the mark's edge pixels`);
-            const glyph = rules.filter((r) => r.selectors.includes(`${sel} svg`));
-            assert.ok(glyph.some((r) => /(^|[;\s])color:\s*var\(--mark-glyph\)/.test(r.body)), `${sel} svg: no rule paints the glyph from --mark-glyph`);
-        }
-
-        // 2. EVERY rule that can reach the mark, in any block (a @media rule, a later override, a parent
-        //    selector), is free of the accent family. The first-match version of this test passed a
-        //    `@media { .logo-mark { background: var(--gradient-brand) } }` appended further down the file.
-        const REACHES_THE_MARK = /logo-mark|login-mark|sidebar-logo|login-logo/;
+        // EVERY rule that can reach the mark, in any block, is free of the accent family. The first-match version of this test passed
+        // a `@media { .logo-mark { background: var(--gradient-brand) } }` appended further down the file.
+        const REACHES_THE_MARK = /logo-mark|login-mark|sidebar-logo|login-logo|mark-tile|mark-glyph/;
         const ACCENT_FAMILY = /var\(--(?:accent[a-z-]*|gradient-brand[a-z-]*|text-on-accent|chart-accent)\)/;
         const touching = rules.filter((r) => r.selectors.some((x) => REACHES_THE_MARK.test(x)));
-        assert.ok(touching.length >= 6, `only ${touching.length} rules reach the mark; the scan is not reading the stylesheet`);
+        assert.ok(touching.length >= 5, `only ${touching.length} rules reach the mark; the scan is not reading the stylesheet`);
         const offenders = touching.filter((r) => ACCENT_FAMILY.test(r.body)).map((r) => `${r.selectors.join(', ')} { ${r.body.trim()} }`);
-        assert.deepEqual(offenders, [], 'a rule paints the frozen mark from the accent');
-        // ...and none of them re-colours it by a literal either.
+        assert.deepEqual(offenders, [], 'a rule paints the mark from the accent');
         const literal = touching.filter((r) => /(?:background|color|fill|stroke)[a-z-]*:[^;]*(?:#[0-9a-fA-F]{3,8}\b|rgba?\()/.test(r.body)).map((r) => r.selectors.join(', '));
-        assert.deepEqual(literal, [], 'a rule paints the frozen mark from a colour literal instead of the mark tokens');
+        assert.deepEqual(literal, [], 'a rule paints the mark from a colour literal instead of the mark tokens');
+        // IDENTITY.md Never: no gradient, gloss, shadow or 3D effect, and nothing that mirrors it.
+        const effects = touching.filter((r) => /(?:gradient|box-shadow|filter|drop-shadow|transform|text-shadow)/.test(r.body)).map((r) => r.selectors.join(', '));
+        assert.deepEqual(effects, [], 'the mark takes no gradient, shadow, filter or transform');
     });
 
-    it('the markup is still Lucide\'s zap in both places', () => {
+    it('the login and the sidebar are the master geometry, in markup that paints before any script runs', () => {
         const html = read('dashboard/index.html');
-        assert.ok(html.includes('<div class="login-mark"><i data-lucide="zap" aria-hidden="true"></i></div>'));
-        assert.ok(html.includes('<div class="logo-mark"><i data-lucide="zap" aria-hidden="true"></i></div>'));
+        for (const cls of ['login-mark', 'logo-mark']) {
+            const m = new RegExp(`<div class="${cls}">(<svg [^>]*>[\\s\\S]*?</svg>)</div>`).exec(html);
+            assert.ok(m, `${cls}: an inline svg`);
+            const svg = m[1] as string;
+            assert.ok(svg.includes('viewBox="0 0 256 256"') && svg.includes('aria-hidden="true"'), `${cls}: the 256 grid, decorative`);
+            assert.ok(svg.includes('<rect class="mark-tile" width="256" height="256" rx="64"/>'), `${cls}: the tile, radius 2 modules`);
+            assert.ok(svg.includes(`<path class="mark-glyph" d="${MARK.glyph}"/>`), `${cls}: the master glyph`);
+            assert.equal((svg.match(/<path/g) ?? []).length, 1, `${cls}: one path, so the د and the ر and nothing else (never a dot)`);
+        }
     });
 
-    it('public/favicon.svg is byte-identical to the one the app was submitted with', () => {
+    it('public/favicon.svg is the kit\'s 16px micro cut, byte for byte, with no light-mode swap', () => {
         const svg = readFileSync('public/favicon.svg');
-        assert.equal(createHash('sha256').update(svg).digest('hex'), FROZEN.faviconSha256);
-        assert.match(svg.toString('utf8'), /<rect width="64" height="64" rx="14" fill="#0071e3"\/>/);
+        assert.equal(createHash('sha256').update(svg).digest('hex'), MARK.faviconSha256);
+        const text = svg.toString('utf8');
+        assert.match(text, /<rect width="16" height="16" rx="4" fill="#BCDE70"\/>/);
+        assert.match(text, /<path fill="#141610" d="M5 3H9V9H3V7H7V5H5ZM11 3H13V11L11 13H8L11 10Z"\/>/);
+        assert.equal(/prefers-color-scheme|<style|@media/.test(text), false, 'the Ink tile at 16px vanishes on a dark tab strip: Cardamom at every size');
     });
 
-    it('the manifest still lists exactly the favicon as its icon', () => {
-        const manifest = JSON.parse(read('public/site.webmanifest')) as { icons: unknown };
-        assert.deepEqual(manifest.icons, [{ src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' }]);
+    it('the manifest names the four icons the build wrote, and the dark page for its two colours', () => {
+        const manifest = JSON.parse(read('public/site.webmanifest')) as { icons: Array<{ src: string; sizes: string; type: string; purpose: string }>; theme_color: string; background_color: string };
+        assert.equal(manifest.theme_color, MARK.manifestColour);
+        assert.equal(manifest.background_color, MARK.manifestColour);
+        assert.equal(manifest.theme_color, THEMES.dark['surface-page']?.toLowerCase());
+        const shape = manifest.icons.map((i) => [i.src.replace(/\.[0-9a-f]{8}\./, '.<sha8>.'), i.sizes, i.type, i.purpose]);
+        assert.deepEqual(shape, [
+            ['/brand/icon-192.<sha8>.png', '192x192', 'image/png', 'any'],
+            ['/brand/icon-512.<sha8>.png', '512x512', 'image/png', 'any'],
+            ['/brand/icon-maskable-512.<sha8>.png', '512x512', 'image/png', 'maskable'],
+            ['/brand/mark.<sha8>.svg', 'any', 'image/svg+xml', 'any'],
+        ]);
     });
 
-    it('#0071e3 lives only in the four places that are the logo', () => {
+    it('neither the Lucide zap nor #0071e3 is the brand mark anywhere: no page, script, stylesheet, icon file or manifest names either', () => {
+        const ZAP_PATH = 'M4 14a1 1 0 0 1-.78-1.63';
+        const OLD_FAVICON_POLYGON = '13 2 3 14 12 14 11 22 21 10 12 10 13 2';
+        const BRAND_BOX = /class="[^"]*\b(?:logo-mark|login-mark|welcome-brand|sidebar-logo|login-logo|wordmark|foot-mark)\b[^"]*"[^>]*>(?:(?!<\/(?:div|span|a|header)>)[\s\S])*?data-lucide="zap"/;
         const hits: string[] = [];
         const walk = (dir: string): void => {
             for (const e of readdirSync(dir, { withFileTypes: true })) {
-                const p = `${dir}/${e.name}`;
+                const f = `${dir}/${e.name}`;
                 if (e.isDirectory()) {
                     if (e.name === 'samples') continue;
-                    walk(p);
-                } else if (/\.(css|js|html|svg|webmanifest|ts|mjs)$/.test(e.name) && /#0071e3/i.test(read(p))) {
-                    hits.push(p);
+                    walk(f);
+                    continue;
                 }
+                // The two test files that name the old blue on purpose: this one, and the icon guard's, whose mutation puts it in a manifest.
+                if (!/\.(css|js|html|svg|webmanifest|ts|mjs|json)$/.test(e.name) || f.endsWith('src/dashboard/design-md.test.ts') || f.endsWith('scripts/build-brand-icons.test.mjs')) continue;
+                const text = read(f);
+                // icons.js is the Lucide subset: `zap` is a real icon there (the inbox's "hot" badge), never the logo.
+                if (/#0071e3/i.test(text)) hits.push(`${f}: #0071e3`);
+                if (f !== 'dashboard/js/icons.js' && text.includes(ZAP_PATH)) hits.push(`${f}: the Lucide zap path`);
+                if (text.includes(OLD_FAVICON_POLYGON)) hits.push(`${f}: the old favicon's polygon`);
+                if (BRAND_BOX.test(text)) hits.push(`${f}: data-lucide="zap" inside a brand mark`);
             }
         };
         for (const d of ['dashboard', 'public', 'src', 'scripts']) walk(d);
-        const allowed = [
-            'dashboard/css/tokens.css', // the pinned mark tokens
-            'public/favicon.svg', // the favicon
-            'public/site.webmanifest', // theme_color: browser chrome, moves with the logo
-            'src/dashboard/design-md.test.ts', // this file
-        ];
-        assert.deepEqual(hits.sort(), allowed.sort(), 'the old blue is back somewhere that is not the logo, or the logo lost one of its places');
+        for (const f of ['preview.html', 'preview-dark.html']) {
+            const text = read(f);
+            if (/#0071e3/i.test(text) || text.includes(ZAP_PATH) || /mark-tile-lit/.test(text)) hits.push(f);
+        }
+        assert.deepEqual(hits, [], 'the old mark is back somewhere');
     });
 });
 
@@ -390,10 +424,10 @@ describe('preview.html and preview-dark.html', () => {
         for (const html of [light, dark]) assert.ok(html.includes('id="dir-toggle"'));
     });
 
-    it('every colour on the page is a token, except the planned ر mark\'s two', () => {
+    it('every colour on the page is a token (the mark too: it paints --mark-tile and --mark-glyph)', () => {
         const css = (/<style>([\s\S]*?)<\/style>/.exec(light)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
         const literals = [...new Set([...css.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map((m) => m[0].toLowerCase()))].sort();
-        assert.deepEqual(literals, ['#1a1c15', '#bcde70'], 'a hex literal on the preview is a value that will not follow tokens.css');
+        assert.deepEqual(literals, [], 'a hex literal on the preview is a value that will not follow tokens.css');
     });
 
     it('shows every catalog section', () => {

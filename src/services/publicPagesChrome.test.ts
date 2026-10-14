@@ -166,9 +166,18 @@ describe('public pages — the shared chrome carries the display face (L3)', () 
         const decls = m[1] ?? '';
         assert.match(decls, /font-family:\s*var\(--font-display\);/);
         assert.match(decls, /font-weight:\s*var\(--fw-semibold\);/);
-        assert.match(decls, /inline-size:\s*6\.3em;/);
         assert.match(decls, /white-space:\s*nowrap;/);
-        // The Latin line under the name stays on the Latin system face.
-        assert.match(/\.wordmark \.latin \{([^}]*)\}/.exec(css)?.[1] ?? '', /font-family:\s*var\(--font-latin\);/);
+        // The name is the lockup's second item, beside the 32px Kufi mark, and keeps the measure of the Arabic name.
+        assert.match(/\n {8}\.wordmark \.wm-name \{([^}]*)\}/.exec(css)?.[1] ?? '', /min-inline-size:\s*6\.3em;/);
+        assert.match(/\n {8}\.wordmark \.arp-mark \{([^}]*)\}/.exec(css)?.[1] ?? '', /inline-size:\s*32px;\s*block-size:\s*32px;/);
+        // The one-line lockup has no Latin sub-line any more: the name takes the page's language.
+        assert.equal(/\.latin\b/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), false);
+    });
+
+    it('shows the mark alone in the bar below 37rem, and keeps the name for screen readers (the bar needs 577px for both in English)', () => {
+        const hidden = /@media \(max-width: 37rem\) \{([\s\S]*?)\n {8}\}/.exec(css)?.[1] ?? '';
+        assert.match(hidden, /\.topbar \.wordmark \.wm-name \{[^}]*position:\s*absolute;[^}]*clip-path:\s*inset\(50%\);/);
+        assert.match(hidden, /\.topbar \.wordmark \{\s*min-inline-size:\s*var\(--tap-target\);/);
+        assert.equal(/display:\s*none/.test(hidden), false, 'display:none would take the link\'s accessible name with it');
     });
 });

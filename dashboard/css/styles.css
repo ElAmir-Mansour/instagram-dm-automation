@@ -309,17 +309,17 @@ bdi { unicode-bidi: isolate; }
 }
 .sidebar-logo { display: flex; align-items: center; gap: var(--space-3); }
 .logo-mark {
-    width: 38px; height: 38px;
-    /* The mark is frozen (tokens.css, "The logo mark"): it paints its own pinned tokens and
-       never --accent or --gradient-brand, so a palette change cannot recolour the logo. One
-       layer, as it always was: a background-color beneath the gradient changes its edge pixels. */
-    background: var(--mark-tile-lit);
-    border-radius: var(--radius-sm);
-    display: flex; align-items: center; justify-content: center;
+    /* Kufi «رد» (DESIGN.md section 4). 32px, not 38: the master's every edge lands on a whole pixel at 32 and
+       between pixels at 38. The rounded tile is the SVG's own (2 modules), so this box has no radius and no
+       background. The mark paints --mark-tile and --mark-glyph (Cardamom in dark, Ink in light) through
+       `.mark-tile` and `.mark-glyph` below, and never --accent or --gradient-brand. */
+    inline-size: 32px; block-size: 32px;
+    display: flex;
     flex-shrink: 0;
 }
-.logo-mark [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
-.logo-mark svg { color: var(--mark-glyph); }
+.logo-mark svg, .login-mark svg { display: block; inline-size: 100%; block-size: 100%; }
+.mark-tile { fill: var(--mark-tile); }
+.mark-glyph { fill: var(--mark-glyph); }
 .sidebar-brand { font-family: var(--font-display); font-weight: var(--fw-semibold); font-size: var(--fs-300); color: var(--text-strong); }
 
 .sidebar-nav {
@@ -1312,16 +1312,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .login-lang { position: absolute; inset-block-start: var(--space-3); inset-inline-end: var(--space-3); }
 .login-logo { margin-block-end: var(--space-6); }
 .login-mark {
-    width: 62px; height: 62px;
-    /* Frozen, like .logo-mark: pinned mark tokens, not the accent. */
-    background: var(--mark-tile-lit);
-    border-radius: var(--radius-lg);
-    display: inline-flex; align-items: center; justify-content: center;
+    /* 64px, not 62: an exact size for the master (see .logo-mark). No shadow or glow: IDENTITY.md says the mark takes none. */
+    inline-size: 64px; block-size: 64px;
+    display: inline-flex;
     margin-block-end: var(--space-4);
-    box-shadow: var(--elev-glow);
 }
-.login-mark [data-lucide] { inline-size: 30px; block-size: 30px; }
-.login-mark svg { color: var(--mark-glyph); }
 .login-title { font-family: var(--font-display); font-size: var(--fs-600); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .login-subtitle { color: var(--text-muted); font-size: var(--fs-200); margin-block-start: var(--space-2); }
 .login-form { display: flex; flex-direction: column; gap: var(--space-4); text-align: start; }

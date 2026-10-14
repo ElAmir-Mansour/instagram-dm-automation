@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="أوتوريبلاي برو · AutoReply Pro">
+  <!-- Kufi «رد», Ink colourway: light UI only (sidebar, login), never an icon or favicon. Tile #1A1C15, glyph #BCDE70, master geometry (UI sizes; exact at 32/64). 11.3:1. -->
+  <rect width="256" height="256" rx="64" fill="#1A1C15"/>
+  <path fill="#BCDE70" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/>
+</svg>
