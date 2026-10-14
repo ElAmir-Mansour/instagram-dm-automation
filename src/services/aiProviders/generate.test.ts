@@ -646,6 +646,64 @@ describe('the `dm` purpose and the `eval` label, through generate', () => {
     });
 });
 
+describe('naming the route for one call (the evaluation harness compares models before one is saved)', () => {
+    it('answers with the named provider and model, whatever route is saved, and records the row under the label and no tenant', async () => {
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' } }));
+        answer = (a) => okAnswer({ model: a.model, billed: [{ model: a.model, in: 1000, out: 500 }] });
+        const out = await call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'anthropic', model: 'claude-haiku-5-5' } });
+        const sent = providerCalls[0]!;
+        assert.deepEqual([sent.provider, sent.model, sent.apiKey, sent.effort], ['anthropic', 'claude-haiku-5-5', FAKE_KEYS.anthropic, 'low'], 'the purpose\'s default effort, not the saved route\'s');
+        assert.equal(out.route, 'saved');
+        const row = db.usage[0]!;
+        assert.deepEqual([row.purpose, row.creator_id, row.model, row.outcome], ['eval', null, 'claude-haiku-5-5', 'ok']);
+        assert.equal(row.usd, 0.00035, '1000 in at $0.10/M plus 500 out at $0.50/M: the named model\'s price');
+    });
+
+    it('takes the route\'s effort, and the call\'s own effort over it', async () => {
+        await call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'medium' } });
+        assert.equal(providerCalls[0]!.effort, 'medium');
+        await call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'medium' }, effort: 'high' });
+        assert.equal(providerCalls[1]!.effort, 'high');
+    });
+
+    it('does not use a provider that has no key or is switched off: no_provider, a refusal row, and no call', async () => {
+        const noKey = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'openai', model: 'gpt-x' } }));
+        assert.equal(noKey.kind, 'no_provider');
+        assert.match(noKey.message, /no API key/);
+        db.setSetting('ai.providers', JSON.stringify({ anthropic: { enabled: false } }));
+        const off = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'anthropic', model: 'claude-haiku-5-5' } }));
+        assert.equal(off.kind, 'no_provider');
+        assert.equal(providerCalls.length, 0);
+        assert.deepEqual(db.usage.map((u) => [u.purpose, u.outcome]), [['eval', 'no_provider'], ['eval', 'no_provider']]);
+    });
+
+    it('refuses a provider or a model that is not one, before anything is read or written', async () => {
+        for (const route of [{ provider: 'nope', model: 'm' }, { provider: 'anthropic', model: '' }, { provider: 'anthropic', model: '../../x' }, { provider: 'anthropic', model: 'a b' }]) {
+            const err = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: route as never }));
+            assert.equal(err.kind, 'bad_request', JSON.stringify(route));
+        }
+        assert.equal(providerCalls.length, 0);
+        assert.equal(db.usage.length, 0);
+        assert.equal(db.statements.length, 0);
+    });
+
+    it('is for a call that belongs to no tenant: a tenant\'s calls follow the operator\'s routing, and a route named for one is refused unread', async () => {
+        const err = await failure(call({ purpose: 'dm', creatorId: TENANT, route: { provider: 'anthropic', model: 'claude-haiku-5-5' } }));
+        assert.equal(err.kind, 'bad_request');
+        assert.match(err.message, /belongs to no tenant/);
+        assert.equal(providerCalls.length, 0);
+        assert.equal(db.usage.length, 0);
+        assert.equal(db.statements.length, 0);
+    });
+
+    it('is still held by the budgets', async () => {
+        budgets({ 'ai.budget.daily_usd': '0' });
+        const refused = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'anthropic', model: 'claude-haiku-5-5' } }));
+        assert.equal(refused.kind, 'budget');
+        assert.equal(providerCalls.length, 0);
+    });
+});
+
 describe('the whole path with the cache, through the real Anthropic adapter', () => {
     const reply = (usage: Record<string, number>) => jsonResponse(200, {
         id: 'msg_01', type: 'message', role: 'assistant', model: 'claude-opus-5-5',

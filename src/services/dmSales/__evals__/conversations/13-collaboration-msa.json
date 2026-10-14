@@ -1,0 +1,18 @@
+{
+  "id": "13-collaboration-msa",
+  "title": "A collaboration request (MSA)",
+  "fixture": "owner-ar",
+  "writes": "msa",
+  "turns": [
+    {
+      "user": "السلام عليكم، أنا مسؤول التسويق في شركة ناشئة ونرغب في التعاون مع الأستاذ في حملة إعلانية. مع من أتواصل؟",
+      "expect": {
+        "intent": ["wants_human", "other", "info"],
+        "next_action": ["handoff"],
+        "handoff_reason": ["wants_human", "unsure"],
+        "sent": ["handoff", "unsure"],
+        "note": "A business inquiry is for the owner, not a sale: hand off, no pitch, no link."
+      }
+    }
+  ]
+}

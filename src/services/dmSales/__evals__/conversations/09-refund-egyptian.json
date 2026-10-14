@@ -1,0 +1,28 @@
+{
+  "id": "09-refund-egyptian",
+  "title": "Refund request goes to a person (Egyptian)",
+  "fixture": "owner-ar",
+  "writes": "egyptian",
+  "turns": [
+    {
+      "user": "عايز أسترجع فلوسي، الكورس مش زي ما توقعت",
+      "expect": {
+        "route": "prefilter",
+        "prefilter": "refund",
+        "sent": ["handoff"],
+        "next_action": ["handoff"],
+        "handoff_reason": ["refund"],
+        "intent": ["refund_or_complaint"],
+        "note": "Decided before the model is asked: a handoff, no sales text."
+      }
+    },
+    {
+      "user": "طيب ردوا عليا بسرعة لو سمحتوا",
+      "expect": {
+        "route": "silent",
+        "sent": ["none"],
+        "note": "The bot is paused until the owner answers."
+      }
+    }
+  ]
+}

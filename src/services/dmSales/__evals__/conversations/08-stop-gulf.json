@@ -1,0 +1,27 @@
+{
+  "id": "08-stop-gulf",
+  "title": "\"Stop\": one confirmation, then nothing (Gulf)",
+  "fixture": "owner-ar",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "وقف",
+      "expect": {
+        "route": "prefilter",
+        "prefilter": "opt_out",
+        "sent": ["opt_out"],
+        "next_action": ["close"],
+        "intent": ["opt_out"],
+        "note": "One confirmation line from the kit, the opt-out recorded, the model not asked."
+      }
+    },
+    {
+      "user": "طيب كم السعر؟",
+      "expect": {
+        "route": "silent",
+        "sent": ["none"],
+        "note": "Nothing is sent after an opt-out, whatever the person writes next."
+      }
+    }
+  ]
+}

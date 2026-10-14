@@ -1,0 +1,21 @@
+{
+  "id": "05-link-now-gulf",
+  "title": "Asks for the link straight away (Gulf)",
+  "fixture": "owner-ar",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "ابي الرابط",
+      "expect": {
+        "next_action": ["send_link"],
+        "offer_id": ["main"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "must_not": ["مستواك|هدفك|وش خبرتك|كم خبرتك|هل انت مبتدئ|هل أنت مبتدئ|هل تعرف برمج"],
+        "soft": ["tone", "helpfulness", "no_pressure"],
+        "note": "The link is never gated behind questions: asked for the link, send it (next_action send_link, the server adds the URL)."
+      }
+    }
+  ]
+}

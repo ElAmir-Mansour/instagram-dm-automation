@@ -1,0 +1,21 @@
+{
+  "id": "06-off-topic-gulf",
+  "title": "Off-topic question (Gulf)",
+  "fixture": "owner-ar",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "وش أحسن جوال أشتريه الحين؟",
+      "expect": {
+        "intent": ["off_topic", "other"],
+        "next_action": ["reply"],
+        "offer_id": ["none"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "soft": ["tone", "helpfulness", "no_pressure"],
+        "note": "A short, polite redirect. No hard sell, no offer, no handoff (it is not worth the owner's time), and no phone model or price the data does not hold."
+      }
+    }
+  ]
+}

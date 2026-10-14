@@ -1,0 +1,23 @@
+{
+  "id": "02-beginner-egyptian",
+  "title": "Is it for beginners (Egyptian)",
+  "fixture": "owner-ar",
+  "writes": "egyptian",
+  "turns": [
+    {
+      "user": "الكورس ده مناسب للمبتدئين؟ أنا لسه ماعرفش برمجة خالص",
+      "expect": {
+        "intent": ["level_fit", "info"],
+        "next_action": ["recommend", "reply"],
+        "offer_id": ["main"],
+        "reply_language": {
+          "variety": "egyptian",
+          "lean": true
+        },
+        "must": ["مبتد|الصفر|خبر[ةه]"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"],
+        "note": "Answer from the offer's level and for_whom (it starts from zero), in Egyptian, and recommend the one linked offer."
+      }
+    }
+  ]
+}

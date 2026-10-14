@@ -1167,6 +1167,29 @@ Three behaviours that look like failures but aren't, and one that used to be a f
 - **Trial reel refused.** The post FAILS and says it was not published; turn Trial Reel off to post
   it normally.
 
+## DM sales evaluation
+
+Fifteen golden conversations (Gulf, Egyptian, MSA and English: a price, "is it for beginners", "too expensive", free on YouTube, the
+link at once, off-topic, abuse, "stop", a refund, a payment problem, an injection, a question the course does not cover, a
+collaboration, an English speaker, and qualify → recommend → link) go through the real sales prompt, schema, coerce and guard against
+a model you name. Run it before every prompt or kit change, and to choose the model of the `dm` route (docs/DM_SALES_PLAN.md §11).
+
+```bash
+npx tsx scripts/eval-dm-sales.mts --model claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5 --report eval-report.md  # needs an Anthropic key (Operations → AI providers)
+npx tsx scripts/eval-dm-sales.mts --model claude-sonnet-5-5 --cases 1,5,15 --no-judge                                 # a quick look: hard checks only
+npx tsx scripts/eval-dm-sales.mts --stub                                                                               # no key, no database: the two cases CI runs
+```
+
+- **The bar:** every hard check passes (action, handoff reason, no invented number, no model-written link, 900-byte cap, language and
+  dialect, opt-out honoured), the Claude judge's mean for tone, helpfulness, pressure and recommendation is at least 4, and no score is
+  under 3. The terminal table and the markdown report give each model's pass rate, p50/p90 latency, tokens, cost and every failure with its
+  reason. Exit 0 = every model met the bar, 1 = one did not, 2 = usage, 3 = refused.
+- **What it touches:** the committed fixtures only (`src/services/dmSales/__evals__/fixtures.ts`), never a tenant or a conversation, and it
+  sends nothing; a flag that names a tenant is refused. Its model calls go through the AI providers layer and land in `ai_usage` as purpose
+  `eval`, charged to no tenant, so they count against the platform budget but not a tenant's.
+- **Adding a case:** one JSON file in `src/services/dmSales/__evals__/conversations/`. The loader rejects a misspelt expectation instead of
+  letting it check nothing. `npm test` runs the harness's tests and a two-case dry run with a stub model.
+
 ## Media storage
 
 Uploads live in the public Supabase Storage bucket `media` (`<creator_id>/<id><ext>`);
