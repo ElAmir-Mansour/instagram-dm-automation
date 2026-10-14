@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="أوتوريبلاي برو · AutoReply Pro">
+  <!-- Kufi «رد» small cut: 20-31px. 24 grid, u=3px, every anchor on a whole pixel. Tile r6 (2u). -->
+  <rect width="24" height="24" rx="6" fill="#BCDE70"/>
+  <path fill="#141610" d="M7 5H13V14H4V11H10V8H7ZM16 5H19V17L16 20H11L16 15Z"/>
+</svg>

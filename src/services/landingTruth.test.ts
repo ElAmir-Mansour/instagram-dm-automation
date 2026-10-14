@@ -1683,8 +1683,10 @@ describe('landing — the display face is Alexandria 600, self-hosted (L3)', () 
     });
 
     it('reserves the Arabic wordmark\'s width, so the bar cannot wrap when the font arrives', () => {
+        // The lockup (mark, then name): the mark is a fixed 32px, the name keeps the 6.3em measure of «أوتوريبلاي برو» in Alexandria 600.
+        assert.match(rule('.wordmark .wm-name'), /min-inline-size:\s*6\.3em;/);
+        assert.match(rule('.wordmark .arp-mark'), /inline-size:\s*32px;\s*block-size:\s*32px;/);
         const decls = rule('.wordmark');
-        assert.match(decls, /inline-size:\s*6\.3em;/);
         assert.match(decls, /flex:\s*none;/);
         assert.match(decls, /white-space:\s*nowrap;/);
     });

@@ -6,8 +6,8 @@ Read this before changing any pixel, or any sentence a user sees.
 - **Languages.** Arabic leads; English is a peer.
 - **Previews.** Open `preview.html` (light) and `preview-dark.html` (dark) from the repo root. They load
   `dashboard/css/tokens.css` by relative path and read every swatch live, so they cannot drift.
-- **What is shipped and what is next.** Sections say so where it matters: the logo is **frozen** (§4, Mark) and the
-  display face is **planned** (§3). Everything else here describes what the code does today.
+- **What is shipped and what is next.** Sections say so where it matters: the logo is the Kufi «رد» mark (§4, Mark) and the
+  display face is Alexandria 600 (§3). Everything else here describes what the code does today.
 
 ## 1. Visual Theme & Atmosphere
 
@@ -130,16 +130,16 @@ series takes the deep olive instead. It falls back to `currentColor`, never to a
 | `--chart-positive` | `#2DD4A7` | `#248A3D` | up |
 | `--chart-negative` | `#F87171` | `#D70015` | down |
 
-### The logo mark: FROZEN
-Three pinned tokens, the same in both themes and **independent of the palette**. The dashboard's mark
-(`.logo-mark`, `.login-mark`) paints them and nothing else does. Frozen until TikTok accepts the app, then the
-ر mark from §4.
+### The logo mark: Kufi «رد»
+Two tokens, per theme: the tile and the glyph. The dashboard's mark (`.logo-mark`, `.login-mark`) and the inline marks on the
+public pages paint them, through `.mark-tile` and `.mark-glyph`, and nothing else does. Dark UI is the Cardamom colourway and
+light UI the Ink colourway (IDENTITY.md §2). The icons are **not** painted from these: the favicon, the apple-touch icon and
+the manifest's PNGs are the Cardamom files at every size (§4, Mark).
 
 | token | dark | light | role |
 |---|---|---|---|
-| `--mark-tile` | `#0071E3` | `=` | the tile; also `public/favicon.svg`'s fill |
-| `--mark-tile-lit` | `linear-gradient(180deg, #0A7CF0, var(--mark-tile) 60%, #0064CC)` | `=` | the lit tile the dashboard has always drawn, as one background layer (its middle stop is `--mark-tile`) |
-| `--mark-glyph` | `#FFFFFF` | `=` | the zap |
+| `--mark-tile` | `#BCDE70` | `#1A1C15` | the tile |
+| `--mark-glyph` | `#141610` | `#BCDE70` | the «رد» |
 
 ### Measured (the guard's arithmetic: glass composited down to the canvas)
 `npm run check:contrast` reports these; the design-md test fails if this section stops matching its output.
@@ -153,6 +153,8 @@ Three pinned tokens, the same in both themes and **independent of the palette**.
 - **The outgoing bubble's furniture:** the quick-reply pill (12% of the label colour as its fill) and the
   timestamp (78% of it as ink), on the flat accent and every gradient stop, at 4.5:1.
 - **`--accent-text` on `--accent-soft` over a card:** 8.03:1 dark, 7.16:1 light.
+- **The mark:** the glyph on its tile is 12.00:1 dark and 11.32:1 light, and the tile as a shape against its tightest
+  ground (the card) is 10.91:1 dark and 15.58:1 light. `check:contrast` holds the glyph to 4.5:1 and the tile to 3:1.
 - **Hue (≥ 25° apart, enforced):** the accent is 78.5° dark and 77.1° light, against danger 3.2°, warning 36.5° and
   success 135.1°.
 
@@ -381,50 +383,58 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 
 ### Mark
 
-**In use today, and frozen: Lucide's `zap` on a blue tile.**
-- It is the dashboard's `.logo-mark` (sidebar, 38px) and `.login-mark` (login card, 62px), and `public/favicon.svg`.
-- The tile paints `--mark-tile-lit` as one background layer (its middle stop is `--mark-tile`), the glyph `--mark-glyph`, all pinned in tokens.css (§2). The
-  favicon uses the literal `#0071E3` and white, because CSS variables don't reach a favicon.
-- **Why frozen:** the app is in TikTok's review with this logo. Nothing in the palette may recolour it, so
-  `src/dashboard/design-md.test.ts` pins the three tokens, the favicon's checksum and the manifest's icon list.
-- **Browser chrome is not the logo, and was treated in two ways.** The `<meta name="theme-color">` tags in the HTML
-  follow `--surface-page` (the test checks them). `public/site.webmanifest` was left byte-identical, `theme_color`
-  (`#0071e3`) and `background_color` included, to be safe; both move with the logo at the switch below.
-- The public pages have no mark tile: their wordmark is text.
+**Kufi «رد»**, the Arabic word for "reply", on a square-Kufi grid: every stroke and gap is one module, and the only diagonal is
+the ر's 45° tail, the answer going out. Chosen 2026-10-13, in service since the B5 switch. Lucide's `zap` on the blue `#0071E3`
+tile, which it replaced, is gone from every page, and `design-md.test.ts` fails if either comes back. The drawing, its cuts, its
+colourways and its Never list are IDENTITY.md §2 (the kit is `docs/brand/mark/final/`, local only); the five kit files the build
+needs are committed in `scripts/brand-icons/`, pinned by hash.
 
 ```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="AutoReply Pro">
-  <rect width="64" height="64" rx="14" fill="#0071e3"/>
-  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" transform="translate(9.2 9.2) scale(1.9)" fill="#ffffff" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="أوتوريبلاي برو · AutoReply Pro">
+  <rect width="256" height="256" rx="64" fill="#BCDE70"/>
+  <path fill="#141610" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/>
 </svg>
 ```
 
-**Next, after TikTok accepts the app: the ر mark.** A ر whose tail ends in a reply arrowhead. Never mirrored; centre it
-optically in preview.html.
+- **Where it is.**
+  - The dashboard: the sidebar's `.logo-mark` (32px), the login card's and the invite card's `.login-mark` (64px), the
+    onboarding bar's `.logo-mark` (32px). The login and the sidebar are static markup in `index.html`, painted before any
+    script runs; the others take `UI.brandMark()`.
+  - The public pages: the bar's lockup and the footer's (32px, the name beside it). The bar shows the mark alone below 37rem and
+    keeps the name for screen readers. IDENTITY.md says 30rem; the bar's own measure (the mark, the name, three links and both
+    language buttons) needs 577px in English, so between 30rem and 36rem it would break onto a second row.
+  - The icons: `public/favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, and the manifest's PNGs and SVG.
+- **Colour.** `--mark-tile` and `--mark-glyph` (§2): Cardamom in dark, Ink in light. The mark never paints from `--accent` or
+  `--gradient-brand`, and takes no shadow, glow, gradient or outline.
+- **Sizes are exact ones.** The master lands every edge on a whole pixel at 32 and 64 (38 and 62 put every edge between
+  pixels, which is why the sidebar mark went from 38 to 32 and the login mark from 62 to 64). The micro cut is drawn for
+  16–19px, the small cut for 20–31px and 48px, the master from 32px up.
+- **The favicon has no light/dark swap.** Cardamom at every size: measured at 16px, the Ink tile is Linktree's pattern (a dark
+  tile with a lime glyph), and on a dark tab strip it is 1.07:1 and vanishes. (An earlier plan for an inner
+  `prefers-color-scheme: light` swap is withdrawn.)
+- **The icon files** are built by `scripts/build-brand-icons.mjs` and checked by `npm run check:brand-icons`:
 
-```svg
-<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AutoReply Pro">
-  <rect width="64" height="64" rx="15" fill="var(--mark-tile)"/>
-  <g fill="none" stroke="var(--mark-glyph)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M38 14c1.6 10.5 1 19.5-4.5 25.5-4.2 4.6-10 6.8-16.5 7"/>  <!-- the ر -->
-    <path d="M24.5 38.5 16.5 46.5l8.5 7.5"/>                             <!-- its reply arrowhead -->
-  </g>
-</svg>
-```
+  | file | what |
+  |---|---|
+  | `/favicon.svg` | the micro cut (16 grid), byte for byte |
+  | `/favicon.ico` | PNG-in-ICO: 16 from the micro, 32 from the master, 48 from the small cut at 2×; at most 15 KB |
+  | `/apple-touch-icon.png` | 180×180 from the full-bleed file, no alpha |
+  | `/brand/mark.<sha8>.svg` | the master, named for its own bytes |
+  | `/brand/icon-192.<sha8>.png`, `icon-512.<sha8>.png` | `any`, from the master |
+  | `/brand/icon-maskable-512.<sha8>.png` | `maskable`, from the full-bleed file (no radius, glyph at ⅞) |
 
-- **Tokens at the switch:** `--mark-tile` / `--mark-glyph` become `#BCDE70` / `#141610` in dark and `#1A1C15` /
-  `#BCDE70` in light, and `--mark-tile-lit` goes (the new tile is flat). The pin in the test is then edited on
-  purpose, in the same PR.
-- **The switch is one PR:** the three tokens, the two markup spots in `dashboard/index.html`, `public/favicon.svg`
-  (literal hex, with an inner `@media (prefers-color-scheme: light)` swap) and `public/site.webmanifest`.
-- **The manifest at the switch:** `icons` (the new file), `theme_color` (`#0071e3` today, the browser chrome colour)
-  and `background_color` (`#161617` today, which is the previous page colour; the page is `#111210` now, so it
-  should follow `--surface-page`). Neither was touched in the palette PR, to keep the submitted manifest identical.
-- **Google:** don't change the logo on Google's OAuth consent screen until the YouTube audit is done; it re-triggers
-  brand verification.
-- **Wordmark:** the mark plus «أوتوريبلاي برو» in `--font-display` 600 (shipped with L3: the public bar and the dashboard's
-  sidebar), with "AutoReply Pro" beneath it at 12px regular `--text-muted`.
-- **Clear space:** ¼ of the mark. **Minimum size:** 20px.
+  The four root files are served by `src/index.ts` (`public/**` has no static handler); `/brand/*` is `immutable`, so a changed
+  icon is a new name and the manifest names it.
+- **The manifest.** `theme_color` and `background_color` are `#111210`, the dark page (`--surface-page`), which the check reads.
+  Browser chrome follows the page through the two `<meta name="theme-color">` tags.
+- **Never add a dot to the ر.** It would read «زد», which is Zid, a competitor's brand. The build refuses a glyph that is not
+  exactly two subpaths (the د and the ر).
+- **Google:** don't change the logo on Google's OAuth consent screen until the YouTube audit is done; it re-triggers brand
+  verification. The Meta and TikTok portals are a separate step (B6).
+- **Clear space:** 2u on every side, where u is one module (⅛ of the mark): ¼ of the mark, the same number as before.
+  **Minimum size:** 16px (the micro cut); never below.
+- **Wordmark:** the lockup is the mark, a gap of 2u, then «أوتوريبلاي برو» (or "AutoReply Pro" in English) in `--font-display`
+  600 at half the mark's size, with the name's baseline on the mark's own baseline (19px under the tile's top at 32px).
 
 ### Other patterns
 Callouts, empty states, step marks, meters, media frames, wells and tint panels use the `Pattern:` blocks in
@@ -519,7 +529,7 @@ is wrong; extend the scale.
 - **Operator identity and contact.**
   - The operator's public identity (ElAmir Mansour and his three accounts) stays in the footer and the legal pages.
   - Contact goes through `{{WHATSAPP_URL}}` / `{{CONTACT_EMAIL}}`, never a literal. A test enforces this.
-- **The logo does not change until TikTok accepts the app** (§4, Mark).
+- **The mark is Kufi «رد»** (§4, Mark), and the ر never takes a dot.
 
 ### Do
 - Highlight one word per block with `.kw`.
@@ -529,7 +539,7 @@ is wrong; extend the scale.
 - Say what is NOT promised.
 
 ### Don't
-- Blue anywhere in our chrome. (The frozen mark is the one exception, until the switch.)
+- Blue anywhere in our chrome.
 - Colour literals in a `var(--x, #…)` fallback, or anywhere outside tokens.css. A fallback is a second palette.
 - Platform colours as solid fills on controls.
 - Cardamom as a background field or a status.
@@ -611,7 +621,8 @@ the same paragraph as the feature.
 | `check:voice` | a word from the "Never" list (IDENTITY.md §7: "Pro" outside the name, Premium, Powered by, instant, guaranteed, AI-powered, bot, revolutionary, all-in-one, magic, viral, growth hack, supercharge, unlimited, "trusted by", and the Arabic of each) in a dashboard dictionary value, a public page's text, meta or alt, or the dashboard shell's title and description. The name is allowed, and so is a limit stated ("not guaranteed"); any other exception is an entry in `scripts/check-voice.mjs` with a reason, and an entry that matches nothing fails |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 | `check:icon-subset` | `dashboard/js/icons.js` out of date with the icon names the dashboard uses |
-| `design-md.test.ts` | a §2 value that differs from tokens.css; a colour token with no row; the frozen mark, favicon or manifest icons changing; the browser-chrome `theme-color` drifting from `--surface-page`; a colour literal creeping back into a legal page's fallbacks |
+| `check:brand-icons` | an icon file not named for its bytes or not the pixels the pinned kit sources render to; a manifest naming a stale icon or a colour other than the dark page's; a page missing one of the four icon links; a dot on the ر; the .ico over 15 KB; `--mark-tile` / `--mark-glyph` painting another colourway; a root icon file with no route in `src/index.ts` |
+| `design-md.test.ts` | a §2 value that differs from tokens.css; a colour token with no row; the mark's markup, rules or icon files changing off the Kufi drawing; the Lucide zap or `#0071E3` coming back anywhere; the browser-chrome `theme-color` drifting from `--surface-page`; a colour literal creeping back into a legal page's fallbacks |
 
 ### Before the PR
 Run:

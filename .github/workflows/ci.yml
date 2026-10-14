@@ -78,6 +78,15 @@ jobs:
       - name: Check share cards
         run: npm run check:og
 
+      # The Kufi «رد» icon set (the favicon .svg and .ico, the apple-touch icon, the manifest's PNGs and the content-hashed mark under
+      # public/brand/) is rendered from the kit's finals pinned in scripts/brand-icons/ by scripts/build-brand-icons.mjs, which is its own
+      # rasteriser (exact polygon coverage), so this step needs only node and compares PIXELS with the committed files. Nothing else
+      # notices an icon that was never re-rendered, a manifest naming a stale file, a page missing one of the four head links, a dot
+      # added to the ر (it would read «زد»), the .ico past 15 KB, tokens.css painting a colourway the files are not, or a root route
+      # removed from src/index.ts (public/** has no static handler: the files 404 without it).
+      - name: Check brand icons
+        run: npm run check:brand-icons
+
       # Token colours are one hex edit away from failing AA, and nothing else in this repo
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast

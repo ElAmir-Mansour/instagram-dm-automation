@@ -23,7 +23,9 @@
     "build:font": "node scripts/build-font.mjs",
     "check:font": "node scripts/build-font.mjs --check",
     "build:og": "node scripts/build-og.mjs",
-    "check:og": "node scripts/build-og.mjs --check"
+    "check:og": "node scripts/build-og.mjs --check",
+    "build:brand-icons": "node scripts/build-brand-icons.mjs",
+    "check:brand-icons": "node scripts/build-brand-icons.mjs --check"
   },
   "keywords": [
     "instagram",

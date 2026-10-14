@@ -34,6 +34,7 @@ import { gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
 import { FONT_FILE, LICENCE_FILE } from './build-font.mjs';
 import { IMAGE_FILE } from './build-og.mjs';
+import { ICON_FILE } from './build-brand-icons.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const OUT_DIR = join(ROOT, 'public/brand');
@@ -209,8 +210,8 @@ async function main() {
     }
     // 5. Nothing else lives there: the route serves this directory `immutable` for a year. The display font and its licence are
     //    another script's (scripts/build-font.mjs, npm run check:font), which owns and verifies them; so are the share cards (scripts/build-og.mjs,
-    //    npm run check:og).
-    for (const f of have) if (!NAME.test(f) && !FONT_FILE.test(f) && !IMAGE_FILE.test(f) && f !== LICENCE_FILE) problems.push(`public/brand/${f} is not a built file, and this directory is served immutable for a year`);
+    //    npm run check:og) and the mark's icon files (scripts/build-brand-icons.mjs, npm run check:brand-icons).
+    for (const f of have) if (!NAME.test(f) && !FONT_FILE.test(f) && !IMAGE_FILE.test(f) && !ICON_FILE.test(f) && f !== LICENCE_FILE) problems.push(`public/brand/${f} is not a built file, and this directory is served immutable for a year`);
 
     if (problems.length) {
         console.error('\nhero3d check failed:\n');

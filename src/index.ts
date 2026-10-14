@@ -265,14 +265,25 @@ app.get('/pricing', (req, res) => {
     void sendPublicPage(req, res, 'pricing');
 });
 
-// The two root-level files every public page's <head> names. `public/**` has no static
-// handler — vercel.json sends only /dashboard/* and /samples/* to static files and everything
-// else here — so without these two routes /favicon.svg and /site.webmanifest would 404 on
-// every page that links them. A day of caching: both are tiny, and neither carries a ?v=.
+// The root-level files every public page's <head> names, and that a browser or an iPhone asks for
+// by name whether a page names them or not (/favicon.ico, /apple-touch-icon.png). `public/**` has
+// no static handler — vercel.json sends only /dashboard/* and /samples/* to static files and
+// everything else here — so without these routes the files would 404 on every page that links
+// them. A day of caching: all are tiny, and none carries a ?v= (the manifest's own icons are
+// content-hashed under /brand, so a changed mark is a new URL there).
+// `npm run check:brand-icons` fails when one of these four is not served from public/ by name.
 const ROOT_ASSET_MAX_AGE = 24 * 60 * 60 * 1000;
 app.get('/favicon.svg', (_req, res) => {
     res.type('image/svg+xml');
     res.sendFile(path.join(__dirname, '../public/favicon.svg'), { maxAge: ROOT_ASSET_MAX_AGE });
+});
+app.get('/favicon.ico', (_req, res) => {
+    res.type('image/x-icon');
+    res.sendFile(path.join(__dirname, '../public/favicon.ico'), { maxAge: ROOT_ASSET_MAX_AGE });
+});
+app.get('/apple-touch-icon.png', (_req, res) => {
+    res.type('image/png');
+    res.sendFile(path.join(__dirname, '../public/apple-touch-icon.png'), { maxAge: ROOT_ASSET_MAX_AGE });
 });
 app.get('/site.webmanifest', (_req, res) => {
     res.type('application/manifest+json');

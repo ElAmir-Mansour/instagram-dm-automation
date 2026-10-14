@@ -1459,7 +1459,7 @@ const WelcomePage = {
         return html`
             <header class="welcome-top">
                 <div class="welcome-brand">
-                    <span class="logo-mark" aria-hidden="true"><i data-lucide="zap"></i></span>
+                    <span class="logo-mark" aria-hidden="true">${UI.brandMark()}</span>
                     <span class="welcome-brand-name">${t('app.name')}</span>
                 </div>
                 <div class="welcome-tools">

@@ -9,11 +9,13 @@
     <title>أوتوريبلاي برو — كلمةٌ واحدة تفتح المحادثة</title>
     <meta name="description" content="تكتب الرد مرة واحدة، فتصل رسالة خاصة إلى كل تعليق فيه كلمتك على إنستجرام وفيسبوك: رسالة واحدة لكل شخص في اليوم، وضمن حدود ميتا. وتجدول منشوراتك من اللوحة نفسها.">
     <meta name="color-scheme" content="dark light">
-    <!-- The tab icon and the home-screen tile. Both were missing: a blank tab, and
-         "Add to Home Screen" drew a generic letter tile for a tool DESIGN.md says is
-         opened at 8pm from a phone. SVG only; iOS ignores it for the apple-touch-icon
-         and falls back to a screenshot until a PNG exists. -->
+    <!-- The tab icon and the home-screen tile: the Kufi «رد» mark, built by scripts/build-brand-icons.mjs
+         (npm run check:brand-icons). Cardamom at every size, with no light-mode swap: the Ink tile at 16px
+         vanishes on a dark tab strip (DESIGN.md section 4). The .ico is for the browsers that ask for it by
+         name and says 32x32 so that Chrome takes the SVG; iOS takes the 180px apple-touch icon. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" content="#111210" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#f4f4ee" media="(prefers-color-scheme: light)">
@@ -35,8 +37,8 @@
          The preconnects to fonts.googleapis.com and fonts.gstatic.com stay gone - a preconnect to a
          host nothing requests is a wasted DNS lookup and TLS handshake. The display face is a
          same-origin file (/brand), allowed by font-src 'self'; the shell does not preload it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.37">
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=12.37">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.38">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=12.38">
 
     <script>
         /* Applied before first paint so a pinned light theme never flashes dark.
@@ -88,7 +90,7 @@
             try {
                 var dictLang = lang === 'en' ? 'en' : 'ar';
                 var dict = document.createElement('script');
-                dict.src = '/dashboard/js/i18n.' + dictLang + '.js?v=12.37';
+                dict.src = '/dashboard/js/i18n.' + dictLang + '.js?v=12.38';
                 dict.setAttribute('data-i18n-dict', dictLang);
                 dict.onload = function () { dict.setAttribute('data-state', 'loaded'); };
                 dict.onerror = function () { dict.setAttribute('data-state', 'failed'); };
@@ -117,12 +119,12 @@
                     link.href = href;
                     document.head.appendChild(link);
                 };
-                preload('/dashboard/js/pages/' + page + '.js?v=12.37');
+                preload('/dashboard/js/pages/' + page + '.js?v=12.38');
                 /* The articles live in their own file, which the help page
                    loads before it paints: fetch both at once. */
-                if (page === 'help') preload('/dashboard/js/help-content.js?v=12.37');
+                if (page === 'help') preload('/dashboard/js/help-content.js?v=12.38');
                 /* Operations loads the AI providers card before it paints. */
-                if (page === 'operations') preload('/dashboard/js/pages/ai_providers.js?v=12.37');
+                if (page === 'operations') preload('/dashboard/js/pages/ai_providers.js?v=12.38');
             } catch (e) { /* the module still loads, just a beat later */ }
         }());
     </script>
@@ -140,7 +142,7 @@
                         lang="en" dir="ltr" aria-label="التبديل إلى الإنجليزية"
                         data-action="app:toggleLanguage">English</button>
                 <div class="login-logo">
-                    <div class="login-mark"><i data-lucide="zap" aria-hidden="true"></i></div>
+                    <div class="login-mark"><svg viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></div>
                     <h1 class="login-title" data-i18n="login.title">أوتوريبلاي برو</h1>
                     <p class="login-subtitle" data-i18n="login.subtitle">استوديو نموّ لصنّاع المحتوى العرب</p>
                 </div>
@@ -209,7 +211,7 @@
         <nav id="sidebar" class="sidebar" data-i18n-attr="aria-label:app.mainNav" aria-label="التنقل الرئيسي">
             <div class="sidebar-header">
                 <div class="sidebar-logo">
-                    <div class="logo-mark"><i data-lucide="zap" aria-hidden="true"></i></div>
+                    <div class="logo-mark"><svg viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></div>
                     <span class="sidebar-brand" data-i18n="app.name">أوتوريبلاي برو</span>
                 </div>
             </div>
@@ -404,7 +406,7 @@
          UMD once (same URL, same SRI) instead of rendering blank. It is first among
          the deferred scripts, so it has run by the time app.js boots on
          DOMContentLoaded; CSS reserves the box for every `i[data-lucide]`. -->
-    <script defer src="/dashboard/js/icons.js?v=12.37"></script>
+    <script defer src="/dashboard/js/icons.js?v=12.38"></script>
 
     <!-- Chart.js is gone entirely, not merely deferred. It was ~201KB of UMD from
          a CDN for four charts, it looked generic because it WAS generic, and a
@@ -412,17 +414,17 @@
          pure functions. cdn.jsdelivr.net stays in the CSP only for the icon
          fallback in js/icons.js. -->
 
-    <script defer src="/dashboard/js/i18n.js?v=12.37"></script>
-    <script defer src="/dashboard/js/api.js?v=12.37"></script>
-    <script defer src="/dashboard/js/components.js?v=12.37"></script>
-    <script defer src="/dashboard/js/motion.js?v=12.37"></script>
-    <script defer src="/dashboard/js/charts.js?v=12.37"></script>
+    <script defer src="/dashboard/js/i18n.js?v=12.38"></script>
+    <script defer src="/dashboard/js/api.js?v=12.38"></script>
+    <script defer src="/dashboard/js/components.js?v=12.38"></script>
+    <script defer src="/dashboard/js/motion.js?v=12.38"></script>
+    <script defer src="/dashboard/js/charts.js?v=12.38"></script>
     <!-- Not a page: the administration foundation (Admin.confirm, which replaces
          window.confirm for destructive actions anywhere) plus the health strip,
          which has to be available on a page whose own module does not know
          about it. Small, and needed off the admin screens, so it is eager. -->
-    <script defer src="/dashboard/js/pages/admin_common.js?v=12.37"></script>
-    <script defer src="/dashboard/js/app.js?v=12.37"></script>
+    <script defer src="/dashboard/js/pages/admin_common.js?v=12.38"></script>
+    <script defer src="/dashboard/js/app.js?v=12.38"></script>
 
 </body>
 </html>

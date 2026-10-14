@@ -227,18 +227,13 @@
         .nav-item.is-active { color: var(--text-strong); background: var(--accent-soft); border-inline-start: 2px solid var(--accent); }
 
         /* ─── 12. Mark ────────────────────────────────────────────────────────────────── */
-        /* The frozen mark: pinned tokens, exactly as .logo-mark and .login-mark paint them. */
-        .mark { display: inline-flex; align-items: center; justify-content: center; flex: none; background: var(--mark-tile-lit); }
-        .mark svg { color: var(--mark-glyph); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-        .mark.lg { inline-size: 62px; block-size: 62px; border-radius: var(--radius-lg); box-shadow: var(--elev-glow); }
-        .mark.lg svg { inline-size: 30px; block-size: 30px; }
-        .mark.sm { inline-size: 38px; block-size: 38px; border-radius: var(--radius-sm); }
-        .mark.sm svg { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
-        /* The planned ر mark (DESIGN.md §4): local to this page, because it is not in tokens.css yet. */
-        :root { --next-tile: var(--accent); --next-glyph: var(--text-on-accent); }
-        :root[data-theme='light'] { --next-tile: #1a1c15; --next-glyph: #bcde70; }
-        .next-tile { inline-size: 62px; block-size: 62px; border-radius: 15px; background: var(--next-tile); display: inline-flex; }
-        .next-tile svg { inline-size: 100%; block-size: 100%; }
+        /* The Kufi «رد» mark, painted from the mark tokens exactly as .logo-mark and .login-mark paint it. */
+        .mark { display: inline-flex; flex: none; }
+        .mark svg { display: block; inline-size: 100%; block-size: 100%; }
+        .mark .mark-tile { fill: var(--mark-tile); }
+        .mark .mark-glyph { fill: var(--mark-glyph); }
+        .mark.lg { inline-size: 64px; block-size: 64px; }
+        .mark.sm { inline-size: 32px; block-size: 32px; }
         .wordmark { display: flex; align-items: center; gap: var(--space-3); }
         .wordmark b { display: block; font-size: var(--fs-300); color: var(--text-strong); line-height: var(--lh-tight); }
         .wordmark small { display: block; font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-tight); }
@@ -467,15 +462,11 @@
         <!-- 12 ─── Mark ───────────────────────────────────────────────────────────────── -->
         <section id="mark">
             <h2>12 · The mark</h2>
-            <p class="lede"><b>Frozen</b> until TikTok accepts the app: Lucide's zap on the blue tile, painted from <code>--mark-tile</code>, <code>--mark-tile-lit</code> and <code>--mark-glyph</code>. It must look the same in both previews.</p>
+            <p class="lede">Kufi «رد», the Arabic word for "reply", painted from <code>--mark-tile</code> and <code>--mark-glyph</code>: Cardamom in dark, Ink in light. 32px and 64px are the sizes at which every edge of the master lands on a whole pixel.</p>
             <div class="row" style="gap:var(--space-6)">
-                <div class="wordmark"><span class="mark lg" role="img" aria-label="AutoReply Pro (login mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">AutoReply Pro · .login-mark 62px</small></span></div>
-                <div class="wordmark"><span class="mark sm" role="img" aria-label="AutoReply Pro (sidebar mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">.logo-mark 38px</small></span></div>
-                <div class="wordmark"><img src="public/favicon.svg" width="48" height="48" alt="public/favicon.svg" style="border-radius:var(--radius-sm)"><span><b lang="en" dir="ltr">favicon.svg</b><small lang="en" dir="ltr">flat, literal hex; byte-pinned</small></span></div>
-            </div>
-            <h3 class="sub">Next, after TikTok accepts the app (DESIGN.md §4): the ر mark</h3>
-            <div class="row" style="gap:var(--space-6)">
-                <div class="wordmark"><span class="next-tile" role="img" aria-label="AutoReply Pro (the planned ر mark)"><svg viewBox="0 0 64 64"><g fill="none" stroke="var(--next-glyph)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"><path d="M38 14c1.6 10.5 1 19.5-4.5 25.5-4.2 4.6-10 6.8-16.5 7"/><path d="M24.5 38.5 16.5 46.5l8.5 7.5"/></g></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">planned · not shipped · never mirrored</small></span></div>
+                <div class="wordmark"><span class="mark lg" role="img" aria-label="AutoReply Pro (login mark)"><svg viewBox="0 0 256 256" aria-hidden="true"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">AutoReply Pro · .login-mark 64px</small></span></div>
+                <div class="wordmark"><span class="mark sm" role="img" aria-label="AutoReply Pro (sidebar mark)"><svg viewBox="0 0 256 256" aria-hidden="true"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">.logo-mark 32px</small></span></div>
+                <div class="wordmark"><img src="public/favicon.svg" width="32" height="32" alt="public/favicon.svg"><span><b lang="en" dir="ltr">favicon.svg</b><small lang="en" dir="ltr">the 16px micro cut; Cardamom at every size, no light-mode swap</small></span></div>
             </div>
         </section>
     </main>
@@ -495,7 +486,7 @@
             ['Status: fill, tint, label', ['success', 'success-soft', 'success-text', 'danger', 'danger-soft', 'danger-text', 'warning', 'warning-soft', 'warning-text', 'info', 'info-soft', 'info-text']],
             ['Platforms (data, never decoration)', ['brand-instagram', 'brand-instagram-soft', 'brand-instagram-text', 'brand-facebook', 'brand-facebook-soft', 'brand-facebook-text', 'brand-tiktok', 'brand-tiktok-soft', 'brand-youtube-soft']],
             ['Charts', ['chart-grid', 'chart-tick', 'chart-accent', 'chart-positive', 'chart-negative']],
-            ['The mark (frozen)', ['mark-tile', 'mark-tile-lit', 'mark-glyph']]
+            ['The mark', ['mark-tile', 'mark-glyph']]
         ];
         var host = document.getElementById('swatches');
         GROUPS.forEach(function (g) {

@@ -34,6 +34,10 @@
  * `--logo-on-accent`). They are read from there, and each pair a logo is painted on is measured as a
  * non-text shape at 3:1 (LOGO PAIRS below). checkPlatformColourUsage also reads the `<style>` of every
  * public page, so a platform colour cannot come back as a solid fill there either.
+ *
+ * The logo mark (Kufi «رد», DESIGN.md §4) paints two tokens, `--mark-tile` and `--mark-glyph`: Cardamom in dark and
+ * Ink in light. The glyph is measured on its own tile at 4.5:1 (it is the whole drawing), and the tile as a shape against
+ * the page and the card it sits on at 3:1 (MARK PAIRS below).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 const css = readFileSync('dashboard/css/tokens.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -544,6 +548,29 @@ function checkBubbleFurniture() {
     }
 }
 
+// ─── MARK PAIRS: the Kufi «رد» mark, painted by --mark-tile and --mark-glyph (B5) ───────────────────
+//
+// The glyph on its tile is the whole drawing, so it is held to the text floor even though it is a graphic. The tile is a
+// shape on the page, the card and the sidebar's chrome it sits on, held to the non-text 3:1. IDENTITY.md section 2 measured
+// 12.00:1 and 11.32:1 for the glyph, and 12.36:1 (Cardamom on the dark page) and 15.58:1 (Ink on the light page) for the tile.
+const MARK_GROUNDS = [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page'], ['surface-chrome', 'surface-page']];
+const markGlyph = {};   // theme -> ratio
+const markTile = {};    // theme -> { r, label }
+for (const [name, t] of Object.entries(THEMES)) {
+    const tile = resolve(t, t['mark-tile']);
+    const glyph = resolve(t, t['mark-glyph']);
+    if (!tile || !glyph) { failures.push(`--mark-tile / --mark-glyph (${name}) are not declared in tokens.css, or are not colours the guard can read.`); continue; }
+    markGlyph[name] = ratio(glyph.slice(0, 3), tile.slice(0, 3));
+    if (markGlyph[name] < MIN) failures.push(`${markGlyph[name].toFixed(2)}:1 - --mark-glyph on --mark-tile (${name} theme) is below the ${MIN}:1 floor.`);
+    for (const stack of MARK_GROUNDS) {
+        const bg = flatten(t, stack);
+        if (!bg) { failures.push(`${stack.map(x => `--${x}`).join(' on ')} (${name}) could not be resolved for the mark.`); continue; }
+        const r = ratio(tile.slice(0, 3), bg);
+        if (!markTile[name] || r < markTile[name].r) markTile[name] = { r, label: stack.map(x => `--${x}`).join(' on ') };
+        if (r < MIN_NON_TEXT) failures.push(`${r.toFixed(2)}:1 - --mark-tile on ${stack.map(x => `--${x}`).join(' on ')} (${name} theme) is below the ${MIN_NON_TEXT}:1 non-text floor.`);
+    }
+}
+
 checkPlatformColourUsage();
 checkBubbleFurniture();
 checkLogoRules();
@@ -563,5 +590,6 @@ console.log(
     + `chart accent ${Object.entries(nonTextChart).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}); `
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
     + `platform colours solid only in data viz (and nowhere on the public pages); `
-    + `${logoTotal} platform-logo pairs clear ${MIN_LOGO}:1 as shapes (tightest ${Object.entries(logoTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')})`
+    + `${logoTotal} platform-logo pairs clear ${MIN_LOGO}:1 as shapes (tightest ${Object.entries(logoTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')}); `
+    + `the mark: glyph on tile ${Object.entries(markGlyph).map(([th, r]) => `${r.toFixed(2)}:1 ${th}`).join(', ')}, tile vs ground ${Object.entries(markTile).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}`
 );

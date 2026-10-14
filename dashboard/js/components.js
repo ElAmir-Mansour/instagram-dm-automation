@@ -101,6 +101,17 @@ const UI = {
     _actions: Object.create(null),
     _guardBaseline: null,
 
+    // ─── The brand mark ─────────────────────────────────────────────────────
+    /**
+     * Kufi «رد» (DESIGN.md section 4): the master geometry, which lands every edge on a whole pixel at 32 and 64. The tile and the glyph are
+     * `.mark-tile` and `.mark-glyph`, painted from --mark-tile and --mark-glyph, so the mark follows the theme (Cardamom in dark, Ink in light).
+     * Put it inside `.logo-mark` or `.login-mark`, which size it. The same markup is in index.html for the login and the sidebar, which are
+     * painted before any script runs; scripts/build-brand-icons.test.mjs reads them all against the kit's file.
+     */
+    brandMark() {
+        return html.raw('<svg viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg>');
+    },
+
     // ─── Focus across a re-render ───────────────────────────────────────────
     /**
      * Every page on this dashboard re-renders by writing `container.innerHTML`,
