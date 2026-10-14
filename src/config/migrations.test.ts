@@ -13,6 +13,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES } from '../services/dmEngine.js';
+import { DEFAULT_SALES_MODE, SALES_MODES } from '../services/dmSales/mode.js';
+import { HANDOFF_REASONS, INTENTS, STAGES } from '../services/dmSales/types.js';
 import { PROFILE_LIMITS } from '../services/profile/validate.js';
 import { compareSchema, EXPECTED_MIGRATIONS } from './migrations.js';
 
@@ -634,5 +636,91 @@ describe('migration v37: the DM engine switch', () => {
         const altered = [...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!);
         assert.deepEqual([...new Set(altered)], ['ai_agents']);
         assert.ok(existing.has('ai_agents'));
+    });
+});
+
+// ─── v39: the DM sales turn's switch and state ─────────────────────────────────────────────────
+
+describe('migration v39: the DM sales turn\'s switch and state', () => {
+    const FILE = 'migration_v39_dm_sales_state.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered, after v37 (v38 belongs to another change), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v37_dm_engine.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds the sales mode defaulting to OFF and an empty test list: every existing agent answers as it did', () => {
+        assert.match(sql, /ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS sales_mode VARCHAR\(5\) NOT NULL DEFAULT 'off'/);
+        assert.match(sql, /ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS sales_test_senders TEXT\[\] NOT NULL DEFAULT '\{\}'/);
+        // The code's idea of "a row that says nothing" is the column's default.
+        assert.equal(DEFAULT_SALES_MODE, 'off');
+    });
+
+    it('allows exactly the modes the code runs, and replaces its CHECK so a re-run is harmless', () => {
+        const check = /ADD CONSTRAINT ai_agents_sales_mode_check CHECK \(sales_mode IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(check, 'the CHECK is there');
+        assert.deepEqual([...check![1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]), [...SALES_MODES]);
+        assert.ok(sql.indexOf('DROP CONSTRAINT IF EXISTS ai_agents_sales_mode_check') >= 0 && sql.indexOf('DROP CONSTRAINT IF EXISTS ai_agents_sales_mode_check') < sql.indexOf('ADD CONSTRAINT ai_agents_sales_mode_check'));
+    });
+
+    it('allows exactly the stages and hand-off reasons the code uses', () => {
+        const stage = /ADD CONSTRAINT conversations_stage_check CHECK \(stage IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(stage, 'the stage CHECK is there');
+        assert.deepEqual([...stage![1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]), [...STAGES]);
+        assert.match(sql, /conversations ADD COLUMN IF NOT EXISTS stage VARCHAR\(12\) NOT NULL DEFAULT 'new'/);
+        const reason = /ADD CONSTRAINT conversations_handoff_reason_check CHECK \(handoff_reason IS NULL OR handoff_reason IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(reason, 'the hand-off reason CHECK is there');
+        assert.deepEqual([...reason![1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]), HANDOFF_REASONS.filter((r) => r !== 'none'), 'every reason but "none", which is NULL');
+        for (const name of ['conversations_stage_check', 'conversations_handoff_reason_check']) {
+            assert.ok(sql.indexOf(`DROP CONSTRAINT IF EXISTS ${name}`) >= 0 && sql.indexOf(`DROP CONSTRAINT IF EXISTS ${name}`) < sql.indexOf(`ADD CONSTRAINT ${name}`), name);
+        }
+    });
+
+    it('fits every value the code writes: the widest intent, stage and reason are inside their columns', () => {
+        const width = (column: string): number => Number(new RegExp(`${column} VARCHAR\\((\\d+)\\)`).exec(sql)![1]);
+        assert.ok(Math.max(...INTENTS.map((i) => i.length)) <= width('last_intent'));
+        assert.ok(Math.max(...STAGES.map((s) => s.length)) <= width('stage'));
+        assert.ok(Math.max(...HANDOFF_REASONS.map((r) => r.length)) <= width('handoff_reason'));
+    });
+
+    it('adds the funnel the plan names to conversations, and the ai_meta to messages: nothing more', () => {
+        const added = (table: string): string[] => [...sql.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS (\\w+)`, 'g'))].map((m) => m[1]!);
+        assert.deepEqual(added('conversations'), [
+            'stage', 'last_intent', 'offer_id', 'offers_linked', 'last_link_at', 'qualifier_turns', 'abuse_strikes', 'last_inbound_at', 'handoff_at',
+            'handoff_reason', 'opted_out_at', 'followups_sent', 'source_campaign_id',
+        ]);
+        assert.deepEqual(added('messages'), ['ai_meta']);
+        assert.match(sql, /messages ADD COLUMN IF NOT EXISTS ai_meta JSONB;/);
+        assert.deepEqual(added('ai_agents'), ['sales_mode', 'sales_test_senders']);
+    });
+
+    it('is idempotent and creates no table, so there is no new table to enable row level security on (the ones it alters have it since v11)', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.deepEqual(createdTables(sql), []);
+        assert.doesNotMatch(sql, /CREATE (UNIQUE )?INDEX/);
+        const rls = readFileSync(path.join(CONFIG_DIR, 'migration_v11_rls.sql'), 'utf8');
+        for (const table of ['ai_agents', 'conversations', 'messages', 'campaigns']) assert.match(rls, new RegExp(`ALTER TABLE IF EXISTS ${table}\\s+ENABLE ROW LEVEL SECURITY`), table);
+    });
+
+    it('alters tables that exist by the time it runs, and touches no other', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        const altered = [...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!);
+        assert.deepEqual([...new Set(altered)].sort(), ['ai_agents', 'conversations', 'messages']);
+        for (const table of ['ai_agents', 'conversations', 'messages', 'campaigns']) assert.ok(existing.has(table), `${table} exists before v39`);
+    });
+
+    it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i, 'a foreign key\'s ON DELETE SET NULL is not a DELETE');
     });
 });

@@ -590,7 +590,10 @@ describe('Campaign golden seeds', () => {
  *   dm.sales-system-filled.elamir   the same with everything typed in (a price with a date that has not passed, a sales block, the FAQ, the
  *                                   hand-off rule and the hours) and a conversation's facts after it: the whole shape of the prompt;
  *   dm.sales-schema.elamir          the schema, with the nine offer ids;
- *   dm.sales-system-filled.english  the English control: the same shape in the English kit.
+ *   dm.sales-system-filled.english  the English control: the same shape in the English kit;
+ *   dm.sales-system-dm-voice.elamir the filled case again with `dm.voice_guide` typed: the voice section shows THAT guide and not `voice.guide`
+ *                                   (the profile's guide is tuned for posts; a chat reply has its own). Added by S6; the files above did not move;
+ *   dm.sales-system-dm-voice.english  the same, for the English control.
  *
  * Each is built from the profile as it is and again from the profile as storage returns it (serialised, keys reordered, read through
  * `upgradeProfile`): the sales block must survive being stored, or the bot would sell from less than the owner typed.
@@ -601,6 +604,10 @@ describe('DM sales golden prompts', () => {
     const live = (): CreatorProfile => planOwnerOffers(storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)).next;
     const english = (): CreatorProfile => storedProfile(ENGLISH_SETTINGS);
     const primaryId = (p: CreatorProfile): string => p.offers.find((o) => o.primary)!.id;
+    /** The voice of a chat reply, as an owner would type it: the opposite of what his posts' guide says about links and slides. */
+    const DM_VOICE_AR = 'اكتب كأنك ترد على صديق في المحادثة: جملة أو جملتين، بلا شرح طويل. اسأل سؤالاً واحداً فقط، وإن طلب الرابط فأرسله فوراً.';
+    const DM_VOICE_EN = 'Write like a text to a friend: one or two short sentences, no lecture, one question at most. If they ask for the link, send it straight away.';
+    const withDmVoice = (p: CreatorProfile, guide: string): CreatorProfile => ({ ...p, dm: { ...p.dm, voice_guide: guide } });
 
     for (const [via, read] of [
         ['as built', (p: CreatorProfile) => p],
@@ -620,6 +627,15 @@ describe('DM sales golden prompts', () => {
                     base: 'dm.sales-system-filled', slug: 'english', set: 'control', agent: { system_prompt: starterPersona('en'), knowledge_base: '' },
                     profile: read(withSales(english(), 'en')), timezone: 'Europe/London', now: SALES_NOW,
                     facts: { stage: 'link', qualifierTurns: 1, linkSentFor: [primaryId(english())] },
+                }),
+                ...dmSalesSurface({
+                    ...owner, base: 'dm.sales-system-dm-voice', profile: read(withDmVoice(withSales(live(), 'ar'), DM_VOICE_AR)),
+                    facts: { stage: 'recommend', qualifierTurns: 2, linkSentFor: [] },
+                }),
+                ...dmSalesSurface({
+                    base: 'dm.sales-system-dm-voice', slug: 'english', set: 'control', agent: { system_prompt: starterPersona('en'), knowledge_base: '' },
+                    profile: read(withDmVoice(withSales(english(), 'en'), DM_VOICE_EN)), timezone: 'Europe/London', now: SALES_NOW,
+                    facts: { stage: 'recommend', qualifierTurns: 1, linkSentFor: [] },
                 }),
             ]);
         });

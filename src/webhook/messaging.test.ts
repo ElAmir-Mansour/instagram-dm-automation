@@ -283,6 +283,8 @@ interface Scenario {
      * profile cannot be read: the owner is then answered in his legacy wording, another tenant's job is retried.
      */
     owner?: string | null;
+    /** Statements a scenario arranges on top of the standard ones, tried first (the sales turn's own reads and writes). */
+    extraRoutes?: Array<[RegExp, { rows?: any[]; rowCount?: number }]>;
 }
 
 /** Any 32 bytes of hex: enough to encrypt and decrypt a saved key inside one run. */
@@ -312,7 +314,7 @@ async function runDm(
     entryId = 'ig-page-1',
     /** What to drive instead of `handleMessagingEvent` — the job handler, for the wiring test. */
     invoke?: (event: any, entryId: string) => Promise<void>
-): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any }> {
+): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any; timeline: string[] }> {
     const {
         creator = CREATOR,
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
@@ -328,9 +330,12 @@ async function runDm(
         envGeminiKey = 'test-key',
         profile,
         owner,
+        extraRoutes = [],
     } = scenario;
 
     const executed: Executed[] = [];
+    // Every call that leaves the pipeline, in the order it was made: a statement, Gemini, a request to Meta. What "the same calls in the same order" is checked on.
+    const timeline: string[] = [];
     const sends: Sent[] = [];
     // The request body Gemini was actually handed. Recorded because one bug in this file is
     // only visible in the payload: a story mention used to append an empty `user` part.
@@ -367,6 +372,7 @@ async function runDm(
     // Read as the database hands it back: JSONB, its keys in Postgres's order.
     if (profile) routes.unshift([/FROM creator_profiles/, { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] }]);
     if (owner !== undefined) routes.unshift([/SELECT id FROM creators ORDER BY created_at, id LIMIT 1/, { rows: owner === null ? [] : [{ id: owner }] }]);
+    routes.unshift(...extraRoutes);
     // The owner lookup is cached in the process for 30 s: one run's answer must not be the next one's.
     invalidateTenantCache();
 
@@ -379,12 +385,14 @@ async function runDm(
 
     (pool as any).query = async (sql: string, params: any[] = []) => {
         executed.push({ sql, params });
+        timeline.push(`SQL ${sql.replace(/\s+/g, ' ').slice(0, 40)}`);
         const route = routes.find(([pattern]) => pattern.test(sql));
         if (!route) throw new Error(`no result arranged for SQL:\n${sql}`);
         const { rows = [], rowCount } = route[1];
         return { rows, rowCount: rowCount ?? rows.length };
     };
     (axios as any).post = async (url: string, payload: any, config: any) => {
+        timeline.push('GEMINI');
         geminiCalls++;
         geminiPayloads.push(payload);
         geminiUrls.push(url);
@@ -392,6 +400,7 @@ async function runDm(
         return gemini();
     };
     (metaHttp as any).post = async (url: string, body: any) => {
+        timeline.push(`META ${body?.sender_action ?? 'message'}`);
         sends.push({ url, body });
         return send(url, body);
     };
@@ -413,7 +422,7 @@ async function runDm(
         invalidateTenantCache();
     }
 
-    return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error };
+    return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error, timeline };
 }
 
 const textEvent = (over: Record<string, unknown> = {}) => ({
@@ -1211,5 +1220,172 @@ describe('handleMessagingEvent — the reply engine (S3)', () => {
         const { sends } = await runDm(textEvent(), { agent: agentOn('providers') });
         assert.match(sends[0]!.body.message.text, /^🤖 رد آلي من المساعد الذكي\n/);
         assert.match(sends[0]!.body.message.text, /رد من المزوّد$/);
+    });
+});
+
+// ─── The sales mode switch (S6) ─────────────────────────────────────────────────────────────
+
+/**
+ * `ai_agents.sales_mode` decides which brain answers a DM (docs/DM_SALES_PLAN.md S6):
+ *
+ *   off   exactly the pipeline as it was: the same calls, in the same order, down to the statements. The default, and the owner's today.
+ *   test  the sales turn for the senders in `sales_test_senders` only; everyone else is answered the old way.
+ *   on    the sales turn for everyone.
+ *
+ * "The same calls in the same order" is a list written out below, captured from the pipeline before the switch existed (`origin/main` at
+ * `2ef25cc`, the same scenario run through both, the difference being the one statement that reads the mode). A change to the old path
+ * shows up here as a different list, never as a test that still passes.
+ */
+describe('handleMessagingEvent — the sales mode switch (S6)', () => {
+    const agentIn = (mode: 'off' | 'test' | 'on', senders: string[] = []) => ({
+        is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7, engine: 'gemini', gemini_fallback: true,
+        sales_mode: mode, sales_test_senders: senders,
+    });
+
+    /** What the pipeline did for a first message on the old path, in order. `READ MODE` is the one statement the switch added (see below). */
+    const TODAYS_CALLS = [
+        'SQL SELECT id, instagram_page_id, facebook_',
+        'SQL INSERT INTO conversations (creator_id,',
+        'SQL INSERT INTO messages (conversation_id,',
+        'SQL SELECT sales_mode, sales_test_senders F',   // READ MODE: the only difference from the pipeline before S6
+        'SQL SELECT profile, version, activated_at F',
+        'SQL SELECT id FROM creators ORDER BY create',
+        'SQL SELECT engine, gemini_fallback FROM ai_',
+        'SQL SELECT is_active, system_prompt, knowled',
+        'SQL SELECT value, is_secret FROM app_settin',
+        'SQL SELECT direction, text FROM messages WH',
+        'GEMINI',
+        'SQL INSERT INTO rate_limit_counters (creato',
+        'SQL INSERT INTO app_rate_limit_counters (bu',
+        'META message',
+        'SQL UPDATE conversations SET ai_disclosed_a',
+        'SQL INSERT INTO messages (conversation_id,',
+        'SQL UPDATE messages SET handled_at = NOW(),',
+    ];
+
+    /**
+     * `timeline` is the calls as the harness saw them (a statement's first 40 characters), and `TODAYS_CALLS` their beginnings: the same
+     * number of calls, each starting as the old pipeline's did. A statement or a send added, dropped or moved fails here, naming both lists.
+     */
+    const sameCalls = (actual: string[], expected: string[], what = 'the calls'): void => {
+        const matches = actual.length === expected.length && actual.every((call, i) => call.startsWith(expected[i]!));
+        assert.ok(matches, `${what} differ from today's.\nexpected:\n  ${expected.join('\n  ')}\nactual:\n  ${actual.join('\n  ')}`);
+    };
+
+    /** The sales turn's own statements, for a scenario that reaches it. */
+    const SALES_ROUTES: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+        [/UPDATE conversations\s+SET last_inbound_at/, { rows: [{ stage: 'new', qualifier_turns: 0, abuse_strikes: 0, offer_id: null, offers_linked: [], last_link_at: null, opted_out_at: null, ai_replies_last_hour: 0 }] }],
+        [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
+        [/UPDATE conversations SET stage/, { rowCount: 1 }],
+    ];
+
+    let layerCalls: AiGenerateArgs[];
+    let undo: () => void;
+    beforeEach(() => {
+        layerCalls = [];
+        const previousCaller = setAiCaller(async (args) => {
+            layerCalls.push(args);
+            return {
+                json: { intent: 'info', stage: 'new', next_action: 'reply', offer_id: 'none', handoff_reason: 'none', text: 'رد المبيعات', quick_replies: [] },
+                usage: { in: 900, out: 60 }, billed: [], model: 'claude-test', provider: 'anthropic', stopReason: 'end_turn', elapsed_ms: 800, usd: 0.003,
+                priced: true, costSource: 'table', effort: 'low', route: 'saved', usageId: '1',
+            } as AiGenerateResult;
+        });
+        undo = () => { setAiCaller(previousCaller); };
+    });
+    afterEach(() => undo());
+
+    it('off: the same calls in the same order as the pipeline before the switch existed, and no sender action, no layer call, no sales statement', async () => {
+        const { timeline, sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentIn('off') });
+
+        assert.equal(error, null);
+        sameCalls(timeline, TODAYS_CALLS);
+        assert.equal(geminiCalls, 1);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(sends.length, 1, 'one message, and no typing indicator');
+        assert.ok(!sends.some((s) => s.body.sender_action));
+        assert.ok(!executed.some((e) => /last_inbound_at|stage = \$3|ai_meta/.test(e.sql)), 'none of the sales statements');
+    });
+
+    it('a row from before v39 (no sales columns) is off: the same calls again', async () => {
+        const { timeline, layerCalls: _ignored, error } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
+        }).then((r) => ({ ...r, layerCalls: [] }));
+        assert.equal(error, null);
+        sameCalls(timeline, TODAYS_CALLS);
+    });
+
+    it('a database that cannot answer the mode is off as well: the DM is answered the old way, never by the experiment', async () => {
+        const { timeline, sends, error } = await runDm(textEvent(), {
+            agent: agentIn('on'),
+            extraRoutes: [[/SELECT sales_mode, sales_test_senders FROM ai_agents/, { rows: [] }]],
+        });
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(sends.length, 1);
+        assert.deepEqual(timeline.filter((c) => c === 'GEMINI'), ['GEMINI'], 'Gemini answered');
+    });
+
+    it('test with a sender who is NOT on the list takes today\'s path: the very same calls as off', async () => {
+        const { timeline, sends, geminiCalls, error } = await runDm(textEvent(), { agent: agentIn('test', ['999999', '888888']) });
+
+        assert.equal(error, null);
+        sameCalls(timeline, TODAYS_CALLS, 'the calls for a sender who is not a test sender');
+        assert.equal(geminiCalls, 1);
+        assert.equal(layerCalls.length, 0, 'the sales turn was not reached');
+        assert.ok(!sends.some((s) => s.body.sender_action));
+    });
+
+    it('test with an empty list answers nobody with the sales turn', async () => {
+        const { timeline } = await runDm(textEvent(), { agent: agentIn('test', []) });
+        sameCalls(timeline, TODAYS_CALLS);
+        assert.equal(layerCalls.length, 0);
+    });
+
+    it('test with a listed sender is the sales turn: the layer answers, Gemini is never asked, and the person is told it was read', async () => {
+        const { timeline, sends, geminiCalls, error, executed } = await runDm(
+            textEvent({ sender: { id: '17841400000000001' } }),
+            { agent: agentIn('test', ['17841400000000001']), extraRoutes: SALES_ROUTES }
+        );
+
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 1);
+        assert.equal(layerCalls[0]!.purpose, 'dm');
+        assert.equal(geminiCalls, 0);
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['mark_seen', 'typing_on', 'message']);
+        assert.ok(String(sends[2]!.body.message.text).endsWith('رد المبيعات'));
+        assert.ok(executed.some((e) => /UPDATE conversations SET stage/.test(e.sql)), 'the turn was recorded');
+        assert.ok(timeline.indexOf('META message') < timeline.findIndex((c) => /UPDATE messages SET handled_at/.test(c)), 'handled last');
+    });
+
+    it('on answers everyone with the sales turn', async () => {
+        const { sends, geminiCalls, error } = await runDm(textEvent(), { agent: agentIn('on'), extraRoutes: SALES_ROUTES });
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 1);
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 3);
+    });
+
+    it('the pause check still comes first: a paused conversation is not answered by either brain', async () => {
+        const { timeline, sends } = await runDm(textEvent(), {
+            agent: agentIn('on'), extraRoutes: SALES_ROUTES, conversation: { id: 'conv-1', is_bot_active: false, ai_disclosed_at: null },
+        });
+        assert.equal(sends.length, 0);
+        assert.equal(layerCalls.length, 0);
+        assert.ok(!timeline.some((c) => /sales_mode/.test(c)), 'the mode is not even read for a paused thread');
+    });
+
+    it('a transient send failure in the sales turn is retried like the old path\'s: the claim is released and the error re-raised', async () => {
+        const { error, executed } = await runDm(textEvent(), {
+            agent: agentIn('on'), extraRoutes: SALES_ROUTES,
+            send: async (_url, body) => {
+                if (body.sender_action) return { data: {} };
+                throw Object.assign(new Error('boom'), { response: { status: 500, data: {} } });
+            },
+        }, { lastAttempt: false });
+        assert.ok(error, 'raised for the job runner');
+        assert.equal(ranRelease(executed), true);
+        assert.equal(ranMarkHandled(executed), false);
+        assert.ok(!executed.some((e) => /UPDATE conversations SET stage/.test(e.sql)), 'nothing recorded for a reply that did not go');
     });
 });

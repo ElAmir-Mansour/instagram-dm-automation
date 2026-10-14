@@ -129,7 +129,7 @@ const ITEMS: Record<string, (v: unknown) => boolean> = {
 const BY_HAND = new Set(['language.surfaces', 'socials.links']);
 
 /** Keys the default has none for because they are optional, with what each must be. */
-const OPTIONAL: Record<string, Record<string, (v: unknown) => boolean>> = { audience: { timezone: isString } };
+const OPTIONAL: Record<string, Record<string, (v: unknown) => boolean>> = { audience: { timezone: isString }, dm: { voice_guide: isString } };
 
 const join = (path: string, key: string): string => (path ? `${path}.${key}` : key);
 

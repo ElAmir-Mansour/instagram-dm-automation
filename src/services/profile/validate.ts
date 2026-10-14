@@ -32,6 +32,8 @@ export const PROFILE_LIMITS = {
     countries: 30,
     languages: 10,
     guide: 4000,
+    /** `dm.voice_guide`: the voice of a chat reply, written the way `guide` is. */
+    dmVoiceGuide: 4000,
     samples: { items: 5, each: 2200 },
     tone: { items: 5, each: 30 },
     words: { items: 30, each: 80 },
@@ -431,8 +433,9 @@ function problemsOf(raw: unknown): string[] {
     }
 
     // dm
-    const dm = object(profile.dm, 'dm', ['faq', 'handoff', 'hours']);
+    const dm = object(profile.dm, 'dm', ['faq', 'handoff', 'hours'], ['voice_guide']);
     if (dm) {
+        text(dm.voice_guide, 'dm.voice_guide', PROFILE_LIMITS.dmVoiceGuide);
         list(dm.faq, 'dm.faq', PROFILE_LIMITS.faq, (v, path) => {
             const item = object(v, path, ['q', 'a']);
             if (!item) return;

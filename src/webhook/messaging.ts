@@ -7,6 +7,8 @@
 import { queryCount, queryOne } from '../db/query.js';
 import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/rows.js';
 import { generateDmReply } from '../services/dmEngine.js';
+import { answersWithSales, readSalesSettings } from '../services/dmSales/mode.js';
+import { runSalesTurn } from '../services/dmSales/turn.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
@@ -365,9 +367,39 @@ async function processDm(
     }
 
     try {
+        // Which brain answers (`ai_agents.sales_mode`, DM plan S6): `off`, the default, is everything below exactly as it was; `test`
+        // sends the sales turn only the listed test senders and everyone else down the old path; `on` sends it everyone. The read fails
+        // toward `off` (a database that is behind, an error): a DM is never answered by an experiment because the lookup broke.
+        const salesSettings = await readSalesSettings(creator.id);
+        const useSales = answersWithSales(salesSettings, dm.senderId);
+
         // Who the creator is, once for this DM: the model's rules and schema and the disclosure line below are written
         // from it. A profile that cannot be read is the owner's wording (`profileContextOrLegacy`), never a failed reply.
         const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+
+        if (useSales) {
+            // The sales turn owns the reply, its quota check, the disclosure and the record of both (src/services/dmSales/turn.ts); this
+            // function keeps the claim: handled once the turn has concluded, released for a retry when the quota stopped it, and the
+            // catch below still decides what a thrown error means.
+            const turn = await runSalesTurn({
+                creator: { id: creator.id, page_access_token: creator.page_access_token },
+                pageId: resolveDmPageId(creator, [recipientId, entryId]),
+                conversation: { id: conversationId },
+                inbound: { id: claim.id, senderId: dm.senderId, text: dmPromptText(dm), payload: dm.payload || undefined },
+                ctx: dmCtx,
+                disclosure: { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) },
+            });
+            if (turn.kind === 'quota') {
+                if (mayRetry) {
+                    await releaseInbound(claim.id);
+                    throw new Error(`Send quota exhausted (${turn.blockedBy}: ${turn.count}/${turn.limit}).`);
+                }
+                await markHandled(claim.id);
+                return;
+            }
+            await markHandled(claim.id);
+            return;
+        }
 
         // Ask the engine the tenant chose (`ai_agents.engine`): Gemini, today's call, unless they flipped it. Timed, because
         // this is both the dominant marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.

@@ -108,6 +108,10 @@ const AiSettingsPage = {
         if (engine) settings.engine = engine.value === 'providers' ? 'providers' : 'gemini';
         const fallback = document.getElementById('gemini-fallback-toggle');
         if (fallback) settings.gemini_fallback = !!fallback.checked;
+        // The sales turn's switch and its test senders (DM plan S6): present only when the form has them, like the engine's.
+        const sales = document.getElementById('sales-mode-selector');
+        if (sales) settings.sales_mode = this.salesMode();
+        if (document.getElementById('sales-test-senders')) settings.sales_test_senders = this.testSenders().join('\n');
         return settings;
     },
 
@@ -129,7 +133,8 @@ const AiSettingsPage = {
         const saved = this._saved && this._saved.settings;
         if (!now || !saved) return false;
         return now.is_active !== saved.is_active || now.model !== saved.model || now.temperature !== saved.temperature
-            || now.engine !== saved.engine || now.gemini_fallback !== saved.gemini_fallback;
+            || now.engine !== saved.engine || now.gemini_fallback !== saved.gemini_fallback
+            || now.sales_mode !== saved.sales_mode || now.sales_test_senders !== saved.sales_test_senders;
     },
 
     /** AI6: «تغييرات غير محفوظة» beside Save, while there are any. */
@@ -216,6 +221,28 @@ const AiSettingsPage = {
                                 <input type="checkbox" id="gemini-fallback-toggle" data-change="ai:fallbackChanged" checked>
                                 <span class="switch-track"></span>
                             </label>
+                        </div>
+
+                        <!-- The sales assistant (DM plan S6): Off is today's replies, Test answers only the listed senders, On everyone. It writes
+                             through the same "dm" route as the engine above, whichever engine is picked. The IDs are numbers, so the box is LTR. -->
+                        <div class="form-group">
+                            <label class="form-label" for="sales-mode-selector">${t('ai.sales')}</label>
+                            <select class="select" id="sales-mode-selector" data-change="ai:salesChanged" aria-describedby="sales-desc">
+                                <option value="off">${t('ai.salesOff')}</option>
+                                <option value="test">${t('ai.salesTest')}</option>
+                                <option value="on">${t('ai.salesOn')}</option>
+                            </select>
+                            <span class="field-desc" id="sales-desc">${t('ai.salesDesc')}</span>
+                        </div>
+
+                        <div class="form-group hidden" id="sales-senders-block">
+                            <label class="form-label" for="sales-test-senders">${t('ai.salesSenders')}</label>
+                            <span class="field-desc" id="sales-senders-desc">${t('ai.salesSendersDesc')}</span>
+                            <textarea id="sales-test-senders" class="field-textarea" dir="ltr" lang="en" rows="3" inputmode="numeric"
+                                      spellcheck="false" autocomplete="off" data-input="ai:salesChanged"
+                                      aria-describedby="sales-senders-desc sales-senders-hint"
+                                      placeholder="${t('ai.salesSendersPlaceholder')}"></textarea>
+                            <p class="form-hint hidden" id="sales-senders-hint" role="status" aria-live="polite"></p>
                         </div>
 
                         <div class="form-grid">
@@ -341,8 +368,14 @@ const AiSettingsPage = {
             if (engine) engine.value = settings.engine === 'providers' ? 'providers' : 'gemini';
             const fallback = document.getElementById('gemini-fallback-toggle');
             if (fallback) fallback.checked = settings.gemini_fallback !== false;
+            // Optional too: a server that predates the sales turn (or a row from before v39) sends neither, which is Off with no senders.
+            const sales = document.getElementById('sales-mode-selector');
+            if (sales) sales.value = ['test', 'on'].includes(settings.sales_mode) ? settings.sales_mode : 'off';
+            const senders = document.getElementById('sales-test-senders');
+            if (senders) senders.value = Array.isArray(settings.sales_test_senders) ? settings.sales_test_senders.join('\n') : '';
             this._routeView = undefined;
             this.syncEngine();
+            this.syncSales();
 
             this._saved = {
                 system_prompt: prompt.value,
@@ -405,6 +438,56 @@ const AiSettingsPage = {
         return !el || !!el.checked;
     },
 
+    /** The sales mode on screen: off, test or on. Anything else (a form that lacks the picker) is off. */
+    salesMode() {
+        const el = document.getElementById('sales-mode-selector');
+        return el && (el.value === 'test' || el.value === 'on') ? el.value : 'off';
+    },
+
+    /** Whether the AI providers layer writes replies now: the engine is AI providers, or the sales assistant is on (it always uses the layer). */
+    usesProviders() {
+        return this.engineValue() === 'providers' || this.salesMode() !== 'off';
+    },
+
+    /** The test senders on screen: one ID per entry, trimmed and each once, in the order typed. Commas, spaces and lines all separate. */
+    testSenders() {
+        const el = document.getElementById('sales-test-senders');
+        const out = [];
+        String(el ? el.value : '').split(/[\s,;\u060C]+/).forEach((part) => {
+            const id = part.trim();
+            if (id && !out.includes(id)) out.push(id);
+        });
+        return out;
+    },
+
+    /**
+     * What is wrong with the senders on screen, as a hint: the first entry that is not an ID (IDs are 5 to 32 digits), too many, or none while
+     * Test is chosen (then nobody gets sales replies). Pure over its arguments. null: nothing to say. The server checks again and refuses a bad one.
+     */
+    sendersHint(mode, senders) {
+        const bad = senders.find((id) => !/^\d{5,32}$/.test(id));
+        if (bad !== undefined) return { tone: 'warning', text: t('ai.salesSendersInvalid', { value: this.isolate(bad.slice(0, 40)) }) };
+        if (senders.length > 20) return { tone: 'warning', text: t('ai.salesSendersMany', { max: 20 }) };
+        if (mode === 'test' && senders.length === 0) return { tone: 'warning', text: t('ai.salesSendersEmpty') };
+        return null;
+    },
+
+    /** Shows the senders box only in Test mode, and says what is wrong with it. Written as text, so nothing in it is ever markup. */
+    syncSales() {
+        const mode = this.salesMode();
+        const block = document.getElementById('sales-senders-block');
+        if (block) block.classList.toggle('hidden', mode !== 'test');
+        const hintEl = document.getElementById('sales-senders-hint');
+        if (hintEl) {
+            const hint = mode === 'test' ? this.sendersHint(mode, this.testSenders()) : null;
+            hintEl.textContent = hint ? hint.text : '';
+            hintEl.classList.toggle('hidden', !hint);
+            hintEl.classList.toggle('text-warning', !!hint);
+        }
+        // The fallback switch and the route hint mean something whenever the layer writes replies, which Sales On and Test do too.
+        this.syncEngine();
+    },
+
     /**
      * What the "dm" route would do right now, from `GET /api/admin/ai` (`view`), as a short hint for the operator who picked AI
      * providers: a muted line when a route is saved, a warning when no provider can answer (no key) or no route is saved (the
@@ -430,7 +513,7 @@ const AiSettingsPage = {
     showRouteHint() {
         const el = document.getElementById('engine-route-hint');
         if (!el) return;
-        const hint = this.engineValue() === 'providers' ? this.routeHint(this._routeView, this.fallbackOn()) : null;
+        const hint = this.usesProviders() ? this.routeHint(this._routeView, this.fallbackOn()) : null;
         el.textContent = hint ? hint.text : '';
         el.classList.toggle('hidden', !hint);
         el.classList.toggle('text-warning', !!hint && hint.tone === 'warning');
@@ -459,7 +542,7 @@ const AiSettingsPage = {
      * status the first time it is wanted.
      */
     syncEngine() {
-        const providers = this.engineValue() === 'providers';
+        const providers = this.usesProviders();
         const block = document.getElementById('fallback-block');
         if (block) block.classList.toggle('hidden', !providers);
         if (providers) this.loadRouteStatus();
@@ -473,6 +556,11 @@ const AiSettingsPage = {
 
     fallbackChanged() {
         this.showRouteHint();
+        this.refreshDirty();
+    },
+
+    salesChanged() {
+        this.syncSales();
         this.refreshDirty();
     },
 
@@ -502,6 +590,19 @@ const AiSettingsPage = {
         // The engine and the fallback switch, when the form has them. Sent every time, so what is on screen is what is saved.
         if (document.getElementById('engine-selector')) payload.engine = this.engineValue();
         if (document.getElementById('gemini-fallback-toggle')) payload.gemini_fallback = this.fallbackOn();
+        // The sales mode and its test senders, when the form has them. Sent every time, so what is on screen is what is saved; a bad ID
+        // is stopped here with the hint on screen (the server refuses it as well).
+        if (document.getElementById('sales-mode-selector')) {
+            payload.sales_mode = this.salesMode();
+            payload.sales_test_senders = this.testSenders();
+            const problem = this.sendersHint('on', payload.sales_test_senders);
+            if (problem) {
+                this.syncSales();
+                UI.toast(problem.text, 'error');
+                restore();
+                return;
+            }
+        }
 
         try {
             await API.saveAiSettings(payload);
@@ -710,4 +811,5 @@ UI.registerActions('ai', {
     refreshDirty: () => AiSettingsPage.refreshDirty(),
     engineChanged: () => AiSettingsPage.engineChanged(),
     fallbackChanged: () => AiSettingsPage.fallbackChanged(),
+    salesChanged: () => AiSettingsPage.salesChanged(),
 });

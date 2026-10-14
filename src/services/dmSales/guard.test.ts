@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { checkClaims, guardReply, stripLinks, stripWomenEmoji, type ClaimFacts, type Violation } from './guard.js';
+import { checkClaims, guardReply, linkKey, stripLinks, stripWomenEmoji, type ClaimFacts, type Violation } from './guard.js';
 import type { LivePrice } from './price.js';
 
 const LIVE_349: LivePrice = { offerId: 'a', text: '349 SAR', amounts: ['349'], currency: 'SAR', validUntil: '2026-12-31' };
@@ -269,5 +269,98 @@ describe('guardReply: all of it together', () => {
     it('an empty reply, and a reply that is only a link, have nothing to refuse', () => {
         assert.equal(guardReply('', FACTS).ok, true);
         assert.equal(guardReply('https://example.com', FACTS).text, '');
+    });
+});
+
+// ─── The allowlist (S6): the creator's own addresses, and the link the server inserts ─────────
+
+describe('stripLinks and guardReply: only an EXACT match to an allowed address survives', () => {
+    const SITE = 'https://creator.example';
+    const SOCIAL = 'https://instagram.com/the.creator';
+    const OFFER = 'https://shop.example/product?code=AB12CD';
+    const allowed = [SITE, SOCIAL, OFFER];
+
+    it('keeps an allowed link as written, and takes out every other link of the same reply', () => {
+        const out = stripLinks(`Follow ${SOCIAL} or see https://elsewhere.example/x today.`, allowed);
+        assert.equal(out.text, `Follow ${SOCIAL} or see today.`);
+        assert.deepEqual(out.removed, ['https://elsewhere.example/x'], 'the kept one is not in what was removed');
+    });
+
+    it('keeps the sentence\'s own punctuation after a kept link, in both scripts', () => {
+        assert.equal(stripLinks(`Visit ${SITE}.`, allowed).text, `Visit ${SITE}.`);
+        assert.equal(stripLinks(`زر ${SITE}، وشكراً`, allowed).text, `زر ${SITE}، وشكراً`);
+    });
+
+    it('does not mind the scheme, a leading www. or a closing slash, nor the case of the host', () => {
+        for (const written of ['http://creator.example', 'https://www.creator.example', 'https://creator.example/', 'HTTPS://CREATOR.EXAMPLE', 'creator.example/']) {
+            const out = stripLinks(`See ${written} now`, allowed);
+            assert.deepEqual(out.removed, [], written);
+            assert.ok(out.text.includes(written), `${written} kept: ${out.text}`);
+        }
+    });
+
+    it('takes out a link that differs by a path, a query or a letter: a near match is another address', () => {
+        for (const near of [
+            'https://instagram.com/the.creator2', 'https://instagram.com/the.creato', 'https://instagram.com/the.creator/reels', 'https://instagram.com/The.Creator',
+            'https://shop.example/product?code=AB12CE', 'https://shop.example/product?code=ab12cd', 'https://shop.example/product', 'https://shop.example/product?code=AB12CD&x=1',
+            'https://creator.example.evil.example', 'https://evil-creator.example', 'https://creator.example@evil.example',
+        ]) {
+            const out = stripLinks(`See ${near} now`, allowed);
+            assert.equal(out.removed.length >= 1, true, near);
+            assert.ok(!out.text.includes('evil') && !out.text.includes(near), `${near} is gone: ${out.text}`);
+        }
+    });
+
+    it('keeps a markdown link\'s words and its address when the address is allowed, and only its words when it is not', () => {
+        assert.equal(stripLinks(`See [my page](${SITE}) now`, allowed).text, `See my page ${SITE} now`);
+        assert.equal(stripLinks('See [my page](https://elsewhere.example) now', allowed).text, 'See my page now');
+    });
+
+    it('is the strict rule when nothing is allowed: the same text loses its links', () => {
+        assert.equal(stripLinks(`Follow ${SOCIAL}`).text, 'Follow');
+        assert.equal(stripLinks(`Follow ${SOCIAL}`, []).text, 'Follow');
+    });
+
+    it('a kept link is not broken by the patterns that run after the one that found it (a www. address inside a scheme address)', () => {
+        const out = stripLinks('Go to https://www.creator.example/a/b/c now', ['https://www.creator.example/a/b/c']);
+        assert.equal(out.text, 'Go to https://www.creator.example/a/b/c now');
+        assert.deepEqual(out.removed, []);
+    });
+
+    it('still takes out an email address and a bare domain that is not on the list', () => {
+        const out = stripLinks(`${SITE} or me@creator.example or example.org/x`, allowed);
+        assert.equal(out.text, `${SITE} or or`);
+        assert.deepEqual(out.removed, ['me@creator.example', 'example.org/x']);
+    });
+
+    it('a kept link\'s digits are not numbers the data must hold: guardReply checks the claims on the text without links', () => {
+        const facts: ClaimFacts = { texts: ['12 lessons'], prices: [], allowedLinks: ['https://creator.example/p/2024?x=9987'] };
+        const g = guardReply('The 12 lessons are at https://creator.example/p/2024?x=9987 for you.', facts);
+        assert.deepEqual(g.violations, []);
+        assert.ok(g.text.includes('https://creator.example/p/2024?x=9987'), 'and the link is still in what is sent');
+        assert.equal(g.linksRemoved.length, 0);
+    });
+
+    it('a number in a link the model was NOT allowed is gone with the link, and a claim beside a kept link is still a claim', () => {
+        const facts: ClaimFacts = { texts: [], prices: [], allowedLinks: [SITE] };
+        assert.deepEqual(guardReply(`See ${SITE} and https://other.example/77`, facts).violations, []);
+        assert.deepEqual(kinds(guardReply(`Only 25 dollars at ${SITE}`, facts).violations), ['price']);
+    });
+
+    it('guardReply with no allowedLinks is the strict rule it was', () => {
+        const g = guardReply(`See ${SITE}`, { texts: [], prices: [] });
+        assert.equal(g.text, 'See');
+        assert.deepEqual(g.linksRemoved, [SITE]);
+    });
+});
+
+describe('linkKey: what makes two addresses one', () => {
+    it('is the host in lower case and the rest as written, without scheme, www. or closing slashes', () => {
+        assert.equal(linkKey('HTTPS://WWW.Example.COM/Path?Q=1'), 'example.com/Path?Q=1');
+        assert.equal(linkKey('example.com///'), 'example.com');
+        assert.equal(linkKey(' https://example.com '), 'example.com');
+        assert.notEqual(linkKey('https://example.com/a'), linkKey('https://example.com/A'));
+        assert.notEqual(linkKey('https://example.com/a?x=1'), linkKey('https://example.com/a?x=2'));
+        assert.notEqual(linkKey('https://example.com/a'), linkKey('https://example.com/a#frag'));
     });
 });

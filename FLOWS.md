@@ -637,6 +637,44 @@ calls **`markHandled`** (**:298**) and returns.
 the inbox (`PUT /api/conversations/:id/toggle-bot`), and a retry must not decide later that the
 bot should have answered after all.
 
+### 2.6b — The sales switch (v39, DM plan S6)
+
+Right after the pause check, `readSalesSettings` (**`src/services/dmSales/mode.ts`**) reads `ai_agents.sales_mode` and `sales_test_senders` in a
+statement of its own, and `answersWithSales` decides who gets the sales turn: `off` nobody (the default, the owner's, and what a row from before
+v39 or a failed read means: `dm.sales_mode_read_failed`), `test` only a sender whose id is on the list (exact string match), `on` everybody.
+**`off` is everything below, exactly as it was.** `messaging.test.ts` ("the sales mode switch") writes out the calls of the old pipeline, in order,
+and checks both `off` and `test` for an unlisted sender against it: the one statement the switch added is the read of the mode.
+
+For a sender it does answer, `runSalesTurn` (**`src/services/dmSales/turn.ts`**) owns the reply and `processDm` keeps the claim (handled once the
+turn concluded; released and re-raised when the send quota stopped it; the catch still decides what a thrown Meta error means). In order:
+
+1. **State and burst.** `loadSalesState` reads the conversation's stage, counts and links and stamps `last_inbound_at` in one statement. A message
+   with a later unhandled inbound in the thread, or any reply after it, stands down (`dm.sales_superseded`): one reply per burst, and a job
+   resumed after a crash between the send and the bookkeeping does not answer twice.
+2. **Agent and loop.** The owner's switch is honoured as ever (off or unconfigured says nothing). Fifteen bot replies to one conversation in an
+   hour pause it and send nothing (`dm.sales_reply_cap`).
+3. **Prefilter, before any model** (`prefilter.ts`): a refund or complaint is the hand-off line (the profile's `dm.handoff.message`, else the
+   kit's) with the bot paused; "stop" is one opt-out line, `opted_out_at`, the bot paused; the first insult one calm line, the second pauses the
+   bot and says nothing. No `mark_seen`, no model.
+4. **Model.** `mark_seen` and `typing_on` go out while the model thinks (best effort: a failure is `dm.sender_action_failed` and nothing more).
+   The layer is asked for purpose `dm` with the static prompt as the cached system text and the conversation's facts in front of the last user
+   turn. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
+   `[buttons: …]` instead of the stored `[Structured Template]`, and a customer's button tap carries its code, `(tapped: OTHER_COURSES)`. The old
+   path's history is untouched. A failure of any kind is the legacy Gemini path once when `gemini_fallback` is on, else a hand-off
+   (`dm.engine_failed`): never silence.
+5. **The code decides.** `coerceSalesReply` makes the answer true to its shape, `decideTurn` (**`flow.ts`**) applies the flow's rules (a link is
+   only the `link` stage if one was sent; no way back from `link`; `handoff` and `closed` only by action; two qualifying questions, then
+   recommend; nothing sold to a closed conversation unless the person says they want to buy).
+6. **Guard.** The model's text loses every link except the creator's own site and socials and the offer link being inserted, on an exact match
+   (`guard.ts`), and any number, price, discount or coupon the data does not hold is asked again once and then is the kit's safe line and a
+   hand-off (`dm.claim_blocked`).
+7. **Link and bytes.** `send_link` is the only way a link goes: `linkFor` (**`link.ts`**) makes it, a tracked `https://<app.public_base_url>/r/<code>`
+   link (S7, one code per conversation and offer) or, if that cannot be made, the offer's own address (`dm.tracked_link_failed`), and puts it after
+   the text; text plus link are within 900 UTF-8 bytes.
+8. **Send and record.** The same quota, disclosure and `sendDirectMessage` as the old path, then ONE statement writes the reply (with
+   `messages.ai_meta`) and the conversation's new state (`recordTurn`, **`store.ts`**), then the message is marked handled. A failed send records
+   nothing.
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),
