@@ -60,7 +60,11 @@ const InboxPage = {
     /** The route's own cap. */
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
-    FILTERS: Object.freeze(['all', 'waiting', 'paused']),
+    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'paused']),
+    /** Meta's standard messaging window: a reply is allowed for 24 h after the customer's last message (DM plan §2). */
+    WINDOW_MS: 24 * 60 * 60 * 1000,
+    /** A conversation id as the alert's link carries it (`#/inbox?c=<id>`); anything else in the hash is data. */
+    ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
     RETURN_NOTICE_MS: 60 * 1000,
 
@@ -104,8 +108,10 @@ const InboxPage = {
     searchTerm: '',
     /** The server's answer for a search: `{ term, rows }`, the term lower-cased and trimmed. */
     searchMatches: null,
-    /** 'all' | 'waiting' | 'paused' */
+    /** 'all' | 'waiting' | 'needs_you' | 'paused' */
     filter: 'all',
+    /** The conversation the page was opened on (`#/inbox?c=<id>`, the link in the owner's alert), until the list has loaded and it is opened. */
+    _deepLinkId: '',
     renderedMessageIds: new Set(),
     lastMessageStamp: null,
     chatShellThreadId: null,
@@ -213,6 +219,7 @@ const InboxPage = {
 
         this.resetViewState();
         this.filter = this.filterFromHash();
+        this._deepLinkId = this.threadFromHash();
         this.syncFilterButtons();
         this.markStale(false);
         this.bindImageGuard();
@@ -274,6 +281,7 @@ const InboxPage = {
         this.searchTerm = '';
         this.searchMatches = null;
         this.filter = 'all';
+        this._deepLinkId = '';
         this._pollFailures = 0;
         this._unchangedTicks = 0;
         this._listSignature = null;
@@ -479,8 +487,73 @@ const InboxPage = {
         return !!thread && thread.is_bot_active === false && thread.last_message_direction === 'inbound';
     },
 
+    /**
+     * The bot handed this conversation to a person and nobody has answered yet: a refund, a complaint, "I want to talk to someone" (the
+     * bot is PAUSED for these), or a reply that could not be written at all, because the model was down (the bot is left ON, so the
+     * customer's next message gets a normal reply: DM plan §8, S8). The bot being on or off is therefore not part of the answer.
+     * `stage` and `handoff_at` are the v39 columns, so a database that is behind flags nothing. `last_operator_at` is the owner's last
+     * reply, from here or from the Instagram app: a reply after the handoff ends it. So does turning the AI back on (the server moves the
+     * stage on: `toggle-bot`), and so does the bot's own next turn in the sales flow, which leaves the `handoff` stage by answering.
+     */
+    isNeedsYou(thread) {
+        if (!thread || thread.stage !== 'handoff') return false;
+        const handedAt = Date.parse(thread.handoff_at);
+        const answeredAt = Date.parse(thread.last_operator_at);
+        return !(Number.isFinite(handedAt) && Number.isFinite(answeredAt) && answeredAt >= handedAt);
+    },
+
+    /** A person has to act: it is waiting for a reply, or handed over. These are the threads the 24 h window is counted down on. */
+    needsHuman(thread) {
+        return this.isWaiting(thread) || this.isNeedsYou(thread);
+    },
+
+    /**
+     * Milliseconds left of Meta's 24 h window, counted from the customer's LAST message (`last_inbound_message_at`, read from
+     * `messages`: the v39 `last_inbound_at` is stamped only by a sales turn, so it is old for a customer who wrote again after the
+     * bot was paused). 0 once it has closed; null when there is no such message.
+     */
+    windowLeftMs(thread, now = Date.now()) {
+        if (!thread) return null;
+        const at = Date.parse(thread.last_inbound_message_at || thread.last_inbound_at);
+        if (!Number.isFinite(at)) return null;
+        return Math.max(0, Math.min(this.WINDOW_MS, at + this.WINDOW_MS - now));
+    },
+
+    /** "5 h 20 min", "40 min" or "under a minute". Latin digits, as every number on this screen. */
+    windowTime(ms) {
+        const minutes = Math.floor(ms / 60000);
+        if (minutes < 1) return t('inbox.window.lt1');
+        const h = Math.floor(minutes / 60);
+        const m = minutes % 60;
+        if (h === 0) return t('inbox.window.m', { m: UI.formatNumber(m) });
+        return m === 0 ? t('inbox.window.h', { h: UI.formatNumber(h) }) : t('inbox.window.hm', { h: UI.formatNumber(h), m: UI.formatNumber(m) });
+    },
+
+    /** The countdown for a thread that needs a person: its words, or '' for any other thread and for one with no message from the customer. */
+    windowText(thread, now = Date.now()) {
+        if (!this.needsHuman(thread)) return '';
+        const ms = this.windowLeftMs(thread, now);
+        if (ms === null) return '';
+        return ms <= 0 ? t('inbox.window.closed') : t('inbox.window.left', { time: this.windowTime(ms) });
+    },
+
+    /** The conversation id in `#/inbox?c=<id>`, or '' (anything that is not an id is ignored). */
+    threadFromHash() {
+        const raw = typeof App !== 'undefined' && typeof App.hashParam === 'function' ? String(App.hashParam('c') || '') : '';
+        return this.ID_PATTERN.test(raw) ? raw.toLowerCase() : '';
+    },
+
+    /** Open the conversation the page was opened on, once, when the list that holds it has arrived. One that is not among the newest threads is left alone. */
+    openDeepLink() {
+        const id = this._deepLinkId;
+        if (!id) return;
+        this._deepLinkId = '';
+        if (this.findThread(id)) this.selectThread(id);
+    },
+
     matchesFilter(thread) {
         if (this.filter === 'waiting') return this.isWaiting(thread);
+        if (this.filter === 'needs_you') return this.isNeedsYou(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
         return true;
     },
@@ -568,7 +641,11 @@ const InboxPage = {
     applyPending(rows) {
         if (this.pendingBotState.size > 0) {
             rows.forEach((row) => {
-                if (this.pendingBotState.has(row.id)) row.is_bot_active = this.pendingBotState.get(row.id);
+                if (this.pendingBotState.has(row.id)) {
+                    row.is_bot_active = this.pendingBotState.get(row.id);
+                    // A poll that left before the server moved the stage on must not bring "Needs you" back for a tick.
+                    if (row.is_bot_active && row.stage === 'handoff') row.stage = 'new';
+                }
             });
         }
         return rows;
@@ -594,6 +671,7 @@ const InboxPage = {
             this.noteListChange(rows);
             this.renderThreads();
             this.reportWaiting();
+            this.openDeepLink();
             // Not awaited, and never throws: the names of the newest threads fill in behind the list, one at a time.
             this.backfillProfiles(rows);
 
@@ -637,7 +715,8 @@ const InboxPage = {
     /** SH3: the count on the Inbox nav item and in the tab title, from every screen. */
     reportWaiting() {
         if (typeof App === 'undefined' || typeof App.setInboxWaiting !== 'function') return;
-        App.setInboxWaiting(this.threads.filter((x) => this.isWaiting(x)).length);
+        // Waiting for a reply, or handed over to a person: the two are what the owner opens the inbox for.
+        App.setInboxWaiting(this.threads.filter((x) => this.needsHuman(x)).length);
     },
 
     /** A thread from the list or from the search's answer — the open one may be either. */
@@ -716,6 +795,12 @@ const InboxPage = {
                 ${!x.is_bot_active && isInbound
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}
+                ${this.isNeedsYou(x)
+                    ? html`<span class="badge badge-warning"><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.needsYou')}</span>`
+                    : ''}
+                ${this.windowText(x)
+                    ? html`<span class="badge badge-neutral"><i data-lucide="clock" aria-hidden="true"></i>${this.windowText(x)}</span>`
+                    : ''}
             </span>
         `;
     },
@@ -749,6 +834,7 @@ const InboxPage = {
     emptyMarkup(kind) {
         if (kind === 'search') return html`<div class="empty-threads" data-empty="search"><p>${t('inbox.noMatch')}</p></div>`;
         if (kind === 'waiting') return html`<div class="empty-threads" data-empty="waiting"><p>${t('inbox.noWaiting')}</p></div>`;
+        if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
         return html`
             <div class="empty-threads" data-empty="none">
@@ -810,6 +896,9 @@ const InboxPage = {
                 x.is_bot_active ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
+                this.isNeedsYou(x) ? '1' : '0',
+                // The text shown, so the row is repainted when the minute changes and not before.
+                this.windowText(x),
             ].join('\u001f'),
             create: () => {
                 const item = document.createElement('div');
@@ -1191,6 +1280,13 @@ const InboxPage = {
     metaMarkup(thread) {
         if (!thread) return '';
         const chips = [];
+        // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
+        if (this.isNeedsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
+        const countdown = this.windowText(thread);
+        if (countdown) {
+            const closed = this.windowLeftMs(thread) === 0;
+            chips.push(this.metaChip(closed ? `${countdown}: ${t('inbox.window.closedHint')}` : countdown, { icon: 'clock' }));
+        }
         if (thread.is_user_follow_business === true) chips.push(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }));
         else if (thread.is_user_follow_business === false) chips.push(this.metaChip(t('inbox.meta.notFollowsYou')));
         if (thread.is_business_follow_user === true) chips.push(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
@@ -1800,9 +1896,16 @@ const InboxPage = {
         const copies = this.threadCopies(id);
         const thread = copies[0] || null;
         const previous = thread ? thread.is_bot_active !== false : !checked;
+        const stages = copies.map((copy) => copy.stage);
 
-        const paint = (value) => {
-            copies.forEach((copy) => { copy.is_bot_active = value; });
+        // Turning the AI on for a thread that was handed over ends the handoff, as the server does (`toggle-bot` moves the stage on);
+        // a revert puts the stage back with the switch.
+        const paint = (value, restore = false) => {
+            copies.forEach((copy, i) => {
+                copy.is_bot_active = value;
+                if (restore) copy.stage = stages[i];
+                else if (value && copy.stage === 'handoff') copy.stage = 'new';
+            });
             const toggle = document.getElementById('bot-toggle-input');
             if (toggle && toggle.checked !== value) toggle.checked = value;
             this.renderThreads();
@@ -1816,7 +1919,7 @@ const InboxPage = {
 
         return Motion.optimistic({
             send: () => API.toggleConversationBot(id, checked),
-            revert: () => paint(previous),
+            revert: () => paint(previous, true),
             onError: (err) => {
                 console.error('Toggle Bot Error:', err);
                 UI.toast((err && err.message) || t('inbox.botFailed'), 'error');

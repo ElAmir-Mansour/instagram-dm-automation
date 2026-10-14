@@ -201,6 +201,29 @@ export const APP_SETTING_KEYS = {
      * (`POST /api/settings/sales-followup`).
      */
     dmSalesFollowupMinutes: 'dm.sales.followup_minutes',
+    /**
+     * Handoff alerts to the owner (docs/DM_SALES_PLAN.md S8, `src/services/notify.ts`): a Telegram bot the owner makes with @BotFather.
+     * The token is the one secret (encrypted, and the Settings card is told `{set, last4}` and nothing else). The chat id is the owner's
+     * own (a number, or `@channel`). `enabled` is 'true' once the owner has switched alerts on, and `hot_leads` is 'false' only when
+     * the owner turned the hot-lead pings off (unset means they are on: the owner's decision of 2026-10-14). Alerts exist for the
+     * platform owner's tenant only: until a per-tenant channel exists, another tenant's customers are never sent to this chat.
+     */
+    notifyTelegramBotToken: 'notify.telegram_bot_token',
+    notifyTelegramChatId: 'notify.telegram_chat_id',
+    notifyTelegramEnabled: 'notify.telegram_enabled',
+    notifyTelegramHotLeads: 'notify.telegram_hot_leads',
+    /**
+     * 'true': an echo (`is_echo`) that proves a person replied by hand pauses the bot for that conversation (`src/webhook/echo.ts`).
+     * Unset is off, and off means echoes are dropped before they become jobs, exactly as before this setting existed. DM plan
+     * assumption A4 (can our own sends be told from the owner's replies in the Instagram app?) is unverified, so it ships off.
+     */
+    dmEchoTakeover: 'dm.echo_takeover',
+    /**
+     * Comma-separated Meta app ids the owner ADDS to the ones whose echoes mean "a person replied". The documented one (the Facebook Page
+     * inbox app, `PAGE_INBOX_APP_IDS` in `src/webhook/echo.ts`) is always in the list; the owner adds the id the Instagram app's echoes carry
+     * once the log line `dm.echo_classified` shows it.
+     */
+    dmEchoOwnerAppIds: 'dm.echo_owner_app_ids',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -215,6 +238,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.aiProviderKeyOpenai,
     APP_SETTING_KEYS.aiProviderKeyOpenrouter,
     APP_SETTING_KEYS.aiProviderKeyCustom,
+    APP_SETTING_KEYS.notifyTelegramBotToken,
 ]);
 
 export function isSecretSetting(key: AppSettingKey): boolean {

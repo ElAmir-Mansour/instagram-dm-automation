@@ -509,13 +509,45 @@ const ranRelease = (executed: Executed[]) =>
     executed.some((e) => /SET reply_claimed_at = NULL WHERE/.test(e.sql));
 
 describe('handleMessagingEvent — what it declines to answer', () => {
-    it('ignores the page\'s own echo without touching the database', async () => {
-        const { executed, geminiCalls } = await runDm(
+    it('ignores the page\'s own echo: with takeover off, the default, the one statement is the read of that switch (S8)', async () => {
+        // Before S8 an echo cost no statement at all. The queue still drops an echo before it is a job (router.test.ts), so this is
+        // the inline fallback path only, and what it costs is one indexed row, `dm.echo_takeover`. Everything else is as it was:
+        // no conversation, no claim, no pause, no model, no send.
+        const { executed, geminiCalls, sends } = await runDm(
             textEvent({ message: { mid: 'mid-1', text: 'x', is_echo: true } })
         );
 
-        assert.equal(executed.length, 0);
+        assert.equal(executed.length, 1);
+        assert.match(executed[0]!.sql, /FROM app_settings WHERE key/);
+        assert.ok(executed[0]!.params.flat().includes('dm.echo_takeover'), 'and it is that switch it reads');
         assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 0);
+    });
+
+    it('takeover on: an echo from the Page inbox app pauses the thread through the same pipeline, and still sends and asks nothing (S8)', async () => {
+        const { executed, geminiCalls, sends, error } = await runDm(
+            { sender: { id: 'ig-page-1' }, recipient: { id: 'user-1' }, message: { mid: 'mid-echo', text: 'I will take this one', is_echo: true, app_id: '263902037430900' } },
+            { extraRoutes: [
+                [/FROM app_settings WHERE key/, { rows: [{ key: 'dm.echo_takeover', value: 'true', is_secret: false }] }],
+                [/UPDATE conversations SET is_bot_active = false/, { rows: [{ id: 'conv-1' }] }],
+            ] }
+        );
+
+        assert.equal(error, null);
+        assert.ok(executed.some((e) => /UPDATE conversations SET is_bot_active = false/.test(e.sql)), 'the thread is paused');
+        assert.ok(!executed.some((e) => /ON CONFLICT \(meta_message_id\) DO NOTHING|reply_attempts/.test(e.sql) && /'customer'/.test(e.sql)), 'and it is not claimed as a customer message');
+        assert.equal(sends.length, 0);
+        assert.equal(geminiCalls, 0);
+    });
+
+    it('takeover on, but an echo with no app_id: nothing is paused, because it cannot be told from our own send (A4)', async () => {
+        const { executed, sends } = await runDm(
+            { sender: { id: 'ig-page-1' }, recipient: { id: 'user-1' }, message: { mid: 'mid-echo', text: 'x', is_echo: true } },
+            { extraRoutes: [[/FROM app_settings WHERE key/, { rows: [{ key: 'dm.echo_takeover', value: 'true', is_secret: false }] }]] }
+        );
+
+        assert.equal(executed.length, 1, 'only the switch was read');
+        assert.equal(sends.length, 0);
     });
 
     it('stops at the creator lookup when no tenant owns the page', async () => {
@@ -1081,16 +1113,41 @@ describe('handleMessagingEvent — transient versus permanent failure', () => {
         assert.equal(flip.params[0], 'creator-1');
     });
 
-    it('records a transient failure as final on the last attempt', async () => {
-        const { executed, error } = await runDm(
+    it('records a transient failure as final on the last attempt, and hands the conversation over: the customer is told, never left in silence (S8)', async () => {
+        // Found live 2026-10-14: Gemini failed all three attempts and the DM got no reply at all. The detail (the pause, the stamp, the
+        // owner's alert, every other branch) is in src/services/dmSales/handoff.test.ts; this is the old path's own contract.
+        const { executed, error, sends } = await runDm(
             textEvent(),
-            { gemini: async () => { throw new Error('socket hang up'); } },
+            {
+                gemini: async () => { throw new Error('socket hang up'); },
+                profile: FITNESS_EN, owner: 'creator-1',
+                extraRoutes: [
+                    [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
+                    [/UPDATE conversations\s+SET stage = 'handoff', handoff_at = NOW\(\)/, { rowCount: 1 }],
+                ],
+            },
             { lastAttempt: true }
         );
 
         assert.equal(error, null);
         assert.equal(ranMarkHandled(executed), true);
         assert.equal(ranRelease(executed), false);
+        assert.equal(sends.length, 1, 'one message to the customer: the handoff line');
+        assert.ok(executed.some((e) => /SET stage = 'handoff', handoff_at = NOW\(\)/.test(e.sql)), 'and the thread is stamped');
+        assert.ok(!executed.some((e) => /is_bot_active\s*=\s*FALSE/i.test(e.sql)), 'but the bot is NOT paused: an outage is not a request for a person');
+    });
+
+    it('records a permanent Meta failure on the last attempt exactly as before: no handoff line to a recipient who cannot be written to (S8)', async () => {
+        const { executed, error, sends } = await runDm(
+            textEvent(),
+            { send: async () => { throw Object.assign(new Error('blocked'), { response: { status: 400, data: { error: { code: 10903 } } } }); } },
+            { lastAttempt: true }
+        );
+
+        assert.equal(error, null);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(sends.length, 1, 'only the reply that failed');
+        assert.ok(!executed.some((e) => /stage = 'handoff'/.test(e.sql)));
     });
 });
 
@@ -1308,6 +1365,13 @@ describe('handleMessagingEvent — the reply engine (S3)', () => {
     afterEach(() => { for (const f of undo) f(); });
 
     const outboundRows = (executed: Executed[]) => executed.filter((e) => /INSERT INTO messages/.test(e.sql) && /'outbound'/.test(e.sql));
+    /** What a failed engine now writes (S8): the stamp, and nothing that turns the bot off. Its two statements, arranged for the harness. */
+    const HANDOVER_ROUTES: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+        [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
+        [/UPDATE conversations\s+SET stage = 'handoff', handoff_at = NOW\(\)/, { rowCount: 1 }],
+    ];
+    const stampsOf = (executed: Executed[]) => executed.filter((e) => /SET stage = 'handoff', handoff_at = NOW\(\)/.test(e.sql));
+    const botTurnedOff = (executed: Executed[]) => executed.some((e) => /is_bot_active\s*=\s*FALSE/i.test(e.sql));
 
     it('the gemini engine is today\'s pipeline: Gemini answers, the layer is never asked', async () => {
         const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('gemini') });
@@ -1356,40 +1420,63 @@ describe('handleMessagingEvent — the reply engine (S3)', () => {
         assert.equal(ranMarkHandled(executed), true);
     });
 
-    it('with the fallback off, nothing is sent and nothing is written as a reply; the message is closed, not retried; the log says why', async () => {
+    it('with the fallback off, the customer is handed over once (the handoff line, the conversation stamped, the bot left ON); the message is closed, not retried; the log says why (S8)', async () => {
+        // This was silence (S3 left it for S8's handoff to pick up): the model could not answer and nothing was said to the customer.
         layer = layerFailing('no_provider');
-        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('providers', false) }, { lastAttempt: false });
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('providers', false), extraRoutes: HANDOVER_ROUTES }, { lastAttempt: false });
 
         assert.equal(error, null, 'not re-raised: a retry would only spend the same budget again');
-        assert.equal(sends.length, 0);
+        assert.equal(sends.length, 1, 'one message: the handoff line, never a model\'s words and never a second');
+        assert.match(String(sends[0]!.body.message.text), /^🤖 رد آلي من المساعد الذكي\n./s, 'with the automated-service disclosure, as the first reply');
         assert.equal(geminiCalls, 0);
-        assert.equal(outboundRows(executed).length, 0, 'no outbound turn is invented');
+        assert.equal(outboundRows(executed).length, 1, 'the line is the bot\'s own row on the thread');
+        assert.ok(String(sends[0]!.body.message.text).endsWith(String(outboundRows(executed)[0]!.params[2])), 'and it is the line that was sent');
+        assert.equal(stampsOf(executed).length, 1, 'stamped as handed over, for the inbox\'s "Needs you"');
+        assert.deepEqual(stampsOf(executed)[0]!.params, ['conv-1', 'creator-1', 'unsure']);
+        assert.equal(botTurnedOff(executed), false, 'an outage is not a request for a person: the next message gets a normal reply');
         assert.equal(ranMarkHandled(executed), true);
         assert.equal(ranRelease(executed), false);
         const failed = logged.filter((l) => l.event === 'dm.engine_failed');
         assert.equal(failed.length, 1);
         assert.equal(failed[0]!.reason, 'no_provider');
         assert.equal(failed[0]!.fallback, 'off');
+        assert.equal(logged.filter((l) => l.event === 'dm.failure_handoff').length, 1);
         assert.equal(logged.filter((l) => l.event === 'dm.pipeline_failed').length, 0, 'a decision, not a crash');
         assert.equal(logged.filter((l) => l.event === 'ai.replied').length, 0, 'nothing replied');
     });
 
-    it('both engines failing sends no canned apology and no second try: the stub', async () => {
+    it('both engines failing is handed over once too: no model words, no second try (S8)', async () => {
         layer = layerFailing('server');
         const { sends, geminiCalls, error, executed } = await runDm(textEvent(), {
             agent: agentOn('providers', true),
             gemini: async () => { throw new Error('socket hang up'); },
+            extraRoutes: HANDOVER_ROUTES,
         }, { lastAttempt: false });
 
         assert.equal(error, null);
         assert.equal(layerCalls.length, 1);
         assert.equal(geminiCalls, 1);
-        assert.equal(sends.length, 0);
-        assert.equal(outboundRows(executed).length, 0);
+        assert.equal(sends.length, 1, 'the handoff line, once');
+        assert.equal(stampsOf(executed).length, 1);
+        assert.equal(botTurnedOff(executed), false);
         assert.equal(ranMarkHandled(executed), true);
         const [failed] = logged.filter((l) => l.event === 'dm.engine_failed');
         assert.equal(failed?.reason, 'server');
         assert.equal(failed?.fallback, 'failed');
+    });
+
+    it('a handoff line that cannot be sent in that path is logged and let go: the message is still closed, and nothing loops (S8)', async () => {
+        layer = layerFailing('timeout');
+        const { sends, error, executed } = await runDm(textEvent(), {
+            agent: agentOn('providers', false), extraRoutes: HANDOVER_ROUTES,
+            send: async () => { throw Object.assign(new Error('boom'), { response: { status: 500, data: {} } }); },
+        }, { lastAttempt: false });
+
+        assert.equal(error, null);
+        assert.equal(new Set(sends.map((s) => s.body.message.text)).size, 1, 'one message, tried once by this code');
+        assert.equal(logged.filter((l) => l.event === 'dm.failure_handoff_send_failed').length, 1);
+        assert.equal(outboundRows(executed).length, 0, 'no line is recorded that the customer never got');
+        assert.equal(ranMarkHandled(executed), true);
     });
 
     it('a switched-off agent is silent whatever the engine, and does not count as a failure', async () => {
@@ -1826,6 +1913,10 @@ describe('handleMessagingEvent — a message with no words', () => {
         assert.ok(unclaimOf(executed));
         assert.equal(ranMarkHandled(executed), true);
         assert.equal(ranRelease(executed), false);
+        // S8's handoff after a reply that failed for the last time is for a customer who asked something. A photo asked nothing: no pause,
+        // no stamp, no second message, no alert.
+        assert.ok(!executed.some((e) => /stage = 'handoff'|is_bot_active = FALSE/.test(e.sql)), 'nothing paused');
+        assert.ok(!logged.some((l) => l.event === 'dm.failure_handoff'), 'not handed over');
     });
 
     it('a permanent Meta error is final: the claim is taken back and the message handled, the token flagged, nothing re-raised', async () => {

@@ -9,7 +9,8 @@ import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/ro
 import { generateDmReply } from '../services/dmEngine.js';
 import { answersWithSales, readSalesSettings } from '../services/dmSales/mode.js';
 import { runSalesTurn } from '../services/dmSales/turn.js';
-import { profileContextOrLegacy } from '../services/profile/context.js';
+import { profileContextOrLegacy, type ProfileContext } from '../services/profile/context.js';
+import { handoffAfterFailure } from '../services/dmSales/failureHandoff.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
 import { PROFILE_WAIT_MS, refreshSenderProfile, settleWithin } from '../services/senderProfile.js';
@@ -19,6 +20,7 @@ import { checkFairSendQuota } from '../utils/rateLimiter.js';
 import { acknowledgeWordless } from './attachmentAck.js';
 import { describeWordless, WORDLESS_PLACEHOLDERS, type Wordless } from './attachments.js';
 import { toMetaMessage, applyDisclosure, disclosureLine, type MetaMessagePayload } from './meta-payload.js';
+import { handleEcho } from './echo.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 
@@ -214,9 +216,10 @@ export async function handleMessagingEvent(
 ): Promise<void> {
     const recipientId = event?.recipient?.id;
 
-    // Ignore echo messages (sent by the page itself)
+    // An echo is a message the account itself sent, coming back. Whose it was (ours, or the owner's from the Instagram app) is `echo.ts`'s
+    // question; with takeover off, the default, it is logged and dropped exactly as it always was.
     if (event?.message?.is_echo) {
-        log('debug', 'dm.skipped_echo');
+        await handleEcho(event, entryId);
         return;
     }
 
@@ -428,6 +431,27 @@ async function answerDm(
         return;
     }
 
+    // For the catch below, which may have to hand the conversation over: the profile once it has been read, and whether the reply to
+    // this message has already gone out (a failure after the send is a customer who HAS been answered).
+    let handoffCtx: ProfileContext<'dm'> | null = null;
+    let replied = false;
+
+    /**
+     * No reply could be written for this message and nothing is left to try: the customer is told once, the conversation is STAMPED as
+     * handed over (and NOT paused: a model that is down is an outage, not a request for a person, so their next message gets a normal reply),
+     * and the owner is told. Never throws and never loops (src/services/dmSales/failureHandoff.ts).
+     */
+    const handOver = (): Promise<unknown> => handoffAfterFailure({
+        creator: { id: creator.id, page_access_token: creator.page_access_token },
+        pageId: resolveDmPageId(creator, [recipientId, entryId]),
+        conversationId,
+        inboundId: claim.id,
+        senderId: dm.senderId,
+        ctx: handoffCtx,
+        disclosureNeeded: needsDisclosure(conversation.ai_disclosed_at),
+        replied,
+    });
+
     try {
         // A message with no words never reaches a brain, in any `sales_mode`: not Gemini, not the providers engine, not the sales turn. It is
         // already stored (as its kind); what is left is one fixed line from the kit, or nothing for a sticker (src/webhook/attachmentAck.ts).
@@ -458,6 +482,7 @@ async function answerDm(
         // Who the creator is, once for this DM: the model's rules and schema and the disclosure line below are written
         // from it. A profile that cannot be read is the owner's wording (`profileContextOrLegacy`), never a failed reply.
         const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+        handoffCtx = dmCtx;
 
         if (useSales) {
             // The sales turn owns the reply, its quota check, the disclosure and the record of both (src/services/dmSales/turn.ts); this
@@ -490,10 +515,12 @@ async function answerDm(
         // stored, so ai.ts's "is this message already in the history" check can succeed.
         const dmReply = await generateDmReply(conversationId, dmPromptText(dm), creator.id, undefined, dmCtx);
 
-        // The AI providers engine failed and so did what stands in for it (or the fallback is off): nothing is sent, no canned
-        // apology and no second try. `dm.engine_failed` has said why. Terminal on purpose, like the paused bot above: S8's handoff
-        // is what will pick this message up, and a retry here would only spend the same budget again.
+        // The AI providers engine failed and so did what stands in for it (or the fallback is off): `dm.engine_failed` has said why. No second
+        // try, because a retry here would only spend the same budget again; but not silence either: the customer is told once that a person
+        // has the message, the conversation is stamped (the bot stays on) and the owner is told, as for a reply that fails on its last
+        // attempt (S8). Terminal otherwise.
         if (dmReply.kind === 'handoff') {
+            await handOver();
             await markHandled(claim.id);
             return;
         }
@@ -568,6 +595,7 @@ async function answerDm(
 
         // Send DM using Meta Send API
         await sendDirectMessage(dm.senderId, metaMessagePayload, creator.page_access_token, pageId);
+        replied = true;
         log('info', 'dm.sent', {
             creator_id: creator.id, message_type: aiRes.message_type, disclosed: discloseNow,
         });
@@ -611,6 +639,15 @@ async function answerDm(
             await releaseInbound(claim.id);
             throw aiError;
         }
+
+        // The last attempt, and the failure is not a permanent one: this was the end of the road, and the customer has had NO answer. In
+        // every `sales_mode` that is a handoff, never silence (found live 2026-10-14: Gemini failed all three attempts and the DM got
+        // nothing): the thread is stamped as handed over (the bot is NOT paused), the customer is sent the handoff line once, the owner is
+        // told. `handoffAfterFailure` never throws and never loops, so the message is marked handled below whatever it did. A permanent Meta
+        // error (a blocked recipient, a dead token) is as it always was: nothing can be sent to them. Not for a message with no words (a
+        // photo, a voice note, a sticker): it asked nothing, so a failed acknowledgement leaves nobody waiting for an answer, and is not
+        // worth an alert.
+        if (!permanent && !dm.wordless) await handOver();
 
         await markHandled(claim.id);
     }

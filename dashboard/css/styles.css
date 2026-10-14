@@ -4822,6 +4822,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 /* I1 + I7: the filter and the count under the search box. */
 .inbox-search .segmented { margin-block-start: var(--space-2); inline-size: 100%; }
 .inbox-search .segmented .btn { flex: 1; }
+/* Four filters since "Needs you" (DM plan S8): at 375px they do not fit on one line, and each label used to wrap inside its own segment
+   (three lines for «الردّ الآلي متوقف»). They take a second row instead, each label on one line. */
+.inbox-search .segmented { flex-wrap: wrap; }
+.inbox-search .segmented .btn { flex: 1 1 auto; white-space: nowrap; }
 .inbox-count { margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
 .inbox-count strong { color: var(--text-strong); }
 /* I9: the empty state, with a next step. */

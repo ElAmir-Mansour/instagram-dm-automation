@@ -8,6 +8,10 @@ import {
     createLegacySession, createSession, describeSessionLifetime, requireAuth, createDownloadToken, consumeDownloadToken
 } from '../middleware/auth.js';
 import { getSessionDays } from '../services/onboardingSettings.js';
+import {
+    describeTelegramSettings, mergeTelegram, parseTelegramInput, readTelegramSettings, saveTelegramInput, sendTestMessage,
+} from '../services/notify.js';
+import { PAGE_INBOX_APP_IDS, parseOwnerAppIds, readEchoSettings, saveEchoInput } from '../webhook/echo.js';
 import axios from 'axios';
 import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
@@ -3172,7 +3176,9 @@ export function conversationSearchPattern(raw: unknown): string | null {
  * One lateral per fact instead of a correlated subselect per column, so the newest message is read once. The preview needs more than its
  * text: a carousel is stored as the placeholder "[Structured Template]" with its cards in `raw_payload`, so the card count and the first
  * card's title are lifted out of the JSON here (paths, not the whole body: an inbound row's `raw_payload` is the entire Meta event).
- * The message count is the thread header's.
+ * The message count is the thread header's. `last_inbound_message_at` and `last_operator_at` (the `fx` lateral) are the two facts the inbox's "Needs you" flag and window countdown read (DM plan S8). They come from
+ * `messages`, not from the v39 column `last_inbound_at`: only a sales turn stamps that one, so it is stale for a person who wrote again
+ * after the bot was paused, which is exactly the thread the countdown is for.
  */
 export function conversationsQuery(where: string, limitParam: number, offsetParam: number): string {
     return `SELECT c.*,
@@ -3181,7 +3187,9 @@ export function conversationsQuery(where: string, limitParam: number, offsetPara
                 lm.message_type AS last_message_type,
                 lm.cards AS last_message_cards,
                 lm.card_title AS last_message_card_title,
-                mc.n AS message_count
+                mc.n AS message_count,
+                fx.last_inbound_message_at,
+                fx.last_operator_at
          FROM conversations c
          LEFT JOIN LATERAL (
              SELECT m.text, m.direction, m.message_type,
@@ -3196,6 +3204,11 @@ export function conversationsQuery(where: string, limitParam: number, offsetPara
          LEFT JOIN LATERAL (
              SELECT COUNT(m2.id)::int AS n FROM messages m2 WHERE m2.conversation_id = c.id
          ) mc ON TRUE
+         LEFT JOIN LATERAL (
+             SELECT MAX(m3.created_at) FILTER (WHERE m3.direction = 'inbound') AS last_inbound_message_at,
+                    MAX(m3.created_at) FILTER (WHERE m3.direction = 'outbound' AND m3.sender = 'operator') AS last_operator_at
+               FROM messages m3 WHERE m3.conversation_id = c.id
+         ) fx ON TRUE
          WHERE ${where}
          ORDER BY c.last_message_at DESC
          LIMIT $${limitParam} OFFSET $${offsetParam}`;
@@ -3432,8 +3445,16 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
             return;
         }
 
+        // Turning the bot back ON for a conversation a person had (it was paused: a manual reply, a handoff, an echo) also clears
+        // `ai_disclosed_at`, so the bot's next reply says it is automated again. Meta asks for the disclosure "when a chat moves
+        // from human to automated" (DM plan §2, S8). `CASE` reads the OLD `is_bot_active`, so switching on a bot that is already on
+        // (a second tab, a repeated click) is not a hand-back and changes nothing else.
         const result = await pool.query(
-            'UPDATE conversations SET is_bot_active = $1 WHERE id = $2 AND creator_id = $3 RETURNING *',
+            `UPDATE conversations
+                SET is_bot_active = $1::boolean,
+                    ai_disclosed_at = CASE WHEN $1::boolean AND is_bot_active IS NOT TRUE THEN NULL ELSE ai_disclosed_at END
+              WHERE id = $2 AND creator_id = $3
+          RETURNING *`,
             [is_bot_active, id, getTenantId(req)]
         );
 
@@ -3442,7 +3463,24 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
             return;
         }
 
-        res.json(result.rows[0]);
+        // The AI is the one answering again, so a conversation in the `handoff` stage is no longer waiting for a person: the stage goes
+        // back to `new`, which is what the bot already treats `handoff` as on its next turn (`salesFactsBlock`, `REPLY_MOVES`), so it changes
+        // nothing about what the bot says. It is what ends "Needs you" in the inbox for a thread whose bot is on. A separate statement
+        // and best effort: `stage` is a v39 column, and a database that is behind must not lose the toggle for it.
+        const row = result.rows[0];
+        if (is_bot_active) {
+            try {
+                const reset = await pool.query(
+                    `UPDATE conversations SET stage = 'new' WHERE id = $1 AND creator_id = $2 AND stage = 'handoff'`,
+                    [id, getTenantId(req)]
+                );
+                if (reset.rowCount) row.stage = 'new';
+            } catch (err) {
+                log('warn', 'api.toggle_bot_stage_reset_failed', describeError(err));
+            }
+        }
+
+        res.json(row);
     } catch (err) {
         log('error', 'api.toggle_bot_failed', describeError(err));
         res.status(500).json({ error: 'Failed to toggle bot.' });
@@ -3988,6 +4026,105 @@ router.post('/settings/sales-followup', requirePlatformAdmin, canAdminister, asy
     } catch (err) {
         log('error', 'api.sales_followup_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the follow-up delay.' });
+    }
+});
+
+// ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────
+//
+// `GET/POST /settings/notify` and `POST /settings/notify/test`: the Telegram bot the owner is told on when a conversation needs a person
+// (src/services/notify.ts), and the switch that lets an echo of his own reply pause the bot (src/webhook/echo.ts). Both live in
+// `app_settings`, one set for the deployment, so, like the public-site settings above, they are for platform admins only: anyone else
+// gets the same 404 a stranger would. The bot token is never in an answer: `{ set, last4 }` is all the card is ever told of it.
+
+async function notifySettingsPayload() {
+    const [telegram, echo] = await Promise.all([readTelegramSettings(), readEchoSettings()]);
+    return {
+        telegram: describeTelegramSettings(telegram),
+        echo: { takeover: echo.takeover, ownerAppIds: echo.extraOwnerAppIds, documentedAppIds: [...PAGE_INBOX_APP_IDS] },
+    };
+}
+
+router.get('/settings/notify', requirePlatformAdmin, async (_req, res) => {
+    try {
+        res.json(await notifySettingsPayload());
+    } catch (err) {
+        log('error', 'api.notify_settings_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the alert settings.' });
+    }
+});
+
+router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const body = req.body ?? {};
+        const updatedBy = req.session?.userId ?? null;
+
+        // Everything is checked before anything is written, so a refused field never leaves the others half saved. `field` names the
+        // input the dashboard marks.
+        const telegram = parseTelegramInput(body.telegram);
+        if (!telegram.ok) {
+            res.status(400).json({ error: telegram.error, field: telegram.field });
+            return;
+        }
+        let echoInput: { takeover?: boolean; ownerAppIds?: string[] } | undefined;
+        if (body.echo !== undefined) {
+            const echo = (body.echo && typeof body.echo === 'object' ? body.echo : {}) as Record<string, unknown>;
+            echoInput = {};
+            if (echo['takeover'] !== undefined) {
+                if (typeof echo['takeover'] !== 'boolean') {
+                    res.status(400).json({ error: 'takeover must be true or false.', field: 'takeover' });
+                    return;
+                }
+                echoInput.takeover = echo['takeover'];
+            }
+            if (echo['ownerAppIds'] !== undefined) {
+                const ids = parseOwnerAppIds(echo['ownerAppIds']);
+                if ('error' in ids) {
+                    res.status(400).json({ error: ids.error, field: 'ownerAppIds' });
+                    return;
+                }
+                echoInput.ownerAppIds = ids.ids;
+            }
+        }
+
+        if (Object.keys(telegram.value).length === 0 && Object.keys(echoInput ?? {}).length === 0) {
+            res.status(400).json({ error: 'Nothing to save.' });
+            return;
+        }
+
+        // Alerts cannot be switched on while half the address is missing: they would be on, and silent.
+        const after = mergeTelegram(await readTelegramSettings(), telegram.value);
+        if (after.enabled && (!after.token || !after.chatId)) {
+            res.status(400).json({ error: 'Save the bot token and the chat id first: alerts need both.', field: 'enabled' });
+            return;
+        }
+
+        await saveTelegramInput(telegram.value, updatedBy);
+        if (echoInput) await saveEchoInput(echoInput, updatedBy);
+
+        // Which settings changed, never their values: the token is one of them.
+        log('info', 'api.notify_settings_written', {
+            user_id: updatedBy,
+            changed: [
+                ...Object.keys(telegram.value).map((k) => `telegram.${k}`),
+                ...Object.keys(echoInput ?? {}).map((k) => `echo.${k}`),
+            ],
+        });
+        res.json(await notifySettingsPayload());
+    } catch (err) {
+        log('error', 'api.notify_settings_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the alert settings.' });
+    }
+});
+
+router.post('/settings/notify/test', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        // The dashboard's language, so the test reads like the alerts will: Arabic unless the screen is English.
+        const result = await sendTestMessage(req.body?.lang === 'en' ? 'en' : 'ar');
+        log('info', 'api.notify_test', { ok: result.ok, reason: result.ok ? null : result.reason, status: result.ok ? null : result.status });
+        res.json(result);
+    } catch (err) {
+        log('error', 'api.notify_test_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to send the test message.' });
     }
 });
 

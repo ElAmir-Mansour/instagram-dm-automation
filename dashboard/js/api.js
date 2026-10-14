@@ -549,6 +549,15 @@ const API = {
     getSiteSettings: () => API.request('/settings/site'),
     /** Each field optional; '' clears it. A 400 carries `field` on `err.body`. */
     saveSiteSettings: (data) => API.request('/settings/site', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Handoff alerts and echo takeover (DM plan S8), a platform admin's alone: `{ telegram: { botToken: { set, last4 }, chatId, enabled,
+     * hotLeads, ready }, echo: { takeover, ownerAppIds, documentedAppIds } }`. The token is never sent back.
+     */
+    getNotifySettings: () => API.request('/settings/notify'),
+    /** `{ telegram?: { botToken?, chatId?, enabled?, hotLeads? }, echo?: { takeover?, ownerAppIds? } }`. A 400 carries `field` on `err.body`. */
+    saveNotifySettings: (data) => API.request('/settings/notify', { method: 'POST', body: JSON.stringify(data) }),
+    /** Sends the test message with what is saved. `{ ok: true }`, or `{ ok: false, reason: 'not_configured' | 'rejected' | 'unreachable', status, description }`. */
+    testNotify: (lang) => API.request('/settings/notify/test', { method: 'POST', body: JSON.stringify({ lang }) }),
     /** Meta's verify handshake, run by the server against the public webhook URL. `{ ok, reason, status, detail, url }` */
     checkWebhookHandshake: () => API.request('/settings/webhook-token/check', { method: 'POST' }),
 };
