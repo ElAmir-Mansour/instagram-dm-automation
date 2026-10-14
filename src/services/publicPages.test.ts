@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { escapeAttr, pageLangFromQuery, renderSiteTemplate, WHATSAPP_OPENER, whatsappUrl } from './publicPages.js';
+import { escapeAttr, pageLangFromQuery, PRODUCTION_ORIGIN, renderSiteTemplate, WHATSAPP_OPENER, whatsappUrl } from './publicPages.js';
 
 const ALL = { whatsappNumber: '966501234567', contactEmail: 'hello@example.com', eidCouponsExpire: '2026-04-05' };
 const NONE = { whatsappNumber: null, contactEmail: null, eidCouponsExpire: null };
@@ -189,5 +189,73 @@ describe('renderSiteTemplate — the language of the served page', () => {
     it('reads only an exact ?lang=en as English', () => {
         assert.equal(pageLangFromQuery('en'), 'en');
         for (const v of [undefined, '', 'ar', 'EN', 'fr', ['en'], 1]) assert.equal(pageLangFromQuery(v), 'ar', String(v));
+    });
+});
+
+describe('renderSiteTemplate — one <title>, and one JSON-LD block, per language (L5)', () => {
+    const HEAD = [
+        '<head>',
+        '    <title data-lang-only="ar">عنوان عربي</title>',
+        '    <title data-lang-only="en">English title</title>',
+        '    <script type="application/ld+json" data-lang-only="ar">',
+        '{"@context":"https://schema.org","name":"اسم"}',
+        '    </script>',
+        '    <script type="application/ld+json" data-lang-only="en">',
+        '{"@context":"https://schema.org","name":"name"}',
+        '    </script>',
+        '    <script>var keep = 1;</script>',
+        '</head>',
+    ].join('\n');
+
+    it('keeps the Arabic title and block for Arabic, and nothing else but the unmarked script', () => {
+        const out = renderSiteTemplate(HEAD, ALL, 'ar');
+        assert.equal((out.match(/<title/g) ?? []).length, 1);
+        assert.ok(out.includes('عنوان عربي') && out.includes('"name":"اسم"'));
+        assert.equal(out.includes('English title') || out.includes('"name":"name"'), false);
+        assert.ok(out.includes('<script>var keep = 1;</script>'), 'a script with no mark is not touched');
+        assert.equal(out.split('\n').filter((l) => l.trim() === '').length, 0, 'no blank line left behind');
+    });
+
+    it('keeps the English ones for ?lang=en', () => {
+        const out = renderSiteTemplate(HEAD, ALL, 'en');
+        assert.equal((out.match(/<title/g) ?? []).length, 1);
+        assert.ok(out.includes('English title') && out.includes('"name":"name"'));
+        assert.equal(out.includes('عنوان عربي') || out.includes('اسم'), false);
+        assert.ok(out.includes('<script>var keep = 1;</script>'));
+    });
+
+    it('never runs a marked <script> into the next one: each is matched to its own close', () => {
+        const out = renderSiteTemplate(HEAD, ALL, 'ar');
+        assert.equal((out.match(/<script/g) ?? []).length, (out.match(/<\/script>/g) ?? []).length);
+    });
+});
+
+describe('renderSiteTemplate — {{SITE_ORIGIN}} (L5)', () => {
+    const LINKS = [
+        '<link rel="canonical" href="{{SITE_ORIGIN}}/pricing{{LANG_QUERY}}">',
+        '<meta property="og:image" content="{{SITE_ORIGIN}}/brand/og-ar.00000000.png">',
+        '<script type="application/ld+json">{"url":"{{SITE_ORIGIN}}/"}</script>',
+    ].join('\n');
+
+    it('is the production address unless a site address is given', () => {
+        const out = renderSiteTemplate(LINKS, ALL);
+        assert.ok(out.includes(`href="${PRODUCTION_ORIGIN}/pricing"`));
+        assert.ok(out.includes(`content="${PRODUCTION_ORIGIN}/brand/og-ar.00000000.png"`));
+        assert.ok(out.includes(`{"url":"${PRODUCTION_ORIGIN}/"}`), 'inside a JSON-LD block too');
+        assert.equal(out.includes('{{'), false);
+    });
+
+    it('is the given origin, and a trailing slash never doubles', () => {
+        for (const origin of ['https://example.org', 'https://example.org/', 'https://example.org//']) {
+            const out = renderSiteTemplate(LINKS, ALL, 'en', origin);
+            assert.ok(out.includes('href="https://example.org/pricing?lang=en"'), origin);
+            assert.equal(out.includes('org//'), false, origin);
+        }
+    });
+
+    it('is escaped like every other value, so a hostile setting cannot break out of an attribute', () => {
+        const out = renderSiteTemplate(LINKS, ALL, 'ar', 'https://x.test" onload="y');
+        assert.equal(/onload="y/.test(out), false);
+        assert.ok(out.includes('https://x.test&quot; onload=&quot;y/pricing'));
     });
 });

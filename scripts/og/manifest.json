@@ -1,0 +1,17 @@
+{
+  "spec": "7e51c687c4b09b34f4a03210bbcaa92fd28d92a85546304a8315ecb6f55aaca8",
+  "renderer": "Google Chrome 155.0.8059.79",
+  "font": "alexandria-600.91767410.woff2",
+  "images": {
+    "ar": {
+      "file": "og-ar.2a7478bc.png",
+      "sha256": "2a7478bc197341a1aace2d13d7e608e141b206481e06897efe2e74d16718bd94",
+      "bytes": 54543
+    },
+    "en": {
+      "file": "og-en.26805217.png",
+      "sha256": "26805217e5fdf08b6ae5402141eea8d8ec6ca5ad9c8ac57bb606c4e6e7c215e3",
+      "bytes": 66275
+    }
+  }
+}

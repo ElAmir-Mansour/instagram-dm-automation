@@ -114,27 +114,45 @@
     <!-- Both schemes are real here: the page consumes the app's tokens, which
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
-    <title>الأسعار · Pricing — AutoReply Pro</title>
+    <title data-lang-only="ar">الأسعار — أوتوريبلاي برو · AutoReply Pro</title>
+    <title data-lang-only="en">Pricing — AutoReply Pro</title>
     <meta name="description" data-lang-only="ar" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية: ما تشمله كل باقة، وما تحدّه ميتا، وكيف نربط حسابك.">
     <meta name="description" data-lang-only="en" content="AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/pricing{{LANG_QUERY}}">
-    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/pricing">
-    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/pricing?lang=en">
-    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/pricing">
-    <meta property="og:title" content="الأسعار · Pricing — AutoReply Pro">
+    <link rel="canonical" href="{{SITE_ORIGIN}}/pricing{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="{{SITE_ORIGIN}}/pricing">
+    <link rel="alternate" hreflang="en" href="{{SITE_ORIGIN}}/pricing?lang=en">
+    <link rel="alternate" hreflang="x-default" href="{{SITE_ORIGIN}}/pricing">
+    <meta property="og:title" data-lang-only="ar" content="الأسعار — أوتوريبلاي برو · AutoReply Pro">
+    <meta property="og:title" data-lang-only="en" content="Pricing — AutoReply Pro">
     <meta property="og:description" data-lang-only="ar" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية: ما تشمله كل باقة، وما تحدّه ميتا، وكيف نربط حسابك.">
     <meta property="og:description" data-lang-only="en" content="AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/pricing{{LANG_QUERY}}">
+    <meta property="og:url" content="{{SITE_ORIGIN}}/pricing{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
     <meta property="og:locale" data-lang-only="ar" content="ar_SA">
     <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
     <meta property="og:locale" data-lang-only="en" content="en_US">
     <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
+    <meta property="og:image" data-lang-only="ar" content="{{SITE_ORIGIN}}/brand/og-ar.2a7478bc.png">
+    <meta property="og:image" data-lang-only="en" content="{{SITE_ORIGIN}}/brand/og-en.26805217.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" data-lang-only="ar" content="بطاقة أوتوريبلاي برو: «فيديوهاتك تصير منشورات، وتعليقاتهم تصير محادثات»، استوديو نموّ مُدار لصنّاع المحتوى العرب">
+    <meta property="og:image:alt" data-lang-only="en" content="AutoReply Pro: “Your videos become posts. Their comments become conversations.” A managed growth studio for Arabic creators">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" data-lang-only="ar" content="الأسعار — أوتوريبلاي برو · AutoReply Pro">
+    <meta name="twitter:title" data-lang-only="en" content="Pricing — AutoReply Pro">
+    <meta name="twitter:description" data-lang-only="ar" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية: ما تشمله كل باقة، وما تحدّه ميتا، وكيف نربط حسابك.">
+    <meta name="twitter:description" data-lang-only="en" content="AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+    <meta name="twitter:image" data-lang-only="ar" content="{{SITE_ORIGIN}}/brand/og-ar.2a7478bc.png">
+    <meta name="twitter:image" data-lang-only="en" content="{{SITE_ORIGIN}}/brand/og-en.26805217.png">
+    <meta name="twitter:image:alt" data-lang-only="ar" content="بطاقة أوتوريبلاي برو: «فيديوهاتك تصير منشورات، وتعليقاتهم تصير محادثات»، استوديو نموّ مُدار لصنّاع المحتوى العرب">
+    <meta name="twitter:image:alt" data-lang-only="en" content="AutoReply Pro: “Your videos become posts. Their comments become conversations.” A managed growth studio for Arabic creators">
 
     <!-- One design system in this repo, not three. Same file the dashboard,
          /privacy and dashboard/eid.html load, so the sales page and the

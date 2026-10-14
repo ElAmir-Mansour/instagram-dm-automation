@@ -71,6 +71,13 @@ jobs:
       - name: Check display font
         run: npm run check:font
 
+      # The share cards (one 1200x630 PNG per language under public/brand/, named for the hash of its own bytes) are rendered by headless
+      # Chrome from the composition in scripts/build-og.mjs; this step needs only node. Nothing else notices a card that was never
+      # re-rendered after the composition changed, a page naming a stale one (og:image and twitter:image in both languages on five
+      # pages), a card over 300 KB or not 1200x630, a colour that is no longer the token it claims to be, or a character the font lacks.
+      - name: Check share cards
+        run: npm run check:og
+
       # Token colours are one hex edit away from failing AA, and nothing else in this repo
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast

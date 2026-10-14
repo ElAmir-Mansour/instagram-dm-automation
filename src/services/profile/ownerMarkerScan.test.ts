@@ -186,6 +186,7 @@ const ALLOWED: readonly Allowed[] = [
         'src/services/profile/views.test.ts',
         'src/services/profile/writers.test.ts',
         'src/services/publicPagesChrome.test.ts',
+        'src/services/publicPagesSeo.test.ts',
         'src/services/studio/drafts.test.ts',
         'src/services/studio/generate.test.ts',
         'src/services/studio/infographicPrompt.test.ts',

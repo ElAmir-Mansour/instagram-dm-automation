@@ -14,6 +14,7 @@ import { queryOne, queryCount, queryRows } from '../db/query.js';
 import type { AppSettingRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
 import { CONTENT_RULE_PRESETS, type ContentRulePreset } from './profile/types.js';
+import { PRODUCTION_ORIGIN } from './publicPages.js';
 
 /** Every key this codebase reads. A typo becomes a compile error rather than a silent null. */
 export const APP_SETTING_KEYS = {
@@ -578,6 +579,28 @@ export async function getPublicBaseUrl(requestOrigin: string | null): Promise<st
     const fromEnv = process.env.PUBLIC_BASE_URL ? normaliseOrigin(process.env.PUBLIC_BASE_URL) : null;
     if (fromEnv) return fromEnv;
     return requestOrigin ? normaliseOrigin(requestOrigin) : null;
+}
+
+/** `PUBLIC_BASE_URL`, or the production address when it is unset or not an https origin. What the site names itself at when the database cannot be read. */
+export function siteOriginFromEnv(): string {
+    const fromEnv = process.env.PUBLIC_BASE_URL ? normaliseOrigin(process.env.PUBLIC_BASE_URL) : null;
+    return fromEnv ?? PRODUCTION_ORIGIN;
+}
+
+/**
+ * The origin the public pages, `robots.txt` and the sitemap name themselves at: the saved `app.public_base_url`, then
+ * `PUBLIC_BASE_URL`, then the production address (src/services/publicPages.ts `PRODUCTION_ORIGIN`).
+ *
+ * Not `getPublicBaseUrl(requestOrigin)`'s last resort. A canonical, an hreflang or an og:image built from the Host header makes
+ * every preview deployment announce itself to crawlers as the real site, and a public page must still render when the settings
+ * table is unreachable, so a failed read answers from the environment alone.
+ */
+export async function getSiteOrigin(): Promise<string> {
+    try {
+        return (await getPublicBaseUrl(null)) ?? PRODUCTION_ORIGIN;
+    } catch {
+        return siteOriginFromEnv();
+    }
 }
 
 export interface TikTokPostingFlags {

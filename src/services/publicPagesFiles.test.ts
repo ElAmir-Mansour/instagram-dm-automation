@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { DEFAULT_CONTACT_EMAIL } from './appSettings.js';
-import { renderSiteTemplate } from './publicPages.js';
+import { compactPublicPage, PRODUCTION_ORIGIN, renderSiteTemplate } from './publicPages.js';
 
 const CHROME_PAGES = ['landing', 'pricing', 'privacy', 'terms', 'data-deletion', '404'] as const;
 const INDEXED = ['landing', 'pricing', 'privacy', 'terms', 'data-deletion'] as const;
@@ -140,14 +140,24 @@ describe('public pages — what a crawler reads (PB4, PB10)', () => {
             assert.ok(en.includes('<html lang="en" dir="ltr">'));
         });
 
-        it(`${p}: hreflang ar / en / x-default, and a canonical per language`, () => {
+        it(`${p}: hreflang ar / en / x-default, and a canonical per language, on whatever origin the site is saved at`, () => {
+            // L5: the pages carry `{{SITE_ORIGIN}}`, filled from `app.public_base_url`, so every absolute URL follows the saved origin.
             const src = read(`public/${p}.html`);
-            const base = /<link rel="alternate" hreflang="ar" href="([^"]+)">/.exec(src)?.[1];
-            assert.ok(base, 'hreflang ar');
-            assert.ok(src.includes(`<link rel="alternate" hreflang="en" href="${base}?lang=en">`));
-            assert.ok(src.includes(`<link rel="alternate" hreflang="x-default" href="${base}">`));
-            assert.ok(renderSiteTemplate(src, ALL, 'ar').includes(`<link rel="canonical" href="${base}">`));
-            assert.ok(renderSiteTemplate(src, ALL, 'en').includes(`<link rel="canonical" href="${base}?lang=en">`));
+            for (const origin of [PRODUCTION_ORIGIN, 'https://example.org']) {
+                const ar = renderSiteTemplate(src, ALL, 'ar', origin);
+                const en = renderSiteTemplate(src, ALL, 'en', origin);
+                const base = /<link rel="alternate" hreflang="ar" href="([^"]+)">/.exec(ar)?.[1];
+                assert.ok(base?.startsWith(`${origin}/`), `hreflang ar on ${origin}: ${base}`);
+                assert.ok(ar.includes(`<link rel="alternate" hreflang="en" href="${base}?lang=en">`));
+                assert.ok(ar.includes(`<link rel="alternate" hreflang="x-default" href="${base}">`));
+                assert.ok(ar.includes(`<link rel="canonical" href="${base}">`));
+                assert.ok(en.includes(`<link rel="canonical" href="${base}?lang=en">`));
+                assert.equal(metas(ar, 'og:url')[0], base);
+                assert.equal(metas(en, 'og:url')[0], `${base}?lang=en`);
+            }
+            // The head is what crawlers and previews read. (The legal pages' prose names the address they govern, and stays literal.)
+            const other = renderSiteTemplate(compactPublicPage(src), ALL, 'en', 'https://example.org');
+            assert.equal(other.slice(0, other.indexOf('</head>')).includes(PRODUCTION_ORIGIN), false, 'no tag in the head names the production address when the site is saved elsewhere');
         });
 
         it(`${p}: picks the language from ?lang=, then the stored choice — never the browser locale`, () => {

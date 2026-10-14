@@ -20,7 +20,9 @@
     "build:hero3d": "node scripts/build-hero3d.mjs",
     "check:hero3d": "node scripts/build-hero3d.mjs --check",
     "build:font": "node scripts/build-font.mjs",
-    "check:font": "node scripts/build-font.mjs --check"
+    "check:font": "node scripts/build-font.mjs --check",
+    "build:og": "node scripts/build-og.mjs",
+    "check:og": "node scripts/build-og.mjs --check"
   },
   "keywords": [
     "instagram",
