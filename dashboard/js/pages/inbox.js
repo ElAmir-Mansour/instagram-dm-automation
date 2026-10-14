@@ -45,6 +45,21 @@
  * Everything drawn from a message or a payload is attacker-reachable: only the `html` tag, `safeUrl`
  * and `linkUrl` ever put it in the page.
  *
+ * ─── The sales view (DM sales plan S11, S12) ────────────────────────────────
+ * What the sales flow knows about a thread, drawn where the operator already looks:
+ *   - a stage chip on each thread, in the list and in the header (the v39 stages: `STAGES`, one tone each);
+ *   - the "Hot" filter: a person opened the link we sent, or said they are ready to buy, or the bot flagged
+ *     a hot lead (`isHot`), and not someone who asked to be left alone;
+ *   - the link clicks in the header: how many times a PERSON opened the thread's links, and when last. The
+ *     server leaves preview crawlers and prefetches out of that number, and the chip says so;
+ *   - under each AI bubble, what the bot decided (`messages.ai_meta`): intent, stage, next action, offer,
+ *     engine and the handoff reason. Every value but the offer id comes from a closed list (`AI_INTENTS`
+ *     and friends, the same lists as src/services/dmSales/types.ts, with a test that they agree); a value
+ *     outside its list is shown as escaped text and never looked up, so it cannot name a key or a class;
+ *   - the funnel card (`GET /api/dm/funnel`): conversations by the step they reached, the plan's rates and
+ *     the bot's reply time, over 7, 30 or 90 days. It sits above the list, closed, and asks the server only
+ *     when opened or when the period changes: it is not part of the poll.
+ *
  * ─── Mobile ─────────────────────────────────────────────────────────────────
  * This is the screen the creator opens on a phone, and the one that used to be
  * least usable there. The layout is a single grid cell below 900px with the
@@ -60,13 +75,38 @@ const InboxPage = {
     /** The route's own cap. */
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
-    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'paused']),
+    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused']),
     /** Meta's standard messaging window: a reply is allowed for 24 h after the customer's last message (DM plan §2). */
     WINDOW_MS: 24 * 60 * 60 * 1000,
     /** A conversation id as the alert's link carries it (`#/inbox?c=<id>`); anything else in the hash is data. */
     ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
     RETURN_NOTICE_MS: 60 * 1000,
+
+    // ─── The sales flow's vocabulary (src/services/dmSales/types.ts: a test fails when these differ) ──
+    AI_INTENTS: Object.freeze([
+        'greeting', 'info', 'price', 'level_fit', 'objection_price', 'objection_time', 'objection_trust', 'ready_to_buy', 'support',
+        'refund_or_complaint', 'wants_human', 'off_topic', 'abuse', 'opt_out', 'other',
+    ]),
+    STAGES: Object.freeze(['new', 'qualify', 'recommend', 'objection', 'link', 'follow_up', 'handoff', 'closed']),
+    NEXT_ACTIONS: Object.freeze(['reply', 'ask_qualifier', 'recommend', 'send_link', 'handoff', 'close']),
+    /** 'none' (the schema's stand-in for no reason) is not a reason, so it is not here and is never drawn. */
+    HANDOFF_REASONS: Object.freeze(['unsure', 'refund', 'complaint', 'wants_human', 'hot_lead', 'abuse']),
+    /** Who wrote a reply (`ai_meta.engine`): the AI providers layer, Gemini after it failed, a fixed rule, the safety pre-filter, a kit line. */
+    ENGINES: Object.freeze(['providers', 'gemini_fallback', 'rule', 'prefilter', 'kit']),
+    /** One badge tone per stage, from the tones the stylesheet has. No prototype, so a stage from the data finds nothing but a stage here. */
+    STAGE_TONES: Object.freeze(Object.assign(Object.create(null), {
+        new: 'neutral', qualify: 'info', recommend: 'info', objection: 'warning', link: 'success', follow_up: 'info', handoff: 'warning', closed: 'neutral',
+    })),
+    /** Longest an offer id or an unknown value is shown, so a long string cannot stretch the line it is in. */
+    AI_META_TEXT_MAX: 48,
+
+    // ─── The funnel card ─────────────────────────────────────────────────────
+    FUNNEL_WINDOWS: Object.freeze([7, 30, 90]),
+    /** The server's step ids, in the order they are drawn. */
+    FUNNEL_STEPS: Object.freeze(['conversations', 'qualified', 'recommended', 'link_sent', 'clicked']),
+    /** An open card older than this asks again when it is reopened. */
+    FUNNEL_STALE_MS: 60 * 1000,
 
     // ─── What the stored rows say, so a placeholder is never mistaken for words ──
     /** The text the pipeline stores for a carousel (which has none) and for a story mention. */
@@ -108,8 +148,13 @@ const InboxPage = {
     searchTerm: '',
     /** The server's answer for a search: `{ term, rows }`, the term lower-cased and trimmed. */
     searchMatches: null,
-    /** 'all' | 'waiting' | 'needs_you' | 'paused' */
+    /** 'all' | 'waiting' | 'needs_you' | 'hot' | 'paused' */
     filter: 'all',
+    /**
+     * The funnel card: whether it is open, the period shown, what came back, whether it failed, and which request is the live one
+     * (`seq`: an answer that arrives after a newer question, or after the page was left, is dropped).
+     */
+    funnel: { open: false, days: 30, data: null, failed: false, loading: false, seq: 0, at: 0 },
     /** The conversation the page was opened on (`#/inbox?c=<id>`, the link in the owner's alert), until the list has loaded and it is opened. */
     _deepLinkId: '',
     renderedMessageIds: new Set(),
@@ -191,6 +236,7 @@ const InboxPage = {
                          dropped network looked exactly like a quiet inbox:
                          a frozen list, indefinitely, with no way to tell. -->
                     <div id="threads-stale" class="hidden"></div>
+                    ${this.funnelShell()}
                     <div class="threads-list" id="threads-container">
                         ${Motion.threadRows(7)}
                     </div>
@@ -221,6 +267,7 @@ const InboxPage = {
         this.filter = this.filterFromHash();
         this._deepLinkId = this.threadFromHash();
         this.syncFilterButtons();
+        this.paintFunnel();
         this.markStale(false);
         this.bindImageGuard();
 
@@ -287,6 +334,10 @@ const InboxPage = {
         this._listSignature = null;
         this._countMarkup = null;
         this._staleShown = false;
+        // Closed again, and the request in flight (if any) is no longer the live one: its answer is dropped. Painted too, because a tenant
+        // switch resets the page without repainting the layout, and the card must not stay open on the new tenant's numbers.
+        this.funnel = { open: false, days: 30, data: null, failed: false, loading: false, seq: ((this.funnel && this.funnel.seq) || 0) + 1, at: 0 };
+        this.paintFunnel();
         if (this._searchFetch && typeof this._searchFetch.cancel === 'function') this._searchFetch.cancel();
     },
 
@@ -502,6 +553,20 @@ const InboxPage = {
         return !(Number.isFinite(handedAt) && Number.isFinite(answeredAt) && answeredAt >= handedAt);
     },
 
+    /**
+     * A thread worth the owner's attention first (DM plan §8, "Hot"): a PERSON opened the link we sent (`link_clicks.clicks` leaves out preview
+     * crawlers and prefetches), or their last message said they are ready to buy, or the bot flagged it a hot lead. Not for someone who has
+     * asked to be left alone or has been closed: a click from before that is not a lead any more. The v39 columns and the click counts are
+     * read as they come, so a database that is behind has no hot threads rather than an error.
+     */
+    isHot(thread) {
+        if (!thread) return false;
+        if (thread.stage === 'closed' || thread.opted_out_at) return false;
+        if (thread.last_intent === 'ready_to_buy' || thread.handoff_reason === 'hot_lead') return true;
+        const clicks = thread.link_clicks && typeof thread.link_clicks === 'object' ? Number(thread.link_clicks.clicks) : 0;
+        return Number.isFinite(clicks) && clicks > 0;
+    },
+
     /** A person has to act: it is waiting for a reply, or handed over. These are the threads the 24 h window is counted down on. */
     needsHuman(thread) {
         return this.isWaiting(thread) || this.isNeedsYou(thread);
@@ -554,6 +619,7 @@ const InboxPage = {
     matchesFilter(thread) {
         if (this.filter === 'waiting') return this.isWaiting(thread);
         if (this.filter === 'needs_you') return this.isNeedsYou(thread);
+        if (this.filter === 'hot') return this.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
         return true;
     },
@@ -775,6 +841,19 @@ const InboxPage = {
      * one place a blink still earns its place is a post that is publishing
      * right now, where something really is in flight.
      */
+    /**
+     * A stage as a badge: its word, in the tone it has. '' for anything that is not one of the flow's stages (a thread from before v39 has
+     * none, and the server pins a stranger to null), so the chip is drawn from the closed list and from nothing the data can add to.
+     */
+    stageChip(stage) {
+        if (typeof stage !== 'string' || !this.STAGES.includes(stage)) return '';
+        return html`<span class="badge badge-${this.STAGE_TONES[stage]}" data-stage="${stage}">${t(`inbox.stage.${stage}`)}</span>`;
+    },
+
+    hotBadge() {
+        return html`<span class="badge badge-accent" data-hot><i data-lucide="zap" aria-hidden="true"></i>${t('inbox.hot')}</span>`;
+    },
+
     threadRow(x) {
         const isInbound = x.last_message_direction === 'inbound';
         // I8: which network the thread is on, as the same IG / FB tag the
@@ -792,6 +871,8 @@ const InboxPage = {
                 ${x.is_bot_active
                     ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
                     : html`<span class="badge badge-neutral">${t('inbox.aiPaused')}</span>`}
+                ${this.stageChip(x.stage)}
+                ${this.isHot(x) ? this.hotBadge() : ''}
                 ${!x.is_bot_active && isInbound
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}
@@ -835,6 +916,7 @@ const InboxPage = {
         if (kind === 'search') return html`<div class="empty-threads" data-empty="search"><p>${t('inbox.noMatch')}</p></div>`;
         if (kind === 'waiting') return html`<div class="empty-threads" data-empty="waiting"><p>${t('inbox.noWaiting')}</p></div>`;
         if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
+        if (kind === 'hot') return html`<div class="empty-threads" data-empty="hot"><p>${t('inbox.noHot')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
         return html`
             <div class="empty-threads" data-empty="none">
@@ -897,6 +979,8 @@ const InboxPage = {
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
                 this.isNeedsYou(x) ? '1' : '0',
+                x.stage || '',
+                this.isHot(x) ? '1' : '0',
                 // The text shown, so the row is repainted when the minute changes and not before.
                 this.windowText(x),
             ].join('\u001f'),
@@ -1267,9 +1351,28 @@ const InboxPage = {
         return html`${face}${picture}`;
     },
 
-    /** One chip of the detail strip. */
-    metaChip(label, { icon = '', accent = false } = {}) {
-        return html`<span class="chip${accent ? html.raw(' chip-accent') : ''}">${icon ? html`<i data-lucide="${icon}" aria-hidden="true"></i>` : ''}${label}</span>`;
+    /** One chip of the detail strip. `note` is what the chip does not say on its face: a tooltip, and read out after it. */
+    metaChip(label, { icon = '', accent = false, note = '' } = {}) {
+        return html`<span class="chip${accent ? html.raw(' chip-accent') : ''}"${note ? html` title="${note}"` : ''}>${icon ? html`<i data-lucide="${icon}" aria-hidden="true"></i>` : ''}${label}${note ? html`<span class="sr-only">. ${note}</span>` : ''}</span>`;
+    },
+
+    /**
+     * What the thread's links did, as chips (DM plan S11): how many times a PERSON opened them and when last, or that none has yet. Only for a
+     * thread a link was sent in (`last_link_at`, or a tracked link on the server's side). The count is the server's `link_clicks.clicks`, which
+     * leaves out preview crawlers and prefetches, and the chip says so.
+     */
+    linkChips(thread) {
+        if (!thread) return [];
+        const found = thread.link_clicks && typeof thread.link_clicks === 'object' && Number(thread.link_clicks.links) > 0 ? thread.link_clicks : null;
+        // A link went out, but what people did with it is not known (the lookup failed, or the table is not there): say only that it went out.
+        if (!found) return thread.last_link_at ? [this.metaChip(t('inbox.links.sent'), { icon: 'link' })] : [];
+        const note = t('inbox.links.note');
+        const clicks = Math.floor(Number(found.clicks));
+        if (!Number.isFinite(clicks) || clicks <= 0) return [this.metaChip(t('inbox.links.notClicked'), { icon: 'link', note })];
+        const last = Date.parse(found.last_click_at);
+        const label = t('inbox.links.clicked', { count: clicks, n: UI.formatNumber(clicks) })
+            + (Number.isFinite(last) ? ` · ${t('inbox.links.last', { when: this.threadTime(found.last_click_at) })}` : '');
+        return [this.metaChip(label, { icon: 'link', accent: true, note })];
     },
 
     /**
@@ -1280,6 +1383,11 @@ const InboxPage = {
     metaMarkup(thread) {
         if (!thread) return '';
         const chips = [];
+        // Where the sales flow has got to with this person, and whether they are a hot lead.
+        if (this.STAGES.includes(thread.stage)) {
+            chips.push(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }));
+        }
+        if (this.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
         if (this.isNeedsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
         const countdown = this.windowText(thread);
@@ -1287,6 +1395,7 @@ const InboxPage = {
             const closed = this.windowLeftMs(thread) === 0;
             chips.push(this.metaChip(closed ? `${countdown}: ${t('inbox.window.closedHint')}` : countdown, { icon: 'clock' }));
         }
+        chips.push(...this.linkChips(thread));
         if (thread.is_user_follow_business === true) chips.push(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }));
         else if (thread.is_user_follow_business === false) chips.push(this.metaChip(t('inbox.meta.notFollowsYou')));
         if (thread.is_business_follow_user === true) chips.push(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
@@ -1878,7 +1987,242 @@ const InboxPage = {
         if (reply && reply.attempts > 1) {
             items.push(html`<span class="badge badge-warning"><i data-lucide="rotate-cw" aria-hidden="true"></i>${t('inbox.detail.retried', { count: reply.attempts, n: UI.formatNumber(reply.attempts) })}</span>`);
         }
-        return items.length ? html`<div class="msg-detail">${items}</div>` : '';
+        const decided = this.aiMetaDetail(msg);
+        return items.length || decided ? html`${items.length ? html`<div class="msg-detail">${items}</div>` : ''}${decided}` : '';
+    },
+
+    // ─── What the bot decided (`messages.ai_meta`) ───────────────────────────
+    /** `ai_meta` of an AI reply as an object: JSONB arrives parsed, a string is parsed, anything else (an operator's row, an old one) is null. */
+    aiMetaOf(msg) {
+        if (!msg || msg.direction !== 'outbound' || msg.sender !== 'ai') return null;
+        return this.parsePayload(msg.ai_meta);
+    },
+
+    /**
+     * A value of one of the flow's closed lists as its word. A value that is on the list is looked up; one that is not (a newer server, a
+     * hand-edited row, text a model put in a field) is shown as the escaped text it is, cut short, and is never turned into a key.
+     * '' for nothing, and for the schema's own "none".
+     */
+    vocabText(prefix, list, value) {
+        const text = this.plainText(value);
+        if (!text || text === 'none') return '';
+        if (list.includes(text)) return t(`${prefix}.${text}`);
+        return text.length > this.AI_META_TEXT_MAX ? `${text.slice(0, this.AI_META_TEXT_MAX - 1)}…` : text;
+    },
+
+    /** One "label value" pair of the decision line. */
+    aiMetaItem(labelKey, value) {
+        return html`<span class="msg-detail-item"><span class="msg-detail-key">${t(labelKey)}:</span> ${value}</span>`;
+    },
+
+    /**
+     * The line under an AI reply that says what the bot decided: what it took the customer's message to be (intent), where that left the
+     * conversation (stage), what it did (next action), which offer it was about, who wrote the reply (engine) and, when it handed over, why.
+     * Each is shown only when the row has it, so the follow-up nudge and the handoff line (which carry fewer fields) and a reply from before
+     * v39 (which carries none) draw what they have. Every value goes through `html`; none is ever markup.
+     */
+    aiMetaDetail(msg) {
+        const meta = this.aiMetaOf(msg);
+        if (!meta) return '';
+        const items = [];
+        const intent = this.vocabText('inbox.intent', this.AI_INTENTS, meta.intent);
+        if (intent) items.push(this.aiMetaItem('inbox.aiMeta.intent', html`<bdi dir="auto">${intent}</bdi>`));
+        const stage = this.plainText(meta.stage);
+        if (stage) {
+            items.push(this.aiMetaItem('inbox.aiMeta.stage', this.STAGES.includes(stage)
+                ? this.stageChip(stage)
+                : html`<bdi class="ltr-text" dir="ltr">${this.vocabText('inbox.stage', this.STAGES, stage)}</bdi>`));
+        }
+        const action = this.vocabText('inbox.nextAction', this.NEXT_ACTIONS, meta.next_action);
+        if (action) items.push(this.aiMetaItem('inbox.aiMeta.next', html`<bdi dir="auto">${action}</bdi>`));
+        const offer = this.plainText(meta.offer_id);
+        if (offer && offer !== 'none') {
+            const shown = offer.length > this.AI_META_TEXT_MAX ? `${offer.slice(0, this.AI_META_TEXT_MAX - 1)}…` : offer;
+            items.push(this.aiMetaItem('inbox.aiMeta.offer', html`<bdi class="ltr-text" dir="ltr">${shown}</bdi>`));
+        }
+        const engine = this.vocabText('inbox.engine', this.ENGINES, meta.engine);
+        if (engine) items.push(this.aiMetaItem('inbox.aiMeta.engine', html`<bdi dir="auto">${engine}</bdi>`));
+        const reason = this.vocabText('inbox.handoffReason', this.HANDOFF_REASONS, meta.handoff_reason);
+        if (reason) items.push(this.aiMetaItem('inbox.aiMeta.handoff', html`<span class="badge badge-warning"><bdi dir="auto">${reason}</bdi></span>`));
+        return items.length ? html`<div class="msg-detail msg-detail--meta" data-ai-meta>${items}</div>` : '';
+    },
+
+    // ─── The funnel card (DM plan S12) ───────────────────────────────────────
+    /**
+     * The card's shell: a closed toggle above the list. It holds no numbers until it is opened, and the poll never touches it: the funnel is
+     * three statements over the whole period, which is not something to repeat every five seconds.
+     */
+    funnelShell() {
+        const open = !!(this.funnel && this.funnel.open);
+        return html`
+            <section class="dm-funnel" id="dm-funnel" aria-label="${t('inbox.funnel.title')}">
+                <button type="button" class="dm-funnel-toggle${open ? html.raw(' is-open') : ''}" id="dm-funnel-toggle" data-action="inbox:toggleFunnel"
+                        aria-expanded="${open ? 'true' : 'false'}" aria-controls="dm-funnel-panel">
+                    <i data-lucide="bar-chart-3" aria-hidden="true"></i>
+                    <span class="dm-funnel-title">${t('inbox.funnel.title')}</span>
+                    <i data-lucide="chevron-down" class="dm-funnel-chevron" aria-hidden="true"></i>
+                </button>
+                <div class="dm-funnel-panel${open ? '' : html.raw(' hidden')}" id="dm-funnel-panel"></div>
+            </section>
+        `;
+    },
+
+    /** Bring the toggle and the panel in line with `this.funnel`. Safe when the page is not on screen. */
+    paintFunnel() {
+        const toggle = document.getElementById('dm-funnel-toggle');
+        const panel = document.getElementById('dm-funnel-panel');
+        if (!toggle || !panel) return;
+        const f = this.funnel;
+        toggle.setAttribute('aria-expanded', f.open ? 'true' : 'false');
+        if (toggle.classList) toggle.classList.toggle('is-open', f.open);
+        if (panel.classList) panel.classList.toggle('hidden', !f.open);
+        if (!f.open) {
+            if (panel.innerHTML !== '') panel.innerHTML = '';
+            return;
+        }
+        const focus = UI.captureFocus(panel);
+        panel.innerHTML = esc(this.renderFunnel());
+        UI.icons(panel);
+        UI.restoreFocus(focus);
+    },
+
+    toggleFunnel() {
+        const f = this.funnel;
+        f.open = !f.open;
+        this.paintFunnel();
+        if (f.open && !f.loading && (!f.data || Date.now() - f.at > this.FUNNEL_STALE_MS)) this.loadFunnel(f.days);
+    },
+
+    setFunnelWindow(days) {
+        const span = Number(days);
+        if (!this.FUNNEL_WINDOWS.includes(span) || span === this.funnel.days) return Promise.resolve();
+        return this.loadFunnel(span);
+    },
+
+    /**
+     * Ask for `days` days and redraw when the answer lands. What was on screen stays until the answer replaces it (for the same period), and
+     * an answer that comes after a newer question, or after the page was left, is dropped.
+     */
+    async loadFunnel(days) {
+        const span = this.FUNNEL_WINDOWS.includes(days) ? days : 30;
+        const seq = (this.funnel.seq || 0) + 1;
+        const kept = this.funnel.days === span ? this.funnel.data : null;
+        this.funnel = { ...this.funnel, days: span, data: kept, failed: false, loading: true, seq };
+        this.paintFunnel();
+        let data = null;
+        let failed = false;
+        try {
+            data = await API.getDmFunnel(span);
+        } catch (err) {
+            console.error('Funnel Load Error:', err);
+            failed = true;
+        }
+        if (this.funnel.seq !== seq) return;
+        this.funnel = {
+            ...this.funnel, data: failed ? null : data, loading: false, at: Date.now(),
+            failed: failed || !data || typeof data !== 'object' || !Array.isArray(data.steps),
+        };
+        this.paintFunnel();
+    },
+
+    /** "67%", or "—" when there was nothing to divide by. */
+    funnelPercent(pct) {
+        return pct === null || pct === undefined || !Number.isFinite(Number(pct)) ? '—' : UI.formatPercent(Number(pct));
+    },
+
+    renderFunnel() {
+        const f = this.funnel;
+        return html`
+            <div class="dm-funnel-body">
+                <div class="segmented dm-funnel-window" role="group" aria-label="${t('inbox.funnel.windowLabel')}">
+                    ${this.FUNNEL_WINDOWS.map((days) => html`
+                        <button type="button" class="btn btn-sm btn-ghost" id="dm-funnel-window-${days}" data-action="inbox:funnelWindow" data-days="${days}"
+                                aria-pressed="${f.days === days ? 'true' : 'false'}">${t('inbox.funnel.window', { count: days, n: UI.formatNumber(days) })}</button>
+                    `)}
+                </div>
+                ${f.loading && !f.data ? html`<p class="form-hint" role="status">${t('common.loading')}</p>` : ''}
+                ${!f.loading && f.failed ? html`
+                    <p class="form-hint text-warning" role="alert">${t('inbox.funnel.failed')}</p>
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'inbox:funnelRetry', id: 'dm-funnel-retry' })}
+                ` : ''}
+                ${f.data && !f.failed ? this.renderFunnelBody(f.data) : ''}
+            </div>
+        `;
+    },
+
+    /** A whole-number count the server sent, or 0 for anything else. */
+    funnelCount(value) {
+        const n = Number(value);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    },
+
+    /** One rate: its name, its percentage, and the numbers it is made of, so a small sample reads as a small sample. */
+    funnelRate(labelKey, rate, ofKey) {
+        const r = rate && typeof rate === 'object' ? rate : {};
+        const count = this.funnelCount(r.count);
+        const of = this.funnelCount(r.of);
+        return html`
+            <div class="dm-funnel-rate">
+                <dt>${t(labelKey)}</dt>
+                <dd><strong>${UI.ltr(this.funnelPercent(r.pct))}</strong>
+                    <span class="dm-funnel-of">${t('inbox.funnel.of', { count: UI.formatNumber(count), total: UI.formatNumber(of), what: t(ofKey) })}</span></dd>
+            </div>
+        `;
+    },
+
+    renderFunnelBody(data) {
+        const total = this.funnelCount(data.conversations);
+        const days = this.funnelCount(data.days) || this.funnel.days;
+        if (total === 0) return html`<p class="form-hint">${t('inbox.funnel.empty', { count: days, n: UI.formatNumber(days) })}</p>`;
+
+        // The ids are the server's, but only the five this page knows are drawn, in its order: a word from a fixed table, never one from the response.
+        const byId = new Map((Array.isArray(data.steps) ? data.steps : []).filter((x) => x && typeof x.id === 'string').map((x) => [x.id, x]));
+        const rates = data.rates && typeof data.rates === 'object' ? data.rates : {};
+        const outcomes = data.outcomes && typeof data.outcomes === 'object' ? data.outcomes : {};
+        const reply = data.reply && typeof data.reply === 'object' ? data.reply : {};
+        const clicks = data.clicks && typeof data.clicks === 'object' ? data.clicks : {};
+        const sample = this.funnelCount(reply.sample);
+        const time = (ms) => (ms !== null && ms !== undefined && Number.isFinite(Number(ms)) ? this.durationText(Number(ms)) || '—' : '—');
+        const previews = this.funnelCount(clicks.preview);
+        return html`
+            <p class="form-hint">${t('inbox.funnel.intro', { count: days, n: UI.formatNumber(days) })}</p>
+            <ol class="dm-funnel-steps">
+                ${this.FUNNEL_STEPS.map((id) => {
+                    const step = byId.get(id) || {};
+                    const count = Math.min(this.funnelCount(step.count), total);
+                    const pct = this.funnelPercent(Math.round((100 * count) / total));
+                    const label = t(`inbox.funnel.step.${id}`);
+                    const figure = `${UI.formatNumber(count)} · ${pct}`;
+                    return html`
+                        <li class="dm-funnel-step" data-step="${id}">
+                            <span class="dm-funnel-label">${label}</span>
+                            <span class="dm-funnel-count">${UI.ltr(figure)}</span>
+                            <progress class="studio-meter" max="${total}" value="${count}" aria-label="${label}: ${figure}"></progress>
+                        </li>
+                    `;
+                })}
+            </ol>
+
+            <dl class="dm-funnel-rates">
+                ${this.funnelRate('inbox.funnel.rate.link', rates.link, 'inbox.funnel.of.recommended')}
+                ${this.funnelRate('inbox.funnel.rate.click', rates.click, 'inbox.funnel.of.linked')}
+                ${this.funnelRate('inbox.funnel.rate.handoff', rates.handoff, 'inbox.funnel.of.conversations')}
+                ${this.funnelRate('inbox.funnel.rate.optOut', rates.opt_out, 'inbox.funnel.of.conversations')}
+                <div class="dm-funnel-rate">
+                    <dt>${t('inbox.funnel.reply.median')}</dt>
+                    <dd><strong>${UI.ltr(time(reply.median_ms))}</strong>
+                        <span class="dm-funnel-of">${sample > 0 ? t('inbox.funnel.reply.p90', { time: time(reply.p90_ms), count: sample, n: UI.formatNumber(sample) }) : t('inbox.funnel.reply.none')}</span></dd>
+                </div>
+            </dl>
+
+            <ul class="dm-funnel-outcomes" aria-label="${t('inbox.funnel.outcomes')}">
+                ${[['followUp', 'follow_up'], ['handoff', 'handoff'], ['closed', 'closed'], ['optedOut', 'opted_out'], ['complaints', 'complaints']].map(([key, field]) => html`
+                    <li class="chip"><span>${t(`inbox.funnel.outcome.${key}`)}</span> <strong>${UI.num(this.funnelCount(outcomes[field]))}</strong></li>
+                `)}
+            </ul>
+
+            <p class="form-hint">${t('inbox.funnel.previews', { count: previews, n: UI.formatNumber(previews) })}</p>
+        `;
     },
 
     // ─── Actions ─────────────────────────────────────────────────────────────
@@ -2073,4 +2417,7 @@ UI.registerActions('inbox', {
     setFilter: (el) => InboxPage.setFilter(el && el.dataset ? el.dataset.filter : 'all'),
     retryThreads: () => InboxPage.retryThreads(),
     handBack: (el) => InboxPage.handBack(el && el.dataset ? el.dataset.id : ''),
+    toggleFunnel: () => InboxPage.toggleFunnel(),
+    funnelWindow: (el) => InboxPage.setFunnelWindow(el && el.dataset ? el.dataset.days : ''),
+    funnelRetry: () => InboxPage.loadFunnel(InboxPage.funnel.days),
 });

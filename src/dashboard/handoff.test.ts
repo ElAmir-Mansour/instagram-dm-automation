@@ -150,7 +150,7 @@ describe('Inbox: which threads need you', () => {
     it('is its own filter, seeded from the address, and the filter keeps only these', () => {
         const s = load();
         const I = s.Inbox;
-        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'paused']);
+        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused']);
         s.hash['filter'] = 'needs_you';
         assert.equal(I.filterFromHash(), 'needs_you');
         s.hash['filter'] = 'needs-you';

@@ -19,10 +19,15 @@
  *
  * Every lookup is optional. A failed query (a database behind a migration, a table that is not there) is logged and the answer goes out
  * without that block; the message list is never held hostage to a nicety.
+ *
+ * The sales funnel's share of the list (DM plan S11): the conversation's stage, last intent and handoff columns (v39) are pinned to a type,
+ * and `link_clicks` says how many times a PERSON opened the links sent in the thread (`loadLinkClicks`, the same optional kind of lookup).
+ * A visit that was a link-preview crawler, a HEAD request or a prefetch (`link_clicks.is_prefetch`) is never in that count.
  */
 import { queryRows } from '../db/query.js';
 import type { ConversationPlatform } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
+import { STAGES, type Stage } from './dmSales/types.js';
 
 /** How far before a reply's row a usage row may have started and still be taken for the call that wrote it. */
 export const USAGE_MATCH_WINDOW_SECONDS = 180;
@@ -62,17 +67,98 @@ export function profileView(row: Record<string, unknown>) {
     };
 }
 
+const isoOrNull = (value: unknown): string | null => {
+    if (value === null || value === undefined) return null;
+    const date = value instanceof Date ? value : new Date(value as string);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+const isStage = (value: unknown): value is Stage => typeof value === 'string' && (STAGES as readonly string[]).includes(value);
+
+/**
+ * What the sales flow keeps on the conversation (v39), pinned to a type: null for each on a database that is behind, and `stage` null for
+ * a value that is not one of the flow's own (the chip is drawn from a closed list, so a stranger is no chip, not a guess).
+ * Timestamps go out as ISO strings, as `pg` Dates would be serialised anyway.
+ */
+export function salesView(row: Record<string, unknown>) {
+    return {
+        stage: isStage(row.stage) ? row.stage : null,
+        last_intent: typeof row.last_intent === 'string' && row.last_intent ? row.last_intent : null,
+        handoff_reason: typeof row.handoff_reason === 'string' && row.handoff_reason ? row.handoff_reason : null,
+        handoff_at: isoOrNull(row.handoff_at),
+        last_link_at: isoOrNull(row.last_link_at),
+        opted_out_at: isoOrNull(row.opted_out_at),
+        followups_sent: countOf(row.followups_sent),
+    };
+}
+
+/**
+ * The tracked links sent in a thread (`/r/:code`, DM plan S7) and what people did with them: `links` created, `clicks` by a PERSON, `last_click_at`
+ * the newest of those, and `prefetch` the visits that were not a person's (a preview crawler, a HEAD request: counted so the number can be
+ * shown honestly, never added to `clicks`).
+ */
+export interface LinkClicks {
+    links: number;
+    clicks: number;
+    prefetch: number;
+    last_click_at: string | null;
+}
+
+interface LinkClickRow {
+    conversation_id: string;
+    links: number | string | null;
+    clicks: number | string | null;
+    prefetch: number | string | null;
+    last_click_at: Date | string | null;
+}
+
+/** One row per conversation that has a tracked link, for the page of conversations on screen. `$1` the tenant, `$2` the conversation ids. */
+export const LINK_CLICKS_SQL = `SELECT tl.conversation_id,
+       COUNT(DISTINCT tl.code)::int AS links,
+       COUNT(lc.id) FILTER (WHERE NOT lc.is_prefetch)::int AS clicks,
+       COUNT(lc.id) FILTER (WHERE lc.is_prefetch)::int AS prefetch,
+       MAX(lc.clicked_at) FILTER (WHERE NOT lc.is_prefetch) AS last_click_at
+  FROM tracked_links tl
+  LEFT JOIN link_clicks lc ON lc.code = tl.code
+ WHERE tl.creator_id = $1 AND tl.conversation_id = ANY($2::uuid[])
+ GROUP BY tl.conversation_id`;
+
+/**
+ * The link clicks of these conversations, by conversation id. Never throws: a database without the tracked-links tables (v38), or any other
+ * failure, is logged as `inbox.detail_failed` and answers an empty map, so the list simply carries no click counts.
+ */
+export async function loadLinkClicks(tenantId: string, conversationIds: readonly string[]): Promise<Map<string, LinkClicks>> {
+    const out = new Map<string, LinkClicks>();
+    if (conversationIds.length === 0) return out;
+    try {
+        const rows = await queryRows<LinkClickRow>(LINK_CLICKS_SQL, [tenantId, [...conversationIds]]);
+        for (const row of rows) {
+            out.set(String(row.conversation_id), {
+                links: countOf(row.links) ?? 0,
+                clicks: countOf(row.clicks) ?? 0,
+                prefetch: countOf(row.prefetch) ?? 0,
+                last_click_at: isoOrNull(row.last_click_at),
+            });
+        }
+    } catch (err) {
+        log('warn', 'inbox.detail_failed', { what: 'link_clicks', tenant_id: tenantId, ...describeError(err) });
+    }
+    return out;
+}
+
 /**
  * One conversation as the inbox reads it. The row is passed through (`c.*` has always been the answer) and the fields this release added are
  * pinned to a type, so a database without v40 answers null for each and the dashboard reads one shape before and after the migration.
  *
  * `platform` is the caller's: `conversationPlatformOf` lives with the route.
  */
-export function conversationView<T extends Record<string, unknown>>(row: T, platform: ConversationPlatform | null) {
+export function conversationView<T extends Record<string, unknown>>(row: T, platform: ConversationPlatform | null, clicks?: LinkClicks | null) {
     return {
         ...row,
         platform,
         ...profileView(row),
+        ...salesView(row),
+        link_clicks: clicks ?? null,
         message_count: countOf(row.message_count),
         // What the list's preview needs of the newest message, beyond its text (see `GET /conversations`).
         last_message_type: typeof row.last_message_type === 'string' ? row.last_message_type : null,

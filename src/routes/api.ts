@@ -43,7 +43,8 @@ import { queryOne } from '../db/query.js';
 import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
-import { annotateMessages, conversationView, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
@@ -3247,11 +3248,14 @@ router.get('/conversations', async (req, res) => {
             answered = await run(false);
         }
         const { rows: result, count: countRes } = answered;
+        // How many times a person opened the links sent in each thread (DM plan S11): its own optional lookup, so a database without the
+        // tracked-links tables answers the list without counts rather than not at all.
+        const clicks = await loadLinkClicks(tenantId, result.rows.map((row) => String(row.id)));
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
-            // after v26 is applied. `conversationView` does the same for v40's profile columns.
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform))),
+            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state.
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)))),
             pagination: {
                 page,
                 limit,
@@ -3484,6 +3488,29 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
     } catch (err) {
         log('error', 'api.toggle_bot_failed', describeError(err));
         res.status(500).json({ error: 'Failed to toggle bot.' });
+    }
+});
+
+/**
+ * The sales funnel of this tenant's DMs over the last 7, 30 (the default) or 90 days: conversations by the step they reached, the plan's
+ * rates and the bot's reply time (DM plan S12; the card on the inbox page). Counts and rates only, scoped to the session's tenant, and
+ * readable by every role, like the inbox it sits in. See `services/dmFunnel.ts` for what each number means.
+ */
+router.get('/dm/funnel', async (req, res) => {
+    const days = parseDmFunnelWindow(req.query.days);
+    if (days === null) {
+        res.status(400).json({ error: 'days must be 7, 30 or 90.' });
+        return;
+    }
+    try {
+        res.set('Cache-Control', 'no-store').json(await loadDmFunnel(getTenantId(req), days));
+    } catch (err) {
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: 'The database is behind: apply the pending migrations with `npm run migrate` (v38 tracked links, v39 sales state), then reload.' });
+            return;
+        }
+        log('error', 'api.dm_funnel_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to build the funnel.' });
     }
 });
 
