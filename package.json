@@ -17,6 +17,7 @@
     "check:icon-subset": "node scripts/build-icons.mjs --check",
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:voice": "node scripts/check-voice.mjs",
     "build:hero3d": "node scripts/build-hero3d.mjs",
     "check:hero3d": "node scripts/build-hero3d.mjs --check",
     "build:font": "node scripts/build-font.mjs",
