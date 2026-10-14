@@ -3060,6 +3060,8 @@
     'monteur.settings.brain': 'الذكاء الاصطناعي لاختيار المقاطع وكتابة النصوص والتعديلات',
     'monteur.settings.brainGemini': 'Gemini (داخل التطبيق)',
     'monteur.settings.brainClaude': 'Claude على الماك',
+    'monteur.settings.brainApi': 'مزوّدو الذكاء الاصطناعي (تعدّهم المنصّة)',
+    'monteur.settings.brainHintApi': 'يجيب الذكاء الاصطناعي الذي أعدّته المنصّة، فلا يحتاج إلى ماك ولا إلى مفتاح Gemini، وتُحسب تكلفته على ميزانية الذكاء الاصطناعي للمنصّة. إذا لم يكن هناك مزوّد جاهز يتوقف الفيديو مع السبب، وزر إعادة المحاولة يطلبه من جديد.',
     'monteur.settings.brainHint': 'يجيب Claude على الماك باشتراكك في Claude على {name}. إذا كان {name} نائمًا تنتظره المقاطع الجديدة، وإذا لم يُجب نحو أربع ساعات يتوقف الفيديو مع السبب، وزر إعادة المحاولة يطلبه من جديد.',
     'monteur.settings.style': 'نمط التعديلات',
     'monteur.settings.styleClassic': 'كلاسيكي',

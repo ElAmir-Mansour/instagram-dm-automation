@@ -11,7 +11,9 @@
  * stays `generating` forever; one older than ten minutes is therefore presented as failed.
  *
  * The generation module (generate.ts, rules.ts) is reached through `generation` so the tests
- * can stand in for Gemini. Nothing else here calls a model.
+ * can stand in for Gemini. Nothing else here calls a model. Whose model it is: the owner's writer is
+ * Gemini, as it always was; any other tenant's call goes through the AI providers layer (`tenant_studio`,
+ * `writerOptionsFor` in tenantAi.ts, plan D13), handed to the writer as `GenOptions.callModel`.
  */
 import { pool } from '../../config/db.js';
 import { queryRows } from '../../db/query.js';
@@ -37,6 +39,7 @@ import type { StudioWording } from './prompts.js';
 import { validateCarousel } from './rules.js';
 import { getStudioSettings } from './settings.js';
 import { nextFreeSlots } from './slots.js';
+import { writerOptionsFor } from './tenantAi.js';
 
 // ─── The generation seam ────────────────────────────────────────────────────────────────
 
@@ -556,7 +559,7 @@ export async function createDraft(creatorId: string, raw: unknown): Promise<Draf
 
     let generated: Awaited<ReturnType<Generation['generateDraft']>>;
     try {
-        generated = await generation.generateDraft(input, sources, await buildGenContext(creatorId, settings));
+        generated = await generation.generateDraft(input, sources, await buildGenContext(creatorId, settings), await writerOptionsFor(creatorId));
     } catch (err) {
         log('warn', 'studio.generate_failed', { draft_id: draft.id, ...describeError(err) });
         return fail(`Writing the carousel failed: ${errorText(err)}`);
@@ -660,7 +663,7 @@ export async function rewriteDraftSlide(creatorId: string, draftId: string, body
     ]);
     let slide: Slide;
     try {
-        slide = await generation.rewriteSlide(draft.carousel, index as number, instruction, sources, await buildGenContext(creatorId, settings));
+        slide = await generation.rewriteSlide(draft.carousel, index as number, instruction, sources, await buildGenContext(creatorId, settings), await writerOptionsFor(creatorId));
     } catch (err) {
         log('warn', 'studio.rewrite_failed', { draft_id: draft.id, ...describeError(err) });
         throw new StudioError(502, `Rewriting the slide failed: ${errorText(err)}`);
@@ -761,7 +764,7 @@ export async function planDrafts(creatorId: string, body: unknown): Promise<Plan
 
     let proposals: Awaited<ReturnType<Generation['planWeek']>>;
     try {
-        proposals = await generation.planWeek(count as number, lessons, await buildGenContext(creatorId, settings));
+        proposals = await generation.planWeek(count as number, lessons, await buildGenContext(creatorId, settings), await writerOptionsFor(creatorId));
     } catch (err) {
         log('warn', 'studio.plan_failed', describeError(err));
         throw new StudioError(502, `Planning failed: ${errorText(err)}`);

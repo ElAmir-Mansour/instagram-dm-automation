@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { setAiCaller, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
+import { BudgetRefused } from '../aiProviders/usage.js';
+import { AiError } from '../llm/errors.js';
 import { withProfileCache } from '../profile/cache.js';
 import { FITNESS_EN } from '../profile/fixtures.js';
 import { throughJsonb } from '../profile/jsonb.js';
@@ -15,17 +18,17 @@ import { PROFILE_READ, profileReads } from '../profile/stampSupport.js';
 import { ARABIC_SCRIPT } from '../profile/testSupport.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
-import { ASK_POOL } from './copy.js';
+import { ASK_POOL, COPY_SCHEMA } from './copy.js';
 import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING, editorSchema, editorSystemPrompt, humanTouchesPrompt } from './editor.js';
 import { LEGACY_EDITOR_KIT, PRONOUN_KITS } from './editorKits.js';
-import { PICK_MAX_OUTPUT } from './pick.js';
+import { PICK_MAX_OUTPUT, PICK_SCHEMA } from './pick.js';
 import {
     CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, PROFILE_UNREADABLE, PROFILE_UNREADABLE_PICK, setEditRetryWaits,
     sweepMonteur,
     transientModelError,
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
-import type { ThinkTry } from './think.js';
+import { flattenTurns, THINK_MODEL, toJsonSchema, type ThinkTry } from './think.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const SOURCE = '66666666-6666-4666-8666-666666666666';
@@ -923,6 +926,204 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.equal(queued().length, 0, 'try 2 after 10 minutes, not at once');
         assert.equal(released().length, 1);
         assert.equal(calls.length, 0);
+    });
+});
+
+// ─── The AI providers layer (monteur.brain = api, P32) ──────────────────────────────────
+
+describe('sweepMonteur — the AI providers layer (monteur.brain = api)', () => {
+    const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+    let brains: Record<string, 'gemini' | 'claude_mac' | 'api'>;
+    let layer: AiGenerateArgs[];
+    let layerAnswer: (args: AiGenerateArgs, step: 'pick' | 'copy' | 'edit') => unknown;
+    let restoreLayer: AiCaller;
+    let macList: string | null;
+    let thinks: Record<string, ThinkTry[]>;
+
+    const stepOf = (args: AiGenerateArgs): 'pick' | 'copy' | 'edit' => (args.schema === PICK_SCHEMA ? 'pick' : args.schema === COPY_SCHEMA ? 'copy' : 'edit');
+    const queued = () => db.ran(/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/).map((s) => JSON.parse(s.params[1]));
+    /** Everything that reaches the Mac's queue: a think queued, and a think's tries looked up. (The Analyst's own resume query mentions the kind and asks nothing of it.) */
+    const toMac = () => db.statements.filter((s) => /^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/.test(s.sql) || /AS try FROM studio_jobs/.test(s.sql));
+    const used = (usage: { in: number; out: number; cacheRead?: number }): AiGenerateResult['usage'] => usage;
+    const result = (json: unknown): AiGenerateResult => ({
+        json, usage: used({ in: 40, out: 300, cacheRead: 2000 }), billed: [{ model: 'claude-opus-5-5', in: 40, out: 300 }], model: 'claude-opus-5-5', provider: 'anthropic',
+        stopReason: 'end_turn', elapsed_ms: 9_000, usd: 0.03, priced: true, costSource: 'table', effort: 'high', route: 'default', usageId: '7',
+    });
+
+    beforeEach(() => {
+        brains = { [NEW_TENANT]: 'api' };
+        layer = [];
+        macList = null;
+        thinks = {};
+        layerAnswer = (_args, step) => ({ pick: PICK, copy: COPY, edit: EDIT })[step];
+        restoreLayer = setAiCaller(async (args) => {
+            layer.push(args);
+            const answer = layerAnswer(args, stepOf(args));
+            if (answer instanceof Error) throw answer;
+            return result(answer);
+        });
+        db.routes.unshift(
+            [/FROM studio_settings/, (p) => ({
+                rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo, brain: brains[p[0]] ?? 'gemini' } }],
+            })],
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && macList !== null ? [{ value: macList, is_secret: false }] : [],
+            })],
+            [/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, (p) => ({ rows: (thinks[String(p[1]).split('/').pop()!] ?? []).map((t) => ({ ...t })) })],
+            [/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/, () => ({ rows: [{ id: 'think-job' }] })],
+            [/^UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1/, () => ({ rows: [], rowCount: 1 })],
+        );
+    });
+    afterEach(() => { setAiCaller(restoreLayer); });
+
+    /** One sweep of a source of this tenant. */
+    const sweepFor = async (creatorId: string) => {
+        source = { ...source, creator_id: creatorId };
+        return sweepMonteur(later());
+    };
+
+    it('a tenant’s pick, copy and edit go through the layer as tenant_monteur_think, charged to them: never Gemini, never the Mac', async () => {
+        const out = await sweepFor(NEW_TENANT);
+        assert.deepEqual(out.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+        assert.deepEqual(layer.map((l) => [l.purpose, l.creatorId, stepOf(l)]), [
+            ['tenant_monteur_think', NEW_TENANT, 'pick'], ['tenant_monteur_think', NEW_TENANT, 'copy'], ['tenant_monteur_think', NEW_TENANT, 'edit'],
+        ]);
+        assert.equal(calls.length, 0, 'Gemini is never called with the brain on the layer');
+        assert.equal(toMac().length, 0, 'and nothing is queued for the Mac');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 1);
+    });
+
+    it('records the layer’s model and tokens on the source, the whole prompt counted as the Mac’s is', async () => {
+        await sweepFor(NEW_TENANT);
+        const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
+        assert.deepEqual([record.model, record.tokens_in, record.tokens_out], ['claude-opus-5-5', 2040, 300]);
+        assert.deepEqual(record.copy, { model: 'claude-opus-5-5', tokens_in: 2040, tokens_out: 300 });
+        assert.deepEqual(record.edit, { model: 'claude-opus-5-5', tokens_in: 2040, tokens_out: 300 });
+        assert.equal(logs.filter((l) => l.event === 'monteur.api_answered').length, 3);
+    });
+
+    it('asks with the same system prompt, turns and schema Gemini and the Mac are given, and parses the answers exactly as theirs', async () => {
+        brains[NEW_TENANT] = 'gemini';
+        await sweepFor(NEW_TENANT);
+        const viaGemini = { calls: [...calls], copy: savedCopy(), edits: db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14] };
+        db.statements.length = 0;
+        calls.length = 0;
+
+        brains[NEW_TENANT] = 'api';
+        await sweepFor(NEW_TENANT);
+        assert.equal(layer.length, 3);
+        layer.forEach((l, i) => {
+            const g = viaGemini.calls[i]!;
+            assert.equal(l.system, g.system, `${g.purpose}: the same system prompt`);
+            assert.deepEqual(l.user, g.turns, `${g.purpose}: the same turns`);
+            assert.deepEqual(l.schema, g.schema, `${g.purpose}: the same schema`);
+            assert.equal(l.maxTokens, g.maxOutputTokens);
+        });
+        assert.deepEqual(savedCopy(), viaGemini.copy);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14], viaGemini.edits);
+    });
+
+    it('the owner on the Mac: the layer is never asked, and the request queued is exactly the one Gemini’s prompt gives, flattened', async () => {
+        brains[TENANT] = 'gemini';
+        await sweepFor(TENANT);
+        const base = calls[0]!;
+        db.statements.length = 0;
+        calls.length = 0;
+
+        brains[TENANT] = 'claude_mac';
+        const out = await sweepFor(TENANT);
+        assert.equal(out.pick?.outcome, 'waiting');
+        assert.deepEqual(queued(), [{
+            request: `source/${SOURCE}/a1/monteur.pick`, try: 1, step: 'pick', purpose: 'monteur.pick', model: THINK_MODEL,
+            system: base.system, user: flattenTurns(base.turns), schema: toJsonSchema(base.schema),
+        }]);
+        assert.equal(layer.length, 0, 'his work is never routed through the operator’s API key');
+        assert.equal(calls.length, 0);
+    });
+
+    it('the owner whose stored brain is api is still the Mac’s: the same Mac request, the layer never asked', async () => {
+        brains[TENANT] = 'claude_mac';
+        await sweepFor(TENANT);
+        const onTheMac = queued();
+        db.statements.length = 0;
+
+        brains[TENANT] = 'api';
+        const out = await sweepFor(TENANT);
+        assert.equal(out.pick?.outcome, 'waiting');
+        assert.deepEqual(queued(), onTheMac, 'the request is the one `claude_mac` makes');
+        assert.equal(layer.length, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    it('a tenant on the Mac list whose stored brain is api is pinned to the Mac too, and the tenant that is taken off it goes to the layer', async () => {
+        macList = JSON.stringify([NEW_TENANT]);
+        const out = await sweepFor(NEW_TENANT);
+        assert.equal(out.pick?.outcome, 'waiting');
+        assert.equal(queued().length, 1);
+        assert.equal(layer.length, 0);
+
+        macList = '[]';
+        db.statements.length = 0;
+        const again = await sweepFor(NEW_TENANT);
+        assert.equal(again.pick?.outcome, 'rendering');
+        assert.equal(layer.length, 3);
+        assert.equal(toMac().length, 0);
+    });
+
+    it('no provider: the attempt fails with the layer’s own words, and the Mac and Gemini are never tried instead', async () => {
+        layerAnswer = () => new AiError({ kind: 'no_provider', provider: '', model: '', message: 'No AI provider is ready: save an API key for one in Operations → AI providers.' });
+        const out = await sweepFor(NEW_TENANT);
+        assert.equal(out.pick?.outcome, 'retry');
+        assert.match(out.pick?.error ?? '', /No AI provider is ready: save an API key for one in Operations → AI providers/);
+        assert.equal(layer.length, 1, 'asked once, refused, and the attempt ends');
+        assert.equal(toMac().length, 0, 'no fallback to the owner’s Mac');
+        assert.equal(calls.length, 0, 'and none to Gemini');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+    });
+
+    it('a spent budget is the same: the tenant’s attempt fails saying so, nothing else is tried', async () => {
+        layerAnswer = () => new BudgetRefused('tenant_day', 2, 2, 'anthropic', 'claude-opus-5-5');
+        const out = await sweepFor(NEW_TENANT);
+        assert.equal(out.pick?.outcome, 'retry');
+        assert.match(out.pick?.error ?? '', /daily AI budget is spent/);
+        assert.equal(toMac().length, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    it('the Editor asks again after a layer error that may pass (rate, server, timeout), and goes on without edits after one that will not', async () => {
+        let edits = 0;
+        layerAnswer = (_a, step) => {
+            if (step !== 'edit') return step === 'pick' ? PICK : COPY;
+            return ++edits === 1 ? new AiError({ kind: 'rate', provider: 'anthropic', model: 'm', status: 429, message: 'slow down' }) : EDIT;
+        };
+        const out = await sweepFor(NEW_TENANT);
+        assert.equal(out.pick?.outcome, 'rendering');
+        assert.equal(layer.filter((l) => stepOf(l) === 'edit').length, 2, 'asked again');
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14]), EDITS);
+
+        db.statements.length = 0;
+        layer = [];
+        layerAnswer = (_a, step) => (step === 'edit' ? new AiError({ kind: 'auth', provider: 'anthropic', model: 'm', status: 401, message: 'invalid x-api-key' }) : step === 'pick' ? PICK : COPY);
+        const again = await sweepFor(NEW_TENANT);
+        assert.equal(again.pick?.outcome, 'rendering', 'a reel never waits for its edits when the layer cannot give them');
+        assert.equal(layer.filter((l) => stepOf(l) === 'edit').length, 1, 'not asked again');
+        const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
+        assert.match(record.edit.error, /invalid x-api-key/);
+        assert.equal(toMac().length, 0);
+    });
+
+    it('a profile that cannot be read when the Editor is due gives a tenant on the layer no Editor call, never the owner’s text', async () => {
+        // The Marketer is asked first; from then on the profile cannot be read.
+        db.routes.unshift([/FROM creator_profiles/, () => {
+            if (layer.some((l) => stepOf(l) === 'copy')) throw new Error('connection terminated');
+            return { rows: [] };
+        }]);
+        const out = await sweepFor(NEW_TENANT);
+        assert.equal(out.pick?.outcome, 'rendering', 'the reel goes out without edits, as for any tenant whose Editor cannot be asked');
+        assert.deepEqual(layer.map(stepOf), ['pick', 'copy'], 'the Editor is skipped');
+        const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
+        assert.equal(record.edit.error, PROFILE_UNREADABLE);
+        assert.equal(toMac().length, 0);
     });
 });
 

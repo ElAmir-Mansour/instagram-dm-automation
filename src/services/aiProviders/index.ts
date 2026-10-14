@@ -10,7 +10,12 @@
  * It lives beside `llm/` and not in it because `llm/` is held clear of the database by a test (llm/schema.test.ts), so that loading a
  * schema or an adapter never loads the pool.
  *
- * Nothing existing calls it yet. The owner's DM bot (`ai.ts`, Gemini), his Monteur, his infographics and his Studio keep the paths they have.
+ * Who calls it: the onboarding draft and proof (`onboarding_*`), the DM engine (`dm`), and, for a tenant who is not the owner, the Monteur
+ * (`tenant_monteur_think`, the `monteur.brain: 'api'` branch of `ask()`, monteur/model.ts), infographics written on the server
+ * (`tenant_infographic`, studio/infographicWriter.ts) and the Studio's carousel writer (`tenant_studio`, `GenOptions.callModel`,
+ * studio/tenantAi.ts; plan D13). The owner's DM bot (`ai.ts`, Gemini), his Monteur and infographics (Claude Code on his Mac, on his own
+ * plan) and his Studio (Gemini) keep the paths they have: the router refuses the Mac's two purposes for him, and nothing hands him the
+ * Studio's `callModel`.
  */
 export { generate, setAiCaller, setProviderFetch, estimateUsd, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from './generate.js';
 export { resolveRoute, pickRoute, assertNotMacBrainWork, MacBrainTenantRefused, type ResolvedRoute } from './route.js';

@@ -29,7 +29,7 @@ import type { StudioSettings } from '../studio/settingsTypes.js';
 import { type EditorKit, type PronounKit } from './editorKits.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import type { TranscriptWord } from '../../db/rows.js';
-import { ask, type CallCost, emptyCost } from './model.js';
+import { type ApiOn, ask, type CallCost, emptyCost, viaApi } from './model.js';
 import { thinkRoute, type ThinkOn } from './think.js';
 import type { TranscriptLine } from './transcript.js';
 import { formatStamp } from './transcript.js';
@@ -593,7 +593,7 @@ export interface EditResult {
 /**
  * The Editor's one call for every clip of a video, C1… in the order given (the clips that got
  * copy), each read on its own clock. Throws what the call throws: the sweep catches it, since a
- * failed Editor call must never hold a reel back. `think` sends the call to Claude on the Mac. `kit` is what
+ * failed Editor call must never hold a reel back. `think` sends the call to Claude on the Mac; `api`, through the AI providers layer. `kit` is what
  * the prompt says about the creator, read from their profile (`editorKitFor`).
  */
 export async function writeEdits(
@@ -604,6 +604,7 @@ export async function writeEdits(
     kit: EditorKit,
     deadline: number,
     think?: ThinkOn,
+    api?: ApiOn,
 ): Promise<EditResult> {
     const cost = emptyCost();
     const human = humanTouchesOn(settings);
@@ -618,6 +619,7 @@ export async function writeEdits(
         maxOutputTokens: EDITOR_MAX_OUTPUT,
         capMs: EDITOR_CALL_MS,
         think: thinkRoute(think, 'monteur.edit', 'edit'),
+        ...viaApi(api),
     }, deadline, cost);
     return {
         edits: editsByClip(raw, perClip),

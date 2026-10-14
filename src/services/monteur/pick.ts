@@ -13,7 +13,7 @@ import { log } from '../../utils/log.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import { LANGUAGES } from '../studio/prompts.js';
 import type { PickKit } from './copyKits.js';
-import { ask, emptyCost, type CallCost } from './model.js';
+import { type ApiOn, ask, emptyCost, type CallCost, viaApi } from './model.js';
 import { evidenceLine, type ReelEvidenceSet } from './reelEvidence.js';
 import { ThinkWaiting, thinkRoute, type ThinkOn } from './think.js';
 import {
@@ -164,7 +164,7 @@ export interface PickOutcome {
 /**
  * The clips for one source. A transcript with no words, or one shorter than the shortest clip,
  * has nothing to pick and costs no call. The repair round runs only when something needs
- * repairing and fewer clips than wanted survived. `think` sends both calls to Claude on the Mac.
+ * repairing and fewer clips than wanted survived. `think` sends both calls to Claude on the Mac; `api`, through the AI providers layer.
  */
 export async function pickClips(
     source: { words: readonly TranscriptWord[]; duration: number | null },
@@ -172,6 +172,7 @@ export async function pickClips(
     context: { lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet; existingTexts?: readonly string[]; kit: PickKit },
     deadline: number,
     think?: ThinkOn,
+    api?: ApiOn,
 ): Promise<PickOutcome> {
     const cost = emptyCost();
     const lines = groupLines(source.words);
@@ -187,7 +188,7 @@ export async function pickClips(
     const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels, keep, kit: context.kit }) }];
     const call = (purpose: string) => ask({
         purpose, system, turns, schema: PICK_SCHEMA, temperature: 0.4, thinkingBudget: PICK_THINKING,
-        maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'),
+        maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'), ...viaApi(api),
     }, deadline, cost);
 
     const raw = await call('monteur.pick');

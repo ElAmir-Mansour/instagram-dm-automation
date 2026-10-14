@@ -81,9 +81,12 @@ export type MonteurSource = 'folder' | 'course';
 export type MonteurMode = 'review' | 'auto';
 /**
  * Who makes the Monteur's model calls — the pick, the Marketer, the Editor and the Analyst:
- * Gemini, from this app, or Claude, on the Mac worker with the owner's Claude plan (MONTEUR.md §6.3).
+ * Gemini, from this app, or Claude, on the Mac worker with the owner's Claude plan (MONTEUR.md §6.3), or `api`: whichever provider the
+ * operator routed `tenant_monteur_think` to in Operations → AI providers, on the operator's API key (P32). `api` is for the tenants the
+ * Mac is NOT for: the owner's work stays on his Mac whatever is stored (`effectiveBrain`, monteur/brain.ts), and a tenant the Mac works
+ * for cannot save it. A tenant created from P32 on starts on `api`; one saved before it keeps what it has.
  */
-export type MonteurBrain = 'gemini' | 'claude_mac';
+export type MonteurBrain = 'gemini' | 'claude_mac' | 'api';
 /**
  * How the worker renders a reel's edits (MONTEUR.md §6.2): 'classic', the dark cards, or 'paper'
  * (Ali Abdaal style: unfolding paper cards, paper letters, drawn icons, black-and-white b-roll).
@@ -100,7 +103,10 @@ export type MonteurConfig = {
     source: MonteurSource;
     /** 'review': a rendered reel waits for Approve. 'auto': the drain approves it, as Approve would. */
     mode: MonteurMode;
-    /** 'claude_mac': every call is a `monteur_think` job for the Mac, and Gemini is never called for them. */
+    /**
+     * 'claude_mac': every call is a `monteur_think` job for the Mac, and Gemini is never called for them.
+     * 'api': every call goes through the AI providers layer, never to Gemini and never to the Mac.
+     */
     brain: MonteurBrain;
     /** Sent to the worker as `brand.style` in every `monteur_render`. */
     style: MonteurStyle;

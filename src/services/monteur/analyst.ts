@@ -30,7 +30,8 @@ import { type Exec, StudioError } from '../studio/common.js';
 import { trimText, type GeminiSchema } from '../studio/generate.js';
 import { languageKit, oneLine } from '../studio/prompts.js';
 import { getStudioSettings } from '../studio/settings.js';
-import { ask, emptyCost, usageFields } from './model.js';
+import { effectiveBrain } from './brain.js';
+import { type ApiOn, ask, emptyCost, usageFields, viaApi } from './model.js';
 import { lessonsThinkKey, ThinkWaiting, thinkRoute } from './think.js';
 
 export const ANALYST_FRESH_DAYS = 7;
@@ -246,12 +247,16 @@ const iso = (d: Date | null): string | null => (d ? new Date(d).toISOString() : 
  */
 export async function runAnalyst(creatorId: string, deadline: number, resume: StudioLessonRow | null = null): Promise<StudioLessonRow> {
     const settings = await getStudioSettings(creatorId);
+    // Which brain asks: `claude_mac` is the Mac as it always was; `api` is the AI providers layer, unless the Mac is this tenant's (brain.ts).
+    // Before the run's row exists: a read that fails leaves no row `running`.
+    const brain = await effectiveBrain(creatorId, settings.monteur.brain);
     // A resumed run keeps the stamp it was inserted with: the version the run began under, however long it waited for the Mac.
     const run = resume ?? (await pool.query<StudioLessonRow>(
         `INSERT INTO studio_lessons (creator_id, status, profile_version) VALUES ($1, 'running', $2) RETURNING *`,
         [creatorId, await profileVersionFor(creatorId)]
     )).rows[0]!;
-    const think = settings.monteur.brain === 'claude_mac' ? { creatorId, key: lessonsThinkKey(run.id) } : undefined;
+    const think = brain === 'claude_mac' ? { creatorId, key: lessonsThinkKey(run.id) } : undefined;
+    const api: ApiOn | undefined = brain === 'api' ? { creatorId } : undefined;
     const cost = emptyCost();
     const began = Date.now();
     try {
@@ -274,6 +279,7 @@ export async function runAnalyst(creatorId: string, deadline: number, resume: St
             maxOutputTokens: ANALYST_MAX_OUTPUT,
             capMs: ANALYST_CALL_MS,
             think: thinkRoute(think, ANALYST_PURPOSE, 'analyst'),
+            ...viaApi(api),
         }, deadline, cost);
         const { lessons, summary } = parseLessons(raw);
         log('info', 'monteur.analyst', {

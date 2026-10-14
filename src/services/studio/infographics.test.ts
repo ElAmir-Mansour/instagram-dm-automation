@@ -7,6 +7,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
+import { setAiCaller, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
+import { MacBrainTenantRefused } from '../aiProviders/route.js';
+import { BudgetRefused } from '../aiProviders/usage.js';
+import { AiError } from '../llm/errors.js';
 import { withProfileCache } from '../profile/cache.js';
 import { profileReads } from '../profile/stampSupport.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
@@ -18,8 +22,9 @@ import {
     BUDGETS, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, specProblems, WRITE_SCHEMA, writeSystemPrompt,
     writeUserPrompt, type InfographicSpec,
 } from './infographicSpec.js';
+import { answerToWritten, layerWriteSchema, writeInfographicOnServer } from './infographicWriter.js';
 import {
-    copyInfographic, createInfographic, deleteInfographic, normaliseSpec, rerenderInfographic, scheduleInfographic, updateInfographic,
+    copyInfographic, createInfographic, deleteInfographic, normaliseSpec, renderPayload, rerenderInfographic, scheduleInfographic, updateInfographic,
 } from './infographics.js';
 import { completeJob, failJob, STUDIO_JOB_KINDS } from './jobs.js';
 import { ELAMIR_SETTINGS } from './testFixtures.js';
@@ -421,55 +426,52 @@ describe('scheduleInfographic', () => {
     });
 });
 
-// ─── The Mac is the owner's (G1) ────────────────────────────────────────────────────────
+// ─── The Mac is the owner's (G1), and a tenant's infographic is written on the server (P32) ──────────
 
-describe('the Mac is the owner’s: Claude writes an infographic only for him and the tenants added in studio.mac_brain_tenants', () => {
-    const NEW_TENANT = '44444444-4444-4444-8444-444444444444';
+const NEW_TENANT = '44444444-4444-4444-8444-444444444444';
+
+/** What the layer hands back for a call that worked: `json` is the answer, the rest is the bookkeeping `generate` returns. */
+const layerResult = (json: unknown, over: Partial<AiGenerateResult> = {}): AiGenerateResult => ({
+    json, usage: { in: 3000, out: 2500 }, billed: [{ model: 'claude-opus-5-5', in: 3000, out: 2500 }], model: 'claude-opus-5-5', provider: 'anthropic',
+    stopReason: 'end_turn', elapsed_ms: 40_000, usd: 0.062, priced: true, costSource: 'table', effort: 'high', route: 'default', usageId: '901', ...over,
+});
+
+/** A column as the model writes it (WRITE_SCHEMA): the same words as `column()`, with its diagrams as `diagram` and `icon`/`label`. */
+const answerColumn = (name: string) => ({
+    name, logo: 'PostgreSQL', examples: ['PostgreSQL', 'postgresql', ' Veeam '],
+    kind: 'معرفة ضخمة ومتغيّرة', note: 'أكبر من السياق، وتتجدّد باستمرار', hero: { kind: 'docs', label: '10K+ docs' },
+    steps: [
+        { title: 'التقطيع والتضمين', desc: 'تُقسَّم المستندات إلى مقاطع', diagram: { kind: 'chunk-db' } },
+        { title: 'استرجاع الأقرب', desc: 'يُطابَق السؤال مع أقرب المقاطع', diagram: { kind: 'icon', icon: 'robot' } },
+        { title: 'الدمج والتوليد', desc: 'تُضاف أفضل المقاطع إلى الموجِّه', diagram: { kind: 'augment', label: 'LLM' } },
+    ],
+});
+const REVIEW = { objections: [{ comment: 'On demand, not on upload', reply: 'True.' }, { comment: 'It depends', reply: 'It does.' }] };
+const ANSWER = {
+    subtitle: SPEC.subtitle.text, accent: SPEC.subtitle.accent, columns: ['RAG', 'CAG', 'KAG'].map(answerColumn), caption: CAPTION, review: REVIEW,
+};
+/** What the worker's `specFromAnswer` makes of ANSWER, less the logos it finds in simple-icons: `SPEC` with each column's examples as names. */
+const WRITTEN_SPEC = {
+    ...SPEC,
+    columns: SPEC.columns.map((c) => ({ ...c, examples: [{ title: 'PostgreSQL', hex: null, path: null }, { title: 'Veeam', hex: null, path: null }] })),
+};
+
+describe('the Mac is the owner’s: Claude writes an infographic on it only for him and the tenants added in studio.mac_brain_tenants', () => {
     let saved: string | null;
+    let asked: AiGenerateArgs[];
+    let restoreCaller: AiCaller;
     beforeEach(() => {
         saved = null;
+        asked = [];
         db.routes.push([/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
             rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
         })]);
+        restoreCaller = setAiCaller(async (args) => { asked.push(args); return layerResult(ANSWER); });
     });
-
-    /** The 409 the route sends, with its code. */
-    const refused = (err: unknown) => err instanceof StudioError && err.status === 409 && err.code === 'NEEDS_API_BRAIN'
-        && err.message === 'This tenant\'s AI work can\'t run on the operator\'s Mac; it needs the AI providers layer (coming).';
+    afterEach(() => { setAiCaller(restoreCaller); });
     const wrote = () => db.statements.filter((s) => /^(INSERT INTO infographics|INSERT INTO studio_jobs|UPDATE infographics)/.test(s.sql));
 
-    it('createInfographic refuses a new tenant before anything is written: no transaction, no row, no job', async () => {
-        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refused);
-        assert.equal(wrote().length, 0);
-        assert.equal(db.ran(/^BEGIN$/).length, 0, 'it never got as far as a transaction');
-    });
-
-    it('and for both themes, which asks Claude the same once', async () => {
-        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG', theme: 'both' }), refused);
-        assert.equal(wrote().length, 0);
-    });
-
-    it('a bad request is still a 400, whoever asks: the refusal does not hide what is wrong', async () => {
-        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'x' }), isStudioError(400));
-    });
-
-    it('rerenderInfographic with rewrite is refused before the row is locked: no transaction, the row does not go "writing"', async () => {
-        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, { rewrite: true }), refused);
-        assert.equal(wrote().length, 0);
-        assert.equal(db.ran(/^BEGIN$/).length, 0);
-    });
-
-    it('a row Claude has not written yet is a rewrite whatever the body says: refused too, and rolled back', async () => {
-        row.spec = null;
-        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, {}), refused);
-        assert.equal(wrote().length, 0);
-        // The first attempt finds out the row is a rewrite and stops; the second (with the context) is refused by the queue.
-        assert.ok(db.ran(/^BEGIN$/).length >= 1);
-        assert.equal(db.ran(/^ROLLBACK$/).length, db.ran(/^BEGIN$/).length, 'every transaction it opened was rolled back');
-        assert.equal(db.ran(/^COMMIT$/).length, 0);
-    });
-
-    it('a render alone is no Claude work: it queues for a tenant that is not on the list', async () => {
+    it('a render alone is no Claude work: it queues for a tenant that is not on the list, and the layer is not asked', async () => {
         await rerenderInfographic(NEW_TENANT, ID, { theme: 'dark' });
         assert.equal(jobPayload().write, undefined);
         assert.ok(jobPayload().spec);
@@ -478,26 +480,241 @@ describe('the Mac is the owner’s: Claude writes an infographic only for him an
         await copyInfographic(NEW_TENANT, ID, { theme: 'light' });
         assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 3, 'a render, an edit and a copy');
         for (const insert of db.ran(/^INSERT INTO studio_jobs/)) assert.equal(JSON.parse(insert.params[2]).write, undefined);
+        assert.equal(asked.length, 0);
     });
 
-    it('the owner, with nothing configured, writes and rewrites as before', async () => {
+    it('the owner, with nothing configured, writes and rewrites on the Mac as before, and the layer is never asked', async () => {
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
         assert.ok(jobPayload().write);
         await rerenderInfographic(TENANT, ID, { rewrite: true });
         assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 2);
         assert.ok(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[1]!.params[2]).write);
+        assert.equal(asked.length, 0, 'his work is never routed through the operator’s API key');
+        assert.match(db.ran(/^INSERT INTO infographics/)[0]!.sql, /'writing'/, 'and his row is born `writing`, with no spec: the Mac writes it');
+        assert.deepEqual(db.ran(/^UPDATE infographics SET status = \$3/).map((s) => s.params[2]), ['writing', 'writing']);
     });
 
-    it('a saved list adds a tenant, who is refused again the moment it is taken off; the owner is never refused', async () => {
+    it('a saved list adds a tenant to the Mac, who goes to the API the moment it is taken off; the owner never does', async () => {
         saved = JSON.stringify([NEW_TENANT]);
         await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' });
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
-        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 2, 'the listed tenant and the owner');
+        assert.deepEqual(db.ran(/^INSERT INTO studio_jobs/).map((s) => Boolean(JSON.parse(s.params[2]).write)), [true, true], 'the listed tenant and the owner: the Mac writes both');
+        assert.equal(asked.length, 0);
 
         saved = '[]';
-        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refused);
+        await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.deepEqual(asked.map((a) => [a.purpose, a.creatorId]), [['tenant_infographic', NEW_TENANT]], 'off the list: the layer');
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
-        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 3);
+        assert.equal(asked.length, 1, 'the owner is still the Mac’s');
+        assert.ok(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[3]!.params[2]).write);
+        assert.equal(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[2]!.params[2]).write, undefined, 'and what the layer wrote goes to the worker to draw, not to write');
+        assert.ok(wrote().length > 0);
+    });
+
+    it('a bad request is a 400, whoever asks: the layer is not asked about what is wrong', async () => {
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'x' }), isStudioError(400));
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG', theme: 'blue' }), isStudioError(400));
+        assert.equal(asked.length, 0);
+        assert.equal(wrote().length, 0);
+    });
+});
+
+describe('a tenant’s infographic is written on the server, through the layer (P32, tenant_infographic)', () => {
+    let asked: AiGenerateArgs[];
+    let answer: (args: AiGenerateArgs) => Promise<AiGenerateResult>;
+    let restoreCaller: AiCaller;
+    let nextRow: number;
+    beforeEach(() => {
+        asked = [];
+        nextRow = 1;
+        answer = async () => layerResult(ANSWER);
+        restoreCaller = setAiCaller(async (args) => { asked.push(args); return answer(args); });
+        db.routes.unshift([/^INSERT INTO infographics/, () => ({ rows: [{ id: `row-${nextRow++}` }] })]);
+    });
+    afterEach(() => { setAiCaller(restoreCaller); });
+
+    const jobs = () => db.ran(/^INSERT INTO studio_jobs/).map((s) => ({ kind: s.params[1], payload: JSON.parse(s.params[2]) }));
+    const refusal = (status: number, code: string) => (err: unknown) => err instanceof StudioError && err.status === status && err.code === code;
+    const wrote = () => db.statements.filter((s) => /^(INSERT INTO infographics|INSERT INTO studio_jobs|UPDATE infographics)/.test(s.sql));
+
+    it('asks the layer for the tenant, with the prompts and the schema the Mac would be given, and nothing else', async () => {
+        await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost' });
+        assert.equal(asked.length, 1);
+        const [call] = asked;
+        assert.equal(call!.purpose, 'tenant_infographic');
+        assert.equal(call!.creatorId, NEW_TENANT);
+        // The Mac's `write`, for the same request: the owner's payload builder, with the same context.
+        const mac = renderPayload('x', { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost', language: 'ar' }, 'light', ELAMIR_SETTINGS, null, OWNER_CTX).write!;
+        assert.equal(call!.system, mac.system, 'the same system prompt');
+        assert.equal(call!.user, mac.user, 'the same user prompt');
+        assert.ok('json' in call!.schema, 'WRITE_SCHEMA as plain JSON Schema');
+        const sent = JSON.stringify((call!.schema as { json: unknown }).json);
+        assert.ok(!/minItems|maxItems/.test(sent), 'no array bounds: structured output refuses them, and the answer is checked here');
+        assert.deepEqual(Object.keys((call!.schema as { json: { properties: object } }).json.properties), Object.keys(WRITE_SCHEMA.properties), 'the same fields');
+        assert.ok(call!.maxTokens > 0 && call!.timeoutMs > 0 && call!.timeoutMs <= 150_000);
+    });
+
+    it('the row is born rendering with its spec, caption and review; the job is render-only: a spec, no write, in the tenant’s brand', async () => {
+        const view = await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.ok(view);
+        const insert = db.ran(/^INSERT INTO infographics/)[0]!;
+        assert.match(insert.sql, /'rendering'/, 'never `writing`: nothing is left to write');
+        assert.deepEqual(insert.params.slice(0, 5), [NEW_TENANT, 'RAG vs CAG vs KAG', null, 'ar', 'light']);
+        assert.deepEqual(JSON.parse(insert.params[5]), WRITTEN_SPEC);
+        assert.equal(insert.params[6], CAPTION);
+        assert.deepEqual(JSON.parse(insert.params[7]), REVIEW);
+        assert.equal(insert.params[8], null, 'no profile stamp for a tenant with no profile');
+
+        const [job] = jobs();
+        assert.equal(jobs().length, 1);
+        assert.equal(job!.kind, 'render_infographic');
+        assert.equal(job!.payload.write, undefined, 'the worker is not asked to think');
+        assert.deepEqual(job!.payload.spec, WRITTEN_SPEC);
+        assert.deepEqual(Object.keys(job!.payload).sort(), ['brand', 'infographicId', 'language', 'spec', 'theme']);
+        assert.equal(job!.payload.infographicId, 'row-1');
+        assert.deepEqual([job!.payload.theme, job!.payload.language], ['light', 'ar']);
+        assert.equal(job!.payload.brand.site, BRAND.site);
+        assert.deepEqual(db.ran(/^UPDATE infographics SET status = \$3, theme = \$4, job_id = \$5/)[0]!.params.slice(2), ['rendering', 'light', 'job-new']);
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).filter((s) => s.params[1] === 'monteur_think').length, 0, 'nothing for the Mac');
+    });
+
+    it('turns the answer into the template’s spec as the worker does: dir, title, diagrams, examples as names (the logos are the worker’s), the accent only when it is in the subtitle', () => {
+        const written = answerToWritten(ANSWER, 'ar');
+        assert.deepEqual(written.spec, WRITTEN_SPEC);
+        assert.equal(written.caption, CAPTION);
+        assert.deepEqual(written.review, REVIEW);
+        assert.equal(written.spec.columns[0]!.logo, undefined, 'a logo is found in simple-icons, which the server does not load');
+        assert.deepEqual(specProblems(written.spec), [], 'and it passes the same checks as a spec the worker returned');
+        assert.deepEqual(captionProblems(written.caption, written.spec), []);
+        assert.deepEqual(answerToWritten({ ...ANSWER, accent: 'not in it' }, 'en').spec.subtitle, { text: SPEC.subtitle.text });
+        assert.equal(answerToWritten(ANSWER, 'en').spec.dir, 'ltr');
+        const odd = answerToWritten({ ...ANSWER, columns: [answerColumn('A'), { ...answerColumn('B'), hero: { kind: 'icon' }, examples: 'x' }], review: 'x' }, 'ar');
+        assert.deepEqual(odd.spec.columns[1]!.hero, { kind: 'icon', name: 'sparkles' }, 'an icon with no name');
+        assert.equal(odd.spec.columns[1]!.examples, undefined);
+        assert.equal(odd.review, null);
+    });
+
+    it('refuses what the worker refuses: not 2 or 3 columns, not three steps, no name, no caption', () => {
+        const bad = (answer: unknown) => () => answerToWritten(answer, 'ar');
+        assert.throws(bad('x'), /not an object/);
+        assert.throws(bad({ ...ANSWER, columns: [answerColumn('A')] }), /2 or 3 columns/);
+        assert.throws(bad({ ...ANSWER, columns: ['A', 'B', 'C', 'D'].map(answerColumn) }), /2 or 3 columns/);
+        assert.throws(bad({ ...ANSWER, columns: [answerColumn('A'), { ...answerColumn('B'), steps: answerColumn('B').steps.slice(0, 2) }] }), /column 2 has 2 steps, not 3/);
+        assert.throws(bad({ ...ANSWER, columns: [answerColumn('A'), answerColumn(' ')] }), /column 2 has no name/);
+        assert.throws(bad({ ...ANSWER, caption: ' ' }), /no caption/);
+    });
+
+    it('the schema it sends is closed and has no array bounds, for every provider that will take it', () => {
+        const { json } = layerWriteSchema() as { json: Record<string, any> };
+        const objects: Record<string, any>[] = [];
+        (function walk(node: unknown): void {
+            if (Array.isArray(node)) return node.forEach(walk);
+            if (!node || typeof node !== 'object') return;
+            if ((node as Record<string, unknown>).type === 'object') objects.push(node as Record<string, any>);
+            Object.values(node).forEach(walk);
+        })(json);
+        assert.ok(objects.length >= 6);
+        for (const o of objects) assert.equal(o.additionalProperties, false);
+        assert.ok(!/minItems|maxItems/.test(JSON.stringify(json)));
+        assert.ok((json.required as string[]).includes('caption'));
+        assert.ok('minItems' in WRITE_SCHEMA.properties.columns, 'and WRITE_SCHEMA itself, the Mac’s, is not changed');
+    });
+
+    it('both themes: written once, two rows born rendering, two render-only jobs', async () => {
+        await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG', theme: 'both' });
+        assert.equal(asked.length, 1, 'the model is asked once');
+        const inserts = db.ran(/^INSERT INTO infographics/);
+        assert.deepEqual(inserts.map((s) => s.params[4]), ['light', 'dark'], 'the settings’ theme, then the other');
+        assert.deepEqual(inserts.map((s) => s.params[6]), [CAPTION, CAPTION]);
+        assert.deepEqual(jobs().map((j) => [j.payload.infographicId, j.payload.theme, Boolean(j.payload.write)]), [['row-1', 'light', false], ['row-2', 'dark', false]]);
+        assert.deepEqual(jobs().map((j) => j.payload.spec), [WRITTEN_SPEC, WRITTEN_SPEC]);
+    });
+
+    it('no provider: 409 NEEDS_AI_PROVIDER, saying where to fix it and that the Mac was not tried; no transaction, no row, no job', async () => {
+        answer = async () => { throw new AiError({ kind: 'no_provider', provider: '', model: '', message: 'No AI provider is ready: save an API key for one in Operations → AI providers.' }); };
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), (err: unknown) => refusal(409, 'NEEDS_AI_PROVIDER')(err)
+            && /Operations → AI providers/.test((err as Error).message) && /Nothing was sent to the Mac/.test((err as Error).message));
+        assert.equal(asked.length, 1);
+        assert.equal(wrote().length, 0);
+        assert.equal(db.ran(/^BEGIN$/).length, 0, 'it never got as far as a transaction');
+        assert.equal(jobs().length, 0);
+    });
+
+    it('a spent budget is 429 AI_BUDGET_SPENT with its own words; the provider being down is a 503 that may pass; a bad key a 503 that will not', async () => {
+        answer = async () => { throw new BudgetRefused('tenant_day', 2, 2, 'anthropic', 'claude-opus-5-5'); };
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), (err: unknown) => refusal(429, 'AI_BUDGET_SPENT')(err) && /daily AI budget is spent/.test((err as Error).message));
+        answer = async () => { throw new AiError({ kind: 'server', provider: 'anthropic', model: 'm', status: 529, message: 'overloaded' }); };
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refusal(503, 'AI_UNAVAILABLE'));
+        answer = async () => { throw new AiError({ kind: 'auth', provider: 'anthropic', model: 'm', status: 401, message: 'invalid x-api-key' }); };
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refusal(503, 'AI_PROVIDER_REJECTED'));
+        assert.equal(wrote().length, 0);
+    });
+
+    it('an answer that is no infographic is a 502 and writes nothing', async () => {
+        answer = async () => layerResult({ ...ANSWER, columns: [answerColumn('A')] });
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), (err: unknown) => refusal(502, 'AI_ANSWER_UNUSABLE')(err) && /2 or 3 columns/.test((err as Error).message));
+        assert.equal(wrote().length, 0);
+    });
+
+    it('the layer itself refuses the Mac’s tenants (the owner): a 409 MAC_BRAIN_TENANT, never a write', async () => {
+        answer = async (args) => { throw new MacBrainTenantRefused(args.purpose, args.creatorId!); };
+        // Reached only by a caller that routed the owner here: the create path sends him to the Mac, so call the writer as that caller would.
+        await assert.rejects(writeInfographicOnServer({ creatorId: TENANT, topic: 'RAG', notes: null, language: 'ar', avoid: [], ctx: OWNER_CTX }), refusal(409, 'MAC_BRAIN_TENANT'));
+    });
+
+    it('writes it again on the server, for a rewrite: the row’s topic, a new spec, caption, review and stamp, and a render-only job', async () => {
+        row.notes = 'Mention cost';
+        await rerenderInfographic(NEW_TENANT, ID, { rewrite: true, theme: 'light' });
+        assert.deepEqual(asked.map((a) => [a.purpose, a.creatorId]), [['tenant_infographic', NEW_TENANT]]);
+        assert.match(asked[0]!.user as string, /^Topic: RAG vs CAG vs KAG[\s\S]*Mention cost/);
+        const update = db.ran(/^UPDATE infographics SET spec = \$3::jsonb, caption = \$4, review = \$5::jsonb, profile_version = \$6/)[0]!;
+        assert.deepEqual(JSON.parse(update.params[2]), WRITTEN_SPEC);
+        assert.equal(update.params[3], CAPTION);
+        assert.deepEqual(JSON.parse(update.params[4]), REVIEW);
+        const [job] = jobs();
+        assert.equal(job!.payload.write, undefined);
+        assert.deepEqual(job!.payload.spec, WRITTEN_SPEC);
+        assert.equal(job!.payload.theme, 'light');
+        assert.equal(db.ran(/^UPDATE infographics SET status = \$3/)[0]!.params[2], 'rendering');
+    });
+
+    it('a rewrite that would be refused costs nothing: a row that is busy, or a theme that is wrong, never reaches the model', async () => {
+        row.status = 'rendering';
+        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, { rewrite: true }), isStudioError(409));
+        row.status = 'ready';
+        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, { rewrite: true, theme: 'blue' }), isStudioError(400));
+        assert.equal(asked.length, 0);
+        assert.equal(wrote().length, 0);
+    });
+
+    it('a row with no spec asked to render is a rewrite: the server’s for a tenant, never a write job for the Mac', async () => {
+        row.spec = null;
+        row.status = 'failed';
+        await rerenderInfographic(NEW_TENANT, ID, {});
+        assert.equal(asked.length, 1);
+        assert.deepEqual(jobs().map((j) => Boolean(j.payload.write)), [false]);
+    });
+
+    it('a rewrite with no provider is the same 409, and the row does not go writing', async () => {
+        answer = async () => { throw new AiError({ kind: 'no_provider', provider: '', model: '', message: 'x' }); };
+        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, { rewrite: true }), refusal(409, 'NEEDS_AI_PROVIDER'));
+        assert.equal(wrote().length, 0);
+        assert.equal(db.ran(/^BEGIN$/).length, 0);
+    });
+
+    it('the render-only job it queued is applied as any render is: the row’s own spec and caption stay, and the problems are worked out', async () => {
+        // The worker returns `written: null` for a render-only job; the row already holds what the server wrote.
+        db.routes.unshift(
+            [/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({ rows: [{ id: JOB, creator_id: NEW_TENANT, kind: 'render_infographic', status: 'claimed', payload: { infographicId: ID } }] })],
+            [/^SELECT job_id, spec, caption, topic, notes, language, pair_theme, profile_version FROM infographics/, () => ({ rows: [{ ...row, job_id: JOB, spec: WRITTEN_SPEC, caption: 'RAG and CAG' }] })],
+        );
+        const RESULT = { mp4_url: up(4), gif_url: up(5), cover_url: up(6), gif_width: 720, gif_fps: 15 };
+        assert.equal(await completeJob(NEW_TENANT, JOB, RESULT), 'applied');
+        const u = db.ran(/^UPDATE infographics SET status = 'ready'/)[0]!;
+        assert.deepEqual(JSON.parse(u.params[2]), WRITTEN_SPEC);
+        assert.equal(u.params[3], 'RAG and CAG');
+        assert.match(u.params[5], /doesn't mention «KAG»/, 'what the model missed is kept for the operator to fix, as for the owner');
+        assert.equal(u.params[6], false, 'and the review the row has stays');
     });
 });
 

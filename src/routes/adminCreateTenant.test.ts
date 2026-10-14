@@ -113,6 +113,14 @@ beforeEach(() => {
             if (!onboarding.has(id)) onboarding.set(id, { status: 'invited' });
             return { rows: [] };
         }],
+        // `seedApiBrain` (P32): the Monteur's brain, only where the row says nothing about it, as the SQL's own WHERE says.
+        [/^UPDATE studio_settings SET monteur = COALESCE\(monteur, '\{\}'::jsonb\) \|\| jsonb_build_object\('brain', 'api'\)/, ([id]) => {
+            const row = state.studio.get(id);
+            const monteur = (row?.monteur ?? null) as Record<string, unknown> | null;
+            if (!row || (monteur && monteur.brain != null)) return { rows: [], rowCount: 0 };
+            row.monteur = { ...(monteur ?? {}), brain: 'api' };
+            return { rows: [], rowCount: 1 };
+        }],
         [/^INSERT INTO ai_agents /, ([id, persona]) => {
             if (!agents.has(id)) agents.set(id, { is_active: false, system_prompt: persona, knowledge_base: '' });
             return { rows: [] };
@@ -204,6 +212,21 @@ describe('creating a tenant by name', () => {
         await create({ name: 'Nour' });
         assert.equal((state.studio.get(NEW)!.brand as { direction: string }).direction, 'rtl');
         assert.equal((await getStudioSettings(NEW)).brand.direction, 'rtl');
+    });
+
+    it('puts the new tenant\'s Monteur on the AI providers layer (monteur.brain api), inside the transaction, and leaves the owner\'s row exactly as it was', async () => {
+        const ownerBefore = structuredClone(state.studio.get(OWNER));
+        await create({ name: 'Nour' });
+        assert.equal((state.studio.get(NEW)!.monteur as { brain: string }).brain, 'api');
+        const settings = await getStudioSettings(NEW);
+        assert.equal(settings.monteur.brain, 'api', 'and the reader shows it');
+        assert.equal(settings.monteur.enabled, false, 'the Monteur itself stays off until the tenant turns it on');
+        assert.deepEqual(state.studio.get(OWNER), ownerBefore, 'the owner\'s Studio row is untouched: his brain is his');
+        const sql = db.statements.map((s) => s.sql);
+        const seed = sql.findIndex((x) => /^UPDATE studio_settings SET monteur /.test(x));
+        assert.ok(seed > sql.indexOf('BEGIN') && seed < sql.indexOf('COMMIT'), 'seeded in the creating transaction');
+        assert.ok(seed > sql.findIndex((x) => /^INSERT INTO studio_settings /.test(x)), 'after its settings row exists');
+        assert.deepEqual(db.statements[seed]!.params, [NEW], 'only for the new tenant');
     });
 
     it('leaves the Studio\'s direction alone for an English tenant, whose profile is English', async () => {

@@ -13,10 +13,13 @@ import express from 'express';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import { setMediaStore, SupabaseStorageMediaStore, type MediaStore } from '../services/storage.js';
+import { setAiCaller } from '../services/aiProviders/generate.js';
+import { AiError } from '../services/llm/errors.js';
 import { NEEDS_API_BRAIN_MESSAGE } from '../services/macBrain.js';
 import { setStorageFetch } from '../services/supabaseStorage.js';
 import { invalidateTenantCache } from '../services/tenant.js';
 import { setGeneration } from '../services/studio/drafts.js';
+import { NEEDS_AI_PROVIDER_MESSAGE } from '../services/studio/tenantAi.js';
 import { hashWorkerToken, mintWorkerToken } from '../services/studio/worker.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
 
@@ -556,24 +559,47 @@ describe('the Mac is the owner’s (G1), over the routes', () => {
     });
     afterEach(() => invalidateTenantCache());
 
-    it('POST /infographics answers a tenant that is not on the list with 409 { error, code: NEEDS_API_BRAIN }, writing nothing', async () => {
-        const res = await call('post', '/infographics', { body: { topic: 'RAG vs CAG vs KAG' } });
-        assert.equal(res.statusCode, 409);
-        assert.deepEqual(res.body, { error: NEEDS_API_BRAIN_MESSAGE, code: 'NEEDS_API_BRAIN' });
-        assert.ok(!statements.some((s) => /^INSERT INTO (infographics|studio_jobs)/.test(s.sql)));
+    /** The layer, answering as the real one does with no key saved: `no_provider`. Records what it was asked, and puts itself back. */
+    async function withNoProvider(run: (asked: string[]) => Promise<void>): Promise<void> {
+        const asked: string[] = [];
+        const previous = setAiCaller(async (args) => {
+            asked.push(`${args.purpose}:${args.creatorId}`);
+            throw new AiError({ kind: 'no_provider', provider: '', model: '', message: 'No AI provider is ready: save an API key for one in Operations → AI providers.' });
+        });
+        try {
+            await run(asked);
+        } finally {
+            setAiCaller(previous);
+        }
+    }
+
+    it('POST /infographics for a tenant the Mac is not for goes to the AI providers layer: with no provider ready it is 409 { error, code: NEEDS_AI_PROVIDER }, writing nothing', async () => {
+        await withNoProvider(async (asked) => {
+            const res = await call('post', '/infographics', { body: { topic: 'RAG vs CAG vs KAG' } });
+            assert.equal(res.statusCode, 409);
+            assert.deepEqual(res.body, { error: NEEDS_AI_PROVIDER_MESSAGE, code: 'NEEDS_AI_PROVIDER' });
+            assert.match(res.body.error, /Nothing was sent to the Mac/);
+            assert.deepEqual(asked, [`tenant_infographic:${TENANT_A}`], 'the layer was asked, for this tenant, for this purpose');
+            assert.ok(!statements.some((s) => /^INSERT INTO (infographics|studio_jobs)/.test(s.sql)), 'no row, and no job for the Mac or the worker');
+        });
     });
 
-    it('POST /infographics/:id/render with rewrite is the same 409, and a render alone is not', async () => {
+    it('POST /infographics/:id/render with rewrite is the layer’s too (409 NEEDS_AI_PROVIDER, nothing queued), and a render alone is not', async () => {
         const id = '22222222-2222-4222-8222-222222222222';
-        const row = { id, creator_id: TENANT_A, topic: 'RAG', notes: null, language: 'en', theme: 'dark', status: 'ready', spec: { columns: [] }, job_id: null };
+        const row = { id, creator_id: TENANT_A, topic: 'RAG', notes: null, language: 'en', theme: 'dark', pair_theme: null, status: 'ready', spec: { columns: [] }, caption: 'c', review: null,
+            render: null, schedule: null, job_id: null, error: null, created_at: new Date(), updated_at: new Date(), job_status: null, job_progress: null };
         routes.unshift(
+            [/^SELECT i\.id, i\.topic/, () => ({ rows: [row] })],
             [/^SELECT \* FROM infographics WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/, () => ({ rows: [row] })],
             [/^INSERT INTO studio_jobs/, (p) => ({ rows: [{ id: 'job-new', kind: p[1], status: 'pending', payload: JSON.parse(p[2]) }] })],
         );
-        const rewrite = await call('post', '/infographics/:id/render', { params: { id }, body: { rewrite: true } });
-        assert.equal(rewrite.statusCode, 409);
-        assert.equal(rewrite.body.code, 'NEEDS_API_BRAIN');
-        assert.equal(statements.filter((s) => /^INSERT INTO studio_jobs/.test(s.sql)).length, 0);
+        await withNoProvider(async (asked) => {
+            const rewrite = await call('post', '/infographics/:id/render', { params: { id }, body: { rewrite: true } });
+            assert.equal(rewrite.statusCode, 409);
+            assert.equal(rewrite.body.code, 'NEEDS_AI_PROVIDER');
+            assert.deepEqual(asked, [`tenant_infographic:${TENANT_A}`]);
+            assert.equal(statements.filter((s) => /^INSERT INTO studio_jobs/.test(s.sql)).length, 0);
+        });
     });
 
     it('the Studio settings answer a tenant switching the Monteur onto the Mac with 400 { error, code }', async () => {
