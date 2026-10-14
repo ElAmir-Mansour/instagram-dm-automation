@@ -724,3 +724,62 @@ describe('migration v39: the DM sales turn\'s switch and state', () => {
         assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i, 'a foreign key\'s ON DELETE SET NULL is not a DELETE');
     });
 });
+
+// ─── v41: who a private reply went to ──────────────────────────────────────────────────────────
+
+describe('migration v41: interactions.recipient_id (the comment -> DM bridge)', () => {
+    const FILE = 'migration_v41_interaction_recipient.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered right after v40 (v39 and v40 are taken), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(EXPECTED_MIGRATIONS[i - 1], 'migration_v40_conversation_profile.sql');
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement (it locks interactions, the comment path\'s table)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds exactly one column to interactions: nullable, no default, only if absent, and as wide as the other tables\' recipient ids', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?)([^;]*);/g)];
+        assert.equal(added.length, 1);
+        assert.deepEqual([added[0]![1], added[0]![2], added[0]![3]], ['interactions', 'recipient_id', 'VARCHAR(255)']);
+        assert.equal(added[0]![4]!.trim(), '', 'nothing after the type: no NOT NULL, no DEFAULT, so no row is rewritten');
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 1);
+        // The same width as `dm_send_log.recipient_id` and `conversations.instagram_user_id`, the ids it is compared with.
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'migration_v10_hardening.sql'), 'utf8'), /recipient_id VARCHAR\(255\) NOT NULL/);
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'schema_migration_v2.sql'), 'utf8'), /instagram_user_id VARCHAR\(255\) NOT NULL/);
+    });
+
+    it('indexes the bridge\'s lookup, partial, so it holds only rows that have a recipient and builds over none', () => {
+        const index = /CREATE INDEX IF NOT EXISTS (\w+) ON interactions \(([^)]*)\) WHERE ([^;]*);/.exec(sql);
+        assert.ok(index, 'the index is there');
+        assert.equal(index![1], 'idx_interactions_recipient');
+        assert.equal(index![2], 'creator_id, recipient_id, timestamp DESC', 'tenant, then who, then the newest first: what `commentSource` asks for');
+        assert.equal(index![3]!.trim(), 'recipient_id IS NOT NULL');
+        assert.doesNotMatch(sql, /CREATE UNIQUE INDEX/, 'a UNIQUE index named like an old one would silently no-op (v15)');
+        assert.doesNotMatch(sql, /CONCURRENTLY/, 'the runner applies each file inside a transaction, where it is refused');
+    });
+
+    it('is idempotent and creates no table, so there is no new table to enable row level security on (interactions has it since v11)', () => {
+        assert.equal((sql.match(/CREATE INDEX/g) ?? []).length, (sql.match(/CREATE INDEX IF NOT EXISTS/g) ?? []).length);
+        assert.deepEqual(createdTables(sql), []);
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'migration_v11_rls.sql'), 'utf8'), /ALTER TABLE IF EXISTS interactions\s+ENABLE ROW LEVEL SECURITY/);
+    });
+
+    it('alters a table that exists by the time it runs, and touches no other', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['interactions']);
+        assert.ok(existing.has('interactions'));
+    });
+
+    it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i);
+    });
+});

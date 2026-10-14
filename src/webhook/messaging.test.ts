@@ -28,6 +28,7 @@ import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../serv
 import { AiError } from '../services/llm/errors.js';
 import { metaHttp } from '../services/http.js';
 import { ProfileUnreadableError } from '../services/profile/context.js';
+import { withSales } from '../services/dmSales/testFixtures.js';
 import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
 import { KITS } from '../services/profile/kits.js';
 import { throughJsonb } from '../services/profile/testSupport.js';
@@ -1555,6 +1556,9 @@ describe('handleMessagingEvent — the sales mode switch (S6)', () => {
         [/UPDATE conversations\s+SET last_inbound_at/, { rows: [{ stage: 'new', qualifier_turns: 0, abuse_strikes: 0, offer_id: null, offers_linked: [], last_link_at: null, opted_out_at: null, ai_replies_last_hour: 0 }] }],
         [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
         [/UPDATE conversations SET stage/, { rowCount: 1 }],
+        // The comment → DM lookup (S10): arranged as "nobody replied to this sender and the conversation has no source", so a scenario that is
+        // not about the bridge does not walk its failure path. A scenario about it puts its own row first.
+        [/LEFT JOIN LATERAL/, { rows: [{ current_source: null, interaction_id: null, recent_campaign: null, recipient_id: null, replied_at: null, recent_keywords: null, recent_template: null, current_keywords: null, current_template: null }] }],
     ];
 
     let layerCalls: AiGenerateArgs[];
@@ -1665,6 +1669,93 @@ describe('handleMessagingEvent — the sales mode switch (S6)', () => {
         assert.equal(ranRelease(executed), true);
         assert.equal(ranMarkHandled(executed), false);
         assert.ok(!executed.some((e) => /UPDATE conversations SET stage/.test(e.sql)), 'nothing recorded for a reply that did not go');
+    });
+
+    /**
+     * A DM that follows a comment (docs/DM_SALES_PLAN.md S10, `dmSales/bridge.ts`): the person commented a keyword, was sent the link in a private
+     * reply, and has written back. In the sales turn the conversation starts at `recommend` with the campaign's offer among its facts, and the
+     * campaign is stored on the conversation. Everywhere else (`off`, a `test` sender who is not listed, a paused thread) not one statement
+     * about it runs: the lookup lives inside the sales turn precisely so that today's calls stay today's calls.
+     */
+    describe('a DM that follows a comment (S10)', () => {
+        const SENDER = '17841400000000001';
+        const profile = withSales(FITNESS_EN, 'en');
+        /** A private reply sent an hour ago to this sender, by a campaign whose text holds the plan's address. */
+        const REPLIED: Record<string, unknown> = {
+            current_source: null, interaction_id: 'int-1', recent_campaign: 'camp-1', recipient_id: SENDER, replied_at: new Date(Date.now() - 60 * 60 * 1000),
+            recent_keywords: 'plan, خطة', recent_template: 'Here is the plan: https://samifit.example/plan', current_keywords: null, current_template: null,
+        };
+        const withSource: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+            [/LEFT JOIN LATERAL/, { rows: [REPLIED] }],
+            [/UPDATE conversations SET source_campaign_id/, { rowCount: 1 }],
+            ...SALES_ROUTES,
+        ];
+        /** The facts the model was given: the opening of its last turn. */
+        const factsOf = (): string => (layerCalls[0]!.user as { text: string }[]).at(-1)!.text;
+        const touchesSource = (executed: Array<{ sql: string }>) => executed.some((e) => /\binteractions\b|source_campaign_id/.test(e.sql));
+
+        it('on: a conversation with a source campaign starts at recommend, with that campaign\'s offer in the facts, and the source is stored', async () => {
+            const { error, executed, sends, geminiCalls } = await runDm(textEvent({ sender: { id: SENDER } }), { agent: agentIn('on'), profile, extraRoutes: withSource });
+
+            assert.equal(error, null);
+            assert.equal(geminiCalls, 0);
+            assert.equal(layerCalls.length, 1);
+            assert.match(factsOf(), /Stage so far: recommend/);
+            assert.match(factsOf(), /They commented «plan» and were sent the link to Twelve-week plan\./);
+            const lookup = executed.find((e) => /LEFT JOIN LATERAL/.test(e.sql))!;
+            assert.deepEqual(lookup.params, ['conv-1', 'creator-1', SENDER, 'instagram'], 'the sender of THIS DM, in this tenant, on this network');
+            const write = executed.find((e) => /UPDATE conversations SET source_campaign_id/.test(e.sql));
+            assert.ok(write, 'the campaign is stored on the conversation');
+            assert.deepEqual(write!.params, ['conv-1', 'camp-1', 'creator-1']);
+            assert.equal(sends.filter((s) => s.body.message).length, 1, 'and the person is answered once');
+        });
+
+        it('on, with no source: the very same conversation starts at new, as before', async () => {
+            const { error } = await runDm(textEvent({ sender: { id: SENDER } }), { agent: agentIn('on'), profile, extraRoutes: SALES_ROUTES });
+            assert.equal(error, null);
+            assert.match(factsOf(), /Stage so far: new/);
+            assert.doesNotMatch(factsOf(), /They commented/);
+        });
+
+        it('test: a listed sender gets the bridge', async () => {
+            const { error, executed } = await runDm(textEvent({ sender: { id: SENDER } }), { agent: agentIn('test', [SENDER]), profile, extraRoutes: withSource });
+            assert.equal(error, null);
+            assert.match(factsOf(), /Stage so far: recommend/);
+            assert.ok(executed.some((e) => /UPDATE conversations SET source_campaign_id/.test(e.sql)));
+        });
+
+        it('test: a sender who is NOT listed is today\'s path, with the very same calls, and nothing about a comment is read or written', async () => {
+            const { timeline, executed, geminiCalls, error } = await runDm(textEvent(), { agent: agentIn('test', ['999999']), extraRoutes: withSource });
+            assert.equal(error, null);
+            sameCalls(timeline, TODAYS_CALLS, 'the calls for a sender who is not a test sender, with a private reply waiting for him');
+            assert.equal(touchesSource(executed), false);
+            assert.equal(geminiCalls, 1);
+            assert.equal(layerCalls.length, 0);
+        });
+
+        it('OFF IS UNCHANGED: with a private reply waiting for the sender, the calls are exactly today\'s, in the same order, and nothing about a comment is read or written', async () => {
+            const { timeline, executed, geminiCalls, error, sends } = await runDm(textEvent({ sender: { id: SENDER } }), { agent: agentIn('off'), extraRoutes: withSource });
+            assert.equal(error, null);
+            sameCalls(timeline, TODAYS_CALLS);
+            assert.equal(touchesSource(executed), false, 'no statement mentions interactions or source_campaign_id');
+            assert.equal(geminiCalls, 1, 'Gemini answered');
+            assert.equal(layerCalls.length, 0);
+            assert.equal(sends.length, 1);
+        });
+
+        it('a paused thread is not looked up at all, in any mode', async () => {
+            const { executed, sends } = await runDm(textEvent({ sender: { id: SENDER } }), {
+                agent: agentIn('on'), profile, extraRoutes: withSource, conversation: { id: 'conv-1', is_bot_active: false, ai_disclosed_at: null },
+            });
+            assert.equal(sends.length, 0);
+            assert.equal(touchesSource(executed), false);
+        });
+
+        it('a message with no words is acknowledged without the lookup, as without the sales mode', async () => {
+            const photo = textEvent({ message: { mid: 'mid-photo', attachments: [{ type: 'image', payload: { url: 'https://cdn.example.test/i.jpg' } }] } });
+            const { executed } = await runDm(photo, { agent: agentIn('on'), profile, extraRoutes: withSource });
+            assert.equal(touchesSource(executed), false);
+        });
     });
 });
 

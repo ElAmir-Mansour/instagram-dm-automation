@@ -86,6 +86,11 @@ interface World {
     recordedRow?: Row | null;
     /** The job queue the follow-up is offered to: a recording one by default, or this one (shared across runs, to see the queue dedupe). */
     queue?: ReturnType<typeof recordingQueue>;
+    /**
+     * What the comment → DM lookup (`bridge.ts`, S10) returns, over the "no source" row: a private reply sent to this sender, and the campaign it
+     * belongs to. Absent, the sender was never replied to and the conversation has no source. `'down'` is a database the lookup cannot read (v41 not applied).
+     */
+    bridge?: Row | 'down';
 }
 
 /** When the link of a recorded reply went, and the id of the row that carried it: what `recordTurn` reads back from its statement. */
@@ -126,6 +131,12 @@ const reply = (over: Record<string, unknown> = {}): Record<string, unknown> => (
     intent: 'info', stage: 'recommend', next_action: 'reply', offer_id: 'none', handoff_reason: 'none', text: 'It is a twelve-week plan for busy parents.', quick_replies: [], ...over,
 });
 
+/** The comment → DM lookup's answer for a conversation with no private reply to this sender and no source. */
+const NO_SOURCE: Row = {
+    current_source: null, interaction_id: null, recent_campaign: null, recipient_id: null, replied_at: null,
+    recent_keywords: null, recent_template: null, current_keywords: null, current_template: null,
+};
+
 const STATE: Row = {
     stage: 'new', qualifier_turns: 0, abuse_strikes: 0, offer_id: null, offers_linked: [], last_link_at: null, opted_out_at: null, ai_replies_last_hour: 0,
 };
@@ -153,6 +164,8 @@ async function run(world: World = {}): Promise<Run> {
     let geminiCalls = 0;
 
     const routes: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+        [/LEFT JOIN LATERAL/, { rows: [{ ...NO_SOURCE, ...(world.bridge === 'down' ? {} : world.bridge) }] }],   // the comment → DM lookup (S10)
+        [/UPDATE conversations SET source_campaign_id/, { rowCount: 1 }],
         [/FROM creator_profiles/, { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] }],
         [/FROM app_settings WHERE key/, { rows: [] }],
         [/FROM creators\s+WHERE is_active/, { rows: [CREATOR] }],
@@ -193,6 +206,7 @@ async function run(world: World = {}): Promise<Run> {
 
     (pool as any).query = async (sql: string, params: any[] = []) => {
         executed.push({ sql, params });
+        if (world.bridge === 'down' && /LEFT JOIN LATERAL/.test(sql)) throw new Error('column i.recipient_id does not exist');
         if (/FROM app_settings WHERE key/.test(sql) && params[0] === 'dm.sales.followup_minutes' && world.followupMinutes !== undefined) {
             return { rows: [{ value: world.followupMinutes, is_secret: false }], rowCount: 1 };
         }
@@ -1094,5 +1108,134 @@ describe('the sales turn: who is followed up is who the sales mode answers', () 
     it('on: the sales turn, and the link is followed up', async () => {
         const r = await run({ layer: saying(SEND_LINK) });
         assert.equal(r.enqueued.filter((j) => j.kind === 'dm.followup').length, 1);
+    });
+});
+
+// ─── A conversation that began with a comment (S10) ─────────────────────────────────────────
+
+/**
+ * The person commented a keyword, was sent the link in a private reply, and has now written back (`bridge.ts`). The sales turn then starts
+ * at `recommend` with "they commented «keyword» and were sent the link to <offer>" among the facts, instead of qualifying from scratch.
+ * What is pinned: where it starts, what the model is told, that it is stored once, that a conversation already going is not moved, and that
+ * a lookup that cannot run is the turn it would have been.
+ */
+describe('the sales turn: a conversation that began with a comment (S10)', () => {
+    const NOW_MS = Date.now();
+    /** What the lookup returns for a private reply sent an hour ago to this sender, for a campaign whose text holds the plan's address. */
+    const BRIDGED: Row = {
+        current_source: null, interaction_id: 'int-1', recent_campaign: 'camp-1', recipient_id: 'user-1', replied_at: new Date(NOW_MS - 60 * 60 * 1000),
+        recent_keywords: 'plan, خطة', recent_template: `Hi! Here is the plan: ${PLAN_URL}`, current_keywords: null, current_template: null,
+    };
+    /** The facts block the model was given: the opening of its last turn. */
+    const factsOf = (r: Run): string => {
+        const turns = r.layerCalls[0]!.user as { role: string; text: string }[];
+        return turns[turns.length - 1]!.text;
+    };
+    const sourceWrites = (r: Run) => r.executed.filter((e) => /UPDATE conversations SET source_campaign_id/.test(e.sql));
+
+    it('starts at recommend, tells the model they commented and were sent the link, and does not let it ask them to start over', async () => {
+        const r = await run({ bridge: BRIDGED, text: 'Thanks! Is it OK for beginners?' });
+
+        assert.equal(r.error, null);
+        const facts = factsOf(r);
+        assert.match(facts, /Stage so far: recommend/, 'not new');
+        assert.match(facts, /They commented «plan» and were sent the link to Twelve-week plan\./);
+        assert.match(facts, /The link was already sent for: Twelve-week plan\. Do not send it again unless they ask\./, 'the facts agree with each other');
+        assert.doesNotMatch(facts, /No link has been sent yet/);
+        assert.match(facts, /Is it OK for beginners\?$/);
+        assert.equal(messages(r).length, 1);
+    });
+
+    it('stores the campaign on the conversation, once, and logs the id the private reply went to beside the id the DM came from (A1)', async () => {
+        const r = await run({ bridge: BRIDGED });
+
+        const writes = sourceWrites(r);
+        assert.equal(writes.length, 1);
+        assert.deepEqual(writes[0]!.params, ['conv-1', 'camp-1', 'creator-1']);
+        const line = logs(r, 'dm.bridge_matched');
+        assert.equal(line.length, 1);
+        assert.deepEqual([line[0]!.sender_id, line[0]!.recipient_id, line[0]!.same_id, line[0]!.campaign_id], ['user-1', 'user-1', true, 'camp-1']);
+    });
+
+    it('moves nothing the follow-up reads: no link is recorded as sent by the bot and no nudge is queued for a private reply (plan §10.3)', async () => {
+        const r = await run({ bridge: BRIDGED });
+        const rec = record(r);
+        assert.equal(rec.linkedOfferId, null, 'conversations.offers_linked is not touched');
+        assert.equal(r.enqueued.length, 0);
+    });
+
+    it('a model that proposes qualifying is held at recommend: the conversation does not start over', async () => {
+        const r = await run({ bridge: BRIDGED, layer: saying(reply({ stage: 'qualify', next_action: 'reply', text: 'It starts from zero, so yes.' })) });
+        const rec = record(r);
+        assert.equal(rec.stage, 'recommend');
+        assert.ok((rec.aiMeta.guard.overrides as string[]).some((o) => o === 'stage:qualify->recommend'), 'and the override is recorded');
+    });
+
+    it('with no source it is the turn it always was: it starts at new, says nothing of a comment, and stores nothing', async () => {
+        const r = await run({});
+        const facts = factsOf(r);
+        assert.match(facts, /Stage so far: new/);
+        assert.doesNotMatch(facts, /They commented/);
+        assert.match(facts, /No link has been sent yet/);
+        assert.equal(sourceWrites(r).length, 0);
+        assert.equal(logs(r, 'dm.bridge_matched').length, 0);
+    });
+
+    it('a conversation that is already going keeps its stage and its qualifier count: the comment is a fact, never a move', async () => {
+        const r = await run({ bridge: { ...BRIDGED, current_source: 'camp-1', current_keywords: 'plan, خطة', current_template: 't' }, state: { stage: 'qualify', qualifier_turns: 1 } });
+        const facts = factsOf(r);
+        assert.match(facts, /Stage so far: qualify/);
+        assert.match(facts, /They commented «plan»/);
+        assert.equal(sourceWrites(r).length, 0, 'already stored');
+    });
+
+    it('a conversation that began with a comment longer ago than the window still remembers it, and stores nothing again', async () => {
+        const stale = { ...BRIDGED, replied_at: new Date(NOW_MS - 30 * 24 * 60 * 60 * 1000), current_source: 'camp-1', current_keywords: 'plan, خطة', current_template: 't' };
+        const r = await run({ bridge: stale });
+        assert.match(factsOf(r), /They commented «plan»/);
+        assert.equal(sourceWrites(r).length, 0);
+    });
+
+    it('a private reply older than the window is not a source: the conversation starts at new', async () => {
+        const r = await run({ bridge: { ...BRIDGED, replied_at: new Date(NOW_MS - 8 * 24 * 60 * 60 * 1000) } });
+        assert.match(factsOf(r), /Stage so far: new/);
+        assert.doesNotMatch(factsOf(r), /They commented/);
+        assert.equal(sourceWrites(r).length, 0);
+    });
+
+    it('a campaign that sells no offer the profile knows is still a comment: "were sent a link", and the link is not claimed as sent for any offer', async () => {
+        const r = await run({ bridge: { ...BRIDGED, recent_keywords: 'giveaway', recent_template: 'Thanks for entering' } });
+        const facts = factsOf(r);
+        assert.match(facts, /They commented «giveaway» and were sent a link\./);
+        assert.match(facts, /No link has been sent yet/);
+        assert.match(facts, /Stage so far: recommend/);
+    });
+
+    it('a lookup that cannot run is no source, and the turn answers exactly as it would have: new, a reply, the state recorded', async () => {
+        const r = await run({ bridge: 'down' });
+
+        assert.equal(r.error, null);
+        assert.match(factsOf(r), /Stage so far: new/);
+        assert.equal(messages(r).length, 1, 'the person is answered');
+        assert.ok(handled(r));
+        const failed = logs(r, 'dm.bridge_failed');
+        assert.equal(failed.length, 1);
+        assert.equal(failed[0]!.level, 'warn');
+    });
+
+    it('the keyword the model was shown is data for the guard: a reply that repeats a keyword with a digit in it is not an invented number', async () => {
+        const r = await run({
+            bridge: { ...BRIDGED, recent_keywords: 'plan2027', recent_template: 'Thanks' },
+            layer: saying(reply({ text: 'Thanks for commenting plan2027 — it starts from zero.' })),
+        });
+        assert.equal(r.layerCalls.length, 1, 'no second try: nothing was flagged');
+        assert.equal(logs(r, 'dm.claim_blocked').length, 0);
+        assert.match(String(messages(r)[0]!.body.message.text), /plan2027/);
+    });
+
+    it('the address of an offer stays out of the model\'s hands as before: the facts name the offer, never its link', async () => {
+        const r = await run({ bridge: BRIDGED });
+        assert.ok(!factsOf(r).includes(PLAN_URL));
+        assert.ok(!String(r.layerCalls[0]!.system).includes(PLAN_URL));
     });
 });
