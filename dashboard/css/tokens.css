@@ -283,6 +283,10 @@
        a default rather than a brand. A 3:1 shape against every ground a chart sits on. */
     --chart-accent: #bcde70;
 
+    /* The ink of the Rows pattern «سطور» (IDENTITY.md section 3): bars of a comment thread drawn behind a card, never behind body
+       text. 6% of the ground's own opposite, so it stays within 1.25:1 of the ground it sits on (check:contrast measures it). */
+    --pattern-ink: rgba(255, 255, 255, 0.06);
+
     /* ─── The logo mark: Kufi «رد» (DESIGN.md §4, IDENTITY.md §2) ────────────
        The tile and the glyph of .logo-mark and .login-mark, and of the inline marks on the public pages. Dark UI is the
        Cardamom colourway: a cardamom tile, an ink glyph (12.0:1). Light UI is the Ink colourway below. The icons are not
@@ -382,6 +386,8 @@
         --chart-tick: #66695c;
         --chart-accent: #3e5208;
 
+        --pattern-ink: rgba(24, 26, 16, 0.06);
+
         /* The Ink colourway: an ink tile, a cardamom glyph (11.3:1), for the light UI only. */
         --mark-tile: #1a1c15;
         --mark-glyph: #bcde70;
@@ -474,6 +480,8 @@
     --chart-tick: #66695c;
     --chart-accent: #3e5208;
 
+    --pattern-ink: rgba(24, 26, 16, 0.06);
+
     /* The Ink colourway: an ink tile, a cardamom glyph (11.3:1), for the light UI only. */
     --mark-tile: #1a1c15;
     --mark-glyph: #bcde70;
@@ -494,4 +502,133 @@
         --motion-base: 1ms;
         --motion-slow: 1ms;
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Identity motif (B2): the keyword highlighter `.kw`, its motion, and Rows «سطور»
+   ═══════════════════════════════════════════════════════════════════════════
+   IDENTITY.md sections 3 and 6; DESIGN.md sections 2, 4 and 6. This block is additive and lives here, not in styles.css,
+   because the public pages load tokens.css and not styles.css, and the landing page is on a served-bytes budget
+   (publicPagesSeo.test.ts): one definition, loaded by the dashboard and by every public page.
+
+   The sequence is highlight, then deliver: the highlight sweeps in from the inline-start (--kw-sweep), a short hold
+   (--kw-hold), a 6px packet travels to its target (--kw-deliver), and the target's ring shows once (--kw-receipt).
+   960ms in all. Everything that moves is `transform` or `opacity`, and under prefers-reduced-motion every step is 1ms and
+   the CSS animations are off, so what is left is the end state. There is no control for it: the visitor's own setting is
+   the opt-out. Never bounce, overshoot, shimmer, confetti or typing dots (they imply AI replies). */
+:root {
+    --kw-sweep: 320ms;      /* the highlight grows scaleX 0 -> 1, from the inline-start */
+    --kw-hold: 120ms;       /* a pause */
+    --kw-deliver: 320ms;    /* the packet's flight; it fades over its last 25% */
+    --kw-receipt: 200ms;    /* the target's ring, 0 -> 1 -> 0, once */
+}
+
+/* The keyword: the guest's own word, lit; the word that fires a campaign. Only on the matched keyword or the one word that
+   matters in a block, never on a status, the brand name or a number. The negative inline margin very nearly cancels the
+   padding, so the question mark does not drift away from the word it belongs to ("السعر ؟"). */
+.kw {
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+    color: var(--accent-text);
+    padding: 0.1em 0.3em;
+    margin-inline: -0.2em;
+    font-weight: var(--fw-semibold);
+}
+/* The headline variant: one word of an h1/h2 (a wrapped fragment would be misdrawn). `.kw-display` and a `.kw` that is sweeping
+   are painted by ::before, so the highlight can be a transform; at rest it is the same pixels as a plain `.kw`. Adding
+   `.is-sweeping` plays the sweep once: in the markup it plays on first view (the landing's h1), from script it replays. */
+.kw-display {
+    padding: 0.02em 0.16em;
+    margin-inline: -0.1em;
+    border-radius: 0.18em;
+}
+.kw-display,
+.kw.is-sweeping {
+    position: relative;
+    isolation: isolate;
+    background: none;
+    box-shadow: none;
+}
+:is(.kw-display, .kw.is-sweeping)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+    transform-origin: 0 50%;
+}
+:is(.kw-display, .kw.is-sweeping):dir(rtl)::before { transform-origin: 100% 50%; }
+.is-sweeping::before { animation: kw-sweep var(--kw-sweep) var(--ease-standard) both; }
+@keyframes kw-sweep { from { transform: scaleX(0); } }
+
+/* The receipt: the target of a delivery shows its ring once. The ring is a static shadow on ::after and only its opacity
+   moves. `:where()` keeps the anchoring at zero specificity, so a target that is already positioned keeps its own. */
+:where(.is-receipt) { position: relative; }
+.is-receipt::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: 0 0 0 var(--ring) var(--accent-ring);
+    opacity: 0;
+    pointer-events: none;
+    animation: kw-receipt var(--kw-receipt) var(--ease-exit) 1;
+}
+@keyframes kw-receipt { 0%, 100% { opacity: 0; } 40% { opacity: 1; } }
+
+/* The packet: 6px, the accent as ink, flown by CSS from (--x0, --y0) to (--x1, --y1), viewport pixels written by highlightDeliver
+   (physical `left`/`top` on purpose: it moves by a pixel translate, which has no inline axis). It flies over --kw-deliver with the
+   standard ease and fades linearly over the last 25%; its animationend is what hands the delivery to the target's receipt. */
+.kw-packet {
+    position: fixed;
+    left: 0;
+    top: 0;
+    inline-size: 6px;
+    block-size: 6px;
+    border-radius: 50%;
+    background: var(--accent-text);
+    pointer-events: none;
+    z-index: var(--z-toast);
+    animation: kw-fly var(--kw-deliver) var(--ease-standard) both, kw-fade var(--kw-deliver) linear both;
+}
+@keyframes kw-fly {
+    from { transform: translate(calc(var(--x0) * 1px - 3px), calc(var(--y0) * 1px - 3px)); }
+    to { transform: translate(calc(var(--x1) * 1px - 3px), calc(var(--y1) * 1px - 3px)); }
+}
+@keyframes kw-fade { 75% { opacity: 1; } to { opacity: 0; } }
+
+/* Rows «سطور»: a comment thread with one word lit. An <svg class="rows"> fills its container and paints `#rows` (the
+   <pattern> defined once per page by the inline <svg id="rows-ink">, whose ink is --pattern-ink), plus one `.lit` bar in the
+   reading-end third. Bars start at the inline-start and end ragged, so in RTL the whole svg is mirrored, lit bar included, and
+   a mask lets the pattern arrive from the reading end. Behind a card or a band, never behind body text, once per page. */
+.rows {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    pointer-events: none;
+    mask-image: linear-gradient(to right, transparent 30%, currentColor 70%);
+}
+[dir='rtl'] .rows { transform: scaleX(-1); }
+.rows .lit {
+    fill: var(--accent-soft);
+    stroke: var(--accent-ring);
+    stroke-width: 1px;
+}
+
+/* Last, so it outranks the rules above it: under reduced motion every step is 1ms (the tokens), the CSS animations are off (what
+   is left is the end state), and no packet is drawn. highlightDeliver reads the same tokens, so its timers follow. */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --kw-sweep: 1ms;
+        --kw-hold: 1ms;
+        --kw-deliver: 1ms;
+        --kw-receipt: 1ms;
+    }
+    .is-sweeping::before,
+    .is-receipt::after { animation: none; }
+    .kw-packet { display: none; }
 }

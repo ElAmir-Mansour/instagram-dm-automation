@@ -63,6 +63,8 @@
 
     'login.title': 'AutoReply Pro',
     'login.subtitle': 'A growth studio for Arabic creators',
+    // The one word of the subtitle that the keyword highlighter lights (`data-i18n-kw`); it must be a word inside it (brandMotif.test.ts).
+    'login.subtitleKw': 'growth',
     'login.password': 'Dashboard password',
     'login.passwordPlaceholder': 'Enter dashboard password',
     'login.email': 'Email address',

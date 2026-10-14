@@ -163,7 +163,8 @@ describe('the guard catches what it exists to catch', () => {
 describe('what the cards may show', () => {
     it('are the page\'s own words: the landing\'s H1 and its eyebrow, in each language, and the product\'s name', () => {
         const landing = read('public/landing.html');
-        const text = (id) => new RegExp(`<h1 id="${id}">([^<]+)</h1>`).exec(landing)?.[1];
+        // The headline's words, with the lit word's <span> (B2) taken out: the card prints the same sentence.
+        const text = (id) => new RegExp(`<h1 id="${id}">(.+?)</h1>`).exec(landing)?.[1]?.replace(/<\/?span[^>]*>/g, '');
         for (const [lang, id] of [['ar', 'hero-ar'], ['en', 'hero-en']]) {
             const c = CARDS[lang];
             assert.equal(`${c.before}${c.lit}${c.after}`, text(id), `${lang} headline`);

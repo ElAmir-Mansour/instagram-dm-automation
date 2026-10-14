@@ -147,6 +147,12 @@ const SURFACE_STACKS = [
     ['accent-soft', 'surface-solid'],
     ['accent-soft', 'surface-sunken', 'surface-page'],
     ['accent-soft', 'surface-chrome', 'surface-page'],
+    // Rows (the motif PR): the pattern's bars are drawn behind the login card and inside the landing's closing band, so the
+    // card's text and the band's text sit over them: on the canvas, on a glass card laid over the bars, and on the band's
+    // own glass with the bars drawn over it.
+    ['pattern-ink', 'surface-page'],
+    ['surface-raised', 'pattern-ink', 'surface-page'],
+    ['pattern-ink', 'surface-raised', 'surface-page'],
 ];
 
 /**
@@ -571,6 +577,28 @@ for (const [name, t] of Object.entries(THEMES)) {
     }
 }
 
+// ─── ROWS INK: the pattern «سطور», painted by --pattern-ink (the motif PR) ───────────────────────────
+//
+// The bars are texture, not content, so they are held to the opposite of the usual rule: each ground carrying them must stay within
+// 1.25:1 of itself with the ink laid on (IDENTITY.md section 3). That is what lets text sit near them without a pair of its own;
+// the text pairs over them are in SURFACE_STACKS above. An ink that measures 1.00:1 would be no pattern at all.
+const MAX_INK = 1.25;
+const ROWS_GROUNDS = [['surface-page'], ['surface-sunken', 'surface-page'], ['surface-solid'], ['surface-raised', 'surface-page']];
+const rowsInk = {};   // theme -> { r, label }: the loudest ink-on-ground pair
+for (const [name, t] of Object.entries(THEMES)) {
+    const ink = resolve(t, t['pattern-ink']);
+    if (!ink) { failures.push(`--pattern-ink (${name}) is not declared in tokens.css, or is not a colour the guard can read.`); continue; }
+    for (const stack of ROWS_GROUNDS) {
+        const bg = flatten(t, stack);
+        if (!bg) continue;
+        const r = ratio(over(ink, bg), bg);
+        const label = stack.map(x => `--${x}`).join(' on ');
+        if (!rowsInk[name] || r > rowsInk[name].r) rowsInk[name] = { r, label };
+        if (r > MAX_INK) failures.push(`${r.toFixed(2)}:1 - --pattern-ink on ${label} (${name} theme) is above the ${MAX_INK}:1 ceiling: the Rows would read as content.`);
+        if (r < 1.05) failures.push(`${r.toFixed(2)}:1 - --pattern-ink on ${label} (${name} theme) is invisible.`);
+    }
+}
+
 checkPlatformColourUsage();
 checkBubbleFurniture();
 checkLogoRules();
@@ -591,5 +619,6 @@ console.log(
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
     + `platform colours solid only in data viz (and nowhere on the public pages); `
     + `${logoTotal} platform-logo pairs clear ${MIN_LOGO}:1 as shapes (tightest ${Object.entries(logoTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')}); `
-    + `the mark: glyph on tile ${Object.entries(markGlyph).map(([th, r]) => `${r.toFixed(2)}:1 ${th}`).join(', ')}, tile vs ground ${Object.entries(markTile).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}`
+    + `the mark: glyph on tile ${Object.entries(markGlyph).map(([th, r]) => `${r.toFixed(2)}:1 ${th}`).join(', ')}, tile vs ground ${Object.entries(markTile).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; `
+    + `Rows ink within ${MAX_INK}:1 of its grounds (loudest ${Object.entries(rowsInk).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')})`
 );

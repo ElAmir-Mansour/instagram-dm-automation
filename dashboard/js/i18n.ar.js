@@ -73,6 +73,8 @@
     // ─── Login ──────────────────────────────────────────────────────────
     'login.title': 'أوتوريبلاي برو',
     'login.subtitle': 'استوديو نموّ لصنّاع المحتوى العرب',
+    // The one word of the subtitle that the keyword highlighter lights (`data-i18n-kw`); it must be a word inside it (brandMotif.test.ts).
+    'login.subtitleKw': 'نموّ',
     'login.password': 'كلمة مرور اللوحة',
     'login.passwordPlaceholder': 'أدخل كلمة المرور',
     'login.email': 'البريد الإلكتروني',

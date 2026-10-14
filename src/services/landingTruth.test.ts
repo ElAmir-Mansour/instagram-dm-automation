@@ -289,9 +289,10 @@ describe('landing — the hero sells a growth studio (P0-3) and no woman appears
 
     it('says what the product is, in both languages, and drops Sign in from the hero', () => {
         assert.ok(hero(L.ar).includes('استوديو نموّ مُدار لصنّاع المحتوى العرب'));
-        assert.ok(hero(L.ar).includes('<h1 id="hero-ar">فيديوهاتك تصير منشورات، وتعليقاتهم تصير محادثات</h1>'));
+        // B2: one word of the headline is lit (`.kw-display`, swept on first view); the words themselves are unchanged.
+        assert.ok(hero(L.ar).includes('<h1 id="hero-ar">فيديوهاتك تصير منشورات، وتعليقاتهم تصير <span class="kw kw-display is-sweeping">محادثات</span></h1>'));
         assert.ok(hero(L.en).includes('A managed growth studio for Arabic creators'));
-        assert.ok(hero(L.en).includes('<h1 id="hero-en">Your videos become posts. Their comments become conversations.</h1>'));
+        assert.ok(hero(L.en).includes('<h1 id="hero-en">Your videos become posts. Their comments become <span class="kw kw-display is-sweeping">conversations</span>.</h1>'));
         assert.ok(words(hero(L.ar)).includes('المونتير يقصّ من فيديوهاتك الطويلة ريلز، والاستوديو يكتب من دروسك كاروسيلاً'));
         assert.ok(words(hero(L.en)).includes('The Monteur cuts reels from your long videos and the Studio writes carousels from your lessons'));
         for (const doc of [L.ar, L.en]) {

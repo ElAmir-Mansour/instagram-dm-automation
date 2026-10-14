@@ -97,7 +97,8 @@ describe('the strings B3 wrote', () => {
         const app = read('dashboard/js/app.js');
         assert.equal(index.match(/<title>([^<]*)<\/title>/)[1], `${ar['app.name']} — ${ar['app.tagline']}`);
         assert.equal(index.match(/<meta name="description" content="([^"]*)">/)[1], ar['app.description']);
-        assert.equal(index.match(/data-i18n="login\.subtitle">([^<]*)</)[1], ar['login.subtitle']);
+        // The shell's subtitle lights one word with a <span class="kw"> (B2, data-i18n-kw): the words are the dictionary's.
+        assert.equal(index.match(/data-i18n="login\.subtitle"[^>]*>(.*?)<\/p>/)[1].replace(/<[^>]+>/g, ''), ar['login.subtitle']);
         assert.match(app, /document\.title = `\$\{t\('app\.name'\)\} — \$\{t\('app\.tagline'\)\}`/);
         assert.match(app, /meta\[name="description"\]'\)\?\.setAttribute\('content', t\('app\.description'\)\)/);
     });

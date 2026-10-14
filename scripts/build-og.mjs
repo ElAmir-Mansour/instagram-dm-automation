@@ -52,7 +52,7 @@ export const IMAGE_FILE = /^og-(ar|en)\.([0-9a-f]{8})\.png$/;
 /** This release's card and the one before it: a link preview fetched from a page the CDN still serves finds its own. */
 export const MAX_RELEASES = 2;
 
-/** Dark values of dashboard/css/tokens.css. `--pattern-ink` does not exist there yet (the motif PR adds it): the value is IDENTITY.md section 3. */
+/** Dark values of dashboard/css/tokens.css (`--pattern-ink` since the motif PR, IDENTITY.md section 3). */
 export const TOKENS = {
     '--surface-page': '#111210',
     '--text-strong': '#f2f3ec',
@@ -60,8 +60,9 @@ export const TOKENS = {
     '--accent-soft': 'rgba(188,222,112,0.16)',
     '--accent-ring': 'rgba(188,222,112,0.4)',
     '--accent-text': '#c9e683',
+    '--pattern-ink': 'rgba(255,255,255,0.06)',
 };
-export const PATTERN_INK = 'rgba(255,255,255,0.06)';
+export const PATTERN_INK = TOKENS['--pattern-ink'];
 
 /**
  * The words are the page's own: the headline is the landing's H1 and the descriptor is the footer's one-liner
