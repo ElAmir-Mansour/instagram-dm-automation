@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { defaultProfile } from '../profile/defaults.js';
 import { PROFILE_LIMITS, validateProfile } from '../profile/validate.js';
 import { computeSignals } from './draftSignals.js';
-import { okBusiness, okVoice, STORE_CANDIDATES, STORE_SOURCES, storeSignals } from './fixtures/draftAnswers.js';
+import { emptyBusiness, emptyVoice, okBusiness, okVoice, STORE_CANDIDATES, STORE_SOURCES, storeSignals } from './fixtures/draftAnswers.js';
 import { mulberry32 } from './fixtures/hostile.js';
 import { validateDraft, type Draft, type DraftContext, type DraftOutput } from './validateDraft.js';
 
@@ -723,5 +723,65 @@ describe('validateDraft: a hostile bio, end to end', () => {
         const d = validateDraft({ voice: okVoice(), business }, { sources, signals: null });
         const text = JSON.stringify([d.profile, d.contact]);
         assert.ok(!text.includes('evil2'), text);
+    });
+});
+
+describe('validateDraft: `usable` is what the MODEL said, not what code filled in', () => {
+    const sampleKeys = (d: Draft): string[] => d.touched.filter((p) => p.startsWith('voice.samples'));
+
+    it('an answer of {} is not usable, though code still fills three sample posts around it', () => {
+        const d = validateDraft({ voice: {}, business: {} }, ctx());
+        assert.equal(d.usable, false);
+        assert.equal(sampleKeys(d).length, 3, 'the samples are there: they are code\'s');
+        assert.equal(flagged(d, 'samples_filled'), true);
+        assert.equal(d.samples.every((s) => s.why === ''), true);
+    });
+
+    it('so is a complete answer that says nothing: every choice unknown, every list empty', () => {
+        const d = validateDraft({ voice: emptyVoice(), business: emptyBusiness() }, ctx());
+        assert.equal(d.usable, false);
+        assert.equal(d.partial, false);
+        assert.equal(sampleKeys(d).length, 3);
+    });
+
+    it('and no answer at all, and answers that are not objects', () => {
+        for (const raw of [{}, { voice: null, business: null }, { voice: 'x', business: 5 }, { voice: [], business: [] }] as DraftOutput[]) assert.equal(validateDraft(raw, ctx()).usable, false, JSON.stringify(raw));
+    });
+
+    it('a sample the MODEL chose is its word: an answer whose only content is the posts it picked is usable', () => {
+        const v = emptyVoice();
+        v.voice.samples = [{ post_id: 'p1', why: 'a question, then an offer' }];
+        const d = validateDraft({ voice: v, business: emptyBusiness() }, ctx());
+        assert.equal(d.usable, true);
+        assert.equal(d.touched.includes('voice.samples[0]'), true);
+    });
+
+    it('a model\'s pick topped up by code is usable, and only the topped-up ones are code\'s', () => {
+        const v = emptyVoice();
+        v.voice.samples = [{ post_id: 'p1', why: 'x' }];
+        const d = validateDraft({ voice: v, business: emptyBusiness() }, ctx());
+        assert.equal(sampleKeys(d).length, 3);
+        assert.equal(d.samples[0]!.why, 'x');
+    });
+
+    it('one real field is enough: a niche, a pillar, an offer, a FAQ answer', () => {
+        const nicheOnly = emptyVoice();
+        nicheOnly.identity.niche = { value: 'عطور شرقية وغربية أصلية', source: 'bio', evidence: 'عطور شرقية وغربية أصلية', confidence: 'high' };
+        assert.equal(validateDraft({ voice: nicheOnly, business: emptyBusiness() }, ctx()).usable, true);
+        const offerOnly = emptyBusiness();
+        offerOnly.offers = [{ name: 'عود الليل', kind: 'product', url: '', price: '', bullets: [], facts: [], keyword: '', source: 'p1', evidence: 'بعود الليل', confidence: 'high' }];
+        assert.equal(validateDraft({ voice: emptyVoice(), business: offerOnly }, ctx()).usable, true);
+    });
+
+    it('what code counted or found alone (colours, links, the register) still does not make a draft', () => {
+        const d = validateDraft({}, ctx({ code: { brand: { primary: '#7B3F61', accent: '#E0A458' }, socials: { handle: 'noor.perfumes', site: 'https://noor-perfumes.example/', links: {} } } }));
+        assert.equal(d.usable, false);
+        assert.ok(d.touched.includes('brand.primary'));
+    });
+
+    it('an honest answer is still usable, with three samples', () => {
+        const d = honest();
+        assert.equal(d.usable, true);
+        assert.equal(sampleKeys(d).length >= 3, true);
     });
 });

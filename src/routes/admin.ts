@@ -68,6 +68,7 @@ import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import aiRouter from './adminAi.js';
 import { profileErrorBody } from './profile.js';
+import { adminActor, advanceDraftFor, getDraftFor, guard as draftGuard, startDraftFor } from './onboardingDrafts.js';
 import {
     buildInviteUrl, createInvite, InviteError, listInvites, readTtl, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
     type AdminInvite, type CreatedInvite, type InvitePurpose,
@@ -1233,6 +1234,27 @@ router.get('/tenants/:id/invites', async (req, res) => {
     }
 });
 
+// ─── Profile drafts (P24) ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * A tenant's profile draft, from the operator's side (docs/onboarding/03 §4). The tenant has its own routes (`/api/onboarding/draft`),
+ * below `resolveTenant`; they cannot serve an admin, whose session resolves to the admin's own tenant. These take the tenant from
+ * the PATH. Handlers and rules are shared (`routes/onboardingDrafts.ts`); what differs is that nothing here is gated on the tenant's
+ * onboarding (a re-draft after it is done is the operator's call) and that the answer carries the provider's message, the steps and the cost.
+ */
+const noTenant = { status: 404, body: { error: 'Tenant not found.' } };
+
+router.get('/tenants/:id/draft', draftGuard('admin.draft_read_failed', 'Failed to read the draft.', async (req) =>
+    (isUuid(req.params.id) ? getDraftFor(req.params.id, adminActor(req)) : noTenant)));
+
+/** `{ instagram?, website?, youtube?, about?, force? }`; what is not sent comes from the handle and site typed at creation. */
+router.post('/tenants/:id/draft', draftGuard('admin.draft_start_failed', 'Failed to start the draft.', async (req) =>
+    (isUuid(req.params.id) ? startDraftFor(req.params.id, req.body, adminActor(req)) : noTenant)));
+
+/** What the Tenants screen fires, un-awaited, right after creating a tenant: it starts the draft when there is none (D6). */
+router.post('/tenants/:id/draft/advance', draftGuard('admin.draft_advance_failed', 'Failed to advance the draft.', async (req) =>
+    (isUuid(req.params.id) ? advanceDraftFor(req.params.id, req.body, adminActor(req), true) : { ...noTenant, draftId: null }), { advance: true }));
+
 /** Replace a link with a new one for the same person: the old one stops working in the same step. */
 router.post('/invites/:id/regenerate', async (req, res) => {
     try {
@@ -1305,6 +1327,12 @@ router.put('/onboarding-settings', async (req, res) => {
         }
         if (patch.writes.length === 0) {
             res.status(400).json({ error: 'Nothing to save.' });
+            return;
+        }
+        // The tenant that reads other people's Instagram has to exist: a typo here would send every draft's Instagram read to "not configured".
+        const discovery = patch.writes.find((w) => w.field === 'discoveryCreatorId' && w.value !== null);
+        if (discovery && (await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [discovery.value])).length === 0) {
+            res.status(400).json({ error: 'discoveryCreatorId is not a tenant.', field: 'discoveryCreatorId' });
             return;
         }
         await saveOnboardingSettings(patch.writes, req.session?.userId ?? null);

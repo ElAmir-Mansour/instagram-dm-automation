@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Eight flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Nine flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -26,7 +26,8 @@ bug it was written to fix.
 [5. Job lifecycle](#5-job-lifecycle) ·
 [6. TikTok post → inbox → published](#6-tiktok-post--inbox--published) ·
 [7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask) ·
-[8. Meta login → a connected Page](#8-meta-login--a-connected-page)
+[8. Meta login → a connected Page](#8-meta-login--a-connected-page) ·
+[9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait)
 
 ---
 
@@ -2147,6 +2148,135 @@ Each save is one `settings.meta_login_write` audit row naming the fields. No das
 > on a manually built dialog; what a non-role-holder sees (the `not_tester` reason is inferred from "nothing granted"). The first real
 > Tester connecting is the test (plan P27, live check).
 
+## 9. A tenant's profile draft: read, ask, check, wait
+
+`profile_drafts` (migration v34) reads what a tenant gave (an Instagram handle, a website, a YouTube channel, some pasted text), asks a
+model for a Creator Profile of them, **checks the answer in code**, and keeps it as a *draft* until a person applies it field by field.
+It is a **row with a lease**, not a job in `jobs`: the queue's inline drain runs after the response, where Vercel freezes the function
+(`src/jobs/drain.ts`), and a two-minute job would hold the comment replies behind it. The code is `src/services/onboarding/`:
+`drafts.ts` is the engine, `draftStep.ts` what it decides (pure), `draftStore.ts` every statement, `draftSources.ts` the fetch,
+`draftView.ts` what the API shows.
+
+**The timings are the plan's** (`draftStep.ts:30-50`): a model call times out at **150 s**, an invocation works until **270 s**, the lease
+it holds is **290 s** (longer than the deadline on purpose: a second caller cannot take over while the first is still inside its time and
+bill the same draft twice), the sweep stops at **280 s**, three tries a minute and then five minutes apart, and a draft not finished in
+**30 minutes** is given up.
+
+```
+queued ─claim→ fetching ─sources saved→ drafting ─answers checked→ ready
+   └──────────────┴───────────────┬──────────────┘
+                                  ├→ failed       (final error · tries spent · no source · too old)
+                                  └→ superseded   (new inputs replaced it)
+```
+
+### 9.1 — Starting: three doors, one engine
+
+1. **The tenant:** `POST /api/onboarding/draft` (**`src/routes/onboardingDrafts.ts:219`**, below `resolveTenant`; `startDraftFor` :111). `requireTenantRole('owner')`
+   and, in `admit` (**`onboardingDrafts.ts:96`**, after `creatorFacts` :63, one query joining `onboarding`), only while the tenant's onboarding is
+   `invited` or `in_progress`: a completed tenant, and a tenant with no `onboarding` row (D14), get 409 `ONBOARDING_COMPLETED`. The tenant
+   comes from the **session**, never the body. `GET /draft` and `POST /draft/advance` are the same door.
+2. **The operator:** `GET`, `POST` and `POST …/advance` on `/api/admin/tenants/:id/draft` (**`admin.ts:1306`**, **:1310**, **:1314**),
+   platform admin only (404 for anyone else), the tenant from the **path**, not gated on onboarding (a re-draft is the operator's call).
+   The Tenants screen fires `advance` right after creating a tenant: it **starts** the draft when there is none (D6). The tenant's own
+   `advance` never starts one.
+3. **What is read:** `readDraftInputs` (`draftInputs.ts`) makes the four inputs canonical (`@Noor.Perfumes` and `instagram.com/noor.perfumes/`
+   are one input) from the body, falling back on the handle and site the operator typed at creation (`creators.instagram_username`,
+   `website_url`). The road for Instagram is part of the input: `own_token` if the tenant has connected Meta, else `discovery`.
+4. **`startDraft`** (**`drafts.ts:103`**), one transaction under the tenant's advisory lock (`LOCK_TENANT_DRAFTS_SQL`, `draftStore.ts:81`):
+   - the same `inputs_hash` (inputs **and** `PROFILE_DRAFT_V1`) as a draft in flight, or as a ready one under 24 hours old, **returns that
+     row** (`SELECT_REUSABLE_SQL`, :46). Nothing is made, nothing counts. `force` (operator only) makes a new one over a finished draft, never
+     over one in flight;
+   - the day's limit: `COUNT_START_SQL` (:93) increments `app_rate_limit_counters` (`draft:<tenant>`, per UTC day) **then** compares; a sixth
+     start is a 429 `DRAFT_LIMIT`, and the throw rolls the increment back with everything else;
+   - **new inputs supersede the old draft:** `SUPERSEDE_SQL` (:85) marks everything in flight or ready `superseded` and clears its lease,
+     *before* the insert, because the partial unique index (one active draft per tenant) would refuse the insert otherwise. An invocation
+     still working the old draft finds out at its next write (§9.2);
+   - `INSERT_SQL` makes it `queued`. A start asks nothing of a model and fetches nothing.
+5. **Audit:** a new draft is `onboarding.draft_start` with which inputs were given, never their values. Reads, reuses and advances are not.
+
+### 9.2 — The lease: `advanceDraft` (**`drafts.ts:185`**)
+
+1. **Early answers** from a plain read and `nextDraftStep` (`draftStep.ts:108`, pure): terminal → `terminal`; somebody holds it → `busy`;
+   in back-off → `waiting`. A poll that finds nothing to do never touches the lease.
+2. **The claim is one UPDATE** (**`CLAIM_SQL`, `draftStore.ts:132`**): `status IN (active) AND (lease_until IS NULL OR lease_until < NOW()) AND
+   (next_attempt_at IS NULL OR next_attempt_at <= NOW())`, setting `lease_owner` and `lease_until = NOW() + 290 s`. Whoever gets the row owns the
+   draft. The SQL is the authority: two callers that both read "free" race here and one is refused (`busy`). Time is the database's.
+3. **An abandoned lease counts a try.** `attempts` goes up by one when the claim takes the draft from an owner that never let go
+   (`lease_owner IS NOT NULL`; a clean release clears it). A function that keeps dying therefore uses its three tries and the draft ends
+   `abandoned`, instead of being retried for ever.
+4. **Steps, while the deadline allows** (up to 4): `nextDraftStep` says `fetch` or `draft`; a step is only started with the time it needs
+   (35 s for a fetch, 68 s for a model call: `hasBudgetFor`, :219) and a model call gets `min(150 s, remaining − 8 s)` (`callTimeoutMs`, :224).
+   Out of time: the invocation saves what it has and lets go; the next caller resumes at the next step.
+5. **Every write is guarded by the owner:** each statement a step saves with says `AND lease_owner = $2 AND status IN (active)`. A caller
+   whose lease ran out, or whose draft was superseded, writes nothing and gets `LeaseLost` (`onboarding.draft_lease_lost`); the work it
+   did is lost, and the draft is not brought back to life.
+6. **Release** (`RELEASE_SQL`, :149) in `finally`, owner-guarded. If even that fails, the lease simply runs out at 290 s.
+
+### 9.3 — Step 1, fetch: `fetchStep` (**`drafts.ts:280`**) → `fetchDraftSources` (**`draftSources.ts:216`**)
+
+1. `queued` → `fetching`. The four sources run **in parallel under one 25 s phase** (`within`, :121: a source that does not answer is a
+   retryable `timeout` and its late result is ignored):
+   - **Instagram:** the tenant's own token if connected (`fetchOwnInstagram`), else **Business Discovery** as the platform's connected
+     account (`resolveDiscoveryAccount` → `fetchBusinessDiscovery`; its tenant is the setting `onboarding.discovery_creator_id`, default the
+     owner's). A shut road (`no_access`) falls back to the other when a handle was typed.
+   - **Website:** `gatherWebsite` (every request through `safeFetch`: SSRF guard, robots.txt, 25 s phase).
+   - **YouTube:** the typed channel by the platform's API key (`youtube.api_key`; none saved = skipped, not failed) or the tenant's own
+     connection.
+   - **Typed:** the text the tenant pasted.
+2. **A source that fails is one line of `sources_status`**; the others still land. IG `not_found` plus a readable website still drafts from
+   the website. Each line has a state, the road, the failure kind, whether a retry could help, `ms`, counts and `needsPaste`: **no text.**
+3. What is kept (`profile_drafts.sources`, so no retry fetches again): the prepared sources (cleaned, capped, **typed text first, then the bio, the site,
+   the channel, then captions**, so the 60 000-character budget cuts captions and not the business), the sample candidates, the signals
+   (`computeSignals`), and the facts **code** found: colours, logo *addresses*, social links, counts, the host. Never an image.
+4. `decideAfterFetch`: any usable source → `saveFetched` (`drafting`); none and something retryable → back-off; none otherwise → **failed,
+   `no_source`**, with `sources_status` kept so the wizard can say "paste your About text".
+
+### 9.4 — Step 2, draft: `draftStep` (**`drafts.ts:359`**)
+
+1. Both calls (**voice** and **business**) run **in parallel**, each through `generate()` (`aiProviders/generate.ts`: route, budget, `ai_usage`
+   row) with purpose `onboarding_draft`, `maxTokens` 16 000, the call's own prompt (`buildDraftPrompt`: fenced sources, nonce, signals) and
+   schema. No retry and no second provider inside a call (06 §2).
+2. **A call that answered is saved and never asked again.** The answers wait in `draft` (`stage: 'answers'`); a retry asks only what has not answered.
+3. `decideAfterCalls` (`draftStep.ts:175`): everything answered → finish; something retryable and tries left → retry only that (1 min, then 5);
+   otherwise with at least one answer → finish **partial**; otherwise **fail** with the most telling error (a missing key before a refusal).
+   Retryable: network, 429, 5xx/529, timeouts, **one** malformed answer. Final: no key, a 400, a refusal, a cut-off answer, a spent budget.
+4. **Finish:** `validateDraft` (§3.5 of the draft spec) checks the answers against what the model was shown; the result is stored with the
+   facts code found. `status = 'ready'`, `partial`, `usage` with every step and call and its `elapsed_ms`. **Nothing is applied to the profile.**
+5. **No AI key** (`no_provider`): the draft **fails cleanly after the fetch**, `needsAiKey` is true, and what code found is kept as a
+   **prefill** (colours, logo candidates, links, the handle) so the wizard continues by hand with those filled in. Final: never retried.
+
+### 9.5 — The poll, the sweep and who moves a draft on
+
+1. **The wizard polls** `GET /api/onboarding/draft` every 3 s while the tab is visible (`dashboard/js/pages/draft_client.js`, `watch`). The
+   view says `advanceable` when nobody holds the draft and its back-off is over; the client then fires `POST …/advance`, **one at a time**.
+   That request does the steps inside it, up to 270 s. Whether Vercel keeps running it when the browser goes away is not known:
+   `onboarding.advance_client_gone` is logged if the client left first, and a later `onboarding.draft_advance` for the same draft says the
+   work went on.
+2. **The backstop:** `POST /api/onboarding/drafts/sweep` (**`api.ts:386`**), above authentication with the other scheduler routes, guarded by
+   the **same `requireCronSecret` as `/api/jobs/drain`** (Bearer `CRON_SECRET`, header only, fail closed). `sweepDrafts` (**`drafts.ts:478`**)
+   takes up to 10 due drafts (`SELECT_DUE_SQL`: active, not held, not in back-off, oldest first), three at a time, each given what is left of
+   280 s, and skips what it has no time for. It is **not part of the drain**: the drain's worker budget is 45 s and `publishDuePosts` runs first.
+3. **`heroku-worker/worker.mjs`** has a second loop (`sweepLoop`, **:115**) calling it about every 60 s, independent of the drain's: neither
+   waits for the other, and a hung sweep (a model call takes minutes) cannot hold the queue back. It logs only a sweep that found something.
+   If the worker is scaled to 0, nothing but a wizard or the operator moves a draft, and nothing ends one that nobody opens.
+
+### 9.6 — What a person does with it
+
+1. The view carries the checked draft (`draft.profile`, `provenance`, `touched`, `flags`, `samples`, `faqPending`) or, with no key, the
+   `prefill`. A tenant sees a kind and a fixed sentence about a failure; an operator also the provider's words, the steps and the cost.
+   **Neither sees the text that was read** (ids and kinds only).
+2. **Applying is the person's, field by field, through the existing PATCH** (`PATCH /api/profile`; an operator's client, `PATCH
+   /api/admin/tenants/:id/profile`): `DraftClient.applyFields` builds one patch of the chosen `touched` fields (a list is replaced whole, so
+   an entry of a list is applied as its list) against the version it just read, and retries once on a version conflict.
+3. "Start without waiting": the person carries on by hand while the draft is written; `startWithoutWaiting` hands the wizard the fields
+   they have **not** edited, once, when the draft is ready. A field the person edited is never offered.
+4. A test fails if any module outside `onboarding/` names the table or imports the engine, apart from the two routes (`draftIsolation.test.ts`).
+   Agents read `creator_profiles`, which holds what a person confirmed.
+
+**Settings the operator needs** (Settings → Onboarding): the YouTube Data API key (`youtube.api_key`, a secret, never returned: `{set,
+source, last4}`) and the tenant that reads other people's Instagram (`onboarding.discovery_creator_id`). With neither, the draft still
+runs: YouTube is skipped, and Instagram by handle is read as the owner's tenant.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -2188,5 +2318,12 @@ error, and several write **no row at all**.
 | 8 | Connect with Facebook is off (`meta.login_enabled`) | *(none: `reason=disabled`)* | the state is spent, nothing else |
 | 8 | the webhook could not be subscribed — `subscribePage` | `meta.subscribe_failed` / `_incomplete` / `_unread` (`warn`) | yes: connected, `meta_webhook_subscribed_at` NULL, `warn=` in the redirect |
 | 8 | a pick nobody finishes | *(none)* | `meta_pick` row, payload cleared after 10 min by the next Meta state or the daily cron |
+| 9 | **no AI provider has a key** — `draftStep` / `generate` (`no_provider`) | `ai.call_refused`, `onboarding.draft_failed` (`error_kind: no_provider`) | yes: `failed`, `needsAiKey`, the prefill kept; **no draft, no retry** |
+| 9 | one source unreadable (private Instagram, a site that refuses, no YouTube key) — `fetchDraftSources` | `onboarding.ig_source_failed`, `onboarding.yt_source_skipped`, `onboarding.draft_fetched` | yes: the draft is made from the rest, the failure is a line of `sources_status` |
+| 9 | **nothing at all readable** — `decideAfterFetch` | `onboarding.draft_step` (`outcome: fail`), `onboarding.draft_failed` | yes: `failed`, `no_source` (the wizard asks for the About text) |
+| 9 | a second caller on a draft being worked on — `CLAIM_SQL` | `onboarding.draft_advance` (`outcome: busy`) | no change |
+| 9 | **a draft nobody advances** (no wizard open, worker not running): it stays `queued` | *(none)* until the sweep runs: `onboarding.sweep` | row untouched; ended `expired` by whoever finds it after 30 minutes |
+| 9 | a slow invocation whose lease ran out, or whose draft was superseded — owner-guarded writes | `onboarding.draft_lease_lost` | no (what it did is dropped) |
+| 9 | the draft is ready and nobody applies it | *(none)* | the draft stays a draft: nothing is applied to the profile by the engine |
 
 `RUNBOOK.md` works these backwards from the symptom.

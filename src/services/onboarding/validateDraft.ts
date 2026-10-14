@@ -526,6 +526,7 @@ export function validateDraft(raw: DraftOutput, ctx: DraftContext): Draft {
             if (samples.some((s) => s.post_id === id) || samples.length >= PROFILE_LIMITS.samples.items) continue;
             samples.push({ post_id: id, why: cleanText(isObj(node) ? node.why : '', 'voice.samples.why', 200), text: clip(textOf(id), PROFILE_LIMITS.samples.each) });
         }
+        const chosenSamples = samples.length;
         const wanted = Math.min(3, pool.filter((c) => textOf(c.id)).length);
         if (samples.length < wanted) {
             const rest = pool
@@ -539,7 +540,9 @@ export function validateDraft(raw: DraftOutput, ctx: DraftContext): Draft {
         }
         if (samples.length) {
             profile.voice.samples = samples.map((s) => s.text);
-            samples.forEach((_, i) => touch(`voice.samples[${i}]`, { source: samples[i]!.post_id, evidence: '', confidence: 'medium' }));
+            // The ones the model chose are its words; the ones code filled in to reach three are code's, and a draft whose only content is those
+            // is no draft (`usable`): a model that answered `{}` must not come out as a draft of three posts.
+            samples.forEach((_, i) => touch(`voice.samples[${i}]`, { source: samples[i]!.post_id, evidence: '', confidence: 'medium' }, i < chosenSamples ? 'model' : 'code'));
         }
     }
 

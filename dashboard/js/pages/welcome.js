@@ -41,6 +41,7 @@ const WelcomePage = {
     //   problems(values)    [{ field, key }]: what is wrong, checked before anything is sent
     //   patch(values, profile)   what Continue sends to PATCH /api/profile ({} when there is nothing to send)
     //   fields(state)       the form's markup
+    //   assist(state)       optional: a panel shown above the form, outside it (the draft assist on W1, `welcome_draft.js`)
     //   after(root, state)  wiring after the markup is painted
     STEPS: Object.create(null),
 
@@ -944,6 +945,8 @@ const WelcomePage = {
             problems: (v) => P.aboutProblems(v),
             patch: (v, profile) => P.aboutPatch(v, profile),
             fields: (state) => P.aboutFields(state),
+            assist: (state) => P.assist('about', state),
+            after: (root, state) => P.assistAfter('about', root, state),
         });
         this.register('voice', {
             code: 'W2', required: true, skippable: false,
@@ -986,6 +989,24 @@ const WelcomePage = {
             patch: () => ({}),
             fields: (state) => P.doneFields(state),
         });
+    },
+
+    // ─── The draft assist (P24): optional, and in its own file ───────────────
+
+    /** The assist panel of a step, or nothing: `welcome_draft.js` may not be loaded (a page that could not fetch it is the plain form). */
+    assist(id, state) {
+        return typeof WelcomeDraft !== 'undefined' ? WelcomeDraft.panel(id, state) : '';
+    },
+
+    assistAfter(id, root, state) {
+        if (typeof WelcomeDraft !== 'undefined') WelcomeDraft.afterPaint(this, id, root, state);
+    },
+
+    /** Load the assist before the first step is drawn. Never fatal. */
+    async loadAssist() {
+        try {
+            if (typeof App !== 'undefined' && App.loadPageModule) await App.loadPageModule('welcome_draft');
+        } catch { /* the plain form */ }
     },
 
     // ─── Rendering the screen (pure) ─────────────────────────────────────────
@@ -1118,6 +1139,7 @@ const WelcomePage = {
             <p class="welcome-lead">${lead}</p>
             ${this.notice(state)}
             ${this.problemList(state)}
+            ${typeof def.assist === 'function' ? def.assist(state) : ''}
             <form id="welcome-form" class="welcome-form" data-submit="welcome:submit" data-input="welcome:onInput" data-change="welcome:onInput"
                   novalidate autocomplete="off">
                 ${def.fields(state)}
@@ -1204,6 +1226,7 @@ const WelcomePage = {
         this.state.tenants = session && Array.isArray(session.tenants) ? session.tenants : [];
         this.state.tenantId = session && session.tenantId ? session.tenantId : '';
         this.paint(true);
+        await this.loadAssist();
         await this.load();
     },
 
@@ -1211,6 +1234,7 @@ const WelcomePage = {
     destroy() {
         clearTimeout(this._saveTimer);
         this._saveTimer = null;
+        if (typeof WelcomeDraft !== 'undefined') WelcomeDraft.stop();
         const root = this.root();
         if (root && this._onFocusOut) root.removeEventListener('focusout', this._onFocusOut);
         if (root && this._onKeyDown) root.removeEventListener('keydown', this._onKeyDown);

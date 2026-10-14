@@ -93,10 +93,15 @@ const App = {
         // #welcome-screen: it has its own shell, and `navigate()` never reaches it. `showWelcome` is how it opens, and
         // the navigate gate (`mustOnboard`) is how a tenant that has not finished ends up there from every other route.
         welcome: { src: 'welcome', page: () => WelcomePage, routable: false },
+        // The profile draft's client (P24): start it, watch it, carry on by hand while it is written, apply a field. No screen of its own; the
+        // wizard and the tenant's page load it on demand: `const DraftClient = await App.loadPageModule('draft_client')`.
+        draft_client: { src: 'draft_client', page: () => DraftClient, routable: false },
+        // The draft assist on the wizard's first step ("Fill it for me"): loaded by the wizard when it starts, optional.
+        welcome_draft: { src: 'welcome_draft', page: () => WelcomeDraft, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.19',
+    ASSET_VERSION: '12.20',
 
     _modules: Object.create(null),
 

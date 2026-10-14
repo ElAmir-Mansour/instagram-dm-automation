@@ -1512,6 +1512,25 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .welcome-rules-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-2); }
 .welcome-rule-list { margin: 0; padding-inline-start: var(--space-5); color: var(--text-default); font-size: var(--fs-200); }
 
+/* The draft assist on the first step (welcome_draft.js): a panel above the form, outside it, empty until there is something to say. A suggestion is a
+   card with the value on its own line, so a long name or address wraps and never widens the column at 375px; the buttons are full width on a phone
+   and side by side from 40rem (mobile first, like the rest of the wizard). */
+.welcome-assist { margin-block-end: var(--space-5); padding-block-end: var(--space-4); border-block-end: 1px solid var(--border-subtle); min-inline-size: 0; }
+.welcome-assist:empty { display: none; }
+.welcome-assist .welcome-subtitle { margin-block-end: var(--space-2); }
+.welcome-assist-status { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.welcome-assist-status > [data-lucide] { flex-shrink: 0; margin-block-start: 3px; color: var(--info-text); }
+.welcome-assist-working { display: flex; flex-direction: column; align-items: center; padding-block: var(--space-3); }
+.welcome-suggest-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.welcome-suggest { padding: var(--space-3) var(--space-4); min-inline-size: 0; overflow-wrap: anywhere; }
+.welcome-suggest p { margin: 0; }
+.welcome-suggest-label { font-size: var(--fs-100); color: var(--text-muted); }
+.welcome-suggest-value { font-size: var(--fs-300); color: var(--text-strong); font-weight: var(--fw-semibold); margin-block: var(--space-1); }
+.welcome-suggest-why { font-size: var(--fs-100); color: var(--text-muted); }
+.welcome-suggest-check { font-size: var(--fs-100); color: var(--warning-text); margin-block-start: var(--space-1); }
+.welcome-suggest-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }
+.welcome-suggest-actions .btn { min-block-size: var(--tap-target); flex: 1 1 100%; }
+
 /* The bar sticks to the bottom of the screen and sits at the end of the column when the form is short. It is hidden while the
    on-screen keyboard is open (welcome.js reads `visualViewport`), so it never covers the field being typed in. */
 .welcome-bar {
@@ -1529,6 +1548,7 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
     .welcome-preview { overflow-x: visible; }
     .pv-card, .pv-cover { flex: 1 1 0; }
     .welcome-card { padding: var(--space-6); }
+    .welcome-suggest-actions .btn { flex: 0 1 auto; }
 }
 
 /* Input with a leading icon. The icon is taken out of flow and overlaid on the field. Its

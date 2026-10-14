@@ -67,6 +67,8 @@ import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
+import { onboardingDraftsRouter } from './onboardingDrafts.js';
+import { sweepDrafts } from '../services/onboarding/drafts.js';
 import { syncAllTenants } from '../services/growth/sync.js';
 import { sweepDeadline, sweepMonteur, type MonteurSweepResult } from '../services/monteur/sweep.js';
 
@@ -375,6 +377,25 @@ router.get('/jobs/drain', async (req, res) => {
 
     const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError, { result: monteur, error: monteurError });
     res.status(status).json(status === 200 ? { ...body, tiktok } : body);
+});
+
+/**
+ * The profile drafts' backstop (docs/onboarding/03 §4, P24): advance the drafts nobody is working on. A draft is moved on first by
+ * whoever asks (the admin's create, the wizard's poll); this finds the ones whose invocation was lost, whose back-off is over or that
+ * nobody opened. `heroku-worker/worker.mjs` calls it in its own loop, about every minute.
+ *
+ * Guarded exactly like `/api/jobs/drain` (the same `requireCronSecret`: Bearer `CRON_SECRET`, fail closed), and NOT part of it: a
+ * draft takes minutes, the drain's worker budget is 45 s and `publishDuePosts` runs first, so sharing the call would make the queue
+ * wait on a model. POST, because it changes state; the spec's GET would let a link prefetcher start spending.
+ */
+router.post('/onboarding/drafts/sweep', async (req, res) => {
+    if (!requireCronSecret(req, res, '/api/onboarding/drafts/sweep')) return;
+    try {
+        res.status(200).json(await sweepDrafts());
+    } catch (err) {
+        log('error', 'onboarding.sweep_endpoint_failed', describeError(err));
+        res.status(500).json({ error: 'Draft sweep failed.' });
+    }
 });
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
@@ -1501,6 +1522,11 @@ router.use('/profile', profileRouter);
 
 // The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
 router.use('/onboarding', onboardingRouter);
+
+// The profile draft (docs/onboarding/03 §4) — tenant-scoped, owner of the tenant, and only while its onboarding is open (the router carries both).
+// Its paths (`/draft`, `/draft/advance`) are not the wizard's (`/`, `/steps/:step`, `/complete`). The backstop sweep of the same name is above
+// requireAuth, with the other routes a scheduler calls.
+router.use('/onboarding', onboardingDraftsRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //

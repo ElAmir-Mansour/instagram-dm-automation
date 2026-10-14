@@ -690,6 +690,26 @@ and the wizard then lets them finish), or, as a last resort, `UPDATE onboarding 
 WHERE creator_id = '<id>'`, which lets them in with a profile that is not complete. The owner's own tenant is `completed` and
 never sees the wizard; `#/welcome?mode=behalf` opens it for a platform admin. Full walk-through: FLOWS.md §4.9.
 
+**The profile draft (P24).** Creating a tenant by name also starts a draft of its profile from the handle and site you typed: the Tenants
+screen fires `POST /api/admin/tenants/:id/draft/advance` right after the 201. It reads the public Instagram account (Business Discovery, as the
+tenant named in Settings → Onboarding → "Instagram account that reads other people's profiles", default the owner's), the website, a YouTube
+channel (needs the YouTube Data API key in the same card) and any text pasted, asks the AI route `onboarding_draft` for a profile, **checks the
+answer in code** and keeps it as a draft. **Nothing is applied until a person applies it** (the wizard, or you on the tenant's Profile screen).
+`GET /api/admin/tenants/:id/draft` shows its state, each source's outcome, every step's `elapsed_ms` and what it cost.
+
+- **"needs an AI key" / `error_kind: no_provider`:** no AI provider has a key (Operations → AI providers). The draft failed cleanly after
+  reading the sources and kept what code found (colours, logo candidates, links); the wizard continues by hand. Add a key, then start a new
+  draft (`POST …/draft`, five new drafts a tenant a day).
+- **Stuck in `queued` / `drafting`:** something has to move it. The wizard's poll does, and so does `POST /api/onboarding/drafts/sweep`, which the
+  Heroku worker calls about every minute (`heroku ps:scale worker=1 -a autoreply-pro-worker`; its second loop, `DRAFT_SWEEP_INTERVAL_MS`). With the
+  worker off and nobody on the wizard, a draft waits; after 30 minutes whoever touches it first ends it as `expired`. The sweep is guarded like the
+  drain (Bearer `CRON_SECRET`). Redeploy the worker after pulling this: an old worker has no second loop.
+- **`failed`, `no_source`:** nothing could be read: check `sources_status` (a private or personal Instagram account is `not_readable`, a site that
+  refuses is `blocked` and asks the tenant to paste their About text).
+- **Cost and time:** every call is an `ai_usage` row (`onboarding_draft`); the daily budgets in Operations refuse a call with `budget`. Look for
+  `onboarding.draft_step` (`elapsed_ms` per step), `onboarding.draft_ready` (`total_ms`) and, to learn whether Vercel keeps an `advance` running
+  after the browser has gone, `onboarding.advance_client_gone` followed by `onboarding.draft_advance`. Full walk-through: FLOWS.md §9.
+
 ### 8.2 Meta side — get the verify token right *before* the subscription exists
 
 This is the ordering trap, and it has already cost hours.

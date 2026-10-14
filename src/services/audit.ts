@@ -156,6 +156,8 @@ export const AUDIT_ACTIONS = {
     inviteAccept: 'invite.accept',
     /** The onboarding settings (invite lifetime, default role, session length, message, default rules) were changed from Settings. */
     settingsOnboardingWrite: 'settings.onboarding_write',
+    /** A profile draft was started for a tenant (P24), by the operator or by the tenant's own wizard. `detail` names the draft, its origin and which inputs it was given, never their values. Starting one is what costs money; advancing it is not recorded. */
+    onboardingDraftStart: 'onboarding.draft_start',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
