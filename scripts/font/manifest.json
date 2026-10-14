@@ -1,0 +1,99 @@
+{
+  "spec": {
+    "family": "Alexandria",
+    "weight": 600,
+    "source": {
+      "repo": "google/fonts",
+      "commit": "fffdadf0f0c9cc1ec8b407063424a8bfbee05611",
+      "dir": "ofl/alexandria",
+      "file": "Alexandria[wght].ttf",
+      "sha256": "db8ae03b62d55a65aa4e04307878df8c00d6e5388e4800635cbe0e22b6411b64",
+      "licenceSha256": "56372aed19c2701f50e6e784110af55bf8796ed51648805324ad1adb0a3860bb",
+      "upstream": "Gue3bara/Alexandria@4fd1422be3488837c41fbdb84a77350f0f56a734"
+    },
+    "unicodes": "U+0600-06FF,U+0750-077F,U+FB50-FDFF,U+FE70-FEFF,U+0020-007E,U+00A0-00FF,U+2000-206F",
+    "features": [
+      "ccmp",
+      "locl",
+      "rvrn",
+      "init",
+      "medi",
+      "fina",
+      "isol",
+      "rlig",
+      "liga",
+      "calt",
+      "curs",
+      "mark",
+      "mkmk",
+      "abvm",
+      "blwm",
+      "kern",
+      "tnum",
+      "pnum",
+      "lnum"
+    ]
+  },
+  "fallback": {
+    "latin": {
+      "range": "U+0000-05FF, U+2000-206F",
+      "local": [
+        "Arial Bold",
+        "Arial-BoldMT",
+        "Helvetica Bold",
+        "Helvetica-Bold"
+      ],
+      "sizeAdjust": 1.06
+    },
+    "arabic": {
+      "range": "U+0600-06FF, U+0750-077F, U+FB50-FDFF, U+FE70-FEFF",
+      "local": [
+        "Geeza Pro Bold",
+        "GeezaPro-Bold",
+        "Tahoma Bold",
+        "Tahoma-Bold",
+        "Arial Bold",
+        "Arial-BoldMT"
+      ],
+      "sizeAdjust": 1.15
+    }
+  },
+  "output": {
+    "file": "alexandria-600.91767410.woff2",
+    "bytes": 21028,
+    "sha256": "9176741093dae87b06f8042f9c74b2e56cc2101557121d6bcb4e41fc6491b2a4",
+    "glyphs": 568,
+    "codepoints": 480,
+    "coverage": "U+0020-007E,U+00A0-00FF,U+060C,U+0615,U+061B,U+061F,U+0621-063A,U+0640-0656,U+0658,U+0660-0671,U+0679,U+067E,U+0686,U+0688,U+0691,U+0698,U+06A1,U+06A4,U+06A9,U+06AF,U+06BA,U+06BE,U+06C1-06C3,U+06CC,U+06D2-06D4,U+06F0-06F9,U+2007-200B,U+2010,U+2012-2015,U+2018-201A,U+201C-201E,U+2020-2022,U+2026,U+2030,U+2032-2033,U+2039-203A,U+2044,U+FB51,U+FB57-FB59,U+FB67-FB69,U+FB6B-FB6D,U+FB7B-FB7D,U+FB89,U+FB8B,U+FB8D,U+FB8F-FB91,U+FB93-FB95,U+FB9F,U+FBA7-FBA9,U+FBAB-FBAD,U+FBAF,U+FBB1-FBB9,U+FBBD-FBBE,U+FBFD-FBFF,U+FC64-FC65,U+FC67,U+FC6A-FC6B,U+FC6D,U+FC70-FC71,U+FC73,U+FC76-FC77,U+FC79,U+FC8A-FC8B,U+FC8D,U+FC91-FC92,U+FC94,U+FD0D-FD10,U+FD29-FD2C,U+FD3E-FD3F,U+FDF2,U+FE82,U+FE84,U+FE86,U+FE88,U+FE8A-FE8C,U+FE8E,U+FE90-FE92,U+FE94,U+FE96-FE98,U+FE9A-FE9C,U+FE9E-FEA0,U+FEA2-FEA4,U+FEA6-FEA8,U+FEAA,U+FEAC,U+FEAE,U+FEB0,U+FEB2-FEB4,U+FEB6-FEB8,U+FEBA-FEBC,U+FEBE-FEC0,U+FEC2-FEC4,U+FEC6-FEC8,U+FECA-FECC,U+FECE-FED0,U+FED2-FED4,U+FED6-FED8,U+FEDA-FEDC,U+FEDE-FEE0,U+FEE2-FEE4,U+FEE6-FEE8,U+FEEA-FEEC,U+FEEE,U+FEF0,U+FEF2-FEFC",
+    "features": [
+      "abvm",
+      "blwm",
+      "ccmp",
+      "fina",
+      "init",
+      "kern",
+      "liga",
+      "locl",
+      "mark",
+      "medi",
+      "mkmk",
+      "pnum",
+      "rlig",
+      "tnum"
+    ],
+    "metrics": {
+      "ascent": 968,
+      "descent": -251,
+      "glyphYMax": 1214,
+      "glyphYMin": -578,
+      "lineGap": 0,
+      "unitsPerEm": 1000,
+      "xAvgCharWidth": 644,
+      "zeroAdvance": 705
+    },
+    "builtWith": {
+      "brotli": "1.2.0",
+      "fontTools": "4.60.1"
+    }
+  }
+}

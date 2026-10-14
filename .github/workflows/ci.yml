@@ -64,6 +64,13 @@ jobs:
       - name: Check hero 3D bundle
         run: npm run check:hero3d
 
+      # The display face is one committed woff2 under public/brand/, named for the hash of its own bytes and served `immutable`,
+      # subset from a pinned google/fonts commit by scripts/build-font.mjs (the only step that needs fontTools; this one needs
+      # only node). Nothing else notices a font edited without a rebuild, a page naming a stale file, one of the seven copies of the
+      # @font-face block drifting, a second page preloading it, the font growing past 48 KB, or a heading using a glyph it lacks.
+      - name: Check display font
+        run: npm run check:font
+
       # Token colours are one hex edit away from failing AA, and nothing else in this repo
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast

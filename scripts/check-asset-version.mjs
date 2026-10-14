@@ -160,8 +160,9 @@ for (const page of [INDEX, ...SHARED_ASSET_PAGES]) {
     for (const host of FONT_HOSTS) {
         if (withoutComments.includes(host)) {
             fail.push(
-                `${page} references ${host}. Typography is the system font stack, so nothing should `
-                + `be downloaded — and the CSP no longer allows it, so this would be blocked at runtime.`
+                `${page} references ${host}. UI text is the system font stack and the display face is self-hosted `
+                + `(/brand, scripts/build-font.mjs), so nothing should come from a font CDN — and the CSP no longer allows it, `
+                + `so this would be blocked at runtime.`
             );
         }
     }
@@ -216,7 +217,8 @@ for (const file of CSP_FILES) {
         if (bare.includes(host)) {
             fail.push(
                 `${file} still allows ${host} in its Content-Security-Policy. Nothing downloads a `
-                + `webfont any more, and an allowance nothing needs is a hole left open.`
+                + `font from a font CDN any more (the display face is served from this origin), and an allowance nothing `
+                + `needs is a hole left open.`
             );
         }
     }

@@ -166,33 +166,65 @@ Three pinned tokens, the same in both themes and **independent of the palette**.
 
 **Faces (shipped)**
 - `--font-ui` / `--font-latin` / `--font-mono`: the system stacks in tokens.css, for all UI and body text.
-  Nothing is downloaded. An Arabic run falls through per glyph to the platform's Arabic face.
+  Nothing is downloaded for them. An Arabic run falls through per glyph to the platform's Arabic face.
 
-**Display face (planned, PR L3; not in tokens.css yet)**
-- `--font-display: 'Alexandria', var(--font-ui)`: one self-hosted woff2 at weight 600.
+**Display face (shipped, PR L3)**
+- `--font-display: 'Alexandria', 'Alexandria Fallback', var(--font-ui)` (in tokens.css): Alexandria at weight 600,
+  one self-hosted subset woff2 for both scripts, `public/brand/alexandria-600.<sha8>.woff2`, **20.5 KB** (limit 48 KB).
+  Alexandria is by Mohamed Gaber and Julieta Ulanovsky under the SIL OFL 1.1; `public/brand/OFL.txt` is upstream's licence,
+  unchanged, and the copyright and licence notice stay inside the font's name table.
+  - **Source:** `google/fonts`, `ofl/alexandria/Alexandria[wght].ttf`, pinned to commit `fffdadf` (SHA-256 recorded). The
+    variable font is instanced at `wght=600`, then subset. `scripts/build-font.mjs` does it and records every input in
+    `scripts/font/manifest.json`; `npm run check:font` verifies the committed file against it.
   - **Subset:** Arabic (U+0600–06FF, U+0750–077F, U+FB50–FDFF, U+FE70–FEFF), plus U+0020–007E, U+00A0–00FF and
-    U+2000–206F.
-  - **OpenType features kept:** init/medi/fina/isol/rlig/liga/ccmp/mark/mkmk/kern.
-  - **Loading:** ≤ 48 KB, `font-display: swap`, preloaded on `/` only.
-  - **Where it will be declared:** `@font-face` in the SHARED SITE CHROME CSS block and in styles.css, not in
-    tokens.css.
+    U+2000–206F. The font draws 480 of those code points (the Arabic letters, harakat, both digit sets, the presentation
+    forms, Latin and the common punctuation). `check:font` scans the display text of the six public pages and the dashboard's
+    headings and fails when one of its code points is not in the font.
+  - **OpenType features kept:** ccmp, locl, init, medi, fina, isol, rlig, liga, calt, curs, mark, mkmk, abvm, blwm, kern, tnum, pnum,
+    lnum (those the font has: `abvm`/`blwm` place the harakat, `tnum`/`pnum` serve `tabular-nums`). Rendered through the browser's
+    shaper, the subset is pixel-identical to the full font on every display string.
+  - **Loading:** ≤ 48 KB, `font-display: swap`, **preloaded on `/` only** (`crossorigin`, as a font preload needs). The other
+    pages find it when their CSS is parsed; it is the same immutable file, so a visitor who has seen one page has it for all.
+  - **No layout shift at the swap:** until the font arrives the text is drawn in `'Alexandria Fallback'`, a local face
+    (Arial Bold for Latin, Geeza Pro Bold then Tahoma Bold for Arabic) with `size-adjust` 106% / 115% and Alexandria's ascent,
+    descent and line-gap. A heading's `max-width` is in `em`, never `ch`: a heading's `ch` is the advance of "0" in its own face,
+    and Alexandria's (0.705em) is wider than the fallback's, so a `ch` measure moves at the swap. The wordmark reserves
+    Alexandria's width (6.3em) for the same reason.
+  - **Where it is declared:** one generated `@font-face` block, identical in the SHARED SITE CHROME CSS block of the six public pages
+    and at the top of styles.css, not in tokens.css (which declares only `--font-display`).
   - **Use for:** public h1/h2, the wordmark, `.figures`/`.tally` numbers, the dashboard page title (`--fs-500`), stat
     values (`--fs-600`), `--fs-700`, and the login title.
-  - **Never use for:** body, labels, buttons, inputs, tables, chat bubbles, or legal text.
+  - **Never use for:** body, labels, buttons, inputs, tables, chat bubbles, or legal text. (On the legal pages that means the body:
+    their h1 and h2 are public headings and use it.)
 
 **Scale**
 - Dashboard `--fs-100…700`: 12 / 14 / 16 / 18 / 22 / 28 / 36.
 - Public (`--lp-*`, in landing.html):
-  - `--lp-display` 36→60
+  - `--lp-display` 31.5→49.5 (`clamp(1.96875rem, 1.2456rem + 2.57vw, 3.09375rem)`; it sizes the hero h1 and nothing else)
   - `--lp-h2` 28→46
   - `--lp-h3` 18→22
   - `--lp-lede` 17→21
   - UI 14
   - micro 12 (the floor)
 - Arabic body is 17px on public pages (Latin 16).
+- **`--lp-display` is set by a contract, not by taste.** It was 36→60 when the hero was drawn in the system faces. Alexandria 600 is
+  wider, and at that size the hero h1 ran a line longer in both languages (4 lines in Arabic and 5 in English at 1280), pushing the
+  buttons toward the fold. The step is now the one that gives the hero h1 the line counts it had in the system face, at every width
+  the page is checked at, in both languages:
 
-**Weights:** 400 / 500 / 600 / 700. Public display is 600 in Arabic and 500 in Latin. Public pages use
-`font-synthesis-weight: none`.
+  | Width | 320 | 375 | 414 | 768 | 1280 | 1440 |
+  |---|---|---|---|---|---|---|
+  | Arabic | 4 | 3 | 3 | 2 | 3 | 3 |
+  | English | 5 | 4 | 3 | 3 | 4 | 4 |
+
+  The floor is 31.5px (414px Arabic and 375px English need at least 31; 430px Arabic wants at most 31.5) and the ceiling 49.5px
+  (1280px allows 42.5 to 51.5 in Arabic and 47.5 to 53.5 in English). The count at 320px English is main's: 5, not 4. Change the face,
+  the copy or the step and re-measure all twelve cells: each cell allows a window of sizes (the 1280px window is 42.5 to 51.5), and
+  these two ends sit in the middle of the narrowest ones.
+
+**Weights:** 400 / 500 / 600 / 700. Display is 600 in both scripts: Alexandria 600 is the only weight of the display face, so a
+display rule asks for 600 and nothing else (a 500 or 700 request would resolve to the same face, or be smeared into a fake bold).
+Public pages use `font-synthesis-weight: none`.
 
 **Line-height, never `normal`**
 
@@ -383,8 +415,8 @@ optically in preview.html.
   should follow `--surface-page`). Neither was touched in the palette PR, to keep the submitted manifest identical.
 - **Google:** don't change the logo on Google's OAuth consent screen until the YouTube audit is done; it re-triggers
   brand verification.
-- **Wordmark:** the mark plus «أوتوريبلاي برو» in `--font-display` 600 once L3 ships (the system face until then), with
-  "AutoReply Pro" beneath it at 12px regular `--text-muted`.
+- **Wordmark:** the mark plus «أوتوريبلاي برو» in `--font-display` 600 (shipped with L3: the public bar and the dashboard's
+  sidebar), with "AutoReply Pro" beneath it at 12px regular `--text-muted`.
 - **Clear space:** ¼ of the mark. **Minimum size:** 20px.
 
 ### Other patterns

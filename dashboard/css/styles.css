@@ -23,6 +23,43 @@
        static panels jump when the mouse passed over them.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ─── Display face: Alexandria 600 (generated) ───────────────────────────────────────────────
+   Written by scripts/build-font.mjs. Do not edit it here: the same text is in the six public pages and in
+   dashboard/css/styles.css, and `npm run check:font` fails when a copy differs. The file name carries the hash of
+   its own bytes, so /brand serves it `immutable`. `swap` paints text at once in the fallback; the fallback faces are
+   local fonts scaled to Alexandria's width and vertical metrics, so the swap changes letterforms, not boxes.
+   `--font-display` (tokens.css) names both. Weight 600 is the only one that exists; a heading asks for 600. */
+@font-face {
+    font-family: 'Alexandria';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/brand/alexandria-600.91767410.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Alexandria Fallback';
+    font-style: normal;
+    font-weight: 600;
+    src: local('Arial Bold'), local('Arial-BoldMT'), local('Helvetica Bold'), local('Helvetica-Bold');
+    unicode-range: U+0000-05FF, U+2000-206F;
+    size-adjust: 106%;
+    ascent-override: 91.32%;
+    descent-override: 23.68%;
+    line-gap-override: 0%;
+}
+@font-face {
+    font-family: 'Alexandria Fallback';
+    font-style: normal;
+    font-weight: 600;
+    src: local('Geeza Pro Bold'), local('GeezaPro-Bold'), local('Tahoma Bold'), local('Tahoma-Bold'), local('Arial Bold'), local('Arial-BoldMT');
+    unicode-range: U+0600-06FF, U+0750-077F, U+FB50-FDFF, U+FE70-FEFF;
+    size-adjust: 115%;
+    ascent-override: 84.17%;
+    descent-override: 21.83%;
+    line-gap-override: 0%;
+}
+/* ─── end of display face ─── */
+
 /* ─── Reset & base ───────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -283,7 +320,7 @@ bdi { unicode-bidi: isolate; }
 }
 .logo-mark [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .logo-mark svg { color: var(--mark-glyph); }
-.sidebar-brand { font-weight: var(--fw-bold); font-size: var(--fs-300); color: var(--text-strong); }
+.sidebar-brand { font-family: var(--font-display); font-weight: var(--fw-semibold); font-size: var(--fs-300); color: var(--text-strong); }
 
 .sidebar-nav {
     flex: 1;
@@ -383,7 +420,9 @@ bdi { unicode-bidi: isolate; }
 }
 .header-start { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .header-end { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.page-title { font-size: var(--fs-500); }
+/* The display face (--font-display, tokens.css): page titles, the login title and stat values. Weight 600 is the only weight it has,
+   and the base h1..h5 rule asks for bold, so these name 600 themselves; asking a 600 face for 700 would be smeared into a fake bold. */
+.page-title { font-family: var(--font-display); font-size: var(--fs-500); font-weight: var(--fw-semibold); }
 .page-subtitle { font-size: var(--fs-100); color: var(--text-muted); }
 
 .icon-button {
@@ -1283,7 +1322,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .login-mark [data-lucide] { inline-size: 30px; block-size: 30px; }
 .login-mark svg { color: var(--mark-glyph); }
-.login-title { font-size: var(--fs-600); color: var(--text-strong); }
+.login-title { font-family: var(--font-display); font-size: var(--fs-600); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .login-subtitle { color: var(--text-muted); font-size: var(--fs-200); margin-block-start: var(--space-2); }
 .login-form { display: flex; flex-direction: column; gap: var(--space-4); text-align: start; }
 .login-error { color: var(--danger-text); font-size: var(--fs-200); text-align: center; }
@@ -1539,8 +1578,9 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .stat-icon.danger { background: var(--danger-soft); color: var(--danger-text); }
 .stat-icon.warning { background: var(--warning-soft); color: var(--warning-text); }
 .stat-value {
+    font-family: var(--font-display);
     font-size: var(--fs-600);
-    font-weight: var(--fw-bold);
+    font-weight: var(--fw-semibold);
     color: var(--text-strong);
     line-height: 1.15;
     font-variant-numeric: tabular-nums;

@@ -52,12 +52,13 @@
 
     <!-- One design system in this repo, not three. Same file the dashboard
          and the other public pages load. Same origin, and allowed by the CSP
-         that src/routes/api.ts sets on every route. No webfont: --font-ui is
-         the -apple-system stack, so nothing is downloaded. Keep this ?v=
+         that src/routes/api.ts sets on every route. UI text is the
+         -apple-system stack (--font-ui); the heading is the self-hosted
+         Alexandria 600, declared in the shared chrome. Keep this ?v=
          pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it for the pages in its
          SHARED_ASSET_PAGES list; add this one there. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.18">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.19">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -126,9 +127,10 @@
             margin: 0 0 var(--space-2);
         }
         h1 {
+            font-family: var(--font-display);
             font-size: var(--fs-600);
             line-height: var(--lh-tight);
-            font-weight: var(--fw-bold);
+            font-weight: var(--fw-semibold);
             color: var(--text-strong);
             margin: 0 0 var(--space-3);
         }
@@ -247,6 +249,43 @@
             :root { --nav-t: 1ms; }
         }
 
+        /* ─── Display face: Alexandria 600 (generated) ───────────────────────────────────────────────
+           Written by scripts/build-font.mjs. Do not edit it here: the same text is in the six public pages and in
+           dashboard/css/styles.css, and `npm run check:font` fails when a copy differs. The file name carries the hash of
+           its own bytes, so /brand serves it `immutable`. `swap` paints text at once in the fallback; the fallback faces are
+           local fonts scaled to Alexandria's width and vertical metrics, so the swap changes letterforms, not boxes.
+           `--font-display` (tokens.css) names both. Weight 600 is the only one that exists; a heading asks for 600. */
+        @font-face {
+            font-family: 'Alexandria';
+            font-style: normal;
+            font-weight: 600;
+            font-display: swap;
+            src: url('/brand/alexandria-600.91767410.woff2') format('woff2');
+        }
+        @font-face {
+            font-family: 'Alexandria Fallback';
+            font-style: normal;
+            font-weight: 600;
+            src: local('Arial Bold'), local('Arial-BoldMT'), local('Helvetica Bold'), local('Helvetica-Bold');
+            unicode-range: U+0000-05FF, U+2000-206F;
+            size-adjust: 106%;
+            ascent-override: 91.32%;
+            descent-override: 23.68%;
+            line-gap-override: 0%;
+        }
+        @font-face {
+            font-family: 'Alexandria Fallback';
+            font-style: normal;
+            font-weight: 600;
+            src: local('Geeza Pro Bold'), local('GeezaPro-Bold'), local('Tahoma Bold'), local('Tahoma-Bold'), local('Arial Bold'), local('Arial-BoldMT');
+            unicode-range: U+0600-06FF, U+0750-077F, U+FB50-FDFF, U+FE70-FEFF;
+            size-adjust: 115%;
+            ascent-override: 84.17%;
+            descent-override: 21.83%;
+            line-gap-override: 0%;
+        }
+        /* ─── end of display face ─── */
+
         /* ─── Cross-document view transitions ──────────────────────────────────
            Moving between these four pages was a hard navigation: white flash,
            full repaint, the reader loses their place — and on a site whose whole
@@ -344,6 +383,14 @@
             flex-direction: column;
             justify-content: center;
             min-block-size: var(--tap-target);
+            /* The Arabic name's width, reserved. The bar is full at 375px in English, so a wordmark that is 10px wider in the
+               fallback than in Alexandria wraps it to a second row, and everything below it moves 52px when the font arrives.
+               6.3em is Alexandria's measure of «أوتوريبلاي برو» at 600 (6.28em): the fallback may overhang the 12px gap beside it,
+               and nothing moves. Change the name in the markup, change this. */
+            inline-size: 6.3em;
+            flex: none;
+            white-space: nowrap;
+            font-family: var(--font-display);
             font-size: 1rem;
             font-weight: var(--fw-semibold);
             color: var(--text-strong);
