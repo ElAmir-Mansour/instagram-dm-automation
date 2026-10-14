@@ -282,58 +282,64 @@ describe('the import fallback of every register, as drafted (for a native speake
 // ─── The DM sales prompt (docs/DM_SALES_PLAN.md §3, S5) ──────────────────────────────────────
 
 /**
- * The four lines a customer is sent WITHOUT a model reading their message (or after the guard refused its answer), in every register, as
- * drafted. `NAME` stands for how the creator is called. None names anyone, none addresses the reader by gender, and none holds a link or
- * a number. The Gulf column is the plan's own wording made generic; the other three are drafts for a native speaker to read (05 §2),
+ * The five lines a customer is sent WITHOUT a model reading their message (or after the guard refused its answer; the fifth is the one
+ * follow-up nudge, S9), in every register, as drafted. `NAME` stands for how the creator is called. None names anyone, none addresses the
+ * reader by gender, and none holds a link or a number. The Gulf column is the plan's own wording made generic; the other three are drafts for a native speaker to read (05 §2),
  * and the owner reads this table before the lines are merged.
  */
-const REVIEW_SALES: Record<KitKey, { handoff: string; unsure: string; optOut: string; calm: string }> = {
+const REVIEW_SALES: Record<KitKey, { handoff: string; unsure: string; optOut: string; calm: string; nudge: string }> = {
     gulf: {
         handoff: 'أبلغت NAME برسالتك، والرد عليك راح يكون قريب إن شاء الله 🙏',
         unsure: 'هالمعلومة ما عندي فيها تأكيد، راح أسأل NAME وأرجع لك 🙏',
         optOut: 'تمام، ما راح نرسل لك رسائل ثانية. شكراً لوقتك 🙏',
         calm: 'نقدّر لو نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+        nudge: 'لو عندك أي سؤال عن الرابط اللي أرسلناه لك، يسعدنا نساعدك 🙏',
     },
     msa: {
         handoff: 'أبلغتُ NAME برسالتك، وسيصلك الرد قريباً بإذن الله 🙏',
         unsure: 'لا أملك تأكيداً لهذه المعلومة، وسأسأل NAME وأعود إليك 🙏',
         optOut: 'حسناً، لن نرسل إليك رسائل أخرى. شكراً لوقتك 🙏',
         calm: 'نقدّر الحوار المحترم، وإن كان لديك أي سؤال فيسعدنا أن نساعدك 🙏',
+        nudge: 'إن كان لديك أي سؤال حول الرابط الذي أرسلناه إليك، فيسعدنا أن نساعدك 🙏',
     },
     egyptian: {
         handoff: 'بلّغت NAME برسالتك، والرد هيوصلك قريب إن شاء الله 🙏',
         unsure: 'مش عندي تأكيد للمعلومة دي، هسأل NAME وأرجعلك 🙏',
         optOut: 'تمام، مش هنبعتلك رسايل تانية. شكراً لوقتك 🙏',
         calm: 'يا ريت نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+        nudge: 'لو عندك أي سؤال عن الرابط اللي بعتناه ليك، يسعدنا نساعدك 🙏',
     },
     levantine: {
         handoff: 'بلّغت NAME برسالتك، والرد رح يوصلك قريباً إن شاء الله 🙏',
         unsure: 'ما عندي تأكيد لهالمعلومة، رح اسأل NAME وبرجعلك 🙏',
         optOut: 'تمام، ما رح نبعتلك رسائل تانية. شكراً لوقتك 🙏',
         calm: 'منقدّر لو نحكي بأسلوب محترم، ولو عندك أي سؤال بيسعدنا نساعدك 🙏',
+        nudge: 'إذا عندك أي سؤال عن الرابط اللي بعتناه إلك، بيسعدنا نساعدك 🙏',
     },
     en: {
         handoff: 'I\'ve passed your message to NAME, and you\'ll hear back soon 🙏',
         unsure: 'I can\'t confirm that yet. I\'ll check with NAME and get back to you 🙏',
         optOut: 'Understood, we won\'t message you again. Thanks for your time 🙏',
         calm: 'Let\'s keep this respectful. If you have a question, I\'m glad to help 🙏',
+        nudge: 'If you have any questions about the link we sent, we\'re happy to help 🙏',
     },
 };
 
 describe('the DM sales kit: what a customer is sent without a model, as drafted (for a native speaker to read)', () => {
     for (const key of KIT_KEYS) {
-        it(`${key}: the hand-off, the "I can't confirm", the opt-out confirmation and the calm line`, () => {
+        it(`${key}: the hand-off, the "I can't confirm", the opt-out confirmation, the calm line and the follow-up nudge`, () => {
             const lines = KITS[key].sales.lines;
             const want = REVIEW_SALES[key];
             assert.equal(lines.handoff('NAME'), want.handoff);
             assert.equal(lines.unsure('NAME'), want.unsure);
             assert.equal(lines.optOut, want.optOut);
             assert.equal(lines.calm, want.calm);
+            assert.equal(lines.nudge, want.nudge);
         });
 
         it(`${key}: names nobody but the creator it is given, and holds no link and no number: the guard has nothing to refuse in it`, () => {
             const lines = KITS[key].sales.lines;
-            for (const text of [lines.handoff('الاسم'), lines.unsure('Sami'), lines.optOut, lines.calm]) {
+            for (const text of [lines.handoff('الاسم'), lines.unsure('Sami'), lines.optOut, lines.calm, lines.nudge]) {
                 const g = guardReply(text, { texts: ['الاسم', 'Sami'], prices: [] });
                 assert.deepEqual(g.violations, [], text);
                 assert.deepEqual(g.linksRemoved, [], text);
@@ -348,13 +354,13 @@ describe('the DM sales kit: what a customer is sent without a model, as drafted 
     it('an Egyptian or MSA customer is told none of the Gulf words', () => {
         for (const key of ['egyptian', 'msa'] as const) {
             const lines = KITS[key].sales.lines;
-            for (const text of [lines.handoff('X'), lines.unsure('X'), lines.optOut, lines.calm]) assertNoGulfInEgyptianOrMsa(text, `${key} sales line`);
+            for (const text of [lines.handoff('X'), lines.unsure('X'), lines.optOut, lines.calm, lines.nudge]) assertNoGulfInEgyptianOrMsa(text, `${key} sales line`);
         }
     });
 
     it('every register has a line of each, in its own words: no register is left speaking another\'s', () => {
         for (const key of ['msa', 'egyptian', 'levantine', 'en'] as const) {
-            for (const line of ['handoff', 'unsure', 'optOut', 'calm'] as const) {
+            for (const line of ['handoff', 'unsure', 'optOut', 'calm', 'nudge'] as const) {
                 const text = (k: KitKey): string => { const l = KITS[k].sales.lines[line]; return typeof l === 'function' ? l('X') : l; };
                 assert.notEqual(text(key), text('gulf'), `${key} ${line}`);
             }

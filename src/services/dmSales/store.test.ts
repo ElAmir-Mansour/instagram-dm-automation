@@ -112,12 +112,24 @@ describe('recordTurn', () => {
 
         assert.equal(asked.length, 1, 'one statement, not two');
         const { sql, params } = asked[0]!;
-        assert.match(sql, /^WITH reply AS \( INSERT INTO messages \(conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta\) VALUES \(\$1, \$2, 'outbound', \$13, \$14, \$15::jsonb, 'ai', \$16::jsonb\) \) UPDATE conversations SET /);
-        assert.match(sql, /WHERE id = \$1 AND creator_id = \$2$/);
+        assert.match(sql, /^WITH reply AS \( INSERT INTO messages \(conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta\) VALUES \(\$1, \$2, 'outbound', \$13, \$14, \$15::jsonb, 'ai', \$16::jsonb\) RETURNING id \) UPDATE conversations SET /);
+        assert.match(sql, /WHERE id = \$1 AND creator_id = \$2 RETURNING last_link_at, \(SELECT id FROM reply\) AS reply_id$/);
         assert.deepEqual(params.slice(0, 12), ['conv-1', 'creator-1', 'link', 1, 0, 'ready_to_buy', 'plan', 'plan', false, null, false, false]);
         assert.deepEqual(params.slice(12, 14), ['text', 'Here you go']);
         assert.deepEqual(JSON.parse(params[14]), { text: 'Here you go' });
         assert.deepEqual(JSON.parse(params[15]), { engine: 'providers', intent: 'ready_to_buy' });
+    });
+
+    it('hands back what the follow-up needs from the very statement that recorded the link: the database\'s own link time and the reply row\'s id', async () => {
+        const linkAt = new Date('2026-10-14T09:00:00.123Z');
+        answering([{ last_link_at: linkAt, reply_id: 'msg-9' }], 1);
+        assert.deepEqual(await recordTurn(turn()), { linkAt, replyId: 'msg-9' });
+        // A statement that matched no conversation (a wrong tenant) records nothing, and says so: there is no link to follow up.
+        answering([], 0);
+        assert.deepEqual(await recordTurn(turn()), { linkAt: null, replyId: null });
+        // Nothing sent: nothing to hand back.
+        answering([], 1);
+        assert.deepEqual(await recordTurn(turn({ message: null, linkedOfferId: null })), { linkAt: null, replyId: null });
     });
 
     it('the state assignments keep what the turn did not name: an intent, an offer, a hand-off reason are only replaced when there is one', async () => {

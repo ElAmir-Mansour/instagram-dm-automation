@@ -14,6 +14,7 @@
  *   9. link        `send_link` is the only way a link is sent, and the server writes it (`linkFor`), after the text, within 900 UTF-8 bytes
  *  10. send        the same quota, disclosure and Send API the old path uses
  *  11. record      the reply, its `ai_meta` and the new state, in one statement (`recordTurn`)
+ *  12. follow-up   a reply that carried a link queues the ONE nudge for it (`followupJob.ts`, S9): due hours later, re-checked when it runs
  *
  * **The conversation's facts go with the customer's message, not in the system prompt.** `buildSalesPrompt` makes the system text the same
  * on every turn of one tenant (`prefix`) so the layer's prompt cache (`cacheSystem`) can hit within a live back-and-forth; the stage and
@@ -23,7 +24,8 @@
  * answered by the legacy Gemini path ONCE when the agent's `gemini_fallback` is on (the owner's setting, as for the engine switch), and
  * otherwise by a hand-off: the kit's line, the bot paused, a person to answer.
  *
- * What this module does not do: tell the owner (S8's notification), send a follow-up (S9), or know where a conversation began (S10).
+ * What this module does not do: tell the owner (S8's notification), send the follow-up itself (S9's job does, `followupJob.ts`), or know where a
+ * conversation began (S10).
  */
 import { queryCount } from '../../db/query.js';
 import { checkFairSendQuota } from '../../utils/rateLimiter.js';
@@ -40,6 +42,7 @@ import { coerceSalesReply, type SalesOfferRef } from './coerce.js';
 import {
     abuseDecision, decideTurn, handoffDecision, loopDecision, MAX_AI_REPLIES_PER_HOUR, optOutDecision, unchangedDecision, type TurnDecision,
 } from './flow.js';
+import { scheduleFollowup } from './followupJob.js';
 import { guardReply, type GuardedReply, type Violation } from './guard.js';
 import { linkFor } from './link.js';
 import { prefilter, type PrefilterDecision } from './prefilter.js';
@@ -245,7 +248,17 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 handoff_reason: decision.handoffReason, latency_ms: Date.now() - startedAt,
             },
         };
-        await recordTurn(record);
+        const recorded = await recordTurn(record);
+
+        // 12. A link just went out: queue the ONE follow-up for it (`followupJob.ts`). After the record, best effort and never throwing, so a
+        // failure to queue can never make this job run again and answer the person twice. Only a sales turn is here, so `sales_mode = 'off'`
+        // (and a test sender who is not listed) queues nothing.
+        if (record.linkedOfferId && o.link) {
+            await scheduleFollowup({
+                creatorId: creator.id, conversationId: conversation.id, senderId: inbound.senderId, pageId: input.pageId,
+                offerId: record.linkedOfferId, recorded,
+            });
+        }
         return done();
     };
 

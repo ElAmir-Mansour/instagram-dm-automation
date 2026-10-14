@@ -431,6 +431,9 @@ const API = {
     getAiSettings: () => API.request('/settings/ai'),
     saveAiSettings: (data) => API.request('/settings/ai', { method: 'POST', body: JSON.stringify(data) }),
     testAiSettings: (data) => API.request('/settings/ai/test', { method: 'POST', body: JSON.stringify(data) }),
+    // The follow-up delay after a sales DM's link (S9): a platform-wide setting, so a platform admin's alone.
+    getSalesFollowup: () => API.request('/settings/sales-followup'),
+    saveSalesFollowup: (data) => API.request('/settings/sales-followup', { method: 'POST', body: JSON.stringify(data) }),
 
     // ─── Carousel Studio (STUDIO.md §4) ─────────────────────────────────────
     // The worker on the Mac does the slow parts (indexing, rendering); these
