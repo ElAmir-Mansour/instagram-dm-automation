@@ -49,12 +49,16 @@ describe('generateLinkCode', () => {
     });
 
     it('uses every one of the 62 characters, evenly enough that none is missing or twice as common', () => {
+        // 300,000 characters (~40 ms): a count's standard deviation is about 69, 1.4% of the mean, so ±15% is 10.5 of them and an
+        // honest generator fails this about once in 1e22 runs. At 3,000 codes and ±20% (4.4 of them) it failed once in ~1,500.
+        // A `byte % 62` without the rejection puts 8 characters 21% above the mean, and fails it every time.
+        const CODES = 30_000;
         const seen = new Map<string, number>();
-        for (let i = 0; i < 3000; i++) for (const ch of generateLinkCode()) seen.set(ch, (seen.get(ch) ?? 0) + 1);
+        for (let i = 0; i < CODES; i++) for (const ch of generateLinkCode()) seen.set(ch, (seen.get(ch) ?? 0) + 1);
         assert.equal(seen.size, 62);
         const counts = [...seen.values()];
-        const mean = (3000 * 10) / 62;
-        assert.ok(Math.min(...counts) > mean * 0.8 && Math.max(...counts) < mean * 1.2, `${Math.min(...counts)}..${Math.max(...counts)} around ${Math.round(mean)}`);
+        const mean = (CODES * 10) / 62;
+        assert.ok(Math.min(...counts) > mean * 0.85 && Math.max(...counts) < mean * 1.15, `${Math.min(...counts)}..${Math.max(...counts)} around ${Math.round(mean)}`);
     });
 
     it('discards bytes 248..255 instead of wrapping them: without that the first 8 characters would be likelier', () => {
