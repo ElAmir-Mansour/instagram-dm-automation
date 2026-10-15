@@ -7,8 +7,9 @@
  *   - the six names (Anthropic, OpenAI, Google (Gemini), OpenRouter, Groq, and an address the operator enters), in both languages, in the same order;
  *   - that they are used ONLY when the operator has added a key and left the provider on, which is the whole difference between "we use
  *     these" and "these are possible";
- *   - what goes to them (the account owner's profile and content, for drafting), and what does not (anything about people who comment or
- *     message), with the one exception that already exists named, not hidden: the DM text Google receives (section 3);
+ *   - what goes to them (the account owner's profile and content, for drafting), and what does not (anything else about people who comment
+ *     or message), with direct-message text named, not hidden: section 3 says when it reaches Google, and when, the operator having
+ *     routed an account's DM replies to one, it reaches a provider instead (the `providers` engine and sales mode, dmEngine.ts);
  *   - that their copy is theirs and cannot be deleted by us, on the deletion page as well;
  *   - that the contents list still has one link per section (a sub-processor list is an h3, not a new section), and the stamps agree.
  *
@@ -101,18 +102,38 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
         assert.ok(words(block.ar).includes('لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً، وما لم يفعل ذلك لا يصله شيء.'));
     });
 
-    it('says what is sent (the account owner\'s profile and content, to write a draft) and what is not (anything about people who comment or message)', () => {
+    it('says what is sent (the account owner\'s profile and content, to write a draft) and what is not (anything else about people who comment or message)', () => {
         assert.ok(words(block.en).includes('the account owner\'s profile and content'));
         assert.ok(words(block.en).includes('so that a draft can be written for them'));
-        assert.ok(words(block.en).includes('Nothing about people who comment or message on Instagram or Facebook is sent through this route'));
+        assert.ok(words(block.en).includes('nothing else about people who comment or message on Instagram or Facebook is sent through this route'));
         assert.ok(words(block.ar).includes('ملف صاحب الحساب ومحتواه'));
-        assert.ok(words(block.ar).includes('لا يُرسَل عبر هذا المسار شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك'));
+        assert.ok(words(block.ar).includes('ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك'));
+        assert.ok(!words(block.en).includes('Nothing about people who comment'), 'the old, absolute denial is gone: DM text can reach a provider');
     });
 
-    it('does not hide the one thing that already reaches Google (direct-message text): it points to section 3 rather than denying it', () => {
-        assert.ok(words(block.en).includes('the direct-message text that reaches Google is described in section 3'));
-        assert.ok(words(block.ar).includes('أما نصوص الرسائل الخاصة التي تصل إلى جوجل فموضّحة في القسم 3'));
+    it('does not hide direct-message text: a provider the operator routes an account\'s DM replies to receives the conversation, as section 3 says', () => {
+        assert.ok(words(block.en).includes('where the operator chooses, the replies to its direct messages (section 3)'));
+        assert.ok(words(block.en).includes('When the operator has a provider write an account\'s direct-message replies, the text of the conversation is sent to that provider too, exactly as section 3 describes'));
+        assert.ok(words(block.ar).includes('والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3)'));
+        assert.ok(words(block.ar).includes('وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ على رسائله الخاصة، يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً، على النحو الموضّح في القسم 3 تماماً'));
         assert.ok(privacy.en.includes('id="gemini-en"') && privacy.ar.includes('id="gemini-ar"'), 'and section 3 is there');
+    });
+
+    it('section 3 says what a provider gets in place of Google: up to twelve messages and notes on the conversation, no name or ids, Gemini as the fallback', () => {
+        const en = words(between(privacy.en, '<h2 id="gemini-en">', '<h2 id="retention-en">'));
+        assert.ok(en.includes('generate one, by default, the text of your message and the last eight messages in the thread are sent to Google\'s Gemini API'));
+        assert.ok(en.includes('an account that uses the tool\'s sales mode always has them written that way'));
+        assert.ok(en.includes('the text of your message and up to the last twelve messages in the thread, with the direction of each, are sent to that provider in place of Google'));
+        assert.ok(en.includes('or that you commented the account\'s keyword on a post (the keyword, not your comment)'));
+        assert.ok(en.includes('Your username, your account ID and the conversation ID are not sent to it either.'));
+        assert.ok(en.includes('If that provider cannot answer, the reply may be written by Gemini as described above.'));
+        const ar = words(between(privacy.ar, '<h2 id="gemini-ar">', '<h2 id="retention-ar">'));
+        assert.ok(ar.includes('يُرسَل افتراضياً نصّ رسالتك وآخر ثماني رسائل من المحادثة'));
+        assert.ok(ar.includes('والحساب الذي يستخدم وضع المبيعات في الأداة تُكتب ردوده بهذه الطريقة دائماً'));
+        assert.ok(ar.includes('نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة، مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل'));
+        assert.ok(ar.includes('(الكلمة نفسها، لا تعليقك)'));
+        assert.ok(ar.includes('ولا يُرسَل إليه كذلك اسمك ولا معرّف حسابك ولا معرّف المحادثة.'));
+        assert.ok(ar.includes('وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ «جيميناي» كما سبق.'));
     });
 
     it('says the operator\'s key is the one used, and that each provider\'s copy is its own, which we cannot delete', () => {
@@ -169,12 +190,14 @@ describe('/data-deletion — the same providers are named among what deletion ca
         for (const name of ['Anthropic', 'OpenAI', 'Google (Gemini)', 'OpenRouter', 'Groq', 'a service at an address the operator added']) assert.ok(en.includes(name), name);
         assert.ok(en.includes('if you are an account owner and the operator of the tool has switched on a provider'));
         assert.ok(en.includes('we cannot delete it on your behalf'));
-        assert.ok(en.includes('Nothing about people who comment or message on Instagram or Facebook is sent to them'));
+        assert.ok(en.includes('the text of your conversation reached that provider instead of Google (section 3 of the privacy policy)'));
+        assert.ok(en.includes('Nothing else about people who comment or message on Instagram or Facebook is sent to them'));
         const ar = words(section5.ar);
         for (const name of ['Anthropic', 'OpenAI', 'Gemini', 'OpenRouter', 'Groq']) assert.ok(ar.includes(name), name);
         assert.ok(ar.includes('إن كنتَ صاحب حساب وفعّل مُشغّل الأداة مزوّداً'));
         assert.ok(ar.includes('ولا نستطيع حذفها نيابةً عنك'));
-        assert.ok(ar.includes('لا يصلهم شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك'));
+        assert.ok(ar.includes('فقد وصل نصّ محادثتك إلى ذلك المزوّد بدلاً من جوجل (القسم 3 من سياسة الخصوصية)'));
+        assert.ok(ar.includes('ولا يصلهم شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك'));
     });
 
     it('points to the list on /privacy, by section, in both languages', () => {
