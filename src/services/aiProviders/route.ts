@@ -3,7 +3,7 @@
  *
  *   1. A saved route wins. If its provider cannot answer (no key, switched off, no base URL) that is `no_provider`, naming the cause:
  *      never a quiet move to another provider, which would bill someone the operator did not choose and hide a broken key.
- *   2. With none saved, the first provider that can answer, in the registry's order (Anthropic, OpenAI, Gemini, OpenRouter, Custom),
+ *   2. With none saved, the first provider that can answer, in the registry's order (Anthropic, OpenAI, Gemini, OpenRouter, Groq, Custom),
  *      at its default model. Gemini's key is the DM bot's, so on a deployment that has only that one, drafts spend the bot's quota:
  *      the Operations card says so beside any route that lands there.
  *   3. With no provider at all, `no_provider`. That error is final; the wizard falls back to its deterministic prefill.

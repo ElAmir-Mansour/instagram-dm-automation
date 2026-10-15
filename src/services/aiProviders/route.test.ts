@@ -16,7 +16,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const LISTED = '22222222-2222-4222-8222-222222222222';
 const OTHER = '33333333-3333-4333-8333-333333333333';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 
@@ -70,9 +70,9 @@ describe('the default pick: the first provider that has a key', () => {
         assert.deepEqual(route, { purpose: 'onboarding_draft', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high', source: 'default' });
     });
 
-    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Custom', async () => {
+    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Groq, Custom', async () => {
         const expected: string[] = [];
-        for (const id of ['custom', 'openrouter', 'gemini', 'openai', 'anthropic'] as const) {
+        for (const id of ['custom', 'groq', 'openrouter', 'gemini', 'openai', 'anthropic'] as const) {
             if (id === 'custom') {
                 saveProviders({ custom: { baseUrl: 'https://llm.example.com/v1', defaultModel: 'my-model' } });
             } else {
@@ -108,6 +108,19 @@ describe('the default pick: the first provider that has a key', () => {
         saveKey('openai');
         saveProviders({ anthropic: { enabled: false } });
         assert.equal((await pick('onboarding_draft')).provider, 'openai');
+    });
+
+    it('lands on Groq, at its default gpt-oss model, only when it is the first provider with a key; any earlier one keeps the default pick', async () => {
+        saveKey('groq');
+        assert.deepEqual(await pick('onboarding_draft'), { purpose: 'onboarding_draft', provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'high', source: 'default' });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low', source: 'default' });
+        saveKey('openrouter');
+        assert.equal((await pick('dm')).provider, 'openrouter', 'OpenRouter is ahead of Groq in the registry\'s order');
+    });
+
+    it('takes GROQ_API_KEY as Groq\'s key', async () => {
+        process.env.GROQ_API_KEY = FAKE_KEYS.groq;
+        assert.equal((await pick('onboarding_draft')).provider, 'groq');
     });
 
     it('lands on Gemini when it is the only key, which is the DM bot\'s (the card warns)', async () => {
@@ -158,6 +171,25 @@ describe('a saved route', () => {
         assert.equal((await pick('tenant_studio')).source, 'default');
         saveRouting({ dm: { provider: 'anthropic', model: 'claude-haiku-5-5', effort: 'medium' } });
         assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'anthropic', model: 'claude-haiku-5-5', effort: 'medium', source: 'saved' });
+    });
+
+    it('for `dm` can be Groq, with its own model and effort, while every other purpose stays on the default and no engine or route is changed', async () => {
+        saveKey('anthropic');
+        saveKey('groq');
+        saveRouting({ dm: { provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'medium' } });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'medium', source: 'saved' });
+        assert.deepEqual(await pick('tenant_studio'), { purpose: 'tenant_studio', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'medium', source: 'default' });
+        // Groq has no base URL or JSON mode to carry: only Custom does.
+        assert.ok(!('baseUrl' in (await pick('dm'))) && !('jsonMode' in (await pick('dm'))));
+    });
+
+    it('for `dm` on Groq with no key (or switched off) is `no_provider` naming Groq, never a move to the provider that has one', async () => {
+        saveKey('anthropic');
+        saveRouting({ dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' } });
+        assert.match((await failure(resolveRoute('dm', null))).message, /dm uses Groq, which has no API key saved/);
+        saveKey('groq');
+        saveProviders({ groq: { enabled: false } });
+        assert.match((await failure(resolveRoute('dm', null))).message, /dm uses Groq, which is switched off/);
     });
 
     it('for `dm` whose provider has no key is `no_provider` naming dm and the provider, never a move to the provider that has one', async () => {

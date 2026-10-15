@@ -11,8 +11,8 @@ import { isAiError } from './errors.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
 
 describe('PROVIDERS', () => {
-    it('lists the five launch providers in the order resolveRoute falls back through them', () => {
-        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'custom']);
+    it('lists the six providers in the order resolveRoute falls back through them', () => {
+        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
         assert.deepEqual([...PROVIDER_IDS], PROVIDERS.map((p) => p.id));
     });
 
@@ -23,8 +23,21 @@ describe('PROVIDERS', () => {
             openai: 'openai_responses',
             gemini: 'gemini',
             openrouter: 'chat_completions',
+            groq: 'chat_completions',
             custom: 'chat_completions',
         });
+    });
+
+    it('has Groq at its fixed OpenAI-compatible address, key required, defaulting to a gpt-oss model and suggesting no Llama', () => {
+        const groq = providerById('groq')!;
+        assert.equal(groq.label, 'Groq');
+        assert.equal(groq.baseUrl, 'https://api.groq.com/openai/v1');
+        assert.equal(groq.editableBaseUrl, false);
+        assert.equal(groq.keyRequired, true);
+        assert.equal(groq.defaultModel, 'openai/gpt-oss-120b');
+        assert.deepEqual([...groq.suggestedModels], ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+        // Strict `json_schema` is what every call asks for, and among Groq's production models only gpt-oss does it (the registry says why).
+        for (const model of groq.suggestedModels) assert.match(model, /^openai\/gpt-oss-/);
     });
 
     it('defaults Anthropic to Opus 5.5 and offers Sonnet and Haiku 5.5 beside it', () => {
@@ -64,16 +77,19 @@ describe('PROVIDERS', () => {
 describe('providerById, isProviderId and providerName', () => {
     it('finds a provider by id and says no to one that does not exist', () => {
         assert.equal(providerById('gemini')?.family, 'gemini');
-        assert.equal(providerById('groq'), undefined);
+        assert.equal(providerById('groq')?.family, 'chat_completions');
+        assert.equal(providerById('mistral'), undefined);
         assert.equal(providerById(undefined), undefined);
         assert.equal(isProviderId('openrouter'), true);
-        assert.equal(isProviderId('groq'), false);
+        assert.equal(isProviderId('groq'), true);
+        assert.equal(isProviderId('mistral'), false);
         assert.equal(isProviderId(42), false);
     });
 
     it('names a provider the way an error message should', () => {
         assert.equal(providerName('anthropic'), 'Anthropic');
         assert.equal(providerName('openai'), 'OpenAI');
+        assert.equal(providerName('groq'), 'Groq');
         assert.equal(providerName('custom'), 'The custom endpoint');
         assert.equal(providerName('nope'), 'The provider');
     });

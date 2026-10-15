@@ -43,8 +43,8 @@ interface Fixture {
     baseUrl?: string;
     /** Whether an answer whose top level is an array is allowed (OpenAI's strict mode needs an object). */
     arrayRoot: boolean;
-    /** What a spent balance answers: 429, or OpenRouter's 402. */
-    quotaStatus: number;
+    /** What a spent balance answers: 429, or OpenRouter's 402. Absent for a provider with no such answer: Groq's 429 is always a rate limit. */
+    quotaStatus?: number;
     text(text: string, usage?: { input: number; output: number }): Response;
     refusal(): Response;
     cutOff(): Response;
@@ -54,7 +54,7 @@ interface Fixture {
     /** How long a caller is told to wait after `rateLimited()` with the header `retryAfterHeader`, or without one. */
     waitMs: { withHeader: number; withoutHeader: number | undefined };
     /** A 429 for a limit that does not: a daily quota, the monthly spend cap. */
-    quotaSpent(): Response;
+    quotaSpent?(): Response;
 }
 
 const ANTHROPIC_ERROR_TYPES: Record<number, string> = {
@@ -234,6 +234,30 @@ const openrouter: Fixture = {
     quotaSpent: () => openRouterError(402, 'Insufficient credits. Add more using https://openrouter.ai/settings/credits'),
 };
 
+// Groq: `{error: {message, type}}`; a 429 carries `retry-after` in seconds, and 498 is its own status for a flex tier that is out of capacity.
+const groqError = (status: number, message: string, type = 'invalid_request_error') => jsonResponse(status, { error: { message, type } });
+
+const groq: Fixture = {
+    provider: 'groq',
+    model: 'openai/gpt-oss-120b',
+    // Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
+    key: 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh',
+    keyHeader: 'authorization',
+    keyHeaderValue: (key) => `Bearer ${key}`,
+    arrayRoot: true,
+    origin: 'https://api.groq.com/',
+    text: chatText('openai/gpt-oss-120b'),
+    refusal: chatRefusal('openai/gpt-oss-120b'),
+    cutOff: chatCutOff('openai/gpt-oss-120b'),
+    error: (status, message) => groqError(status, message),
+    rateLimited: (retryAfter) => jsonResponse(
+        429,
+        { error: { message: 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 7.5s.', type: 'tokens' } },
+        retryAfter ? { 'retry-after': retryAfter } : {},
+    ),
+    waitMs: { withHeader: 30_000, withoutHeader: undefined },
+};
+
 const custom: Fixture = {
     provider: 'custom',
     model: 'llama-4-maverick',
@@ -276,7 +300,7 @@ const printed = (err: AiError): string =>
 /** What Node's fetch throws for `redirect: 'error'`. */
 const redirectRefusal = () => Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
 
-for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
+for (const fx of [anthropic, openai, gemini, openrouter, groq, custom]) {
     describe(`generateJson (${fx.provider})`, () => {
         describe('a structured answer', () => {
             it('returns the parsed JSON with usage, billing, model, provider, stop reason and timing', async () => {
@@ -423,8 +447,8 @@ for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
                 assert.equal(err.retryAfterMs, fx.waitMs.withHeader);
             });
 
-            it('a 429 for a limit that does not lift by itself is quota: final, with no wait', async () => {
-                const { fetchImpl, calls } = stubFetch(fx.quotaSpent(), fx.text(JSON.stringify(ANSWER)));
+            it('a 429 for a limit that does not lift by itself is quota: final, with no wait', { skip: fx.quotaSpent === undefined }, async () => {
+                const { fetchImpl, calls } = stubFetch(fx.quotaSpent!(), fx.text(JSON.stringify(ANSWER)));
                 const err = await rejection(call(fx, fetchImpl));
                 assert.equal(err.kind, 'quota');
                 assert.equal(err.status, fx.quotaStatus);
@@ -713,7 +737,7 @@ describe('generateJson (gemini specifics)', () => {
 
     it('tells a per-minute 429 from a per-day one although both say "You exceeded your current quota"', async () => {
         const perMinute = await rejection(call(gemini, stubFetch(gemini.rateLimited()).fetchImpl));
-        const perDay = await rejection(call(gemini, stubFetch(gemini.quotaSpent()).fetchImpl));
+        const perDay = await rejection(call(gemini, stubFetch(gemini.quotaSpent!()).fetchImpl));
         assert.equal(perMinute.message, perDay.message);
         assert.equal(perMinute.kind, 'rate');
         assert.equal(perMinute.retryable, true);
@@ -984,6 +1008,91 @@ describe('generateJson (openrouter specifics)', () => {
     });
 });
 
+describe('generateJson (groq specifics)', () => {
+    it('asks for strict structured output nested in response_format, with reasoning_effort and include_reasoning, and nothing that is OpenRouter\'s', async () => {
+        const { fetchImpl, calls } = stubFetch(groq.text(JSON.stringify(ANSWER)));
+        await call(groq, fetchImpl, { system: 'Be brief.', maxTokens: 777, effort: 'low' });
+        const { body, headers, url } = calls[0]!;
+        assert.equal(url, 'https://api.groq.com/openai/v1/chat/completions');
+        assert.equal(body.model, 'openai/gpt-oss-120b');
+        assert.equal(body.response_format.type, 'json_schema');
+        assert.equal(body.response_format.json_schema.strict, true);
+        assert.equal(body.response_format.json_schema.name, 'answer');
+        assert.deepEqual(body.response_format.json_schema.schema.required, ['reply', 'score']);
+        assert.equal(body.response_format.json_schema.schema.additionalProperties, false);
+        assert.equal(body.reasoning_effort, 'low');
+        assert.equal(body.include_reasoning, false);
+        assert.equal(body.max_tokens, 777);
+        assert.deepEqual(body.messages, [{ role: 'system', content: 'Be brief.' }, { role: 'user', content: 'Say hello.' }]);
+        for (const field of ['provider', 'reasoning', 'usage', 'max_completion_tokens', 'temperature', 'stream']) assert.ok(!(field in body), field);
+        assert.deepEqual(Object.keys(headers).sort(), ['authorization', 'content-type']);
+    });
+
+    it('sends reasoning_effort for gpt-oss only, as low, medium or high, with xhigh and max sent as high', async () => {
+        const sent = async (model: string, effort: Effort) => {
+            const { fetchImpl, calls } = stubFetch(groq.text(JSON.stringify(ANSWER)));
+            await call(groq, fetchImpl, { model, effort });
+            return [calls[0]!.body.reasoning_effort, calls[0]!.body.include_reasoning];
+        };
+        assert.deepEqual(await sent('openai/gpt-oss-20b', 'low'), ['low', false]);
+        assert.deepEqual(await sent('openai/gpt-oss-120b', 'medium'), ['medium', false]);
+        assert.deepEqual(await sent('openai/gpt-oss-120b', 'high'), ['high', false]);
+        assert.deepEqual(await sent('openai/gpt-oss-120b', 'xhigh'), ['high', false]);
+        assert.deepEqual(await sent('openai/gpt-oss-120b', 'max'), ['high', false]);
+        for (const model of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']) {
+            assert.deepEqual(await sent(model, 'high'), [undefined, undefined], model);
+        }
+    });
+
+    it('bills the tokens Groq reports under the model it was asked for, and prices them from the table: no cost is taken from the answer', async () => {
+        const withCost = jsonResponse(200, chatBody(
+            'openai/gpt-oss-120b',
+            { message: { role: 'assistant', content: JSON.stringify(ANSWER), reasoning: 'thinking it over' }, finish_reason: 'stop' },
+            { prompt_tokens: 150, completion_tokens: 40, total_tokens: 190, completion_tokens_details: { reasoning_tokens: 22 }, cost: 99 },
+        ));
+        const out = await call(groq, stubFetch(withCost).fetchImpl);
+        assert.deepEqual(out.billed, [{ model: 'openai/gpt-oss-120b', in: 150, out: 40 }]);
+        assert.deepEqual(out.json, ANSWER);
+        assert.ok(!JSON.stringify(out).includes('thinking it over'), 'the reasoning text is never part of the answer');
+        // Groq's own rate from the table ($0.15 / $0.60 a million), not the `cost: 99` in the body.
+        assert.deepEqual(costOf(out.billed, DEFAULT_PRICES).usd, (150 * 0.15 + 40 * 0.6) / 1e6);
+    });
+
+    it('reads an optional field back out of strict mode, as OpenAI\'s does', async () => {
+        const { fetchImpl } = stubFetch(groq.text('{"reply":"hi","score":null}'));
+        assert.deepEqual((await call(groq, fetchImpl)).json, { reply: 'hi' });
+    });
+
+    it('reads status 498, the flex tier out of capacity, as a server error to try again from one request, with the wait it asks for', async () => {
+        const { fetchImpl, calls } = stubFetch(groqError(498, 'Flex tier capacity exceeded. Please retry later.', 'capacity_exceeded'), groq.text(JSON.stringify(ANSWER)));
+        const err = await rejection(call(groq, fetchImpl));
+        assert.equal(err.kind, 'server');
+        assert.equal(err.status, 498);
+        assert.equal(err.retryable, true);
+        assert.equal(err.provider, 'groq');
+        assert.equal(calls.length, 1);
+        const waiting = await rejection(call(groq, stubFetch(jsonResponse(498, { error: { message: 'Retry later.', type: 'capacity_exceeded' } }, { 'retry-after': '12' })).fetchImpl));
+        assert.equal(waiting.retryAfterMs, 12_000);
+    });
+
+    it('is the only provider for which 498 is a server error', async () => {
+        for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
+            const err = await rejection(call(fx, stubFetch(fx.error(498, 'odd')).fetchImpl));
+            assert.equal(err.kind, 'bad_request', fx.provider);
+            assert.equal(err.retryable, false, fx.provider);
+        }
+    });
+
+    it('reads every 429 as a rate limit, whatever its words say: Groq\'s limits are lifted by waiting, and its messages point at where to upgrade', async () => {
+        const message = 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD). Need more tokens? Upgrade at https://console.groq.com/settings/billing';
+        const { fetchImpl, calls } = stubFetch(groqError(429, message, 'tokens'), groq.text(JSON.stringify(ANSWER)));
+        const err = await rejection(call(groq, fetchImpl));
+        assert.equal(err.kind, 'rate');
+        assert.equal(err.retryable, true);
+        assert.equal(calls.length, 1);
+    });
+});
+
 describe('generateJson (custom specifics)', () => {
     it('posts to the operator\'s base URL, tidied, and to nothing else', async () => {
         const { fetchImpl, calls } = stubFetch(custom.text(JSON.stringify(ANSWER)));
@@ -1045,10 +1154,13 @@ describe('generateJson (custom specifics)', () => {
         assert.equal(calls.length, 0);
     });
 
-    it('does not offer JSON-object mode to a provider that is not Custom: OpenRouter and OpenAI stay on strict schemas', async () => {
+    it('does not offer JSON-object mode to a provider that is not Custom: OpenRouter, Groq and OpenAI stay on strict schemas', async () => {
         const router = stubFetch(openrouter.text(JSON.stringify(ANSWER)));
         await call(openrouter, router.fetchImpl, { jsonMode: 'object' });
         assert.equal(router.calls[0]!.body.response_format.type, 'json_schema');
+        const fast = stubFetch(groq.text(JSON.stringify(ANSWER)));
+        await call(groq, fast.fetchImpl, { jsonMode: 'object' });
+        assert.equal(fast.calls[0]!.body.response_format.type, 'json_schema');
         const direct = stubFetch(openai.text(JSON.stringify(ANSWER)));
         await call(openai, direct.fetchImpl, { jsonMode: 'object' });
         assert.equal(direct.calls[0]!.body.text.format.type, 'json_schema');
@@ -1075,7 +1187,7 @@ describe('generateJson (custom specifics)', () => {
 });
 
 describe('an answer that leaves out a required field', () => {
-    for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
+    for (const fx of [anthropic, openai, gemini, openrouter, groq, custom]) {
         describe(fx.provider, () => {
             it('is bad_output, retryable once, naming the field and billed, because some endpoints take strict for a hint', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.text('{"score":3}', { input: 77, output: 9 }));
@@ -1170,6 +1282,9 @@ describe('a limit below what the model needs to think', () => {
         await call(openai, stubFetch(openai.text(JSON.stringify(ANSWER))).fetchImpl, { model: 'gpt-4.1', maxTokens: 100 });
         await call(custom, stubFetch(custom.text(JSON.stringify(ANSWER))).fetchImpl, { maxTokens: 100 });
         await call(openrouter, stubFetch(openrouter.text(JSON.stringify(ANSWER))).fetchImpl, { maxTokens: 100 });
+        // Groq has no minimum, gpt-oss included: it counts max_tokens against the free tier's 8 000 tokens a minute (limits.ts).
+        await call(groq, stubFetch(groq.text(JSON.stringify(ANSWER))).fetchImpl, { maxTokens: 1000 });
+        await call(groq, stubFetch(groq.text(JSON.stringify(ANSWER))).fetchImpl, { model: 'llama-3.3-70b-versatile', maxTokens: 100 });
         assert.equal(warnings().length, 0);
     });
 
@@ -1194,7 +1309,7 @@ describe('generateJson before any request is made', () => {
 
     it('is bad_request for a provider that does not exist', async () => {
         const { fetchImpl, calls } = stubFetch();
-        const err = await rejection(call(anthropic, fetchImpl, { provider: 'groq' as ProviderId }));
+        const err = await rejection(call(anthropic, fetchImpl, { provider: 'mistral' as ProviderId }));
         assert.equal(err.kind, 'bad_request');
         assert.equal(calls.length, 0);
     });
@@ -1243,7 +1358,7 @@ describe('generateJson before any request is made', () => {
         });
 
         it('is ignored, however bad, for a provider that has its own address', async () => {
-            for (const fx of [anthropic, openai, gemini, openrouter]) {
+            for (const fx of [anthropic, openai, gemini, openrouter, groq]) {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
                 const out = await call(fx, fetchImpl, { baseUrl: 'http://10.0.0.5/not-a-url-we-would-allow' });
                 assert.deepEqual(out.json, ANSWER);
@@ -1277,7 +1392,7 @@ describe('generateJson before any request is made', () => {
         it('checks them before it looks for a key or a provider', async () => {
             const { fetchImpl } = stubFetch();
             assert.match((await rejection(call(anthropic, fetchImpl, { apiKey: '', timeoutMs: 0 }))).message, /timeoutMs/);
-            assert.match((await rejection(call(anthropic, fetchImpl, { provider: 'groq' as ProviderId, maxTokens: 0 }))).message, /maxTokens/);
+            assert.match((await rejection(call(anthropic, fetchImpl, { provider: 'mistral' as ProviderId, maxTokens: 0 }))).message, /maxTokens/);
         });
 
         describe('and caps the deadline', () => {

@@ -99,6 +99,7 @@ describe('the draft schemas', () => {
             assert.doesNotThrow(() => buildOpenAiRequest({ ...base, provider: 'openai', model: 'gpt-6-astra' }));
             assert.doesNotThrow(() => buildGeminiRequest({ ...base, provider: 'gemini', model: 'gemini-3.8-flash' }));
             assert.doesNotThrow(() => buildChatRequest({ ...base, provider: 'openrouter', model: 'openrouter/auto' }));
+            assert.doesNotThrow(() => buildChatRequest({ ...base, provider: 'groq', model: 'openai/gpt-oss-120b' }));
             assert.doesNotThrow(() => buildChatRequest({ ...base, provider: 'custom', model: 'm', baseUrl: 'https://llm.example.com/v1' }));
             const gemini = buildGeminiRequest({ ...base, provider: 'gemini', model: 'gemini-3.8-flash' });
             assert.doesNotMatch(JSON.stringify(gemini.body), /minItems|maxItems/, 'Gemini 3 answers a schema with array bounds with a bare 400');

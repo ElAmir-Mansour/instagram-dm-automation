@@ -18,7 +18,7 @@ import { PROVIDER_IDS } from '../llm/registry.js';
 import { installAiDb, type AiDb } from './testDb.js';
 import { assertNoKey, FAKE_KEYS } from './testKeys.js';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
 
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
@@ -58,9 +58,11 @@ const EMPTY: AiConfig = { providers: {}, routing: {}, prices: {}, budgets: { dai
 describe('the setting keys', () => {
     it('are the ones 06 names, one secret row per provider, and Gemini keeps the existing one', () => {
         assert.deepEqual(Object.values(PROVIDER_KEY_SETTING).sort(), [
-            'ai.providers.anthropic.api_key', 'ai.providers.custom.api_key', 'ai.providers.openai.api_key', 'ai.providers.openrouter.api_key', 'gemini.api_key',
+            'ai.providers.anthropic.api_key', 'ai.providers.custom.api_key', 'ai.providers.groq.api_key', 'ai.providers.openai.api_key', 'ai.providers.openrouter.api_key', 'gemini.api_key',
         ]);
         assert.equal(PROVIDER_KEY_SETTING.gemini, APP_SETTING_KEYS.geminiApiKey);
+        assert.equal(PROVIDER_KEY_SETTING.groq, APP_SETTING_KEYS.aiProviderKeyGroq);
+        assert.equal(APP_SETTING_KEYS.aiProviderKeyGroq, 'ai.providers.groq.api_key');
         assert.equal(APP_SETTING_KEYS.aiProviders, 'ai.providers');
         assert.equal(APP_SETTING_KEYS.aiRouting, 'ai.routing');
         assert.equal(APP_SETTING_KEYS.aiPrices, 'ai.prices');
@@ -75,8 +77,8 @@ describe('the setting keys', () => {
         }
     });
 
-    it('have environment fallbacks for three providers and Gemini, none for Custom', () => {
-        assert.deepEqual(PROVIDER_KEY_ENV, { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', custom: null });
+    it('have environment fallbacks for four providers and Gemini, none for Custom', () => {
+        assert.deepEqual(PROVIDER_KEY_ENV, { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', custom: null });
     });
 });
 
@@ -120,6 +122,27 @@ describe('loadAiSettings: the keys', () => {
         assert.equal(keys.has('openrouter'), false);
         assert.equal(keys.get('openrouter'), null);
         assert.deepEqual(keys.status('openrouter'), { set: false, source: null, last4: null, envFallback: false });
+    });
+
+    it('reads Groq\'s key from its own setting, saved first, then GROQ_API_KEY, trimmed, and never previews the environment\'s', async () => {
+        process.env.GROQ_API_KEY = `  ${FAKE_KEYS.openai}\n`;
+        let { keys } = await loadAiSettings();
+        assert.equal(keys.get('groq'), FAKE_KEYS.openai);
+        assert.deepEqual(keys.status('groq'), { set: true, source: 'env', last4: null, envFallback: true });
+        db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
+        ({ keys } = await loadAiSettings());
+        assert.equal(keys.get('groq'), FAKE_KEYS.groq);
+        assert.deepEqual(keys.status('groq'), { set: true, source: 'database', last4: 'grq6', envFallback: true });
+        // The key is Groq's alone: no other provider answers with it.
+        assert.equal(keys.has('openai'), false);
+        assert.equal(keys.has('openrouter'), false);
+    });
+
+    it('is not set for Groq with no key anywhere; a blank GROQ_API_KEY is not a key', async () => {
+        process.env.GROQ_API_KEY = '   ';
+        const { keys } = await loadAiSettings();
+        assert.equal(keys.has('groq'), false);
+        assert.deepEqual(keys.status('groq'), { set: false, source: null, last4: null, envFallback: false });
     });
 
     it("reads Gemini's key from the platform's existing setting, saved first, then GEMINI_API_KEY", async () => {
@@ -180,6 +203,13 @@ describe('what a screen is told (describeAi)', () => {
         assert.equal(byId.openai!.problem, 'is switched off');
         assert.equal(byId.openai!.enabled, false);
         assert.equal(byId.openrouter!.problem, 'has no API key saved');
+        assert.equal(byId.groq!.problem, 'has no API key saved');
+        assert.equal(byId.groq!.label, 'Groq');
+        assert.equal(byId.groq!.keyRequired, true);
+        assert.equal(byId.groq!.sharesDmQuota, false);
+        assert.equal(byId.groq!.baseUrl, null, 'only Custom has one');
+        assert.equal(byId.groq!.defaultModel, 'openai/gpt-oss-120b');
+        assert.deepEqual(byId.groq!.suggestedModels, ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
         assert.equal(byId.custom!.problem, 'has no base URL saved');
         assert.equal(byId.gemini!.sharesDmQuota, true);
         assert.equal(byId.anthropic!.sharesDmQuota, false);
@@ -202,6 +232,27 @@ describe('what a screen is told (describeAi)', () => {
         codes = view.warnings.map((w) => w.code);
         assert.deepEqual(codes, ['unpriced_model'], 'openai answers first; its default model has no price in the table');
         assert.deepEqual(view.warnings[0]!.detail, ['gpt-6-astra']);
+    });
+
+    it('does not flag a route on gpt-oss, which the table prices, and flags a Groq model it does not price, since Groq reports no cost', async () => {
+        db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
+        db.setSetting('ai.budget.daily_usd', '5');
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'high' } }));
+        let { config, keys } = await loadAiSettings();
+        let view = describeAi(config, keys);
+        assert.deepEqual(view.purposes.find((p) => p.purpose === 'dm')!.resolved, { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'high', source: 'saved' });
+        // The no-route purposes fall back to Groq too, the one provider with a key, at its default model.
+        assert.deepEqual(view.purposes.find((p) => p.purpose === 'tenant_studio')!.resolved, { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'medium', source: 'default' });
+        assert.deepEqual(view.warnings, []);
+        // A Groq model the table does not seed is flagged, and the operator's own price clears it (a figure for the test, not Groq's).
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'groq', model: 'llama-3.3-70b-versatile', effort: 'high' } }));
+        ({ config, keys } = await loadAiSettings());
+        view = describeAi(config, keys);
+        assert.deepEqual(view.warnings, [{ code: 'unpriced_model', detail: ['llama-3.3-70b-versatile'] }]);
+        db.setSetting('ai.prices', JSON.stringify({ 'llama-3.3-70b-versatile': { in: 1, out: 2 } }));
+        ({ config, keys } = await loadAiSettings());
+        view = describeAi(config, keys);
+        assert.deepEqual(view.warnings, []);
     });
 
     it('shows each purpose with what it would use now: the saved route, or the reason it would fail', async () => {
@@ -311,6 +362,16 @@ describe('planAiPatch: what a change may be', () => {
         const r = plan({ providers: { openai: { enabled: true } } }, current);
         assert.ok(r.ok);
         assert.deepEqual(r.plan.providers!.openai, { defaultModel: 'gpt-6-luna' });
+    });
+
+    it('takes Groq\'s default model and a route to it, a model id with a slash and all, and gives it no base URL or JSON mode', () => {
+        const r = plan({ providers: { groq: { defaultModel: ' openai/gpt-oss-20b ' } }, routing: { dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'max' } } });
+        assert.ok(r.ok);
+        assert.deepEqual(r.plan.providers, { groq: { defaultModel: 'openai/gpt-oss-20b' } });
+        assert.deepEqual(r.plan.routing, { dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'max' } });
+        assert.deepEqual(r.plan.changes.routes, { dm: 'groq/openai/gpt-oss-120b/max' });
+        assert.match(problems({ providers: { groq: { baseUrl: 'https://llm.example.com/v1' } } })[0]!, /providers\.groq\.baseUrl: only Custom has a base URL/);
+        assert.match(problems({ providers: { groq: { jsonMode: 'object' } } })[0]!, /providers\.groq\.jsonMode: only Custom has a JSON mode/);
     });
 
     it('refuses a base URL anywhere but Custom, and one that is not a public https address', () => {
@@ -433,7 +494,9 @@ describe('providerProblem and defaultModelOf', () => {
         const { config, keys } = await loadAiSettings();
         assert.equal(providerProblem('anthropic', config, keys), 'is switched off');
         assert.equal(providerProblem('openai', config, keys), 'has no API key saved');
+        assert.equal(providerProblem('groq', config, keys), 'has no API key saved');
         assert.equal(providerProblem('custom', config, keys), null, 'Custom needs a base URL, not a key');
+        assert.equal(defaultModelOf('groq', config), 'openai/gpt-oss-120b');
         assert.equal(defaultModelOf('custom', config), 'm');
         assert.equal(defaultModelOf('gemini', config), 'gemini-3.8-flash');
         assert.equal(defaultModelOf('custom', EMPTY), '');

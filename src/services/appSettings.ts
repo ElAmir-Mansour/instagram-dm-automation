@@ -147,12 +147,13 @@ export const APP_SETTING_KEYS = {
     /**
      * The AI providers layer (docs/onboarding/06, `src/services/aiProviders/settings.ts`): the operator's own API keys, one secret row per
      * provider, each checked with the provider before it is saved. Gemini has no row here: it is `gemini.api_key` above, shared with the
-     * DM bot and the Studio. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` are the fallbacks; Custom has none.
+     * DM bot and the Studio. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `GROQ_API_KEY` are the fallbacks; Custom has none.
      * A key is never returned by any route: the Operations card is told `{set, source, last4}` and nothing else.
      */
     aiProviderKeyAnthropic: 'ai.providers.anthropic.api_key',
     aiProviderKeyOpenai: 'ai.providers.openai.api_key',
     aiProviderKeyOpenrouter: 'ai.providers.openrouter.api_key',
+    aiProviderKeyGroq: 'ai.providers.groq.api_key',
     aiProviderKeyCustom: 'ai.providers.custom.api_key',
     /**
      * JSON `{ "<provider>": { enabled?, defaultModel?, baseUrl?, jsonMode? } }`: what the operator changed about a provider. `baseUrl` and
@@ -272,6 +273,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.aiProviderKeyAnthropic,
     APP_SETTING_KEYS.aiProviderKeyOpenai,
     APP_SETTING_KEYS.aiProviderKeyOpenrouter,
+    APP_SETTING_KEYS.aiProviderKeyGroq,
     APP_SETTING_KEYS.aiProviderKeyCustom,
     APP_SETTING_KEYS.notifyTelegramBotToken,
 ]);

@@ -16,6 +16,8 @@ const anthropicBody = (type: string, message: string, details?: unknown) =>
 const geminiBody = (code: number, status: string, message: string, details?: unknown[]) =>
     JSON.stringify({ error: { code, message, status, ...(details ? { details } : {}) } });
 const openAiBody = (code: string, message: string) => JSON.stringify({ error: { message, type: 'insufficient_quota', code } });
+// Groq's error body, `{error: {message, type}}`, and the 498 it keeps for itself: the flex tier is out of capacity, try again later.
+const groqBody = (message: string, type: string) => JSON.stringify({ error: { message, type } });
 
 // Google's structured 429 detail: which quota was hit, and how long to wait.
 const quotaFailure = (...quotaIds: string[]) => ({
@@ -58,6 +60,19 @@ describe('errorFromHttp', () => {
         ['Anthropic 504', 'anthropic', 504, anthropicBody('timeout_error', 'Request timed out'), 'server'],
         ['Gemini 503', 'gemini', 503, geminiBody(503, 'UNAVAILABLE', 'The model is overloaded. Please try again later.'), 'server'],
         ['502 from a gateway', 'custom', 502, '<html><body>502 Bad Gateway</body></html>', 'server'],
+        ['Groq 401', 'groq', 401, groqBody('Invalid API Key', 'invalid_request_error'), 'auth'],
+        ['Groq 403', 'groq', 403, groqBody('Forbidden', 'permission_denied'), 'auth'],
+        ['Groq 400', 'groq', 400, groqBody('response_format: json_schema is not supported with this model', 'invalid_request_error'), 'bad_request'],
+        ['Groq 413', 'groq', 413, groqBody('Request too large for model on tokens per minute', 'tokens'), 'bad_request'],
+        ['Groq 498, the flex tier is out of capacity', 'groq', 498, groqBody('Flex tier capacity exceeded. Please retry later.', 'capacity_exceeded'), 'server'],
+        ['Groq 498 with no body', 'groq', 498, '', 'server'],
+        ['Groq 500', 'groq', 500, groqBody('Internal server error', 'internal_server_error'), 'server'],
+        ['Groq 502', 'groq', 502, '<html><body>502 Bad Gateway</body></html>', 'server'],
+        ['Groq 503', 'groq', 503, groqBody('Service unavailable', 'service_unavailable'), 'server'],
+        // 498 is Groq's and nobody else's: from any other provider it is the 4xx it looks like, the request's own fault.
+        ['a 498 from OpenRouter', 'openrouter', 498, JSON.stringify({ error: { code: 498, message: 'odd' } }), 'bad_request'],
+        ['a 498 from a custom endpoint', 'custom', 498, '', 'bad_request'],
+        ['a 498 from Anthropic', 'anthropic', 498, anthropicBody('api_error', 'odd'), 'bad_request'],
     ];
 
     for (const [name, provider, status, body, kind] of table) {
@@ -131,6 +146,11 @@ describe('errorFromHttp', () => {
             ['OpenAI, an empty balance said only in words, with the underscores', 'openai', JSON.stringify({ error: { message: 'Blocked.', type: 'x', code: 'credit_balance_exhausted_for_org' } }), 'quota'],
             ['a compatible endpoint that says the credits are gone', 'custom', JSON.stringify({ error: 'Your organization has no prepaid credits remaining.' }), 'quota'],
             ['OpenRouter, its 429 for a rate limit', 'openrouter', JSON.stringify({ error: { code: 429, message: 'Rate limit exceeded', metadata: { error_type: 'rate_limit_exceeded' } } }), 'rate'],
+            ['Groq, a rate limit', 'groq', JSON.stringify({ error: { message: 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM). Please try again in 1.5s.', type: 'tokens' } }), 'rate'],
+            ['Groq, a rate limit with a code', 'groq', JSON.stringify({ error: { message: 'Rate limit reached.', type: 'requests', code: 'rate_limit_exceeded' } }), 'rate'],
+            // Groq is not read by its words: a limit message that points at where to upgrade is a limit that lifts, not a spent balance.
+            ['Groq, a rate limit whose message mentions billing', 'groq', JSON.stringify({ error: { message: 'Rate limit reached. Need more tokens? Upgrade at https://console.groq.com/settings/billing', type: 'tokens' } }), 'rate'],
+            ['a custom endpoint with that same message, read by its words', 'custom', JSON.stringify({ error: { message: 'Rate limit reached. Need more tokens? Upgrade at https://console.groq.com/settings/billing', type: 'tokens' } }), 'quota'],
             ['a 429 with nothing to read', 'openai', '', 'rate'],
             ['a 429 with an HTML body', 'custom', '<html>429</html>', 'rate'],
         ];
@@ -153,6 +173,18 @@ describe('errorFromHttp', () => {
         it('reads retry-after off a 529 and a 503 too', () => {
             assert.equal(errorFromHttp('anthropic', 'm', 529, anthropicBody('overloaded_error', 'Overloaded'), { retryAfter: '2' }).retryAfterMs, 2000);
             assert.equal(errorFromHttp('gemini', 'm', 503, geminiBody(503, 'UNAVAILABLE', 'busy'), { retryAfter: '1.5' }).retryAfterMs, 1500);
+        });
+
+        it('reads retry-after off a Groq 429 and a Groq 498, in seconds', () => {
+            const limited = errorFromHttp('groq', 'm', 429, groqBody('Rate limit reached. Please try again in 7s.', 'tokens'), { retryAfter: '7' });
+            assert.equal(limited.kind, 'rate');
+            assert.equal(limited.retryAfterMs, 7000);
+            const flex = errorFromHttp('groq', 'm', 498, groqBody('Flex tier capacity exceeded.', 'capacity_exceeded'), { retryAfter: '30' });
+            assert.equal(flex.kind, 'server');
+            assert.equal(flex.retryable, true);
+            assert.equal(flex.retryAfterMs, 30_000);
+            // No wait is invented for a 498 that names none.
+            assert.equal(errorFromHttp('groq', 'm', 498, '').retryAfterMs, undefined);
         });
 
         it('takes Google\'s RetryInfo for a rate limit that has no header, as Google sends none', () => {
@@ -333,6 +365,11 @@ describe('scrub', () => {
             openai: 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
             anthropic: 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
             openrouter: 'sk-or-v1-' + '0123'.repeat(8),
+            // Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
+            groq: 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh',
+            // Too short for the run-of-characters rule (forty), so only the `gsk_` line catches it: an echoed fragment, and one that is masked.
+            groqShort: 'gsk_' + 'Zk3x9QvR7m',
+            groqMasked: 'gsk_' + '*'.repeat(20) + 'AbCd',
             google: 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY',
             // Providers that mask the middle of a key still print its two ends.
             masked: 'sk-proj-********************abcd',
@@ -344,6 +381,17 @@ describe('scrub', () => {
             assert.ok(out.includes('[redacted]'), `${name}: ${out}`);
             assert.ok(out.includes('Incorrect API key provided'), `${name}: the explanation survives: ${out}`);
         }
+    });
+
+    it('removes a Groq key from an error that was never told which key the call used', () => {
+        const groqKey = 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh';
+        const err = errorFromHttp('groq', 'openai/gpt-oss-120b', 401, JSON.stringify({ error: { message: `Invalid API Key: ${groqKey}`, type: 'invalid_request_error' } }));
+        assert.equal(err.kind, 'auth');
+        assert.ok(!JSON.stringify(err).includes(groqKey));
+        assert.ok(!JSON.stringify(err).includes(groqKey.slice(4, 24)));
+        assert.equal(err.message, 'Invalid API Key: [redacted]');
+        // Told which key it is, the key's own placeholder is used and the explanation reads the same.
+        assert.equal(errorFromHttp('groq', 'm', 401, JSON.stringify({ error: { message: `Invalid API Key: ${groqKey}` } }), { key: groqKey }).message, 'Invalid API Key: [key]');
     });
 
     it('removes bearer tokens, keys in a query string and echoed credential headers', () => {

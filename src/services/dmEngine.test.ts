@@ -629,7 +629,7 @@ describe('through the real layer: route, budget and the request Anthropic gets',
         // The outer `install` already ran: put the real `generate` back, and lay the in-memory database for the layer's tables under
         // the agent and history statements. `installAiDb` replaces `pool.query`, so this suite's answers go on top of it.
         setAiCaller(realCaller);
-        for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']) { savedEnv[name] = process.env[name]; delete process.env[name]; }
+        for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY']) { savedEnv[name] = process.env[name]; delete process.env[name]; }
         const outer = pool.query;
         db = installAiDb({ owner: OWNER });
         db.setSetting('ai.providers.anthropic.api_key', FAKE_KEYS.anthropic, true);
@@ -642,7 +642,7 @@ describe('through the real layer: route, budget and the request Anthropic gets',
             db.restore();
             (pool as unknown as { query: unknown }).query = outer;
             setProviderFetch(undefined);
-            for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']) {
+            for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY']) {
                 if (savedEnv[name] === undefined) delete process.env[name]; else process.env[name] = savedEnv[name];
             }
         });
@@ -678,6 +678,66 @@ describe('through the real layer: route, budget and the request Anthropic gets',
         const row = db.usage[0]!;
         assert.deepEqual([row.purpose, row.creator_id, row.provider, row.outcome, row.cache_write_tokens], ['dm', TENANT, 'anthropic', 'ok', 1800]);
         assert.equal(geminiCalls.length, 0);
+    });
+
+    describe('with the `dm` route saved to Groq', () => {
+        const groqSaying = (reply: Record<string, unknown>) => jsonResponse(200, {
+            id: 'chatcmpl-1', object: 'chat.completion', model: 'openai/gpt-oss-120b',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(reply) } }],
+            usage: { prompt_tokens: 2100, completion_tokens: 140, total_tokens: 2240 },
+        });
+        beforeEach(() => {
+            db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
+            db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' } }));
+        });
+
+        it('sends gpt-oss the persona as the system message and the conversation, the strict schema, effort low and the DM\'s own token limit; records a `dm` row on groq', async () => {
+            const { fetchImpl, calls } = stubFetch(groqSaying({ message_type: 'text', text: 'رد من جروك' }));
+            setProviderFetch(fetchImpl);
+            world.history = [{ direction: 'inbound', text: 'كم السعر؟' }, { direction: 'outbound', text: 'أهلاً' }, { direction: 'inbound', text: 'مرحبا' }];
+
+            const reply = await ask('كم السعر؟');
+
+            assert.equal(reply.kind === 'reply' && reply.engine, 'providers');
+            assert.equal(reply.kind === 'reply' && reply.response.text, 'رد من جروك');
+            assert.equal(calls.length, 1);
+            const body = calls[0]!.body;
+            assert.equal(calls[0]!.url, 'https://api.groq.com/openai/v1/chat/completions');
+            assert.equal(calls[0]!.headers['authorization'], `Bearer ${FAKE_KEYS.groq}`);
+            assert.deepEqual(body.messages, [
+                { role: 'system', content: dmSystemInstruction(AGENT.system_prompt, AGENT.knowledge_base, CTX) },
+                { role: 'user', content: 'مرحبا' }, { role: 'assistant', content: 'أهلاً' }, { role: 'user', content: 'كم السعر؟' },
+            ]);
+            assert.equal(body.reasoning_effort, 'low');
+            assert.equal(body.include_reasoning, false);
+            assert.equal(body.response_format.type, 'json_schema');
+            assert.equal(body.response_format.json_schema.strict, true);
+            const schema = body.response_format.json_schema.schema;
+            assert.equal(schema.additionalProperties, false);
+            assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort(), 'strict mode lists every property as required');
+            assert.equal(body.max_tokens, DM_MAX_TOKENS, 'not raised: Groq counts max_tokens against the free tier\'s 8 000 tokens a minute');
+            assert.ok(!('reasoning' in body) && !('provider' in body));
+            assert.ok(!calls[0]!.raw.includes('cache_control'), 'Anthropic\'s cache marker is not sent to anyone else');
+            assert.ok(!calls[0]!.raw.includes(FAKE_KEYS.groq));
+
+            assert.equal(db.usage.length, 1);
+            const row = db.usage[0]!;
+            assert.deepEqual([row.purpose, row.creator_id, row.provider, row.model, row.outcome, row.priced], ['dm', TENANT, 'groq', 'openai/gpt-oss-120b', 'ok', true]);
+            assert.equal(row.usd, (2100 * 0.15 + 140 * 0.6) / 1e6, 'Groq\'s paid rate from the table (a free-tier call costs nothing)');
+            assert.equal(geminiCalls.length, 0);
+        });
+
+        it('a Groq 498 (the flex tier is out of capacity) is `server`: Gemini answers once, and the call is on the books as a failed one', async () => {
+            const { fetchImpl, calls } = stubFetch(jsonResponse(498, { error: { message: 'Flex tier capacity exceeded.', type: 'capacity_exceeded' } }));
+            setProviderFetch(fetchImpl);
+
+            const reply = await ask();
+
+            assert.equal(calls.length, 1);
+            assert.equal(reply.kind === 'reply' && reply.fellBackFrom?.reason, 'server');
+            assert.equal(geminiCalls.length, 1);
+            assert.deepEqual(db.usage.map((u) => [u.purpose, u.provider, u.outcome]), [['dm', 'groq', 'server']]);
+        });
     });
 
     it('the sandbox is `eval` in ai_usage, still charged to the tenant', async () => {

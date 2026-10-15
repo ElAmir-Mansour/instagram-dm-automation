@@ -1496,7 +1496,7 @@
     'ops.ai.purpose.key_test': 'Checks and tests',
     'ops.ai.purpose.eval': 'Evaluation runs',
     'ops.ai.prices': 'Prices',
-    'ops.ai.pricesHint': 'Optional. US dollars per million tokens. The table starts with Claude and Gemini models; a model it does not list (OpenAI, OpenRouter, custom) is charged at the highest rate in the table and flagged until you add its price.',
+    'ops.ai.pricesHint': 'Optional. US dollars per million tokens. The table starts with Claude and Gemini models and Groq’s two gpt-oss models; a model it does not list (OpenAI, OpenRouter, custom, Groq’s others) is charged at the highest rate in the table and flagged until you add its price.',
     'ops.ai.priceDefault': 'Built in',
     'ops.ai.priceCustom': 'Yours',
     'ops.ai.priceIn': 'In',

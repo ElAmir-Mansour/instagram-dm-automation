@@ -1650,7 +1650,7 @@
     'ops.ai.purpose.key_test': 'الفحوص والتجارب',
     'ops.ai.purpose.eval': 'تشغيلات التقييم',
     'ops.ai.prices': 'الأسعار',
-    'ops.ai.pricesHint': 'اختيارية. بالدولار الأمريكي لكل مليون رمز. يبدأ الجدول بنماذج Claude وGemini، وما لا يعرفه (OpenAI وOpenRouter والمخصّص) يُحسب بأعلى سعر في الجدول ويُعلَّم حتى تضيف سعره.',
+    'ops.ai.pricesHint': 'اختيارية. بالدولار الأمريكي لكل مليون رمز. يبدأ الجدول بنماذج Claude وGemini ونموذجَي gpt-oss على Groq، وما لا يعرفه (OpenAI وOpenRouter والمخصّص وسائر نماذج Groq) يُحسب بأعلى سعر في الجدول ويُعلَّم حتى تضيف سعره.',
     'ops.ai.priceDefault': 'مضمَّن',
     'ops.ai.priceCustom': 'سعرك',
     'ops.ai.priceIn': 'الإدخال',

@@ -30,6 +30,7 @@ export const PROVIDER_KEY_SETTING: Readonly<Record<ProviderId, AppSettingKey>> =
     openai: APP_SETTING_KEYS.aiProviderKeyOpenai,
     gemini: APP_SETTING_KEYS.geminiApiKey,
     openrouter: APP_SETTING_KEYS.aiProviderKeyOpenrouter,
+    groq: APP_SETTING_KEYS.aiProviderKeyGroq,
     custom: APP_SETTING_KEYS.aiProviderKeyCustom,
 };
 
@@ -39,6 +40,7 @@ export const PROVIDER_KEY_ENV: Readonly<Record<ProviderId, string | null>> = {
     openai: 'OPENAI_API_KEY',
     gemini: 'GEMINI_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
+    groq: 'GROQ_API_KEY',
     custom: null,
 };
 
@@ -152,7 +154,7 @@ export class ProviderKeys {
 
 // ─── Reading ─────────────────────────────────────────────────────────────────────────────────
 
-/** A model id as every provider here writes one: `claude-opus-5-5`, `anthropic/claude-opus-5.5`, `openrouter/auto`, `llama3:8b`. */
+/** A model id as every provider here writes one: `claude-opus-5-5`, `anthropic/claude-opus-5.5`, `openrouter/auto`, `openai/gpt-oss-120b`, `llama3:8b`. */
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/;
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);

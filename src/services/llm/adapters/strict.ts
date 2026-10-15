@@ -21,7 +21,7 @@ type StrictFor = Pick<AdapterArgs, 'provider' | 'model' | 'apiKey' | 'schema'>;
  * The caller's schema as `strict: true` accepts it, or a `bad_request` that says what to change,
  * before anything is sent and billed. `objectRoot` is OpenAI's own rule (structured-outputs guide,
  * "Supported schemas": the root must be an object and must not be `anyOf`); a Chat Completions
- * endpoint behind OpenRouter or Custom may be any provider, so it is left to answer for itself.
+ * endpoint behind OpenRouter, Groq or Custom may be any provider's, so it is left to answer for itself.
  */
 export function strictSchemaFor(a: StrictFor, opts: { objectRoot: boolean }): JsonSchema {
     const refuse = (message: string) => new AiError({ kind: 'bad_request', provider: a.provider, model: a.model, message, key: a.apiKey });

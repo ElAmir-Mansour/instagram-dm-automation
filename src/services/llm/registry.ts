@@ -2,8 +2,12 @@
  * Every AI provider a tenant's work can run on (docs/onboarding/06-ai-providers.md §2).
  *
  * Four wire families cover all of them. A provider is a family, a base URL, whether it needs a
- * key and a few suggested models; the model field always takes any id the provider accepts, so
- * adding another Chat Completions provider later is one entry here and nothing else.
+ * key and a few suggested models; the model field always takes any id the provider accepts. A
+ * Chat Completions provider is one entry here and then whatever else names providers one by one,
+ * which adding Groq touched: its key setting and environment variable (aiProviders/settings.ts),
+ * the shape of its key and its own status codes (errors.ts), what its reasoning models need
+ * (adapters/chatCompletions.ts, limits.ts), the privacy and data-deletion pages' lists of who
+ * receives a request, and the dashboard's names for the environment variables.
  *
  * Gemini is deliberately the same provider the DM bot and the Studio already use. Its key is the
  * existing `gemini.api_key` setting (P20c), not a second one.
@@ -13,14 +17,14 @@
  * (`ai.providers.<id>.defaultModel`), because model ids change faster than this file ships.
  */
 
-/** The wire formats. `chat_completions` is what OpenRouter and every OpenAI-compatible endpoint speak. */
+/** The wire formats. `chat_completions` is what OpenRouter, Groq and every OpenAI-compatible endpoint speak. */
 export type ProviderFamily = 'anthropic' | 'openai_responses' | 'gemini' | 'chat_completions';
 
 /**
  * In `resolveRoute`'s fallback order (P20c): with no saved route, the first of these that has a
  * key is used, at its default model.
  */
-export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'custom'] as const;
+export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface ProviderDef {
@@ -86,6 +90,20 @@ export const PROVIDERS: readonly ProviderDef[] = [
         // Its own router: always exists, so a fresh key works before anyone has picked a model.
         defaultModel: 'openrouter/auto',
         suggestedModels: ['openrouter/auto'],
+    },
+    {
+        id: 'groq',
+        label: 'Groq',
+        family: 'chat_completions',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        editableBaseUrl: false,
+        keyRequired: true,
+        // Only the two gpt-oss models are suggested, and not Llama, on purpose: constrained decoding of a strict
+        // `json_schema` (what every call here asks for) works on openai/gpt-oss-120b and -20b alone among Groq's production models.
+        // The Llama models answer only in JSON-object mode and would refuse the request outright, so offering one as a click would
+        // be offering a model that fails. Any other id can still be typed.
+        defaultModel: 'openai/gpt-oss-120b',
+        suggestedModels: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
     },
     {
         id: 'custom',

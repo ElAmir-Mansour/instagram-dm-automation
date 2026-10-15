@@ -10,7 +10,7 @@ import {
 import { PROVIDERS } from './registry.js';
 
 describe('DEFAULT_PRICES', () => {
-    it('seeds the Claude and Gemini models the registry offers, at the rates on the providers\' pricing pages', () => {
+    it('seeds the Claude, Gemini and Groq models the registry offers, at the rates on the providers\' pricing pages', () => {
         assert.deepEqual(DEFAULT_PRICES, {
             'claude-opus-5-5': { in: 4, out: 20 },
             'claude-opus-5': { in: 5, out: 25 },
@@ -20,11 +20,13 @@ describe('DEFAULT_PRICES', () => {
             'claude-haiku-5-5': { in: 0.1, out: 0.5 },
             'gemini-3.8-flash': { in: 1.5, out: 7.5 },
             'gemini-3.1-pro-preview': { in: 2, out: 12 },
+            'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
+            'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
         });
     });
 
-    it('prices every Anthropic and Gemini model the registry suggests or defaults to', () => {
-        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini')) {
+    it('prices every Anthropic, Gemini and Groq model the registry suggests or defaults to', () => {
+        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini' || p.id === 'groq')) {
             for (const model of [p.defaultModel, ...p.suggestedModels]) {
                 assert.equal(priceFor(model, {}).priced, true, `${p.id}: ${model}`);
             }

@@ -17,6 +17,10 @@
  *     a JSON answer both fit: Anthropic 4 000 / 8 000 / 16 000 / 24 000 / 32 000 for low to max;
  *     Gemini twice the thinking budget the adapter asks for (a budget is held to half the limit,
  *     adapters/gemini.ts), and at least 4 096.
+ *   - Groq: 0, gpt-oss included, although its reasoning is counted in its completion tokens. Groq
+ *     counts the `max_tokens` a request asks for against the account's tokens per minute, and on
+ *     the free tier that is 8 000 for gpt-oss-120b: a 25 000 floor would make every free-tier
+ *     request "too large" (a 413) before it was read. The caller's limit stands.
  *   - Everything else (a model that does not reason, a Custom endpoint, an unknown name): 0, no
  *     minimum, which is the answer for a limit that was sized for the JSON alone.
  */

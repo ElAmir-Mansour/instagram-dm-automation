@@ -18,9 +18,9 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
 import { describeAi } from '../services/aiProviders/view.js';
-import { ProviderKeys, type AiConfig, type KeySource } from '../services/aiProviders/settings.js';
+import { PROVIDER_KEY_ENV, ProviderKeys, type AiConfig, type KeySource } from '../services/aiProviders/settings.js';
 import type { UsageSummary } from '../services/aiProviders/usage.js';
-import type { ProviderId } from '../services/llm/registry.js';
+import { PROVIDER_IDS, type ProviderId } from '../services/llm/registry.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -310,7 +310,11 @@ describe('AI providers card — the pure helpers', () => {
     it('names the environment variable a key falls back to, and answers nothing for a name it does not own', () => {
         assert.equal(View.keyEnv('anthropic'), 'ANTHROPIC_API_KEY');
         assert.equal(View.keyEnv('gemini'), 'GEMINI_API_KEY');
+        assert.equal(View.keyEnv('openrouter'), 'OPENROUTER_API_KEY');
+        assert.equal(View.keyEnv('groq'), 'GROQ_API_KEY');
         assert.equal(View.keyEnv('custom'), null);
+        // The card keeps its own copy of the server's table (it cannot import it), so a provider added there and not here would say "the server's key" with no name.
+        for (const id of PROVIDER_IDS) assert.equal(View.keyEnv(id), PROVIDER_KEY_ENV[id], id);
         assert.equal(View.keyEnv('constructor'), null, 'a table lookup, not an object property chain');
         assert.equal(View.keyEnv('__proto__'), null);
     });
@@ -449,7 +453,7 @@ describe('AI providers card — what it draws', () => {
             env: ['openai'],
         });
         const markup = String(Card.renderLoaded());
-        for (const label of ['Anthropic (Claude)', 'OpenAI', 'Google Gemini', 'OpenRouter', 'Custom (OpenAI-compatible)']) assert.ok(markup.includes(label), label);
+        for (const label of ['Anthropic (Claude)', 'OpenAI', 'Google Gemini', 'OpenRouter', 'Groq', 'Custom (OpenAI-compatible)']) assert.ok(markup.includes(label), label);
         assert.ok(markup.includes(`${t('ops.ai.badge.saved')} <bdi class="ltr-text" dir="ltr">••••ant1</bdi>`), 'the saved key: status and its last four, isolated');
         assert.ok(markup.includes(t('ops.ai.badge.env')));
         assert.ok(!markup.includes('oai2'), 'an environment key is reported present and never previewed');
@@ -461,7 +465,7 @@ describe('AI providers card — what it draws', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
         const inputs = [...markup.matchAll(/<input[^>]*type="password"[^>]*>/g)].map((m) => m[0]);
-        assert.equal(inputs.length, 5, 'one per provider');
+        assert.equal(inputs.length, 6, 'one per provider');
         for (const input of inputs) {
             assert.match(input, /autocomplete="new-password"/);
             assert.match(input, /name="apiKey"/);
@@ -490,10 +494,10 @@ describe('AI providers card — what it draws', () => {
         assert.match(String(Card.providerInner(Card.provider('custom'))).match(/<button[^>]*data-action="aip:loadModels"[^>]*>/)![0], /disabled/, 'Custom needs its base URL first');
     });
 
-    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all five, the endpoint on Custom only', () => {
+    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all six, the endpoint on Custom only', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
-        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 5);
+        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 6);
         assert.equal([...markup.matchAll(/name="baseUrl"/g)].length, 1);
         assert.equal([...markup.matchAll(/name="jsonMode"/g)].length, 1);
         const custom = String(Card.providerInner(Card.provider('custom')));
@@ -556,7 +560,7 @@ describe('AI providers card — what it draws', () => {
         const markup = String(Card.pricesInner());
         assert.ok(markup.includes('claude-opus-5-5') && markup.includes('gpt-6-astra'));
         assert.ok(markup.includes(t('ops.ai.priceCustom')) && markup.includes(t('ops.ai.priceDefault')));
-        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 9, 'eight built in and one of the operator\'s');
+        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 11, 'ten built in and one of the operator\'s');
         assert.equal([...markup.matchAll(/data-action="aip:removePrice"/g)].length, 1, 'only an override can be removed');
         assert.match(markup, /data-model="gpt-6-astra"[^>]*data-in="2.5"[^>]*data-out="10"/);
     });
@@ -1348,7 +1352,7 @@ describe('AI providers card — escaping (nothing from the server is written as 
         ai.providers[0].defaultModel = PLACES.defaultModel;
         ai.providers[0].defaultModelSource = 'setting';
         ai.providers[0].suggestedModels = [PLACES.suggestedModel];
-        ai.providers[4].baseUrl = PLACES.baseUrl;
+        ai.providers.find((p: Json) => p.id === 'custom').baseUrl = PLACES.baseUrl;
         ai.purposes[0].saved = { provider: 'anthropic', model: PLACES.savedModel, effort: 'high' };
         ai.purposes[1].resolved = { provider: 'anthropic', model: PLACES.resolvedModel, effort: 'high', source: 'saved' };
         ai.purposes[2].resolved = { error: { kind: PLACES.resolvedKind, message: PLACES.resolvedMessage } };

@@ -66,7 +66,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 /** What `generateJson` hands an adapter. */
 export interface AdapterArgs {
-    /** Which provider, for errors: two providers can share a family (OpenRouter and Custom). */
+    /** Which provider, for errors: several providers can share a family (OpenRouter, Groq and Custom). */
     provider: ProviderId;
     apiKey: string;
     /**
@@ -78,7 +78,7 @@ export interface AdapterArgs {
     baseUrl?: string;
     /**
      * Only Custom reads it: how the endpoint is asked for JSON (default `schema`). `callLlm`
-     * withholds it from every other provider, as it does `baseUrl`; OpenRouter is always `schema`.
+     * withholds it from every other provider, as it does `baseUrl`; OpenRouter and Groq are always `schema`.
      */
     jsonMode?: JsonMode;
     model: string;
@@ -139,7 +139,7 @@ export type KeyCheck = { ok: true; warning?: string };
  *     of whatever went wrong; what it returns is a pass, possibly with a `warning`.
  *
  * `listModels` and `checkKey` are the family's own: a `ProviderQuery` carries the provider
- * because two providers can share a family (OpenRouter and Custom), and they differ here.
+ * because several providers can share a family (OpenRouter, Groq and Custom), and they differ here.
  * `listProviderModels` and `checkProviderKey` (providerQuery.ts) are what callers use.
  */
 export interface FamilyAdapter {
