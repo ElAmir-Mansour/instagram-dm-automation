@@ -52,7 +52,7 @@ const AiProvidersView = {
 
     /** The environment variable each provider's key falls back to (settings.ts PROVIDER_KEY_ENV). */
     KEY_ENV: Object.assign(Object.create(null), {
-        anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY',
+        anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
     }),
 
     /**

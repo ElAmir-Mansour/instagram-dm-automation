@@ -1,9 +1,9 @@
 /**
  * What a call cost, from the tokens it used and a price table.
  *
- * The table is a setting, not a constant (P20c, `ai.prices`): prices change, and OpenRouter and
- * Custom models would otherwise have none. `DEFAULT_PRICES` is what those settings start from and
- * what every lookup falls back to: the operator's table is laid over it, never used instead of
+ * The table is a setting, not a constant (P20c, `ai.prices`): prices change, and OpenRouter, Groq
+ * and Custom models would otherwise have none. `DEFAULT_PRICES` is what those settings start from
+ * and what every lookup falls back to: the operator's table is laid over it, never used instead of
  * it, so an empty or half-filled `ai.prices` cannot make a call free.
  *
  * A provider that reports what it charged overrides the table: OpenRouter's `usage.cost` arrives
@@ -38,8 +38,13 @@ export type PriceTable = Readonly<Record<string, Price>>;
  *     Gemini 3.8 Flash $0.75/$3.75 until 2026-12-31 and $1.50/$7.50 from 2027-01-01, seeded at
  *     the later rate so a budget cannot under-count after the change; Gemini 3.1 Pro Preview
  *     $2/$12 for prompts up to 200k tokens ($4/$18 above).
+ *   - console.groq.com/docs/model/openai/gpt-oss-120b and -20b, checked on 2026-10-15: $0.15/$0.60
+ *     and $0.075/$0.30, Groq's paid rates. On Groq's free tier the same call costs nothing, so these
+ *     over-count it, which is the safe side for a budget; they are only Groq's (OpenRouter reports
+ *     its own cost, which overrides the table).
  * Not seeded: Fable ($10/$50), whose calls are therefore charged at this table's ceiling and
- * flagged, which under-counts them; and every OpenAI, OpenRouter and Custom model.
+ * flagged, which under-counts them; and every OpenAI, OpenRouter and Custom model, and the other
+ * Groq models.
  */
 export const DEFAULT_PRICES: PriceTable = {
     'claude-opus-5-5': { in: 4, out: 20 },
@@ -50,6 +55,8 @@ export const DEFAULT_PRICES: PriceTable = {
     'claude-haiku-5-5': { in: 0.1, out: 0.5 },
     'gemini-3.8-flash': { in: 1.5, out: 7.5 },
     'gemini-3.1-pro-preview': { in: 2, out: 12 },
+    'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
+    'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
 };
 
 /**

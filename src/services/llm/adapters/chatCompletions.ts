@@ -1,10 +1,11 @@
 /**
- * Chat Completions, the wire format OpenRouter and every OpenAI-compatible endpoint speak:
- * OpenRouter (fixed address) and Custom (an address the operator typed).
+ * Chat Completions, the wire format OpenRouter, Groq and every OpenAI-compatible endpoint speak:
+ * OpenRouter and Groq (fixed addresses) and Custom (an address the operator typed).
  *
  * Shapes verified against openrouter.ai/docs and developers.openai.com on 2026-10-13
  * (structured-outputs, provider-routing, usage-accounting, reasoning-tokens, errors, limits,
- * the API overview, `GET /api/v1/key`, `GET /api/v1/models` read live) with findings that shape
+ * the API overview, `GET /api/v1/key`, `GET /api/v1/models` read live), and against
+ * console.groq.com/docs on 2026-10-15 (the Groq paragraph below), with findings that shape
  * the code:
  *
  *   - `response_format: {type: 'json_schema', json_schema: {name, strict: true, schema}}`, nested
@@ -40,13 +41,34 @@
  *   - No attribution headers (`HTTP-Referer`, `X-Title`): they are optional, and they would name
  *     this deployment to a third party from a constant, where owner-facing values are settings.
  *
+ * Groq (api.groq.com/openai/v1) speaks the same format, with these differences:
+ *
+ *   - Structured output: the same nested strict `json_schema`, enforced by constrained decoding,
+ *     but only on `openai/gpt-oss-120b` and `openai/gpt-oss-20b` among its production models. The
+ *     Llama models take JSON-object mode only and refuse a strict schema, so none is suggested
+ *     (registry.ts); one typed in by hand is sent the request all the same and answers for itself.
+ *     Strict mode wants every property in `required` and `additionalProperties: false`, which
+ *     `strictSchemaFor` already makes of every schema, as it does for OpenAI.
+ *   - Reasoning (gpt-oss only): `reasoning_effort` is `low | medium | high`, so `xhigh` and `max`
+ *     are sent as `high`. By default Groq returns the model's reasoning text in `message.reasoning`,
+ *     which nothing here reads, so `include_reasoning: false` leaves it out of the response. A
+ *     model that is not gpt-oss gets neither parameter, and Groq never sees OpenRouter's
+ *     `reasoning: {...}` object or `provider: {...}` field.
+ *   - Errors are the same `{error: {message, type}}`; a 429 carries `retry-after` in seconds.
+ *     Status 498 is Groq's own: the flex tier is out of capacity, try again later (errors.ts).
+ *   - The response carries no cost, so a call is priced from the operator's table or, with no
+ *     price for the model, at the table's ceiling and flagged (cost.ts).
+ *   - Reasoning tokens count in `usage.completion_tokens`, so `limits.ts` asks for the same room
+ *     as for an OpenAI reasoning model.
+ *
  * Custom's JSON mode (`jsonMode`, the operator's setting): `schema` as above, or `object` for an
  * endpoint that only does JSON mode: `{type: 'json_object'}` plus the schema described in the
  * system prompt (JSON mode errors unless the word "JSON" is in the conversation, and promises
- * valid JSON, not this schema). OpenRouter is always `schema`.
+ * valid JSON, not this schema). OpenRouter and Groq are always `schema`.
  *
  * The key is `Authorization: Bearer`, in that header and nowhere else (none for a keyless Custom
- * endpoint). OpenRouter's address is fixed; Custom's is checked by `endpointFor` every time.
+ * endpoint). OpenRouter's and Groq's addresses are fixed (the registry's); Custom's is checked by
+ * `endpointFor` every time.
  */
 import { totalUsage } from '../cost.js';
 import { AiError, errorFromHttp } from '../errors.js';
@@ -70,6 +92,19 @@ export function openRouterReasoning(model: string, effort: AdapterArgs['effort']
     return sent ? { effort: sent } : undefined;
 }
 
+/** Groq's reasoning models: gpt-oss, in its two production sizes. No other Groq model takes `reasoning_effort`. */
+const GROQ_REASONING_MODEL = /^openai\/gpt-oss-(?:120b|20b)$/i;
+
+/**
+ * The `reasoning_effort` Groq takes for this model, or none. It has three levels, so `xhigh` and
+ * `max` are sent as `high`. A model this code does not know to take it gets nothing, which is the
+ * one choice that cannot be refused for a parameter the model lacks.
+ */
+export function groqReasoningEffort(model: string, effort: AdapterArgs['effort']): 'low' | 'medium' | 'high' | undefined {
+    if (!GROQ_REASONING_MODEL.test(model.trim())) return undefined;
+    return effort === 'low' || effort === 'medium' ? effort : 'high';
+}
+
 /** The schema as a paragraph for the system prompt, for an endpoint that can only be asked for "a JSON object". */
 function describedSchema(a: AdapterArgs): string {
     return `Answer with a single JSON object and nothing else, one that matches this JSON Schema:\n${JSON.stringify(jsonSchemaFor(a.schema))}`;
@@ -84,7 +119,8 @@ function messagesFor(system: string, user: string | LlmTurn[]): Array<{ role: 's
 export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
     const base = endpointFor(a);
     const openrouter = a.provider === 'openrouter';
-    const objectMode = !openrouter && a.jsonMode === 'object';
+    // JSON-object mode is Custom's alone: OpenRouter and Groq are always asked for the strict schema.
+    const objectMode = a.provider === 'custom' && a.jsonMode === 'object';
 
     let system = a.system;
     let responseFormat: Record<string, unknown>;
@@ -102,6 +138,7 @@ export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record
     }
 
     const reasoning = openrouter ? openRouterReasoning(a.model, a.effort) : undefined;
+    const groqEffort = a.provider === 'groq' ? groqReasoningEffort(a.model, a.effort) : undefined;
     return {
         url: `${base}/chat/completions`,
         // The key is here and nowhere else: not in the URL, not in the body. A keyless endpoint sends none.
@@ -113,6 +150,8 @@ export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record
             response_format: responseFormat,
             ...(openrouter ? { provider: { require_parameters: true } } : {}),
             ...(reasoning ? { reasoning } : {}),
+            // The reasoning text is returned by default and nothing here reads it: leave it out of the response, not just out of the answer.
+            ...(groqEffort ? { reasoning_effort: groqEffort, include_reasoning: false } : {}),
         },
     };
 }
@@ -122,7 +161,7 @@ const money = (n: unknown): number | undefined => (typeof n === 'number' && Numb
 
 /**
  * What OpenRouter says the call cost, as the `usd` and `source` of a `Billed` entry, or nothing.
- * Only OpenRouter's figure is a price: a Custom endpoint's `cost` could mean anything. `cost` is
+ * Only OpenRouter's figure is a price: Groq reports none, and a Custom endpoint's `cost` could mean anything. `cost` is
  * what was charged to the account; on a BYOK call that is OpenRouter's fee alone, and the model's
  * own provider billed `cost_details.upstream_inference_cost` on top, so the call cost both. A BYOK
  * call that reports no upstream figure is left to the price table: the fee alone would be a
@@ -225,10 +264,22 @@ function openRouterModels(body: unknown): string[] {
     return modelIdsFrom({ data: usable });
 }
 
+/**
+ * Groq's list holds more than chat models: speech to text (`whisper-large-v3`), text to speech
+ * (`canopylabs/orpheus-*`) and two kinds of classifier (`meta-llama/llama-prompt-guard-*`,
+ * `openai/gpt-oss-safeguard-20b`) that answer with a verdict and not with JSON. None of them can
+ * do this library's job, so none is offered; a model left out can still be typed in.
+ */
+const GROQ_NOT_CHAT = /whisper|orpheus|prompt-guard|gpt-oss-safeguard/i;
+
+function groqModels(body: unknown): string[] {
+    return modelIdsFrom(body).filter((id) => !GROQ_NOT_CHAT.test(id));
+}
+
 /** A list, or a check, of an OpenAI-compatible endpoint's models; `404` is "this server has no list", for the caller to read. */
 async function getModels(q: ProviderQuery) {
-    // OpenRouter's list is public, and a Custom endpoint may need no key: neither is required here.
-    const { def, key, signal } = prepareQuery(q, { needsKey: false });
+    // OpenRouter's list is public, and a Custom endpoint may need no key: neither is required here. Groq's list needs one, and is what proves it.
+    const { def, key, signal } = prepareQuery(q, { needsKey: q.provider !== 'openrouter' });
     const openrouter = def.id === 'openrouter';
     const base = endpointFor({ provider: q.provider, model: '', apiKey: key, baseUrl: q.baseUrl });
     return getJson({
@@ -247,7 +298,7 @@ export const chatCompletionsFamily: FamilyAdapter = {
     listModels: async (q) => {
         try {
             const body = await getModels(q);
-            return q.provider === 'openrouter' ? openRouterModels(body) : modelIdsFrom(body);
+            return q.provider === 'openrouter' ? openRouterModels(body) : q.provider === 'groq' ? groqModels(body) : modelIdsFrom(body);
         } catch (err) {
             if (q.provider === 'custom' && isNoList(err)) {
                 throw prepareQuery(q, { needsKey: false }).fail('bad_request', `${providerName(q.provider)} has no model list: GET /models answered 404. Type the model id instead.`, 404);
@@ -268,8 +319,9 @@ export const chatCompletionsFamily: FamilyAdapter = {
             await getModels(q);
             return { ok: true };
         } catch (err) {
-            // A server with no `/models` cannot say whether the key is good; saving it is the operator's call.
-            if (isNoList(err)) return { ok: true, warning: 'no_model_list' };
+            // A server with no `/models` cannot say whether the key is good; saving it is the operator's call. Only Custom can be one: Groq's list
+            // is where its key is proven, so a 404 from it is a fault to show, not a pass.
+            if (q.provider === 'custom' && isNoList(err)) return { ok: true, warning: 'no_model_list' };
             throw err;
         }
     },

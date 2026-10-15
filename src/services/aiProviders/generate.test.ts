@@ -20,7 +20,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const TENANT = '44444444-4444-4444-8444-444444444444';
 const SCHEMA: GeminiSchema = { type: 'OBJECT', properties: { reply: { type: 'STRING' } }, required: ['reply'] };
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: { level: string; line: string }[];
@@ -503,6 +503,78 @@ describe('the whole path, through the real Anthropic adapter', () => {
         assert.equal(err.kind, 'auth');
         assertNoKey(JSON.stringify(err) + err.message + (err.stack ?? ''), 'the error');
         assert.equal(db.usage[0]!.outcome, 'auth');
+        assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
+    });
+});
+
+describe('the whole path, through the real Groq adapter', () => {
+    const groqAnswer = (usage: Record<string, unknown> = { prompt_tokens: 120, completion_tokens: 34, total_tokens: 154 }) => jsonResponse(200, {
+        id: 'chatcmpl-1', object: 'chat.completion', model: 'openai/gpt-oss-120b',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"reply":"hello from groq"}' } }],
+        usage,
+    });
+    const viaGroq = (fetchImpl: ReturnType<typeof stubFetch>['fetchImpl'], effort = 'high') => {
+        restoreCaller?.();
+        restoreCaller = undefined;
+        db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'groq', model: 'openai/gpt-oss-120b', effort } }));
+        setProviderFetch(fetchImpl);
+    };
+
+    it('sends the request Groq takes, keeps the caller\'s maxTokens (Groq counts it against tokens a minute), and puts the key only in the header', async () => {
+        const { fetchImpl, calls } = stubFetch(groqAnswer());
+        viaGroq(fetchImpl, 'xhigh');
+        const out = await call({ purpose: 'dm', maxTokens: 2000 });
+        assert.deepEqual(out.json, { reply: 'hello from groq' });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.url, 'https://api.groq.com/openai/v1/chat/completions');
+        assert.equal(calls[0]!.headers['authorization'], `Bearer ${FAKE_KEYS.groq}`);
+        assert.ok(!calls[0]!.url.includes(FAKE_KEYS.groq) && !calls[0]!.raw.includes(FAKE_KEYS.groq), 'never in the URL or the body');
+        assert.equal(calls[0]!.body.model, 'openai/gpt-oss-120b');
+        assert.equal(calls[0]!.body.max_tokens, 2000, 'no floor is added: on the free tier 25 000 alone is over the 8 000 tokens a minute');
+        assert.equal(calls[0]!.body.reasoning_effort, 'high', 'xhigh is sent as high');
+        assert.equal(calls[0]!.body.include_reasoning, false);
+        assert.ok(!('reasoning' in calls[0]!.body) && !('provider' in calls[0]!.body));
+        assert.equal(calls[0]!.body.response_format.json_schema.strict, true);
+        assert.deepEqual(calls[0]!.body.response_format.json_schema.schema.required, ['reply']);
+    });
+
+    it('prices a call from Groq\'s own rates in the table, because Groq reports no cost; an operator\'s price overrides them', async () => {
+        const { fetchImpl } = stubFetch(groqAnswer(), groqAnswer());
+        viaGroq(fetchImpl);
+        const out = await call({ purpose: 'dm', maxTokens: 30_000 });
+        assert.deepEqual([out.priced, out.costSource, out.usd], [true, 'table', (120 * 0.15 + 34 * 0.6) / 1e6]);
+        const row = db.usage[0]!;
+        assert.deepEqual([row.provider, row.model, row.outcome, row.input_tokens, row.output_tokens, row.priced, row.usd], ['groq', 'openai/gpt-oss-120b', 'ok', 120, 34, true, (120 * 0.15 + 34 * 0.6) / 1e6]);
+        // A figure for the test, not Groq's.
+        db.setSetting('ai.prices', JSON.stringify({ 'openai/gpt-oss-120b': { in: 1, out: 2 } }));
+        const priced = await call({ purpose: 'dm', maxTokens: 30_000 });
+        assert.deepEqual([priced.priced, priced.usd], [true, (120 * 1 + 34 * 2) / 1e6]);
+        assert.equal(db.usage[1]!.priced, true);
+    });
+
+    it('counts a gpt-oss call against a budget at Groq\'s rate, not the table\'s ceiling, so a DM-sized call fits a small daily cap', async () => {
+        const { fetchImpl, calls } = stubFetch(groqAnswer(), groqAnswer());
+        viaGroq(fetchImpl);
+        budgets({ 'ai.budget.daily_usd': '0.01' });
+        await call({ purpose: 'dm', maxTokens: 4000 });
+        await call({ purpose: 'dm', maxTokens: 4000 });
+        assert.equal(calls.length, 2, 'at the ceiling ($25 a million out) 4 000 tokens would reserve $0.10, ten times this cap');
+        assert.deepEqual(db.usage.map((r) => r.usd), [0.0000384, 0.0000384]);
+    });
+
+    it('turns a 498 into a retryable `server` row, and a 401 into an `auth` row with no key in the error, even when Groq echoes it', async () => {
+        const { fetchImpl } = stubFetch(
+            jsonResponse(498, { error: { message: 'Flex tier capacity exceeded. Retry later.', type: 'capacity_exceeded' } }, { 'retry-after': '5' }),
+            jsonResponse(401, { error: { message: `Invalid API Key: ${FAKE_KEYS.groq}`, type: 'invalid_request_error', code: 'invalid_api_key' } }),
+        );
+        viaGroq(fetchImpl);
+        const overloaded = await failure(call({ purpose: 'dm' }));
+        assert.deepEqual([overloaded.kind, overloaded.retryable, overloaded.status, overloaded.retryAfterMs, overloaded.provider], ['server', true, 498, 5000, 'groq']);
+        assert.equal(db.usage[0]!.outcome, 'server');
+        const refused = await failure(call({ purpose: 'dm' }));
+        assert.equal(refused.kind, 'auth');
+        assertNoKey(JSON.stringify(refused) + refused.message + (refused.stack ?? ''), 'the error');
         assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
     });
 });

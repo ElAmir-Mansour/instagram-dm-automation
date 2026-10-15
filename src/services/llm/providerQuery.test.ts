@@ -18,6 +18,8 @@ const KEYS = {
     openai: 'sk-proj-Tq8vLm2xWz4RnYb7KdP1aHc6JfSe9UoNgIiXtVrBwEs3',
     gemini: 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY',
     openrouter: 'sk-or-v1-' + '3f9a'.repeat(16),
+    // Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
+    groq: 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh',
     custom: 'llm-key-Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq',
 } satisfies Record<ProviderId, string>;
 const CUSTOM_BASE = 'https://llm.example.com/v1';
@@ -93,6 +95,25 @@ const openrouterList = () => jsonResponse(200, {
     total_count: 7,
 });
 
+// Groq's list is the whole catalogue, not only what chats: speech to text, text to speech and two classifiers are in it.
+const groqList = () => jsonResponse(200, {
+    object: 'list',
+    data: [
+        { id: 'llama-3.3-70b-versatile', object: 'model', created: 1733447754, owned_by: 'Meta', active: true, context_window: 131072 },
+        { id: 'whisper-large-v3', object: 'model', created: 1693721698, owned_by: 'OpenAI', active: true, context_window: 448 },
+        { id: 'openai/gpt-oss-120b', object: 'model', created: 1754408224, owned_by: 'OpenAI', active: true, context_window: 131072 },
+        { id: 'canopylabs/orpheus-v1-english', object: 'model', created: 1764000000, owned_by: 'Canopy Labs', active: true, context_window: 4000 },
+        { id: 'meta-llama/llama-prompt-guard-2-22m', object: 'model', created: 1745000000, owned_by: 'Meta', active: true, context_window: 512 },
+        { id: 'openai/gpt-oss-20b', object: 'model', created: 1754407957, owned_by: 'OpenAI', active: true, context_window: 131072 },
+        { id: 'whisper-large-v3-turbo', object: 'model', created: 1728413088, owned_by: 'OpenAI', active: true, context_window: 448 },
+        { id: 'openai/gpt-oss-safeguard-20b', object: 'model', created: 1761000000, owned_by: 'OpenAI', active: true, context_window: 131072 },
+        { id: 'canopylabs/orpheus-arabic-saudi', object: 'model', created: 1764000001, owned_by: 'Canopy Labs', active: true, context_window: 4000 },
+        { id: 'meta-llama/llama-prompt-guard-2-86m', object: 'model', created: 1745000001, owned_by: 'Meta', active: true, context_window: 512 },
+        { id: 'llama-3.1-8b-instant', object: 'model', created: 1693721698, owned_by: 'Meta', active: true, context_window: 131072 },
+        { id: 'openai/gpt-oss-120b', object: 'model', created: 1754408224, owned_by: 'OpenAI', active: true, context_window: 131072 },
+    ],
+});
+
 const customList = () => jsonResponse(200, { object: 'list', data: [{ id: 'llama-4-maverick', object: 'model' }, { id: 'qwen-4-72b', object: 'model' }] });
 
 const openRouterKey = () => jsonResponse(200, { data: { label: 'sk-or-v1-abc...f3a', limit: null, limit_remaining: null, usage: 1.25, is_free_tier: false } });
@@ -113,6 +134,10 @@ const rows: Array<{
         provider: 'gemini', list: geminiList, models: ['gemini-3.8-flash', 'gemini-3.1-pro-preview'],
         listUrl: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', checkUrl: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',
         header: 'x-goog-api-key', value: (k) => k,
+    },
+    {
+        provider: 'groq', list: groqList, models: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'],
+        listUrl: 'https://api.groq.com/openai/v1/models', checkUrl: 'https://api.groq.com/openai/v1/models', header: 'authorization', value: (k) => `Bearer ${k}`,
     },
     {
         provider: 'custom', list: customList, models: ['llama-4-maverick', 'qwen-4-72b'],
@@ -176,6 +201,41 @@ describe('listProviderModels', () => {
         it('keeps the models that can answer in a schema and write text, once each, and the ones whose fields are not there to judge', async () => {
             const { fetchImpl } = stubFetch(openrouterList());
             assert.deepEqual(await listProviderModels(query('openrouter', fetchImpl)), ['openrouter/auto', 'anthropic/claude-opus-5.5', 'google/gemini-3.8-flash', 'some/model-with-no-fields']);
+        });
+    });
+
+    describe('groq', () => {
+        it('drops what is not a chat model (speech to text, text to speech, both kinds of classifier), keeps the order it was given and lists each once', async () => {
+            const { fetchImpl } = stubFetch(groqList());
+            const models = await listProviderModels(query('groq', fetchImpl));
+            assert.deepEqual(models, ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant']);
+            for (const gone of ['whisper-large-v3', 'whisper-large-v3-turbo', 'canopylabs/orpheus-v1-english', 'canopylabs/orpheus-arabic-saudi', 'meta-llama/llama-prompt-guard-2-22m', 'meta-llama/llama-prompt-guard-2-86m', 'openai/gpt-oss-safeguard-20b']) {
+                assert.ok(!models.includes(gone), gone);
+            }
+        });
+
+        it('needs a key, unlike OpenRouter: with none no request is made, and the list is not asked for anonymously', async () => {
+            const { fetchImpl, calls } = stubFetch(groqList());
+            for (const apiKey of ['', '  ']) {
+                const err = await rejection(listProviderModels(query('groq', fetchImpl, { apiKey })));
+                assert.equal(err.kind, 'no_provider');
+                assert.equal(err.provider, 'groq');
+            }
+            assert.equal(calls.length, 0);
+        });
+
+        it('says so when Groq refuses the key: a 401 is auth, and it is the list that said it', async () => {
+            const { fetchImpl } = stubFetch(jsonResponse(401, { error: { message: 'Invalid API Key', type: 'invalid_request_error', code: 'invalid_api_key' } }));
+            const err = await rejection(listProviderModels(query('groq', fetchImpl)));
+            assert.equal(err.kind, 'auth');
+            assert.equal(err.status, 401);
+            assert.match(err.message, /Invalid API Key/);
+        });
+
+        it('keeps no entry whose id it cannot read, and is an empty list for a body with none', async () => {
+            const { fetchImpl } = stubFetch(jsonResponse(200, { data: [{ object: 'model' }, null, { id: 'whisper-large-v3' }, { id: 'llama-3.1-8b-instant' }] }));
+            assert.deepEqual(await listProviderModels(query('groq', fetchImpl)), ['llama-3.1-8b-instant']);
+            assert.deepEqual(await listProviderModels(query('groq', stubFetch(jsonResponse(200, { ok: true })).fetchImpl)), []);
         });
     });
 
@@ -278,6 +338,34 @@ describe('checkProviderKey', () => {
         });
     });
 
+    describe('groq', () => {
+        it('asks /models with the key, which is where Groq proves it, and needs one: with none no request is made', async () => {
+            const { fetchImpl, calls } = stubFetch(groqList());
+            assert.deepEqual(await checkProviderKey(query('groq', fetchImpl)), { ok: true });
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0]!.url, 'https://api.groq.com/openai/v1/models');
+            assert.equal(calls[0]!.headers['authorization'], `Bearer ${KEYS.groq}`);
+            const none = stubFetch(groqList());
+            const err = await rejection(checkProviderKey(query('groq', none.fetchImpl, { apiKey: '' })));
+            assert.equal(err.kind, 'no_provider');
+            assert.equal(none.calls.length, 0);
+        });
+
+        it('fails a key Groq refuses, and a 404 is a fault to show, not the pass with a warning that only a Custom endpoint may have', async () => {
+            const refused = await rejection(checkProviderKey(query('groq', stubFetch(jsonResponse(401, { error: { message: 'Invalid API Key', type: 'invalid_request_error', code: 'invalid_api_key' } })).fetchImpl)));
+            assert.equal(refused.kind, 'auth');
+            const missing = await rejection(checkProviderKey(query('groq', stubFetch(jsonResponse(404, { error: { message: 'Not found' } })).fetchImpl)));
+            assert.equal(missing.kind, 'bad_request');
+            assert.equal(missing.status, 404);
+        });
+
+        it('treats Groq\'s 498 (the flex tier is out of capacity) as a server error to try again, not as a refusal of the key', async () => {
+            const err = await rejection(checkProviderKey(query('groq', stubFetch(jsonResponse(498, { error: { message: 'Flex tier capacity exceeded', type: 'internal_server_error' } })).fetchImpl)));
+            assert.equal(err.kind, 'server');
+            assert.equal(err.retryable, true);
+        });
+    });
+
     describe('custom', () => {
         it('passes with a warning when the endpoint has no /models: it cannot say whether the key is good', async () => {
             const { fetchImpl, calls } = stubFetch(jsonResponse(404, { error: { message: 'Not found' } }));
@@ -312,6 +400,8 @@ describe('checkProviderKey', () => {
             ['gemini', 400, { error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } }, 'auth'],
             ['gemini', 403, { error: { code: 403, message: 'Permission denied', status: 'PERMISSION_DENIED' } }, 'auth'],
             ['openrouter', 401, { error: { code: 401, message: 'No auth credentials found' } }, 'auth'],
+            ['groq', 401, { error: { message: 'Invalid API Key', type: 'invalid_request_error', code: 'invalid_api_key' } }, 'auth'],
+            ['groq', 403, { error: { message: 'Forbidden', type: 'permission_denied', code: 'permission_denied' } }, 'auth'],
         ];
         for (const [provider, status, body, kind] of refusals) {
             it(`${provider} ${status} is ${kind}, final, and names the provider but no model`, async () => {
@@ -422,15 +512,15 @@ describe('the front door', () => {
     it('refuses a provider that does not exist, before any request', async () => {
         const { fetchImpl, calls } = stubFetch(customList());
         for (const run of [listProviderModels, checkProviderKey]) {
-            const err = await rejection(run({ provider: 'groq' as ProviderId, apiKey: 'k', fetchImpl }));
+            const err = await rejection(run({ provider: 'mistral' as ProviderId, apiKey: 'k', fetchImpl }));
             assert.equal(err.kind, 'bad_request');
-            assert.match(err.message, /Unknown AI provider "groq"/);
+            assert.match(err.message, /Unknown AI provider "mistral"/);
         }
         assert.equal(calls.length, 0);
     });
 
     it('is no_provider for a provider that needs a key and has none, before any request', async () => {
-        for (const provider of ['anthropic', 'openai', 'gemini'] as const) {
+        for (const provider of ['anthropic', 'openai', 'gemini', 'groq'] as const) {
             for (const run of [listProviderModels, checkProviderKey]) {
                 const { fetchImpl, calls } = stubFetch(anthropicList());
                 const err = await rejection(run(query(provider, fetchImpl, { apiKey: '   ' })));

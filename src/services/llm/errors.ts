@@ -43,16 +43,18 @@ export const MAX_MESSAGE_CHARS = 240;
 
 /**
  * Things that look like a credential even when we were not told the key: `sk-…` (OpenAI,
- * Anthropic `sk-ant-`, OpenRouter `sk-or-`), Google's `AIza…`, a bearer token, a key in a query
- * string or an echoed header, and any other long unbroken run of token characters (xAI, Groq and
- * the next provider's prefix). Providers that mask a key print stars in the middle
- * ("sk-proj-****abcd"), so stars count as part of one.
+ * Anthropic `sk-ant-`, OpenRouter `sk-or-`), Groq's `gsk_…`, Google's `AIza…`, a bearer token, a
+ * key in a query string or an echoed header, and any other long unbroken run of token characters
+ * (xAI and the next provider's prefix). Providers that mask a key print stars in the middle
+ * ("sk-proj-****abcd"), so stars count as part of one. Groq's has its own line, like `sk-`'s, because
+ * the run-of-characters rule needs forty and a masked or shortened key echoed back has fewer.
  */
 const KEY_SHAPES: ReadonlyArray<readonly [RegExp, string]> = [
     [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]'],
     [/([?&](?:key|api_key|apikey|access_token)=)[^&\s"'<>]+/gi, '$1[redacted]'],
     [/\b(x-api-key|x-goog-api-key|authorization)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1$2[redacted]'],
     [/\bsk-[A-Za-z0-9_*.-]{6,}/g, '[redacted]'],
+    [/\bgsk_[A-Za-z0-9_*.-]{6,}/g, '[redacted]'],
     [/\bAIza[0-9A-Za-z_*-]{16,}/g, '[redacted]'],
     [/\b[A-Za-z0-9_-]{40,}\b/g, '[redacted]'],
 ];
@@ -187,7 +189,7 @@ function retryDelayMs(details: unknown): number | undefined {
 /**
  * The provider's explanation out of an error body, and the parsed body itself. Anthropic sends
  * `{type:'error', error:{type, message, details?}}`, OpenAI and OpenRouter `{error:{message,
- * code, type}}`, Gemini `{error:{code, message, status, details:[…]}}` (sometimes inside an
+ * code, type}}` (Groq's has `message` and `type`), Gemini `{error:{code, message, status, details:[…]}}` (sometimes inside an
  * array), and a gateway may send a plain string or an HTML page.
  */
 function explanation(bodyText: string): { message: string; tag: string; error: any } {
@@ -227,7 +229,13 @@ const QUOTA_CODES = new Set([
 const BAD_KEY_WORDS = /api[ _-]?key[^.]{0,40}(?:not valid|invalid|expired|not found|missing)|(?:invalid|expired|missing)[^.]{0,20}api[ _-]?key/i;
 /** A quota that comes back with the day or the month, not in a minute. */
 const SLOW_QUOTA_ID = /Per(?:Day|Month)/i;
-/** Providers whose 429 has no structure of its own to read, so its words are all there is. */
+/**
+ * Providers whose 429 has no structure of its own to read, so its words are all there is. Groq is
+ * not one: its limits are per-minute and per-day rate limits that send `retry-after`, so `rate`
+ * (retryable, waiting as long as the header says) is the reading its structure supports, and
+ * reading its words for "billing" could turn a limit message that points at where to upgrade into
+ * a final `quota`.
+ */
 const WORDS_ONLY = new Set(['openai', 'openrouter', 'custom']);
 
 /**
@@ -306,7 +314,8 @@ export interface HttpErrorOptions {
  *   any other 429 (see `classify429`)                      → rate      (retryable)
  *   400, 404, 413, 422 and other 4xx, and a redirect       → bad_request (final)
  *   408                                                    → timeout   (retryable)
- *   5xx, including Anthropic's 529                         → server    (retryable)
+ *   5xx, including Anthropic's 529, and Groq's 498 (the
+ *   flex tier is out of capacity: "retry later")           → server    (retryable)
  *
  * Anthropic reports an empty credit balance or a spend limit the operator set as a plain 400,
  * which is why a 400 is looked at for those words too; every other 400 is the request's own fault.
@@ -324,7 +333,7 @@ export function errorFromHttp(provider: string, model: string, status: number, b
     else if (status === 400 && BAD_KEY_WORDS.test(said)) kind = 'auth';
     else if (status === 400 && QUOTA_WORDS.test(heard)) kind = 'quota';
     else if (status === 408) kind = 'timeout';
-    else if (status >= 500) kind = 'server';
+    else if (status >= 500 || (provider === 'groq' && status === 498)) kind = 'server';
     else kind = 'bad_request';
 
     // Waiting only helps a limit that lifts: Anthropic's spend cap sends no header, and a daily

@@ -1,13 +1,14 @@
 /**
- * The Chat Completions adapter (OpenRouter and Custom): the request it builds, what OpenRouter
- * gets that Custom does not, JSON-object mode, and how it reads an answer, an error that came
- * back in a 200, and OpenRouter's own cost. The whole path (every status, timeouts, the key's
- * whereabouts) is in generate.test.ts; model lists and key checks are in providerQuery.test.ts.
+ * The Chat Completions adapter (OpenRouter, Groq and Custom): the request it builds, what OpenRouter
+ * and Groq get that Custom does not (and what each is never sent of the other's), JSON-object mode,
+ * and how it reads an answer, an error that came back in a 200, and OpenRouter's own cost. The whole
+ * path (every status, timeouts, the key's whereabouts) is in generate.test.ts; model lists and key
+ * checks are in providerQuery.test.ts.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-    buildChatRequest, chatCompletionsAdapter, chatCompletionsFamily, OPENROUTER_BASE_URL, openRouterReasoning, parseChatResponse,
+    buildChatRequest, chatCompletionsAdapter, chatCompletionsFamily, groqReasoningEffort, OPENROUTER_BASE_URL, openRouterReasoning, parseChatResponse,
 } from './adapters/chatCompletions.js';
 import { costOf, DEFAULT_PRICES } from './cost.js';
 import { isAiError } from './errors.js';
@@ -28,6 +29,13 @@ const router = (over: Partial<AdapterArgs> = {}): AdapterArgs => ({
 });
 const custom = (over: Partial<AdapterArgs> = {}): AdapterArgs => ({
     provider: 'custom', apiKey: 'llm-key-123456', baseUrl: 'https://llm.example.com/v1', model: 'llama-4-maverick', system: 'You write replies.', user: 'Say hi.',
+    schema: SCHEMA, maxTokens: 4000, effort: 'medium', ...over,
+});
+
+// Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
+const GROQ_KEY = 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh';
+const groq = (over: Partial<AdapterArgs> = {}): AdapterArgs => ({
+    provider: 'groq', apiKey: GROQ_KEY, model: 'openai/gpt-oss-120b', system: 'You write replies.', user: 'Say hi.',
     schema: SCHEMA, maxTokens: 4000, effort: 'medium', ...over,
 });
 
@@ -121,6 +129,129 @@ describe('openRouterReasoning', () => {
     it('is in the request only for OpenRouter, never for Custom, even for a model with an OpenAI name', () => {
         assert.deepEqual(buildChatRequest(router({ model: 'openai/gpt-6.1-sol', effort: 'high' })).body.reasoning, { effort: 'high' });
         assert.ok(!('reasoning' in buildChatRequest(custom({ model: 'openai/gpt-6.1-sol', effort: 'high' })).body));
+    });
+});
+
+describe('groqReasoningEffort', () => {
+    it('is sent for gpt-oss, in the three levels Groq has: low, medium and high, with xhigh and max sent as high', () => {
+        for (const model of ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'OpenAI/GPT-OSS-120B']) {
+            assert.deepEqual(['low', 'medium', 'high', 'xhigh', 'max'].map((e) => groqReasoningEffort(model, e as AdapterArgs['effort'])), ['low', 'medium', 'high', 'high', 'high'], model);
+        }
+    });
+
+    it('is sent for no other model: not Llama, not the gpt-oss classifier, not another provider\'s reasoning model, not a name that only looks like gpt-oss', () => {
+        for (const model of [
+            'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-safeguard-20b', 'meta-llama/llama-prompt-guard-2-22m', 'whisper-large-v3',
+            'gpt-oss-120b', 'openai/gpt-oss-120b-extra', 'openai/gpt-oss-1200b', 'openai/gpt-6.1-sol', 'openai/o3', 'qwen/qwen3-32b', 'openrouter/auto', '',
+        ]) {
+            assert.equal(groqReasoningEffort(model, 'high'), undefined, model);
+        }
+    });
+});
+
+describe('buildChatRequest for Groq', () => {
+    it('is exactly this: its own /chat/completions, a nested strict json_schema, max_tokens, reasoning_effort and include_reasoning false', () => {
+        const r = buildChatRequest(groq());
+        assert.equal(r.url, 'https://api.groq.com/openai/v1/chat/completions');
+        assert.deepEqual(r.headers, { authorization: `Bearer ${GROQ_KEY}` });
+        assert.deepEqual(r.body, {
+            model: 'openai/gpt-oss-120b',
+            messages: [{ role: 'system', content: 'You write replies.' }, { role: 'user', content: 'Say hi.' }],
+            max_tokens: 4000,
+            response_format: {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'answer',
+                    strict: true,
+                    schema: {
+                        type: 'object',
+                        properties: { reply: { type: 'string' }, score: { type: ['integer', 'null'] } },
+                        required: ['reply', 'score'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            reasoning_effort: 'medium',
+            include_reasoning: false,
+        });
+    });
+
+    it('closes every object and requires every property, at any depth, which is what Groq\'s strict mode wants', () => {
+        const r = buildChatRequest(groq({
+            schema: { json: { type: 'object', properties: { a: { type: 'string' }, inner: { type: 'object', properties: { b: { type: 'integer' }, c: { type: 'string' } }, required: ['b'] }, list: { type: 'array', items: { type: 'object', properties: { d: { type: 'string' } } } } }, required: ['a'] } },
+        }));
+        const schema = (r.body.response_format as any).json_schema.schema;
+        assert.equal((r.body.response_format as any).json_schema.strict, true);
+        const nodes = [schema, schema.properties.inner, schema.properties.list.items];
+        assert.deepEqual(schema.properties.list.type, ['array', 'null']);
+        for (const node of nodes) {
+            assert.equal(node.additionalProperties, false);
+            assert.deepEqual([...node.required].sort(), Object.keys(node.properties).sort());
+        }
+        // An optional property is still there to be written, and may be null: that is how strict mode says "optional".
+        assert.deepEqual(schema.properties.inner.properties.c.type, ['string', 'null']);
+    });
+
+    it('maps the effort for gpt-oss: low, medium and high as they are, xhigh and max as high', () => {
+        const sent = (model: string, effort: AdapterArgs['effort']) => buildChatRequest(groq({ model, effort })).body.reasoning_effort;
+        for (const model of ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']) {
+            assert.deepEqual((['low', 'medium', 'high', 'xhigh', 'max'] as const).map((e) => sent(model, e)), ['low', 'medium', 'high', 'high', 'high'], model);
+        }
+    });
+
+    it('leaves the reasoning text out of the response whenever it asks for reasoning, and only then', () => {
+        for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+            const body = buildChatRequest(groq({ effort })).body;
+            assert.equal(body.include_reasoning, false, effort);
+            assert.ok(!('reasoning_format' in body), effort);
+        }
+    });
+
+    it('sends a Llama model none of it: no reasoning_effort, no include_reasoning, and still a strict json_schema', () => {
+        for (const model of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']) {
+            for (const effort of ['low', 'max'] as const) {
+                const r = buildChatRequest(groq({ model, effort }));
+                assert.deepEqual(Object.keys(r.body), ['model', 'messages', 'max_tokens', 'response_format'], `${model} ${effort}`);
+                assert.equal((r.body.response_format as any).type, 'json_schema');
+                assert.equal((r.body.response_format as any).json_schema.strict, true);
+            }
+        }
+    });
+
+    it('never sends OpenRouter\'s reasoning object or provider field, not even for a model whose name OpenRouter would send them for', () => {
+        for (const model of ['openai/gpt-oss-120b', 'openai/gpt-6.1-sol', 'llama-3.3-70b-versatile']) {
+            const body = buildChatRequest(groq({ model, effort: 'high' })).body;
+            assert.ok(!('reasoning' in body), model);
+            assert.ok(!('provider' in body), model);
+        }
+    });
+
+    it('puts the key in the header and nowhere else, and sends no attribution headers', () => {
+        const r = buildChatRequest(groq());
+        assert.ok(!r.url.includes(GROQ_KEY));
+        assert.ok(!JSON.stringify(r.body).includes(GROQ_KEY));
+        assert.deepEqual(Object.keys(r.headers), ['authorization']);
+    });
+
+    it('is always a strict schema and always at its own address: JSON-object mode and a base URL are not offered', () => {
+        const r = buildChatRequest(groq({ jsonMode: 'object', baseUrl: 'https://evil.example.com/v1' }));
+        assert.equal((r.body.response_format as any).type, 'json_schema');
+        assert.equal(r.url, 'https://api.groq.com/openai/v1/chat/completions');
+    });
+
+    it('refuses a schema strict mode cannot express, before any request', () => {
+        const err = caught(() => buildChatRequest(groq({ schema: { json: { type: 'object', properties: { m: { type: 'object', additionalProperties: { type: 'string' } } } } } })));
+        assert.equal(err.kind, 'bad_request');
+        assert.equal(err.provider, 'groq');
+        assert.match(err.message, /free-form keys/);
+    });
+
+    it('is what changes for Groq alone: OpenRouter and Custom are sent no reasoning_effort or include_reasoning, whatever the model is called', () => {
+        for (const args of [router({ model: 'openai/gpt-oss-120b', effort: 'high' }), custom({ model: 'openai/gpt-oss-120b', effort: 'high' })]) {
+            const body = buildChatRequest(args).body;
+            assert.ok(!('reasoning_effort' in body), args.provider);
+            assert.ok(!('include_reasoning' in body), args.provider);
+        }
     });
 });
 
@@ -324,12 +455,79 @@ describe('parseChatResponse', () => {
     });
 });
 
+describe('parseChatResponse for Groq', () => {
+    const groqCall = { provider: 'groq', model: 'openai/gpt-oss-120b', apiKey: GROQ_KEY } as const;
+    // What Groq sends for a gpt-oss call: the reasoning rides along in `message.reasoning` unless `include_reasoning` is false, and there is no cost.
+    const groqCompletion = (over: Record<string, unknown> = {}) => ({
+        id: 'chatcmpl-1', object: 'chat.completion', created: 1790000000, model: 'openai/gpt-oss-120b',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"reply":"hi"}', reasoning: 'The user wants a greeting, so say hi.' } }],
+        usage: { queue_time: 0.01, prompt_tokens: 120, prompt_time: 0.002, completion_tokens: 80, completion_time: 0.1, total_tokens: 200, completion_tokens_details: { reasoning_tokens: 46 } },
+        ...over,
+    });
+
+    it('reads the content and the tokens (reasoning is inside completion_tokens), never the reasoning text, and bills under the model it asked for', () => {
+        const r = parseChatResponse(groqCompletion(), groqCall);
+        assert.equal(r.text, '{"reply":"hi"}');
+        assert.equal(r.stopReason, 'end_turn');
+        assert.deepEqual(r.usage, { in: 120, out: 80 });
+        assert.deepEqual(r.billed, [{ model: 'openai/gpt-oss-120b', in: 120, out: 80 }]);
+        assert.equal(r.model, 'openai/gpt-oss-120b');
+        assert.ok(!JSON.stringify(r).includes('greeting'));
+    });
+
+    it('has no price of its own: the figure is left to the table, and a cost that appears anyway is not taken for one', () => {
+        assert.ok(!('usd' in parseChatResponse(groqCompletion(), groqCall).billed[0]!));
+        const odd = parseChatResponse(groqCompletion({ usage: { prompt_tokens: 1, completion_tokens: 1, cost: 5, is_byok: true, cost_details: { upstream_inference_cost: 9 } } }), groqCall);
+        assert.ok(!('usd' in odd.billed[0]!) && !('source' in odd.billed[0]!));
+    });
+
+    it('is max_tokens, with the tokens it was billed, when the reasoning used the limit up and nothing was written', () => {
+        const r = parseChatResponse(groqCompletion({ choices: [{ index: 0, finish_reason: 'length', message: { role: 'assistant', content: '', reasoning: 'Let me think about' } }] }), groqCall);
+        assert.equal(r.stopReason, 'max_tokens');
+        assert.equal(r.text, '');
+        assert.deepEqual(r.usage, { in: 120, out: 80 });
+    });
+});
+
 describe('the family\'s normalize', () => {
     it('drops the nulls strict mode wrote for optional fields, and keeps a required one', () => {
         const normalize = chatCompletionsFamily.normalize!;
         assert.deepEqual(normalize({ reply: 'hi', score: null }, SCHEMA), { reply: 'hi' });
         assert.deepEqual(normalize({ reply: 'hi', score: 3 }, SCHEMA), { reply: 'hi', score: 3 });
         assert.deepEqual(normalize({ json: 1 }, { json: { type: 'object', properties: { json: { type: ['integer', 'null'] } }, required: ['json'] } }), { json: 1 });
+    });
+});
+
+describe('chatCompletionsAdapter for Groq', () => {
+    it('makes one POST to Groq with the bearer key and the request body, and returns the answer', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, completion({ model: 'openai/gpt-oss-120b', usage: { prompt_tokens: 12, completion_tokens: 8 } })));
+        const r = await chatCompletionsAdapter({ ...groq({ effort: 'max' }), fetchImpl });
+        assert.equal(r.text, '{"reply":"hi"}');
+        assert.deepEqual(r.billed, [{ model: 'openai/gpt-oss-120b', in: 12, out: 8 }]);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.url, 'https://api.groq.com/openai/v1/chat/completions');
+        assert.equal(calls[0]!.method, 'POST');
+        assert.equal(calls[0]!.redirect, 'error');
+        assert.equal(calls[0]!.headers['authorization'], `Bearer ${GROQ_KEY}`);
+        assert.equal(calls[0]!.body.reasoning_effort, 'high');
+        assert.equal(calls[0]!.body.include_reasoning, false);
+        assert.ok(!calls[0]!.raw.includes(GROQ_KEY));
+    });
+
+    it('reads Groq\'s 498 (flex tier out of capacity) as a server error to try again, keeping the wait it asks for, and a 429 as a rate limit', async () => {
+        const overloaded = jsonResponse(498, { error: { message: 'Flex tier capacity exceeded. Please retry later.', type: 'capacity_exceeded' } }, { 'retry-after': '3' });
+        const err = await chatCompletionsAdapter({ ...groq(), fetchImpl: stubFetch(overloaded).fetchImpl }).then(() => assert.fail('expected a failure'), (e) => e);
+        assert.ok(isAiError(err));
+        assert.equal(err.kind, 'server');
+        assert.equal(err.status, 498);
+        assert.equal(err.retryable, true);
+        assert.equal(err.retryAfterMs, 3000);
+        assert.equal(err.provider, 'groq');
+        const limited = jsonResponse(429, { error: { message: 'Rate limit reached for model `openai/gpt-oss-120b`. Please try again in 7s.', type: 'tokens' } }, { 'retry-after': '7' });
+        const rate = await chatCompletionsAdapter({ ...groq(), fetchImpl: stubFetch(limited).fetchImpl }).then(() => assert.fail('expected a failure'), (e) => e);
+        assert.ok(isAiError(rate));
+        assert.equal(rate.kind, 'rate');
+        assert.equal(rate.retryAfterMs, 7000);
     });
 });
 

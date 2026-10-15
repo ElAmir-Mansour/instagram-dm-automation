@@ -12,6 +12,7 @@ export const FAKE_KEYS: Record<ProviderId, string> = {
     openai: 'sk-proj-' + 'OpenaiSentinel'.repeat(3) + 'oai2',
     gemini: 'AIza' + 'GeminiSentinel'.repeat(3) + 'gem3',
     openrouter: 'sk-or-v1-' + 'OpenrouterSentinel'.repeat(3) + 'ort4',
+    groq: 'gsk_' + 'GroqSentinel'.repeat(4) + 'grq6',
     custom: 'custom-' + 'CustomSentinel'.repeat(3) + 'cus5',
 };
 

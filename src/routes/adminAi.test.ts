@@ -72,6 +72,13 @@ const goodProvider = (hit: Hit): Response => {
         if (hit.headers.authorization !== `Bearer ${FAKE_KEYS.openrouter}`) return echoes401(hit);
         return jsonResponse(200, { data: { limit_remaining: null } });
     }
+    if (u.host === 'api.groq.com' && u.pathname === '/openai/v1/models') {
+        if (hit.headers.authorization !== `Bearer ${FAKE_KEYS.groq}`) return echoes401(hit);
+        return jsonResponse(200, {
+            object: 'list',
+            data: [{ id: 'openai/gpt-oss-120b' }, { id: 'whisper-large-v3' }, { id: 'openai/gpt-oss-20b' }, { id: 'canopylabs/orpheus-v1-english' }, { id: 'llama-3.3-70b-versatile' }],
+        });
+    }
     if (u.host === 'llm.example.com' && u.pathname === '/v1/models') {
         return jsonResponse(200, { data: [{ id: 'my-model' }, { id: 'other-model' }] });
     }
@@ -89,7 +96,7 @@ const fakeFetch: FetchLike = async (url, init) => {
 
 // ─── The stand-in for the rest ───────────────────────────────────────────────────────────────
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: string[];
@@ -181,7 +188,7 @@ describe('GET /ai', () => {
     it('answers with providers, purposes, prices, budgets, warnings and today\'s spend, and nothing is saved yet', async () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
-        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'custom']);
+        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
         assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']);
         assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
         assert.equal(body.budgets.unlimited, true);
@@ -196,6 +203,7 @@ describe('GET /ai', () => {
         saveKey('gemini');
         process.env.OPENAI_API_KEY = FAKE_KEYS.openai;
         db.setSetting('ai.providers.custom.api_key', FAKE_KEYS.custom, true);
+        db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
         const { body } = await call('GET', '/ai');
         const keys = Object.fromEntries(body.providers.map((p: any) => [p.id, p.key]));
         assert.deepEqual(keys.anthropic, { set: true, source: 'database', last4: 'ant1', envFallback: false });
@@ -203,6 +211,7 @@ describe('GET /ai', () => {
         assert.deepEqual(keys.openai, { set: true, source: 'env', last4: null, envFallback: true });
         assert.deepEqual(keys.openrouter, { set: false, source: null, last4: null, envFallback: false });
         assert.deepEqual(keys.custom, { set: true, source: 'database', last4: 'cus5', envFallback: false });
+        assert.deepEqual(keys.groq, { set: true, source: 'database', last4: 'grq6', envFallback: false });
         assertNoKey(JSON.stringify(body), 'GET /ai');
     });
 
@@ -390,6 +399,36 @@ describe('PUT /ai/keys/:provider: checked with the provider first, saved only if
         assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.openrouter}`);
     });
 
+    it('checks Groq\'s key against its model list with a bearer header, then saves it encrypted under its own setting', async () => {
+        const { status, body } = await call('PUT', '/ai/keys/groq', { body: { apiKey: `  ${FAKE_KEYS.groq}\n` } });
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'groq', key: { set: true, source: 'database', last4: 'grq6', envFallback: false } });
+        assert.equal(hits.length, 1);
+        assert.equal(hits[0]!.method, 'GET');
+        assert.equal(hits[0]!.url, 'https://api.groq.com/openai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.groq}`);
+        const stored = db.settings.get('ai.providers.groq.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored value');
+        assert.deepEqual(db.audits.map((a) => [a.action, a.detail]), [['settings.ai_key_write', { provider: 'groq', change: 'saved', warning: null }]]);
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.outcome]), [['groq', 'ok']]);
+        assertNoKey(JSON.stringify(db.audits) + JSON.stringify(db.usage), 'the audit and usage rows');
+    });
+
+    it('refuses a Groq key Groq refuses with 400, saves nothing, and does not repeat the key its error echoed', async () => {
+        const bad = FAKE_KEYS.groq.replace('grq6', 'xxxx');
+        const { status, body } = await call('PUT', '/ai/keys/groq', { body: { apiKey: bad } });
+        assert.equal(status, 400);
+        assert.equal(body.kind, 'auth');
+        assert.match(body.error, /^Groq refused this key: /);
+        assertNoKey(JSON.stringify(body), 'the refusal', [bad]);
+        assert.ok(!JSON.stringify(body).includes(bad.slice(8, -4)));
+        assert.equal(db.settings.size, 0);
+        assert.equal(db.audits.length, 0);
+        assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
+    });
+
     it('needs Custom\'s base URL to be saved first, then checks the key against that endpoint', async () => {
         const first = await call('PUT', '/ai/keys/custom', { body: { apiKey: FAKE_KEYS.custom } });
         assert.equal(first.status, 400);
@@ -482,8 +521,17 @@ describe('POST /ai/test', () => {
         assert.equal(body.ok, true);
     });
 
+    it('with GROQ_API_KEY tests Groq\'s model list with it', async () => {
+        process.env.GROQ_API_KEY = FAKE_KEYS.groq;
+        const { body } = await call('POST', '/ai/test', { body: { provider: 'groq' } });
+        assert.equal(body.ok, true);
+        assert.equal(hits[0]!.url, 'https://api.groq.com/openai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.groq}`);
+    });
+
     it('refuses a provider with no key, Custom with no base URL, an unknown provider, and a body that is neither or both', async () => {
         assert.match((await call('POST', '/ai/test', { body: { provider: 'openai' } })).body.error, /No API key is saved for OpenAI/);
+        assert.match((await call('POST', '/ai/test', { body: { provider: 'groq' } })).body.error, /No API key is saved for Groq/);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'custom' } })).body.error, /has no base URL saved/);
         for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'eval' }, { purpose: 'nope' }]) {
             assert.equal((await call('POST', '/ai/test', { body })).status, 400, JSON.stringify(body));
@@ -572,6 +620,16 @@ describe('GET /ai/models/:provider', () => {
         assert.equal(usageOf('key_test').length, 0, 'listing is not a test');
     });
 
+    it('lists Groq\'s chat models with the saved key, without its speech and text-to-speech models', async () => {
+        saveKey('groq');
+        const { status, body } = await call('GET', '/ai/models/groq');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'groq', models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.3-70b-versatile'], truncated: false });
+        assert.equal(hits[0]!.url, 'https://api.groq.com/openai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.groq}`);
+        assert.equal((await call('GET', '/ai/models/openrouter')).status, 400, 'a provider with no key is still refused');
+    });
+
     it('lists Custom\'s models from its saved base URL', async () => {
         await call('PUT', '/ai', { body: { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } } });
         assert.deepEqual((await call('GET', '/ai/models/custom')).body.models, ['my-model', 'other-model']);
@@ -640,26 +698,31 @@ describe('masking: no key is ever in a response, a log, an audit row or a usage 
         await send('PUT', '/ai', { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } });
         await send('PUT', '/ai/keys/anthropic', { apiKey: FAKE_KEYS.anthropic });
         await send('PUT', '/ai/keys/openrouter', { apiKey: FAKE_KEYS.openrouter });
+        await send('PUT', '/ai/keys/groq', { apiKey: FAKE_KEYS.groq });
         await send('PUT', '/ai/keys/custom', { apiKey: FAKE_KEYS.custom });
         await send('PUT', '/ai/keys/anthropic', { apiKey: FAKE_KEYS.anthropic.replace('ant1', 'wrong') }, 400);
+        await send('PUT', '/ai/keys/groq', { apiKey: FAKE_KEYS.groq.replace('grq6', 'wrong') }, 400);
         saveKey('gemini');
         saveKey('openai');
         process.env.OPENAI_API_KEY = FAKE_KEYS.openai;
         await send('GET', '/ai');
         await send('POST', '/ai/test', { provider: 'anthropic' });
         await send('POST', '/ai/test', { provider: 'openrouter' });
+        await send('POST', '/ai/test', { provider: 'groq' });
         await send('POST', '/ai/test', { purpose: 'onboarding_draft' });
         await send('GET', '/ai/models/anthropic');
+        await send('GET', '/ai/models/groq');
         await send('GET', '/ai/models/custom');
         await send('GET', '/ai/usage');
         await send('PUT', '/ai/keys/gemini', { apiKey: FAKE_KEYS.gemini }, 400);
         await send('PUT', '/ai', { routing: { tenant_studio: { provider: 'openai', model: 'gpt-6-astra' } }, prices: { 'gpt-6-astra': { in: 2, out: 8 } } });
         await send('DELETE', '/ai/keys/anthropic');
         await send('DELETE', '/ai/keys/custom');
+        await send('DELETE', '/ai/keys/groq');
         await send('GET', '/ai');
 
-        const everything = [...Object.values(FAKE_KEYS), FAKE_KEYS.anthropic.replace('ant1', 'wrong')];
-        assert.ok(bodies.length >= 17);
+        const everything = [...Object.values(FAKE_KEYS), FAKE_KEYS.anthropic.replace('ant1', 'wrong'), FAKE_KEYS.groq.replace('grq6', 'wrong')];
+        assert.ok(bodies.length >= 22);
         assertNoKey(JSON.stringify(bodies), 'a response', everything);
         assertNoKey(logs.join('\n'), 'the log', everything);
         assertNoKey(JSON.stringify(db.audits), 'an audit row', everything);

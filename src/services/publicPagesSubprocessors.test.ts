@@ -4,7 +4,7 @@
  * Meta, TikTok and Google reviewers and the account owners themselves read these pages, so each sentence is a claim about the product.
  * The AI providers layer is planned, not live (DESIGN.md §9's truth table), so what is pinned is the shape of an honest disclosure:
  *
- *   - the five names (Anthropic, OpenAI, Google (Gemini), OpenRouter, and an address the operator enters), in both languages, in the same order;
+ *   - the six names (Anthropic, OpenAI, Google (Gemini), OpenRouter, Groq, and an address the operator enters), in both languages, in the same order;
  *   - that they are used ONLY when the operator has added a key and left the provider on, which is the whole difference between "we use
  *     these" and "these are possible";
  *   - what goes to them (the account owner's profile and content, for drafting), and what does not (anything about people who comment or
@@ -68,17 +68,32 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
         }
     });
 
-    it('lists the same five, in the same order, in Arabic and English', () => {
+    it('lists the same six, in the same order, in Arabic and English', () => {
         const names = (html: string) => [...html.matchAll(/<li>\s*<strong>([\s\S]*?)<\/strong>/g)].map((m) => words(m[1]!).trim());
         const ar = names(block.ar);
         const en = names(block.en);
-        assert.equal(ar.length, 5);
-        assert.equal(en.length, 5);
-        assert.deepEqual(en, ['Anthropic', 'OpenAI', 'Google', 'OpenRouter', 'A service at an address the operator enters']);
-        assert.deepEqual(ar.slice(0, 4), ['Anthropic', 'OpenAI', 'جوجل', 'OpenRouter']);
-        assert.equal(ar[4], 'خدمة بعنوان يحدّده المُشغّل');
+        assert.equal(ar.length, 6);
+        assert.equal(en.length, 6);
+        assert.deepEqual(en, ['Anthropic', 'OpenAI', 'Google', 'OpenRouter', 'Groq', 'A service at an address the operator enters']);
+        assert.deepEqual(ar.slice(0, 5), ['Anthropic', 'OpenAI', 'جوجل', 'OpenRouter', 'Groq']);
+        assert.equal(ar[5], 'خدمة بعنوان يحدّده المُشغّل');
         assert.ok(words(block.ar).includes('Gemini') && words(block.en).includes('Gemini'));
         assert.ok(words(block.en).includes('OpenAI-compatible'));
+    });
+
+    it('says what Groq does with a request, and no more than its own page says: it keeps none by default, and may log one for up to 30 days for a fault or abuse', () => {
+        const li = (doc: string) => doc.slice(doc.indexOf('Groq'), doc.indexOf('</li>', doc.indexOf('Groq')));
+        const en = words(li(block.en));
+        assert.ok(en.includes('Groq — runs the open model the operator chooses (such as OpenAI\'s gpt-oss) on its own hardware.'));
+        assert.ok(en.includes('By default it keeps no request; it may log one for up to 30 days to investigate a fault or abuse.'));
+        assert.ok(en.includes('How Groq handles API data'));
+        const ar = words(li(block.ar));
+        assert.ok(ar.includes('تشغّل النموذج المفتوح الذي يختاره المُشغّل (مثل gpt-oss من OpenAI) على عتادها الخاص.'));
+        assert.ok(ar.includes('لا تحتفظ بأي طلب افتراضياً، وقد تسجّل طلباً مدةً أقصاها 30 يوماً للتحقق من عطل أو من إساءة استخدام.'));
+        assert.ok(ar.includes('كيف تتعامل Groq مع بيانات الواجهة البرمجية'));
+        // Every Latin name in the Arabic entry sits in its own <bdi>, as the neighbouring entries do, or the punctuation around it reorders.
+        const arRaw = li(block.ar);
+        for (const latin of ['Groq', 'gpt-oss', 'OpenAI']) assert.match(arRaw, new RegExp(`<bdi lang="en" dir="ltr">${latin}</bdi>`), latin);
     });
 
     it('says they are used only when the operator has added a key and left the provider on, and that until then nothing reaches them', () => {
@@ -116,6 +131,7 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
                 'https://openai.com/policies/privacy-policy/',
                 'https://policies.google.com/privacy',
                 'https://openrouter.ai/privacy',
+                'https://console.groq.com/docs/your-data',
             ], lang);
             for (const attrs of links) assert.match(attrs, /target="_blank" rel="noopener noreferrer"/, lang);
         }
@@ -128,7 +144,7 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
             const h2 = [...doc.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
             assert.deepEqual([...toc.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]), h2, lang);
         }
-        assert.ok(privacy.ar.includes('آخر تحديث: 14 أكتوبر 2026') && privacy.en.includes('Last updated: 14 October 2026'));
+        assert.ok(privacy.ar.includes('آخر تحديث: 15 أكتوبر 2026') && privacy.en.includes('Last updated: 15 October 2026'));
     });
 });
 
@@ -148,14 +164,14 @@ describe('/data-deletion — the same providers are named among what deletion ca
         }
     });
 
-    it('names the four providers and the operator\'s own address, scopes it to account owners, and says the copy is theirs', () => {
+    it('names the five providers and the operator\'s own address, scopes it to account owners, and says the copy is theirs', () => {
         const en = words(section5.en);
-        for (const name of ['Anthropic', 'OpenAI', 'Google (Gemini)', 'OpenRouter', 'a service at an address the operator added']) assert.ok(en.includes(name), name);
+        for (const name of ['Anthropic', 'OpenAI', 'Google (Gemini)', 'OpenRouter', 'Groq', 'a service at an address the operator added']) assert.ok(en.includes(name), name);
         assert.ok(en.includes('if you are an account owner and the operator of the tool has switched on a provider'));
         assert.ok(en.includes('we cannot delete it on your behalf'));
         assert.ok(en.includes('Nothing about people who comment or message on Instagram or Facebook is sent to them'));
         const ar = words(section5.ar);
-        for (const name of ['Anthropic', 'OpenAI', 'Gemini', 'OpenRouter']) assert.ok(ar.includes(name), name);
+        for (const name of ['Anthropic', 'OpenAI', 'Gemini', 'OpenRouter', 'Groq']) assert.ok(ar.includes(name), name);
         assert.ok(ar.includes('إن كنتَ صاحب حساب وفعّل مُشغّل الأداة مزوّداً'));
         assert.ok(ar.includes('ولا نستطيع حذفها نيابةً عنك'));
         assert.ok(ar.includes('لا يصلهم شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك'));
@@ -170,7 +186,7 @@ describe('/data-deletion — the same providers are named among what deletion ca
     });
 
     it('carries the same date in both languages', () => {
-        assert.ok(deletion.ar.includes('آخر تحديث: 14 أكتوبر 2026') && deletion.en.includes('Last updated: 14 October 2026'));
+        assert.ok(deletion.ar.includes('آخر تحديث: 15 أكتوبر 2026') && deletion.en.includes('Last updated: 15 October 2026'));
     });
 });
 
@@ -180,7 +196,7 @@ describe('both pages — no provider is promised as live', () => {
             const html = noComments(read(`public/${p}.html`));
             // The layer is planned, not live: the owner rules on these pages (no invented claims) are checked by landingTruth's, and this is
             // the one that is new, that no sentence states a provider as in use.
-            assert.equal(/we (?:use|send to|rely on) (?:Anthropic|OpenAI|OpenRouter)/i.test(words(html)), false);
+            assert.equal(/we (?:use|send to|rely on) (?:Anthropic|OpenAI|OpenRouter|Groq)/i.test(words(html)), false);
         });
     }
 });

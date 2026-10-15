@@ -26,7 +26,7 @@ export interface PreparedQuery {
 /**
  * The provider, its trimmed key and a deadline, or the error that says what is missing. `needsKey`
  * is true unless the call is one that works without one (OpenRouter's model list is public) or
- * the provider needs none (Custom).
+ * the provider needs none (Custom). Groq's list is not public: it needs the key, and proves it.
  */
 export function prepareQuery(q: ProviderQuery, opts: { needsKey?: boolean } = {}): PreparedQuery {
     const key = (q.apiKey ?? '').trim();
@@ -38,8 +38,9 @@ export function prepareQuery(q: ProviderQuery, opts: { needsKey?: boolean } = {}
 }
 
 /**
- * Where a Chat Completions request goes: OpenRouter's own address, always, or Custom's, which must
- * be a public https origin (`checkBaseUrl`) and is returned tidied, without a trailing slash.
+ * Where a Chat Completions request goes: the registry's own address for OpenRouter and Groq,
+ * always, or Custom's, which must be a public https origin (`checkBaseUrl`) and is returned
+ * tidied, without a trailing slash.
  */
 export function endpointFor(a: { provider: string; model: string; apiKey: string; baseUrl?: string }): string {
     const def = providerById(a.provider);
