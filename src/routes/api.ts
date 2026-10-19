@@ -11,6 +11,7 @@ import { getSessionDays } from '../services/onboardingSettings.js';
 import {
     describeTelegramSettings, mergeTelegram, parseTelegramInput, readTelegramSettings, saveTelegramInput, sendTestMessage,
 } from '../services/notify.js';
+import { describeEmailSettings, mergeEmail, parseEmailInput, readEmailSettings, saveEmailInput, sendTestEmail } from '../services/notifyEmail.js';
 import { PAGE_INBOX_APP_IDS, parseOwnerAppIds, readEchoSettings, saveEchoInput } from '../webhook/echo.js';
 import axios from 'axios';
 import {
@@ -4554,15 +4555,17 @@ router.post('/settings/sales-variants', canOperate, async (req, res) => {
 
 // ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────
 //
-// `GET/POST /settings/notify` and `POST /settings/notify/test`: the Telegram bot the owner is told on when a conversation needs a person
-// (src/services/notify.ts), and the switch that lets an echo of his own reply pause the bot (src/webhook/echo.ts). Both live in
-// `app_settings`, one set for the deployment, so, like the public-site settings above, they are for platform admins only: anyone else
-// gets the same 404 a stranger would. The bot token is never in an answer: `{ set, last4 }` is all the card is ever told of it.
+// `GET/POST /settings/notify`, `POST /settings/notify/test` and `POST /settings/notify/test-email`: the Telegram bot and the email address
+// (Resend) the owner is told on when a conversation needs a person (src/services/notify.ts, notifyEmail.ts), and the switch that lets an echo
+// of his own reply pause the assistant (src/webhook/echo.ts). All live in `app_settings`, one set for the deployment, so, like the public-site
+// settings above, they are for platform admins only: anyone else gets the same 404 a stranger would. The bot token and the Resend API key are
+// never in an answer: `{ set, last4 }` is all the card is ever told of either.
 
 async function notifySettingsPayload() {
-    const [telegram, echo] = await Promise.all([readTelegramSettings(), readEchoSettings()]);
+    const [telegram, email, echo] = await Promise.all([readTelegramSettings(), readEmailSettings(), readEchoSettings()]);
     return {
         telegram: describeTelegramSettings(telegram),
+        email: describeEmailSettings(email),
         echo: { takeover: echo.takeover, ownerAppIds: echo.extraOwnerAppIds, documentedAppIds: [...PAGE_INBOX_APP_IDS] },
     };
 }
@@ -4588,6 +4591,11 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             res.status(400).json({ error: telegram.error, field: telegram.field });
             return;
         }
+        const email = parseEmailInput(body.email);
+        if (!email.ok) {
+            res.status(400).json({ error: email.error, field: email.field });
+            return;
+        }
         let echoInput: { takeover?: boolean; ownerAppIds?: string[] } | undefined;
         if (body.echo !== undefined) {
             const echo = (body.echo && typeof body.echo === 'object' ? body.echo : {}) as Record<string, unknown>;
@@ -4609,7 +4617,7 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             }
         }
 
-        if (Object.keys(telegram.value).length === 0 && Object.keys(echoInput ?? {}).length === 0) {
+        if (Object.keys(telegram.value).length === 0 && Object.keys(email.value).length === 0 && Object.keys(echoInput ?? {}).length === 0) {
             res.status(400).json({ error: 'Nothing to save.' });
             return;
         }
@@ -4621,7 +4629,15 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             return;
         }
 
+        // The same for email: on needs the key and an address (the saved one, else the site contact email).
+        const emailAfter = mergeEmail(await readEmailSettings(), email.value);
+        if (emailAfter.enabled && (!emailAfter.apiKey || !(emailAfter.to || emailAfter.defaultTo))) {
+            res.status(400).json({ error: 'Save the Resend API key first: email alerts need it.', field: 'emailEnabled' });
+            return;
+        }
+
         await saveTelegramInput(telegram.value, updatedBy);
+        await saveEmailInput(email.value, updatedBy);
         if (echoInput) await saveEchoInput(echoInput, updatedBy);
 
         // Which settings changed, never their values: the token is one of them.
@@ -4629,10 +4645,17 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             user_id: updatedBy,
             changed: [
                 ...Object.keys(telegram.value).map((k) => `telegram.${k}`),
+                ...Object.keys(email.value).map((k) => `email.${k}`),
                 ...Object.keys(echoInput ?? {}).map((k) => `echo.${k}`),
             ],
         });
-        res.json(await notifySettingsPayload());
+
+        // Saving a new key is the owner's whole set-up, so the server tries it at once with one test email and the card shows the result: no
+        // second click to find out it works. It never fails the save (the test returns a result, whatever happens), and it is skipped when
+        // the key was removed.
+        const emailTest = typeof email.value.apiKey === 'string' ? await sendTestEmail(req.body?.lang === 'en' ? 'en' : 'ar') : undefined;
+        if (emailTest) log('info', 'api.notify_email_test', { after: 'save', ok: emailTest.ok, reason: emailTest.ok ? null : emailTest.reason, status: emailTest.ok ? null : emailTest.status });
+        res.json({ ...(await notifySettingsPayload()), ...(emailTest ? { emailTest } : {}) });
     } catch (err) {
         log('error', 'api.notify_settings_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the alert settings.' });
@@ -4648,6 +4671,19 @@ router.post('/settings/notify/test', requirePlatformAdmin, canAdminister, async 
     } catch (err) {
         log('error', 'api.notify_test_failed', describeError(err));
         res.status(500).json({ error: 'Failed to send the test message.' });
+    }
+});
+
+// The same button for the email address: sends with what is SAVED (the key never travels in this request) and answers ok / rejected (Resend's
+// status and its message, scrubbed of the key) / unreachable / not_configured. Never a 500 for Resend saying no: that is the answer.
+router.post('/settings/notify/test-email', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const result = await sendTestEmail(req.body?.lang === 'en' ? 'en' : 'ar');
+        log('info', 'api.notify_email_test', { after: 'button', ok: result.ok, reason: result.ok ? null : result.reason, status: result.ok ? null : result.status });
+        res.json(result);
+    } catch (err) {
+        log('error', 'api.notify_email_test_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to send the test email.' });
     }
 });
 

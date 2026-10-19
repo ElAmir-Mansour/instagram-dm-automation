@@ -17,9 +17,15 @@
  * state is recorded, a failure is logged (with a scrubbed reason: see `notify.ts`) and costs the customer nothing. The inbox flag
  * ("Needs you") and the dashboard badge do not depend on it.
  *
+ * **Channels.** Every alert, from every caller (a sales turn, a failed reply, a WhatsApp reply that could not be sent), goes through
+ * `notifyOwner`, which sends it to EACH channel the owner switched on: Telegram (`notify.ts`) and/or email (`notifyEmail.ts`). They are
+ * independent: both are tried, at the same time, and one refusing, timing out or throwing changes nothing about the other. With email off
+ * (the state of every deployment before it existed) the alert is the Telegram one it always was: the same read, the same call, the same log lines.
+ * The per-conversation allowance below is spent once per alert, not once per channel.
+ *
  * **Hot leads** are a different alert for a different moment: the reply that SENT the link, to a person whose intent was to buy (or to
  * learn what buying costs, or whether it fits them). They are for the owner to follow up personally, they do not pause the bot, and
- * they are switched off on their own (`notify.telegram_hot_leads`).
+ * they are switched off on their own, per channel (`notify.telegram_hot_leads`: on unless turned off; `notify.email_hot_leads`: off unless turned on).
  *
  * **Alerts are the platform owner's.** The chat is configured once, for the deployment (`app_settings`). Until a tenant can have a
  * channel of its own, a customer of any other tenant is never sent to it: that tenant gets the inbox flag and the badge only.
@@ -32,8 +38,9 @@ import { describeError, log } from '../../utils/log.js';
 import { checkSendQuota } from '../../utils/rateLimiter.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import {
-    buildNoticeText, inboxLink, readTelegramSettings, sendTelegramMessage, telegramReady, windowRemainingMs, type NoticeKind, type NoticeLang,
+    buildNoticeText, inboxLink, sendTelegramMessage, telegramReady, windowRemainingMs, type NoticeInput, type NoticeKind, type NoticeLang,
 } from '../notify.js';
+import { emailReady, readNotifyChannels, redactAddresses, sendEmailNotice } from '../notifyEmail.js';
 import { getPlatformOwnerId } from '../tenant.js';
 import type { TurnDecision } from './flow.js';
 import type { HandoffReason, Intent } from './types.js';
@@ -78,12 +85,12 @@ export function noticeFor(decision: Pick<TurnDecision, 'stage' | 'action' | 'han
 
 /** What `notifyOwner` did, for the log and the tests. */
 export type NoticeOutcome =
-    | 'sent'
-    | 'off'              // alerts are not switched on, or the token or the chat id is missing
-    | 'hot_leads_off'    // alerts are on, hot leads are not
+    | 'sent'             // at least one channel took it
+    | 'off'              // no channel is switched on and complete (a token and a chat id; a key and an address)
+    | 'hot_leads_off'    // alerts are on, hot leads are not (on any channel that is)
     | 'not_owner'        // another tenant's conversation: its owner has no channel yet
     | 'rate_limited'     // this conversation has had its alerts for the hour
-    | 'failed'           // Telegram said no, or did not answer
+    | 'failed'           // every channel tried said no, or did not answer
     | 'error';           // something on our side threw: logged, and costs nothing
 
 export interface NoticeRequest {
@@ -118,9 +125,15 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
     if (!plan) return 'off';
     const logBase = { conversation_id: req.conversationId, kind: plan.kind, reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead' };
     try {
-        const settings = await readTelegramSettings();
-        if (!telegramReady(settings)) return 'off';
-        if (plan.kind === 'hot_lead' && !settings.hotLeads) return 'hot_leads_off';
+        // Both channels' settings, in one round trip. A channel takes this alert when it is on and complete, and, for a hot lead, when its
+        // own hot-lead switch is on.
+        const { telegram: telegramSettings, email: emailSettings } = await readNotifyChannels();
+        const hot = plan.kind === 'hot_lead';
+        const telegramOn = telegramReady(telegramSettings) ? telegramSettings : null;
+        const emailOn = emailReady(emailSettings) ? emailSettings : null;
+        const viaTelegram = telegramOn !== null && (!hot || telegramSettings.hotLeads) ? telegramOn : null;
+        const viaEmail = emailOn !== null && (!hot || emailSettings.hotLeads) ? emailOn : null;
+        if (!viaTelegram && !viaEmail) return telegramOn || emailOn ? 'hot_leads_off' : 'off';
 
         if (req.creatorId !== (await getPlatformOwnerId())) {
             log('debug', 'dm.handoff_notify_skipped', { ...logBase, why: 'not_owner_tenant' });
@@ -155,7 +168,7 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
         }
 
         const kind: NoticeKind = plan.kind;
-        const text = buildNoticeText({
+        const notice: NoticeInput = {
             kind,
             reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead',
             lang: noticeLang(req.language),
@@ -166,18 +179,50 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
             lastMessage: facts.last_inbound_text ?? '',
             windowMs: windowRemainingMs(facts.last_inbound_at, req.now ?? new Date()),
             link: inboxLink(await getPublicBaseUrl(null), req.conversationId),
-        });
+        };
 
-        const result = await sendTelegramMessage({ token: settings.token, chatId: settings.chatId }, text);
-        if (!result.ok) {
-            // `description` has been scrubbed of the token (notify.ts); nothing else of the request is logged.
-            log('warn', 'dm.handoff_notify_failed', { ...logBase, outcome: result.reason, status: result.status, description: result.description });
-            return 'failed';
+        // Each channel is tried on its own and at the same time (a Telegram that hangs for its 5 s must not hold up the email, nor a
+        // refusal of one cost the other its alert). `settle` makes a channel that THROWS (it should not: both senders never do) a failed
+        // channel rather than a lost alert.
+        const attempts: Array<Promise<boolean>> = [];
+        if (viaTelegram) {
+            const text = buildNoticeText(notice);
+            attempts.push(settle(logBase, 'telegram', async () => {
+                const result = await sendTelegramMessage({ token: viaTelegram.token, chatId: viaTelegram.chatId }, text);
+                if (!result.ok) {
+                    // `description` has been scrubbed of the token (notify.ts); nothing else of the request is logged.
+                    log('warn', 'dm.handoff_notify_failed', { ...logBase, outcome: result.reason, status: result.status, description: result.description });
+                    return false;
+                }
+                log('info', 'dm.handoff_notified', logBase);
+                return true;
+            }));
         }
-        log('info', 'dm.handoff_notified', logBase);
-        return 'sent';
+        if (viaEmail) {
+            attempts.push(settle(logBase, 'email', async () => {
+                const result = await sendEmailNotice(notice, emailSettings);
+                if (!result.ok) {
+                    // `description` has been scrubbed of the API key (notifyEmail.ts), and an address (Resend's refusal can name the owner's own).
+                    log('warn', 'dm.handoff_notify_email_failed', { ...logBase, outcome: result.reason, status: result.status, description: redactAddresses(result.description) });
+                    return false;
+                }
+                log('info', 'dm.handoff_notified_email', logBase);
+                return true;
+            }));
+        }
+        return (await Promise.all(attempts)).some(Boolean) ? 'sent' : 'failed';
     } catch (err) {
         log('warn', 'dm.handoff_notify_error', { ...logBase, ...describeError(err) });
         return 'error';
+    }
+}
+
+/** One channel's attempt, as a yes or a no: a throw is logged and is a no, so it can never take the other channel's alert with it. */
+async function settle(logBase: Record<string, unknown>, channel: 'telegram' | 'email', attempt: () => Promise<boolean>): Promise<boolean> {
+    try {
+        return await attempt();
+    } catch (err) {
+        log('warn', 'dm.handoff_notify_channel_error', { ...logBase, channel, ...describeError(err) });
+        return false;
     }
 }

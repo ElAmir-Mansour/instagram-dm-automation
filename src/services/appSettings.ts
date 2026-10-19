@@ -222,6 +222,18 @@ export const APP_SETTING_KEYS = {
     notifyTelegramEnabled: 'notify.telegram_enabled',
     notifyTelegramHotLeads: 'notify.telegram_hot_leads',
     /**
+     * The same alerts by email (`src/services/notifyEmail.ts`), through Resend's HTTPS API, beside Telegram and independent of it. The API key is
+     * the one secret (encrypted, and the Settings card is told `{set, last4}` and nothing else). `to` is the owner's own address; `from` is unset
+     * until he verifies a domain with Resend (the sender then defaults to `onboarding@resend.dev`, which Resend only lets send to the address
+     * the account was made with). `enabled` is 'true' once switched on; `hot_leads` is 'false' only when the owner turned the hot-lead emails
+     * off (unset means on, as Telegram's). The platform owner's tenant only, like the Telegram alerts.
+     */
+    notifyEmailEnabled: 'notify.email_enabled',
+    notifyEmailTo: 'notify.email_to',
+    notifyEmailFrom: 'notify.email_from',
+    notifyEmailApiKey: 'notify.email_api_key',
+    notifyEmailHotLeads: 'notify.email_hot_leads',
+    /**
      * 'true': an echo (`is_echo`) that proves a person replied by hand pauses the bot for that conversation (`src/webhook/echo.ts`).
      * Unset is off, and off means echoes are dropped before they become jobs, exactly as before this setting existed. DM plan
      * assumption A4 (can our own sends be told from the owner's replies in the Instagram app?) is unverified, so it ships off.
@@ -276,6 +288,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.aiProviderKeyGroq,
     APP_SETTING_KEYS.aiProviderKeyCustom,
     APP_SETTING_KEYS.notifyTelegramBotToken,
+    APP_SETTING_KEYS.notifyEmailApiKey,
 ]);
 
 export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {

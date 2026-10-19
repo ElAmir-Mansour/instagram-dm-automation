@@ -417,7 +417,8 @@ describe('Settings: the handoff alerts card', () => {
         for (const lang of ['en', 'ar'] as const) {
             const { Settings, t } = load(lang);
             const markup = String(Settings.notifySection(NOTIFY(), null));
-            assert.equal((markup.match(/<li>/g) || []).length, 4, `${lang}: four steps`);
+            // The Telegram steps come before the first fieldset (the Email block); the Email block has its own three.
+            assert.equal((markup.slice(0, markup.indexOf('<fieldset')).match(/<li>/g) || []).length, 4, `${lang}: four steps`);
             assert.ok(markup.includes('@BotFather') && markup.includes('@userinfobot'));
             for (const key of ['settings.notify.help.step2', 'settings.notify.help.step3']) assert.ok(text(markup).includes(text(t(key))), `${lang} ${key}`);
             assert.match(markup, /data-action="settings:testNotify"/);
@@ -519,5 +520,216 @@ describe('Settings: saving, testing, removing', () => {
         assert.deepEqual(plain(s.calls[0]!.args[0]), { telegram: { botToken: null, enabled: false } });
         await settle();
         assert.deepEqual(s.toasts, [s.t('settings.notify.tokenRemoved')]);
+    });
+});
+
+// ─── The email half of the card ─────────────────────────────────────────────────────────────
+
+const KEY = 're_AbCdEfGh_0123456789abcdefghijkl';
+const EMAIL = (over: Json = {}): Json => ({
+    apiKey: { set: true, last4: 'ijkl' }, to: 'contact@example.com', toIsDefault: true, from: null, defaultFrom: 'AutoReply Pro <onboarding@resend.dev>',
+    enabled: true, hotLeads: false, ready: true, ...over,
+});
+const NO_KEY = (over: Json = {}): Json => EMAIL({ apiKey: { set: false, last4: null }, enabled: false, ready: false, ...over });
+
+/** The Email block of the card: from its fieldset to the next one (the echo block's). */
+const emailBlock = (markup: string): string => {
+    const first = markup.indexOf('<fieldset');
+    return markup.slice(first, markup.indexOf('<fieldset', first + 1));
+};
+
+describe('Settings: the email alerts card', () => {
+    it('never holds the key: a password field that is never filled, "saved ••••last4" in words, and the key nowhere in the markup', () => {
+        const { Settings, t } = load();
+        const markup = String(Settings.notifySection(NOTIFY({ email: { ...EMAIL(), leaked: KEY } }), null));
+        assert.match(markup, /id="notify-email-key" name="emailApiKey" type="password"/);
+        assert.match(markup, /id="notify-email-key"[^>]*autocomplete="new-password"/);
+        assert.ok(!/id="notify-email-key"[^>]*value=/.test(markup), 'not prefilled');
+        assert.ok(text(markup).includes(t('settings.notify.email.keySaved', { mask: '••••ijkl' })), 'the last four, in words');
+        assert.ok(!markup.includes(KEY));
+        const none = String(Settings.notifySection(NOTIFY({ email: NO_KEY() }), null));
+        assert.ok(text(none).includes(t('settings.notify.email.keyNone')));
+        assert.ok(!none.includes('notify-email-remove-key'), 'nothing to remove');
+        assert.ok(markup.includes('id="notify-email-remove-key"'));
+    });
+
+    it('says where email stands in one line: on and where to, off, or not set up; the address is escaped', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const { Settings, t } = load(lang);
+            const on = String(Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+            assert.ok(text(on).includes(text(t('settings.notify.email.stateOn', { address: 'contact@example.com' }))), `${lang}: on, with the address`);
+            assert.match(on, /id="notify-email-state"/);
+            const off = String(Settings.notifySection(NOTIFY({ email: EMAIL({ enabled: false, ready: false }) }), null));
+            assert.ok(text(off).includes(t('settings.notify.email.stateOff')), `${lang}: a key, switched off`);
+            assert.ok(!text(off).includes(text(t('settings.notify.email.stateOn', { address: 'contact@example.com' }))));
+            const none = String(Settings.notifySection(NOTIFY({ email: NO_KEY() }), null));
+            assert.ok(text(none).includes(t('settings.notify.email.stateNone')), `${lang}: nothing yet`);
+        }
+        const { Settings } = load();
+        const evil = String(Settings.notifySection(NOTIFY({ email: EMAIL({ to: '"><script>alert(1)</script>' }) }), null));
+        assert.ok(!evil.includes('<script>alert(1)</script>'), 'the address is escaped');
+        assert.ok(evil.includes('&quot;&gt;&lt;script&gt;'));
+    });
+
+    it('prefills the address with the contact email and says so, and says nothing of the sort for an address the owner typed', () => {
+        const { Settings, t } = load();
+        const fallback = String(Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+        assert.match(fallback, /id="notify-email-to" name="emailTo" type="email"[^>]*value="contact@example\.com"/);
+        assert.ok(text(fallback).includes(t('settings.notify.email.fromContact')), '"(from your contact email)"');
+        assert.ok(text(fallback).includes(t('settings.notify.email.toHintDefault')));
+        const typed = String(Settings.notifySection(NOTIFY({ email: EMAIL({ to: 'me@example.com', toIsDefault: false }) }), null));
+        assert.match(typed, /id="notify-email-to"[^>]*value="me@example\.com"/);
+        assert.ok(!text(typed).includes(t('settings.notify.email.fromContact')));
+        assert.ok(text(typed).includes(t('settings.notify.email.toHint')));
+    });
+
+    it('has the three steps, which say to sign up with the SAME address, a Send test email button, and the switches, in both languages', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const { Settings, t } = load(lang);
+            const markup = String(Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+            assert.equal((emailBlock(markup).match(/<li>/g) || []).length, 3, `${lang}: three steps`);
+            assert.ok(markup.includes('resend.com'));
+            for (const key of ['settings.notify.email.help.step2', 'settings.notify.email.help.step3']) assert.ok(text(markup).includes(text(t(key))), `${lang} ${key}`);
+            assert.ok(/SAME|نفسه/.test(t('settings.notify.email.help.step1')), `${lang}: the same address`);
+            assert.match(markup, /data-action="settings:testNotifyEmail"/);
+            assert.ok(text(markup).includes(t('settings.notify.email.test')));
+            assert.ok(text(markup).includes(t('settings.notify.email.testHint')), 'it says the test uses what is saved');
+            assert.match(markup, /id="notify-email-enabled" name="emailEnabled" checked/);
+            assert.ok(!/id="notify-email-hot" name="emailHotLeads" checked/.test(markup), 'hot leads are off by default');
+        }
+        const { Settings } = load('ar');
+        assert.ok(/dir="ltr"[^>]*>resend\.com|⁦resend\.com⁩/.test(String(Settings.notifySection(NOTIFY({ email: EMAIL() }), null))), 'resend.com is an isolated left-to-right run in the Arabic step');
+    });
+
+    it('the Telegram part is exactly as it was: the same ids, names and four steps, with or without an email block from the server', () => {
+        const { Settings } = load();
+        const without = String(Settings.notifySection(NOTIFY(), null));
+        const withEmail = String(Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+        for (const markup of [without, withEmail]) {
+            assert.match(markup, /id="notify-token" name="botToken" type="password"/);
+            assert.match(markup, /id="notify-enabled" name="enabled" checked/);
+            assert.match(markup, /id="notify-hot" name="hotLeads" checked/);
+            assert.match(markup, /id="notify-chat"[^>]*value="4242424242"/);
+            assert.equal((markup.slice(0, markup.indexOf('<fieldset')).match(/<li>/g) || []).length, 4);
+        }
+    });
+
+    it('offers an own domain as an optional sender, with Resend\'s default as its placeholder', () => {
+        const { Settings } = load();
+        const markup = String(Settings.notifySection(NOTIFY({ email: EMAIL({ from: 'A <a@b.com>' }) }), null));
+        assert.match(markup, /id="notify-email-from" name="emailFrom" type="text"[^>]*placeholder="AutoReply Pro &lt;onboarding@resend\.dev&gt;"[^>]*value="A &lt;a@b\.com&gt;"/);
+    });
+});
+
+describe('Settings: saving, testing and removing the email key', () => {
+    function ready(email: Json = EMAIL(), over: Json = {}) {
+        const s = load();
+        const S = s.Settings;
+        S.render = async (): Promise<void> => {};
+        s.UI.formBusy = () => () => {};
+        s.UI.captureFocus = () => null;
+        s.UI.restoreFocus = () => {};
+        s.UI.clearInvalid = () => {};
+        s.host('notify-settings-error');
+        s.host('notify-settings-form');
+        s.host('notify-email-test-result');
+        Object.assign(s.api, { saveNotifySettings: () => Promise.resolve(NOTIFY({ email })), ...over });
+        S.notifySection(NOTIFY({ email }), null); // the card as it was drawn: what a save is compared with
+        return s;
+    }
+    const form = (fields: Record<string, unknown>): Json => ({ fields });
+    const event = { preventDefault: () => {} };
+    /** The form of the card as drawn for `EMAIL()`: email on, the contact address in the field. */
+    const untouched = { chatId: '4242', emailEnabled: 'on', emailTo: 'contact@example.com' };
+
+    it('pasting the key is the whole save: it sends the key alone, not the switch (the server switches email on) and not the contact address', async () => {
+        const s = ready(NO_KEY());
+        await s.Settings.saveNotify(form({ chatId: '4242', emailTo: 'contact@example.com', emailApiKey: ` ${KEY} ` }), event);
+        assert.deepEqual(plain(s.calls[0]!.args[0]).email, { apiKey: KEY });
+    });
+
+    it('a Telegram-only save sends no email part at all, and a key is never sent when none was typed', async () => {
+        const s = ready();
+        await s.Settings.saveNotify(form({ ...untouched, emailApiKey: '' }), event);
+        assert.ok(!('email' in s.calls[0]!.args[0]), 'the payload is the one it was before email existed');
+        assert.deepEqual(plain(s.calls[0]!.args[0]), { telegram: { chatId: '4242', enabled: false, hotLeads: false }, echo: { takeover: false, ownerAppIds: '' } });
+    });
+
+    it('sends only what the owner changed: the switch, hot leads, an address of his own, the sender', async () => {
+        const s = ready();
+        await s.Settings.saveNotify(form({ chatId: '4242', emailTo: 'me@example.com', emailHotLeads: 'on', emailFrom: ' A <a@b.com> ' }), event);
+        assert.deepEqual(plain(s.calls[0]!.args[0]).email, { enabled: false, hotLeads: true, to: 'me@example.com', from: 'A <a@b.com>' });
+    });
+
+    it('an address emptied is sent as empty (it goes back to the contact email), and a key typed beside a switched-off box says so', async () => {
+        const s = ready();
+        await s.Settings.saveNotify(form({ chatId: '4242', emailEnabled: 'on', emailTo: '', emailApiKey: KEY }), event);
+        assert.deepEqual(plain(s.calls[0]!.args[0]).email, { apiKey: KEY, to: '' });
+        const off = ready();
+        await off.Settings.saveNotify(form({ chatId: '4242', emailTo: 'contact@example.com', emailApiKey: KEY }), event);
+        assert.deepEqual(plain(off.calls[0]!.args[0]).email, { apiKey: KEY, enabled: false }, 'turned off in the same save: said so, so the server does not turn it on');
+    });
+
+    it('keeps the server\'s test email for the card drawn next, shows it once, and never keeps one nobody sent', async () => {
+        const test = { ok: false, reason: 'rejected', status: 403, description: 'You can only send testing emails to your own email address (<b>me</b>).' };
+        const s = ready(NO_KEY(), { saveNotifySettings: () => Promise.resolve({ ...NOTIFY({ email: EMAIL() }), emailTest: test }) });
+        await s.Settings.saveNotify(form({ chatId: '4242', emailApiKey: KEY }), event);
+        const redrawn = String(s.Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+        assert.ok(text(redrawn).includes(s.t('settings.notify.email.test.rejected', { status: 403 })), 'Resend refused it (403).');
+        assert.ok(redrawn.includes('You can only send testing emails to your own email address'), 'in Resend\'s own words');
+        assert.ok(!redrawn.includes('<b>me</b>') && redrawn.includes('&lt;b&gt;me'), 'escaped');
+        const again = String(s.Settings.notifySection(NOTIFY({ email: EMAIL() }), null));
+        assert.ok(!text(again).includes(s.t('settings.notify.email.test.rejected', { status: 403 })), 'shown once');
+
+        const ok = ready(NO_KEY(), { saveNotifySettings: () => Promise.resolve({ ...NOTIFY({ email: EMAIL() }), emailTest: { ok: true } }) });
+        await ok.Settings.saveNotify(form({ chatId: '4242', emailApiKey: KEY }), event);
+        assert.ok(text(ok.Settings.notifySection(NOTIFY({ email: EMAIL() }), null)).includes(ok.t('settings.notify.email.test.ok')));
+        const none = ready(NO_KEY());
+        await none.Settings.saveNotify(form({ chatId: '4242' }), event);
+        assert.ok(!text(none.Settings.notifySection(NOTIFY({ email: EMAIL() }), null)).includes(none.t('settings.notify.email.test.ok')), 'no key, no test, nothing shown');
+    });
+
+    it('marks the field the server refused, in the dashboard\'s language, and never repeats what was typed', async () => {
+        for (const [field, id] of [['emailApiKey', 'notify-email-key'], ['emailTo', 'notify-email-to'], ['emailFrom', 'notify-email-from'], ['emailEnabled', 'notify-email-enabled'], ['emailHotLeads', 'notify-email-hot']] as const) {
+            const s = ready(NO_KEY(), { saveNotifySettings: () => Promise.reject(Object.assign(new Error('refused…'), { body: { field } })) });
+            const marked: string[] = [];
+            s.UI.markInvalid = (el: Json) => { marked.push(el.id); };
+            s.dom.set(id, { id });
+            await s.Settings.saveNotify(form({ chatId: '4242', emailApiKey: 'typo-typed' }), event);
+            assert.ok(text(s.dom.get('notify-settings-error').innerHTML).includes(s.t(`settings.notify.invalid.${field}`)), field);
+            assert.deepEqual(marked, [id]);
+            assert.ok(!s.dom.get('notify-settings-error').innerHTML.includes('typo-typed'));
+        }
+    });
+
+    it('answers a successful test with a pill, and each refusal in words, with the status and Resend\'s reason escaped', () => {
+        const { Settings, t } = load();
+        assert.ok(text(Settings.notifyEmailTestResult({ ok: true })).includes(t('settings.notify.email.test.ok')));
+        const rejected = String(Settings.notifyEmailTestResult({ ok: false, reason: 'rejected', status: 403, description: '<b>Not allowed</b>' }));
+        assert.ok(text(rejected).includes('Resend refused it (403).'));
+        assert.ok(!rejected.includes('<b>Not allowed</b>') && rejected.includes('&lt;b&gt;Not allowed'), 'escaped');
+        assert.ok(text(Settings.notifyEmailTestResult({ ok: false, reason: 'not_configured', status: null, description: '' })).includes(t('settings.notify.email.test.not_configured')));
+        assert.ok(text(Settings.notifyEmailTestResult({ ok: false, reason: 'unreachable', status: null, description: 'ECONNABORTED' })).includes(t('settings.notify.email.test.unreachable')));
+        assert.ok(text(Settings.notifyEmailTestResult({ ok: false, reason: 'error', status: null, description: '' })).includes(t('settings.notify.email.test.unreachable')), 'an unknown reason reads as unreachable');
+    });
+
+    it('sends the test in the dashboard\'s language and shows the result where the button is', async () => {
+        const s = ready(EMAIL(), { testNotifyEmail: () => Promise.resolve({ ok: true }) });
+        s.UI.actionBusy = () => () => {};
+        await s.Settings.testNotifyEmail({});
+        assert.deepEqual(plain(s.calls.find((c) => c.method === 'testNotifyEmail')), { method: 'testNotifyEmail', args: ['en'] });
+        assert.ok(text(s.dom.get('notify-email-test-result').innerHTML).includes(s.t('settings.notify.email.test.ok')));
+        const failing = ready(EMAIL(), { testNotifyEmail: () => Promise.reject(new Error('Network down')) });
+        failing.UI.actionBusy = () => () => {};
+        await failing.Settings.testNotifyEmail({});
+        assert.ok(text(failing.dom.get('notify-email-test-result').innerHTML).includes(failing.t('settings.notify.email.test.requestFailed')));
+    });
+
+    it('removing the key also switches email off, because "on" with nothing to send with is refused', async () => {
+        const s = ready();
+        await s.Settings.removeNotifyEmailKeyConfirmed();
+        assert.deepEqual(plain(s.calls.find((c) => c.method === 'saveNotifySettings')!.args[0]), { email: { apiKey: null, enabled: false } });
+        await settle();
+        assert.deepEqual(s.toasts, [s.t('settings.notify.email.keyRemoved')]);
     });
 });
