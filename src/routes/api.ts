@@ -39,7 +39,7 @@ import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../c
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
 import { runRetentionSweep } from '../services/retention.js';
 import {
-    describeInspection, inspectionStatus, noteMetaFailure, recheckTenantToken,
+    describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
 import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
@@ -51,7 +51,12 @@ import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } f
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { parseTryRequest, tryComment } from '../services/campaignTry.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
+import {
+    classifyOutcome, expectedFailureSql, isOutcome, outcomeCountsSql, outcomeLateral, outcomeSql, readOutcomeCounts, successPercent,
+} from '../services/outcomes.js';
+import { tenantTimezone } from '../services/profile/timezone.js';
 import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
@@ -79,7 +84,7 @@ import {
     normaliseIsoDay, normaliseWhatsappNumber, setSetting,
 } from '../services/appSettings.js';
 import { whatsappUrl } from '../services/publicPages.js';
-import { metaHttp } from '../services/http.js';
+import { isMetaUnavailable, metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
@@ -853,6 +858,16 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
  * an account was suspended would have to be rebuilt by hand afterwards. Re-enabling the
  * tenant simply lets the next sweep pick them up, which is what an operator flipping that
  * switch back on expects.
+ *
+ * ── Archived posts (migration v45, UX US1) ──
+ * A row with `archived_at` set is one the owner put away on purpose: a post parked for next
+ * year, or a held one he no longer wants. The sweep does not pick it up, and the claim below
+ * repeats the test, so a row archived between the SELECT and the claim is not published
+ * either. The skip is silent on purpose, unlike the held tenants above: the owner chose it,
+ * and the dashboard lists every archived row under "Archived". It is the ONLY sweep that
+ * stops: the TikTok and Instagram reconcilers still run on a row already in flight, because
+ * archiving a post must not leave a half-published one unreconciled. Unarchiving a PENDING
+ * row whose time has passed makes it due again, and the next sweep publishes it.
  */
 export async function publishDuePosts(): Promise<PublishSweepResult> {
     // `c.is_active` is selected rather than filtered on, so the held rows can be counted and
@@ -862,7 +877,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id, c.is_active
         FROM scheduled_posts s
         JOIN creators c ON c.id = s.creator_id
-        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
+        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW() AND s.archived_at IS NULL
         ORDER BY s.scheduled_time ASC
     `);
 
@@ -890,7 +905,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         const claim = await pool.query(
             `UPDATE scheduled_posts
                 SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-              WHERE id = $1 AND status = 'PENDING'
+              WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
           RETURNING id`,
             [post.id]
         );
@@ -1689,7 +1704,7 @@ router.get('/stats', async (req, res) => {
                 [req.session?.userId]
             );
 
-        const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook] = await Promise.all([
+        const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook, outcomeRows] = await Promise.all([
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'SENT'`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'FAILED'`, windowParams),
@@ -1705,16 +1720,30 @@ router.get('/stats', async (req, res) => {
             pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'instagram'`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'facebook'`, windowParams),
+            // The same window, sorted into what became of each DM (src/services/outcomes.ts): delivered, handled by design, needs
+            // the owner, in flight, blocked by the person. One pass, classified in SQL with the patterns `failureReasons.ts` reads.
+            pool.query(
+                `SELECT ${outcomeCountsSql()} FROM interactions i CROSS JOIN ${outcomeLateral()} WHERE ${owned}${inWindow}`,
+                windowParams
+            ),
         ]);
 
         const totalCount = total.rows[0].count;
         const sentCount = sent.rows[0].count;
+        const outcomes = readOutcomeCounts(outcomeRows?.rows?.[0]);
 
         res.json({
             totalInteractions: totalCount,
             sent: sentCount,
             failed: failed.rows[0].count,
-            successRate: totalCount > 0 ? Math.round((sentCount / totalCount) * 100) : 0,
+            /**
+             * Delivered ÷ (delivered + actionable), a whole percent: the one definition (audit OV-20). It was sent ÷ every row, so a
+             * person who already had their reply, or a send cap doing its job, counted against the account. `null` when nothing has
+             * been attempted yet: no rate is not 0%.
+             */
+            successRate: successPercent(outcomes),
+            /** What became of every row of the window. `sent` is `delivered`; `failed` still counts every FAILED row, expected or not. */
+            outcomes,
             activeCampaigns: campaigns.rows[0].count,
             activeCreators: creators.rows[0].count,
             /** 'deployment' = every active creator here; 'memberships' = the ones you can see. */
@@ -1770,34 +1799,90 @@ router.get('/stats/hourly', async (req, res) => {
 
 // ─── Daily Stats (for chart) ────────────────────────────────────────────────
 
+/**
+ * `GET /stats/daily?days=N`: one row per day for the last N days, the days of the TENANT'S zone (`tenantTimezone`), oldest first.
+ *
+ * Each row: `day` ('YYYY-MM-DD'), the legacy `sent` and `failed`, the outcome split of that day's comment DMs (`delivered`,
+ * `by_design`, `actionable`, `pending`, `blocked`: src/services/outcomes.ts) and `assistant_replies`, the DMs the assistant sent
+ * that day (outbound `messages` with `sender = 'ai'`). The two series are different things: a comment auto-reply is a DM sent in
+ * answer to a comment; an assistant reply answers a DM someone started. Overview's strip used to draw only the first and was
+ * all zeros on days the assistant had answered people (audit OV-18).
+ *
+ * Days are cut in the tenant's zone, so "today" is the owner's today: it used to be the database session's `CURRENT_DATE`, which
+ * is UTC, and an evening at UTC+3 landed on tomorrow's bar. A tenant that never chose a zone is read in UTC, as before.
+ */
 router.get('/stats/daily', async (req, res) => {
     try {
         const days = clampDays(req.query.days, 30);
+        const tenantId = getTenantId(req);
+
+        let zone = 'UTC';
+        try {
+            zone = (await tenantTimezone(tenantId)).tz;
+        } catch (err) {
+            // The zone is a nicety for the chart, not a reason for it to fail: UTC is what it always was.
+            log('warn', 'api.stats_daily_timezone_unreadable', describeError(err));
+        }
+
         // `generate_series` first, interactions LEFT JOINed onto it — a day with nothing
         // still gets a row. The plain GROUP BY this replaced only emitted a row for a day
         // that had at least one interaction, so `dayStrip` (charts.js) never received the
         // empty days it exists to show as empty cells; it drew exactly as many cells as
         // there were rows, however few. Stretched to fill a wide chart card, two real days
         // out of a claimed seven rendered as two giant bars instead of seven modest ones.
-        // The tenant filter has to live in the JOIN's own ON clause, not a WHERE clause —
-        // WHERE runs after the LEFT JOIN and would null out every date that matched no
-        // interaction, undoing the zero-fill entirely.
-        const result = await pool.query(`
-            SELECT
-                gs.day::date as day,
-                COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed
-            FROM generate_series(
-                CURRENT_DATE::timestamp - make_interval(days => $2::int - 1),
-                CURRENT_DATE::timestamp,
-                '1 day'::interval
-            ) AS gs(day)
-            LEFT JOIN interactions i
-                ON DATE_TRUNC('day', i.timestamp)::date = gs.day::date
-               AND ${interactionsOwnedBy(1)}
-            GROUP BY gs.day
-            ORDER BY gs.day ASC
-        `, [getTenantId(req), days]);
+        // The two series are aggregated per day FIRST (each over just the window) and joined onto the series after, so a day's
+        // interactions and its assistant replies cannot multiply each other and neither scans the tenant's whole history.
+        const run = (tz: string) => pool.query(`
+            WITH span AS (
+                SELECT ((NOW() AT TIME ZONE $3::text)::date - ($2::int - 1)) AS first_day,
+                       (NOW() AT TIME ZONE $3::text)::date AS last_day
+            ), series AS (
+                SELECT d::date AS day
+                  FROM span, generate_series(span.first_day::timestamp, span.last_day::timestamp, '1 day'::interval) AS d
+            ), comment_dms AS (
+                SELECT (i.timestamp AT TIME ZONE $3::text)::date AS day,
+                       COUNT(*) FILTER (WHERE i.status = 'SENT')::int AS sent,
+                       COUNT(*) FILTER (WHERE i.status = 'FAILED')::int AS failed,
+                       ${outcomeCountsSql()}
+                  FROM interactions i
+                  CROSS JOIN ${outcomeLateral()}
+                 WHERE ${interactionsOwnedBy(1)}
+                   AND i.timestamp >= (SELECT first_day FROM span)::timestamp AT TIME ZONE $3::text
+                 GROUP BY 1
+            ), assistant AS (
+                SELECT (m.created_at AT TIME ZONE $3::text)::date AS day,
+                       COUNT(*)::int AS assistant_replies
+                  FROM messages m
+                  JOIN conversations cv ON cv.id = m.conversation_id
+                 WHERE cv.creator_id = $1
+                   AND m.direction = 'outbound' AND m.sender = 'ai'
+                   AND m.created_at >= (SELECT first_day FROM span)::timestamp AT TIME ZONE $3::text
+                 GROUP BY 1
+            )
+            SELECT to_char(series.day, 'YYYY-MM-DD') AS day,
+                   COALESCE(c.sent, 0)::int AS sent,
+                   COALESCE(c.failed, 0)::int AS failed,
+                   COALESCE(c.delivered, 0)::int AS delivered,
+                   COALESCE(c.by_design, 0)::int AS by_design,
+                   COALESCE(c.actionable, 0)::int AS actionable,
+                   COALESCE(c.pending, 0)::int AS pending,
+                   COALESCE(c.blocked, 0)::int AS blocked,
+                   COALESCE(a.assistant_replies, 0)::int AS assistant_replies
+              FROM series
+              LEFT JOIN comment_dms c ON c.day = series.day
+              LEFT JOIN assistant a ON a.day = series.day
+             ORDER BY series.day ASC
+        `, [tenantId, days, tz]);
+
+        let result;
+        try {
+            result = await run(zone);
+        } catch (err) {
+            // 22023 = invalid_parameter_value: this database does not know a zone name the JavaScript side accepted.
+            if ((err as { code?: string }).code !== '22023' || zone === 'UTC') throw err;
+            log('warn', 'api.stats_daily_timezone_unknown', { zone });
+            result = await run('UTC');
+        }
         res.json(result.rows);
     } catch (err) {
         log('error', 'api.stats_daily_failed', describeError(err));
@@ -1807,21 +1892,40 @@ router.get('/stats/daily', async (req, res) => {
 
 // ─── Campaigns CRUD ─────────────────────────────────────────────────────────
 
+/**
+ * A campaign row from `GET /campaigns` with its `outcome_*` columns folded into `counts.all`
+ * (`{ delivered, by_design, actionable, pending, blocked }`), the shape specs/001-dashboard-ux/contracts/api.md gives it.
+ */
+function withOutcomeCounts(row: Record<string, unknown>): Record<string, unknown> {
+    const rest: Record<string, unknown> = {};
+    const picked: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+        if (key.startsWith('outcome_')) picked[key.slice('outcome_'.length)] = value;
+        else rest[key] = value;
+    }
+    return { ...rest, counts: { all: readOutcomeCounts(picked) } };
+}
+
 router.get('/campaigns', async (req, res) => {
     try {
+        // `sent_count`, `failed_count` and `total_interactions` are the legacy counts and stay as they were. `counts.all` is what
+        // became of each of the campaign's DMs (src/services/outcomes.ts): a card can then say "delivered 12 · handled by design 4"
+        // and keep red for the ones that need the owner (audit CA-03). The outcome columns are read into `counts` below, not sent flat.
         const result = await pool.query(`
             SELECT
                 c.*,
                 COUNT(i.id)::int as total_interactions,
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count,
+                ${outcomeCountsSql('i.id', 'o.outcome', 'outcome_')}
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id
+            LEFT JOIN ${outcomeLateral()} ON TRUE
             WHERE c.creator_id = $1
             GROUP BY c.id
             ORDER BY c.created_at DESC
         `, [getTenantId(req)]);
-        res.json(result.rows);
+        res.json(result.rows.map(withOutcomeCounts));
     } catch (err) {
         log('error', 'api.campaigns_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch campaigns.' });
@@ -1996,6 +2100,21 @@ router.delete('/campaigns/:id', canOperate, async (req, res) => {
 
 // ─── Campaigns Stats Leaderboard ─────────────────────────────────────────────
 
+/** How many campaigns `/stats/campaigns` lists unless asked for more. */
+export const CAMPAIGN_STATS_DEFAULT_LIMIT = 5;
+/** The most it lists for a number; `limit=all` lifts the cap, because Analytics must be able to see every campaign (audit OV-20). */
+export const CAMPAIGN_STATS_MAX_LIMIT = 500;
+
+/**
+ * `?limit=` on `/stats/campaigns`: 'all' for no cap (null), a whole number of 1 or more up to 500, else the default five.
+ * The table it feeds is a leaderboard, so five stays the answer for a caller that does not ask.
+ */
+export function campaignStatsLimit(raw: unknown): number | null {
+    if (raw === 'all') return null;
+    const n = typeof raw === 'string' && /^\d{1,6}$/.test(raw) ? Number(raw) : NaN;
+    return Number.isInteger(n) && n >= 1 ? Math.min(n, CAMPAIGN_STATS_MAX_LIMIT) : CAMPAIGN_STATS_DEFAULT_LIMIT;
+}
+
 router.get('/stats/campaigns', async (req, res) => {
     try {
         // A1: the same window as /stats. It goes in the JOIN's ON clause, not a WHERE: a WHERE
@@ -2003,19 +2122,24 @@ router.get('/stats/campaigns', async (req, res) => {
         // window, which is exactly the campaign the operator needs to see at zero.
         const days = statsWindowDays(req.query.days);
         const inWindow = days === null ? '' : ' AND i.timestamp > NOW() - make_interval(days => $2::int)';
+        const limit = campaignStatsLimit(req.query.limit);
+        // `sent_count` and `failed_count` are the legacy counts. The outcome columns say what became of the rest: a DM that was
+        // never sent because the person already had their reply is `by_design`, not a failure of the campaign.
         const result = await pool.query(`
             SELECT
                 c.id,
                 c.trigger_keyword,
                 COUNT(i.id)::int as total_triggers,
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count,
+                ${outcomeCountsSql()}
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id${inWindow}
+            LEFT JOIN ${outcomeLateral()} ON TRUE
             WHERE c.creator_id = $1
             GROUP BY c.id, c.trigger_keyword
-            ORDER BY total_triggers DESC
-            LIMIT 5
+            ORDER BY total_triggers DESC${limit === null ? '' : `
+            LIMIT ${limit}`}
         `, days === null ? [getTenantId(req)] : [getTenantId(req), days]);
         res.json(result.rows);
     } catch (err) {
@@ -2035,12 +2159,15 @@ router.get('/stats/campaigns', async (req, res) => {
 router.get('/stats/failures', async (req, res) => {
     try {
         const days = clampDays(req.query.days, 30);
+        // `expected_total` is the part of `total` the pipeline chose (a send cap, a person who already had their reply, a public reply
+        // sent instead): the same judgement `classifyOutcome` makes, in SQL, over every FAILED row and not only the texts returned.
         const result = await pool.query(`
             SELECT
                 i.error_log,
                 COUNT(*)::int AS count,
                 MAX(i.timestamp) AS last_at,
-                (SUM(COUNT(*)) OVER ())::int AS total
+                (SUM(COUNT(*)) OVER ())::int AS total,
+                (SUM(CASE WHEN ${expectedFailureSql('i.error_log')} THEN COUNT(*) ELSE 0 END) OVER ())::int AS expected_total
             FROM interactions i
             WHERE ${interactionsOwnedBy(1)}
               AND i.status = 'FAILED'
@@ -2121,6 +2248,14 @@ router.get('/interactions', async (req, res) => {
             conditions.push(`i.status = $${params.length}`);
         }
 
+        // `?outcome=actionable` is what became of the DM, not the status it was written with (src/services/outcomes.ts): the
+        // owner's "failed today" is the ones that need him, and a person who already had their reply is not one of those.
+        const outcome = req.query.outcome;
+        if (isOutcome(outcome)) {
+            params.push(outcome);
+            conditions.push(`${outcomeSql()} = $${params.length}`);
+        }
+
         if (search) {
             params.push(`%${search}%`);
             conditions.push(`i.sender_username ILIKE $${params.length}`);
@@ -2156,7 +2291,9 @@ router.get('/interactions', async (req, res) => {
         const dataResult = await pool.query(dataQuery, dataParams);
 
         res.json({
-            data: dataResult.rows,
+            // `outcome` is new on every row and nothing else changed: the dashboard draws the pill from it, so it never has its
+            // own copy of which failures were expected.
+            data: dataResult.rows.map((row) => ({ ...row, outcome: classifyOutcome(row.status, row.error_log) })),
             pagination: {
                 page,
                 limit,
@@ -2226,13 +2363,35 @@ router.get('/settings/token/status', async (req, res) => {
             return;
         }
 
-        // Validate token against Meta API
+        // Meta did not answer about THIS token (a timeout, a network failure, a 5xx, a rate limit, a body that is not an
+        // inspection). That says nothing about the token, so it is `unknown`, and NOTHING is written: a Meta hiccup used to be
+        // stored as `invalid`, which turned a working connection red on the dashboard and in the admin tenant list until the
+        // next check (OV-08).
+        const unanswered = (why: Record<string, unknown>) => {
+            log('warn', 'token.status_unanswered', { creator_id: creatorId, ...why });
+            res.json({
+                status: 'unknown',
+                message: TOKEN_CHECK_UNANSWERED_MESSAGE,
+                expiresAt: null,
+                dataAccessExpiresAt: null,
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
+                isActive: creator.is_active,
+            });
+        };
+
+        // Validate token against Meta API. Through `metaHttp` like every other Graph call: it has a 10 s timeout, which the
+        // bare `axios` it replaces did not, so a hung socket cost the whole function budget.
         try {
-            const debugRes = await axios.get('https://graph.facebook.com/debug_token', {
+            const debugRes = await metaHttp.get('https://graph.facebook.com/debug_token', {
                 params: { input_token: token, access_token: token }
             });
 
-            const data = debugRes.data.data;
+            const data = debugRes.data?.data;
+            if (!isDebugTokenAnswer(data)) {
+                unanswered({ reason: 'not_an_inspection' });
+                return;
+            }
 
             // `describeInspection` rather than reading `data` field by field, so this endpoint
             // and the re-check action cannot disagree about what a healthy token looks like —
@@ -2265,6 +2424,10 @@ router.get('/settings/token/status', async (req, res) => {
                 isActive: creator.is_active,
             });
         } catch (metaErr: any) {
+            if (isMetaUnavailable(metaErr)) {
+                unanswered(describeError(metaErr));
+                return;
+            }
             await recordTokenStatus(
                 creatorId, 'invalid',
                 metaErr?.response?.data?.error?.message || 'Token validation call to Meta failed.'
@@ -2946,6 +3109,63 @@ router.delete('/posts/scheduled/:id', canOperate, async (req, res) => {
 });
 
 /**
+ * Archive and Unarchive one scheduled post (migration v45, UX US1, audit PO-14, FR-003): the owner's way to put away a post that
+ * is not a problem and not an upcoming post either — a failed one parked for next year, a held TikTok draft he has stopped
+ * wanting. Without it such a row sat in "Needs attention" on Posts and on Today for good, and a red badge nobody can clear teaches
+ * him to ignore every red badge.
+ *
+ *   POST    sets `scheduled_posts.archived_at`. The row leaves "Needs attention" and the attention counts, the publish sweep skips it
+ *           (`publishDuePosts`), and the dashboard lists it under "Archived". Nothing is deleted: the row and its media are kept.
+ *   DELETE  clears it. A PENDING row whose time has passed is due again and the next sweep publishes it.
+ *
+ * Any status can be archived, and both calls are idempotent: archiving an archived row keeps its original stamp, unarchiving a row
+ * that is not archived changes nothing. The dashboard offers the button on PENDING, FAILED and held rows only, but the server does
+ * not second-guess it, because the stamp changes what the OWNER sees and what the sweep picks up, never what a platform already has.
+ * It does not touch `status`, `error_log` or the publish ids, so Unarchive puts the row back exactly as it was.
+ *
+ * Operators and owners, as for edit and delete, and scoped to the session's tenant: an id from another tenant is a 404, not a hint
+ * that it exists. Answers the row as the list does (with `archived_at`), so the page can replace its copy. Not written to the audit
+ * ledger: no other post action is (create, edit, delete and publish-now are logged only), and a reversible filing action would only
+ * bury the entries that matter. A database without v45 cannot say, and answers 503 with the migration hint.
+ */
+async function setPostArchived(req: Request, res: Response, archived: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        const updated = await pool.query(
+            archived
+                ? 'UPDATE scheduled_posts SET archived_at = COALESCE(archived_at, NOW()) WHERE id = $1 AND creator_id = $2 RETURNING *'
+                : 'UPDATE scheduled_posts SET archived_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING *',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        log('info', archived ? 'posts.archived' : 'posts.unarchived', {
+            post_id: id, creator_id: tenantId, status: updated.rows[0].status,
+        });
+        res.json(updated.rows[0]);
+    } catch (err) {
+        log('error', 'api.scheduled_archive_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: archived ? 'Failed to archive this post.' : 'Failed to unarchive this post.' });
+    }
+}
+
+router.post('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, true));
+router.delete('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, false));
+
+/**
  * Retry (or fast-forward) one scheduled post from the dashboard's "Publish now" button.
  *
  * This is the fix for a real production incident: the button used to call
@@ -3316,12 +3536,21 @@ router.get('/conversations', async (req, res) => {
         const { rows: result, count: countRes } = answered;
         // How many times a person opened the links sent in each thread (DM plan S11): its own optional lookup, so a database without the
         // tracked-links tables answers the list without counts rather than not at all.
-        const clicks = await loadLinkClicks(tenantId, result.rows.map((row) => String(row.id)));
+        // And what the assistant is set to (UX US1, FR-006): each item's `effective_ai` is read from it, and the page's "assistant is off" strip
+        // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
+        const [clicks, assistant] = await Promise.all([
+            loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
+            loadAssistantState(tenantId),
+        ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
-            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state.
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)))),
+            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
+            // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant)),
+            // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
+            // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
+            assistant,
             pagination: {
                 page,
                 limit,
@@ -3563,6 +3792,80 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
         res.status(500).json({ error: 'Failed to toggle bot.' });
     }
 });
+
+/**
+ * One conversation as the list item it is (the same query, so the same fields): what "Mark handled" answers, so the page can replace its
+ * copy of the thread. Null when there is no such thread for this tenant.
+ */
+async function conversationSummary(tenantId: string, id: string) {
+    const found = await pool.query(conversationsQuery('c.creator_id = $1 AND c.id = $2', 3, 4), [tenantId, id, 1, 0]);
+    const row = found.rows[0];
+    if (!row) return null;
+    const [clicks, assistant] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId)]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant);
+}
+
+/**
+ * "Mark handled" and its undo (UX US1, audit IN-01, FR-003). A thread answered from the Instagram app (the only way to answer once Meta's
+ * 24 h window has closed) is not recorded anywhere, so it stayed "Needs you" and in every count forever; this is the way out.
+ *
+ *   POST    sets `conversations.handled_at` (v45): the thread leaves To do and every "needs you" count, and stays findable in the inbox.
+ *   DELETE  clears it: the thread is back in To do if it still needs a person.
+ *
+ * A new inbound message clears the stamp by itself (the upsert in `src/webhook/messaging.ts`), so "handled" never hides a customer who
+ * asks again. Neither direction touches the thread's AI switch, stage or messages: it changes what the OWNER sees, not who answers.
+ * Operators and owners (the people who can reply); scoped to the session's tenant; both directions are written to the audit log, with the
+ * conversation id and never the person's handle or words.
+ *
+ * The answer is the thread as a list item. A database that has not had v45 applied cannot say: 503 with the migration hint.
+ */
+async function setConversationHandled(req: Request, res: Response, handled: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        // `RETURNING handled_at` so the answer has the stamp even if the summary below cannot be built.
+        const updated = await pool.query(
+            handled
+                ? 'UPDATE conversations SET handled_at = NOW() WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at'
+                : 'UPDATE conversations SET handled_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        await writeAudit(await actorFromSession(req.session), {
+            action: handled ? AUDIT_ACTIONS.dmConversationHandled : AUDIT_ACTIONS.dmConversationUnhandled,
+            targetType: 'conversation', targetId: id, detail: { tenant_id: tenantId },
+        });
+        log('info', handled ? 'inbox.marked_handled' : 'inbox.unmarked_handled', { conversation_id: id, creator_id: tenantId });
+
+        let summary = null;
+        try {
+            summary = await conversationSummary(tenantId, id);
+        } catch (err) {
+            // The change is made and recorded: a summary that cannot be built is not a failed request.
+            log('warn', 'api.handled_summary_failed', describeError(err));
+        }
+        res.json(summary ?? { id, handled_at: updated.rows[0].handled_at ? new Date(updated.rows[0].handled_at).toISOString() : null });
+    } catch (err) {
+        log('error', 'api.conversation_handled_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to update the conversation.' });
+    }
+}
+
+router.post('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, true));
+router.delete('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, false));
 
 /**
  * The sales funnel of this tenant's DMs over the last 7, 30 (the default) or 90 days: conversations by the step they reached, the plan's

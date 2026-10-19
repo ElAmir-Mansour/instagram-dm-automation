@@ -17,6 +17,26 @@
  *    any video that fades up from black, which is the entire reason the field
  *    exists. It is now a titled step with a side-by-side preview of the two
  *    tiles: the frame the platform would pick, and the cover chosen instead.
+ *
+ * ─── Three more, found by the live walkthrough of 2026-10-19 (UX US1) ───────
+ *
+ * 3. RED THAT NEEDED NOTHING. Four posts parked on purpose (two "failed", two held,
+ *    all for 2027-01-01) sat in "Needs attention" on this screen and on Today with
+ *    no way out. Archive (`archived_at`, v45) is the way out: reversible, so there
+ *    is no question first and an Undo after (constitution III, FR-094), and an
+ *    archived post is listed under "Archived", never in "Needs attention", and
+ *    never published by the sweep.
+ *
+ * 4. A PROMISE OF MINUTES ON A POST FOR JANUARY. A card said "within about 5
+ *    minutes" for a post scheduled months ahead, and went on saying it for one
+ *    that was hours late. A card now states a fact and a next step, never a
+ *    number of minutes: the time (weekday, date, clock, city), and for a post past
+ *    its time by more than the grace, "Overdue" with Publish now.
+ *
+ * 5. THE ZONE WAS THE BROWSER'S. A card's time was formatted in whatever zone the
+ *    browser was in. It is the tenant's now, the same one Studio and the Monteur
+ *    read (`studio_settings.schedule.timezone`, shared through `UI.setZone`), and
+ *    it names the city so "19:00" is never ambiguous.
  */
 const PostsPage = {
     activeTab: 'scheduled', // 'scheduled' or 'live'
@@ -98,6 +118,17 @@ const PostsPage = {
     QUEUE_POLL_MS: 15000,
     /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
     _doneOpen: false,
+    /**
+     * Which part of the queue is showing: 'active' (Upcoming, Needs attention, Done) or 'archived' (what the owner put away). Kept across
+     * repaints and refreshes; a tenant switch starts on 'active'. Archived rows are never in the first.
+     */
+    queueView: 'active',
+    /**
+     * A PENDING post this long past its time is overdue: the sweeps run every few minutes, so less than this is just waiting for the next
+     * one. One number for the queue, Today's attention items and the Overview alert: it is `OVERDUE_GRACE_MINUTES` in
+     * src/services/attention.ts and `OverviewPage.OVERDUE_GRACE_MS`, restated here because this is a lazily loaded module. A test pins all three.
+     */
+    OVERDUE_GRACE_MS: 15 * 60 * 1000,
     /** Per-browser memory: the last platform and type a post was created with. Colons: not an i18n key. */
     PREFS_KEY: 'posts:prefs',
     /** Instagram's caption limit, counted in UTF-16 units as Studio's counters count. */
@@ -121,6 +152,9 @@ const PostsPage = {
         this.liveError = null;
         this.publishError = null;
         this.tiktok = null;
+        this.queueView = 'active';
+        // The zone is the tenant's: the next tenant's is read again by `render()`, and until it is, times are in the browser's.
+        UI.setZone('');
         this._ttSeq++;
         this.tiktokCreator = null;
         this._ttChoices = null;
@@ -183,13 +217,18 @@ const PostsPage = {
         // in-place refresh, so a fast response never flashes a skeleton.
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
-        const [scheduled, live, tiktok] = await Promise.allSettled([
+        const [scheduled, live, tiktok, studio] = await Promise.allSettled([
             API.getScheduledPosts(),
             API.getLivePosts(),
             API.getTikTokConnection(),
+            API.getStudioSettings(),
         ]);
         if (!alive()) return;
         gate.done();
+
+        // The tenant's zone, from the settings Studio and the Monteur read it from. Not an error panel either: without it times are
+        // shown in the browser's zone, which the card names, so they are still unambiguous.
+        this.shareZone(studio);
 
         // A failed fetch is an error, not an empty queue. Rendering the cheerful
         // "No Scheduled Posts" state for a 500 invited the creator to recreate
@@ -221,11 +260,25 @@ const PostsPage = {
             : `${t('posts.tabLive')} — ${UI.formatNumber(this.livePosts.length)}`);
     },
 
+    /**
+     * Tell the shared tenant zone what Studio's settings carry (`schedule.timezone`, the mirror of the profile's `identity.timezone`):
+     * the same source Studio and the Monteur read, so a time means the same on every screen. `result` is a settled `API.getStudioSettings()`.
+     * A failed read, or settings with no zone, leaves the zone as it was.
+     */
+    shareZone(result) {
+        if (!result || result.status !== 'fulfilled') return;
+        const settings = result.value && result.value.settings;
+        const zone = settings && settings.schedule && settings.schedule.timezone;
+        if (zone) UI.setZone(zone);
+    },
+
     // ─── The queue's own refresh ─────────────────────────────────────────────
     /** Is any row about to change under the operator? Pure: `now` is injectable for the test. */
     queueNeedsPoll(posts, now) {
         const at = typeof now === 'number' ? now : Date.now();
         return (Array.isArray(posts) ? posts : []).some((post) => {
+            // An archived row is put away: it is not about to change, and nothing here should keep a poll alive for it.
+            if (this.isArchived(post)) return false;
             const status = post && post.status;
             if (status === 'PUBLISHING' || status === 'PROCESSING' || status === 'IN_INBOX') return true;
             if (status !== 'PENDING') return false;
@@ -292,8 +345,11 @@ const PostsPage = {
         }
     },
 
-    /** The queue grid alone, in place, with focus put back on the control it was on. */
-    repaintQueue() {
+    /**
+     * The queue grid alone, in place, with focus put back on the control it was on. `fallbackKey` is where focus goes when that control
+     * is gone (the Archive button of a card that has just left the list).
+     */
+    repaintQueue(fallbackKey) {
         const host = document.getElementById('posts-queue');
         if (!host) return;
         const done = document.getElementById('posts-done');
@@ -302,7 +358,7 @@ const PostsPage = {
         host.innerHTML = esc(this.renderScheduledQueue());
         UI.icons(host);
         UI.revealClipped(host);
-        UI.restoreFocus(focus);
+        UI.restoreFocus(focus, fallbackKey);
         this.wireErrorHost(host);
     },
 
@@ -455,9 +511,44 @@ const PostsPage = {
             `;
         }
 
-        const groups = this.groupQueue(this.posts);
+        const now = Date.now();
+        const groups = this.groupQueue(this.posts, now);
+        const activeCount = this.posts.length - groups.archived.length;
+        // The Active / Archived switch is drawn only once something is archived: until then there is nothing to switch to. And the
+        // view falls back to Active when the last archived post has just been restored, rather than showing an empty Archived list.
+        const view = this.queueView === 'archived' && groups.archived.length > 0 ? 'archived' : 'active';
+        const switcher = groups.archived.length > 0
+            ? UI.tabs([
+                { key: 'active', label: t('posts.view.active'), count: activeCount },
+                { key: 'archived', label: t('posts.view.archived'), count: groups.archived.length, icon: 'folder-open' },
+            ], { mode: 'toggle', current: view, action: 'posts:setQueueView', label: t('posts.view.label') })
+            : '';
+
+        if (view === 'archived') {
+            return html`<div class="queue-groups">${switcher}${this.renderQueueGroup('archived', groups.archived)}</div>`;
+        }
+
+        // Everything is archived: say so, and where it is, rather than draw an empty list under a switch.
+        if (activeCount === 0) {
+            return html`
+                <div class="queue-groups">
+                    ${switcher}
+                    <div class="surface pad-5 stack gap-3">
+                        ${Admin.emptyState('calendar-days', t('posts.emptyActiveTitle'), t('posts.emptyActiveBody'))}
+                        <div class="row row--center">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
+                                action: 'posts:showCreateModal',
+                            })}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         return html`
             <div class="queue-groups">
+                ${switcher}
                 ${this.QUEUE_GROUPS.map((key) => this.renderQueueGroup(key, groups[key]))}
             </div>
         `;
@@ -467,33 +558,99 @@ const PostsPage = {
     /**
      * Upcoming, Needs attention, Done — in that order, because that is the order
      * the operator reads them in. A group with nothing in it is not drawn.
+     *
+     * Archived is not one of them: it is the other view of the queue (`queueView`),
+     * so a post the owner put away is never in the list he is working from, and
+     * never in "Needs attention".
      */
     QUEUE_GROUPS: Object.freeze(['upcoming', 'attention', 'done']),
 
-    /** Which group a row belongs in. Pure, so the rule is pinned by the test. */
-    queueGroupOf(post) {
+    // ─── What a row's state is: pure, so the rule is pinned by the test ──────
+    /** Has the owner put this post away (Archive)? */
+    isArchived(post) {
+        return !!(post && post.archived_at);
+    },
+
+    /**
+     * How late a PENDING post is, in ms, when it is later than the grace: else 0. A row that is waiting for its time, or only just past
+     * it, is not late: the sweeps run every few minutes, so less than the grace is "waiting for the next one". `now` is injectable.
+     */
+    overdueMs(post, now) {
+        if (!post || post.status !== 'PENDING') return 0;
+        const at = new Date(post.scheduled_time).getTime();
+        if (Number.isNaN(at)) return 0;
+        const late = (typeof now === 'number' ? now : Date.now()) - at;
+        return late > this.OVERDUE_GRACE_MS ? late : 0;
+    },
+
+    /** More than the grace past its time and still PENDING. (An archived post is put away, not overdue: callers ask `isArchived` first.) */
+    isOverdue(post, now) {
+        return this.overdueMs(post, now) > 0;
+    },
+
+    /** Which group a row belongs in. */
+    queueGroupOf(post, now) {
+        if (this.isArchived(post)) return 'archived';
         const status = post && post.status;
         if (status === 'PUBLISHED') return 'done';
         // A PENDING row with a note is one being held (TikTok's five-a-day limit,
         // an Instagram container still processing): the operator should look at it.
-        if (status === 'FAILED' || (status === 'PENDING' && post.error_log)) return 'attention';
+        // So is one that is overdue: its time has passed by more than the sweeps explain.
+        if (status === 'FAILED' || (status === 'PENDING' && post.error_log) || this.isOverdue(post, now)) return 'attention';
         return 'upcoming';
     },
 
-    /** Upcoming and held rows soonest first; done rows most recent first. */
-    groupQueue(posts) {
-        const groups = { upcoming: [], attention: [], done: [] };
-        for (const post of Array.isArray(posts) ? posts : []) groups[this.queueGroupOf(post)].push(post);
+    /** Upcoming and held rows soonest first; done and archived rows most recent first. */
+    groupQueue(posts, now) {
+        const groups = { upcoming: [], attention: [], done: [], archived: [] };
+        for (const post of Array.isArray(posts) ? posts : []) groups[this.queueGroupOf(post, now)].push(post);
         const time = (p) => { const n = new Date(p && p.scheduled_time).getTime(); return Number.isNaN(n) ? 0 : n; };
         groups.upcoming.sort((a, b) => time(a) - time(b));
         groups.attention.sort((a, b) => time(a) - time(b));
         groups.done.sort((a, b) => time(b) - time(a));
+        groups.archived.sort((a, b) => time(b) - time(a));
         return groups;
+    },
+
+    /** "2h" / «2 س»: how late, in the one unit that reads best. The catalogue's own short forms (`common.minutes|hours|days`), so each language writes its own unit. */
+    lateText(ms) {
+        const minutes = Math.max(1, Math.round(ms / 60000));
+        if (minutes < 60) return t('common.minutes', { n: UI.formatNumber(minutes) });
+        const hours = Math.floor(minutes / 60);
+        if (hours < 48) return t('common.hours', { n: UI.formatNumber(hours) });
+        return t('common.days', { n: UI.formatNumber(Math.floor(hours / 24)) });
+    },
+
+    /**
+     * A queued post's time, as a person reads it: weekday, date, the clock, and the CITY of the tenant's zone ("Thu, 23 Oct 2026,
+     * 19:00 (Riyadh)"). The tenant's zone (`UI.zone()`), not the browser's: it is what Studio and the Monteur show, and "19:00" with no
+     * city does not say whose 19:00 it is.
+     */
+    whenText(iso) {
+        return UI.formatDateTime(iso, { weekday: true, zone: true });
+    },
+
+    /**
+     * What a PENDING post says about its time beyond the time itself, or null. A fact and a next step, never a number of minutes:
+     *   in the future         nothing: the time is on the card, and a promise of minutes for a post months away is not true
+     *   past it, within grace "due": it goes out at the next check
+     *   past it by more       "overdue", by how long, and that the last check did not publish it (Publish now is on the card)
+     * An archived post, a held one (its own note says why it waits), and any status but PENDING, has none.
+     */
+    timingNote(post, now) {
+        if (!post || this.isArchived(post) || post.status !== 'PENDING' || UI.heldReason(post)) return null;
+        const at = new Date(post.scheduled_time).getTime();
+        if (Number.isNaN(at)) return null;
+        const late = (typeof now === 'number' ? now : Date.now()) - at;
+        if (late <= 0) return null;
+        if (late > this.OVERDUE_GRACE_MS) return { kind: 'overdue', text: t('posts.overdue.line', { late: this.lateText(late) }) };
+        return { kind: 'due', text: t('posts.due.line') };
     },
 
     queueGroupMeta(key) {
         if (key === 'attention') return { icon: 'alert-triangle', label: t('posts.group.attention') };
         if (key === 'done') return { icon: 'check-circle', label: t('posts.group.done') };
+        if (key === 'archived') return { icon: 'folder-open', label: t('posts.group.archived') };
         return { icon: 'calendar-clock', label: t('posts.group.upcoming') };
     },
 
@@ -522,6 +679,7 @@ const PostsPage = {
         return html`
             <section class="queue-group queue-group--${html.raw(key)}" aria-labelledby="${titleId}">
                 <h3 class="queue-group-title" id="${titleId}">${title}</h3>
+                ${key === 'archived' ? html`<p class="form-hint">${t('posts.archived.hint')}</p>` : ''}
                 ${cards}
             </section>
         `;
@@ -774,6 +932,16 @@ const PostsPage = {
         if (isFailed) statusClass = 'failed';
         if (isPublished) statusClass = 'sent';
 
+        // Put away by the owner (Archive): a neutral pill that still says what the post's status is, no red for what needs nothing, and
+        // none of the prompts to act (the TikTok kit, Publish now, Edit). Unarchive is its way back.
+        const parked = this.isArchived(post);
+        const now = Date.now();
+        // A held post (TikTok's five drafts, an Instagram reel still processing) is late on purpose and says so: its own pill and note
+        // explain the wait, so it is not also called overdue (data-model.md: held outranks overdue).
+        const overdue = !parked && !UI.heldReason(post) && this.isOverdue(post, now);
+        const when = this.whenText(post.scheduled_time);
+        const timing = this.timingNote(post, now);
+
         const badge = this.platformBadge(post.platform);
         const mediaUrl = safeUrl(post.media_url);
         const coverUrl = safeUrl(post.cover_url);
@@ -785,9 +953,6 @@ const PostsPage = {
         const typeLabel = slides.length
             ? t('posts.carousel.badge', { n: UI.formatNumber(slides.length) })
             : this.typeLabel(post.post_type);
-        // Only a PENDING row has a publish still ahead of it. An overdue one
-        // reads `isPast`, which is the state the operator has to act on.
-        const pendingWindow = isPending ? this.publishWindow(post.scheduled_time) : null;
         let processingNote = isPhoto ? t('posts.tiktok.processingNotePhoto') : t('posts.tiktok.processingNote');
         if (isDirect) {
             processingNote = isPhoto ? t('posts.tiktok.direct.processingNotePhoto') : t('posts.tiktok.direct.processingNote');
@@ -799,7 +964,7 @@ const PostsPage = {
                  where it goes, what it is, and when. All three are UI copy, so
                  the name is in whichever language the interface is in. -->
             <article class="post-card surface" data-id="${post.id}"
-                     aria-label="${badge.label} · ${typeLabel} · ${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}">
+                     aria-label="${badge.label} · ${typeLabel} · ${t('posts.scheduledAt', { when })}">
                 <div class="post-card-head">
                     <div class="post-card-badges">
                         <span class="badge ${html.raw(badge.cls)}">
@@ -808,11 +973,16 @@ const PostsPage = {
                         <span class="badge badge-neutral">${typeLabel}</span>
                         ${privacyLevel ? this.tiktokPrivacyChip(privacyLevel) : ''}
                     </div>
-                    <span class="status-pill ${html.raw(statusClass)}">
-                        ${isPublishing || isProcessing
-                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? (isPhoto ? t('state.processingPhoto') : t('state.processing')) : t('posts.statusPublishing')}`
-                            : UI.postStatusLabel(post)}
-                    </span>
+                    ${parked
+                        // "Archived · Failed": neutral, with the glyph and both words, so the status is not lost and is not red.
+                        ? UI.statusPill('post', 'archived', { label: `${t('status.post.archived')} · ${UI.postStatusLabel(post)}` })
+                        : overdue
+                            ? UI.statusPill('post', 'overdue')
+                            : html`<span class="status-pill ${html.raw(statusClass)}">
+                                ${isPublishing || isProcessing
+                                    ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? (isPhoto ? t('state.processingPhoto') : t('state.processing')) : t('posts.statusPublishing')}`
+                                    : UI.postStatusLabel(post)}
+                            </span>`}
                 </div>
 
                 ${slides.length ? this.renderSlideStrip(slides) : ''}
@@ -841,26 +1011,25 @@ const PostsPage = {
                     ? UI.previewBlock(post.caption, { label: t('posts.caption'), arabic: true })
                     : html`<div class="template-preview user-content">${t('posts.noCaption')}</div>`}
 
+                <!-- One time line: weekday, date, clock and the tenant's CITY. It states the time and never a number of minutes. -->
                 <p class="post-card-meta">
                     <i data-lucide="clock" aria-hidden="true"></i>
-                    <span>${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}</span>
+                    <span>${t('posts.scheduledAt', { when })}</span>
                 </p>
-                ${isPending && pendingWindow ? html`
-                    <p class="post-card-meta">
-                        <i data-lucide="calendar-clock" aria-hidden="true"></i>
-                        <span class="${pendingWindow.isPast ? html.raw('text-warning') : ''}">
-                            ${this.publishWindowText(pendingWindow)}
-                        </span>
+                ${timing ? html`
+                    <p class="post-card-meta" data-timing="${timing.kind}">
+                        <i data-lucide="${timing.kind === 'overdue' ? 'alert-triangle' : 'hourglass'}" aria-hidden="true"></i>
+                        <span class="${timing.kind === 'overdue' ? html.raw('text-warning') : ''}">${timing.text}</span>
                     </p>
                 ` : ''}
 
-                ${isFailed ? html`
+                ${isFailed && !parked ? html`
                     <p class="post-card-error" dir="auto">
                         <strong>${t('posts.errorLabel')}</strong> ${post.error_log || t('error.unexpected')}
                     </p>
                 ` : ''}
 
-                ${isPending && post.error_log ? html`
+                ${isPending && post.error_log && !parked ? html`
                     <!-- A PENDING row with a note is one being held, not one that
                          failed — TikTok's five-drafts-a-day limit, or a reel
                          Instagram is still processing (the pill then reads «مؤجَّل
@@ -872,6 +1041,14 @@ const PostsPage = {
                     </p>
                 ` : ''}
 
+                ${parked && (isFailed || (isPending && post.error_log)) ? html`
+                    <!-- What it said when the owner put it away, kept where he can read it, in the neutral tone: it needs nothing now. -->
+                    <p class="post-card-meta post-card-meta--note">
+                        <i data-lucide="info" aria-hidden="true"></i>
+                        <span dir="auto">${post.error_log || t('error.unexpected')}</span>
+                    </p>
+                ` : ''}
+
                 ${isTikTok && isProcessing ? html`
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="loader" aria-hidden="true"></i>
@@ -880,7 +1057,7 @@ const PostsPage = {
                 ` : ''}
 
                 ${isTikTok && isInInbox ? this.renderTikTokInboxNote(post) : ''}
-                ${isTikTok && !isInInbox && !isPublished ? this.renderTikTokManual(post) : ''}
+                ${isTikTok && !isInInbox && !isPublished && !parked ? this.renderTikTokManual(post) : ''}
 
                 ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
@@ -904,7 +1081,19 @@ const PostsPage = {
                 ` : ''}
 
                 <div class="card-actions">
-                    ${isPending || isFailed ? html`
+                    ${parked ? html`
+                        <!-- Put away: Unarchive is the way back. No Publish now and no Edit while it is archived. -->
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'rotate-ccw', label: t('posts.unarchive'),
+                            action: 'posts:unarchivePost', data: { id: post.id },
+                            focusKey: `post-unarchive-${post.id}`,
+                        })}
+                        ${UI.button({
+                            variant: 'danger', size: 'sm', icon: 'trash-2', label: isPublished ? t('posts.deleteLog') : t('common.delete'),
+                            action: 'posts:deletePost', data: { id: post.id },
+                            focusKey: `post-delete-${post.id}`,
+                        })}
+                    ` : isPending || isFailed ? html`
                         <!-- Stable keys across the re-render, so closeModal()
                              can put focus back on this card's own button. -->
                         ${UI.button({
@@ -916,6 +1105,12 @@ const PostsPage = {
                             variant: 'secondary', size: 'sm', icon: 'pencil', label: t('common.edit'),
                             action: 'posts:showEditModal', data: { id: post.id },
                             focusKey: `post-edit-${post.id}`,
+                        })}
+                        <!-- Archive, not a question: it can be undone (the toast), and it is the way out of "Needs attention" for a post parked on purpose. -->
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'eye-off', label: t('posts.archive'),
+                            action: 'posts:archivePost', data: { id: post.id },
+                            focusKey: `post-archive-${post.id}`,
                         })}
                         ${UI.button({
                             variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
@@ -3921,6 +4116,119 @@ const PostsPage = {
         });
     },
 
+    // ─── Archive: the way out of "Needs attention" for a post parked on purpose ──
+    /** Ids whose archive or restore request is out, so a double click is one request. */
+    _archiving: new Set(),
+
+    /**
+     * Archive or restore one post on the server, and put the server's answer in the list. Returns the row; throws what the request threw
+     * (callers say it in their own words). The answer carries `archived_at`; a row without it is read as what was asked for.
+     */
+    async setArchived(id, archived) {
+        const row = await (archived ? API.archiveScheduledPost(id) : API.unarchiveScheduledPost(id));
+        const index = this.posts.findIndex((p) => String(p.id) === String(id));
+        if (index !== -1) {
+            const answer = row && typeof row === 'object' ? row : {};
+            const stamp = answer.archived_at !== undefined ? answer.archived_at : (archived ? new Date().toISOString() : null);
+            this.posts[index] = { ...this.posts[index], ...answer, archived_at: stamp };
+        }
+        return row;
+    },
+
+    /** An archive or restore failure, in a sentence and what to do about it. */
+    archiveFailure(err, key) {
+        const { sentence, next } = UI.errorText(err);
+        return t(key, { reason: next ? `${sentence} ${next}` : sentence });
+    },
+
+    /**
+     * Put a post away. Not a question first: it can be taken back, so it is done and an Undo is offered for at least six seconds
+     * (constitution III, FR-094). The request goes FIRST and the Undo reverses it, rather than waiting out the toast and sending it
+     * after: a PENDING post that is still unarchived while the toast is up could be published by a sweep in the meantime. The toast
+     * names what archiving means: not published, and no longer counted as needing attention.
+     */
+    async archivePost(id) {
+        const key = String(id);
+        const post = this.posts.find((p) => String(p.id) === key);
+        if (!post || this.isArchived(post) || this._archiving.has(key)) return;
+        this._archiving.add(key);
+        try {
+            await this.setArchived(key, true);
+        } catch (err) {
+            UI.toast(this.archiveFailure(err, 'posts.archiveFailed'), 'error');
+            return;
+        } finally {
+            this._archiving.delete(key);
+        }
+        if (this.activeTab === 'scheduled') this.repaintQueue('posts-new');
+        UI.undoToast(t('posts.archived.done'), { onUndo: () => this.undoArchive(key) });
+    },
+
+    /** The Undo of the toast above: restore the post, and repaint if the queue is showing. A failure is said, and the post stays archived. */
+    async undoArchive(id) {
+        try {
+            await this.setArchived(id, false);
+        } catch (err) {
+            UI.toast(this.archiveFailure(err, 'posts.unarchiveFailed'), 'error');
+            return;
+        }
+        if (this.activeTab === 'scheduled') this.repaintQueue('posts-new');
+        Motion.announce(t('posts.unarchived.done'));
+    },
+
+    /**
+     * Take a post out of the archive. For a PENDING post whose time has passed this is also "publish it": the sweep takes it again at
+     * the next check, to the live account. So that one is asked about first, naming that; anything else is restored with no question.
+     */
+    unarchivePost(id) {
+        const key = String(id);
+        const post = this.posts.find((p) => String(p.id) === key);
+        if (!post || !this.isArchived(post)) return undefined;
+        const at = new Date(post.scheduled_time).getTime();
+        if (post.status === 'PENDING' && !Number.isNaN(at) && at <= Date.now()) {
+            UI.confirm({
+                title: t('posts.unarchive.confirmTitle'),
+                body: t('posts.unarchive.confirmBody'),
+                confirmLabel: t('posts.unarchive'),
+                confirmIcon: 'rotate-ccw',
+                tone: 'primary',
+                onConfirm: () => this.unarchiveConfirmed(key, true),
+            });
+            return undefined;
+        }
+        return this.unarchiveConfirmed(key, false);
+    },
+
+    /**
+     * Restore it. From the question, a failure is thrown so the dialog shows it and stays; with no question it is a toast.
+     * Focus goes to the control that is still there when the card has left the list.
+     */
+    async unarchiveConfirmed(id, fromConfirm) {
+        if (this._archiving.has(id)) return;
+        this._archiving.add(id);
+        try {
+            await this.setArchived(id, false);
+        } catch (err) {
+            if (fromConfirm) throw err;
+            UI.toast(this.archiveFailure(err, 'posts.unarchiveFailed'), 'error');
+            return;
+        } finally {
+            this._archiving.delete(id);
+        }
+        if (this.activeTab === 'scheduled') this.repaintQueue('posts-new');
+        UI.toast(t('posts.unarchived.done'));
+    },
+
+    /** The Active / Archived switch. Repaints the queue and puts focus on the tab that is now pressed (its buttons are rebuilt with it). */
+    setQueueView(view) {
+        this.queueView = view === 'archived' ? 'archived' : 'active';
+        if (this.activeTab !== 'scheduled') return;
+        this.repaintQueue();
+        const host = document.getElementById('posts-queue');
+        const pressed = host && host.querySelector ? host.querySelector('[data-ui-tab][aria-pressed="true"]') : null;
+        if (pressed && typeof pressed.focus === 'function') pressed.focus({ preventScroll: true });
+    },
+
     // ─── Uploads ─────────────────────────────────────────────────────────────
     /**
      * How many uploads are in flight for the open modal.
@@ -4098,6 +4406,9 @@ UI.registerActions('posts', {
     showEditModal: (el) => PostsPage.showEditModal(el.dataset.id),
     publishNow: (el) => PostsPage.publishNow(el.dataset.id),
     deletePost: (el) => PostsPage.deletePost(el.dataset.id),
+    archivePost: (el) => PostsPage.archivePost(el.dataset.id),
+    unarchivePost: (el) => PostsPage.unarchivePost(el.dataset.id),
+    setQueueView: (el) => PostsPage.setQueueView(el.dataset.key),
     dismissPublishError: () => { PostsPage.publishError = null; PostsPage.renderLayout(); },
     handlePlatformChange: () => PostsPage.applyPlatformMatrix(),
     handleTypeChange: () => PostsPage.applyTypeMatrix(),

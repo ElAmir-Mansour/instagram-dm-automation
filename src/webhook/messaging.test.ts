@@ -601,6 +601,9 @@ describe('handleMessagingEvent — claiming the inbound message', () => {
         assert.match(upsert.sql, /ON CONFLICT \(creator_id, instagram_user_id\)/);
         assert.match(upsert.sql, /DO UPDATE SET last_message_at = NOW\(\)/,
             'one statement, not SELECT-then-INSERT: two DMs a second apart raced on this');
+        // "Mark handled" (v45) lasts until the customer writes again: this is the statement that stores their message, so it clears the stamp.
+        assert.match(upsert.sql, /DO UPDATE SET last_message_at = NOW\(\),\s*handled_at = NULL,/,
+            'a new inbound message puts the thread back in the owner\'s To do, in the same statement that bumps last_message_at');
     });
 
     it('writes the inbound row, claims it, and marks it handled only at the end', async () => {

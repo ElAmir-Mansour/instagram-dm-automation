@@ -28,6 +28,7 @@ import { queryRows } from '../db/query.js';
 import type { ConversationPlatform } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { STAGES, type Stage } from './dmSales/types.js';
+import { effectiveAiOf, windowEndsAtOf, type AssistantState } from './inboxAssistant.js';
 
 /** How far before a reply's row a usage row may have started and still be taken for the call that wrote it. */
 export const USAGE_MATCH_WINDOW_SECONDS = 180;
@@ -151,13 +152,28 @@ export async function loadLinkClicks(tenantId: string, conversationIds: readonly
  * pinned to a type, so a database without v40 answers null for each and the dashboard reads one shape before and after the migration.
  *
  * `platform` is the caller's: `conversationPlatformOf` lives with the route.
+ *
+ * UX US1 adds three fields (contracts/api.md, "Conversations"):
+ *   - `handled_at`      the owner's "Mark handled" stamp (v45), or null: also null on a database that is behind, and ISO, like every stamp here;
+ *   - `window_ends_at`  when Meta's 24 h reply window closes (the customer's last message + 24 h), or null when they have not written;
+ *   - `effective_ai`    who would answer this thread's next message (`effectiveAiOf`): the assistant's global switch, then the thread's own,
+ *                       then the sales mode. `assistant` is what `loadAssistantState` read, or null when it could not be: then only the
+ *                       thread's own switch can be said and the answer is never "off".
  */
-export function conversationView<T extends Record<string, unknown>>(row: T, platform: ConversationPlatform | null, clicks?: LinkClicks | null) {
+export function conversationView<T extends Record<string, unknown>>(
+    row: T,
+    platform: ConversationPlatform | null,
+    clicks?: LinkClicks | null,
+    assistant: AssistantState | null = null
+) {
     return {
         ...row,
         platform,
         ...profileView(row),
         ...salesView(row),
+        handled_at: isoOrNull(row.handled_at),
+        window_ends_at: windowEndsAtOf(row),
+        effective_ai: effectiveAiOf(row, assistant),
         link_clicks: clicks ?? null,
         message_count: countOf(row.message_count),
         // What the list's preview needs of the newest message, beyond its text (see `GET /conversations`).

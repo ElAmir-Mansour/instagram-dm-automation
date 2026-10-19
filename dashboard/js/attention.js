@@ -13,8 +13,8 @@
  * Fields read from a list item (all optional; a missing one means "no" rather than an error, so a database that is behind flags nothing):
  *   is_bot_active, last_message_direction, last_message_at, last_inbound_message_at, last_inbound_at, last_operator_at,
  *   stage, handoff_at, handoff_reason, last_intent, opted_out_at, link_clicks.clicks, handled_at, instagram_user_id.
- * `handled_at` is the "Mark handled" stamp (planned: UX plan R-04). Until the server sends it, every thread reads as not handled, so
- * today's behaviour is exactly what it was before this file existed.
+ * `handled_at` is the "Mark handled" stamp (v45: `POST /api/conversations/:id/handled`, UX plan R-04). The list sends it as an ISO string, or null
+ * for a thread nobody has marked, and a server that is behind sends none, which reads as not handled.
  *
  * Loaded in index.html straight after components.js, with the same `?v=`.
  */

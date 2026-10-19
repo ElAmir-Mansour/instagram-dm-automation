@@ -358,6 +358,9 @@ const API = {
     createCampaign: (data) => API.request('/campaigns', { method: 'POST', body: JSON.stringify(data) }),
     /** What the CSV import seeds each imported row from: `{ seeds, source, fallback }`, the tenant's own offers' campaigns and the wording of a row none names. */
     getCampaignSeeds: () => API.request('/profile/campaign-seeds'),
+    // A dry run (writes nothing): which campaign answers `comment`, with the editor's unsaved `draft` among them. `body` is
+    // `{ comment, postId?, platform?, draft? }` (contracts/api.md, POST /campaigns/try).
+    tryCampaign: (body) => API.request('/campaigns/try', { method: 'POST', body: JSON.stringify(body) }),
     updateCampaign: (id, data) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteCampaign: (id) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
@@ -446,6 +449,12 @@ const API = {
     updateScheduledPost: (id, data) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     /**
+     * Archive a scheduled post and its undo (UX US1): the owner's way to put away a post that needs nothing. Both answer the row as the list
+     * has it (`archived_at` set, or null). An archived post is not published by the sweep and is not counted as needing attention.
+     */
+    archiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
+    unarchiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'DELETE' }),
+    /**
      * Republish an existing queue row in place — claims it server-side (PENDING or FAILED
      * only) and skips whatever platform is already recorded in `published_post_id`, instead
      * of the old create-a-new-row-with-publish_now dance that had no memory of what the
@@ -474,6 +483,12 @@ const API = {
     toggleConversationBot: (id, isActive) => API.request(`/conversations/${encodeURIComponent(id)}/toggle-bot`, {
         method: 'PUT', body: JSON.stringify({ is_bot_active: isActive }),
     }),
+    /**
+     * "Mark handled" and its undo (UX US1): the owner's way out of "needs you" for a thread he answered from the Instagram app. Both answer the
+     * thread as a list item (`handled_at` set, or null). A new message from the customer clears it on the server by itself.
+     */
+    markConversationHandled: (id) => API.request(`/conversations/${encodeURIComponent(id)}/handled`, { method: 'POST' }),
+    unmarkConversationHandled: (id) => API.request(`/conversations/${encodeURIComponent(id)}/handled`, { method: 'DELETE' }),
     /**
      * Look the sender up again (Instagram User Profile API). Throttled on the server, so asking is cheap and
      * answers `{ refreshed: false, reason: 'throttled' }` rather than an error when it is too soon.
@@ -572,6 +587,8 @@ const API = {
     copyInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/copy`, {
         method: 'POST', body: JSON.stringify(data || {}),
     }),
+    /** `{ next_slot, timezone }`: when "the next free slot" would post (ISO, or null when there is none) and the tenant's zone. Read-only. */
+    getInfographicNextSlot: () => API.request('/studio/infographics/next-slot'),
     /** `{ scheduled_time? | now? }` → `{ infographic, scheduled_time }`. */
     scheduleInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/schedule`, {
         method: 'POST', body: JSON.stringify(data || {}),

@@ -197,8 +197,9 @@ describe('GET /stats — ?days= (A1)', () => {
         const { res, sent } = await call('get', '/stats', { query: { days: '28' } }, () => count(3));
         assert.equal(res.body.days, 28);
         const windowed = sent.filter((s) => /i\.creator_id = \$1 AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\)/.test(s.sql));
-        // total, sent, failed, unique people, instagram, facebook.
-        assert.equal(windowed.length, 6);
+        // total, sent, failed, unique people, instagram, facebook, and the outcome split (src/services/outcomes.ts).
+        assert.equal(windowed.length, 7);
+        assert.ok(windowed.some((s) => /COUNT\(i\.id\) FILTER \(WHERE o\.outcome = 'actionable'\)/.test(s.sql)), 'the outcome split rides in the same window');
         for (const s of windowed) assert.deepEqual(s.params, [TENANT, 28]);
         assert.ok(windowed.some((s) => /COUNT\(DISTINCT i\.sender_username\)/.test(s.sql)), 'people reached');
         assert.ok(windowed.some((s) => /i\.platform = 'facebook'/.test(s.sql)), 'the platform split');
@@ -223,7 +224,7 @@ describe('GET /stats/campaigns — ?days= (A1)', () => {
     it('puts the window in the JOIN, so a campaign with nothing in it still shows at zero', async () => {
         const { sent } = await call('get', '/stats/campaigns', { query: { days: '7' } });
         const [q] = sent;
-        assert.match(q!.sql, /LEFT JOIN interactions i ON i\.campaign_id = c\.id AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\) WHERE c\.creator_id = \$1/);
+        assert.match(q!.sql, /LEFT JOIN interactions i ON i\.campaign_id = c\.id AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\) LEFT JOIN LATERAL \(SELECT CASE i\.status .*\) o ON TRUE WHERE c\.creator_id = \$1/);
         assert.deepEqual(q!.params, [TENANT, 7]);
     });
 
@@ -260,6 +261,9 @@ describe('GET /stats/failures (A5)', () => {
         assert.deepEqual(res.body, {
             days: 30,
             total: 12,
+            // No `expected_total` came from the (stubbed) database, so it is counted from the groups: the 24 h cap's five.
+            expected_total: 5,
+            actionable_total: 7,
             reasons: [
                 // `expected`: a designed skip, not a fault (src/services/failureReasons.ts). A dead token is a fault; the 24 h cap is by design.
                 { reason_code: '190', count: 7, expected: false, expected_count: 0, sample: rows[0]!.error_log, last_at: '2026-09-26T08:00:00.000Z' },

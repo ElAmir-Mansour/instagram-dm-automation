@@ -254,6 +254,32 @@ export interface ErasureSample {
     }>;
 }
 
+/**
+ * One workspace (tenant) that holds rows for the handle, and how many.
+ *
+ * Matching is cross-tenant on purpose (`resolveErasureTarget` has no `creator_id` filter): one erasure removes the person from every
+ * workspace, so the screen has to say which ones (UX audit ER-02). `rows` is every row the deletion would remove in that workspace, in
+ * the same four tables `ErasureCounts` counts, so the rows of `byTenant` add up to `countsTotal(counts)`. A row that belongs to no
+ * workspace at all (a legacy row from before migration v12) is grouped under `tenantId` and `name` null, not dropped.
+ */
+export interface ErasureTenantRows {
+    tenantId: string | null;
+    name: string | null;
+    rows: number;
+}
+
+/** The oldest and newest timestamp among the rows of one table; null when there are none. */
+export interface ErasureDateRange {
+    first: string | null;
+    last: string | null;
+}
+
+/**
+ * First and last date per data type, over ALL the matched rows. The sample is the newest five, so its dates cannot say when the
+ * oldest row is; these are MIN and MAX, which can. Dates only: nothing here is content.
+ */
+export type ErasureRanges = Record<keyof ErasureCounts, ErasureDateRange>;
+
 export interface ErasurePreview {
     handle: string;
     found: boolean;
@@ -263,6 +289,9 @@ export interface ErasurePreview {
         instagramUserIds: string[];
     };
     counts: ErasureCounts;
+    /** Rows per workspace, most first. See `ErasureTenantRows`. */
+    byTenant: ErasureTenantRows[];
+    ranges: ErasureRanges;
     sample: ErasureSample;
     /** Null when nothing matched — there is then nothing to authorise. */
     token: string | null;
@@ -277,7 +306,7 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
     const counts = await countErasure(target);
     const found = countsTotal(counts) > 0;
 
-    const [conversations, messages, interactions] = await Promise.all([
+    const [conversations, messages, interactions, tenantRows, rangeRows] = await Promise.all([
         queryRows<any>(
             `SELECT cv.id, cv.creator_id, c.name AS creator_name, cv.instagram_user_id,
                     cv.username, cv.last_message_at
@@ -309,7 +338,44 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
               LIMIT $2`,
             [target.usernames, SAMPLE_LIMIT]
         ),
+        // Rows per workspace. The same four predicates as `countErasure` and as the deletes in `executeErasure`, grouped by the owning
+        // workspace; messages take theirs from the conversation, as the delete does (`conversation_id = ANY(...)`).
+        queryRows<any>(
+            `SELECT t.creator_id, c.name, SUM(t.n)::int AS row_count
+               FROM (
+                    SELECT creator_id, COUNT(*) AS n FROM conversations
+                     WHERE id = ANY($1::uuid[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT cv.creator_id, COUNT(*) FROM messages m
+                      JOIN conversations cv ON cv.id = m.conversation_id
+                     WHERE m.conversation_id = ANY($1::uuid[]) GROUP BY cv.creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM interactions
+                     WHERE lower(sender_username) = ANY($2::text[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM dm_send_log
+                     WHERE recipient_id = ANY($3::text[]) GROUP BY creator_id
+               ) t
+               LEFT JOIN creators c ON c.id = t.creator_id
+              GROUP BY t.creator_id, c.name
+              ORDER BY row_count DESC, c.name NULLS LAST`,
+            [target.conversationIds, target.usernames, target.instagramUserIds]
+        ),
+        // The oldest and newest row of each table, over everything that matched.
+        queryRows<any>(
+            `SELECT
+                 (SELECT MIN(created_at)       FROM conversations WHERE id = ANY($1::uuid[]))                      AS conversations_first,
+                 (SELECT MAX(last_message_at)  FROM conversations WHERE id = ANY($1::uuid[]))                      AS conversations_last,
+                 (SELECT MIN(created_at)       FROM messages      WHERE conversation_id = ANY($1::uuid[]))         AS messages_first,
+                 (SELECT MAX(created_at)       FROM messages      WHERE conversation_id = ANY($1::uuid[]))         AS messages_last,
+                 (SELECT MIN(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_first,
+                 (SELECT MAX(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_last,
+                 (SELECT MIN(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_first,
+                 (SELECT MAX(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_last`,
+            [target.conversationIds, target.usernames, target.instagramUserIds]
+        ),
     ]);
+    const range = rangeRows[0] ?? {};
 
     const token = found ? mintErasureToken(target.handle, counts) : null;
     const verified = token ? verifyErasureToken(token) : null;
@@ -330,6 +396,17 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
             instagramUserIds: target.instagramUserIds,
         },
         counts,
+        byTenant: tenantRows.map((r) => ({
+            tenantId: r.creator_id ?? null,
+            name: r.name ?? null,
+            rows: Number(r.row_count) || 0,
+        })),
+        ranges: {
+            conversations: { first: iso(range.conversations_first), last: iso(range.conversations_last) },
+            messages: { first: iso(range.messages_first), last: iso(range.messages_last) },
+            interactions: { first: iso(range.interactions_first), last: iso(range.interactions_last) },
+            dmSendLog: { first: iso(range.dm_send_log_first), last: iso(range.dm_send_log_last) },
+        },
         sample: {
             conversations: conversations.map((r) => ({
                 id: r.id,

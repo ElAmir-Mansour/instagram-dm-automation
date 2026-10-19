@@ -1033,16 +1033,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.match(infographicsTabs, /href="#\/infographics"\s+aria-current="page"/);
     });
 
-    it('ships at cache version 12.44: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.45: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.44');
+        assert.equal(version, '12.45');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.44']);
+        assert.deepEqual([...new Set(refs)], ['12.45']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.44'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.45'], page);
         }
     });
 });
@@ -1817,5 +1817,147 @@ describe('Infographics page', () => {
         for (const key of ['nav.infographics', 'studio.tabs.infographics', 'infographics.new.title', 'infographics.lang.ar', 'infographics.schedule.gifHint', 'infographics.brand.title']) {
             assert.match(s.t(key), /[؀-ۿ]/, key);
         }
+    });
+});
+
+// ─── Failures are sentences (UX US1, T054: the live 413 of 2026-10-19, ST-08) ────────────────
+
+describe('Monteur — a failure is a sentence, with the raw text behind Details', () => {
+    /** What the Mac worker stored on the source that the live run failed (aicourse-captions, scripts/monteur/upload.mjs). */
+    const LIVE_413 = 'storage answered HTTP 400 to the upload: {"statusCode":"413","error":"Payload too large","message":"The object exceeded the maximum allowed size"}';
+    const TECHNICAL = 'Gemini answered HTTP 503: {"error":{"code":503,"message":"The model is overloaded"}}';
+    const sentenceOf = (markup: string): string => ((markup.match(/<strong class="error-sentence"[^>]*>([\s\S]*?)<\/strong>/) || [])[1] || '').trim();
+    const detailsOf = (markup: string): string => ((markup.match(/<p class="error-details-text"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || '');
+    /** The markup around one element by id: its card, approximately (the element's own tag, and what is beside it). */
+    const around = (page: string, id: string): string => {
+        const at = page.indexOf(`id="${id}"`);
+        assert.ok(at !== -1, `${id} is on the page`);
+        return page.slice(Math.max(0, at - 1500), at + 1500);
+    };
+
+    for (const lang of ['en', 'ar'] as const) {
+        it(`${lang}: a video whose upload Storage refused as too large is a sentence and what to do, and Retry is still there`, async () => {
+            const s = loadMonteur(lang);
+            const sources = [{ id: 's9', name: 'big.mov', path: '/v/big.mov', duration: 1200, status: 'failed', error: LIVE_413, clips: 0, created_at: minutesAgo(30), updated_at: minutesAgo(20) }];
+            stub(s, monteurView({ sources }));
+            const page = await renderPage(s);
+            const card = around(page, 'mt-source-s9-retry');
+            assert.equal(sentenceOf(card), s.t('errors.STORAGE_FILE_TOO_LARGE'), 'the sentence, not the JSON');
+            assert.doesNotMatch(sentenceOf(card), /statusCode|Payload|\{|HTTP/);
+            assert.ok(card.includes(escaped(s.t('errors.STORAGE_FILE_TOO_LARGE.next'))), 'and the next step');
+            assert.match(detailsOf(card), /&quot;statusCode&quot;:&quot;413&quot;/, 'the raw text is only behind Details');
+            assert.ok(tagOf(page, 'mt-source-s9-retry').includes('data-action="monteur:retrySource"'));
+            if (lang === 'ar') assert.match(sentenceOf(card), /[؀-ۿ]/);
+            s.Page.destroy();
+        });
+    }
+
+    it('a failed reel with a technical error says the step did not finish; one with a readable error keeps its words', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({
+            clips: [
+                clip({ id: 'f1', status: 'failed', video_url: null, error: TECHNICAL }),
+                clip({ id: 'f2', status: 'failed', video_url: null, error: 'Remotion ran out of memory' }),
+            ],
+        }));
+        const page = await renderPage(s);
+        const technical = around(page, 'mt-clip-f1-reject');
+        assert.ok(technical.includes(s.t('errors.STUDIO_STEP_FAILED')));
+        assert.match(detailsOf(technical), /The model is overloaded/);
+        assert.ok(!sentenceOf(technical).includes('Gemini'));
+        const readable = around(page, 'mt-clip-f2-reject');
+        assert.ok(readable.includes('Remotion ran out of memory'));
+        s.Page.destroy();
+    });
+
+    it('an automatic approval that was refused with a technical text is worded, and the text is behind Details', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip({ error: 'TikTok answered HTTP 500: {"error":"boom"}' })] }));
+        const page = await renderPage(s);
+        const line = (page.match(/<p [^>]*id="mt-clip-c1-refused"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
+        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: s.t('errors.STUDIO_STEP_FAILED') }))), line);
+        assert.ok(!line.includes('boom'), 'the technical text is not in the line');
+        assert.match(page, /<details class="error-details">[\s\S]*?boom/);
+        s.Page.destroy();
+    });
+
+    it('the last scan failing with a technical text, and the Analyst failing with one, are sentences too', async () => {
+        const s = loadMonteur('en');
+        const lessons = { ...monteurView().lessons, last_run: { status: 'failed', error: TECHNICAL, created_at: minutesAgo(30) } };
+        stub(s, monteurView({ last_scan: { at: minutesAgo(10), added: 0, skipped: 0, missing: false, error: LIVE_413 }, lessons }));
+        const page = await renderPage(s);
+        const last = (page.match(/<p [^>]*id="mt-last-run"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
+        assert.ok(last.includes(escaped(s.t('monteur.run.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '10' }) }), error: s.t('errors.STORAGE_FILE_TOO_LARGE') }))), last);
+        assert.ok(!last.includes('statusCode'));
+        const analyst = (page.match(/<p [^>]*id="mt-lessons-failed"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
+        assert.ok(analyst.includes(s.t('errors.STUDIO_STEP_FAILED')), analyst);
+        assert.ok(!analyst.includes('overloaded'));
+        assert.match(page, /The model is overloaded/, 'but it is on the page, behind Details');
+        assert.ok(count(page, '<details class="error-details">') >= 2);
+        s.Page.destroy();
+    });
+
+    it('Approve refused for a day that is taken: the code is the sentence, the picker opens, and the server’s English is behind Details only', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-clip-c1-error');
+        s.host('mt-clip-c1-approve');
+        const said = 'scheduled_time: another reel from this video is already on Tue 15 Jan. Choose another day.';
+        s.api.approveMonteurClip = () => Promise.reject(Object.assign(new Error(said), { status: 409, code: 'REEL_DAY_TAKEN', params: { day: 'Tue 15 Jan' }, body: { error: said, problems: [said] } }));
+        await s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        const error = s.dom.get('mt-clip-c1-error')!.innerHTML;
+        assert.equal(sentenceOf(error), s.t('errors.REEL_DAY_TAKEN', { day: '⁨Tue 15 Jan⁩' }));
+        assert.ok(error.includes(escaped(s.t('errors.REEL_DAY_TAKEN.next'))));
+        assert.match(detailsOf(error), /another reel from this video is already on Tue 15 Jan/);
+        assert.ok(error.includes(s.t('monteur.clip.pickAnotherTime')), 'and the picker’s hint');
+        assert.equal(count(error, 'another reel from this video'), 1, 'the English appears once: in Details');
+        assert.equal(s.Page.overrides.c1.open, true, 'the time picker opens on it, as for the uncoded refusal');
+        s.Page.destroy();
+    });
+
+    it('a refused Save keeps the extra problem lines, and drops the one its sentence already says', () => {
+        const s = loadMonteur('en');
+        stub(s);
+        const said = 'copy.keyword: «برومبت» sits inside the active keyword «البرومبتات». Change the reel\'s keyword.';
+        const err = Object.assign(new Error(said), { status: 409, code: 'KEYWORD_CLASH', params: { trigger: 'برومبت', live: 'البرومبتات' }, body: { problems: [said, 'copy.caption: too long'] } });
+        assert.deepEqual([...s.Page.extraProblems(err)], ['too long'], 'the path is plain, the repeated line is gone');
+        assert.equal(s.Page.clipFailure(err), err, 'a coded refusal is drawn from its code');
+        const uncoded = Object.assign(new Error(said), { body: { problems: [said] } });
+        assert.equal(s.Page.clipFailure(uncoded).message, '«برومبت» sits inside the active keyword «البرومبتات». Change the reel\'s keyword.', 'an uncoded one loses only the field path it leads with');
+        assert.equal(s.Page.extraProblems(uncoded).length, 1);
+        s.Page.destroy();
+    });
+
+    it('a failed folder pick, Run now and source retry toast the sentence and its next step, not err.message', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        const err = Object.assign(new Error('Failed to queue the render.'), { status: 409, code: 'REEL_NOT_IN_REVIEW', params: { status: 'scheduled' } });
+        const line = `${s.t('errors.REEL_NOT_IN_REVIEW', { status: '⁨scheduled⁩' })} ${s.t('errors.REEL_NOT_IN_REVIEW.next')}`;
+        s.api.pickMonteurFolder = () => Promise.reject(err);
+        await s.Page.pickFolder(button('mt-pick-folder'));
+        s.api.retryMonteurSource = () => Promise.reject(err);
+        await s.Page.retrySource(button('mt-source-s3-retry', { id: 's3' }));
+        s.api.runMonteur = () => Promise.reject(Object.assign(new Error('x'), { status: 500, code: 'NEEDS_AI_PROVIDER' }));
+        await s.Page.runNow(button('mt-run-now'));
+        assert.deepEqual(s.toasts.map((x) => x.type), ['error', 'error', 'error']);
+        assert.equal(s.toasts[0]!.message, line);
+        assert.equal(s.toasts[1]!.message, line);
+        assert.equal(s.toasts[2]!.message, `${s.t('errors.NEEDS_AI_PROVIDER')} ${s.t('errors.NEEDS_AI_PROVIDER.next')}`);
+        s.Page.destroy();
+    });
+
+    it('a page that failed to load says the sentence and the next step as its message and hint', () => {
+        const s = loadMonteur('en');
+        s.Page.viewError = Object.assign(new Error('Failed to read the Monteur.'), { status: 409, code: 'NEEDS_AI_PROVIDER', body: { error: 'x' } });
+        const options = s.Page.loadErrorOptions();
+        assert.equal(options.message, s.t('errors.NEEDS_AI_PROVIDER'));
+        assert.equal(options.hint, s.t('errors.NEEDS_AI_PROVIDER.next'));
+        s.Page.viewError = Object.assign(new Error('Plain.'), { status: 500, body: { error: 'Plain.' } });
+        const plain = s.Page.loadErrorOptions();
+        assert.equal(plain.message, 'Plain.', 'an uncoded refusal is what it was');
+        assert.equal(plain.hint, 'HTTP 500', 'with the status as the hint when there is no next step');
+        s.Page.destroy();
     });
 });

@@ -108,7 +108,7 @@ describe('summariseFailures', () => {
     });
 
     it('reads nothing into an empty window', () => {
-        assert.deepEqual(summariseFailures([]), { total: 0, reasons: [] });
+        assert.deepEqual(summariseFailures([]), { total: 0, expected_total: 0, actionable_total: 0, reasons: [] });
     });
 
     it('never reports a total below what it counted', () => {

@@ -168,7 +168,10 @@ const SettingsPage = {
         if (!live()) return;
         gate.done();
 
-        const isValid = tokenStatus.status === 'valid';
+        // Four states, not two (SE-01, OV-08): what Meta said (`valid`, `invalid`), a tenant that never connected, and a check
+        // that could not run. Everything but `invalid` used to be drawn as the red "Invalid / expired".
+        const tokenState = this.tokenState(tokenStatus);
+        const isValid = tokenState === 'valid';
         const expiresAt = tokenStatus.expiresAt ? new Date(tokenStatus.expiresAt) : null;
         const daysLeft = expiresAt ? Math.ceil((expiresAt - Date.now()) / 86400000) : null;
         // The 90-day data-access window is the date that actually lapses on a
@@ -180,7 +183,9 @@ const SettingsPage = {
         // (`canAdminister`); an operator who could see the forms only learned that
         // from a 403 after pasting a 200-character token.
         const canAdmin = App.canAdminister();
-        const tokenReason = !isValid ? (tokenStatus.error || tokenStatus.message || '') : '';
+        // Only a token Meta rejected has a reason of Meta's to show. The other two states say their own sentence: the server's
+        // `message` for them is English, and was being printed inside the Arabic page (SE-01).
+        const tokenReason = tokenState === 'invalid' ? (tokenStatus.error || tokenStatus.message || '') : '';
 
         const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
             ? this.REQUIRED_SCOPES.filter((scope) => !tokenStatus.scopes.includes(scope))
@@ -214,12 +219,11 @@ const SettingsPage = {
                 <h2 class="section-title">${t('settings.accessToken')}</h2>
                 <div class="settings-card surface">
                     <div class="token-status">
-                        <span class="health-pill ${isValid ? html.raw('health-fresh') : html.raw('health-stale')}">
-                            <i data-lucide="${isValid ? 'check-circle' : 'alert-triangle'}" aria-hidden="true"></i>
-                            ${isValid ? t('settings.valid') : t('settings.invalid')}
-                        </span>
+                        ${this.tokenPill(tokenState)}
                         ${tokenStatus.type ? html`<span class="text-meta">${t('settings.tokenType', { type: tokenStatus.type })}</span>` : ''}
                     </div>
+                    ${tokenState === 'not_connected' ? this.notConnectedNote(canAdmin) : ''}
+                    ${tokenState === 'unknown' ? this.tokenUnknownNote() : ''}
                     ${tokenReason ? html`<div class="mbe-4">${UI.errorStrip(t('settings.tokenProblem'), tokenReason)}</div>` : ''}
                     <p class="form-hint mbe-4">${UI.helpLink('connect-meta#token-health', t('help.link.tokenHealth'), { newTab: true })}</p>
 
@@ -241,9 +245,9 @@ const SettingsPage = {
                                 action: 'settings:extendToken', id: 'settings-extend',
                             }) : ''}
                         </div>
-                    ` : html`
+                    ` : (isValid ? html`
                         <p class="token-info mbe-4">${t('settings.expiresNever')}</p>
-                    `}
+                    ` : '')}
                     ${dataAccessAt && dataAccessDays !== null ? html`
                         <p class="token-info mbe-4">
                             ${t('settings.dataAccessExpires', { date: UI.formatDay(dataAccessAt) })}
@@ -466,6 +470,65 @@ const SettingsPage = {
             `;
         }
         return IceBreakersCard.section(data);
+    },
+
+    // ─── The access token's state (SE-01, OV-08) ─────────────────────────────
+
+    /**
+     * `GET /settings/token/status` as one of four states: `valid`, `invalid` (Meta rejected the token), `not_connected` (this
+     * tenant never connected: there is no token, and nothing is wrong) and `unknown` (Meta did not answer, so nothing is known).
+     * Any other status is `invalid`, as before: an answer this screen does not know is not a healthy one.
+     */
+    tokenState(tokenStatus) {
+        const status = tokenStatus && tokenStatus.status;
+        if (status === 'valid' || status === 'not_connected' || status === 'unknown') return status;
+        return 'invalid';
+    },
+
+    /** The state's pill. A tenant that never connected, and a check that could not run, are neutral: only a rejected token is red. */
+    tokenPill(state) {
+        if (state === 'not_connected') return UI.statusPill('connection', 'not_set_up', { label: t('settings.notConnected') });
+        if (state === 'unknown') return UI.statusPill('connection', 'unknown', { label: t('settings.tokenUnknown') });
+        const valid = state === 'valid';
+        return html`<span class="health-pill ${valid ? html.raw('health-fresh') : html.raw('health-stale')}">
+            <i data-lucide="${valid ? 'check-circle' : 'alert-triangle'}" aria-hidden="true"></i>
+            ${valid ? t('settings.valid') : t('settings.invalid')}
+        </span>`;
+    },
+
+    /**
+     * What to do about a tenant that never connected: one sentence of this screen's own (never the server's English `message`)
+     * and the way there. Connect lives in the Connections card further down, so the button takes the owner to it. Only the
+     * workspace owner can connect; anyone else is told so.
+     */
+    notConnectedNote(canAdmin) {
+        return html`
+            <div class="mbe-4 stack gap-3" data-token-state="not_connected">
+                <p class="token-info">${t('settings.notConnectedBody')}</p>
+                ${canAdmin
+                    ? UI.button({ variant: 'primary', size: 'sm', icon: 'link', label: t('settings.connectAction'), action: 'settings:goConnect', id: 'settings-connect' })
+                    : html`<p class="form-hint">${t('settings.ownerOnlyMeta')}</p>`}
+            </div>
+        `;
+    },
+
+    /** A check that could not run: said as that, with a way to run it again. It is not a verdict on the token. */
+    tokenUnknownNote() {
+        return html`
+            <div class="mbe-4 stack gap-3" data-token-state="unknown">
+                <p class="token-info">${t('settings.tokenUnknownBody')}</p>
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+            </div>
+        `;
+    },
+
+    /** Scroll to the Connections card and put focus on its Connect button, which is where the owner connects. */
+    goConnect() {
+        const card = document.getElementById('settings-meta');
+        if (!card) return;
+        if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'start', behavior: Motion.reduced() ? 'auto' : 'smooth' });
+        const target = document.getElementById('meta-connect') || (typeof card.querySelector === 'function' ? card.querySelector('button, a[href]') : null);
+        if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
     },
 
     // ─── Instagram & Facebook (P28) ──────────────────────────────────────────
@@ -2153,6 +2216,7 @@ const SettingsPage = {
 
 UI.registerActions('settings', {
     render: () => SettingsPage.render(),
+    goConnect: () => SettingsPage.goConnect(),
     extendToken: (el) => SettingsPage.extendToken(el),
     handleTokenUpdate: (el, e) => SettingsPage.handleTokenUpdate(el, e),
     handleWebhookTokenUpdate: (el, e) => SettingsPage.handleWebhookTokenUpdate(el, e),

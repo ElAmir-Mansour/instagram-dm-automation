@@ -41,7 +41,7 @@ import { claimJob, completeJob, failJob, jobCounts, reportProgress, STUDIO_JOB_K
 import { enqueueIndex, enqueueScan, getLesson, indexMissing, lessonCounts, listLessons } from '../services/studio/lessons.js';
 import { queuedTikTokCount, runTikTokBatch, scheduleDraft, unscheduleDraft } from '../services/studio/schedule.js';
 import {
-    copyInfographic, createInfographic, deleteInfographic, getInfographic, listInfographics, rerenderInfographic,
+    copyInfographic, createInfographic, deleteInfographic, getInfographic, listInfographics, nextInfographicSlot, rerenderInfographic,
     scheduleInfographic, updateInfographic,
 } from '../services/studio/infographics.js';
 import { getStudioSettings, updateStudioSettings } from '../services/studio/settings.js';
@@ -458,6 +458,11 @@ studioRouter.post('/monteur/clips/:id/rerender', handle('monteur.rerender_failed
 
 studioRouter.get('/infographics', handle('studio.infographics_failed', 'Failed to list the infographics.', async (req, res) => {
     res.json({ infographics: await listInfographics(getTenantId(req)) });
+}));
+
+// Before `/infographics/:id`, which would read "next-slot" as an id.
+studioRouter.get('/infographics/next-slot', handle('studio.infographic_slot_failed', 'Failed to find the next posting slot.', async (req, res) => {
+    res.json(await nextInfographicSlot(getTenantId(req)));
 }));
 
 studioRouter.get('/infographics/:id', handle('studio.infographic_failed', 'Failed to read the infographic.', async (req, res) => {

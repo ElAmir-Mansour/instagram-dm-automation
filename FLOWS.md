@@ -585,9 +585,14 @@ reliable); `entry.id` could be the IG id or the FB Page id depending on subscrip
 ```sql
 INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
 ON CONFLICT (creator_id, instagram_user_id)
-DO UPDATE SET last_message_at = NOW(), platform = COALESCE(conversations.platform, EXCLUDED.platform)
+DO UPDATE SET last_message_at = NOW(), handled_at = NULL, platform = COALESCE(conversations.platform, EXCLUDED.platform)
 RETURNING id, is_bot_active, ai_disclosed_at
 ```
+
+`handled_at = NULL` (v45) is how a new question returns a thread to the owner's To do: "Mark handled"
+(`POST /api/conversations/:id/handled`) stamps the column, and the next message **from the customer**
+clears it, in this same statement. Nothing else clears it: the owner's own reply, an Instagram-app
+echo and the bot's messages move `last_message_at` or the AI switch elsewhere and leave it alone.
 
 `platform` (v26) comes from the webhook body's `object` (`instagram` or `page`), carried in the DM
 job; a job queued before v26 falls back to which page id the message was addressed to
@@ -1108,17 +1113,25 @@ the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
 **`src/routes/api.ts:600`**.
 
 1. **Select due rows** (**:602-608**) — `scheduled_posts` joined to `creators`,
-   `status = 'PENDING' AND scheduled_time <= NOW()`, oldest first.
+   `status = 'PENDING' AND scheduled_time <= NOW() AND s.archived_at IS NULL`, oldest first.
 2. **Claim each one atomically** (**:623-629**):
 
    ```sql
    UPDATE scheduled_posts SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-    WHERE id = $1 AND status = 'PENDING'
+    WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
    RETURNING id
    ```
 
    `rowCount === 0` means someone else took it: log `cron.publish_already_claimed` and
    `continue` (**:631-634**).
+
+> **Archived posts are skipped, silently and on purpose** (v45, UX US1). `POST /api/posts/scheduled/:id/archive`
+> stamps `archived_at`; the select leaves such a row out, and the claim repeats the test so a row archived
+> between the two is not published either (it matches no row and is logged as `cron.publish_already_claimed`).
+> This is the one sweep that stops: the TikTok and Instagram reconcilers (`reconcileTikTokPosts`,
+> the YouTube visibility check, the growth sync) never mention `archived_at`, so a row already in flight
+> still settles. Unarchiving a `PENDING` row whose time has passed makes it due again, and the next sweep
+> publishes it, which is why the dashboard asks first. Nothing about an archived row is a delete.
 
 > **Why the claim is an `UPDATE … WHERE status = 'PENDING'`.** The old form was SELECT-then-
 > UPDATE, which let two concurrent cron hits both read the row as PENDING and both publish it —

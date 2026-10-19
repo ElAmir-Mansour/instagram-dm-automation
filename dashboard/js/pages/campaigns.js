@@ -6,16 +6,12 @@
  * (src/services/matching.ts → src/utils/arabic.ts). `تم` therefore fires inside
  * اهتمام, تمام and يتم, and the old form's own placeholder suggested `تم`.
  *
- * `keywordMatches()` in the backend does take a `'word'` mode — but nothing
- * persists a per-campaign choice: the campaigns table has no such column, the
- * POST/PUT handlers destructure only trigger_keyword, dm_template,
- * public_reply_template, post_id and is_active, and the webhook calls
- * matchCampaign() with no mode argument. A mode switch here would be a control
- * that silently does nothing, which is worse than no control, so this screen
- * does the honest version instead: it runs the SAME normalisation the webhook
- * runs, and at the moment the operator types a keyword it names the real
- * Arabic words that keyword will also fire on. Shipping the persisted `word`
- * mode is a backend change (one column, two handlers, one call site).
+ * `keywordMatches()` in the backend takes a `'word'` mode, and every campaign has
+ * its own (`match_mode`, migration v14): the editor sets it, the card says it, and
+ * the "will match inside longer words" warning exists only for substring mode.
+ * What a keyword will also fire on is named from the SAME normalisation the
+ * webhook runs. Which OTHER campaign answers a comment is not decided here: the
+ * server's own rule says so (`POST /api/campaigns/try`), see "Collisions" below.
  */
 const CampaignsPage = {
     campaigns: [],
@@ -32,12 +28,14 @@ const CampaignsPage = {
 
     destroy() {
         this._seq++;
+        this.resetCollisions();
     },
 
     /** Tenant switch: cached campaigns and any half-finished CSV import. */
     resetTenantState() {
         this.campaigns = [];
         this.pendingImport = null;
+        this.resetCollisions();
     },
 
     skeleton() {
@@ -140,7 +138,11 @@ const CampaignsPage = {
         const canOperate = App.canOperate();
         const isActive = c.is_active !== false;
         const keywords = this.splitKeywords(c.trigger_keyword);
-        const risky = keywords.filter((k) => this.keywordRisk(k).risky);
+        // The card used to judge every keyword as if it were substring-matched, so a whole-word campaign (and every Monteur
+        // one is) wore red "will match inside many longer words" warnings that are false for it (CA-08). The mode decides.
+        const mode = this.modeOf(c);
+        const riskOf = (k) => this.keywordRisk(k, mode);
+        const risky = keywords.filter((k) => riskOf(k).risky);
 
         return html`
             <!-- An <article> with no accessible name is announced as "article"
@@ -155,8 +157,8 @@ const CampaignsPage = {
                     <div class="keyword-list" id="campaign-keywords-${c.id}">
                         ${isActive ? '' : html`<span class="chip"><i data-lucide="pause" aria-hidden="true"></i> ${t('campaigns.pausedChip')}</span>`}
                         ${keywords.map((k) => html`
-                            <span class="chip ${this.keywordRisk(k).risky ? html.raw('chip-danger') : ''}" dir="auto">
-                                <i data-lucide="${this.keywordRisk(k).risky ? 'alert-triangle' : 'hash'}" aria-hidden="true"></i>
+                            <span class="chip ${riskOf(k).risky ? html.raw('chip-danger') : ''}" dir="auto">
+                                <i data-lucide="${riskOf(k).risky ? 'alert-triangle' : 'hash'}" aria-hidden="true"></i>
                                 ${k}
                             </span>
                         `)}
@@ -175,6 +177,13 @@ const CampaignsPage = {
                             <span class="switch-track"></span>
                         </label>
                     </div>
+                </div>
+
+                <!-- How the keywords are matched, always said (CA-08): the card never showed it, so nothing told the owner that a
+                     whole-word campaign will not fire on «الكورس». Neutral: a mode is a choice, not a problem. It is a sibling of
+                     the keyword list, not inside it, so it stays out of the card's accessible name (that list). -->
+                <div class="row gap-2 row--wrap">
+                    ${this.modeChip(mode)}
                 </div>
 
                 ${risky.length > 0 ? html`
@@ -208,22 +217,7 @@ const CampaignsPage = {
                     </p>
                 ` : ''}
 
-                <div class="campaign-stats">
-                    <span class="campaign-stat"><span class="dot ok" aria-hidden="true"></span> ${t('campaigns.statSent', { count: UI.formatNumber(c.sent_count) })}</span>
-                    <!-- C8: the failed count opens exactly those failures in the
-                         log (App.goWithQuery via app:navigate). Zero stays text:
-                         a link to an empty list is a control that does nothing. -->
-                    ${Number(c.failed_count) > 0 ? html`
-                        <button type="button" class="campaign-stat campaign-stat-link"
-                                data-action="app:navigate" data-target="activity"
-                                data-query="${new URLSearchParams({ campaign: String(c.id), status: 'FAILED' }).toString()}"
-                                title="${t('campaigns.openFailed')}">
-                            <span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}
-                            <span class="sr-only">${t('campaigns.openFailed')}</span>
-                        </button>
-                    ` : html`<span class="campaign-stat"><span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}</span>`}
-                    <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: UI.formatNumber(c.total_interactions) })}</span>
-                </div>
+                ${this.renderStats(c)}
 
                 ${canOperate ? html`
                 <div class="card-actions">
@@ -246,6 +240,103 @@ const CampaignsPage = {
                 ` : ''}
             </article>
         `;
+    },
+
+    // ─── The card: match mode and what became of its replies ─────────────────
+
+    /**
+     * `'word'` or `'substring'`: the same reading the server has (`normalizeMatchMode`). A row with no `match_mode` (older
+     * than migration v14, or from a query that did not select it) is substring, which is how it is matched.
+     */
+    modeOf(c) {
+        return c && c.match_mode === 'word' ? 'word' : 'substring';
+    },
+
+    /** The neutral chip that says how a campaign's keywords are matched: a glyph and a word, and what the word means as the title. */
+    modeChip(mode) {
+        const word = mode === 'word';
+        return html`
+            <span class="chip" data-match-mode="${word ? 'word' : 'substring'}"
+                  title="${word ? t('campaigns.mode.word.hint') : t('campaigns.mode.substring.hint')}">
+                <i data-lucide="${word ? 'target' : 'scan-text'}" aria-hidden="true"></i>
+                <span class="sr-only">${t('campaigns.matchMode')}: </span>${word ? t('campaigns.mode.word') : t('campaigns.mode.substring')}
+            </span>
+        `;
+    },
+
+    /**
+     * The outcome split `GET /campaigns` sends with each campaign: `{ delivered, by_design, actionable, pending }`, under
+     * `counts.all` in the contract (specs/001-dashboard-ux/contracts/api.md) or flat under `counts`. Returns
+     * `{ delivered, byDesign, actionable, pending }` as numbers, or null when the server did not send a usable one: the card then
+     * falls back to `sent_count` / `failed_count`, which is what it showed before the split existed. A split missing one of the
+     * three counts that matter is treated as absent, not as zeros: a number the server did not send is not a count of 0.
+     */
+    outcomeSplit(c) {
+        const counts = c && c.counts;
+        if (!counts || typeof counts !== 'object') return null;
+        const source = counts.all && typeof counts.all === 'object' ? counts.all : counts;
+        const num = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+        const delivered = num(source.delivered);
+        const byDesign = num(source.by_design);
+        const actionable = num(source.actionable);
+        if (![delivered, byDesign, actionable].every(Number.isFinite)) return null;
+        const pending = num(source.pending);
+        return { delivered, byDesign, actionable, pending: Number.isFinite(pending) ? pending : 0 };
+    },
+
+    /**
+     * The card's numbers. With the split (FR-002): delivered, handled by design (neutral: nothing to do), waiting to send, and
+     * FAILED, which is only what the owner can act on. Red belongs to that last one alone, and only while it is above zero: a red
+     * dot beside "0 failed" is a red that asks for nothing. Without the split, sent and failed as before.
+     */
+    renderStats(c) {
+        const split = this.outcomeSplit(c);
+        const n = (v) => UI.formatNumber(v);
+        if (!split) {
+            return html`
+                <div class="campaign-stats">
+                    <span class="campaign-stat"><span class="dot ok" aria-hidden="true"></span> ${t('campaigns.statSent', { count: n(c.sent_count) })}</span>
+                    ${this.failedStat(c, Number(c.failed_count) || 0)}
+                    <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: n(c.total_interactions) })}</span>
+                </div>
+            `;
+        }
+        return html`
+            <div class="campaign-stats" data-outcomes="split">
+                <span class="campaign-stat"><span class="dot ok" aria-hidden="true"></span> ${t('campaigns.stat.delivered', { count: n(split.delivered) })}</span>
+                ${split.byDesign > 0 ? html`
+                    <span class="campaign-stat text-muted" title="${t('campaigns.stat.byDesign.hint')}">
+                        <span class="dot neutral" aria-hidden="true"></span> ${t('campaigns.stat.byDesign', { count: n(split.byDesign) })}
+                    </span>
+                ` : ''}
+                ${split.pending > 0 ? html`
+                    <span class="campaign-stat text-muted"><span class="dot neutral" aria-hidden="true"></span> ${t('campaigns.stat.pending', { count: n(split.pending) })}</span>
+                ` : ''}
+                ${this.failedStat(c, split.actionable)}
+                <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: n(c.total_interactions) })}</span>
+            </div>
+        `;
+    },
+
+    /**
+     * The failed count. C8: above zero it opens exactly those failures in the log (App.goWithQuery via app:navigate). At zero it is
+     * plain text with a neutral dot: a link to an empty list is a control that does nothing, and a red dot beside it a red that
+     * needs nothing.
+     */
+    failedStat(c, count) {
+        const label = t('campaigns.statFailed', { count: UI.formatNumber(count) });
+        if (count > 0) {
+            return html`
+                <button type="button" class="campaign-stat campaign-stat-link"
+                        data-action="app:navigate" data-target="activity"
+                        data-query="${new URLSearchParams({ campaign: String(c.id), status: 'FAILED' }).toString()}"
+                        title="${t('campaigns.openFailed')}">
+                    <span class="dot bad" aria-hidden="true"></span> ${label}
+                    <span class="sr-only">${t('campaigns.openFailed')}</span>
+                </button>
+            `;
+        }
+        return html`<span class="campaign-stat"><span class="dot neutral" aria-hidden="true"></span> ${label}</span>`;
     },
 
     // ─── Keyword hazard analysis ─────────────────────────────────────────────
@@ -309,8 +400,13 @@ const CampaignsPage = {
      * What will this keyword also match? Runs the same normalisation the
      * webhook runs, then looks for common words that CONTAIN it but are not
      * inflections of it. Returns { risky, examples, reason }.
+     *
+     * `mode` is the campaign's match mode. In `'word'` mode the keyword is anchored to word boundaries, so it cannot fire inside
+     * a longer word and there is nothing to warn about: a warning here would be false (CA-08). Any other value is substring,
+     * the default, which is how the server reads it.
      */
-    keywordRisk(keyword) {
+    keywordRisk(keyword, mode) {
+        if (mode === 'word') return { risky: false, examples: [], reason: null };
         const normalized = UI.normalizeArabic(keyword);
         if (!normalized) return { risky: false, examples: [], reason: null };
 
@@ -334,54 +430,211 @@ const CampaignsPage = {
         return { risky: false, examples: [], reason: null };
     },
 
+    // ─── Collisions with the other campaigns: the server's rule, not a client copy ───
+
     /**
-     * Does this keyword collide with a keyword ALREADY used by another
-     * campaign? `this.campaigns` holds every other campaign (populated in
-     * render()), so this needs no extra fetch — the page already has 100% of
-     * the data needed to catch this.
+     * Which campaign answers a comment is decided by `matchCampaign` on the server: every live campaign that fires, ranked by
+     * "tied to a post", then the length of the whole keyword list, then newest, and the FIRST one answers. A client copy of that
+     * drifted (it called «كورس» against «الكورس» safe, and said both campaigns "could trigger" when only one ever does: CA-07),
+     * so the editor asks the dry run, `POST /api/campaigns/try`, with the draft it is holding: once per keyword, the keyword
+     * itself standing in as the comment (research R-06). The answer is the winner and why.
      *
-     * Matching in production is substring-based (src/utils/arabic.ts): if this
-     * keyword and another campaign's keyword are in a substring relationship —
-     * in EITHER direction, including an exact duplicate — any comment
-     * containing the longer one necessarily contains the shorter one too, so
-     * both campaigns fire on the same comment with no way to know which DM
-     * template the customer actually gets. That is the same hazard the bulk
-     * importer can create at scale: many similar CSV rows, each becoming its
-     * own campaign.
-     *
-     * Excludes the campaign identified by `excludeId` (the one being edited,
-     * if any — a campaign's own keyword must not collide with itself) and,
-     * like the corpus check above, does not flag a plain morphological
-     * inflection of the same word (كورس/كورسات from two DIFFERENT campaigns
-     * is still a real collision, but a campaign's own "كورس" next to another
-     * campaign's own unrelated "بايثون" obviously is not — the exception only
-     * ever suppresses same-root pairs, exactly as it does in keywordRisk()).
-     *
-     * Returns up to 4 { campaign, keyword } hits, mirroring keywordRisk()'s
-     * own cap on COMMON_WORDS examples.
+     * Two answers are worth saying:
+     *   - another campaign answers that keyword's comments, so THIS one never fires on them (`shadowed`);
+     *   - this one answers, and at least one other campaign also matches, so THAT one never fires on them (`first`).
+     * A keyword nobody else matches says nothing. The check is only ever allowed to say "safe" once EVERY keyword has been
+     * answered: while it runs, or when it could not run, the inspector says so instead (constitution III: silence never
+     * reads as success).
      */
-    campaignCollisions(keyword, excludeId) {
-        const normalized = UI.normalizeArabic(keyword);
-        if (!normalized) return [];
+    COLLISION_DEBOUNCE_MS: 450,
+    /** The most keywords one check asks about; the rest are said not to have been checked. */
+    COLLISION_MAX_KEYWORDS: 20,
 
-        const hits = [];
-        for (const c of this.campaigns) {
-            if (excludeId !== undefined && excludeId !== null && String(c.id) === String(excludeId)) continue;
+    _collide: { seq: 0, keywordsKey: '', fullKey: '', state: 'idle', rows: [], failed: 0, unchecked: 0 },
+    _collideDebounced: null,
 
-            for (const other of this.splitKeywords(c.trigger_keyword)) {
-                const nOther = UI.normalizeArabic(other);
-                if (!nOther) continue;
+    /** Forget any answer, and any check still on its way (the editor was opened or closed, or the tenant changed). */
+    resetCollisions() {
+        if (this._collideDebounced) this._collideDebounced.cancel();
+        this._collide = { seq: this._collide.seq + 1, keywordsKey: '', fullKey: '', state: 'idle', rows: [], failed: 0, unchecked: 0 };
+    },
 
-                const exact = nOther === normalized;
-                const otherContainsThis = !exact && nOther.includes(normalized) && !this.isMorphologicalVariant(nOther, normalized);
-                const thisContainsOther = !exact && normalized.includes(nOther) && !this.isMorphologicalVariant(normalized, nOther);
-                if (!exact && !otherContainsThis && !thisContainsOther) continue;
+    /** The keywords and the mode: what the answer is about as far as the inspector's text goes. Whitespace and case in the field do not change it. */
+    keywordsKey(value, mode) {
+        return `${mode === 'word' ? 'word' : 'substring'}|${this.splitKeywords(value).join('|')}`;
+    },
 
-                hits.push({ campaign: c, keyword: other });
-                if (hits.length === 4) return hits;
-            }
+    /** The editor's draft, read off its form: the id it edits (none for a new one), the keywords, the mode and the post it is tied to. */
+    draftOf(form) {
+        const field = (selector) => (form && typeof form.querySelector === 'function' ? form.querySelector(selector) : null);
+        const trigger = field('#campaign-trigger');
+        const mode = field('#campaign-match-mode');
+        const post = field('#campaign-post-id');
+        return {
+            id: form && form.dataset && form.dataset.id ? String(form.dataset.id) : null,
+            trigger_keyword: trigger ? String(trigger.value || '') : '',
+            match_mode: mode && mode.value === 'word' ? 'word' : 'substring',
+            post_id: post ? String(post.value || '').trim() : '',
+        };
+    },
+
+    /**
+     * After any change to the draft: say "checking" now, and ask the server once the typing pauses. Unchanged since the last
+     * check (a repaint, a focus), it does nothing. `now` asks at once (the editor was just opened); `force` asks again though
+     * nothing changed (Retry).
+     */
+    queueCollisionCheck(form, { now = false, force = false } = {}) {
+        const draft = this.draftOf(form);
+        const keywords = this.splitKeywords(draft.trigger_keyword);
+        if (keywords.length === 0) { this.resetCollisions(); return; }
+
+        const fullKey = JSON.stringify([draft.id, this.keywordsKey(draft.trigger_keyword, draft.match_mode), draft.post_id]);
+        if (!force && this._collide.fullKey === fullKey) return;
+
+        const seq = this._collide.seq + 1;
+        this._collide = {
+            seq, keywordsKey: this.keywordsKey(draft.trigger_keyword, draft.match_mode), fullKey,
+            state: 'checking', rows: [], failed: 0, unchecked: 0,
+        };
+        if (this._collideDebounced) this._collideDebounced.cancel();
+        if (now) { this.runCollisionCheck(draft, seq); return; }
+        if (!this._collideDebounced) {
+            this._collideDebounced = Motion.debounce((d, s) => this.runCollisionCheck(d, s), this.COLLISION_DEBOUNCE_MS);
         }
-        return hits;
+        this._collideDebounced(draft, seq);
+    },
+
+    /**
+     * One `POST /campaigns/try` per distinct keyword of the draft, in parallel. The draft is sent as live (`is_active: true`) even
+     * when its switch is off: the question is what happens WHEN it is on, and a paused draft matches nothing, so it would never
+     * be shadowed by anything. A later answer for a newer draft (a higher `seq`) wins; this one is dropped.
+     */
+    async runCollisionCheck(draft, seq) {
+        const seen = new Set();
+        const distinct = [];
+        for (const keyword of this.splitKeywords(draft.trigger_keyword)) {
+            const key = UI.normalizeArabic(keyword);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            distinct.push(keyword);
+        }
+        const asked = distinct.slice(0, this.COLLISION_MAX_KEYWORDS);
+        const postId = draft.post_id || null;
+
+        // `async`, so a call that throws before it returns a promise is a failed check like any other, not an unhandled rejection.
+        const settled = await Promise.allSettled(asked.map(async (keyword) => API.tryCampaign({
+            comment: keyword,
+            postId,
+            draft: {
+                id: draft.id,
+                trigger_keyword: draft.trigger_keyword,
+                match_mode: draft.match_mode,
+                post_id: postId,
+                is_active: true,
+            },
+        })));
+        if (seq !== this._collide.seq) return;
+
+        const rows = [];
+        let failed = 0;
+        settled.forEach((outcome, i) => {
+            if (outcome.status !== 'fulfilled') { failed++; return; }
+            const row = this.collisionRow(asked[i], outcome.value);
+            if (row && !rows.some((r) => r.kind === row.kind && r.keyword === row.keyword && r.otherId === row.otherId)) rows.push(row);
+        });
+        this._collide = {
+            ...this._collide,
+            state: failed > 0 ? 'failed' : 'done',
+            rows, failed, unchecked: distinct.length - asked.length,
+        };
+        // Repaint the verdict only: the keywords field, and whatever the owner is typing in it, are not touched.
+        this.inspect(draft.trigger_keyword, draft.match_mode);
+    },
+
+    /** What one `/campaigns/try` answer says about one keyword: a collision row, or null when nobody else is involved. */
+    collisionRow(keyword, answer) {
+        const winner = answer && answer.winner;
+        if (!winner) return null;
+        if (winner.id !== 'draft') {
+            const keywords = Array.isArray(winner.keywords) ? winner.keywords.filter((k) => typeof k === 'string' && k) : [];
+            return { kind: 'shadowed', keyword, otherId: String(winner.id), other: keywords.join('، ') || String(winner.matched || '') };
+        }
+        // The draft answers. `only_match` means no other campaign fired; any other reason names the tier it beat someone on.
+        if (winner.reason && winner.reason !== 'only_match') return { kind: 'first', keyword, otherId: '', other: '' };
+        return null;
+    },
+
+    /** The bidi isolate around text of an unknown direction (a keyword) inside a sentence of the other direction. */
+    iso(value) {
+        return `⁨${value}⁩`;
+    },
+
+    /**
+     * A collision as a list row: the sentence, and what the owner can do about it. "Use whole-word mode" only where it is not
+     * already the mode; "Edit the other campaign" only where that campaign is one this page knows. The answer after either is
+     * the server's again, so an action that does not clear the collision does not claim to.
+     */
+    renderCollision(row, mode) {
+        const known = row.kind === 'shadowed' && this.campaigns.some((c) => String(c.id) === row.otherId);
+        const actions = [];
+        if (row.kind === 'shadowed' && mode !== 'word') {
+            actions.push(UI.button({
+                variant: 'secondary', size: 'sm', icon: 'target', label: t('campaigns.try.useWord'),
+                action: 'campaigns:useWholeWord',
+            }));
+        }
+        if (known) {
+            actions.push(UI.button({
+                variant: 'secondary', size: 'sm', icon: 'pencil', label: t('campaigns.try.editOther'),
+                action: 'campaigns:editOther', data: { id: row.otherId },
+            }));
+        }
+        return html`
+            <li dir="auto" data-collision="${row.kind}">
+                ${row.kind === 'shadowed'
+                    ? t('campaigns.try.shadowed', { keyword: this.iso(row.keyword), other: this.iso(row.other) })
+                    : t('campaigns.try.first', { keyword: this.iso(row.keyword) })}
+                ${actions.length ? html`<span class="row gap-2 row--wrap mbs-2">${actions}</span>` : ''}
+            </li>
+        `;
+    },
+
+    /** The mode select was set to whole word by the "Use whole-word mode" action: the same as choosing it, then the check runs again. */
+    useWholeWord(el) {
+        const form = el && typeof el.closest === 'function' ? el.closest('form') : null;
+        const select = (form && form.querySelector('#campaign-match-mode')) || document.getElementById('campaign-match-mode');
+        if (!select) return;
+        select.value = 'word';
+        // A script setting `value` fires no `change`: do what that handler does, then leave focus on the control that changed.
+        this.reinspect(select);
+        if (typeof select.focus === 'function') select.focus();
+    },
+
+    /**
+     * Open the other campaign's editor in place of this one. Unsaved edits here would be lost with it, so when there are any
+     * the owner is asked first, over the editor (the same question closing it asks).
+     */
+    editOther(id) {
+        if (!this.campaigns.some((c) => String(c.id) === String(id))) return;
+        if (UI.isModalDirty()) {
+            UI.confirm({
+                stack: true,
+                title: t('ui.discard.title'),
+                body: t('common.discardConfirm'),
+                confirmLabel: t('ui.discard.confirm'),
+                cancelLabel: t('ui.discard.keep'),
+                onConfirm: () => { UI.closeModal(); this.showEditModal(String(id)); },
+            });
+            return;
+        }
+        this.showEditModal(String(id));
+    },
+
+    /** Ask again after a check that could not run. */
+    retryCollisions(el) {
+        const form = el && typeof el.closest === 'function' ? el.closest('form') : document.getElementById('campaign-form');
+        if (form) this.queueCollisionCheck(form, { now: true, force: true });
+        this.inspect(this.draftOf(form).trigger_keyword, this.draftOf(form).match_mode);
     },
 
     /**
@@ -393,39 +646,43 @@ const CampaignsPage = {
      * because the container and the static explanation must NOT be rebuilt —
      * see renderMatchInspector() and inspect() below.
      */
-    matchVerdict(value, excludeId, mode) {
+    matchVerdict(value, mode) {
         // Whole-word mode anchors the keyword to token boundaries, so the
         // "fires inside a longer word" hazard does not apply; duplicates and
-        // cross-campaign collisions still do.
-        const word = mode === 'word';
+        // collisions with another campaign still do.
         const keywords = this.splitKeywords(value);
         const seen = new Set();
         const duplicates = [];
         const risks = [];
-        const collisions = [];
 
         keywords.forEach((k) => {
             const n = UI.normalizeArabic(k);
             if (seen.has(n)) duplicates.push(k); else seen.add(n);
-            const risk = word ? { risky: false } : this.keywordRisk(k);
+            const risk = this.keywordRisk(k, mode);
             if (risk.risky) risks.push({ keyword: k, ...risk });
-            this.campaignCollisions(k, excludeId).forEach((hit) => {
-                collisions.push({ keyword: k, other: hit.keyword });
-            });
         });
 
+        // The other campaigns' answer, from the server (see "Collisions" above), and only when it is about THESE keywords in
+        // THIS mode: an answer for what was typed a moment ago is not an answer. Until it is in, the inspector says it is
+        // checking; if it could not run, it says that. Neither is "safe".
+        const answer = this._collide;
+        const current = keywords.length > 0 && answer.keywordsKey === this.keywordsKey(value, mode);
+        const checking = keywords.length > 0 && (!current || answer.state === 'checking' || answer.state === 'idle');
+        const failed = current && answer.state === 'failed';
+        const collisions = current ? answer.rows : [];
+        const unchecked = current ? answer.unchecked : 0;
+
         const hasProblem = risks.length > 0 || duplicates.length > 0 || collisions.length > 0;
+        const safe = keywords.length > 0 && !hasProblem && current && answer.state === 'done' && unchecked === 0;
 
         return {
             hasProblem,
-            state: keywords.length === 0 ? '' : (hasProblem ? 'is-risky' : 'is-safe'),
+            state: keywords.length === 0 ? '' : (hasProblem ? 'is-risky' : (safe ? 'is-safe' : '')),
             verdict: html`
-                ${!hasProblem && keywords.length > 0 ? html`<p class="text-success">${t('campaigns.match.safe')}</p>` : ''}
+                ${safe ? html`<p class="text-success">${t('campaigns.match.safe')}</p>` : ''}
                 ${hasProblem ? html`
                     <ul class="match-risk-list">
-                        ${collisions.map((c) => html`
-                            <li dir="auto">${t('campaigns.match.collision', { keyword: c.keyword, other: c.other })}</li>
-                        `)}
+                        ${collisions.map((row) => this.renderCollision(row, mode))}
                         ${risks.map((r) => html`
                             <li dir="auto">
                                 ${r.reason === 'examples'
@@ -435,8 +692,22 @@ const CampaignsPage = {
                         `)}
                         ${duplicates.map((d) => html`<li dir="auto">${t('campaigns.match.duplicate', { keyword: d })}</li>`)}
                     </ul>
-                    <p class="mbs-4">${risks.length > 0 ? html`${t('campaigns.match.advice')} ${t('campaigns.match.adviceWord')}` : t('campaigns.match.advice')}</p>
+                    ${risks.length > 0 ? html`<p class="mbs-4">${t('campaigns.match.advice')} ${t('campaigns.match.adviceWord')}</p>` : ''}
                 ` : ''}
+                <!-- Said, not left out: with no word about the other campaigns this would read as "none clash". While it runs the
+                     line is hidden from assistive technology (the live region would speak it after every pause in typing); the
+                     answer, when it lands, is spoken. -->
+                ${checking ? html`<p class="form-hint" aria-hidden="true">${t('campaigns.try.checking')}</p>` : ''}
+                ${failed ? html`
+                    <p class="text-warning mbs-2" dir="auto">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('campaigns.try.failed')}
+                    </p>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'),
+                        action: 'campaigns:retryCollisions',
+                    })}
+                ` : ''}
+                ${unchecked > 0 ? html`<p class="form-hint" dir="auto">${t('campaigns.try.partial', { count: UI.formatNumber(this.COLLISION_MAX_KEYWORDS) })}</p>` : ''}
             `,
         };
     },
@@ -460,8 +731,8 @@ const CampaignsPage = {
         return mode === 'word' ? t('campaigns.match.wordMode') : t('campaigns.match.explain');
     },
 
-    renderMatchInspector(value, excludeId, mode) {
-        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId, mode);
+    renderMatchInspector(value, mode) {
+        const { state, hasProblem, verdict } = this.matchVerdict(value, mode);
         return html`
             <div class="match-inspector ${html.raw(state)}" id="match-inspector">
                 <h4 id="match-inspector-heading">
@@ -490,12 +761,12 @@ const CampaignsPage = {
      * between two keystrokes. The verdict still appears while the operator is
      * looking at the field, which was the whole point of it.
      */
-    inspect(value, excludeId, mode) {
+    inspect(value, mode) {
         const host = document.getElementById('match-inspector');
         const verdictHost = document.getElementById('match-inspector-verdict');
         if (!host || !verdictHost) return;
 
-        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId, mode);
+        const { state, hasProblem, verdict } = this.matchVerdict(value, mode);
         const explain = document.getElementById('match-inspector-explain');
         if (explain) explain.textContent = this.matchExplain(mode);
 
@@ -520,21 +791,25 @@ const CampaignsPage = {
 
     inspectKeywords(input) {
         if (!this._inspectDebounced) {
-            this._inspectDebounced = Motion.debounce((value, excludeId, mode) => this.inspect(value, excludeId, mode), 140);
+            this._inspectDebounced = Motion.debounce((value, mode) => this.inspect(value, mode), 140);
         }
-        // `input.form` is the standard DOM link from a field to its owning
-        // <form>. The create form carries no data-id (nothing to exclude);
-        // the edit form's data-id (set in showEditModal()) is how "the
-        // campaign being edited" is told apart from every other campaign.
-        const excludeId = input.form ? input.form.dataset.id : undefined;
+        // `input.form` is the standard DOM link from a field to its owning <form>. The edit form's data-id (set in
+        // showEditModal()) is how "the campaign being edited" is told apart from the other campaigns: the draft sent to the
+        // server for the collision check carries it, so the stored copy of this campaign is replaced and never collides with itself.
         const modeSelect = input.form ? input.form.querySelector('#campaign-match-mode') : null;
-        this._inspectDebounced(input.value, excludeId, modeSelect ? modeSelect.value : 'substring');
+        // The collision check first: it puts "checking" in place at once, so the repaint below never shows an old answer's "safe".
+        this.queueCollisionCheck(input.form);
+        this._inspectDebounced(input.value, modeSelect ? modeSelect.value : 'substring');
     },
 
-    /** The mode changed: re-inspect the keywords under the new rule. */
-    matchModeChange(select) {
-        const trigger = select && select.form ? select.form.querySelector('#campaign-trigger') : null;
+    /** The mode (or the post the campaign is tied to) changed: re-inspect the keywords under the new rule. */
+    reinspect(el) {
+        const trigger = el && el.form ? el.form.querySelector('#campaign-trigger') : null;
         if (trigger) this.inspectKeywords(trigger);
+    },
+
+    matchModeChange(select) {
+        this.reinspect(select);
     },
 
     // ─── Modals ──────────────────────────────────────────────────────────────
@@ -549,7 +824,7 @@ const CampaignsPage = {
         `;
     },
 
-    keywordField(value, excludeId, mode) {
+    keywordField(value, mode) {
         const word = mode === 'word';
         return html`
             <div class="form-group">
@@ -573,7 +848,7 @@ const CampaignsPage = {
                     <option value="word" ${word ? html.raw('selected') : ''}>${t('campaigns.matchMode.word')}</option>
                 </select>
                 <p class="form-hint" id="campaign-match-mode-hint">${t('campaigns.matchMode.hint')}</p>
-                ${this.renderMatchInspector(value || '', excludeId, mode)}
+                ${this.renderMatchInspector(value || '', mode)}
             </div>
         `;
     },
@@ -585,8 +860,11 @@ const CampaignsPage = {
                     ${t('campaigns.postId')} <span class="label-optional">${t('common.optional')}</span>
                 </label>
                 <div class="field-row">
+                    <!-- data-input: the post a campaign is tied to is part of the draft the collision check sends (a campaign tied to a
+                         post outranks one that answers every post), so changing it asks again. -->
                     <input class="field" id="campaign-post-id" name="post_id" value="${value}"
-                           inputmode="numeric" dir="ltr" placeholder="17841459652725922">
+                           inputmode="numeric" dir="ltr" placeholder="17841459652725922"
+                           data-input="campaigns:draftChange">
                     <!-- This button toggles the panel below it, which is a
                          disclosure — and it said nothing about that. A screen
                          reader announced "Pick a post, button", the operator
@@ -608,6 +886,8 @@ const CampaignsPage = {
     },
 
     showCreateModal() {
+        // A new editor starts with no answer about the other campaigns: the last one was about another draft.
+        this.resetCollisions();
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.createTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleCreate">
@@ -645,11 +925,12 @@ const CampaignsPage = {
         const c = this.campaigns.find((x) => x.id === id);
         if (!c) return;
 
+        this.resetCollisions();
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.editTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleEdit" data-id="${c.id}">
                 <div id="campaign-form-error"></div>
-                ${this.keywordField(c.trigger_keyword, c.id, c.match_mode)}
+                ${this.keywordField(c.trigger_keyword, this.modeOf(c))}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
                     <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
@@ -679,6 +960,8 @@ const CampaignsPage = {
                 </div>
             </form>
         `);
+        // The campaign being edited already has keywords: ask about them now, not only after the first keystroke.
+        this.queueCollisionCheck(document.getElementById('campaign-form'), { now: true });
     },
 
     /**
@@ -928,6 +1211,8 @@ const CampaignsPage = {
     selectPickedPost(id) {
         const input = document.getElementById('campaign-post-id');
         if (input) input.value = id;
+        // A script setting `value` fires no `input` event: the draft changed, so ask again.
+        if (input) this.reinspect(input);
         const picker = document.getElementById('post-picker-container');
         const btn = document.getElementById('campaign-post-picker-btn');
         this.togglePicker(picker, btn, false);
@@ -1270,6 +1555,10 @@ UI.registerActions('campaigns', {
     handleEdit: (el, e) => CampaignsPage.handleEdit(el, e),
     inspectKeywords: (el) => CampaignsPage.inspectKeywords(el),
     matchModeChange: (el) => CampaignsPage.matchModeChange(el),
+    draftChange: (el) => CampaignsPage.reinspect(el),
+    useWholeWord: (el) => CampaignsPage.useWholeWord(el),
+    editOther: (el) => CampaignsPage.editOther(el.dataset.id),
+    retryCollisions: (el) => CampaignsPage.retryCollisions(el),
     openPostPicker: (el) => CampaignsPage.openPostPicker(el),
     selectPickedPost: (el) => CampaignsPage.selectPickedPost(el.dataset.id),
     triggerCSVSelect: () => CampaignsPage.triggerCSVSelect(),

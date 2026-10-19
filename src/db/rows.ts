@@ -376,7 +376,8 @@ export interface ScheduledPostRow {
     meta_options: MetaPostOptions | null;
     /**
      * v45. When the owner archived the post, or NULL. An archived post is excluded from "Needs attention" and the attention summary
-     * (`src/services/attention.ts`); the publish sweep skipping it is a later change. Not a delete: the row and its media stay.
+     * (`src/services/attention.ts`), and `publishDuePosts` skips it (the reconcile sweeps still run on a row already in flight). Not a delete:
+     * the row and its media stay.
      */
     archived_at: Timestamptz | null;
     created_at: Timestamptz;

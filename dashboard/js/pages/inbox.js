@@ -60,6 +60,18 @@
  *     the bot's reply time, over 7, 30 or 90 days. It sits above the list, closed, and asks the server only
  *     when opened or when the period changes: it is not part of the poll.
  *
+ * ─── Handled, and who is really answering (UX overhaul US1: audit IN-01, IN-02) ──────────
+ *   - "Mark handled" ends a thread's turn in the owner's To do (`handled_at`, v45): a thread answered from the Instagram app is
+ *     recorded nowhere else, so it stayed "Needs you" and in every count for ever. It is set from the chat header, from a button on
+ *     the row, and from the composer once Meta's 24 h window has closed. It is undoable (a toast with Undo, and "Reopen" in the
+ *     header), and a new message from the customer clears it on the server, so it never hides someone who asks again. The write is
+ *     optimistic and held in `pendingHandled` until the server answers, like the AI switch's `pendingBotState`, so a poll cannot
+ *     bring the thread back for a tick.
+ *   - Every badge about the assistant is the EFFECTIVE state (`effectiveAi`): the assistant's global switch, then the thread's own,
+ *     then the sales mode. It used to read the thread's switch alone, so with the assistant off every thread still wore a green
+ *     "AI active". The list answer carries `assistant` (what it is set to) and each item's `effective_ai`; a strip above the list says
+ *     when nobody is being answered, or when sales is only in test.
+ *
  * ─── Mobile ─────────────────────────────────────────────────────────────────
  * This is the screen the creator opens on a phone, and the one that used to be
  * least usable there. The layout is a single grid cell below 900px with the
@@ -76,6 +88,12 @@ const InboxPage = {
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
     FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused']),
+    /** What `effective_ai` says (src/services/inboxAssistant.ts: a test fails when these differ). */
+    EFFECTIVE_STATES: Object.freeze(['on', 'off_global', 'paused_thread', 'sales_test', 'sales_live']),
+    /** The effective state → the state of the `assistant` status pill (components.js). No prototype, so a stranger finds nothing. */
+    ASSISTANT_PILL: Object.freeze(Object.assign(Object.create(null), {
+        on: 'on', off_global: 'off', paused_thread: 'paused_here', sales_test: 'sales_test', sales_live: 'sales_live',
+    })),
     /** A conversation id as the alert's link carries it (`#/inbox?c=<id>`); anything else in the hash is data. */
     ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
@@ -172,6 +190,19 @@ const InboxPage = {
     /** id → the AI state the operator chose, until the server confirms it. */
     pendingBotState: new Map(),
 
+    /** id → the `handled_at` the owner chose (an ISO stamp, or null for a reopen), until the server confirms it. */
+    pendingHandled: new Map(),
+
+    /**
+     * What the assistant is set to, from the list's answer (`{ configured, is_active, sales_mode, sales_test_senders }`), or null while
+     * it is unknown or could not be read. Unknown is never reported as off: a thread then says only what its own switch says.
+     */
+    assistant: null,
+    /** What the header's handled slot, the composer's window offer and the strip last wrote, so an idle poll writes nothing. */
+    _handledMarkup: null,
+    _windowOfferMarkup: null,
+    _stripMarkup: null,
+
     /** Threads whose profile this visit has already asked the server about: once each, whatever the answer. */
     _profileAsked: new Set(),
     /** The visit's batch of lookups for the newest threads has run. */
@@ -215,6 +246,9 @@ const InboxPage = {
         return html`
             <div class="inbox-layout" data-pane="threads">
                 <section class="inbox-sidebar surface" aria-label="${t('inbox.threads')}">
+                    <!-- When nobody is being answered automatically, or sales is only in test: said once, here, instead of
+                         being left for a row's badge to imply. Hidden until the first answer says there is something to say. -->
+                    <div id="assistant-strip" class="assistant-strip hidden" role="status" aria-label="${t('inbox.strip.label')}"></div>
                     <div class="inbox-search">
                         <label class="sr-only" for="inbox-search">${t('inbox.searchLabel')}</label>
                         <div class="input-affix">
@@ -320,6 +354,11 @@ const InboxPage = {
         this.messagesPainted = false;
         this._lastDayKey = null;
         this.pendingBotState = new Map();
+        this.pendingHandled = new Map();
+        this.assistant = null;
+        this._handledMarkup = null;
+        this._windowOfferMarkup = null;
+        this._stripMarkup = null;
         this._profileAsked = new Set();
         this._backfilled = false;
         this._avatarMarkup = null;
@@ -415,7 +454,7 @@ const InboxPage = {
 
     /** Did this tick change anything the list shows? Counts the idle run the backoff reads. */
     noteListChange(rows) {
-        const sig = [this.total, ...rows.map((r) => [r.id, r.last_message_at, r.is_bot_active, r.last_message_direction].join('|'))].join('\n');
+        const sig = [this.total, ...rows.map((r) => [r.id, r.last_message_at, r.is_bot_active, r.last_message_direction, r.handled_at || '', r.effective_ai || ''].join('|'))].join('\n');
         if (sig === this._listSignature) this._unchangedTicks++;
         else this._unchangedTicks = 0;
         this._listSignature = sig;
@@ -554,6 +593,60 @@ const InboxPage = {
         return ms <= 0 ? t('inbox.window.closed') : t('inbox.window.left', { time: this.windowTime(ms) });
     },
 
+    // ─── Handled, and who is really answering ────────────────────────────────
+    /** Marking handled is an operator's act (`POST /conversations/:id/handled` is `canOperate`); a viewer sees the state and no buttons. */
+    canMark() {
+        return typeof App === 'undefined' || typeof App.canOperate !== 'function' || App.canOperate();
+    },
+
+    /** Waiting for a reply, and not marked handled since the customer last wrote: what "Needs reply" counts and filters. */
+    needsReply(thread) {
+        return Attention.isWaiting(thread) && !Attention.isHandled(thread);
+    },
+
+    /** Handed to a person, not answered, and not marked handled since the customer last wrote: what "Needs you" counts and filters. */
+    needsYou(thread) {
+        return Attention.isHandoff(thread) && !Attention.isHandled(thread);
+    },
+
+    /**
+     * Who would answer this thread's next message: one of `EFFECTIVE_STATES`.
+     *
+     * Worked out from the thread as it is NOW and what the assistant is set to (`Attention.effectiveAi`, the same decision the server makes
+     * for `effective_ai`), so flipping the thread's own switch moves it at once instead of a poll later. Until a list answer has said what
+     * the assistant is set to (or when it could not), the item's own `effective_ai` is what there is, and failing that only the thread's own
+     * switch: an unknown setting is never reported as off.
+     */
+    effectiveAi(thread) {
+        if (this.assistant) return Attention.effectiveAi(thread, this.assistant);
+        if (thread && this.EFFECTIVE_STATES.includes(thread.effective_ai)) return thread.effective_ai;
+        return Attention.effectiveAi(thread, null);
+    },
+
+    /**
+     * The state as a pill: a glyph, a word and a tone, never colour alone (`UI.statusPill`). "On" and "Off" alone say nothing on a row, so
+     * those two name what they are about. The pill's own `title` says what it means for the person and what to do.
+     */
+    assistantPill(thread) {
+        const state = this.effectiveAi(thread);
+        const label = state === 'on' ? t('inbox.assistant.on') : state === 'off_global' ? t('inbox.assistant.off_global') : '';
+        return UI.statusPill('assistant', this.ASSISTANT_PILL[state], label ? { label } : undefined);
+    },
+
+    /** The state in words, beside the header's switch. A boolean (the thread's own switch, as this once took) reads as `on` / `paused_thread`. */
+    aiStateText(state) {
+        const key = state === true ? 'on' : state === false ? 'paused_thread' : state;
+        if (key === 'off_global') return t('inbox.aiState.off_global');
+        if (key === 'sales_test') return t('inbox.aiState.sales_test');
+        if (key === 'sales_live') return t('inbox.aiState.sales_live');
+        return key === 'paused_thread' ? t('inbox.aiOff') : t('inbox.aiOn');
+    },
+
+    /** "Handled" as a neutral badge: the reason a row has lost its Needs-reply and countdown badges. */
+    handledBadge() {
+        return html`<span class="badge badge-neutral" data-handled><i data-lucide="check" aria-hidden="true"></i>${t('inbox.handled.state')}</span>`;
+    },
+
     /** The conversation id in `#/inbox?c=<id>`, or '' (anything that is not an id is ignored). */
     threadFromHash() {
         const raw = typeof App !== 'undefined' && typeof App.hashParam === 'function' ? String(App.hashParam('c') || '') : '';
@@ -569,8 +662,8 @@ const InboxPage = {
     },
 
     matchesFilter(thread) {
-        if (this.filter === 'waiting') return Attention.isWaiting(thread);
-        if (this.filter === 'needs_you') return Attention.isHandoff(thread);
+        if (this.filter === 'waiting') return this.needsReply(thread);
+        if (this.filter === 'needs_you') return this.needsYou(thread);
         if (this.filter === 'hot') return Attention.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
         return true;
@@ -655,8 +748,13 @@ const InboxPage = {
         return this.loadThreads(true, { loud: true, notice: true });
     },
 
-    /** The AI toggle the operator has just flipped outranks a poll that may have left before the write committed. */
+    /** The AI toggle, and the handled stamp, the operator has just chosen outrank a poll that may have left before the write committed. */
     applyPending(rows) {
+        if (this.pendingHandled.size > 0) {
+            rows.forEach((row) => {
+                if (this.pendingHandled.has(row.id)) row.handled_at = this.pendingHandled.get(row.id);
+            });
+        }
         if (this.pendingBotState.size > 0) {
             rows.forEach((row) => {
                 if (this.pendingBotState.has(row.id)) {
@@ -684,6 +782,7 @@ const InboxPage = {
             const total = Number(result && result.pagination && result.pagination.total);
             this._pollFailures = 0;
             this.setStrip(null);
+            this.adoptAssistant(result);
             this.threads = rows;
             this.total = Number.isFinite(total) ? total : rows.length;
             this.noteListChange(rows);
@@ -819,22 +918,34 @@ const InboxPage = {
             </span>
             <span class="thread-preview" dir="auto">${this.threadPreview(x)}</span>
             <span class="thread-badges">
-                ${x.is_bot_active
-                    ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
-                    : html`<span class="badge badge-neutral">${t('inbox.aiPaused')}</span>`}
+                ${this.assistantPill(x)}
                 ${this.stageChip(x.stage)}
                 ${Attention.isHot(x) ? this.hotBadge() : ''}
-                ${Attention.isWaiting(x)
+                ${this.needsReply(x)
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}
-                ${Attention.isHandoff(x)
+                ${this.needsYou(x)
                     ? html`<span class="badge badge-warning"><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.needsYou')}</span>`
                     : ''}
+                ${Attention.isHandled(x) ? this.handledBadge() : ''}
                 ${this.windowText(x)
                     ? html`<span class="badge badge-neutral"><i data-lucide="clock" aria-hidden="true"></i>${this.windowText(x)}</span>`
                     : ''}
             </span>
         `;
+    },
+
+    /**
+     * The row's own "Mark handled": a check button beside the row for a thread that needs a person (`Attention.needsHuman`), so the
+     * owner can clear a thread he answered from the Instagram app without opening it. A sibling of the row's button and never inside
+     * it (a button in a button is not a control a keyboard or a screen reader can use). '' for any other thread, and for a viewer.
+     */
+    rowActionMarkup(x) {
+        if (!this.canMark() || !Attention.needsHuman(x)) return '';
+        const name = `\u2068${this.threadTitle(x)}\u2069`;
+        return html`<button type="button" class="icon-button thread-row-action" data-action="inbox:markHandled" data-id="${x.id}"
+                            data-focus-key="handled-row-${x.id}" aria-label="${t('inbox.handled.markFor', { name })}"
+                            title="${t('inbox.handled.mark')}"><i data-lucide="check" aria-hidden="true"></i></button>`;
     },
 
     /**
@@ -845,7 +956,7 @@ const InboxPage = {
     renderCount() {
         const host = document.getElementById('inbox-count');
         if (!host) return;
-        const waiting = this.threads.filter((x) => Attention.isWaiting(x)).length;
+        const waiting = this.threads.filter((x) => this.needsReply(x)).length;
         const shown = this.threads.length;
         const truncated = !this.searchTerm.trim() && Number(this.total) > shown;
         const markup = esc(html`<strong>${waiting === 0 ? t('inbox.needReply_zero') : t('inbox.needReply', { count: waiting })}</strong>${truncated ? html` · <span>${t('inbox.showing', { shown: UI.formatNumber(shown), total: UI.formatNumber(this.total) })}</span>` : ''}`);
@@ -927,6 +1038,11 @@ const InboxPage = {
                 this.threadTime(x.last_message_at),
                 this.threadPreview(x),
                 x.is_bot_active ? '1' : '0',
+                // Who would actually answer (the global switch and the sales mode count, not only the thread's own), and whether the
+                // owner has marked the thread handled: both change what the row says without touching the thread's own columns.
+                this.effectiveAi(x),
+                Attention.isHandled(x) ? '1' : '0',
+                Attention.needsHuman(x) ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
                 Attention.isHandoff(x) ? '1' : '0',
@@ -942,6 +1058,10 @@ const InboxPage = {
                 btn.type = 'button';
                 btn.className = 'thread-item';
                 item.appendChild(btn);
+                // The row's own actions sit beside its button, not in it.
+                const actions = document.createElement('span');
+                actions.className = 'thread-row-actions';
+                item.appendChild(actions);
                 return item;
             },
             update: (el, x) => {
@@ -956,7 +1076,11 @@ const InboxPage = {
                 else btn.removeAttribute('aria-current');
                 btn.dataset.action = 'inbox:selectThread';
                 btn.dataset.id = x.id;
+                // A stable key, so focus can come back to the row when the button beside it has done its work and gone.
+                btn.dataset.focusKey = `thread-${x.id}`;
                 btn.innerHTML = esc(this.threadRow(x));
+                const actions = typeof el.querySelector === 'function' ? el.querySelector('.thread-row-actions') : null;
+                if (actions) actions.innerHTML = esc(this.rowActionMarkup(x));
             },
         });
     },
@@ -993,6 +1117,7 @@ const InboxPage = {
             const result = await API.getConversations({ limit: this.LIMIT, search: term });
             if (seq !== this._searchSeq || epoch !== this._epoch || term !== this.searchTerm.trim()) return;
             const rows = this.applyPending((result && Array.isArray(result.data)) ? result.data : []);
+            this.adoptAssistant(result);
             this.searchMatches = { term: term.toLowerCase(), rows };
             this.renderThreads();
         } catch (err) {
@@ -1135,11 +1260,6 @@ const InboxPage = {
         if (active && typeof active.focus === 'function') active.focus();
     },
 
-    /** "AI replies: on" beside the switch — the state in words, not only a knob position. */
-    aiStateText(on) {
-        return on ? t('inbox.aiOn') : t('inbox.aiOff');
-    },
-
     /**
      * The line under the composer. The consequence of a manual reply used to
      * live only in the placeholder, which vanishes on the first keystroke —
@@ -1147,6 +1267,9 @@ const InboxPage = {
      * that), the line offers the way back: "Hand back to AI".
      */
     composerHintMarkup(thread) {
+        const state = this.effectiveAi(thread);
+        // Off for everyone: there is nothing to pause or hand back, so neither is offered. The person writing is the only one answering.
+        if (state === 'off_global') return html`<span>${t('inbox.composerHintOffGlobal')}</span>`;
         const on = !!thread && thread.is_bot_active !== false;
         if (on) return html`<span>${t('inbox.composerHint')}</span>`;
         return html`
@@ -1161,17 +1284,21 @@ const InboxPage = {
     /** Keeps the visible state and the hint in step with the switch; writes only on a change. */
     paintAiState(thread) {
         if (!thread || this.chatShellThreadId !== thread.id) return;
-        const on = thread.is_bot_active !== false;
+        // The EFFECTIVE state: the assistant's global switch and the sales mode count, not only this thread's switch.
+        const effective = this.effectiveAi(thread);
+        const answering = effective !== 'off_global' && effective !== 'paused_thread';
         const state = document.getElementById('ai-state');
         if (state) {
-            const text = this.aiStateText(on);
+            const text = this.aiStateText(effective);
             if (state.textContent !== text) state.textContent = text;
-            state.classList.toggle('is-on', on);
+            state.classList.toggle('is-on', answering);
         }
         const hint = document.getElementById('composer-hint');
-        if (hint && hint.dataset && hint.dataset.state !== (on ? 'on' : 'off')) {
+        // Keyed on the thread's own switch AND the effective state: the same effective state can need a different hint.
+        const hintKey = `${effective}|${thread.is_bot_active !== false ? 'on' : 'off'}`;
+        if (hint && hint.dataset && hint.dataset.state !== hintKey) {
             hint.innerHTML = esc(this.composerHintMarkup(thread));
-            hint.dataset.state = on ? 'on' : 'off';
+            hint.dataset.state = hintKey;
             UI.icons(hint);
         }
     },
@@ -1187,12 +1314,19 @@ const InboxPage = {
         if (!chatPane || !thread) return;
 
         const title = this.threadTitle(thread);
+        // `on` is this thread's own switch (the toggle); `effective` is who would actually answer (the words beside it).
         const on = thread.is_bot_active !== false;
+        const effective = this.effectiveAi(thread);
+        const answering = effective !== 'off_global' && effective !== 'paused_thread';
         // Written once here and remembered, so the poll's repaint compares against what is on screen.
         const avatar = this.avatarMarkup(thread);
         const meta = this.metaMarkup(thread);
+        const handled = this.handledSlotMarkup(thread);
+        const windowOffer = this.windowOfferMarkup(thread);
         this._avatarMarkup = esc(avatar);
         this._metaMarkup = esc(meta);
+        this._handledMarkup = esc(handled);
+        this._windowOfferMarkup = esc(windowOffer);
 
         chatPane.innerHTML = esc(html`
             <header class="chat-header">
@@ -1214,9 +1348,11 @@ const InboxPage = {
                     <span class="chat-sub"><span data-chat-platform data-platform="${thread.platform || ''}">${UI.platformTag(thread.platform)}</span>${this.handleSlot(thread)}${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
                 </div>
                 <div class="chat-header-actions">
+                    <!-- "Mark handled" (or "Reopen"), for a thread that needs a person: painted by paintHandled, which keeps it in step. -->
+                    <span class="chat-handled-slot" id="chat-handled-slot">${handled}</span>
                     <!-- The switch already announces its state; this is the same
                          fact for the eye, so it is hidden from the reader. -->
-                    <span class="ai-state${on ? html.raw(' is-on') : ''}" id="ai-state" aria-hidden="true">${this.aiStateText(on)}</span>
+                    <span class="ai-state${answering ? html.raw(' is-on') : ''}" id="ai-state" aria-hidden="true">${this.aiStateText(effective)}</span>
                     <label class="switch" for="bot-toggle-input">
                         <span class="sr-only">${t('inbox.aiToggleLabel')}</span>
                         <input type="checkbox" id="bot-toggle-input"
@@ -1253,6 +1389,9 @@ const InboxPage = {
                  aria-relevant="additions" aria-label="${t('inbox.messages')}"></div>
 
             <div class="chat-composer">
+                <!-- Once Meta's 24 h window has closed a reply from here cannot reach the person: the answer is in the Instagram app,
+                     and this is where the owner says he has given it. Painted by paintWindowOffer. -->
+                <div class="composer-window" id="composer-window">${windowOffer}</div>
                 <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}">
                     <label class="sr-only" for="chat-input-text">${t('inbox.replyLabel')}</label>
                     <textarea id="chat-input-text" dir="auto" placeholder="${t('inbox.replyPlaceholder')}"
@@ -1262,7 +1401,7 @@ const InboxPage = {
                         ariaLabel: t('inbox.sendLabel'),
                     })}
                 </form>
-                <p class="composer-hint" id="composer-hint" data-state="${on ? 'on' : 'off'}">${this.composerHintMarkup(thread)}</p>
+                <p class="composer-hint" id="composer-hint" data-state="${`${effective}|${on ? 'on' : 'off'}`}">${this.composerHintMarkup(thread)}</p>
             </div>
         `);
 
@@ -1340,7 +1479,9 @@ const InboxPage = {
         }
         if (Attention.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
-        if (Attention.isHandoff(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
+        if (this.needsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
+        // Marked handled by the owner, and the customer has not written since: why the two chips above are gone.
+        if (Attention.isHandled(thread)) chips.push(this.metaChip(t('inbox.handled.state'), { icon: 'check' }));
         const countdown = this.windowText(thread);
         if (countdown) {
             const closed = Attention.windowLeftMs(thread) === 0;
@@ -1448,6 +1589,112 @@ const InboxPage = {
         const toggle = document.getElementById('bot-toggle-input');
         if (toggle && document.activeElement !== toggle) toggle.checked = !!thread.is_bot_active;
         this.paintAiState(thread);
+        this.paintHandled(thread);
+        this.paintWindowOffer(thread);
+    },
+
+    /**
+     * The header's "Mark handled" for a thread that needs a person, "Reopen" for one the owner has marked, nothing for the rest (and for
+     * a viewer). One button with one id, so focus can be put back on it when it changes into the other.
+     */
+    handledSlotMarkup(thread) {
+        if (!thread || !this.canMark()) return '';
+        if (Attention.isHandled(thread)) {
+            return UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('inbox.handled.reopen'), action: 'inbox:unmarkHandled', id: 'chat-mark-handled', data: { id: thread.id } });
+        }
+        if (Attention.needsHuman(thread)) {
+            return UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label: t('inbox.handled.mark'), action: 'inbox:markHandled', id: 'chat-mark-handled', data: { id: thread.id } });
+        }
+        return '';
+    },
+
+    /**
+     * What the composer offers once the 24 h window has closed on a thread that needs a person: the way to say "I answered it in the
+     * Instagram app". Only then: with the window open the owner can simply reply here, and a thread nobody has to answer needs nothing.
+     */
+    windowOfferMarkup(thread) {
+        if (!thread || !this.canMark() || !Attention.needsHuman(thread) || Attention.windowLeftMs(thread) !== 0) return '';
+        // The answer is in the app the person wrote from: Instagram, or the Page inbox for a Messenger thread.
+        const facebook = thread.platform === 'facebook';
+        const text = facebook ? t('inbox.window.offerFacebook') : t('inbox.window.offer');
+        const label = facebook ? t('inbox.window.offerActionFacebook') : t('inbox.window.offerAction');
+        return html`<p class="composer-window-text">${text}</p>${UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label, action: 'inbox:markHandled', id: 'composer-mark-handled', data: { id: thread.id } })}`;
+    },
+
+    paintHandled(thread) {
+        const slot = document.getElementById('chat-handled-slot');
+        if (!slot || !thread || this.chatShellThreadId !== thread.id) return;
+        const markup = esc(this.handledSlotMarkup(thread));
+        if (markup === this._handledMarkup) return;
+        const focus = UI.captureFocus(slot);
+        this._handledMarkup = markup;
+        slot.innerHTML = markup;
+        UI.icons(slot);
+        UI.restoreFocus(focus);
+    },
+
+    paintWindowOffer(thread) {
+        const host = document.getElementById('composer-window');
+        if (!host || !thread || this.chatShellThreadId !== thread.id) return;
+        const markup = esc(this.windowOfferMarkup(thread));
+        if (markup === this._windowOfferMarkup) return;
+        const focus = UI.captureFocus(host);
+        this._windowOfferMarkup = markup;
+        host.innerHTML = markup;
+        UI.icons(host);
+        UI.restoreFocus(focus, 'chat-mark-handled');
+    },
+
+    // ─── The strip above the list ────────────────────────────────────────────
+    /** Keep what the list's answer says the assistant is set to. An answer without it (an older server, a read that failed) leaves it unknown: null. */
+    adoptAssistant(result) {
+        const a = result && typeof result === 'object' ? result.assistant : null;
+        this.assistant = a && typeof a === 'object' && typeof a.is_active === 'boolean' ? a : null;
+        this.paintAssistantStrip();
+    },
+
+    /**
+     * What the strip says, or null when there is nothing to say: the assistant was never set up, it is switched off, or sales is only in
+     * test. "Not set up" and "off" are different sentences (nobody switched it off), and with the assistant off the sales mode is moot.
+     */
+    stripKind() {
+        const a = this.assistant;
+        if (!a) return null;
+        if (a.configured === false) return 'notSetUp';
+        if (a.is_active === false) return 'off';
+        if (a.sales_mode === 'test') return Array.isArray(a.sales_test_senders) && a.sales_test_senders.length > 0 ? 'salesTest' : 'salesTestEmpty';
+        return null;
+    },
+
+    stripMarkup() {
+        const kind = this.stripKind();
+        if (!kind) return '';
+        const href = typeof App !== 'undefined' && typeof App.route === 'function' ? App.route('ai_settings') : '#/ai_settings';
+        const label = kind === 'notSetUp' ? t('inbox.strip.notSetUpAction') : kind === 'off' ? t('inbox.strip.offAction') : t('inbox.strip.settingsAction');
+        // Only someone who can change it is offered the way there (the settings routes are `canOperate`).
+        const action = this.canMark() ? html`<a class="btn btn-sm btn-secondary" href="${href}">${label}</a>` : '';
+        const glyph = kind === 'salesTest' || kind === 'salesTestEmpty' ? '◔' : '○';
+        return html`<span class="assistant-strip-glyph" aria-hidden="true">${glyph}</span><span class="assistant-strip-text">${t(`inbox.strip.${kind}`)}</span>${action}`;
+    },
+
+    /** Poll-safe: written only when what it says changes. */
+    paintAssistantStrip() {
+        const host = document.getElementById('assistant-strip');
+        if (!host) return;
+        const kind = this.stripKind();
+        const markup = kind ? esc(this.stripMarkup()) : '';
+        if (markup === this._stripMarkup) return;
+        this._stripMarkup = markup;
+        if (!markup) {
+            host.classList.add('hidden');
+            host.innerHTML = '';
+            if (host.dataset) delete host.dataset.kind;
+            return;
+        }
+        host.innerHTML = markup;
+        if (host.dataset) host.dataset.kind = kind;
+        host.classList.remove('hidden');
+        UI.icons(host);
     },
 
     /** The loader / error host that sits OUTSIDE the log region. */
@@ -2313,6 +2560,73 @@ const InboxPage = {
         if (input && typeof input.focus === 'function') input.focus();
     },
 
+    // ─── Mark handled ────────────────────────────────────────────────────────
+    /**
+     * Set (`handled` true) or clear the owner's "I took care of this" stamp on a thread. Optimistic, like the AI switch: the thread
+     * leaves To do and every count in the same frame, the request goes out behind it, and the chosen stamp is parked in `pendingHandled`
+     * so a poll that left before the write committed cannot bring the thread back for a tick. A refusal puts everything back and says why
+     * in words (`UI.errorText`), not as a status code.
+     *
+     * The stamp it paints is never earlier than the customer's last message (`Attention.isHandled` compares the two), even when this
+     * computer's clock is behind the server's; the server's own stamp replaces it when the answer arrives.
+     *
+     * @returns {Promise<boolean>} whether it was done
+     */
+    async setHandled(id, handled) {
+        const copies = this.threadCopies(id);
+        if (!id || copies.length === 0 || this.pendingHandled.has(id)) return false;
+        const epoch = this._epoch;
+        const lastInbound = Attention.lastInboundMs(copies[0]);
+        const stamp = handled ? new Date(Math.max(Date.now(), (lastInbound === null ? 0 : lastInbound) + 1)).toISOString() : null;
+        const previous = copies.map((copy) => (copy.handled_at === undefined ? null : copy.handled_at));
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+
+        const paint = (values) => {
+            copies.forEach((copy, i) => { copy.handled_at = values[i]; });
+            this.renderThreads();
+            this.reportWaiting();
+            const thread = this.findThread(id);
+            if (thread) this.updateChatHeader(thread);
+            // Whatever had focus may have gone with the button that said "Mark handled": the row or the header's button takes it.
+            UI.restoreFocus(focus, `thread-${id}`);
+        };
+
+        this.resetBackoff();
+        this.pendingHandled.set(id, stamp);
+        paint(copies.map(() => stamp));
+        try {
+            const result = await (handled ? API.markConversationHandled(id) : API.unmarkConversationHandled(id));
+            if (epoch !== this._epoch) return true;
+            const at = result && result.handled_at !== undefined ? result.handled_at : stamp;
+            paint(copies.map(() => at));
+            return true;
+        } catch (err) {
+            console.error('Mark Handled Error:', err);
+            if (epoch === this._epoch) {
+                paint(previous);
+                UI.toast(UI.errorText(err).sentence, 'error');
+            }
+            return false;
+        } finally {
+            if (epoch === this._epoch) this.pendingHandled.delete(id);
+        }
+    },
+
+    /** "Mark handled": done at once and undoable for a few seconds (a toast with Undo), and says what it will take to bring the thread back. */
+    async markHandled(id) {
+        if (!this.canMark()) return;
+        const done = await this.setHandled(id, true);
+        if (!done) return;
+        UI.undoToast(t('inbox.handled.done'), { onUndo: () => this.setHandled(id, false) });
+    },
+
+    /** "Reopen": the thread is in the owner's To do again if it still needs a person. */
+    async unmarkHandled(id) {
+        if (!this.canMark()) return;
+        const done = await this.setHandled(id, false);
+        if (done) Motion.announce(t('inbox.handled.reopened'));
+    },
+
     /** A bubble for a reply that has left the composer but not yet the server. */
     pendingBubble(key, text) {
         // The operator's own reply, so it carries «أنت» from the start and the
@@ -2441,6 +2755,8 @@ UI.registerActions('inbox', {
     setFilter: (el) => InboxPage.setFilter(el && el.dataset ? el.dataset.filter : 'all'),
     retryThreads: () => InboxPage.retryThreads(),
     handBack: (el) => InboxPage.handBack(el && el.dataset ? el.dataset.id : ''),
+    markHandled: (el) => InboxPage.markHandled(el && el.dataset ? el.dataset.id : ''),
+    unmarkHandled: (el) => InboxPage.unmarkHandled(el && el.dataset ? el.dataset.id : ''),
     toggleFunnel: () => InboxPage.toggleFunnel(),
     funnelWindow: (el) => InboxPage.setFunnelWindow(el && el.dataset ? el.dataset.days : ''),
     funnelRetry: () => InboxPage.loadFunnel(InboxPage.funnel.days),
