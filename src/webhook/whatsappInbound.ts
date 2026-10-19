@@ -7,12 +7,13 @@
  *   - the sender is on `whatsapp_test_senders`: the owner's own testers, by BSUID or phone
  *   - the connection is `active` (an `invalid` one still STORES: Meta never redelivers, so a message is stored now or lost)
  *   - the message is words the agent can read: text, a tapped button or list row, a photo's or video's or document's caption, or a voice note it could transcribe
- *     (a photo with no caption, a sticker, a location: not words, see "What a listed tester sends that is not typed words")
+ *     (a photo with no caption: not words, one line is sent instead; a sticker, a location and a contact card: not words either, and the same one line; see "What a listed tester
+ *     sends that is not typed words")
  *   - nobody has taken the thread over (`conversations.is_bot_active`)
  *
  * The send of an ANSWER is `whatsappAnswer.ts`' (through `channels/send.ts`), and `handleWhatsAppInbound` takes it as a dependency, so what is tested here is the
  * decision and the bookkeeping, and what is tested there is the answer. The three other things this file may cause to be sent (the opt-out confirmation, and the one line
- * for a voice note or file that could not be read) are `whatsappOptOut.ts`' and `whatsappMediaInput.ts`', taken as dependencies the same way (`InboundSteps`).
+ * for a voice note or file that could not be read, and for a sticker, a location or a contact card) are `whatsappOptOut.ts`' and `whatsappMediaInput.ts`', taken as dependencies the same way (`InboundSteps`).
  *
  * It is a file of its own, and not another branch of `answerDm` (messaging.ts), because the Instagram pipeline has to stay exactly what it is: this
  * writes the same tables with the same dedupe rules (the `meta_message_id` claim, the 300 s re-claim window) but a different contact
@@ -80,7 +81,7 @@ import { describeError, log, withLogContext } from '../utils/log.js';
 import { dmPromptText } from './messaging.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 import { answerWhatsApp, withoutEntryRef, type NoReplyReason, type WhatsAppAnswerFn } from './whatsappAnswer.js';
-import { readInboundMedia, saveInboundFile, type ReadMediaFn, type SaveFileFn, type SavedFile } from './whatsappMediaInput.js';
+import { acknowledgeInbound, readInboundMedia, saveInboundFile, type AcknowledgeFn, type ReadMediaFn, type SaveFileFn, type SavedFile, type WordlessInbound } from './whatsappMediaInput.js';
 import { optOutWhatsAppContact, type WhatsAppStopFn } from './whatsappOptOut.js';
 import { redactedInboundPayload } from './whatsappRedact.js';
 import { normalizeWhatsAppChange, type WaEntrySource, type WaIgnored, type WaInbound, type WaMedia, type WaSystemEvent } from './whatsapp.js';
@@ -114,7 +115,8 @@ export function isTestSender(testSenders: readonly string[], ids: readonly (stri
  *   unsupported_type   a reaction or a message the agent cannot read, whatever the mode
  *   agent_off          mode `off`
  *   not_test_sender    mode `test` (or `everyone`, which is test-only until the go-live gate) and a sender who is not listed
- *   unsupported_type   a sticker, a location, a contact card: stored, never read (a photo, a video, a document and a voice note ARE read: see `Incoming.file`)
+ *   unsupported_type   what the agent can neither read nor answer with its one line (see `Incoming.answerable`). A sticker, a location and a contact card ARE answerable with that line
+ *                      (`Incoming.acknowledge`), and so are a photo, a video, a document and a voice note (read: see `Incoming.file`)
  *   connection_invalid the connection is not `active`: stored, nothing is sent
  *   bot_paused         a person has the thread
  *
@@ -159,6 +161,11 @@ interface Incoming {
     media: WaMedia | null;
     /** What the customer wrote on a photo, video or document; '' for nothing. (A voice note has none.) */
     caption: string;
+    /**
+     * A sticker, a location or a contact card: not words and not a file the agent reads, but never left unanswered. A tester gets the kit's one line (`acknowledgeInbound`), nothing is
+     * downloaded, and the row says `no_reply_reason` NULL when it went out. Null for everything else.
+     */
+    acknowledge: WordlessInbound | null;
 }
 
 /** The files a tester's message can carry that the agent reads: a voice note or any audio, a photo, a video or a document. A sticker is a like, not a question. */
@@ -166,6 +173,12 @@ function fileOf(message: WaInbound): Incoming['file'] {
     if (message.messageType === 'audio') return 'voice';
     const kind = message.media?.kind;
     return kind === 'image' || kind === 'video' || kind === 'document' ? 'media' : null;
+}
+
+/** The three types that get the one line: by Meta's own `type`, which `messageType` keeps (a sticker is also `message.media`, a location and a card are not). */
+function acknowledgeOf(message: WaInbound): WordlessInbound | null {
+    const type = message.messageType;
+    return type === 'sticker' || type === 'location' || type === 'contacts' ? type : null;
 }
 
 function incomingOf(message: WaInbound): Incoming {
@@ -187,6 +200,7 @@ function incomingOf(message: WaInbound): Incoming {
         file,
         media: message.media,
         caption: file === 'media' ? message.media?.caption?.trim() ?? '' : '',
+        acknowledge: acknowledgeOf(message),
     };
 }
 
@@ -209,6 +223,7 @@ function incomingOfIgnored(message: WaIgnored & { senderId: string; metaMessageI
         file: null,
         media: null,
         caption: '',
+        acknowledge: null,
     };
 }
 
@@ -239,6 +254,8 @@ export interface InboundSteps {
     saveFile: SaveFileFn;
     /** A tester's voice note or file, as words or as the one line (`whatsappMediaInput.ts`). */
     readMedia: ReadMediaFn;
+    /** A tester's sticker, location or contact card: the kit's one line, so the chat is never silent (`whatsappMediaInput.ts`). */
+    acknowledge: AcknowledgeFn;
     /** The tenant's entry-link labels (`platform_connections.settings.entry_links`). */
     labels: (creatorId: string) => Promise<EntryLinkLabels>;
 }
@@ -247,6 +264,7 @@ const LIVE_STEPS: InboundSteps = {
     stop: (input) => optOutWhatsAppContact(input),
     saveFile: saveInboundFile(),
     readMedia: readInboundMedia(),
+    acknowledge: acknowledgeInbound(),
     labels: getEntryLinkLabels,
 };
 
@@ -432,7 +450,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
 
     // Would the agent answer this? Everything but the words themselves: who they are, the mode, the connection, whether a person has the thread.
     let reason = noReplyReasonFor({
-        unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test, answerable: incoming.answerable,
+        unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test, answerable: incoming.answerable || incoming.acknowledge !== null,
         connectionActive: ctx.connectionStatus === 'active', botActive: conversation.is_bot_active !== false,
     });
     const mayAnswer = reason === null;
@@ -481,6 +499,15 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
         // A voice note that SAYS «وقف» is a stop like a typed one (a caption was checked above, with the words).
         const spoken = incoming.file === 'voice' ? matchStopMessage(text) : null;
         if (spoken) return optOut(text, spoken.lang);
+    }
+
+    // 4b. A sticker, a location or a contact card: nothing to read and nothing to download, but the chat does not go silent. The one line, through the same claim and transport as the
+    // file's, and the row says NULL when it went out. Only for a tester the agent may answer: a stranger, an agent that is off, a refused connection and a thread a person has all
+    // came out of `noReplyReasonFor` above with their own reason, and none of them is sent anything.
+    if (reason === null && incoming.acknowledge !== null) {
+        return conclude(await ctx.steps.acknowledge({
+            creatorId: ctx.creatorId, conversationId: conversation.id, messageId: claim.id, what: incoming.acknowledge, aiDisclosedAt: conversation.ai_disclosed_at ?? null,
+        }));
     }
 
     // 5. The agent. It throws only to ask for a retry (the claim is released first); anything else is concluded here, whatever happened.

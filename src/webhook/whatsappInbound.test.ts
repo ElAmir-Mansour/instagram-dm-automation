@@ -87,18 +87,23 @@ const unexpectedAnswer: WhatsAppAnswerFn = async () => { throw new Error('the ag
 const answers = (impl: WhatsAppAnswerFn = async () => ({ reason: null })) => { answerImpl = impl; };
 
 /** The other steps (an opt-out, a file, its words, the entry-link labels), each a recorder that FAILS unless the test arranged it. */
-type StepCalls = { stop: Parameters<InboundSteps['stop']>[0][]; saveFile: Parameters<InboundSteps['saveFile']>[0][]; readMedia: Parameters<InboundSteps['readMedia']>[0][]; labels: string[] };
+type StepCalls = {
+    stop: Parameters<InboundSteps['stop']>[0][]; saveFile: Parameters<InboundSteps['saveFile']>[0][]; readMedia: Parameters<InboundSteps['readMedia']>[0][];
+    acknowledge: Parameters<InboundSteps['acknowledge']>[0][]; labels: string[];
+};
 let stepCalls: StepCalls;
 let steps: InboundSteps;
 const freshSteps = (): InboundSteps => ({
     stop: async (input) => { stepCalls.stop.push(input); throw new Error('the opt-out step must not be asked for this message'); },
     saveFile: async (input) => { stepCalls.saveFile.push(input); throw new Error('a file must not be saved for this message'); },
     readMedia: async (input) => { stepCalls.readMedia.push(input); throw new Error('the media step must not be asked for this message'); },
+    acknowledge: async (input) => { stepCalls.acknowledge.push(input); throw new Error('the one line must not be asked for this message'); },
     labels: async (creatorId) => { stepCalls.labels.push(creatorId); return {}; },
 });
 const stops = (impl: InboundSteps['stop'] = async () => ({ newlyOptedOut: true, followupsCancelled: 0, confirmation: 'sent' })) => { steps.stop = async (input) => { stepCalls.stop.push(input); return impl(input); }; };
 const saves = (impl: InboundSteps['saveFile'] = async () => ({ uploadId: 'upload-1', mimeType: 'audio/ogg' })) => { steps.saveFile = async (input) => { stepCalls.saveFile.push(input); return impl(input); }; };
 const reads = (impl: InboundSteps['readMedia']) => { steps.readMedia = async (input) => { stepCalls.readMedia.push(input); return impl(input); }; };
+const acknowledges = (impl: InboundSteps['acknowledge'] = async () => null) => { steps.acknowledge = async (input) => { stepCalls.acknowledge.push(input); return impl(input); }; };
 
 const originalQuery = pool.query;
 const originalConnect = pool.connect;
@@ -263,7 +268,7 @@ beforeEach(() => {
     failConversationUpsert = false;
     answerCalls = [];
     answerImpl = unexpectedAnswer;
-    stepCalls = { stop: [], saveFile: [], readMedia: [], labels: [] };
+    stepCalls = { stop: [], saveFile: [], readMedia: [], acknowledge: [], labels: [] };
     steps = freshSteps();
     db = { convs: [], msgs: [], consents: [], agent: { whatsapp_mode: 'off', whatsapp_test_senders: [] } };
 
@@ -702,11 +707,10 @@ describe('a message the agent answers', () => {
 describe('a message the agent is NOT asked for, even from a listed test sender', () => {
     const body = (over: Record<string, unknown> = {}) => textBody(BODY, `wamid.N-${Math.random()}`, {}, over);
 
-    it('is not asked for a sticker, a location or a type Meta added, and none of them is downloaded: stored in full, concluded as unsupported_type', async () => {
+    it('is not asked for a reaction or a type Meta added (`unsupported`, `order`), and none of them is downloaded or answered: stored in full, concluded as unsupported_type', async () => {
         agent('test', [BSUID]);
-        for (const name of ['sticker', 'location', 'reaction'] as const) {
-            let f: any;
-            try { f = fixture(name); } catch { continue; }
+        for (const name of ['unsupported', 'order', 'reaction'] as const) {
+            const f = fixture(name);
             const v = f.entry[0].changes[0].value;
             v.contacts[0].user_id = BSUID;
             v.messages[0].from_user_id = BSUID;
@@ -714,7 +718,7 @@ describe('a message the agent is NOT asked for, even from a listed test sender',
             await deliver(f);
         }
         assert.equal(answerCalls.length, 0);
-        assert.deepEqual([stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.stop.length], [0, 0, 0]);
+        assert.deepEqual([stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.acknowledge.length, stepCalls.stop.length], [0, 0, 0, 0], 'not even the one line: it is for a sticker, a location or a card');
         assert.ok(db.msgs.length >= 2);
         assert.ok(db.msgs.every((m) => m.no_reply_reason === 'unsupported_type'), db.msgs.map((m) => m.no_reply_reason).join(','));
     });
@@ -1454,6 +1458,133 @@ describe('a stop phrase from a listed tester (T044, review C2)', () => {
 });
 
 // ─── W6 wired in: what a tester sends that is not typed words ──────────────────────────
+
+// ─── A sticker, a location, a contact card: the chat never goes silent ─────────────────
+
+/** A sticker, a location or a contact card from one person, in the shape Meta sends it. */
+function wordlessBody(type: 'sticker' | 'location' | 'contacts', id: string, who: Sender = {}): any {
+    const content: Record<string, unknown> = {
+        sticker: { id: 'MEDIA-STICKER-1', mime_type: 'image/webp', animated: false },
+        location: { latitude: 21.4858, longitude: 39.1925, name: 'Jeddah Corniche', address: 'Jeddah' },
+        contacts: [{ name: { formatted_name: 'Sami A.', first_name: 'Sami' }, phones: [{ phone: '+966500000000', type: 'CELL' }] }],
+    };
+    return textBody('', id, who, { type, text: undefined, [type]: content[type] });
+}
+
+describe('a sticker, a location or a contact card from a listed tester: one short line, and the chat is never silent', () => {
+    const KINDS = ['sticker', 'location', 'contacts'] as const;
+
+    for (const kind of KINDS) {
+        it(`${kind}: the one-line step is asked once, with the thread and the row, and nothing is downloaded, read or sent to the agent; the row says NULL because the line went out`, async () => {
+            agent('test', [BSUID]);
+            acknowledges(async () => null);
+            await deliver(wordlessBody(kind, `wamid.W-${kind}`));
+
+            const conv = only(db.convs);
+            const msg = only(db.msgs);
+            assert.deepEqual(stepCalls.acknowledge, [{ creatorId: CREATOR, conversationId: conv.id, messageId: msg.id, what: kind, aiDisclosedAt: null }]);
+            assert.deepEqual([answerCalls.length, stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.stop.length], [0, 0, 0, 0]);
+            assert.equal(msg.no_reply_reason, null, 'answered: the line went out');
+            assert.notEqual(msg.handled_at, null);
+            assert.equal(msg.message_type, kind);
+            const said = only(logged('wa.inbound_stored'));
+            assert.deepEqual([said.answered, said.no_reply_reason], [true, null]);
+        });
+    }
+
+    it('what the one-line step concludes is what the row says: superseded in a burst, a closed window, an agent switched off, a refused send', async () => {
+        agent('test', [BSUID]);
+        const reasons = [null, 'superseded', 'window_closed', 'agent_off', 'failure'] as const;
+        let n = 0;
+        for (const reason of reasons) {
+            acknowledges(async () => reason);
+            await deliver(wordlessBody('sticker', `wamid.W2-${n++}`));
+        }
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), [...reasons]);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is said to a tester in mode test and in mode everyone (which is test-only until the go-live gate)', async () => {
+        acknowledges(async () => null);
+        for (const mode of ['test', 'everyone'] as const) {
+            agent(mode, [BSUID]);
+            db.convs.length = 0;
+            db.msgs.length = 0;
+            await deliver(wordlessBody('location', `wamid.W3-${mode}`));
+            assert.equal(only(db.msgs).no_reply_reason, null, mode);
+        }
+        assert.equal(stepCalls.acknowledge.length, 2);
+    });
+
+    it('is NEVER said to a stranger, in any mode, with every other fact in their favour: store-only, no line, the reason is not_test_sender (or agent_off for a thread in mode off), and nothing of theirs is kept', async () => {
+        for (const mode of ['off', 'test', 'everyone'] as const) {
+            agent(mode, ['EG.the.owner.tester']);
+            for (const kind of KINDS) await deliver(wordlessBody(kind, `wamid.X-${mode}-${kind}`));
+        }
+        assert.equal(stepCalls.acknowledge.length, 0, 'not one line to a stranger');
+        assert.deepEqual([answerCalls.length, stepCalls.saveFile.length, stepCalls.readMedia.length], [0, 0, 0]);
+        assert.equal(db.msgs.length, 9);
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), [
+            'agent_off', 'agent_off', 'agent_off', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender',
+        ]);
+        for (const m of db.msgs) assert.deepEqual([m.text, m.payload, m.raw_payload], ['', null, null], m.message_type);
+    });
+
+    it('is not said when the agent may not answer a tester: mode off, a connection Meta refused, a thread a person has. Each keeps its own reason, and nothing is sent', async () => {
+        const cases: Array<[string, () => void, string]> = [
+            ['mode off', () => agent('off', [BSUID]), 'agent_off'],
+            ['a refused connection', () => { agent('test', [BSUID]); connection = connectionRow({ status: 'invalid' }); }, 'connection_invalid'],
+            ['a person has the thread', () => {
+                agent('test', [BSUID]);
+                db.convs.push({
+                    id: 'conv-paused', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+                    wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null, is_bot_active: false,
+                });
+            }, 'bot_paused'],
+        ];
+        let n = 0;
+        for (const [name, arrange, reason] of cases) {
+            db.convs.length = 0;
+            db.msgs.length = 0;
+            connection = connectionRow();
+            arrange();
+            await deliver(wordlessBody('sticker', `wamid.W4-${n++}`));
+            assert.equal(only(db.msgs).no_reply_reason, reason, name);
+        }
+        assert.equal(stepCalls.acknowledge.length, 0);
+    });
+
+    it('a sticker is never read as a stop: no opt-out step is asked, only the one line', async () => {
+        agent('test', [BSUID]);
+        acknowledges();
+        await deliver(wordlessBody('sticker', 'wamid.W5'));
+        assert.equal(stepCalls.stop.length, 0);
+        assert.equal(stepCalls.acknowledge.length, 1);
+    });
+
+    it('a one-line step that fails with the database is an error the runner retries, with the claim still held: nothing is concluded half-way', async () => {
+        agent('test', [BSUID]);
+        acknowledges(async () => { throw new Error('connection terminated unexpectedly'); });
+        await assert.rejects(() => deliver(wordlessBody('contacts', 'wamid.W6'), { lastAttempt: false }), /connection terminated/);
+        const msg = only(db.msgs);
+        assert.equal(msg.handled_at, null);
+        assert.equal(msg.no_reply_reason, null);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('a retried message is handed to the one-line step again (which finds its own claim and does not say it twice)', async () => {
+        agent('test', [BSUID]);
+        acknowledges(async () => { throw new Error('connection terminated unexpectedly'); });
+        const body = wordlessBody('location', 'wamid.W7');
+        await assert.rejects(() => deliver(body, { lastAttempt: false }), /connection terminated/);
+        db.msgs.forEach((m) => { m.reply_claimed_at = null; });
+        acknowledges(async () => null);
+        await deliver(body, { lastAttempt: true });
+        assert.equal(stepCalls.acknowledge.length, 2);
+        assert.equal(only(db.msgs).no_reply_reason, null);
+        assert.equal(only(db.msgs).reply_attempts, 2);
+    });
+});
 
 describe('a file or a voice note from a listed tester (T035, T036, review M17)', () => {
     it('a photo WITH a caption is saved privately, and the caption is the message the agent answers', async () => {

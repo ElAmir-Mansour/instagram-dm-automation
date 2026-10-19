@@ -156,6 +156,12 @@ describe('annotateMessages', () => {
         for (const id of ['a1', 'o1', 'q2', 'old']) assert.equal(out.find((r) => r.id === id)!.delivery, null, id);
     });
 
+    it('sends a voice note\'s transcript: an audio row keeps its `text` (WhatsApp stores the transcript there), so the inbox can show it under the chip', () => {
+        const voice = { id: 'v1', direction: 'inbound', sender: 'customer', message_type: 'audio', meta_message_id: 'wamid.V', text: 'كم سعر الخطة؟' };
+        const out = annotateMessages([voice], NO_EXTRAS);
+        assert.deepEqual([out[0]!.message_type, out[0]!.text], ['audio', 'كم سعر الخطة؟']);
+    });
+
     it('keeps every row, in order, with every field it had, and both blocks always present', () => {
         const out = annotateMessages(rows, NO_EXTRAS);
         assert.deepEqual(out.map((r) => r.id), rows.map((r) => r.id));

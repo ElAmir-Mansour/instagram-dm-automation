@@ -130,6 +130,8 @@ const InboxPage = {
     /** The text the pipeline stores for a carousel (which has none) and for a story mention. */
     STRUCTURED_PLACEHOLDER: '[Structured Template]',
     STORY_MENTION_PLACEHOLDER: '[Story Mention]',
+    /** What an Instagram voice note is stored as (src/webhook/attachments.ts). A WhatsApp voice note's text is its transcript instead, once it has been transcribed. */
+    VOICE_PLACEHOLDER: '[voice note]',
     /**
      * A message with no words (src/webhook/attachments.ts): the pipeline stores its kind as `message_type` and a placeholder (`[photo]`) as
      * its text. This maps each kind to the chip that names it (`attachmentStyle`), so the chip is the message and the placeholder is never
@@ -1822,6 +1824,7 @@ const InboxPage = {
         const text = typeof msg.text === 'string' ? msg.text : '';
         const structure = this.structuredContent(msg);
         const attachments = isOut ? '' : this.attachmentsMarkup(msg);
+        const transcript = isOut ? '' : this.voiceTranscript(msg);
 
         // A placeholder is not words. "[Structured Template]" is what a carousel is stored as; its cards are the message, and
         // when they cannot be drawn (the stored body is pruned after a while) the bubble says what it was instead.
@@ -1851,6 +1854,7 @@ const InboxPage = {
                     ${note ? html`<p class="msg-note" dir="auto">${note}</p>` : ''}
                     ${structure}
                     ${attachments}
+                    ${transcript ? html`<div class="msg-transcript"><span class="msg-transcript-label">${t('inbox.voiceTranscript')}</span><p class="msg-transcript-text" dir="auto">${transcript}</p></div>` : ''}
                     <span class="message-time">${UI.formatTime(msg.created_at)}</span>
                 </div>
                 ${detail}
@@ -2013,6 +2017,18 @@ const InboxPage = {
         const stored = this.wordlessKind(msg && msg.message_type);
         if (stored && !out.some((a) => a.kind === stored)) out.push({ kind: stored, url: '' });
         return out.slice(0, this.MAX_ATTACHMENTS);
+    },
+
+    /**
+     * What a voice note SAID, for the owner to read under its chip. A WhatsApp voice note is transcribed and the transcript is stored as the inbound row's `text`
+     * (src/webhook/whatsappMediaInput.ts); an Instagram one is stored as the `[voice note]` placeholder and has no words, and one that could not be transcribed has none
+     * either. So: an inbound `audio` row whose text is neither empty nor the placeholder. '' for everything else (a customer's typed `[voice note]` in a text row included).
+     * The caller prints it through `html`, which escapes it like every other message text.
+     */
+    voiceTranscript(msg) {
+        if (!msg || msg.direction !== 'inbound' || msg.message_type !== 'audio') return '';
+        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+        return text && text !== this.VOICE_PLACEHOLDER ? text : '';
     },
 
     /** The chip kind a row's `message_type` stands for when the message had no words, or '' for anything else (text, a tap, a carousel). */
