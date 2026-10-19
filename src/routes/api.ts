@@ -3207,6 +3207,10 @@ router.post('/upload', canOperate, async (req, res) => {
  * The list selects `c.*`, so on a database without v26 the key is simply absent; this answers
  * null for that, for a thread v26 could not attribute, and for anything that is not one of the
  * two — the inbox then shows no platform rather than a guess.
+ *
+ * `ConversationPlatform` also names 'whatsapp' since v50, and this still answers null for it: no
+ * WhatsApp thread is written yet, and the dashboard does not know the value (`UI.platformTag`).
+ * The phase that writes the first WhatsApp thread widens this together with the dashboard.
  */
 export function conversationPlatformOf(value: unknown): ConversationPlatform | null {
     return value === 'instagram' || value === 'facebook' ? value : null;

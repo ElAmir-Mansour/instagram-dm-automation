@@ -879,3 +879,212 @@ describe('migration v44: platform_connections.profile (TikTok user.info.profile,
         assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i);
     });
 });
+
+// ─── v50: WhatsApp as a channel (schema only) ──────────────────────────────────────────────────
+
+describe('migration v50: whatsapp (channel CHECKs, contact and delivery columns, consents, usage ledger)', () => {
+    const FILE = 'migration_v50_whatsapp.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    /** The files the runner applies before v50, in order. */
+    const before = (): SqlFile[] => {
+        const earlier = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        return allMigrationFiles().filter((f) => earlier.includes(f.name));
+    };
+    const quoted = (list: string): string[] => [...list.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+    /** The columns the file adds, with everything written after each name. */
+    const addedColumns = (): { table: string; name: string; spec: string }[] =>
+        [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]*);/g)].map((m) => ({ table: m[1]!, name: m[2]!, spec: m[3]!.trim() }));
+    const addedTo = (table: string): string[] => addedColumns().filter((c) => c.table === table).map((c) => c.name);
+    /** The values the newest earlier definition of a CHECK allowed (`CONSTRAINT name CHECK (... IN ('a', 'b'))`, inline or added). */
+    const previousCheckValues = (name: string): string[] => {
+        let found: string[] | null = null;
+        for (const file of before()) {
+            const body = new RegExp(`CONSTRAINT ${name}\\s+CHECK\\s*\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)`, 'g');
+            for (const m of withoutComments(file.sql).replace(/\s+/g, ' ').matchAll(body)) found = quoted(m[1]!);
+        }
+        assert.ok(found, `an earlier migration defines ${name}`);
+        return found;
+    };
+    /** The values the CHECK this file re-adds allows. */
+    const checkValues = (name: string): string[] => {
+        const m = new RegExp(`ADD CONSTRAINT ${name} CHECK \\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)`).exec(sql);
+        assert.ok(m, `${name} is re-added`);
+        return quoted(m![1]!);
+    };
+    const droppedBeforeAdded = (name: string): boolean => {
+        const drop = sql.indexOf(`DROP CONSTRAINT IF EXISTS ${name};`);
+        return drop >= 0 && drop < sql.indexOf(`ADD CONSTRAINT ${name} `);
+    };
+
+    it('is registered after v44 (v45-v49 belong to other work and may sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v44_tiktok_profile.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement (it locks conversations and messages, the DM path\'s tables)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds whatsapp to conversations.platform and keeps every value the newest earlier CHECK allowed', () => {
+        const name = 'conversations_platform_check';
+        const previous = previousCheckValues(name);
+        assert.deepEqual(previous, ['instagram', 'facebook'], 'what v26 allowed');
+        const now = checkValues(name);
+        assert.ok(now.includes('whatsapp'));
+        assert.deepEqual(now, [...previous, 'whatsapp']);
+        assert.match(sql, /ADD CONSTRAINT conversations_platform_check CHECK \(platform IS NULL OR platform IN /, 'NULL stays allowed: a thread no DM has reached');
+        assert.ok(droppedBeforeAdded(name), 'dropped by its exact name, then re-added');
+    });
+
+    it('adds whatsapp to platform_connections.platform and keeps every value the newest earlier CHECK allowed', () => {
+        const name = 'platform_connections_platform_check';
+        const previous = previousCheckValues(name);
+        assert.deepEqual(previous, ['tiktok', 'youtube'], 'what v30 allowed');
+        const now = checkValues(name);
+        assert.ok(now.includes('whatsapp'));
+        assert.deepEqual(now, [...previous, 'whatsapp']);
+        assert.ok(droppedBeforeAdded(name), 'dropped by its exact name, then re-added');
+    });
+
+    it('leaves link_clicks.ua_class alone: a WhatsApp click is attributed through the link\'s conversation platform (review M1)', () => {
+        assert.doesNotMatch(sql, /link_clicks|ua_class|tracked_links/);
+    });
+
+    it('adds exactly the columns the data model names, to exactly the tables it names', () => {
+        assert.deepEqual(addedTo('platform_connections'), ['settings']);
+        assert.deepEqual(addedTo('ai_agents'), ['whatsapp_mode', 'whatsapp_test_senders']);
+        assert.deepEqual(addedTo('conversations'), ['wa_phone', 'wa_username', 'wa_parent_user_id', 'entry_source', 'free_window_expires_at']);
+        assert.deepEqual(addedTo('messages'), [
+            'delivery_status', 'delivery_error_code', 'delivery_error', 'pricing_category', 'pricing_type', 'billable', 'no_reply_reason', 'media_upload_id',
+        ]);
+        assert.equal(addedColumns().length, 1 + 2 + 5 + 8);
+        // The contact's WhatsApp name is the existing conversations.profile_name (v40), not a second column.
+        assert.doesNotMatch(sql, /contact_name/);
+    });
+
+    it('gives every added column the type the data model names', () => {
+        assert.deepEqual(Object.fromEntries(addedColumns().map((c) => [`${c.table}.${c.name}`, c.spec])), {
+            'platform_connections.settings': "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            'ai_agents.whatsapp_mode': "TEXT NOT NULL DEFAULT 'off'",
+            'ai_agents.whatsapp_test_senders': "TEXT[] NOT NULL DEFAULT '{}'",
+            'conversations.wa_phone': 'TEXT',
+            'conversations.wa_username': 'TEXT',
+            'conversations.wa_parent_user_id': 'TEXT',
+            'conversations.entry_source': 'JSONB',
+            'conversations.free_window_expires_at': 'TIMESTAMP WITH TIME ZONE',
+            'messages.delivery_status': 'TEXT',
+            'messages.delivery_error_code': 'INTEGER',
+            'messages.delivery_error': 'TEXT',
+            'messages.pricing_category': 'TEXT',
+            'messages.pricing_type': 'TEXT',
+            'messages.billable': 'BOOLEAN',
+            'messages.no_reply_reason': 'TEXT',
+            'messages.media_upload_id': 'UUID',
+        });
+    });
+
+    it('rewrites no existing row: every added column is nullable or has a constant default, and none has an inline CHECK or REFERENCES', () => {
+        for (const { table, name, spec } of addedColumns()) {
+            const label = `${table}.${name}`;
+            const defaults = [...spec.matchAll(/\bDEFAULT\s+(\S+)/g)].map((m) => m[1]!);
+            assert.ok(!/\bNOT NULL\b/.test(spec) || defaults.length === 1, `${label} is NOT NULL, so it needs a default`);
+            // A literal is stored in the catalog. A function (now(), gen_random_uuid()) would rewrite the table.
+            for (const d of defaults) assert.match(d, /^'[^']*'(::\w+)?$/, `${label}: a constant default`);
+            assert.doesNotMatch(spec, /\b(CHECK|REFERENCES|UNIQUE|PRIMARY|GENERATED)\b/, `${label}: constrained afterwards, by name, as v39 does`);
+        }
+    });
+
+    it('defaults the agent\'s WhatsApp switch to OFF, and allows exactly off, test and everyone', () => {
+        assert.deepEqual(checkValues('ai_agents_whatsapp_mode_check'), ['off', 'test', 'everyone']);
+        assert.match(sql, /ADD CONSTRAINT ai_agents_whatsapp_mode_check CHECK \(whatsapp_mode IN \(/);
+        assert.ok(droppedBeforeAdded('ai_agents_whatsapp_mode_check'));
+    });
+
+    it('allows exactly the delivery statuses WhatsApp reports, and NULL (every inbound row, and every row before this)', () => {
+        assert.deepEqual(checkValues('messages_delivery_status_check'), ['sent', 'delivered', 'read', 'played', 'failed']);
+        assert.match(sql, /ADD CONSTRAINT messages_delivery_status_check CHECK \(delivery_status IS NULL OR delivery_status IN \(/);
+        assert.ok(droppedBeforeAdded('messages_delivery_status_check'));
+    });
+
+    it('creates exactly contact_consents and channel_usage, and enables row level security on both, with no policy', () => {
+        assert.deepEqual(createdTables(sql), ['contact_consents', 'channel_usage']);
+        assert.deepEqual([...rlsEnabledTables(raw)].sort(), ['channel_usage', 'contact_consents']);
+        assert.doesNotMatch(sql, /\bCREATE POLICY\b|\bDISABLE ROW LEVEL SECURITY\b/i, 'deny by default: enabled, no policies');
+        // The repo-wide rule agrees: no table is left to a later migration.
+        assert.deepEqual(tablesWithoutRls(allMigrationFiles()), []);
+    });
+
+    it('declares the foreign keys with the ON DELETE rules the retention sweep and the erasure flow rely on', () => {
+        // Every REFERENCES says what happens on delete: none is left to the default (NO ACTION), which would make a delete fail.
+        const references = [...sql.matchAll(/REFERENCES (\w+)\((\w+)\)( ON DELETE (?:CASCADE|SET NULL))?/g)].map((m) => [m[1], m[2], m[3]?.trim()]);
+        assert.deepEqual(references, [
+            ['media_uploads', 'id', 'ON DELETE SET NULL'],
+            ['creators', 'id', 'ON DELETE CASCADE'],
+            ['conversations', 'id', 'ON DELETE SET NULL'],
+            ['creators', 'id', 'ON DELETE CASCADE'],
+        ]);
+        assert.equal((sql.match(/\bREFERENCES\b/g) ?? []).length, references.length);
+        // And to whom each belongs.
+        assert.match(sql, /ALTER TABLE messages ADD CONSTRAINT messages_media_upload_id_fkey FOREIGN KEY \(media_upload_id\) REFERENCES media_uploads\(id\) ON DELETE SET NULL;/);
+        assert.ok(droppedBeforeAdded('messages_media_upload_id_fkey'));
+        assert.match(sql, /contact_consents \( id UUID PRIMARY KEY DEFAULT gen_random_uuid\(\), creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE, conversation_id UUID REFERENCES conversations\(id\) ON DELETE SET NULL,/);
+        assert.match(sql, /channel_usage \( creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE,/);
+    });
+
+    it('references columns of the same type: creators.id, conversations.id and media_uploads.id are UUIDs, and exist before v50', () => {
+        const files = before();
+        const existing = new Set(files.flatMap((f) => createdTables(f.sql)));
+        for (const table of ['creators', 'conversations', 'media_uploads', 'messages', 'ai_agents', 'platform_connections']) assert.ok(existing.has(table), `${table} exists before v50`);
+        const source = (name: string): string => files.find((f) => f.name === name)!.sql;
+        assert.match(source('schema.sql'), /CREATE TABLE IF NOT EXISTS creators \(\s+id UUID PRIMARY KEY/);
+        assert.match(source('schema_migration_v2.sql'), /CREATE TABLE IF NOT EXISTS conversations \(\s+id UUID PRIMARY KEY/);
+        assert.match(source('migration_v7_media_uploads.sql'), /CREATE TABLE IF NOT EXISTS media_uploads \(\s+id UUID PRIMARY KEY/);
+    });
+
+    it('records consent as the data model says: constrained category, action and source, newest first per contact, one row per event', () => {
+        const table = /CREATE TABLE IF NOT EXISTS contact_consents \(([^;]*)\);/.exec(sql)![1]!;
+        for (const column of ['platform', 'contact_ref', 'category', 'action', 'source']) assert.match(table, new RegExp(`\\b${column} TEXT NOT NULL`), column);
+        assert.match(table, /\bwording TEXT,/, 'the wording is optional');
+        assert.match(table, /created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW\(\)/);
+        const check = (column: string): string[] => quoted(new RegExp(`${column} TEXT NOT NULL CHECK \\(${column} IN \\(([^)]*)\\)\\)`).exec(table)![1]!);
+        assert.deepEqual(check('category'), ['service', 'updates', 'marketing']);
+        assert.deepEqual(check('action'), ['granted', 'withdrawn']);
+        assert.deepEqual(check('source'), ['agent_offer', 'stop_phrase', 'user_preferences', 'owner', 'in_app_signup']);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_contact_consents_contact ON contact_consents \(creator_id, contact_ref, category, created_at DESC\);/);
+        assert.doesNotMatch(sql, /CREATE UNIQUE INDEX/, 'many rows per contact; and a UNIQUE index named like an old one would silently no-op (v15)');
+    });
+
+    it('keeps the usage ledger one row per bucket: a composite primary key, and counters that start at zero', () => {
+        const table = /CREATE TABLE IF NOT EXISTS channel_usage \(([^;]*)\);/.exec(sql)![1]!;
+        assert.match(table, /PRIMARY KEY \(creator_id, platform, external_account_id, period, category, pricing_type, market\)/);
+        assert.match(table, /delivered INTEGER NOT NULL DEFAULT 0,/);
+        assert.match(table, /billable INTEGER NOT NULL DEFAULT 0,/);
+        assert.match(table, /est_cost_usd NUMERIC\(10, 4\) NOT NULL DEFAULT 0,/);
+        for (const column of ['platform', 'external_account_id', 'period', 'category', 'pricing_type', 'market']) assert.match(table, new RegExp(`\\b${column} TEXT NOT NULL`), column);
+    });
+
+    it('is idempotent: every column, table and index only if absent, and every constraint dropped by name before it is added', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/CREATE TABLE/g) ?? []).length, (sql.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/CREATE INDEX/g) ?? []).length, (sql.match(/CREATE INDEX IF NOT EXISTS/g) ?? []).length);
+        const added = [...sql.matchAll(/ALTER TABLE \w+ ADD CONSTRAINT (\w+) /g)].map((m) => m[1]!);
+        assert.equal(added.length, 5, 'two platform CHECKs, the agent mode, the delivery status, and the media foreign key');
+        for (const name of added) assert.ok(droppedBeforeAdded(name), `${name} is dropped by name first`);
+        assert.doesNotMatch(sql, /CONCURRENTLY/, 'the runner applies each file inside a transaction, where it is refused');
+    });
+
+    it('alters tables that exist by the time it runs, and touches no other', () => {
+        assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))].sort(), [
+            'ai_agents', 'channel_usage', 'contact_consents', 'conversations', 'messages', 'platform_connections',
+        ]);
+    });
+
+    it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b|\bDROP COLUMN\b/i, 'a foreign key\'s ON DELETE SET NULL is not a DELETE');
+    });
+});

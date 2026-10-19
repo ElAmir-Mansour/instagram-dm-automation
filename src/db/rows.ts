@@ -122,6 +122,10 @@ export interface InteractionRow {
 export interface ConversationRow {
     id: string;
     creator_id: string;
+    /**
+     * The contact's platform-scoped id: an IGSID on Instagram, a PSID on Facebook and, from v50, the BSUID on a WhatsApp thread (the column keeps
+     * its name). A BSUID cannot collide with a numeric IGSID or PSID, so `unique_creator_user` (creator_id, instagram_user_id) stays valid.
+     */
     instagram_user_id: string;
     status: string | null;
     is_bot_active: boolean;
@@ -163,10 +167,37 @@ export interface ConversationRow {
      * inbound message is stored, which clears it. NOT `MessageRow.handled_at` (v14): that marks a pipeline outcome on one inbound message.
      */
     handled_at: Timestamptz | null;
+    /**
+     * v50. WhatsApp: the contact's phone number in E.164 digits when Meta sends `wa_id`, else NULL. Never required: the BSUID in `instagram_user_id`
+     * identifies the thread. Absent on a row read before v50 is applied, which is why this and the next four fields are optional: nothing may
+     * depend on the column being there.
+     */
+    wa_phone?: string | null;
+    /** v50. WhatsApp: `contacts[].profile.username` when present. The contact's profile NAME is the existing `profile_name` (v40). */
+    wa_username?: string | null;
+    /** v50. WhatsApp: the parent BSUID, when enabled. */
+    wa_parent_user_id?: string | null;
+    /** v50. How the thread began, set on the first inbound only. See `ConversationEntrySource`. NULL until one is set. */
+    entry_source?: ConversationEntrySource | null;
+    /** v50. WhatsApp: the end of the click-to-WhatsApp free-entry window, or NULL. With `last_inbound_at` it decides whether a free-form reply may go out. */
+    free_window_expires_at?: Timestamptz | null;
 }
 
-/** v26. `conversations.platform`. */
-export type ConversationPlatform = 'instagram' | 'facebook';
+/**
+ * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried, `ad_id`, `ctwa_clid` and `headline`
+ * come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601).
+ */
+export interface ConversationEntrySource {
+    kind: 'link' | 'qr' | 'ctwa' | 'ig_bridge' | 'ice_breaker' | 'organic';
+    ref?: string;
+    ad_id?: string;
+    ctwa_clid?: string;
+    headline?: string;
+    at: string;
+}
+
+/** v26. `conversations.platform`. `whatsapp` since v50. */
+export type ConversationPlatform = 'instagram' | 'facebook' | 'whatsapp';
 
 export type MessageDirection = 'inbound' | 'outbound';
 
@@ -207,7 +238,85 @@ export interface MessageRow {
     sender: MessageSender | null;
     /** v39. On a sales-turn reply: { intent, stage, next_action, offer_id, handoff_reason, engine, latency_ms, guard }. NULL on every other row. */
     ai_meta: Record<string, unknown> | null;
+    /**
+     * v50. Outbound WhatsApp only: the latest status Meta reported. NULL on every other row. Absent on a row read before v50 is applied, which is
+     * why this and the seven fields below are optional: nothing may depend on the column being there.
+     */
+    delivery_status?: MessageDeliveryStatus | null;
+    /** v50. With `delivery_status = 'failed'`: Meta's error code (131047, 131026, ...). */
+    delivery_error_code?: number | null;
+    /** v50. With `delivery_status = 'failed'`: Meta's title or details. */
+    delivery_error?: string | null;
+    /** v50. From the status webhook's `pricing.category`: `service`, `utility`, `marketing`, `authentication`, ... */
+    pricing_category?: string | null;
+    /** v50. From the status webhook's `pricing.type`: `free_customer_service`, `free_entry_point`, `regular`, ... */
+    pricing_type?: string | null;
+    /** v50. From the status webhook's `pricing.billable`. */
+    billable?: boolean | null;
+    /**
+     * v50. Inbound WhatsApp only: why the agent did not answer (`agent_off`, `not_test_sender`, `handed_off`, `window_closed`, `opted_out`,
+     * `billable_blocked`, `provider_unavailable`, `unsupported_type`, `failure`). Free text in the database, so the vocabulary can grow without a migration.
+     */
+    no_reply_reason?: string | null;
+    /** v50. The inbound media saved to our store. PRIVATE: never served by the public upload route. SET NULL when the upload is deleted. */
+    media_upload_id?: string | null;
     created_at: Timestamptz;
+}
+
+/** v50. `messages.delivery_status`. A `read` may arrive without a `delivered`; the code keeps the column monotonic. */
+export type MessageDeliveryStatus = 'sent' | 'delivered' | 'read' | 'played' | 'failed';
+
+/** v50. `contact_consents.category`. */
+export type ContactConsentCategory = 'service' | 'updates' | 'marketing';
+/** v50. `contact_consents.action`. */
+export type ContactConsentAction = 'granted' | 'withdrawn';
+/** v50. `contact_consents.source`: where the grant or withdrawal came from. */
+export type ContactConsentSource = 'agent_offer' | 'stop_phrase' | 'user_preferences' | 'owner' | 'in_app_signup';
+
+/**
+ * v50. A `contact_consents` row: one grant or withdrawal of consent, append-only. A contact's current state is the newest row per
+ * (`creator_id`, `contact_ref`, `category`). `conversation_id` is SET NULL when the thread is deleted, so the evidence outlives it.
+ */
+export interface ContactConsentRow {
+    id: string;
+    creator_id: string;
+    conversation_id: string | null;
+    /** The channel the consent was given on. The column has no CHECK: the writers use these three. */
+    platform: ConversationPlatform;
+    /** The platform's id for the person: a BSUID, an IGSID or a PSID. */
+    contact_ref: string;
+    category: ContactConsentCategory;
+    action: ContactConsentAction;
+    source: ContactConsentSource;
+    /** The exact text the person saw or sent, if any. */
+    wording: string | null;
+    created_at: Timestamptz;
+}
+
+/**
+ * v50. A `channel_usage` row: the monthly ledger, one row per bucket (the primary key is every column down to `market`). It feeds the free-replies
+ * meter and the cost estimate.
+ */
+export interface ChannelUsageRow {
+    creator_id: string;
+    /** `whatsapp`. */
+    platform: string;
+    /** The `phone_number_id` the usage was counted on. */
+    external_account_id: string;
+    /** `YYYY-MM`, in the messaging account's timezone. */
+    period: string;
+    /** Meta's pricing category. */
+    category: string;
+    /** Meta's pricing type. */
+    pricing_type: string;
+    /** The recipient's calling-code market: `EG`, `SA` or `other`. */
+    market: string;
+    /** Delivered (or read) statuses, counted once per `wamid`. */
+    delivered: number;
+    /** Of those, the ones Meta marked billable. */
+    billable: number;
+    /** NUMERIC(10,4), so pg returns it as a string. */
+    est_cost_usd: string;
 }
 
 // ─── scheduled posts ────────────────────────────────────────────────────────────────────
@@ -322,7 +431,8 @@ export interface TikTokPostOptions {
 
 // ─── platform connections (v18) ─────────────────────────────────────────────────────────
 
-export type ConnectionPlatform = 'tiktok' | 'youtube';
+/** `whatsapp` since v50: one row per tenant WhatsApp number, `external_account_id` being the `phone_number_id`. */
+export type ConnectionPlatform = 'tiktok' | 'youtube' | 'whatsapp';
 export type ConnectionStatus = 'active' | 'invalid' | 'revoked';
 
 export interface PlatformConnectionRow {
@@ -350,6 +460,11 @@ export interface PlatformConnectionRow {
      * Absent on a row read before v44 is applied, which is why it is optional: nothing may depend on the column being there.
      */
     profile?: unknown;
+    /**
+     * v50. The owner's choices for the connection (JSONB, NOT NULL, default `{}`). WhatsApp: `{ allow_billable, free_tier_alert_at }`. Facts read from the
+     * platform live in `profile`, never here. Absent on a row read before v50 is applied, which is why it is optional.
+     */
+    settings?: Record<string, unknown>;
     created_at: Timestamptz;
     updated_at: Timestamptz;
 }
@@ -439,6 +554,14 @@ export interface AiAgentRow {
     sales_mode: 'off' | 'test' | 'on';
     /** v39: with `sales_mode = 'test'`, the sender ids (IGSIDs on Instagram) the sales turn answers. */
     sales_test_senders: string[];
+    /**
+     * v50: the WhatsApp agent. `off` (the default) stores inbound messages and answers nobody; `test` answers only `whatsapp_test_senders`; `everyone`
+     * answers all (the API refuses it until the go-live gate). Absent on a row read before v50 is applied, which is why this and the next field are
+     * optional: a missing value means `off`.
+     */
+    whatsapp_mode?: 'off' | 'test' | 'everyone';
+    /** v50: with `whatsapp_mode = 'test'`, the BSUIDs or E.164 digits the agent answers on WhatsApp. */
+    whatsapp_test_senders?: string[];
 }
 
 // ─── Carousel Studio (v21) ──────────────────────────────────────────────────────────────
