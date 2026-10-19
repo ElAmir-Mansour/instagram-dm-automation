@@ -310,30 +310,7 @@ const App = {
             }
         });
 
-        // Sidebar navigation — real links, so they also work with the hash router.
-        // Hover and focus warm the page module so the click has nothing to wait
-        // for; `pointerenter` rather than `mouseover` so it fires once per item
-        // and not on touch, where there is no hover to warm from.
-        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
-            item.addEventListener('click', (e) => {
-                // Cmd, Ctrl, Shift, Alt or the middle button is the browser's: the item is a real link, so "open in a new tab" works (SH-24).
-                if (this.isModifiedClick(e)) return;
-                e.preventDefault();
-                this.go(item.dataset.page);
-            });
-            const warm = () => this.prefetchPageModule(item.dataset.page);
-            item.addEventListener('pointerenter', warm, { once: true });
-            item.addEventListener('focus', warm, { once: true });
-        });
-        // The brand mark is the way home (SH-27): the same link rules as a nav item, without being one (it has no marker).
-        const home = document.querySelector('[data-nav-home]');
-        if (home) {
-            home.addEventListener('click', (e) => {
-                if (this.isModifiedClick(e)) return;
-                e.preventDefault();
-                this.go(this.DEFAULT_PAGE);
-            });
-        }
+        this.bindNavLinks();
 
         // The indicator is positioned from measured geometry, so it has to be
         // re-measured whenever the nav's box can change.
@@ -528,6 +505,31 @@ const App = {
         };
         if (typeof list.addEventListener === 'function') list.addEventListener('change', changed);
         else if (typeof list.addListener === 'function') list.addListener(changed);
+    },
+
+    /**
+     * Sidebar navigation: real links, so they also work with the hash router. Hover and focus warm the page module so the click has
+     * nothing to wait for; `pointerenter` rather than `mouseover` so it fires once per item and not on touch, where there is no hover to
+     * warm from. The brand mark is the way home (SH-27): the same link rules as an item, without being one (it has no marker).
+     * Apart from `init()` so a test can bind them to fake links.
+     */
+    bindNavLinks() {
+        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+            item.addEventListener('click', (e) => { this.handleNavClick(e, item.dataset.page); });
+            const warm = () => this.prefetchPageModule(item.dataset.page);
+            item.addEventListener('pointerenter', warm, { once: true });
+            item.addEventListener('focus', warm, { once: true });
+        });
+        const home = document.querySelector('[data-nav-home]');
+        if (home) home.addEventListener('click', (e) => { this.handleNavClick(e, this.DEFAULT_PAGE); });
+    },
+
+    /** A click on a navigation link: the router's, unless it is a modified click, which is the browser's. True when the router took it. */
+    handleNavClick(event, page) {
+        if (this.isModifiedClick(event)) return false;
+        event.preventDefault();
+        this.go(page);
+        return true;
     },
 
     /**
