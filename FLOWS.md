@@ -2852,7 +2852,7 @@ A message that is a **group** message or has **no BSUID anywhere** becomes no jo
 
 **`src/jobs/handlers.ts:41`** — `isWhatsAppDmPayload(payload)` (`object === 'whatsapp'` with a `change`) sends a `dm.process` to **`handleWhatsAppInbound`**
 (**`src/webhook/whatsappInbound.ts:466`**), anything else to `handleMessagingEvent` exactly as before. **`handlers.ts:52`** — `wa.event` →
-**`handleWhatsAppEvent`** (**`src/services/whatsappStatus.ts:146`**). If the queue is down, **`router.ts:222`** → `processWhatsAppEntry` (**:205**) runs the same planner
+**`handleWhatsAppEvent`** (**`src/services/whatsappStatus.ts:163`**). If the queue is down, **`router.ts:222`** → `processWhatsAppEntry` (**:205**) runs the same planner
 and the same two handlers inline, one job at a time, each isolated (`webhook.whatsapp_failed`).
 
 ### 10.4 — Tenant
@@ -2910,18 +2910,56 @@ not merged or deleted**: `wa.contact_rekey_conflict` (`warn`), and the system me
 
 ### 10.9 — Statuses, and the usage ledger
 
-**`whatsappStatus.ts:74`** `applyStatus`, one transaction, the row read **`FOR UPDATE`** (**:80**): a status of one of OUR messages (`direction = 'outbound'`, found by
-`meta_message_id = wamid`) moves `delivery_status` only **up** (`sent` < `failed` < `delivered` < `read` < `played`, **:86**); `failed` records `delivery_error_code` and
+**`whatsappStatus.ts:79`** `applyStatus`, one transaction, the row read **`FOR UPDATE`** (**:87**): a status of one of OUR messages (`direction = 'outbound'`, found by
+`meta_message_id = wamid`) moves `delivery_status` only **up** (`sent` < `failed` < `delivered` < `read` < `played`, **:93**); `failed` records `delivery_error_code` and
 `delivery_error` but never moves a delivered or read message back; `pricing_category`, `pricing_type` and `billable` are copied from whichever status carries them.
-**`:110`** — the first status that takes a message from not-delivered to delivered (a `read` that arrived first included) calls **`recordDelivery`**
+**`:117`** — the first status that takes a message from not-delivered to delivered (a `read` that arrived first included) calls **`recordDelivery`**
 (**`src/services/channelUsage.ts:124`**) **in the same transaction**, so a duplicate or out-of-order status cannot count twice and a count that fails rolls the status
 back for the retry to redo. The ledger row is per number, month (UTC for now, `TODO(M12)`), category, pricing type and recipient market (BSUID prefix `EG.`/`SA.` or
 phone `20`/`966`, else `other`). `GET /api/whatsapp/connection` reads it back as the meter (**`src/routes/whatsapp.ts:76`**, `usageOf`).
 
-### 10.10 — Account and preference events
+### 10.10 — Account events: the connection's health, and who is told
 
-`wa.event` kinds `account` and `preference` are **logged only** (`wa.account_event`, `wa.preference_event`, **`whatsappStatus.ts:165`**, **:169**): W7 and W9 act on them.
-The preference detail names a person's phone number and is deliberately not logged.
+**`whatsappStatus.ts:180`** — a `wa.event` of kind `account` goes to **`handleAccountEvent`** (**`src/services/whatsappAccount.ts:490`**). **`planAccountEvent`** (**:268**, pure) reads the
+field and event into **changes**, or says `informational` (partner, pricing and linked-ad events, and a `PARTNER_REMOVED` with no `disconnection_info`: logged `wa.account_event`, nothing
+written) or `unhandled` (an event or field this build has no sample for, or a payload missing what its event needs: `wa.account_event_unhandled` with `reason`, completed, never guessed).
+The tenant is found by **`entry.id`** against `platform_connections.profile.waba_id` (an account event names no phone number), narrowed to one number when the event carries
+`display_phone_number`.
+
+| Event | `profile` | `status` | Alert |
+|---|---|---|---|
+| `ACCOUNT_DELETED`, `ACCOUNT_OFFBOARDED`, `PARTNER_REMOVED` + `disconnection_info` | `disconnection`, `account_block` (`deleted` / `offboarded` / `disconnected`) | `invalid` | disconnected |
+| `ACCOUNT_RECONNECTED` | `disconnection` cleared, block cleared | `active`, **only if an account block held it** (a dead token stays dead) | reconnected |
+| `ACCOUNT_RESTRICTION` | `restriction` (types, end) | `invalid` + `account_block: restricted` + `block_until` **only for `RESTRICTED_CUSTOMER_INITIATED_MESSAGING` still running** (replies are customer-initiated) | restriction |
+| `ACCOUNT_VIOLATION` | `violation` | unchanged | violation |
+| `DISABLED_UPDATE` | `ban` | `DISABLE` → `invalid` + `banned`; `SCHEDULE_FOR_DISABLE` unchanged; `REINSTATE` → block cleared, `active` | ban |
+| `account_alerts` | `alerts["alert:<type>"]` | unchanged | Meta's words, when `ACTIVE` |
+| `phone_number_name_update` | `name_status`; `display_name` when `APPROVED` | unchanged | name |
+| `phone_number_quality_update` | `messaging_limit` (`current_limit`), `number_status` (`FLAGGED`/`UNFLAGGED`), `throughput` (`THROUGHPUT_UPGRADE`) | unchanged | limit / number status; then `checkConnectionHealth` reads the real rating |
+| `business_capability_update` | `business_capability` (daily limit, number cap) | unchanged | capability |
+
+**"Once per distinct change" is the stored value, never the clock.** `profile.alerts[key]` is the last value the owner was told. A change whose value equals it is a duplicate
+(Meta redelivers, a job is retried: nothing written, nobody told); one that differs is news however soon it follows, so GREEN → YELLOW → GREEN → YELLOW is four alerts (review M13).
+Until a first alert is stored, the profile's own field stands in (`Change.fallback`), so the first event does not announce what the Settings card already shows; a violation, a point
+event with no state, carries `entry.time` in its value. The write is **`commitChange`** (**:150**): read the row, decide (**:155**), `UPDATE … WHERE profile IS NOT DISTINCT FROM <what was read>`,
+retried up to three times against whatever won; the alert is sent **after** the claim, and a send that fails (`wa.alert_failed`) **releases** it and fails the job, so the retry sends it once.
+Alerts switched off (`wa.alert_not_sent`) is not a failure: the state is stored. The alert goes to the operator's Telegram bot (`whatsappNotify.ts`), Arabic then English, naming WhatsApp and
+the number, with what to do; it never carries a customer.
+
+A **block** (`profile.account_block`) is why a valid token does not revive a connection: **`refreshHealth`** (**`whatsappConnections.ts:425`**, **:437**) leaves it `invalid` while the block holds
+(`wa.connection_blocked`) and clears a `restricted` one only when its `block_until` has passed.
+
+**The free-reply alert.** After the transaction in `applyStatus` commits, a first-delivered `service` message calls **`checkFreeTierAlert`** (**`whatsappAccount.ts:550`**): once the period's
+delivered `service` count reaches the connection's `settings.free_tier_alert_at` (900 by default) the owner is told, and `profile.free_tier_alerted_period` stores the period, so the 901st does
+nothing and a new month alerts again; a failed send gives the period back. It never throws into the status path (`wa.free_tier_check_failed`).
+
+**The daily read.** **`refreshAllWhatsAppConnections`** (**`whatsappHealth.ts:149`**) runs from `GET /api/cron/publish` after the YouTube visibility check, 50 connections a day, least recently read first, and
+**never throws**: one tenant's failure is `wa.health_sweep_row_failed`, counted, and does not stop the next. **`checkConnectionHealth`** (**:95**) calls `refreshHealth`; Meta refusing the token or a
+permission (190, 200, 10) makes the connection `invalid` and tells the owner once (`reportConnectionInvalid`: the stored value stops a second alert on every later day, whichever path marked it);
+anything else changes nothing. What changed since the last read (quality, messaging limit via `whatsapp_business_manager_messaging_limit`, number status, name review) is told once by the same rule
+(**`healthChanges`**, **:46**), a first reading is recorded without an alert, and a connection that comes back says so once. `TODO(M12)`: the account timezone is not read yet.
+
+`wa.event` kind `preference` is **logged only** (`wa.preference_event`, **`whatsappStatus.ts:195`**). The preference detail names a person's phone number and is deliberately not logged.
 
 ### 10.11 — The agent answers a test sender (W5)
 
@@ -3038,7 +3076,14 @@ error, and several write **no row at all**.
 | 10 | a status for a message we have no row for — **`whatsappStatus.ts:133`** | `wa.status_unknown_message` | no (nothing to update; the job completes, nothing is retried) |
 | 10 | a status name Meta added later, or a status job with none — **`whatsappStatus.ts:156`**, **:151** | `wa.status_unrecognised` / `wa.status_empty` (`warn`) | no |
 | 10 | a delivery that could not be counted (the message row has no tenant, or the job no number) — **`whatsappStatus.ts:113`** | `wa.usage_not_counted` (`warn`) | the status is applied; **the ledger misses it** |
-| 10 | an account event or a preference change — **`whatsappStatus.ts:165`**, **:169** | `wa.account_event` / `wa.preference_event` | no (logged only until W7 and W9) |
+| 10 | an account event Meta sent that this build cannot map, or one for a number nobody connected — **`whatsappAccount.ts:490`** | `wa.account_event_unhandled` (`warn`, with `reason`) / `wa.account_event_no_connection` (`warn`) | no (Meta got its 200 and will not resend; nothing is written) |
+| 10 | an account event that only says something about partners or pricing — **`whatsappAccount.ts:268`** | `wa.account_event` (`informational: true`) | no |
+| 10 | a repeat of an account change the owner was already told — **`whatsappAccount.ts:155`** | *(none: a duplicate is the point)* | no write, no second alert |
+| 10 | an owner alert while alerts are off, or Telegram unreachable — **`whatsappNotify.ts:243`** | `wa.alert_not_sent` (`info`) / `wa.alert_failed` (`warn`) | the state is stored; a failed send releases the claim and the job retries |
+| 10 | a quality event's follow-up read of the number fails — **`whatsappStatus.ts:180`** | `wa.account_health_read_failed` (`warn`) | the event is applied; the daily read tries again tomorrow |
+| 10 | the free-reply alert check fails — **`whatsappAccount.ts:550`** | `wa.free_tier_check_failed` (`warn`) | the delivery is counted; the next delivery decides again |
+| 10 | a preference change — **`whatsappStatus.ts:195`** | `wa.preference_event` | no (logged only) |
+| 10 | a daily health read of one number fails (a timeout, a database error) — **`whatsappHealth.ts:149`** | `wa.health_sweep_row_failed` (`warn`); a listing failure is `wa.health_sweep_failed` (`error`) | that number is left as it was; the rest are read |
 | 10 | the meter's ledger cannot be read — **`routes/whatsapp.ts:76`** | `whatsapp.usage_unreadable` (`warn`) | no; the card answers `usage.unavailable: true` with zeros |
 | 10 | **a message nobody answers** — `noReplyReasonFor`, **`whatsappInbound.ts:98`** | `wa.inbound_stored` (`no_reply_reason`, `answered: false`) | yes: the inbound row, `handled_at` set, `no_reply_reason` = `agent_off` / `not_test_sender` / `unsupported_type` / `connection_invalid` / `bot_paused` |
 | 10 | the agent's reply could not be sent: a closed window, a billable reply nobody allowed, a refused connection — **`channels/send.ts:124`** | `wa.send_refused` (`warn`), `wa.answer_failed` (`error`) | the inbound row says `window_closed` / `billable_blocked` / `connection_invalid`; **no outbound row**; the thread is stamped "Needs you" and the owner is told; **Meta is not called** |

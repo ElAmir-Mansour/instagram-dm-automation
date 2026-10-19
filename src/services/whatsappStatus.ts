@@ -3,10 +3,13 @@
  *
  *   status       a message of OURS moved on: `sent` -> `delivered` -> `read` -> `played`, or `failed`. Applied to its `messages` row, and the
  *                first time a message counts as delivered it is counted in the usage ledger (channelUsage.ts)
- *   account      quality, limits, bans, name review: LOG ONLY in this phase (W7 acts on them)
- *   preference   a customer's marketing opt-in or opt-out: LOG ONLY in this phase (W9 acts on it)
+ *   account      quality, limits, bans, restrictions, name review, Meta's alerts: written to the connection's profile and status and told to the
+ *                owner once per distinct change (whatsappAccount.ts). A quality event carries no rating, so the real numbers are read from
+ *                Meta afterwards (whatsappHealth.ts), best effort
+ *   preference   a customer's marketing opt-in or opt-out: LOG ONLY in this phase (a later phase acts on it)
  *
- * None of these ever reaches an AI, and none sends anything.
+ * None of these ever reaches an AI, and none sends a WhatsApp message. The first delivery of a `service` message also checks the owner's
+ * free-reply alert (`checkFreeTierAlert`, once per period) after the transaction below has committed.
  *
  * ## A status is applied in one transaction, under a row lock
  *
@@ -31,9 +34,11 @@
 import type { MessageDeliveryStatus } from '../db/rows.js';
 import type { WaEventPayload } from '../jobs/types.js';
 import { normalizeWhatsAppChange, type WaStatus } from '../webhook/whatsapp.js';
-import { log } from '../utils/log.js';
+import { describeError, log } from '../utils/log.js';
 import { recordDelivery } from './channelUsage.js';
 import { withTransaction } from './studio/common.js';
+import { checkFreeTierAlert, handleAccountEvent } from './whatsappAccount.js';
+import { checkConnectionHealth } from './whatsappHealth.js';
 
 /** The order a message's status only ever moves up. See the header for where `failed` sits and why. */
 export const STATUS_RANK: Readonly<Record<MessageDeliveryStatus, number>> = Object.freeze({ sent: 1, failed: 2, delivered: 3, read: 4, played: 5 });
@@ -72,6 +77,8 @@ function errorText(error: { title: string | null; details: string | null } | und
  * and is simply not counted (`wa.usage_not_counted`).
  */
 export async function applyStatus(status: WaStatus & { status: MessageDeliveryStatus }, phoneNumberId: string | null): Promise<StatusOutcome> {
+    // What the free-reply alert needs, set inside the transaction and used only after it has committed.
+    let countedService = null as { creatorId: string; phoneNumberId: string; at?: Date } | null;
     const outcome = await withTransaction<StatusOutcome>(async (tx) => {
         const found = await tx.query<OutboundRow>(
             `SELECT id, creator_id, delivery_status, pricing_category, pricing_type, billable
@@ -124,6 +131,12 @@ export async function applyStatus(status: WaStatus & { status: MessageDeliverySt
                     },
                     tx
                 );
+                if ((status.pricing?.category ?? row.pricing_category)?.toLowerCase() === 'service') {
+                    countedService = {
+                        creatorId: row.creator_id, phoneNumberId,
+                        ...(status.timestamp !== null ? { at: new Date(status.timestamp * 1000) } : {}),
+                    };
+                }
             }
         }
         return { kind: 'applied', moved, counted };
@@ -134,6 +147,10 @@ export async function applyStatus(status: WaStatus & { status: MessageDeliverySt
     } else if (!outcome.moved && status.status !== 'failed') {
         // A repeat or an out-of-order status: harmless, and said so.
         log('debug', 'wa.status_stale', { phone_number_id: phoneNumberId, status: status.status });
+    }
+    if (countedService) {
+        // The delivery is committed; a failure to check or send the alert must not fail the status (it never throws, and says so in the log).
+        await checkFreeTierAlert(countedService);
     }
     if (status.status === 'failed') {
         // The code is Meta's own (131047: outside the window, 131049: not delivered to protect the ecosystem, ...); never the message.
@@ -160,12 +177,21 @@ export async function handleWhatsAppEvent(payload: WaEventPayload): Promise<void
             }
             return;
         }
-        case 'account':
-            // W7 updates the connection's health and tells the owner. Until then the event is on record and nowhere else.
-            log('info', 'wa.account_event', { field: payload.field, entry_id: payload.entryId, phone_number_id: payloadPhoneNumberId(payload.value) });
+        case 'account': {
+            const outcome = await handleAccountEvent(payload);
+            if (outcome.kind !== 'applied') return;
+            for (const creatorId of outcome.readHealthFor) {
+                try {
+                    await checkConnectionHealth(creatorId);
+                } catch (err) {
+                    // The event itself is applied and told. The daily sweep reads the same numbers tomorrow, so this is not worth a retry.
+                    log('warn', 'wa.account_health_read_failed', { field: payload.field, entry_id: payload.entryId, creator_id: creatorId, ...describeError(err) });
+                }
+            }
             return;
+        }
         case 'preference':
-            // W9 turns it into a consent row. The detail names a person's phone number: not logged.
+            // A later phase turns it into a consent row. The detail names a person's phone number: not logged.
             log('info', 'wa.preference_event', { field: 'user_preferences', entry_id: payload.entryId, phone_number_id: payload.phoneNumberId });
             return;
         default: {
@@ -173,11 +199,4 @@ export async function handleWhatsAppEvent(payload: WaEventPayload): Promise<void
             log('warn', 'wa.event_unknown_kind', { kind: (never as { kind?: unknown })?.kind ?? null });
         }
     }
-}
-
-/** An account-level `value` rarely names a number; when it does, the log says which. */
-function payloadPhoneNumberId(value: unknown): string | null {
-    const v = value as { phone_number_id?: unknown; metadata?: { phone_number_id?: unknown } } | null;
-    const id = v?.phone_number_id ?? v?.metadata?.phone_number_id;
-    return typeof id === 'string' && id ? id : null;
 }

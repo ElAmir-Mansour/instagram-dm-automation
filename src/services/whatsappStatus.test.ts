@@ -10,6 +10,9 @@
  *   - a status that fails to count is not applied either, so the retry counts it (the other order loses the count for good)
  *   - `failed` never moves a delivered or read message back, and `delivered` after `failed` wins
  *   - a status for a message with no row is logged and completes: there is nothing to retry
+ *   - the status that takes a number's delivered `service` messages to the owner's alert threshold tells the owner, once per period, and a
+ *     status that is not a delivery, or is not `service`, never asks
+ *   - an account event reaches the connection through the same handler (the per-event mappings are pinned in whatsappAccount.test.ts)
  */
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -21,9 +24,11 @@ import { drainJobs } from '../jobs/runner.js';
 import { memoryQueue } from '../jobs/testSupport.js';
 import type { WaEventPayload } from '../jobs/types.js';
 import { metaHttp } from './http.js';
+import { telegramHttp } from './notify.js';
 import { setLogSink } from '../utils/log.js';
 import { applyStatus, handleWhatsAppEvent, STATUS_RANK } from './whatsappStatus.js';
 import type { WaStatus } from '../webhook/whatsapp.js';
+import { connectionQuery, fakeConnection, newConnectionDb, type ConnectionDb } from './whatsappTestSupport.js';
 
 const CREATOR = '11111111-1111-4111-8111-111111111111';
 const PHONE_ID = '106540352242922';
@@ -45,9 +50,13 @@ let logs: Array<Record<string, any>>;
 let metaCalls: string[];
 let snapshot: string | null;
 let ledgerFails: boolean;
+let conns: ConnectionDb;
+let alerts: string[];
+let healthReads: string[];
+let savedKey: string | undefined;
 const originalQuery = pool.query;
 const originalConnect = pool.connect;
-const originals = { get: metaHttp.get, post: metaHttp.post, delete: metaHttp.delete, axiosGet: axios.get, axiosPost: axios.post };
+const originals = { get: metaHttp.get, post: metaHttp.post, delete: metaHttp.delete, axiosGet: axios.get, axiosPost: axios.post, telegram: telegramHttp.post };
 let restoreSink: (() => void) | undefined;
 const norm = (sql: string) => sql.replace(/\s+/g, ' ').trim();
 
@@ -86,10 +95,28 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
         else db.ledger.push({ key, delivered: 1, billable, est_cost_usd: cost });
         return result([], 1);
     }
+    // The connection, the owner's alert settings and the ledger's free-reply count: what the account events and the free-reply alert read.
+    const connection = connectionQuery(conns, sql, params);
+    if (connection) return connection;
+    if (/FROM app_settings WHERE key/.test(sql)) {
+        const saved: Record<string, string> = { 'notify.telegram_bot_token': '123456789:AAEhBP0av28dummydummydummydummydummy12', 'notify.telegram_chat_id': '424242', 'notify.telegram_enabled': 'true' };
+        const keys: string[] = Array.isArray(params[0]) ? params[0] : [params[0]];
+        return result(keys.filter((k) => k in saved).map((key) => ({ key, value: saved[key], is_secret: false })));
+    }
+    if (/^SELECT COALESCE\(SUM\(delivered\), 0\) AS n FROM channel_usage/.test(sql)) {
+        const [creator, phone, period] = params;
+        const n = db.ledger.filter((b) => b.key.startsWith(`${creator}|${phone}|${period}|service|`)).reduce((sum, b) => sum + b.delivered, 0);
+        return result([{ n }]);
+    }
     throw new Error(`no result arranged for SQL: ${sql}`);
 }
 
 beforeEach(() => {
+    savedKey = process.env.TOKEN_ENCRYPTION_KEY;
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+    conns = newConnectionDb([fakeConnection({ creator_id: CREATOR, external_account_id: PHONE_ID, profile: { ...fakeConnection().profile, waba_id: WABA } })]);
+    alerts = [];
+    healthReads = [];
     statements = [];
     logs = [];
     metaCalls = [];
@@ -106,9 +133,13 @@ beforeEach(() => {
     (metaHttp as any).delete = refuse('DELETE');
     (axios as any).get = refuse('axios GET');
     (axios as any).post = refuse('axios POST');
+    (telegramHttp as any).post = async (_url: string, body: any) => { alerts.push(body.text); return { data: { ok: true } }; };
 });
 
 afterEach(() => {
+    if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+    else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+    (telegramHttp as any).post = originals.telegram;
     assert.deepEqual(metaCalls, [], 'a Meta call was made');
     restoreSink?.();
     (pool as unknown as { query: unknown }).query = originalQuery;
@@ -158,6 +189,16 @@ async function receive(over: StatusOver = {}): Promise<void> {
 }
 
 const logged = (event: string) => logs.filter((l) => l.event === event);
+
+/** A quality event also reads the number from Meta (the event carries no rating): answer that read, and record it apart from the refused calls. */
+function answerHealthReads(): void {
+    (metaHttp as any).get = async (url: string, config: any) => {
+        healthReads.push(`${url.split('/').pop()} ${config.params.fields}`);
+        return { data: String(config.params.fields).startsWith('display_phone_number')
+            ? { display_phone_number: '+1 555-078-3881', verified_name: 'Lucky Shrub', quality_rating: 'GREEN', name_status: 'APPROVED', throughput: { level: 'STANDARD' } }
+            : { status: 'CONNECTED', whatsapp_business_manager_messaging_limit: 'TIER_1K' } };
+    };
+}
 const row = () => db.rows[0]!;
 const delivered = () => db.ledger.reduce((n, b) => n + b.delivered, 0);
 
@@ -414,19 +455,107 @@ describe('a status it cannot apply', () => {
     });
 });
 
+describe('the free-reply alert on a delivery', () => {
+    const SERVICE_BUCKET = `${CREATOR}|${PHONE_ID}|2025-10|service|free_customer_service|EG`;
+    const seed = (delivered: number) => db.ledger.push({ key: SERVICE_BUCKET, delivered, billable: 0, est_cost_usd: 0 });
+    const connectionReads = () => statements.filter((s) => /FROM platform_connections/.test(s.sql)).length;
+    const profile = () => conns.connections[0]!.profile as Record<string, any>;
+
+    it('tells the owner when a delivery takes the month to the threshold (900 by default), and stores the period', async () => {
+        seed(899);
+        db.rows.push(outbound());
+        await receive({ status: 'delivered', pricing: FREE });
+        assert.equal(alerts.length, 1);
+        assert.match(alerts[0]!, /900 \/ 1,000/);
+        assert.equal(profile().free_tier_alerted_period, '2025-10');
+    });
+
+    it('is quiet one below the threshold', async () => {
+        seed(898);
+        db.rows.push(outbound());
+        await receive({ status: 'delivered', pricing: FREE });
+        assert.deepEqual([alerts.length, profile().free_tier_alerted_period], [0, undefined]);
+    });
+
+    it('does not tell again for the 901st delivery of the same month', async () => {
+        seed(899);
+        db.rows.push(outbound(), outbound({ id: 'msg-2', meta_message_id: 'wamid.OUR.MESSAGE.2' }));
+        await receive({ status: 'delivered', pricing: FREE });
+        await receive({ status: 'delivered', pricing: FREE, id: 'wamid.OUR.MESSAGE.2' });
+        assert.equal(delivered(), 901);
+        assert.equal(alerts.length, 1);
+    });
+
+    it('asks about nothing for a status that is not a first delivery, or not a service message', async () => {
+        seed(950);
+        db.rows.push(outbound());
+        await receive({ status: 'sent', pricing: FREE });
+        assert.equal(connectionReads(), 0, 'a sent message is not a delivery');
+        await receive({ status: 'delivered', pricing: PAID });
+        assert.equal(connectionReads(), 0, 'a marketing message is not a free reply');
+        assert.equal(alerts.length, 0);
+        await receive({ status: 'read', pricing: null });
+        assert.equal(connectionReads(), 0, 'a read after a delivery is not a second one');
+    });
+
+    it('never fails the status: a broken alert check is logged and the delivery stays applied and counted', async () => {
+        seed(899);
+        db.rows.push(outbound());
+        const through = (pool as unknown as { query: (sql: string, params: unknown[]) => Promise<unknown> }).query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[]) => {
+            if (/platform_connections/.test(sql)) throw new Error('deadlock detected');
+            return through(sql, params);
+        };
+        await receive({ status: 'delivered', pricing: FREE });
+        assert.equal(row().delivery_status, 'delivered');
+        assert.equal(delivered(), 900);
+        assert.equal(logged('wa.free_tier_check_failed').length, 1);
+        assert.equal(alerts.length, 0);
+    });
+});
+
 describe('account and preference events', () => {
-    it('are logged with their field and number, change nothing, and need no database', async () => {
+    it('an account event is handled for the connection it names: the quality event changes the limit, is logged with its field, and reads the number from Meta', async () => {
+        answerHealthReads();
+        for (const payload of payloadsOf({
+            object: 'whatsapp_business_account',
+            entry: [{ id: WABA, time: 1745612159, changes: [{ field: 'phone_number_quality_update', value: { display_phone_number: '15550783881', event: 'UPGRADE', current_limit: 'TIER_1K' } }] }],
+        })) {
+            await handleWhatsAppEvent(payload);
+        }
+        const account = logged('wa.account_event');
+        assert.deepEqual([account.length, account[0]!.field, account[0]!.entry_id, account[0]!.connections], [1, 'phone_number_quality_update', WABA, 1]);
+        assert.equal((conns.connections[0]!.profile as any).messaging_limit, 'TIER_1K');
+        assert.equal(alerts.length, 1);
+        assert.deepEqual(healthReads, [`${PHONE_ID} display_phone_number,verified_name,quality_rating,code_verification_status,name_status,throughput`, `${PHONE_ID} status,whatsapp_business_manager_messaging_limit`]);
+        assert.notEqual((conns.connections[0]!.profile as any).read_at, '2026-10-18T08:00:00.000Z', 'the read was stored');
+    });
+
+    it('a failed health read after an account event does not fail the event: it is applied, told, and the failure is logged', async () => {
+        (metaHttp as any).get = async () => { throw new Error('socket hang up'); };
+        for (const payload of payloadsOf({
+            object: 'whatsapp_business_account',
+            entry: [{ id: WABA, time: 1745612159, changes: [{ field: 'phone_number_quality_update', value: { display_phone_number: '15550783881', event: 'UPGRADE', current_limit: 'TIER_1K' } }] }],
+        })) await handleWhatsAppEvent(payload);
+        assert.equal(alerts.length, 1);
+        assert.equal(logged('wa.account_health_read_failed').length, 1);
+    });
+
+    it('a preference is logged with its field and number and changes nothing', async () => {
+        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [{ wa_id: '201001234567', detail: 'User requested to stop marketing messages', value: 'stop' }] } });
+        const preference = logged('wa.preference_event');
+        assert.deepEqual([preference.length, preference[0]!.field, preference[0]!.phone_number_id], [1, 'user_preferences', PHONE_ID]);
+        assert.equal(statements.length, 0, 'nothing was read or written');
+    });
+
+    it('an account event with no connection behind it is logged and completes', async () => {
+        conns.connections.length = 0;
         for (const payload of payloadsOf({
             object: 'whatsapp_business_account',
             entry: [{ id: WABA, time: 1745612159, changes: [{ field: 'phone_number_quality_update', value: { display_phone_number: '15550783881', event: 'FLAGGED', current_limit: 'TIER_250' } }] }],
         })) await handleWhatsAppEvent(payload);
-        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [{ wa_id: '201001234567', detail: 'User requested to stop marketing messages', value: 'stop' }] } });
-
-        const account = logged('wa.account_event');
-        assert.deepEqual([account.length, account[0]!.field, account[0]!.entry_id], [1, 'phone_number_quality_update', WABA]);
-        const preference = logged('wa.preference_event');
-        assert.deepEqual([preference.length, preference[0]!.field, preference[0]!.phone_number_id], [1, 'user_preferences', PHONE_ID]);
-        assert.equal(statements.length, 0, 'nothing was read or written');
+        assert.equal(logged('wa.account_event_no_connection').length, 1);
+        assert.equal(alerts.length, 0);
     });
 
     it('never log a customer’s phone number or what they chose', async () => {
@@ -500,6 +629,7 @@ describe('the stored payload of a wa.event job', () => {
     });
 
     it('leaves an account event’s payload alone: it names no one', async () => {
+        answerHealthReads();
         const planned = planJobs({
             object: 'whatsapp_business_account',
             entry: [{ id: WABA, time: 1745612159, changes: [{ field: 'phone_number_quality_update', value: { display_phone_number: '15550783881', event: 'FLAGGED', current_limit: 'TIER_250' } }] }],

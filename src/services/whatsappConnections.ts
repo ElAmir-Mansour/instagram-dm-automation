@@ -30,6 +30,15 @@ import { getPhoneNumberHealth, inspectWhatsAppToken, type PhoneNumberHealth } fr
 
 // ─── The shapes the JSONB columns hold ──────────────────────────────────────────────────
 
+/**
+ * Why Meta, not the token, stopped a connection (an `account_update` event, `whatsappAccount.ts`): the account was deleted or taken off this
+ * app, the number is restricted from replying, or the account is disabled. Kept in `profile.account_block` so a valid token does not undo it
+ * (`refreshHealth`): only Meta saying it is over (a reconnect or reinstate event, or the restriction's own end) clears it.
+ */
+export type AccountBlock = 'deleted' | 'offboarded' | 'disconnected' | 'restricted' | 'banned';
+
+export const ACCOUNT_BLOCKS: readonly AccountBlock[] = ['deleted', 'offboarded', 'disconnected', 'restricted', 'banned'];
+
 /** What a connection keeps of what Meta said. Written by `connect` and every health read; the keys are the data model's. */
 export interface WhatsAppProfile {
     /** The Messaging account (the old WABA) id. Typed by the owner at connect: Meta's answer for a phone number does not name it. */
@@ -49,6 +58,10 @@ export interface WhatsAppProfile {
     timezone: string | null;
     /** ISO time the facts were read. */
     read_at: string | null;
+    /** Present only while Meta has blocked the account (see `AccountBlock`); absent otherwise, so a profile without a block is unchanged. */
+    account_block?: AccountBlock;
+    /** ISO time a `restricted` block ends. Absent for one with no stated end. */
+    block_until?: string;
 }
 
 export const EMPTY_PROFILE: WhatsAppProfile = {
@@ -74,7 +87,24 @@ export function readProfile(value: unknown): WhatsAppProfile {
         is_test_number: v.is_test_number === true,
         timezone: text(v.timezone),
         read_at: text(v.read_at),
+        ...(isAccountBlock(v.account_block) ? { account_block: v.account_block } : {}),
+        ...(isAccountBlock(v.account_block) && text(v.block_until) ? { block_until: text(v.block_until)! } : {}),
     };
+}
+
+export const isAccountBlock = (value: unknown): value is AccountBlock => typeof value === 'string' && (ACCOUNT_BLOCKS as readonly string[]).includes(value);
+
+/**
+ * The block that still holds at `now`, or null: none recorded, or a `restricted` one whose end has passed. An expired restriction is the one
+ * block Meta never announces the end of, so the clock is what lifts it.
+ */
+export function activeAccountBlock(profile: Pick<WhatsAppProfile, 'account_block' | 'block_until'>, now: Date = new Date()): AccountBlock | null {
+    if (!profile.account_block) return null;
+    if (profile.account_block === 'restricted' && profile.block_until) {
+        const until = Date.parse(profile.block_until);
+        if (Number.isFinite(until) && until <= now.getTime()) return null;
+    }
+    return profile.account_block;
 }
 
 /** Meta's health read as the `profile` keys it fills. Not `waba_id` (typed) and not `timezone` (not read). */
@@ -391,6 +421,26 @@ export async function refreshHealth(creatorId: string): Promise<WhatsAppConnecti
 
     let current = await updateHealth(connection.id, health);
     if (!current) throw new WhatsAppNotConnectedError('The WhatsApp connection was removed during a refresh.');
+
+    if (current.status === 'invalid' && current.profile.account_block && !activeAccountBlock(current.profile)) {
+        // The restriction's own end has passed: the block is over, and only the token is left to check below.
+        await queryCount(
+            `UPDATE platform_connections SET profile = COALESCE(profile, '{}'::jsonb) - 'account_block' - 'block_until', updated_at = NOW()
+              WHERE id = $1 AND platform = 'whatsapp'`,
+            [current.id]
+        );
+        const { account_block: _block, block_until: _until, ...rest } = current.profile;
+        current = { ...current, profile: rest };
+        log('info', 'whatsapp.account_block_expired', { connection_id: current.id, creator_id: creatorId });
+    }
+
+    if (current.status === 'invalid' && activeAccountBlock(current.profile)) {
+        // Meta, not the token, stopped this connection (a restriction, a ban, a disconnection): a valid token does not undo that, and flipping
+        // it back to `active` would have the agent send into an account Meta has blocked. Meta's own "reconnected" / "reinstated" event
+        // (whatsappAccount.ts) or the restriction's end lifts it.
+        log('info', 'whatsapp.connection_blocked', { connection_id: current.id, creator_id: creatorId, block: current.profile.account_block });
+        return current;
+    }
 
     if (current.status === 'invalid') {
         const inspection = inspectWhatsAppToken(await fetchDebugToken(accessToken), process.env.META_APP_ID?.trim() || null);
