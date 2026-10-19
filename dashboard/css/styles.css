@@ -5411,6 +5411,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ig-step-label { margin: 0 0 var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
 .ig-when-choice { border: 0; padding: 0; margin: 0 0 var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .ig-radio { display: flex; align-items: center; gap: var(--space-2); min-block-size: var(--tap-target); font-size: var(--fs-200); }
+/* The time field is disabled unless "at a time I choose" is the choice; the claim layer over it takes the press and makes it the choice (IG-01). */
+.ig-at-wrap { position: relative; display: block; }
+.ig-at-claim { position: absolute; inset: 0; cursor: pointer; }
+.ig-at-claim[hidden] { display: none; }
 .ig-brand { margin-block-end: var(--space-5); }
 .ig-brand-summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .ig-brand[open] .ig-brand-summary { margin-block-end: var(--space-4); }

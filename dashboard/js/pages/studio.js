@@ -719,10 +719,12 @@ const StudioPage = {
      * button gets a real listener rather than an inline handler.
      */
     errorHost(error, title, retry) {
+        // The sentence and the next step the error carries (UX US1 FR-007); the status stays as the hint when there is no next step.
+        const info = error ? UI.errorText(error) : null;
         const options = JSON.stringify({
             title,
-            message: (error && error.message) || t('error.unexpected'),
-            hint: error && error.status ? `HTTP ${error.status}` : '',
+            message: info ? info.sentence : t('error.unexpected'),
+            hint: info && info.next ? info.next : (error && error.status ? `HTTP ${error.status}` : ''),
         });
         return html`<div data-error-host data-error-retry="${retry}" data-error-options="${options}"></div>`;
     },
@@ -774,7 +776,7 @@ const StudioPage = {
             return html`
                 <div class="studio-status-failed" role="alert">
                     <i data-lucide="alert-circle" aria-hidden="true"></i>
-                    <span dir="auto">${t('studio.status.failed', { message: this.statusError.message || t('error.unexpected') })}</span>
+                    <span dir="auto">${t('studio.status.failed', { message: UI.errorLine(this.statusError) })}</span>
                     ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'studio:refreshStatus' })}
                 </div>
             `;
@@ -951,7 +953,7 @@ const StudioPage = {
         try {
             await run();
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             this._statusBusy = Math.max(0, this._statusBusy - 1);
             restore();
@@ -1701,7 +1703,7 @@ const StudioPage = {
         try {
             markup = this.lessonDetailMarkup(await this.fetchLesson(id, true));
         } catch (err) {
-            markup = UI.errorStrip((err && err.message) || t('error.unexpected'), '');
+            markup = UI.errorBox(err || t('error.unexpected'));
         }
         if (this.modalLive(token)) this.paintRegion('studio-lesson-body', markup);
     },
@@ -1731,7 +1733,7 @@ const StudioPage = {
                         <i data-lucide="info" aria-hidden="true"></i>
                         <div class="stack gap-2">
                             <span>${lesson.status === 'indexing' ? t('studio.lessons.indexingNote') : t('studio.lessons.notIndexedNote')}</span>
-                            ${lesson.error ? html`<span class="text-danger" dir="auto">${lesson.error}</span>` : ''}
+                            ${lesson.error ? html`<span class="text-danger" dir="auto">${this.failureSentence(lesson.error)}</span>${UI.errorDetails(UI.failureError(lesson.error))}` : ''}
                             ${lesson.status !== 'indexing' && lesson.id ? html`<div>${UI.button({
                                 variant: 'secondary', size: 'sm', icon: 'scan-text', label: t('studio.lessons.indexOne'),
                                 action: 'studio:indexLesson', data: { id: lesson.id },
@@ -1799,7 +1801,7 @@ const StudioPage = {
             this.refreshStatus();
             if (detail) this.paintRegion('studio-lesson-body', this.lessonDetailMarkup(detail));
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -1849,11 +1851,36 @@ const StudioPage = {
         return list.map((p) => String(p));
     },
 
+    /**
+     * The server's problem lines that the error's own sentence does not already say: all of them for an uncoded refusal, only the extra
+     * ones for a coded one (its sentence, built from the code, is the first line already, and the English of it is behind Details).
+     */
+    extraProblems(err) {
+        const all = this.problemList(err);
+        const coded = !!(err && typeof err.code === 'string' && t(`errors.${err.code}`) !== `errors.${err.code}`);
+        return coded ? all.filter((p) => p !== String(err.message || '')) : all;
+    },
+
+    /** A stored failure's sentence: the text itself when it is readable, a plain sentence when it is technical (its text goes behind Details). */
+    failureSentence(text) {
+        return UI.errorText(UI.failureError(text)).sentence;
+    },
+
+    /**
+     * A stored failure as the error a strip draws. A technical one is its coded sentence with the text behind Details; a readable one keeps
+     * its wrapper sentence (`wrapperKey`, with `{message}`), as it has always been shown.
+     */
+    failureEntry(wrapperKey, raw) {
+        const failure = UI.failureError(raw);
+        if (failure.code) return failure;
+        return { message: t(wrapperKey, { message: failure.message || t('error.unexpected') }) };
+    },
+
     newErrorMarkup() {
         const e = this.newError;
         if (!e) return '';
         return html`
-            ${UI.errorStrip(e.message, '', 'studio-new-error-strip')}
+            ${UI.errorBox(e.err || { message: e.message }, 'studio-new-error-strip')}
             ${e.problems && e.problems.length ? html`
                 <ul class="problem-list">${e.problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>
             ` : ''}
@@ -1874,7 +1901,7 @@ const StudioPage = {
         const more = document.getElementById('studio-more');
         if (field && more && typeof more.contains === 'function' && more.contains(field)) more.open = true;
         if (field) UI.markInvalid(field, 'studio-new-error-strip');
-        if (error && error.message) Motion.announce(error.message);
+        if (error && (error.err || error.message)) Motion.announce(UI.errorLine(error.err || { message: error.message }));
     },
 
     /** Is the operator looking at the Studio's home right now (not a draft, not Settings)? */
@@ -2031,7 +2058,8 @@ const StudioPage = {
             if (!draft || !draft.id) throw new Error(t('error.unexpected'));
             if (draft.status === 'failed') {
                 // Saved, but with nothing to edit: say why here, and let the grid show the row.
-                this.newError = { message: t('studio.new.failed', { message: draft.error || t('error.unexpected') }) };
+                const entry = this.failureEntry('studio.new.failed', draft.error);
+                this.newError = { err: entry, message: UI.errorText(entry).sentence };
                 return;
             }
             this.selected = [];
@@ -2050,7 +2078,7 @@ const StudioPage = {
             }
         } catch (err) {
             if (tenant === this._tenantEpoch) {
-                this.newError = { message: (err && err.message) || t('error.unexpected'), problems: this.problemList(err) };
+                this.newError = { err: err || null, message: UI.errorText(err).sentence, problems: this.extraProblems(err) };
             }
         } finally {
             const stale = tenant !== this._tenantEpoch;
@@ -2064,7 +2092,7 @@ const StudioPage = {
                 // in which case the reason stays in `newError`, for the home card to show.
                 if (this.regen && this.regen.state === 'running') {
                     this.regen = this.newError && seq === this._seq
-                        ? { state: 'failed', draftId: this.regen.draftId, message: this.newError.message }
+                        ? { state: 'failed', draftId: this.regen.draftId, message: this.newError.message, err: this.newError.err }
                         : null;
                 }
                 if (this.regen && seq !== this._seq) this.regen = null;
@@ -2196,8 +2224,8 @@ const StudioPage = {
             return html`
                 <section class="surface pad-5 studio-plan">
                     ${head}
-                    ${UI.errorStrip((plan.error && plan.error.message) || t('error.unexpected'), '')}
-                    ${this.problemList(plan.error).length ? html`<ul class="problem-list">${this.problemList(plan.error).map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
+                    ${UI.errorBox(plan.error || t('error.unexpected'))}
+                    ${this.extraProblems(plan.error).length ? html`<ul class="problem-list">${this.extraProblems(plan.error).map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
                 </section>
             `;
         }
@@ -2298,7 +2326,7 @@ const StudioPage = {
                     p.draftId = String(draft.id);
                     if (draft.status === 'failed') {
                         p.run = 'failed';
-                        p.error = draft.error || t('error.unexpected');
+                        p.error = draft.error ? this.failureSentence(draft.error) : t('error.unexpected');
                         failed++;
                     } else {
                         p.run = 'done';
@@ -2307,7 +2335,7 @@ const StudioPage = {
                     }
                 } catch (err) {
                     p.run = 'failed';
-                    p.error = (err && err.message) || t('error.unexpected');
+                    p.error = UI.errorLine(err);
                     failed++;
                 }
             }
@@ -2505,7 +2533,7 @@ const StudioPage = {
                         </p>
                     ` : ''}
                     ${busy ? html`<p class="draft-card-stage"><span class="spinner spinner-sm" aria-hidden="true"></span> ${this.draftStageText(draft)}</p>` : ''}
-                    ${draft.status === 'failed' && draft.error ? html`<p class="post-card-error" dir="auto">${draft.error}</p>` : ''}
+                    ${draft.status === 'failed' && draft.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(draft.error))}</div>` : ''}
                     ${draft.status === 'scheduled' || draft.status === 'generating' ? '' : html`
                         <!-- A scheduled draft is the record of what was posted: the server refuses to delete it.
                              One still being written has nothing to delete yet; its card says so. -->
@@ -2892,7 +2920,8 @@ const StudioPage = {
                 ${d.input && d.input.idea ? html`<span class="text-meta" dir="auto">${t('studio.plan.idea', { idea: d.input.idea })}</span>` : ''}
             </p>
             ${d.status === 'failed' ? html`
-                ${UI.errorStrip(d.error || t('error.unexpected'), canRender ? t('studio.editor.failedHint') : '', 'studio-draft-error')}
+                ${UI.errorBox(UI.failureError(d.error), 'studio-draft-error')}
+                ${canRender ? html`<p class="form-hint">${t('studio.editor.failedHint')}</p>` : ''}
                 ${canRender ? html`<div class="row row--wrap gap-2 mbs-4">${UI.button({
                     variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('studio.editor.renderAgain'),
                     action: 'studio:renderAgain', id: 'studio-render-again',
@@ -3802,7 +3831,7 @@ const StudioPage = {
         const ready = !!(this.draft && this.draft.status === 'ready');
         const keys = this.saveKeys();
         return html`
-            ${this.saveError ? UI.errorStrip(this.saveError, '', 'studio-save-error') : ''}
+            ${this.saveError ? UI.errorBox(this.saveError, 'studio-save-error') : ''}
             <div class="studio-savebar-row">
                 <p class="studio-dirty${dirty ? html.raw(' is-dirty') : ''}" id="studio-dirty" role="status">
                     <span class="studio-dirty-dot" aria-hidden="true"></span>
@@ -4616,7 +4645,7 @@ const StudioPage = {
             detail = await this.fetchLesson(lessonId);
             markup = this.shotPickerMarkup(detail);
         } catch (err) {
-            markup = UI.errorStrip((err && err.message) || t('error.unexpected'), '');
+            markup = UI.errorBox(err || t('error.unexpected'));
         }
         if (!this.modalLive(token) || lessonId !== this._shotLesson) return;
         this.paintRegion('studio-shot-grid', markup);
@@ -4836,7 +4865,7 @@ const StudioPage = {
             this.saveError = null;
         } else {
             this.problems = null;
-            this.saveError = (err && err.message) || t('error.unexpected');
+            this.saveError = err || t('error.unexpected');
         }
         return problems.length > 0;
     },
@@ -4936,8 +4965,8 @@ const StudioPage = {
                     if (seq !== this._seq) return;
                     const refused = this.takeSaveFailure(err);
                     this.paintProblems();
-                    this.paintRegion('studio-rewrite-error', UI.errorStrip(
-                        refused ? t('studio.rewrite.saveRefused') : ((err && err.message) || t('error.unexpected')), '', 'studio-rewrite-error-strip'
+                    this.paintRegion('studio-rewrite-error', UI.errorBox(
+                        refused ? t('studio.rewrite.saveRefused') : (err || t('error.unexpected')), 'studio-rewrite-error-strip'
                     ));
                     restore();
                     return;
@@ -4954,7 +4983,7 @@ const StudioPage = {
             this.startPoll(seq);
         } catch (err) {
             if (seq !== this._seq) return;
-            this.paintRegion('studio-rewrite-error', UI.errorStrip((err && err.message) || t('error.unexpected'), '', 'studio-rewrite-error-strip'));
+            this.paintRegion('studio-rewrite-error', UI.errorBox(err || t('error.unexpected'), 'studio-rewrite-error-strip'));
             restore();
         }
     },
@@ -5064,7 +5093,7 @@ const StudioPage = {
         if (r.state === 'failed') {
             return html`
                 <div class="studio-regen">
-                    ${UI.errorStrip(r.message || t('error.unexpected'), '', 'studio-regen-error')}
+                    ${UI.errorBox(r.err || { message: r.message || t('error.unexpected') }, 'studio-regen-error')}
                     <div class="row row--wrap gap-2 mbs-4">
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('common.dismiss'), action: 'studio:dismissRegen', id: 'studio-regen-dismiss' })}
                     </div>
@@ -5097,7 +5126,7 @@ const StudioPage = {
             this.paintSchedule();
             this.startPoll(this._seq);
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -5200,9 +5229,10 @@ const StudioPage = {
         return { ok: true, body: { scheduled_time: when, tiktok, create_campaign: data.get('create_campaign') === 'on' } };
     },
 
+    /** `message` is a sentence of this page's own (a string) or the refusal itself, whose code becomes the sentence. */
     showScheduleError(message, problems, fieldId) {
         this.paintRegion('studio-schedule-error', html`
-            ${UI.errorStrip(message, '', 'studio-schedule-error-strip')}
+            ${UI.errorBox(message, 'studio-schedule-error-strip')}
             ${problems && problems.length ? html`<ul class="problem-list">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
         `);
         const field = fieldId ? document.getElementById(fieldId) : null;
@@ -5234,7 +5264,7 @@ const StudioPage = {
         } catch (err) {
             restore();
             if (seq !== this._seq) return;
-            this.showScheduleError((err && err.message) || t('error.unexpected'), this.problemList(err), null);
+            this.showScheduleError(err || t('error.unexpected'), this.extraProblems(err), null);
         }
     },
 
@@ -5250,7 +5280,7 @@ const StudioPage = {
             UI.toast(done ? t('studio.tiktokCheck.doneToast') : t('studio.tiktokCheck.undoneToast'));
         } catch (err) {
             el.checked = !done;
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             el.disabled = false;
         }
@@ -5804,7 +5834,7 @@ const StudioPage = {
         return html`
             ${this.settingsSaveError ? html`
                 <div id="studio-settings-error" tabindex="-1">
-                    ${UI.errorStrip(this.settingsSaveError, '', 'studio-settings-error-strip')}
+                    ${UI.errorBox(this.settingsSaveError, 'studio-settings-error-strip')}
                     ${problems.length ? html`<ul class="problem-list">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
                 </div>
             ` : ''}
@@ -5985,7 +6015,7 @@ const StudioPage = {
         const el = first ? document.getElementById(this.settingId(first.path)) : document.getElementById('studio-settings-error');
         if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
         if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-        Motion.announce(message);
+        Motion.announce(UI.errorLine(message));
     },
 
     async saveSettings(form, event) {
@@ -6014,7 +6044,7 @@ const StudioPage = {
             this.showSettingsProblems(
                 problems,
                 problems.map((m) => ({ path: this.settingsProblemPath(m), message: m })),
-                (err && err.message) || t('error.unexpected'),
+                err || t('error.unexpected'),
             );
         } finally {
             restore();
@@ -6165,7 +6195,7 @@ const StudioPage = {
             }
         } catch (err) {
             if (seq !== this._seq) return;
-            this.paintRegion('studio-worker-error', UI.errorStrip((err && err.message) || t('error.unexpected'), '', 'studio-worker-error-strip'));
+            this.paintRegion('studio-worker-error', UI.errorBox(err || t('error.unexpected'), 'studio-worker-error-strip'));
         } finally {
             restore();
         }
@@ -6222,7 +6252,7 @@ const StudioPage = {
  * be said out loud rather than left in the console.
  */
 const studioReport = (value) => {
-    Promise.resolve(value).catch((err) => UI.toast((err && err.message) || t('common.error'), 'error'));
+    Promise.resolve(value).catch((err) => UI.toast(UI.errorLine(err), 'error'));
 };
 
 UI.registerActions('studio', {

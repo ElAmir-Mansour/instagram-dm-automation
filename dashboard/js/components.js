@@ -1318,6 +1318,67 @@ const UI = {
         </div>`;
     },
 
+    /**
+     * `errorText` as one line, for a toast: the sentence, then the next step. A toast cannot hold a disclosure, so the Details stay
+     * behind (the full error is on whatever screen raised it). Never empty.
+     */
+    errorLine(err) {
+        const { sentence, next } = UI.errorText(err);
+        return next ? `${sentence} ${next}` : sentence;
+    },
+
+    /**
+     * An error strip (the `.inline-error` box, with its alert icon and `role="alert"`) that holds `errorHtml`: the sentence, the next
+     * step and the folded Details. The strip the Studio pages draw for a refusal or a failed job, so none of them prints
+     * `err.message` (the server's English, or a worker's raw JSON) as the sentence. `id` names the strip for `aria-describedby`.
+     */
+    errorBox(err, id) {
+        const stripId = id || `error-box-${++UI._previewSeq}`;
+        return html`<div class="inline-error" role="alert" id="${stripId}">
+            <i data-lucide="alert-circle" aria-hidden="true"></i>
+            ${UI.errorHtml(err)}
+        </div>`;
+    },
+
+    /**
+     * The folded Details of an error on their own (`errorHtml`'s disclosure), for a line its caller has already worded (a sentence
+     * wrapped around a stored failure) and that only needs the raw text kept behind it. '' when there is nothing behind the sentence.
+     */
+    errorDetails(err) {
+        const { details } = UI.errorText(err);
+        return details ? html`<details class="error-details">
+            <summary>${t('error.details')}</summary>
+            <p class="error-details-text" dir="auto">${details}</p>
+        </details>` : '';
+    },
+
+    /** What Supabase Storage (or the worker reporting it) says when an object is over the file-size limit: a 413 in any of its spellings. */
+    STORAGE_TOO_LARGE_TEXT: /payload too large|exceeded the maximum allowed size|"statusCode"\s*:\s*"?413\b|\bHTTP\s*413\b/i,
+
+    /** Text that is not for a person: a JSON object, an HTTP status line, a socket error code, a stack frame, `[object Object]`. */
+    TECHNICAL_TEXT: /\{\s*"[\w$.-]+"\s*:|"statusCode"|\bHTTP\s*[1-5]\d\d\b|\b(?:ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE)\b|\n\s+at\s+\S|\[object Object\]/i,
+
+    /**
+     * A failure that was STORED as text (a worker's error on a source, a clip, a draft, a lesson) as an error `errorText` / `errorHtml` can
+     * read: `{ code?, message }`. The text itself is never changed, only what it is shown as:
+     *
+     *   - Storage's 413 ("storage answered HTTP 400 to the upload: {"statusCode":"413","error":"Payload too large"…}") is
+     *     `STORAGE_FILE_TOO_LARGE`: a sentence that says what is wrong and what to do, the raw text behind Details.
+     *   - Any other technical text (JSON, an HTTP status, a socket error, a stack) is `STUDIO_STEP_FAILED`: a plain "this step did not
+     *     finish", the raw text behind Details. It is never the sentence.
+     *   - A readable sentence the server wrote and has not given a code yet stays as it is, the sentence it is today (the contract
+     *     `errorText` already has for an uncoded refusal).
+     *
+     * Empty text gives an error whose sentence is the generic `common.error`.
+     */
+    failureError(text) {
+        const raw = typeof text === 'string' ? text.trim() : '';
+        if (!raw) return { message: '' };
+        if (UI.STORAGE_TOO_LARGE_TEXT.test(raw)) return { code: 'STORAGE_FILE_TOO_LARGE', message: raw };
+        if (UI.TECHNICAL_TEXT.test(raw)) return { code: 'STUDIO_STEP_FAILED', message: raw };
+        return { message: raw };
+    },
+
     // ─── Status pills ───────────────────────────────────────────────────────
     /**
      * The status vocabulary (specs/001-dashboard-ux/data-model.md, "StatusPill vocabulary"): family → state → `[tone, glyph, busy?]`.

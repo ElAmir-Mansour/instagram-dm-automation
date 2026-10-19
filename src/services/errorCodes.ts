@@ -109,6 +109,16 @@ export const ERROR_CODES = {
     DRAFT_SCHEDULED: { status: [409], meaning: 'A carousel draft that is scheduled cannot be changed, scheduled again or deleted.' },
     DRAFT_WRITING: { status: [409], meaning: 'A carousel draft that is still being written cannot be changed.' },
     DRAFT_NOT_READY: { status: [409], meaning: 'Scheduling a carousel draft whose slides are not rendered yet.' },
+    /**
+     * Not sent by a route: RECOGNISED by the dashboard (`UI.failureError`) in the failure text a worker stored on a source, a clip or a draft.
+     * Supabase Storage answers a signed upload that is over its file-size limit with 413 "Payload too large", and the Mac worker records
+     * that as `storage answered HTTP 400 to the upload: {"statusCode":"413"…}` (aicourse-captions, scripts/monteur/upload.mjs). The text
+     * names no limit and no size, so no number is shown: UPLOAD_TOO_LARGE's sentence needs `{maxMb}`, and its next step (host the file
+     * elsewhere) is wrong for a rendered reel.
+     */
+    STORAGE_FILE_TOO_LARGE: { status: [413], meaning: 'A rendered file was refused by Supabase Storage as over its file-size limit (recognised in a worker\'s stored failure text).' },
+    /** Also recognised by the dashboard, not sent: a stored failure whose text is technical (JSON, an HTTP status, a stack), shown as a plain sentence with the text behind Details. */
+    STUDIO_STEP_FAILED: { status: [500], meaning: 'A Studio or Monteur step failed with a technical message (recognised in a worker\'s stored failure text); the person reads a plain sentence.' },
     CHANGED_MEANWHILE: { status: [409], meaning: 'A concurrent change won the race while this one was being saved: reload and try again.' },
 
     // ─── Tenant AI work (the providers layer and the Mac) ───────────────────────────────────────────────
