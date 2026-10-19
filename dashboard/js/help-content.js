@@ -1125,8 +1125,8 @@ const HelpContent = {
             icon: 'message-circle',
             title: { ar: 'واتساب: تجهيز ميتا والربط والتكلفة', en: 'WhatsApp: Meta setup, connecting and costs' },
             summary: {
-                ar: 'خطوات ميتا لمرة وحدة، وربط الرقم باللوحة، وتجربته على جوالك قبل ما يرد على أي عميل، وكم يكلّف بعد الألف ردّ المجانية.',
-                en: 'The one-time Meta steps, connecting the number here, testing it on your own phone before it answers a customer, and what it costs past the first 1,000 free replies.',
+                ar: 'خطوات ميتا لمرة وحدة، وربط الرقم باللوحة، وتجربته على جوالك قبل ما يرد على أي عميل، وروابط الحملات وأسئلة البداية، وكم يكلّف بعد الألف ردّ المجانية.',
+                en: 'The one-time Meta steps, connecting the number here, testing it on your own phone before it answers a customer, campaign links and ice breakers, and what it costs past the first 1,000 free replies.',
             },
             related: ['connect-meta', 'troubleshooting', 'faq'],
             sections: [
@@ -1261,6 +1261,72 @@ const HelpContent = {
                                 'Open the **DM Inbox**: your message should be there. Don’t expect a reply yet: this step only proves that the message gets in.',
                             ] },
                             { tip: '**Everyone** stays disabled until the go-live conditions are met: public privacy pages and the required checks. You can switch the assistant off again at any time by choosing **Off**.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'links',
+                    title: { ar: 'روابط الحملات ورموز QR', en: 'Campaign links and QR codes' },
+                    body: {
+                        ar: [
+                            'الرابط القصير ورمز QR يفتحان محادثة واتساب مع رقمك مباشرة، والعميل يلقى رسالتك الأولى مكتوبة وجاهزة للإرسال. حطّ الرابط في سيرة حسابك، أو اطبع الرمز على ملصق، أو استخدمهما في إعلان. وسوّ رابطاً لكل مكان، فتعرف أي مكان يجيب لك محادثات:',
+                            { ol: [
+                                'افتح **الإعدادات** وانزل لقسم **واتساب**، ثم لقسم **روابط الحملات ورموز QR**.',
+                                'اكتب في **اسم الرابط** اسماً لك أنت، مثل «سيرة إنستجرام». العميل ما يشوفه.',
+                                'اكتب في **الرسالة الأولى** الجملة اللي يبدأ بها العميل المحادثة، حتى 120 حرفاً.',
+                                'اضغط **أنشئ الرابط**. يظهر الرابط ورمز QR في القائمة تحت.',
+                            ] },
+                            'وفي القائمة، لكل رابط:',
+                            { dl: [
+                                ['الرابط القصير', 'اضغط **انسخ الرابط** والصقه حيث تبي.'],
+                                ['رمز QR', 'اضغط **نزّل الصورة**. قد تنفتح الصورة في تبويب جديد، فاحفظها منه ثم ركّبها في تصميمك أو اطبعها.'],
+                                ['رمز التتبّع', 'رمز قصير مثل `#K7M3QA` نضيفه في آخر رسالتك الأولى. يراه العميل داخل الرسالة، فلا تحذفه من الرابط. ولو حذفه العميل نفسه قبل الإرسال ما نعرف من أي رابط جاء.'],
+                                ['المحادثات التي بدأت منه', 'يظهر العدد لما يتوفر. إذا ما شفت رقماً فالعدّ ما بدأ بعد، وهذا لا يعني أن الرابط ما يشتغل.'],
+                            ] },
+                            { note: 'المالك وحده ينشئ الروابط ويحذفها، وبقية الأعضاء يشوفون القائمة بس. وزر **احذف** يسألك قبل التنفيذ: لما يُحذف الرابط يُحذف رمزه معه عند ميتا، وكل نسخة مطبوعة أو منشورة منهما تتوقف.' },
+                        ],
+                        en: [
+                            'The short link and the QR code open a WhatsApp chat with your number directly, and the customer finds your first message typed and ready to send. Put the link in your bio, print the code on a poster, or use either in an ad. Make one link for each place, and you can see which place brings you chats:',
+                            { ol: [
+                                'Open **Settings** and scroll to the **WhatsApp** section, then to **Campaign links and QR codes**.',
+                                'In **Link name**, write a name for yourself, like “Instagram bio”. The customer never sees it.',
+                                'In **First message**, write the sentence the customer starts the chat with, up to 120 characters.',
+                                'Press **Create link**. The link and its QR code appear in the list below.',
+                            ] },
+                            'In the list, each link has:',
+                            { dl: [
+                                ['Short link', 'Press **Copy link** and paste it wherever you need it.'],
+                                ['QR code', 'Press **Download image**. The image may open in a new tab: save it from there, then place it in your design or print it.'],
+                                ['Tracking code', 'A short code like `#K7M3QA` that we add to the end of your first message. The customer sees it inside the message, so don’t remove it from the link. If the customer deletes it before sending, we can’t tell which link they came from.'],
+                                ['Chats started through it', 'The number shows once it is available. If you see none, counting hasn’t started yet, which doesn’t mean the link isn’t working.'],
+                            ] },
+                            { note: 'Only the owner creates and deletes links; other members see the list only. **Delete** asks you first: deleting a link deletes its QR code with it at Meta, and every printed or posted copy of either stops working.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'ice-breakers',
+                    title: { ar: 'أسئلة البداية', en: 'Ice breakers' },
+                    body: {
+                        ar: [
+                            'أسئلة البداية أسئلة قصيرة يضغط عليها العميل لما يفتح محادثة جديدة مع رقمك، من غير ما يكتب. الضغطة توصلك كرسالة عادية منه، ويجاوب عنها المساعد. تقدر تحط حتى 4 أسئلة:',
+                            { ol: [
+                                'افتح **الإعدادات** ← **واتساب** ← **أسئلة البداية في واتساب**.',
+                                'اكتب سؤالاً في كل خانة **السؤال**: حتى 80 حرفاً، وبلا إيموجي. اترك الخانات الزائدة فاضية.',
+                                'اضغط **احفظ الأسئلة**. بعد الحفظ تقرأ اللوحة ما عند ميتا وتعرضه، فإذا اختلف عمّا كتبته تنبّهك.',
+                            ] },
+                            { note: 'واتساب يخفي هذه الأسئلة عمّن يفتح المحادثة من رابط فيه رسالة جاهزة، وكل رابط تنشئه من **روابط الحملات ورموز QR** فيه رسالة جاهزة. فتظهر الأسئلة لمن يبدأ المحادثة من رقمك مباشرة. هذي قاعدة ميتا، مو إعداد عندنا.' },
+                            { tip: 'اكتب الأسئلة كما يسأل العميل فعلاً، مثل «كم السعر؟» أو «وش المنتجات؟»، لأن الضغطة توصل المساعد نصاً عادياً.' },
+                        ],
+                        en: [
+                            'Ice breakers are short questions a customer can tap when they open a new chat with your number, without typing. A tap reaches you as an ordinary message from them, and the assistant answers it. You can set up to 4:',
+                            { ol: [
+                                'Open **Settings** → **WhatsApp** → **WhatsApp ice breakers**.',
+                                'Write one question in each **Question** field: up to 80 characters, with no emoji. Leave the extra fields empty.',
+                                'Press **Save ice breakers**. After saving, the dashboard reads what Meta holds and shows it, and warns you if it differs from what you wrote.',
+                            ] },
+                            { note: 'WhatsApp hides ice breakers from anyone who opens the chat from a link with a prefilled message, and every link you make in **Campaign links and QR codes** has one. So the questions show for people who start a chat from your number directly. That is Meta’s rule, not a setting of ours.' },
+                            { tip: 'Write the questions the way a customer really asks, like “How much is it?” or “What do you sell?”, because a tap reaches the assistant as plain text.' },
                         ],
                     },
                 },
