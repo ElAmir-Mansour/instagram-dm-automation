@@ -24,7 +24,7 @@ import {
 } from './infographicSpec.js';
 import { answerToWritten, layerWriteSchema, writeInfographicOnServer } from './infographicWriter.js';
 import {
-    copyInfographic, createInfographic, deleteInfographic, normaliseSpec, renderPayload, rerenderInfographic, scheduleInfographic, updateInfographic,
+    copyInfographic, createInfographic, deleteInfographic, nextInfographicSlot, normaliseSpec, renderPayload, rerenderInfographic, scheduleInfographic, updateInfographic,
 } from './infographics.js';
 import { completeJob, failJob, STUDIO_JOB_KINDS } from './jobs.js';
 import { ELAMIR_SETTINGS } from './testFixtures.js';
@@ -449,6 +449,29 @@ describe('scheduleInfographic', () => {
         infographicSettings = { ...BRAND, platforms: ['instagram'] };
         await scheduleInfographic(TENANT, ID, {}, NOW);
         assert.deepEqual(posts.map((p) => p.platform), ['instagram']);
+    });
+});
+
+describe('nextInfographicSlot: what the Schedule dialog says "the next free slot" is (UX US1, IG-01)', () => {
+    it('is the instant Schedule would take with no time given, and the tenant’s zone, so the dialog can say time and city', async () => {
+        const preview = await nextInfographicSlot(TENANT, NOW);
+        assert.deepEqual(preview, { next_slot: '2026-10-13T16:00:00.000Z', timezone: 'Asia/Riyadh' }, '19:00 in Riyadh, the fixture’s post_at');
+        await scheduleInfographic(TENANT, ID, {}, NOW);
+        assert.equal((posts[0]!.scheduled_time as Date).toISOString(), preview.next_slot, 'the same slot the preview named');
+    });
+
+    it('skips a slot a pending post already holds, exactly as Schedule does', async () => {
+        posts = [{ platform: 'both', scheduled_time: new Date('2026-10-13T16:00:00Z') }];
+        const preview = await nextInfographicSlot(TENANT, NOW);
+        assert.equal(preview.next_slot, '2026-10-14T16:00:00.000Z', 'today’s 19:00 is taken: tomorrow’s');
+        await scheduleInfographic(TENANT, ID, {}, NOW);
+        assert.equal((posts[1]!.scheduled_time as Date).toISOString(), preview.next_slot);
+    });
+
+    it('writes nothing: it is a read', async () => {
+        await nextInfographicSlot(TENANT, NOW);
+        assert.equal(db.statements.filter((s) => /^(INSERT|UPDATE|DELETE)/i.test(s.sql)).length, 0);
+        assert.equal(db.ran(/pg_advisory_xact_lock/).length, 0, 'and takes no publishing lock');
     });
 });
 

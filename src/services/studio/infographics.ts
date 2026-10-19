@@ -410,6 +410,32 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
     });
 }
 
+/**
+ * The free posting slots an infographic would take, soonest first: the Monteur's `post_at`, in the tenant's zone, that no pending
+ * Meta post holds. ONE definition, shared by Schedule (which takes the first) and by the preview the Schedule dialog shows
+ * (`nextInfographicSlot`), so what the dialog says and what Schedule does cannot drift apart (UX US1, IG-01).
+ */
+async function freeInfographicSlots(creatorId: string, settings: StudioSettings, now: number, exec?: Exec): Promise<string[]> {
+    return nextFreeSlots(creatorId, { timezone: settings.schedule.timezone, slots: settings.monteur.post_at }, SLOT_LOOKAHEAD, now, exec ? { exec } : {});
+}
+
+export interface InfographicNextSlot {
+    /** ISO instant of the slot "the next free slot" would post at; null when there is none in the look-ahead window. */
+    next_slot: string | null;
+    /** The tenant's IANA zone: what the slot's wall time, and a typed time, are read in. */
+    timezone: string;
+}
+
+/**
+ * GET /infographics/next-slot: when "the next free slot" would post, and in which zone, so the Schedule dialog can say the actual
+ * time and city instead of "the next free slot". Read-only: it reads the settings and the pending posts, and writes nothing.
+ */
+export async function nextInfographicSlot(creatorId: string, now: number = Date.now()): Promise<InfographicNextSlot> {
+    const settings = await getStudioSettings(creatorId);
+    const free = await freeInfographicSlots(creatorId, settings, now);
+    return { next_slot: free[0] ?? null, timezone: settings.schedule.timezone };
+}
+
 export interface InfographicScheduleOutcome {
     infographic: InfographicView;
     scheduled_time: string;
@@ -450,7 +476,7 @@ export async function scheduleInfographic(creatorId: string, rawId: unknown, bod
 
         let when = requested;
         if (!when) {
-            const free = await nextFreeSlots(creatorId, { timezone: settings.schedule.timezone, slots: settings.monteur.post_at }, SLOT_LOOKAHEAD, now, { exec: client });
+            const free = await freeInfographicSlots(creatorId, settings, now, client);
             if (!free[0]) throw new StudioError(409, 'There is no free posting slot in the next weeks: choose a time.', undefined, 'NO_FREE_SLOT');
             when = new Date(free[0]);
         }
