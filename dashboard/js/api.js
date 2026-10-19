@@ -465,6 +465,12 @@ const API = {
         method: 'PUT', body: JSON.stringify({ is_bot_active: isActive }),
     }),
     /**
+     * "Mark handled" and its undo (UX US1): the owner's way out of "needs you" for a thread he answered from the Instagram app. Both answer the
+     * thread as a list item (`handled_at` set, or null). A new message from the customer clears it on the server by itself.
+     */
+    markConversationHandled: (id) => API.request(`/conversations/${encodeURIComponent(id)}/handled`, { method: 'POST' }),
+    unmarkConversationHandled: (id) => API.request(`/conversations/${encodeURIComponent(id)}/handled`, { method: 'DELETE' }),
+    /**
      * Look the sender up again (Instagram User Profile API). Throttled on the server, so asking is cheap and
      * answers `{ refreshed: false, reason: 'throttled' }` rather than an error when it is too soon.
      */

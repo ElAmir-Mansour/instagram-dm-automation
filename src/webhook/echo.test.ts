@@ -255,6 +255,12 @@ describe('handleEcho: on', () => {
         assert.deepEqual([taken.conversation_id, taken.why], ['conv-1', 'owner_app_id']);
     });
 
+    it('an owner echo leaves "Mark handled" alone: only a message FROM the customer clears it, not the owner\'s own reply', async () => {
+        const r = await runEcho(echo({ app_id: PAGE_INBOX }));
+        assert.equal(pauses(r).length, 1);
+        assert.doesNotMatch(pauses(r)[0]!.sql, /handled_at/);
+    });
+
     it('stores his words as an operator row keyed on Meta\'s message id, so a redelivery or a retry stores them once', async () => {
         const r = await runEcho(echo({ app_id: PAGE_INBOX }));
 
