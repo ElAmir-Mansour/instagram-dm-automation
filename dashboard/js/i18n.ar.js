@@ -41,6 +41,12 @@
     'settings.dataAccessExpires': 'صلاحية الوصول للبيانات تنتهي: {date}',
     'settings.dataAccessHint': 'تنتهي بعد 90 يوماً من آخر تسجيل دخول إلى ميتا. قبل الموعد ألصق رمزاً جديداً من Graph API Explorer.',
     'settings.ownerOnlyMeta': 'مالك الحساب وحده يستطيع تغيير رموز ميتا.',
+    // The token card's other two states (SE-01, OV-08): never connected is not "invalid", and a check that could not run is not a verdict.
+    'settings.notConnected': 'غير مربوط بعد',
+    'settings.notConnectedBody': 'اربط إنستجرام وفيسبوك لتبدأ الردود.',
+    'settings.connectAction': 'اربط حسابك',
+    'settings.tokenUnknown': 'تعذّر الفحص الآن',
+    'settings.tokenUnknownBody': 'لم تردّ ميتا الآن. هذا لا يعني أن الرمز معطوب؛ أعد المحاولة بعد دقيقة.',
     'help.link.tokenHealth': 'صحة رمز الوصول',
     'campaigns.pausedChip': 'متوقفة',
     'help.link.connectMetaWhere': 'أين تجد هذه القيم في ميتا',
@@ -97,14 +103,14 @@
     'nav.tenants': 'الحسابات',
     'nav.users': 'المستخدمون',
 
-    'page.overview.subtitle': 'ما الذي يحتاج انتباهك هذا الصباح.',
+    'page.overview.subtitle': 'ما يحتاجك الآن.',
     'page.campaigns.subtitle': 'الكلمات المفتاحية وقوالب الرسائل والردود العلنية.',
-    'page.posts.subtitle': 'أنشئ المنشورات وجدولها وانشرها على إنستجرام وفيسبوك.',
+    'page.posts.subtitle': 'أنشئ المنشورات وجدولها وانشرها على إنستجرام وفيسبوك وتيك توك ويوتيوب.',
     'page.inbox.subtitle': 'محادثات العملاء والتحكم في الردود الآلية.',
     'page.ai_settings.subtitle': 'التعليمات وقاعدة المعرفة واختبار الوكيل.',
     'page.analytics.subtitle': 'أداء الأتمتة بالتفصيل.',
     'page.activity.subtitle': 'كل تفاعل مسجّل لحظة حدوثه.',
-    'page.settings.subtitle': 'إدارة الحساب ورموز الوصول.',
+    'page.settings.subtitle': 'الاتصالات والمظهر والتنبيهات والتخزين.',
     'page.tenants.subtitle': 'كل حساب مرتبط، وهل يعمل فعلاً.',
     'page.users.subtitle': 'المستخدمون والصلاحيات ومن يصل إلى أي حساب.',
 
@@ -384,6 +390,10 @@
     'overview.alert.lowSuccessRateBody': '{failed} من {total} رسالة فشلت خلال هذه الفترة — أعلى من المعتاد. افتح سجل النشاط لمعرفة السبب.',
     // Honest "couldn't verify" states — a rejected fetch used to
     // contribute zero alerts, which looks identical to "everything's fine".
+    'overview.alert.notConnected': 'غير مربوط بعد',
+    'overview.alert.notConnectedBody': 'اربط إنستجرام وفيسبوك لتبدأ الردود.',
+    'overview.alert.connect': 'اربط حسابك',
+    'overview.alert.tokenUnansweredBody': 'لم تردّ ميتا الآن. هذا لا يعني أن الرمز معطوب؛ أعد المحاولة بعد دقيقة.',
     'overview.alert.tokenUnknown': 'تعذّر التحقق من حالة رمز الوصول',
     'overview.alert.tokenUnknownBody': 'تعذّر الاتصال بالخادم للتأكد — قد يكون انقطاعاً مؤقتاً في الشبكة، وليس بالضرورة رمزاً معطوباً.',
     'overview.alert.postsUnknown': 'تعذّر التحقق من حالة المنشورات المجدولة',
@@ -545,10 +555,24 @@
     'campaigns.match.riskGeneric': '«{keyword}» قصيرة جداً ({length} حرف) — ستُطابِق داخل كلمات أطول كثيرة.',
     'campaigns.match.advice': 'استخدم كلمة أطول أو عبارة من كلمتين لتفادي التشغيل الخاطئ.',
     'campaigns.match.duplicate': '«{keyword}» مكرّرة في هذه الحملة.',
-    // Cross-campaign collision: this keyword and another campaign's own
-    // keyword are in a substring relationship, so one comment can fire
-    // both campaigns with no way to know which DM the customer gets.
-    'campaigns.match.collision': '«{keyword}» تتطابق أيضاً مع كلمة حملة أخرى «{other}» — قد يُشغِّل التعليق نفسه الحملتين معاً.',
+    // The other campaigns' answer for a keyword, from the server's own matching rule (POST /campaigns/try), never a client guess (CA-07).
+    'campaigns.try.checking': 'نفحص حملاتك الأخرى…',
+    'campaigns.try.failed': 'تعذّر فحص حملاتك الأخرى الآن، فلا نستطيع القول إن الكلمات آمنة.',
+    'campaigns.try.partial': 'فُحصت أول {count} كلمة فقط مقابل حملاتك الأخرى.',
+    'campaigns.try.shadowed': 'عند «{keyword}»: تردّ «{other}» بدلاً منها، ولا تعمل هذه الحملة أبداً على تلك التعليقات.',
+    'campaigns.try.first': 'عند «{keyword}»: تطابقه حملة أخرى أيضاً، لكن هذه الحملة تردّ أولاً، فلا تعمل الأخرى أبداً على تلك التعليقات.',
+    'campaigns.try.useWord': 'استخدم «كلمة كاملة»',
+    'campaigns.try.editOther': 'عدّل الحملة الأخرى',
+
+    // How a campaign's keywords are matched, on its card (CA-08), and what became of its replies (CA-03).
+    'campaigns.mode.word': 'كلمة كاملة',
+    'campaigns.mode.substring': 'أي موضع',
+    'campaigns.mode.word.hint': 'تُشغَّل الحملة فقط حين ترد الكلمة مستقلة في التعليق.',
+    'campaigns.mode.substring.hint': 'تُشغَّل الحملة إذا ظهرت الكلمة في أي موضع من التعليق، حتى داخل كلمة أطول.',
+    'campaigns.stat.delivered': '{count} وصلت',
+    'campaigns.stat.byDesign': '{count} عولجت بحسب القواعد',
+    'campaigns.stat.byDesign.hint': 'كنتَ قد رددتَ يدوياً، أو خرج ردّ علني بدل الرسالة، أو بلغ الإرسال حدّه. لا شيء يلزمك.',
+    'campaigns.stat.pending': '{count} بانتظار الإرسال',
 
     // Bulk import
     'campaigns.bulk.title': 'استيراد حملات ({count})',
@@ -597,7 +621,7 @@
     'posts.tabLive': 'المنشور فعلياً',
     'posts.new': 'جدوِل منشوراً',
     'posts.emptyQueueTitle': 'لا توجد منشورات مجدولة',
-    'posts.emptyQueueBody': 'جدول أول منشور لينشر تلقائياً على إنستجرام أو فيسبوك.',
+    'posts.emptyQueueBody': 'جدول أول منشور لينشر تلقائياً على إنستجرام أو فيسبوك أو تيك توك أو يوتيوب.',
     'posts.emptyLiveTitle': 'لا توجد منشورات منشورة',
     'posts.emptyLiveBody': 'لم نعثر على منشورات على صفحة فيسبوك أو حساب إنستجرام.',
     'posts.createTitle': 'جدولة منشور جديد',
@@ -848,7 +872,7 @@
     'ai.model': 'النموذج',
     'ai.temperature': 'درجة الإبداع: {value}',
     'ai.sandboxTitle': 'اختبار الوكيل',
-    'ai.sandboxDesc': 'جرّب التعليمات وقاعدة المعرفة مباشرة بمحرّك الردّ المختار في هذه الصفحة. لا يرسل هذا أي رسالة إلى إنستجرام.',
+    'ai.sandboxDesc': 'جرّب التعليمات وقاعدة المعرفة مباشرة بمحرّك الردّ المختار في هذه الصفحة. يجرّب الردود العادية فقط حالياً، ولا يعرض مساعد المبيعات هنا. لا يرسل هذا أي رسالة إلى إنستجرام.',
     'ai.sandboxWelcome': 'جرّب وكيل الذكاء الاصطناعي هنا',
     'ai.sandboxWelcomeBody': 'اكتب استفساراً لمعاينة كيف يردّ الوكيل.',
     'ai.sandboxPlaceholder': 'اكتب رسالة تجريبية…',
@@ -1827,7 +1851,7 @@
     'ops.ai.purpose.tenant_infographic': 'كتابة الإنفوجرافيك',
     'ops.ai.purpose.tenant_infographic.hint': 'تكتب صفحات الإنفوجرافيك للحساب ووصفها.',
     'ops.ai.purpose.dm': 'الردّ على الرسائل الخاصة',
-    'ops.ai.purpose.dm.hint': 'تكتب الردود على الرسائل الخاصة للحساب. لا يستخدمها شيء حتى يُفعَّل محرّك الرسائل الخاصة.',
+    'ops.ai.purpose.dm.hint': 'يستخدمه مساعد المبيعات (في وضع التجربة أو التفعيل)، ومحرّك الردّ حين يكون على «مزوّدو الذكاء الاصطناعي».',
     'ops.ai.purpose.key_test': 'الفحوص والتجارب',
     'ops.ai.purpose.eval': 'تشغيلات التقييم',
     'ops.ai.prices': 'الأسعار',

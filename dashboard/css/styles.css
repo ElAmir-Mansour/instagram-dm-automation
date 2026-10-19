@@ -274,6 +274,7 @@ bdi { unicode-bidi: isolate; }
 .mbe-3 { margin-block-end: var(--space-3); }
 .mbe-4 { margin-block-end: var(--space-4); }
 .mbe-5 { margin-block-end: var(--space-5); }
+.mbs-2 { margin-block-start: var(--space-2); }
 .mbs-4 { margin-block-start: var(--space-4); }
 
 .section { margin-block-end: var(--space-6); }
@@ -1877,6 +1878,8 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .campaign-stat .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .campaign-stat .dot.ok { background: var(--success); }
 .campaign-stat .dot.bad { background: var(--danger); }
+/* Outcomes that need nothing from the owner (handled by design, waiting to send, a failed count of zero): a neutral dot, never red. */
+.campaign-stat .dot.neutral { background: var(--text-muted); }
 .card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-block-start: auto; }
 
 /* Keyword hazard inspector — the point-of-decision warning */

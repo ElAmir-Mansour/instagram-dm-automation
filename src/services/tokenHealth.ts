@@ -172,6 +172,20 @@ export function describeInspection(data: any): TokenInspection {
 }
 
 /**
+ * What `GET /api/settings/token/status` says when Meta did not give an answer about the token (a timeout, a network failure, a 5xx, a rate
+ * limit, a body that is not an inspection). The dashboard shows its own sentence for `status: 'unknown'`; this is the text behind it.
+ */
+export const TOKEN_CHECK_UNANSWERED_MESSAGE = 'Meta could not be reached to check the token just now. This is not a verdict on the token: try again in a minute.';
+
+/**
+ * Is `data` the shape of an answer to `debug_token`: an object with a boolean `is_valid`? An empty 200, an error page or a proxy's body is
+ * not one, and `describeInspection` would read all of them as "not valid", which is the one reading a check that could not run must not make.
+ */
+export function isDebugTokenAnswer(data: unknown): data is { is_valid: boolean } {
+    return typeof data === 'object' && data !== null && !Array.isArray(data) && typeof (data as { is_valid?: unknown }).is_valid === 'boolean';
+}
+
+/**
  * The status this inspection should write to `creators.token_status`.
  *
  * A token Meta accepts but which is the wrong type, or has lost data access, is not `valid` in

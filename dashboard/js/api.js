@@ -358,6 +358,9 @@ const API = {
     createCampaign: (data) => API.request('/campaigns', { method: 'POST', body: JSON.stringify(data) }),
     /** What the CSV import seeds each imported row from: `{ seeds, source, fallback }`, the tenant's own offers' campaigns and the wording of a row none names. */
     getCampaignSeeds: () => API.request('/profile/campaign-seeds'),
+    // A dry run (writes nothing): which campaign answers `comment`, with the editor's unsaved `draft` among them. `body` is
+    // `{ comment, postId?, platform?, draft? }` (contracts/api.md, POST /campaigns/try).
+    tryCampaign: (body) => API.request('/campaigns/try', { method: 'POST', body: JSON.stringify(body) }),
     updateCampaign: (id, data) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteCampaign: (id) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 

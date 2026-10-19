@@ -39,7 +39,7 @@ import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../c
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
 import { runRetentionSweep } from '../services/retention.js';
 import {
-    describeInspection, inspectionStatus, noteMetaFailure, recheckTenantToken,
+    describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
 import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
@@ -78,7 +78,7 @@ import {
     normaliseIsoDay, normaliseWhatsappNumber, setSetting,
 } from '../services/appSettings.js';
 import { whatsappUrl } from '../services/publicPages.js';
-import { metaHttp } from '../services/http.js';
+import { isMetaUnavailable, metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
@@ -2223,13 +2223,35 @@ router.get('/settings/token/status', async (req, res) => {
             return;
         }
 
-        // Validate token against Meta API
+        // Meta did not answer about THIS token (a timeout, a network failure, a 5xx, a rate limit, a body that is not an
+        // inspection). That says nothing about the token, so it is `unknown`, and NOTHING is written: a Meta hiccup used to be
+        // stored as `invalid`, which turned a working connection red on the dashboard and in the admin tenant list until the
+        // next check (OV-08).
+        const unanswered = (why: Record<string, unknown>) => {
+            log('warn', 'token.status_unanswered', { creator_id: creatorId, ...why });
+            res.json({
+                status: 'unknown',
+                message: TOKEN_CHECK_UNANSWERED_MESSAGE,
+                expiresAt: null,
+                dataAccessExpiresAt: null,
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
+                isActive: creator.is_active,
+            });
+        };
+
+        // Validate token against Meta API. Through `metaHttp` like every other Graph call: it has a 10 s timeout, which the
+        // bare `axios` it replaces did not, so a hung socket cost the whole function budget.
         try {
-            const debugRes = await axios.get('https://graph.facebook.com/debug_token', {
+            const debugRes = await metaHttp.get('https://graph.facebook.com/debug_token', {
                 params: { input_token: token, access_token: token }
             });
 
-            const data = debugRes.data.data;
+            const data = debugRes.data?.data;
+            if (!isDebugTokenAnswer(data)) {
+                unanswered({ reason: 'not_an_inspection' });
+                return;
+            }
 
             // `describeInspection` rather than reading `data` field by field, so this endpoint
             // and the re-check action cannot disagree about what a healthy token looks like —
@@ -2262,6 +2284,10 @@ router.get('/settings/token/status', async (req, res) => {
                 isActive: creator.is_active,
             });
         } catch (metaErr: any) {
+            if (isMetaUnavailable(metaErr)) {
+                unanswered(describeError(metaErr));
+                return;
+            }
             await recordTokenStatus(
                 creatorId, 'invalid',
                 metaErr?.response?.data?.error?.message || 'Token validation call to Meta failed.'

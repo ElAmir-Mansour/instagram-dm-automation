@@ -596,7 +596,24 @@ const OverviewPage = {
         // 1. Access token — nothing works without it.
         if (tokenRes.status === 'fulfilled' && tokenRes.value) {
             const token = tokenRes.value;
-            if (token.status && token.status !== 'valid') {
+            if (token.status === 'not_connected') {
+                // A tenant that has not connected yet is not broken (OV-04): neutral, with the way to connect. This used to be the
+                // red "access token invalid" below, on the first screen a new tenant ever sees, beside the profile card's own Connect.
+                alerts.push({
+                    level: 'info', icon: 'link',
+                    title: t('overview.alert.notConnected'),
+                    body: t('overview.alert.notConnectedBody'),
+                    action: t('overview.alert.connect'), target: 'settings',
+                });
+            } else if (token.status === 'unknown') {
+                // Meta did not answer the check (OV-08): not a verdict on the token, so not the red one below.
+                alerts.push({
+                    level: 'warning', icon: 'help-circle',
+                    title: t('overview.alert.tokenUnknown'),
+                    body: t('overview.alert.tokenUnansweredBody'),
+                    action: t('overview.openSettings'), target: 'settings',
+                });
+            } else if (token.status && token.status !== 'valid') {
                 alerts.push({
                     level: 'danger', icon: 'key-round',
                     title: t('overview.alert.tokenInvalid'),
