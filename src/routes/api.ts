@@ -77,6 +77,7 @@ import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
 import { recheckAllMetaTokens } from '../services/metaTokenRecheck.js';
 import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
+import { refreshAllWhatsAppConnections } from '../services/whatsappHealth.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
@@ -1035,6 +1036,15 @@ router.get('/cron/publish', async (req, res) => {
         // And whether every published Short is still public (youtubeVisibility.ts). Cannot throw.
         const youtubeVisibility = await checkYouTubeVisibility();
         if (youtubeVisibility.checked > 0) log('info', 'cron.youtube_visibility', { ...youtubeVisibility });
+
+        // WhatsApp: the same daily health read for every connected number (whatsappHealth.ts): quality, limit, name, and a token or
+        // permission Meta now refuses (marked invalid, the owner alerted once). Fail-soft, like the sweeps around it.
+        try {
+            const wa = await refreshAllWhatsAppConnections();
+            if (wa.checked > 0 || wa.failed > 0) log('info', 'cron.whatsapp_health', { ...wa });
+        } catch (waErr) {
+            log('error', 'cron.whatsapp_health_failed', describeError(waErr));
+        }
 
         // Meta: the same daily health check for every connected tenant's Page token (P29, metaTokenRecheck.ts). It writes only what
         // Meta definitively said (valid, expiring, invalid) and never a transient failure, so "reconnect due" cannot be raised by
