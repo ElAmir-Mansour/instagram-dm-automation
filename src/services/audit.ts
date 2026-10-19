@@ -183,6 +183,12 @@ export const AUDIT_ACTIONS = {
     whatsappAgentWrite: 'whatsapp.agent_write',
     /** The owner's WhatsApp billing choices (allow billable replies, the free-tier alert) were changed. */
     whatsappBillingWrite: 'whatsapp.billing_write',
+    /** An entry link (QR code + short link) was made at Meta for the tenant's number. `detail` holds its code and tracking ref, never the message text. */
+    whatsappEntryLinkCreate: 'whatsapp.entry_link_create',
+    /** An entry link was deleted at Meta: printed codes and shared short links answer "expired" from then on. */
+    whatsappEntryLinkDelete: 'whatsapp.entry_link_delete',
+    /** The number's WhatsApp ice breakers and commands were changed from Settings. `detail` holds the counts, never the texts. */
+    whatsappIceBreakersWrite: 'whatsapp.ice_breakers_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
