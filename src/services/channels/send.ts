@@ -99,9 +99,17 @@ function refused(reason: SendFailureReason, detail: string, extra: Partial<Extra
     return { ok: false, reason, attempted: false, permanent: true, mayHaveLanded: false, code: null, closesAt: null, detail, ...extra };
 }
 
+/** Who a reply is addressed to: the contact's phone (`to`) when known, else their BSUID (`recipient`). See the send step below. */
+export function recipientOf(thread: Pick<ThreadRow, 'instagram_user_id' | 'wa_phone'>): string {
+    const phone = typeof thread.wa_phone === 'string' ? thread.wa_phone.trim().replace(/^\+/, '') : '';
+    return /^\d{8,15}$/.test(phone) ? phone : thread.instagram_user_id;
+}
+
 interface ThreadRow {
     id: string;
     instagram_user_id: string;
+    /** v50. The contact's phone in E.164 digits when Meta has sent `wa_id`; NULL for a username-only contact. */
+    wa_phone: string | null;
     platform: string | null;
     last_inbound_at: Date | string | null;
     free_window_expires_at: Date | string | null;
@@ -128,7 +136,7 @@ export async function sendWhatsAppReply(input: SendWhatsAppReplyInput): Promise<
 
     // 1. The thread, for this tenant only: unscoped, this would send from one tenant's number to another's customer.
     const thread = await queryOne<ThreadRow>(
-        `SELECT id, instagram_user_id, platform, last_inbound_at, free_window_expires_at
+        `SELECT id, instagram_user_id, wa_phone, platform, last_inbound_at, free_window_expires_at
            FROM conversations WHERE id = $1 AND creator_id = $2`,
         [conversationId, creatorId]
     );
@@ -173,7 +181,10 @@ export async function sendWhatsAppReply(input: SendWhatsAppReplyInput): Promise<
     // 5. The shape: one message.
     let message;
     try {
-        message = toWhatsAppMessage(input.body, thread.instagram_user_id);
+        // The phone when Meta gave us one, else the BSUID. A test number delivers only to the phone numbers on its allowed list and checks
+        // that list by phone: addressed by BSUID, every reply failed with 131030 "Recipient phone number not in allowed list" (2026-10-19,
+        // the owner's own number on the list). A username-only contact has no phone and is reached by BSUID, as Meta documents.
+        message = toWhatsAppMessage(input.body, recipientOf(thread));
     } catch (err) {
         if (err instanceof WhatsAppShapeError) {
             log('warn', 'wa.send_refused', { ...logBase, reason: 'invalid_message' });
