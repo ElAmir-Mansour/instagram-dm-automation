@@ -165,6 +165,7 @@ const AnalyticsPage = {
 
     skeleton() {
         return html`
+            ${UI.resultsTabs('numbers')}
             ${Motion.statsGrid(4)}
             ${Motion.chartGrid(2)}
             ${Motion.tableCard(6, [
@@ -225,6 +226,8 @@ const AnalyticsPage = {
                 title: t('analytics.errorTitle'),
                 message: err.message,
                 hint: err.isNetworkError ? t('error.network') : '',
+                // The log is one click away even when the numbers failed to load.
+                before: UI.resultsTabs('numbers'),
             }, () => this.render());
             return;
         }
@@ -246,6 +249,7 @@ const AnalyticsPage = {
         const windowLabel = this.windowText(this.range);
 
         container.innerHTML = esc(html`
+            ${UI.resultsTabs('numbers')}
             <div class="analytics-toolbar">${this.rangeMarkup()}</div>
 
             <div class="stats-grid">

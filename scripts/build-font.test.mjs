@@ -105,7 +105,7 @@ describe('the committed display font', () => {
         // A scan that found nothing would pass: it finds the wordmark, an h1 per page, dozens of h2s and the dashboard's titles.
         assert.ok(entries.length > 150, `${entries.length} display strings`);
         assert.ok(entries.some((e) => e.text.includes('أوتوريبلاي برو')), 'the wordmark');
-        assert.ok(entries.some((e) => e.where === 'dashboard' && e.text === 'نظرة عامة'), 'a dashboard page title');
+        assert.ok(entries.some((e) => e.where === 'dashboard' && e.text === 'اليوم'), 'a dashboard page title');
         assert.ok(entries.some((e) => e.where === 'public/landing.html' && /^\d+$/.test(e.text.trim())), 'a figure');
         assert.deepEqual(uncovered(entries, cmap), []);
     });
