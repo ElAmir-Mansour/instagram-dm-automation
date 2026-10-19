@@ -885,8 +885,9 @@ describe('tenant role guards', () => {
     it('refuses a viewer on every mutating tenant-scoped route', () => {
         // The blanket rule. `/interactions/export/token` is the one deliberate exception: it
         // mints a short-lived token for an export of rows the caller can already read on
-        // screen, so it is a read that happens to be a POST.
-        const READ_ONLY_POSTS = new Set(['POST /interactions/export/token']);
+        // screen, so it is a read that happens to be a POST. `/campaigns/try` is the other: a dry run
+        // of the matcher over campaigns the caller can already list (its test pins that it writes nothing).
+        const READ_ONLY_POSTS = new Set(['POST /interactions/export/token', 'POST /campaigns/try']);
 
         const ungated = tenantScopedRoutes()
             .filter((r) => r.method !== 'get' && !r.guard && !READ_ONLY_POSTS.has(r.key))
