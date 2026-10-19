@@ -60,6 +60,7 @@ const MEDIA = {
     connection: { ok: true, bucketExists: true },
     usage: { tierBytes: 5 * 1024 ** 3, storage: { bytes: 1024 ** 3, files: 12 }, database: { files: 0, bytes: 0 }, queuedDeletions: 0 },
 };
+const META_APP = { enabled: true, configId: {}, mode: 'scope', app: { idSet: true, secretSet: true }, publicBaseUrl: 'https://x.example', register: null };
 const SITE = { whatsappNumber: '', contactEmail: '', eidCouponsExpire: '', source: {} };
 const NOTIFY = {
     telegram: { enabled: true, botToken: { set: true, last4: 'abcd' }, chatId: '4242', hotLeads: true },
@@ -172,7 +173,7 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
     const api = {
         getTokenStatus: async () => VALID, getMetaConnection: async () => META, getTikTokConnection: async () => TIKTOK,
         getYouTubeConnection: async () => YOUTUBE, getWhatsAppConnection: async () => WHATSAPP, getMediaStorage: async () => MEDIA,
-        getNotifySettings: async () => NOTIFY, getSiteSettings: async () => SITE,
+        getNotifySettings: async () => NOTIFY, getSiteSettings: async () => SITE, getMetaAppSettings: async () => META_APP,
     };
 
     for (const lang of ['ar', 'en'] as const) {
@@ -204,7 +205,9 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         });
 
         it(`the Platform tab and each of its cards say they apply to every workspace (${lang})`, async () => {
-            const { Settings, container, t } = load(lang, 'admin', { api, hash: '#/settings?s=platform' });
+            // The Meta module is loaded so its operator block has something to draw; with nothing to draw a card leaves no badge behind.
+            const { Settings, container, t, h } = load(lang, 'admin', { api, hash: '#/settings?s=platform', files: ['dashboard/js/pages/meta_connect.js'] });
+            h.App.loadPageModule = async () => h.run('MetaConnect');
             await Settings.render();
             await settle();
             const badge = text(t('settings.scope.platform'));
@@ -219,6 +222,18 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
             }
         });
     }
+
+    it('a card with nothing to draw for this viewer leaves no badge hanging over nothing', async () => {
+        const { Settings, container } = load('en', 'admin', { api });
+        await Settings.render();
+        await settle();
+        const html = container.innerHTML;
+        // The Meta module is not loaded here, so its operator block has nothing to draw; the TikTok and YouTube apps say why theirs failed.
+        assert.equal(html.includes('data-settings-card="meta-app"'), false);
+        assert.ok(html.includes('data-settings-card="tiktok-app"') && html.includes('data-settings-card="youtube-app"'));
+        // Handoff alerts, the TikTok and YouTube apps, storage, the public site, onboarding: six cards, six badges, and none for the missing one.
+        assert.equal((html.match(/class="settings-scope"/g) ?? []).length, 6);
+    });
 
     it('a tenant owner never gets the developer cards or the Platform tab in the page at all, not even hidden', async () => {
         const { Settings, container } = load('en', 'owner', { api: { ...api, getIceBreakers: async () => ({}) } });
@@ -501,6 +516,14 @@ describe('Connections summary: how it is drawn', () => {
             assert.equal((markup.match(new RegExp(`>${text(t('settings.health.connect'))}<`, 'g')) ?? []).length, 4);
         });
     }
+
+    it('the headline\'s glyph has its own shape for each case: ● all working, ▲ something runs out, ✕ something broke', () => {
+        const head = (over: Json): string => /<(?:p|summary) class="settings-health-head[^"]*"[\s\S]*?<\/(?:p|summary)>/.exec(draw('en', over).markup)![0];
+        assert.match(head({}), /is-fine[\s\S]*●/);
+        assert.match(head({ tokenStatus: { ...VALID, dataAccessExpiresAt: inDays(9) } }), /is-attention[\s\S]*▲/);
+        assert.match(head({ tokenStatus: INVALID }), /is-broken[\s\S]*✕/);
+        assert.match(head({ tokenStatus: { ...VALID, dataAccessExpiresAt: inDays(9) }, whatsapp: { connected: false, status: 'invalid' } }), /is-broken[\s\S]*✕/, 'the worst one names the headline');
+    });
 
     it('every row is a glyph and a word (never colour alone), one detail line and ONE action that opens its card', () => {
         const { markup, t } = draw('en', { tokenStatus: { ...VALID, dataAccessExpiresAt: inDays(9) }, tiktok: { ...TIKTOK, connection: { connected: false } } });

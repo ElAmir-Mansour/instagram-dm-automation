@@ -53,6 +53,10 @@
     background: var(--warning);
 }
 .settings-tab-dot[hidden] { display: none; }
+/* Forced colours drop backgrounds; the dot stays a filled shape. */
+@media (forced-colors: active) {
+    .settings-tab-dot { forced-color-adjust: none; background: Mark; }
+}
 
 /* ─── Panels and cards ─────────────────────────────────────────────────────── */
 .settings-panel[hidden] { display: none; }
@@ -88,6 +92,10 @@
     color: var(--text-strong);
 }
 .settings-health-glyph { line-height: 1; }
+/* The glyph's shape and the words say it; the tint only agrees with them. */
+.settings-health-head.is-fine .settings-health-glyph { color: var(--success-text); }
+.settings-health-head.is-attention .settings-health-glyph { color: var(--warning-text); }
+.settings-health-head.is-broken .settings-health-glyph { color: var(--danger-text); }
 /* The all-fine line is also the control that opens the rows behind it. */
 summary.settings-health-head {
     min-block-size: var(--tap-target);
@@ -116,7 +124,8 @@ details[open] > summary .settings-health-more [data-lucide] { transform: rotate(
 }
 .settings-row {
     display: grid;
-    grid-template-columns: minmax(9rem, 16rem) minmax(0, 1fr) auto;
+    /* The first column is one width for every row, so the detail lines start on the same edge. */
+    grid-template-columns: clamp(12rem, 30%, 22rem) minmax(0, 1fr) auto;
     grid-template-areas: 'head detail action';
     align-items: center;
     gap: var(--space-2) var(--space-4);

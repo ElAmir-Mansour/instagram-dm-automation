@@ -333,6 +333,8 @@ const SettingsPage = {
     /** One card inside its wrapper. `inner` null is the stand-in for a card carried over from the page before. */
     cardItem(card, inner) {
         if (inner === null) return html`<div class="settings-item" data-settings-card="${card.id}" data-adopt></div>`;
+        // A card that has nothing to draw for this viewer (a provider's app, when its settings did not come) leaves no badge hanging over nothing.
+        if (!String(inner).trim()) return '';
         return html`
             <div class="settings-item" data-settings-card="${card.id}"${card.inner ? '' : html` id="${card.dom}"`}>
                 ${card.platform ? html`<p class="settings-scope"><span class="badge badge-neutral">${t('settings.scope.platform')}</span></p>` : ''}
@@ -507,8 +509,11 @@ const SettingsPage = {
         return wrap && wrap.dataset ? wrap.dataset.settingsCard || '' : '';
     },
 
-    /** How long, in ms, "the card they just acted on" stays that. */
-    ACTED_MS: 30000,
+    /**
+     * How long, in ms, "the card they just acted on" stays that. A button that asks first (Disconnect, Remove) is pressed in the card and its
+     * answer comes from a dialog, so this has to outlast somebody reading the question; two minutes does, and no longer than that.
+     */
+    ACTED_MS: 120000,
     _acted: null,
     /** Cards acted on by a render that has not landed yet. */
     _saving: new Set(),
@@ -822,7 +827,7 @@ const SettingsPage = {
             `;
         } else {
             body = html`
-                <p class="settings-health-head is-attention" role="status">
+                <p class="settings-health-head ${needs.some((row) => row.state === 'broken') ? html.raw('is-broken') : html.raw('is-attention')}" role="status">
                     <span class="settings-health-glyph" aria-hidden="true">${needs.some((row) => row.state === 'broken') ? '✕' : '▲'}</span>
                     <strong>${t('settings.health.needs', { count: needs.length })}</strong>
                 </p>
