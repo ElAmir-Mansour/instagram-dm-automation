@@ -436,6 +436,12 @@ const API = {
     updateScheduledPost: (id, data) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     /**
+     * Archive a scheduled post and its undo (UX US1): the owner's way to put away a post that needs nothing. Both answer the row as the list
+     * has it (`archived_at` set, or null). An archived post is not published by the sweep and is not counted as needing attention.
+     */
+    archiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
+    unarchiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'DELETE' }),
+    /**
      * Republish an existing queue row in place — claims it server-side (PENDING or FAILED
      * only) and skips whatever platform is already recorded in `published_post_id`, instead
      * of the old create-a-new-row-with-publish_now dance that had no memory of what the
