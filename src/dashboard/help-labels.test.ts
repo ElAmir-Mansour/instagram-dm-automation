@@ -74,6 +74,10 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'خاصاً': 'emphasis: the TikTok account setting',
         'Gemini': 'a product name',
         'المفتاح المجاني حدوده ضيقة': 'quota fact leading a list item',
+        'Verify and save': 'a control in Meta’s dashboard',
+        'System users': 'a control in Meta’s dashboard',
+        'Assign assets': 'a control in Meta’s dashboard',
+        'Generate token': 'a control in Meta’s dashboard',
     },
     en: {
         'Keyword replies': 'feature name leading a list item',
@@ -113,6 +117,10 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'private': 'emphasis: the TikTok account setting',
         'Gemini': 'a product name',
         'A free key has tight limits': 'quota fact leading a list item',
+        'Verify and save': 'a control in Meta’s dashboard',
+        'System users': 'a control in Meta’s dashboard',
+        'Assign assets': 'a control in Meta’s dashboard',
+        'Generate token': 'a control in Meta’s dashboard',
     },
 };
 
