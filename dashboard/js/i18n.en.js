@@ -228,6 +228,8 @@
     'errors.TIKTOK_DIRECT_POST_UNAVAILABLE.next': 'Switch it on in the TikTok app settings, then reconnect the account.',
     'errors.TIKTOK_UPLOAD_PERMISSION_MISSING': 'Sending to TikTok drafts needs the upload permission, and the connected account does not have it.',
     'errors.TIKTOK_UPLOAD_PERMISSION_MISSING.next': 'Reconnect TikTok in Settings.',
+    'errors.WHATSAPP_SENDING_NOT_READY': 'Replying to WhatsApp chats from the inbox is not available yet: messages are only stored in this phase.',
+    'errors.WHATSAPP_SENDING_NOT_READY.next': 'Replying from here arrives in the next WhatsApp phase.',
     'errors.PROFILE_INCOMPLETE': 'This agent cannot be switched on until your profile is complete: it writes from what is in it.',
     'errors.PROFILE_INCOMPLETE.next': 'Open the missing step and fill it in.',
     'errors.PROFILE_UNREADABLE': 'Your profile could not be read just now, so nothing was written.',

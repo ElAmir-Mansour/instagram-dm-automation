@@ -3461,6 +3461,13 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
 
         const conv = convRes.rows[0];
 
+        // A WhatsApp thread (v50) is stored, never answered, until WhatsApp sending exists (phase W4). Without this the
+        // reply below would go to Instagram's Send API addressed to a WhatsApp user id: a confusing failure at best.
+        if (conv.platform === 'whatsapp') {
+            sendError(res, 409, 'WHATSAPP_SENDING_NOT_READY', 'Replying on WhatsApp from the inbox is not available yet.');
+            return;
+        }
+
         // A thread outlives the connection that made it (v34: a tenant can be disconnected): nothing to send it with.
         if (!conv.page_access_token) {
             sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
