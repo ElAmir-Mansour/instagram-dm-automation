@@ -504,7 +504,7 @@ const AnalyticsPage = {
         const list = [...rows].sort((a, b) => (this.campaignOutcomes(b).delivered - this.campaignOutcomes(a).delivered)
             || ((Number(b.total_triggers) || 0) - (Number(a.total_triggers) || 0)));
         return html`
-            <table class="data-table">
+            <table class="data-table outcome-table">
                 <thead>
                     <tr>
                         <th scope="col">${t('table.keyword')}</th>

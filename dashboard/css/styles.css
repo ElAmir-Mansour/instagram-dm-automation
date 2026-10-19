@@ -5298,6 +5298,13 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .failure-group-title { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: var(--fs-300); }
 .failure-group-count { color: var(--text-strong); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .failure-group-note { margin: 0 0 var(--space-2); }
+/* The campaign table's outcome cells: green for delivered, red only where something needs the owner, muted for by design. `.data-table td`
+   sets a colour with more weight (0,1,1) than the one-class text utilities, so a cell that asked for one of them never got it; this says it
+   with the weight to win, for this table only. */
+.outcome-table td.text-success { color: var(--success-text); }
+.outcome-table td.text-danger { color: var(--danger-text); }
+.outcome-table td.text-warning { color: var(--warning-text); }
+.outcome-table td.text-muted { color: var(--text-muted); }
 
 @media (max-width: 560px) {
     .analytics-range { inline-size: 100%; }

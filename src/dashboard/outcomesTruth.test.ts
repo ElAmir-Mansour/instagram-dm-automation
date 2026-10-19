@@ -442,6 +442,20 @@ describe('Analytics — one success definition (quickstart row 5)', () => {
         assert.ok(second.includes('>—<'), 'and no rate: nothing was attempted');
     });
 
+    it('the table’s colours have the weight to win over `.data-table td`, which would otherwise paint every cell the same', () => {
+        // `.data-table td` is (0,1,1) and a bare `.text-danger` is (0,1,0): without `.outcome-table td.text-*` the red and green cells of
+        // this table were all the default ink, which is how a "red only for what needs you" rule can be true in the markup and
+        // invisible on screen.
+        const css = readFileSync('dashboard/css/styles.css', 'utf8');
+        assert.match(css, /\.data-table td \{[^}]*color: var\(--text-default\)/, 'the premise: the table sets a colour of its own');
+        for (const cls of ['text-success', 'text-danger', 'text-warning', 'text-muted']) {
+            assert.match(css, new RegExp(`\\.outcome-table td\\.${cls} \\{ color: var\\(--`), cls);
+        }
+        const h = load();
+        const markup = String(h.A.campaignsMarkup([{ id: 'c1', trigger_keyword: 'x', total_triggers: 3, delivered: 1, by_design: 1, actionable: 1 }]));
+        assert.ok(markup.includes('<table class="data-table outcome-table">'));
+    });
+
     it('reads a campaign row without the split as sent / failed, the old numbers', () => {
         const h = load();
         const row = { id: 'c1', trigger_keyword: 'x', total_triggers: 10, sent_count: 9, failed_count: 1 };
