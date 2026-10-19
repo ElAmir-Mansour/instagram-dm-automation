@@ -5,7 +5,9 @@
  * them is a claim about the product. Four of those claims were untrue and are guarded here so
  * they cannot drift back:
  *
- *   - that AI answers direct messages (the DM bot is parked until the Meta app is verified);
+ *   - that AI answers direct messages (the DM bot was parked until the Meta app was verified; since 2026-10-13 it answers, and since
+ *     2026-10-19 the page says so in ONE place: the platform strip's WhatsApp, Instagram and Facebook lines, pinned word for word in the
+ *     last describe of this file, and nowhere else on the page);
  *   - that all of the code is open source (only the server is; the worker and the Monteur and
  *     infographic templates are private);
  *   - a hero example that used a woman's name (owner rule: no women or girls in content);
@@ -25,6 +27,8 @@ const landing = read('public/landing.html');
 const pricing = read('public/pricing.html');
 
 const noComments = (html: string) => html.replace(/<!--[\s\S]*?-->/g, '');
+/** The platform strip at the top of each hero (2026-10-19): the one place the page says an AI agent answers messages. */
+const PLATFORM_STRIP = /<ul class="card pstrip"[\s\S]*?<\/ul>/g;
 
 /** What a visitor can read: no comments, and none of the page's own CSS or script. */
 const visibleText = (html: string) =>
@@ -144,8 +148,11 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
     ];
 
     for (const [name, html] of [['landing', landing], ['pricing', pricing]] as const) {
-        it(`${name}: none of the removed claims is in the visible markup`, () => {
-            const visible = visibleText(html);
+        it(`${name}: none of the removed claims is in the visible markup${name === 'landing' ? ' (outside the platform strip, whose lines are pinned exactly in the last describe)' : ''}`, () => {
+            // The strip's WhatsApp, Instagram and Facebook lines say an AI agent answers messages, which is true since 2026-10-13 (the DM
+            // pipeline answers: src/webhook/messaging.ts; WhatsApp: src/webhook/whatsappAnswer.ts). They are the only place the page may say so, so
+            // the scan runs on the page without them, and the last describe pins each of those lines.
+            const visible = visibleText(name === 'landing' ? html.replace(PLATFORM_STRIP, '') : html);
             for (const re of CLAIMS) assert.equal(re.test(visible), false, `${name}: ${re}`);
         });
     }
@@ -796,9 +803,17 @@ describe('landing — the diagrams and the real infographic (L9)', () => {
             }
         });
 
-        it('the chips name only the platforms each flow reaches: Meta alone for comment-to-DM, and WhatsApp nowhere', () => {
+        it('the chips name only the platforms each flow reaches: Meta alone for comment-to-DM, and WhatsApp on no flow, because no flow reaches it', () => {
+            // WhatsApp is a real channel now, with its own place on the page (the platform strip, pinned in the last describe). It is still on
+            // none of the diagrams: a WhatsApp chat begins with the customer's message and not with a comment, so the comment-to-DM loop does not
+            // reach it, and nothing is published to it, so neither the Studio nor the Monteur does. The exact lists below hold that, and so does
+            // the explicit check that follows them.
             const glyphs = (fig: string) => [...fig.matchAll(/#plogo-([a-z]+)/g)].map((m) => m[1]!);
             for (const [s, doc] of SECTIONS) {
+                for (const id of ['flow-dm', 'flow-studio', 'flow-monteur']) {
+                    assert.equal(element(doc, `${id}-${s}`).includes('plogo-whatsapp'), false, `${s}: WhatsApp is on no flow (${id})`);
+                }
+                assert.equal(element(doc, `pmap-${s}`, 'table').includes('plogo-whatsapp'), false, `${s}: the map has no WhatsApp row`);
                 assert.deepEqual(glyphs(element(doc, `flow-dm-${s}`)), ['instagram', 'facebook'], `${s}: comment-to-DM is Instagram and Facebook`);
                 assert.deepEqual(glyphs(element(doc, `flow-studio-${s}`)), ['instagram', 'facebook', 'tiktok'], `${s}: the Studio posts to Instagram, Facebook and TikTok`);
                 assert.deepEqual(glyphs(element(doc, `flow-monteur-${s}`)), ['instagram', 'facebook', 'youtube', 'tiktok'], `${s}: the Monteur's four`);
@@ -1565,9 +1580,17 @@ describe('landing — the 3D diagram scenes (L11)', () => {
         });
 
         it("only the platforms the figures name are drawn, each by the page's own sprite glyph", () => {
+            // A scene says nothing its figure does not. WhatsApp is on the page now (the platform strip) but on no figure, so no scene may draw it:
+            // the allowed set is read from the four figures, not written down here, and the day a figure names WhatsApp this test says so.
+            const named = new Set<string>();
+            for (const [s, doc] of SECTIONS) {
+                for (const id of ['flow-dm', 'flow-studio', 'flow-monteur']) for (const m of element(doc, `${id}-${s}`, 'figure').matchAll(/#plogo-([a-z]+)/g)) named.add(m[1]!);
+                for (const m of element(doc, `pmap-${s}`, 'table').matchAll(/#plogo-([a-z]+)/g)) named.add(m[1]!);
+            }
+            assert.deepEqual([...named].sort(), ['facebook', 'instagram', 'tiktok', 'youtube'], 'the figures name four platforms, and WhatsApp is not one of them');
             for (const [name, src] of sources) {
                 for (const m of src.matchAll(/'(instagram|facebook|youtube|tiktok|linkedin|snapchat|pinterest|threads|whatsapp)'/g)) {
-                    assert.ok(['instagram', 'facebook', 'youtube', 'tiktok'].includes(m[1]!), `${name}: ${m[1]}`);
+                    assert.ok(named.has(m[1]!), `${name}: ${m[1]} is not named by any figure`);
                 }
             }
         });
@@ -1690,5 +1713,158 @@ describe('landing — the display face is Alexandria 600, self-hosted (L3)', () 
         const decls = rule('.wordmark');
         assert.match(decls, /flex:\s*none;/);
         assert.match(decls, /white-space:\s*nowrap;/);
+    });
+});
+
+describe('landing — the platform strip says what each platform gets, and nothing the product cannot back (2026-10-19)', () => {
+    // The first thing in the hero: WhatsApp, Instagram, Facebook, TikTok and YouTube, each with one line. These are claims like any other on this page,
+    // so each is pinned word for word, with the code that makes it true in the header's "WHAT CHANGED ON 2026-10-19":
+    //   WhatsApp   the agent answers and hands the chat over: src/webhook/whatsappAnswer.ts (runSalesTurn with a WhatsApp transport; a hand-off stamps the
+    //              conversation for a person and tells the customer). It answers the numbers the owner lists as test senders and nobody else yet:
+    //              src/routes/whatsapp.ts `PUT /agent` refuses `everyone` (409) until the go-live gate exists. So the line says "test numbers".
+    //   Instagram and Facebook   the comment-to-DM loop (src/webhook/comments.ts) and the DM pipeline's AI reply (src/webhook/messaging.ts).
+    //   TikTok     scheduled uploads that land as "Only me" or in drafts until TikTok audits the app (src/services/tiktokPublish.ts), as the page words its
+    //              own limit; YouTube Shorts uploads (src/services/youtubePublish.ts).
+    const LINES = {
+        ar: {
+            whatsapp: 'وكيل بالذكاء الاصطناعي يردّ على العملاء ويسلّمك المحادثة. يعمل اليوم على أرقام اختبار.',
+            instagram: 'من يعلّق بكلمتك تصله رسالة خاصة، ووكيل بالذكاء الاصطناعي يردّ على الرسائل.',
+            facebook: 'من يعلّق بكلمتك على صفحتك تصله رسالة خاصة، ووكيل بالذكاء الاصطناعي يردّ على رسائلها.',
+            tiktok: 'جدولة الفيديو والصور، «أنا فقط» أو مسودّات حتى يوافق تيك توك على التطبيق.',
+            youtube: 'جدولة الريلز إلى قناتك بوصفها Shorts.',
+        },
+        en: {
+            whatsapp: 'An AI agent answers customers and hands the chat to you. Live today on test numbers.',
+            instagram: 'Keyword comments get a DM, and an AI agent answers DMs.',
+            facebook: 'Keyword comments on your Page get a DM, and an AI agent answers its messages.',
+            tiktok: 'Scheduled videos and photos, as Only me or drafts until TikTok approves the app.',
+            youtube: 'Reels scheduled to your channel as Shorts.',
+        },
+    } as const;
+    const NAMES = { ar: ['واتساب', 'إنستجرام', 'فيسبوك', 'تيك توك', 'يوتيوب'], en: ['WhatsApp', 'Instagram', 'Facebook', 'TikTok', 'YouTube'] } as const;
+
+    /** One strip's lines as a reader gets them: tags gone, a no-break space read as a space. */
+    function stripLines(doc: string): Record<string, string> {
+        const ul = /<ul class="card pstrip"[\s\S]*?<\/ul>/.exec(doc)![0];
+        const out: Record<string, string> = {};
+        for (const m of ul.matchAll(/<li><svg class="pmark pmark-([a-z]+)"[^>]*><use [^>]*\/><\/svg><strong>[^<]+<\/strong><span>([\s\S]*?)<\/span><\/li>/g)) {
+            out[m[1]!] = m[2]!.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+        return out;
+    }
+
+    /**
+     * The sentences of some visible text that name WhatsApp and say something the product cannot do: a broadcast, a bulk send, a template, a newsletter,
+     * a promotion. WhatsApp's agent answers a customer who wrote first; nothing here starts a conversation with a number on a list.
+     */
+    const UNBACKED = /broadcast|bulk|mass[\s-]?(?:message|messag|send|text)|template|newsletter|blast|promotion|promo\b|marketing|cold\b|opt-?in list|بث|رسائل جماعية|إرسال جماعي|جماعي|قوالب|قالب|نشرة|ترويج|تسويق/i;
+    function unbackedWhatsApp(visible: string): string[] {
+        return visible
+            .split(/(?<=[.!?؟؛])\s+/)
+            .filter((sentence) => /WhatsApp|واتساب/.test(sentence) && UNBACKED.test(sentence));
+    }
+
+    it('says exactly these five lines, in this order, in Arabic and in English', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            assert.deepEqual(stripLines(L[lang]), LINES[lang], lang);
+            assert.deepEqual(Object.keys(stripLines(L[lang])), ['whatsapp', 'instagram', 'facebook', 'tiktok', 'youtube'], `${lang}: the order`);
+            const names = [...(/<ul class="card pstrip"[\s\S]*?<\/ul>/.exec(L[lang])![0]).matchAll(/<strong>([^<]+)<\/strong>/g)].map((m) => m[1]);
+            assert.deepEqual(names, [...NAMES[lang]], `${lang}: each name is real text`);
+        }
+    });
+
+    it('WhatsApp: the agent answers and hands the chat over, and the line says it is live on test numbers today, not for everyone', () => {
+        assert.ok(LINES.ar.whatsapp.includes('يردّ على العملاء ويسلّمك المحادثة'));
+        assert.ok(LINES.en.whatsapp.includes('answers customers and hands the chat to you'));
+        // Today's reach, in the line itself: `PUT /agent` refuses `everyone` until the go-live gate exists (src/routes/whatsapp.ts).
+        assert.ok(LINES.ar.whatsapp.includes('يعمل اليوم على أرقام اختبار'));
+        assert.ok(LINES.en.whatsapp.includes('Live today on test numbers'));
+        for (const lang of ['ar', 'en'] as const) {
+            assert.equal(/everyone|all your customers|كل عملائك|جميع العملاء|كل العملاء|any number|أي رقم/i.test(stripLines(L[lang])['whatsapp']!), false, `${lang}: no "everyone"`);
+        }
+        // The code the line stands on exists, and says what the line says.
+        const answer = read('src/webhook/whatsappAnswer.ts');
+        assert.ok(/runSalesTurn/.test(answer) && /handed to a person|handed the conversation to a person|hand-off line/.test(answer), 'whatsappAnswer.ts answers and hands over');
+        const routes = read('src/routes/whatsapp.ts');
+        assert.ok(/`everyone` is refused \(409\) until the go-live gate exists/.test(routes), 'the routes still refuse `everyone`: if this changes, the line may say more');
+    });
+
+    it('WhatsApp: no broadcast, bulk send, template or promotion is claimed anywhere on the landing page or on pricing', () => {
+        for (const [name, html] of [['landing', landing], ['pricing', pricing]] as const) {
+            assert.deepEqual(unbackedWhatsApp(visibleText(html)), [], name);
+        }
+        for (const lang of ['ar', 'en'] as const) {
+            assert.equal(UNBACKED.test(stripLines(L[lang])['whatsapp']!), false, `${lang}: the strip's own WhatsApp line`);
+        }
+    });
+
+    it('the WhatsApp scan is not blind: it catches the claims it is for, and passes the lines the page says', () => {
+        for (const bad of [
+            'Broadcast an offer to every WhatsApp contact.',
+            'Send bulk messages on WhatsApp.',
+            'Approved WhatsApp templates for your campaigns.',
+            'Mass messaging on WhatsApp, a newsletter to your list.',
+            'بث عروضك إلى جهات اتصال واتساب.',
+            'إرسال جماعي عبر واتساب.',
+            'قوالب واتساب جاهزة.',
+            'WhatsApp marketing for your shop.',
+        ]) {
+            assert.notDeepEqual(unbackedWhatsApp(bad), [], bad);
+        }
+        for (const lang of ['ar', 'en'] as const) {
+            assert.deepEqual(unbackedWhatsApp(LINES[lang].whatsapp), [], lang);
+        }
+        assert.deepEqual(unbackedWhatsApp('Broadcast to everyone on Instagram.'), [], 'a sentence that does not name WhatsApp is not this scan\'s business');
+    });
+
+    it('WhatsApp is on the strip, the two buttons and the footer, and on no diagram', () => {
+        for (const [doc, s] of [[L.ar, 'ar'], [L.en, 'en']] as const) {
+            assert.equal((doc.match(/#plogo-whatsapp/g) ?? []).length, 3, `${s}: the hero button, the strip and the contact button`);
+            for (const id of ['flow-dm', 'flow-studio', 'flow-monteur']) {
+                const at = doc.indexOf(`id="${id}-${s}"`);
+                assert.ok(at > 0 && !doc.slice(at, doc.indexOf('</figure>', at)).includes('plogo-whatsapp'), `${s}: ${id}`);
+            }
+        }
+    });
+
+    it('AI is claimed on exactly three lines per language, WhatsApp, Instagram and Facebook; TikTok and YouTube say nothing of messages', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const lines = stripLines(L[lang]);
+            const ai = Object.entries(lines).filter(([, line]) => /AI agent|بالذكاء الاصطناعي/.test(line)).map(([id]) => id);
+            assert.deepEqual(ai, ['whatsapp', 'instagram', 'facebook'], lang);
+            for (const id of ['tiktok', 'youtube']) assert.equal(/\bAI\b|\bDMs?\b|message|الذكاء|رسالة|رسائل|محادثة/i.test(lines[id]!), false, `${lang}: ${id}`);
+        }
+        // The page's own limit stands behind it: the comment-to-message loop is Instagram's and Facebook's alone, and TikTok has no comments or messages.
+        assert.ok(words(L.ar).includes('أمّا حلقة التعليق والرسالة الخاصة فتعمل على إنستجرام وفيسبوك وحدهما'));
+        assert.ok(words(L.en).includes('The comment-to-message loop itself runs on Instagram and Facebook only'));
+        assert.ok(words(L.ar).includes('لا تعليقات ولا رسائل على تيك توك') && words(L.en).includes('No comments or messages on TikTok'));
+    });
+
+    it('TikTok keeps the audit limit the refusals state, in the page\'s own words; YouTube is Shorts and nothing else', () => {
+        assert.ok(LINES.ar.tiktok.includes('حتى يوافق تيك توك على التطبيق') && LINES.ar.tiktok.includes('«أنا فقط»') && LINES.ar.tiktok.includes('مسودّات'));
+        assert.ok(LINES.en.tiktok.includes('until TikTok approves the app') && LINES.en.tiktok.includes('Only me') && LINES.en.tiktok.includes('drafts'));
+        assert.ok(L.ar.includes('على تيك توك، لا نشر علني تلقائي حتى الآن') && L.en.includes('No public auto-posting to TikTok, yet'), 'the refusal is still there');
+        assert.ok(LINES.ar.youtube.endsWith('بوصفها Shorts.') && LINES.en.youtube.endsWith('as Shorts.'));
+        // "Shorts" is Latin inside an Arabic sentence: isolated, like every other Latin run in the Arabic document.
+        assert.ok(/<span>جدولة الريلز إلى قناتك بوصفها <bdi lang="en" dir="ltr">Shorts<\/bdi>\.<\/span>/.test(L.ar));
+    });
+
+    it('the strip names no price, offer, superlative or woman, and the share surface is unchanged by it', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const text = Object.values(stripLines(L[lang])).join(' ');
+            assert.equal(/\$|ريال|مجان|\bfree\b|\bbest\b|الأفضل|#1|\bguarantee|فورا|instant/i.test(text), false, lang);
+            assert.equal(/♀|👩|👧|🧕|نورة|Noura/u.test(text), false, lang);
+        }
+        const meta = /<meta name="description" data-lang-only="en" content="([^"]*)"/.exec(landing)![1]!;
+        assert.equal(/WhatsApp|AI\b/.test(meta), false, 'the description still names no WhatsApp and no AI: the share surface was not part of this change');
+    });
+
+    it('the header comment records the change, and cites code that exists', () => {
+        const header = landing.slice(0, landing.indexOf('-->'));
+        assert.ok(header.includes('WHAT CHANGED ON 2026-10-19'));
+        for (const file of ['src/webhook/whatsappAnswer.ts', 'src/routes/whatsapp.ts', 'src/webhook/messaging.ts', 'src/webhook/comments.ts', 'src/services/tiktokPublish.ts', 'src/services/youtubePublish.ts']) {
+            assert.ok(header.includes(file), `${file} is cited`);
+            assert.ok(readFileSync(file, 'utf8').length > 0, `${file} exists`);
+        }
     });
 });

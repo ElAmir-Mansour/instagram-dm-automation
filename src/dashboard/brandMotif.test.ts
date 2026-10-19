@@ -428,11 +428,14 @@ describe('B2: Motion.highlightDeliver', () => {
 });
 
 describe('B2: the landing stays inside its served-bytes budget (L6)', () => {
-    const BUDGET = 215 * 1000;
+    // 215 KB until 2026-10-19, when the platform strip (five marks, names and lines, in both languages, and its CSS) took the landing from
+    // 211.7 KB to 215.8 KB served and the owner asked for it: the budget is 220 KB, with the same 3 KB left for copy. Raise it only for a
+    // feature somebody asked for, in the commit that adds the feature.
+    const BUDGET = 220 * 1000;
     const served = (lang: 'ar' | 'en', site: SiteSettings): number =>
         Buffer.byteLength(renderSiteTemplate(compactPublicPage(LANDING), site, lang, 'https://example.test'));
 
-    it('is at most 215 KB with 3 KB to spare, in both languages with every setting on and off', () => {
+    it('is at most 220 KB with 3 KB to spare, in both languages with every setting on and off', () => {
         const all: SiteSettings = { whatsappNumber: '966501234567', contactEmail: 'hello@example.com', eidCouponsExpire: '2026-04-05' };
         const bare: SiteSettings = { whatsappNumber: null, contactEmail: DEFAULT_CONTACT_EMAIL, eidCouponsExpire: null };
         const worst = Math.max(...(['ar', 'en'] as const).flatMap((lang) => [served(lang, all), served(lang, bare)]));

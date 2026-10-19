@@ -102,7 +102,8 @@ label. Cardamom is never a status.
 ### Platform colours: data, never decoration
 Instagram and Facebook say which network a row belongs to. TikTok and YouTube are tints only, labelled with
 `--text-strong`. Solid platform colours appear only in `.platform-bar-*`, and `check:contrast` enforces that. Their
-logos are monochrome, never in these colours (§4, Platform logos).
+logos are monochrome, never in these colours, with one exception on the landing page: the platform strip (§4, Platform
+logos), whose marks wear each brand's own colour and not these tokens.
 
 | token | dark | light | role |
 |---|---|---|---|
@@ -402,7 +403,7 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Source.** simple-icons@16.33.0 (CC0 path data; the trademarks stay with their owners), WhatsApp, Instagram, Facebook,
   TikTok and YouTube, as one inline sprite right after `<body>` on all six public pages (the shared footer uses it too).
   A path is never edited by hand: `landingLogos.test.ts` compares each to the package, byte for byte.
-- **Monochrome, always.** A platform's colour is data, and each brand's own rules allow black or white (YouTube: white or
+- **Monochrome, except the platform strip.** A platform's colour is data, and each brand's own rules allow black or white (YouTube: white or
   `#282828`, and never as a play button). The inks are three tokens in the shared chrome of the public pages, not in
   tokens.css, in tokens.css's three-selector shape:
   - `--logo-mono`: white in dark, black in light.
@@ -411,7 +412,17 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Beside the name, never instead of it.** The WhatsApp glyph (20px) sits at the label's inline-start in each primary
   WhatsApp button and in the footer's WhatsApp link; a 40px `.ptile` in the platform's `-soft` tint with a 24px glyph leads
   each platform row; 16px glyphs lead the samples' links and captions; the footer's Follow row has the four accounts. No
-  logo strip, no cluster. Every glyph is `aria-hidden`, and the platform's name is real text beside it.
+  logo wall. Every glyph is `aria-hidden`, and the platform's name is real text beside it. The one cluster is the strip below.
+- **The platform strip (2026-10-19, the owner's instruction).** The first thing in the landing hero: WhatsApp, Instagram,
+  Facebook, TikTok and YouTube, each with its mark, its name as text and one line of what the product does there. A card of
+  five columns from 40rem and five rows below it; marks 48px on a phone, 80px from 1280px; no motion, no link, no picture
+  request. It is the one place on the public pages where a mark wears its platform's colour: simple-icons@16.33.0's own `hex`
+  for WhatsApp `#25D366`, Instagram `#FF0069`, Facebook `#0866FF` and YouTube `#FF0000`, declared once as `--pb-*` in the
+  landing page's `.pstrip` rule and nowhere else, so not in tokens.css and not on another page. TikTok's brand colour is black,
+  which would vanish on the dark page, so its mark stays `--logo-mono`: white in dark, black in light. The marks are the same
+  sprite symbols, never edited, mirrored or recoloured beyond that. `check:contrast` measures each on the card and at the
+  hero glow's peak (3:1 on the card, 2.5:1 at the peak); WhatsApp green on the light card is 1.9:1, the one named exemption (a
+  logo is an essential graphic under WCAG 1.4.11, and the name beside it is text). The footer's legal line is the disclaimer.
 - **Never mirrored or transformed.** Arrows mirror in RTL; a logo is not a direction.
 
 ### Mark
@@ -652,9 +663,9 @@ the same paragraph as the feature.
 ### The guards
 | check | stops |
 |---|---|
-| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex); a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome); the Rows ink above 1.25:1 of a ground it is drawn on, or invisible |
+| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex), except the four `--pb-*` declarations of the landing page's platform strip, which must be simple-icons' own hexes, written once, measured on the card and at the hero glow's peak (3:1 and 2.5:1; one named exemption, WhatsApp on the light card), and used by nothing else; a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome); the Rows ink above 1.25:1 of a ground it is drawn on, or invisible |
 | `brandMotif.test.ts` | the motif tokens, `.kw`, `.kw-display`, `.is-receipt` or the `#rows` pattern missing or drifting (the pattern's geometry, its two copies); the reduced-motion guard gone, or anything animated that is not `transform` or `opacity`; the landing h1, the closing band, the login or `Motion.highlightDeliver` not using them; the landing over its served-bytes budget |
-| `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English |
+| `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English; in the platform strip: a colour that is not simple-icons' own hex or is written twice, a mark not painted by its own token, a mark with no name, motion or a flip, a strip that is not first in the hero or that differs between languages |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |
 | `check:voice` | a word from the "Never" list (IDENTITY.md §7: "Pro" outside the name, Premium, Powered by, instant, guaranteed, AI-powered, bot, revolutionary, all-in-one, magic, viral, growth hack, supercharge, unlimited, "trusted by", and the Arabic of each) in a dashboard dictionary value, a public page's text, meta or alt, or the dashboard shell's title and description. The name is allowed, and so is a limit stated ("not guaranteed"); any other exception is an entry in `scripts/check-voice.mjs` with a reason, and an entry that matches nothing fails |
