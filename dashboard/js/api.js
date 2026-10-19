@@ -577,6 +577,8 @@ const API = {
     copyInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/copy`, {
         method: 'POST', body: JSON.stringify(data || {}),
     }),
+    /** `{ next_slot, timezone }`: when "the next free slot" would post (ISO, or null when there is none) and the tenant's zone. Read-only. */
+    getInfographicNextSlot: () => API.request('/studio/infographics/next-slot'),
     /** `{ scheduled_time? | now? }` → `{ infographic, scheduled_time }`. */
     scheduleInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/schedule`, {
         method: 'POST', body: JSON.stringify(data || {}),

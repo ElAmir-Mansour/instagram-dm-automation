@@ -718,10 +718,12 @@ const MonteurPage = {
         const err = this.viewError;
         const said = !!(err && err.body && (err.body.error || err.body.message));
         const missing = !!(err && err.status === 404 && !said);
+        // The sentence and the next step the error carries (UX US1 FR-007); the status stays as the hint when there is no next step.
+        const info = err && !missing ? UI.errorText(err) : null;
         return {
             title: t('monteur.loadFailed'),
-            message: missing ? t('monteur.notDeployed') : (err && err.message) || t('error.unexpected'),
-            hint: err && err.status ? `HTTP ${err.status}` : '',
+            message: missing ? t('monteur.notDeployed') : (info ? info.sentence : t('error.unexpected')),
+            hint: info && info.next ? info.next : (err && err.status ? `HTTP ${err.status}` : ''),
         };
     },
 
@@ -767,6 +769,7 @@ const MonteurPage = {
                 </p>
                 <p class="text-meta" id="mt-next-run">${next}</p>
                 <p class="text-meta${v.last_scan && v.last_scan.error ? html.raw(' text-warning') : ''}" id="mt-last-run" dir="auto"${last ? html` title="${last.title}"` : ''}>${this.lastRunText(last)}</p>
+                ${v.last_scan && v.last_scan.error ? UI.errorDetails(UI.failureError(v.last_scan.error)) : ''}
                 ${scanning ? html`
                     <p class="draft-card-stage" id="mt-scan-state">
                         <span class="spinner spinner-sm" aria-hidden="true"></span>
@@ -787,7 +790,7 @@ const MonteurPage = {
         const ls = this.view.last_scan;
         if (!ls || !age) return t('monteur.run.never');
         // A refused scan says why (e.g. a folder outside the worker's allowed roots).
-        if (ls.error) return t('monteur.run.lastFailed', { when: age.text, error: String(ls.error) });
+        if (ls.error) return t('monteur.run.lastFailed', { when: age.text, error: this.failureSentence(ls.error) });
         if (ls.missing) return t('monteur.run.lastMissing', { when: age.text, name: this.workerName() });
         const added = Math.max(0, Number(ls.added) || 0);
         const skipped = Math.max(0, Number(ls.skipped) || 0);
@@ -1229,7 +1232,7 @@ const MonteurPage = {
                 </div>
                 ${this.scoresMarkup(clip)}
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
-                ${clip.error ? html`<p class="form-hint text-warning" id="mt-clip-${id}-refused" dir="auto">${t('monteur.clip.autoRefused', { error: clip.error })}</p>` : ''}
+                ${clip.error ? html`<p class="form-hint text-warning" id="mt-clip-${id}-refused" dir="auto">${t('monteur.clip.autoRefused', { error: this.failureSentence(clip.error) })}</p>${UI.errorDetails(UI.failureError(clip.error))}` : ''}
                 ${clip.topic ? html`<p class="text-meta monteur-topic"><span>${t('monteur.clip.topic')}</span> <span dir="auto">${clip.topic}</span></p>` : ''}
                 ${this.tiktokCut(clip) ? html`
                     <p class="monteur-tt-line">
@@ -1313,7 +1316,7 @@ const MonteurPage = {
         const e = this.clipErrors[String(id)];
         if (!e) return '';
         return html`
-            ${UI.errorStrip(e.message, '', `mt-clip-${id}-error-strip`)}
+            ${UI.errorBox(e.err || { message: e.message }, `mt-clip-${id}-error-strip`)}
             ${e.problems && e.problems.length ? html`<ul class="problem-list">${e.problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
         `;
     },
@@ -1438,7 +1441,7 @@ const MonteurPage = {
                 </div>
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
                 ${failed ? html`
-                    ${clip.error ? html`<p class="post-card-error" dir="auto">${clip.error}</p>` : ''}
+                    ${clip.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(clip.error))}</div>` : ''}
                     <div class="row row--wrap gap-2">
                         ${UI.button({
                             variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'),
@@ -1522,8 +1525,8 @@ const MonteurPage = {
                 <p class="monteur-source-name" dir="auto"${source.path ? html` title="${source.path}"` : ''}>${name}</p>
                 ${meta.length ? html`<p class="text-meta">${meta.map((part, i) => html`${i ? ' · ' : ''}${part}`)}</p>` : ''}
                 ${source.status === 'no_clips' ? html`<p class="form-hint">${t('monteur.source.noClipsNote')}</p>` : ''}
-                ${source.status === 'no_clips' && source.error ? html`<p class="text-meta" dir="auto">${source.error}</p>` : ''}
-                ${source.status === 'failed' && source.error ? html`<p class="post-card-error" dir="auto">${source.error}</p>` : ''}
+                ${source.status === 'no_clips' && source.error ? html`<p class="text-meta" dir="auto">${this.failureSentence(source.error)}</p>${UI.errorDetails(UI.failureError(source.error))}` : ''}
+                ${source.status === 'failed' && source.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(source.error))}</div>` : ''}
             </div>
             ${this.statusPill('source', source.status)}
             ${source.status === 'failed' ? UI.button({
@@ -1953,7 +1956,7 @@ const MonteurPage = {
         return html`
             ${this.saveError ? html`
                 <div id="mt-settings-error" tabindex="-1">
-                    ${UI.errorStrip(this.saveError, '', 'mt-settings-error-strip')}
+                    ${UI.errorBox(this.saveError, 'mt-settings-error-strip')}
                     ${problems.length ? html`<ul class="problem-list">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}
                 </div>
             ` : ''}
@@ -2194,6 +2197,7 @@ const MonteurPage = {
         });
         this.fieldProblems = map;
         this.generalProblems = general;
+        // `message` is a sentence of this page's own, or the refusal itself (its code becomes the sentence).
         this.saveError = message;
         this.settingsOpen = true;
         this.paintSettings();
@@ -2206,7 +2210,7 @@ const MonteurPage = {
         const el = first ? document.getElementById(idFor(first.key)) : document.getElementById('mt-settings-error');
         if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
         if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-        Motion.announce(message);
+        Motion.announce(UI.errorLine(message));
     },
 
     async saveSettings(form, event) {
@@ -2249,7 +2253,7 @@ const MonteurPage = {
             const problems = this.problemListOf(err);
             this.showSettingsProblems(
                 problems.map((m) => ({ key: this.problemKey(m), message: m })),
-                (err && err.message) || t('error.unexpected'),
+                err || t('error.unexpected'),
             );
         } finally {
             restore();
@@ -2267,7 +2271,7 @@ const MonteurPage = {
             await API.pickMonteurFolder();
             ok = true;
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -2297,7 +2301,7 @@ const MonteurPage = {
             // 409 is the contract's "no folder", or in course mode "no lesson left"; said in the operator's language.
             const course = this.view && this.view.settings.source === 'course';
             const said = course ? t('monteur.run.noLessonsToast') : t('monteur.run.noFolderToast');
-            UI.toast(err && err.status === 409 ? said : ((err && err.message) || t('common.error')), 'error');
+            UI.toast(err && err.status === 409 ? said : UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -2347,7 +2351,7 @@ const MonteurPage = {
             this.refreshSources();
             this.schedulePoll(seq);
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -2488,13 +2492,37 @@ const MonteurPage = {
         Motion.announce(t('studio.editor.discarded'));
     },
 
+    /**
+     * `message` is a sentence of this page's own (a string) or the refusal itself (`clipFailure(err)`): the strip is drawn from the
+     * error, so a code becomes a sentence with its next step and the server's English stays behind Details.
+     */
     showClipError(id, message, problems, fieldId) {
         const key = String(id);
-        this.clipErrors[key] = { message, problems: problems || [] };
+        const err = message && typeof message === 'object' ? message : { message };
+        this.clipErrors[key] = { message: UI.errorText(err).sentence, err, problems: problems || [] };
         this.paintRegion(`mt-clip-${key}-error`, this.clipErrorMarkup(key));
         const field = fieldId ? document.getElementById(fieldId) : null;
         if (field) UI.markInvalid(field, `mt-clip-${key}-error-strip`);
-        Motion.announce(message);
+        Motion.announce(UI.errorLine(err));
+    },
+
+    /** A refusal as the strip should draw it: itself when its code has a sentence, else its message without the field path it leads with. */
+    clipFailure(err) {
+        const known = !!(err && typeof err.code === 'string' && t(`errors.${err.code}`) !== `errors.${err.code}`);
+        return known ? err : { message: this.plainMessage((err && err.message) || t('error.unexpected')) };
+    },
+
+    /** The server's problem lines the error's own sentence does not already say: all of them for an uncoded refusal, the extra ones for a coded one. */
+    extraProblems(err) {
+        const all = this.problemListOf(err).map((p) => this.plainMessage(p));
+        if (this.clipFailure(err) !== err) return all;
+        const said = this.plainMessage(err.message);
+        return all.filter((p) => p !== said);
+    },
+
+    /** A stored failure's sentence: the text itself when it is readable, a plain sentence when it is technical (its text goes behind Details). */
+    failureSentence(text) {
+        return UI.errorText(UI.failureError(text)).sentence;
     },
 
     /** Put a ClipView from the server into the view, replacing the old one. */
@@ -2543,8 +2571,7 @@ const MonteurPage = {
         } catch (err) {
             // A refused keyword (too short, or another campaign's) comes back as a 400 or 409 with its reason.
             if (tenant !== this._tenantEpoch || !this.alive(seq)) return;
-            this.showClipError(id, this.plainMessage((err && err.message) || t('error.unexpected')),
-                this.problemListOf(err).map((p) => this.plainMessage(p)));
+            this.showClipError(id, this.clipFailure(err), this.extraProblems(err));
         } finally {
             restore();
         }
@@ -2657,16 +2684,16 @@ const MonteurPage = {
             restore();
             if (tenant !== this._tenantEpoch || !this.alive(seq)) return;
             const raw = String((err && err.message) || '');
-            const message = this.plainMessage(raw || t('error.unexpected'));
             // §6.1: another reel from this video already has that day, or no day is free:
-            // the reason, and the time picker open on it.
-            if (err && err.status === 409 && /^scheduled_time:|posting slot/i.test(raw)) {
+            // the reason, and the time picker open on it. The codes say it; the words are the fallback for an uncoded server.
+            const dayProblem = !!err && (err.code === 'REEL_DAY_TAKEN' || err.code === 'NO_FREE_SLOT');
+            if (err && err.status === 409 && (dayProblem || /^scheduled_time:|posting slot/i.test(raw))) {
                 const o = this.overrides[id];
                 if (!o || !o.open) this.toggleOverride(id);
-                this.showClipError(id, message, [t('monteur.clip.pickAnotherTime')], `mt-clip-${id}-time`);
+                this.showClipError(id, this.clipFailure(err), [t('monteur.clip.pickAnotherTime')], `mt-clip-${id}-time`);
                 return;
             }
-            this.showClipError(id, message, this.problemListOf(err).map((p) => this.plainMessage(p)));
+            this.showClipError(id, this.clipFailure(err), this.extraProblems(err));
             // Otherwise a 409 means the clip moved on (re-rendering, approved elsewhere): show where it is.
             if (err && err.status === 409) this.refresh(seq);
         }
@@ -2693,7 +2720,7 @@ const MonteurPage = {
             this.refreshQueue();
             this.schedulePoll(seq);
         } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
         } finally {
             restore();
         }
@@ -2736,12 +2763,20 @@ const MonteurPage = {
         const lr = l.last_run && typeof l.last_run === 'object' ? l.last_run : null;
         if (lr) {
             if (lr.status !== 'failed') return '';
-            const message = lr.error || t('error.unexpected');
+            const message = lr.error ? this.failureSentence(lr.error) : t('error.unexpected');
             return lr.created_at
                 ? t('monteur.lessons.lastFailed', { when: UI.relativeAge(lr.created_at).text, message })
                 : t('monteur.lessons.failed', { message });
         }
-        return l.status === 'failed' ? t('monteur.lessons.failed', { message: l.error || t('error.unexpected') }) : '';
+        return l.status === 'failed' ? t('monteur.lessons.failed', { message: l.error ? this.failureSentence(l.error) : t('error.unexpected') }) : '';
+    },
+
+    /** The raw text behind a failed Analyst run's sentence, folded under Details: '' when the sentence is the text itself. */
+    lessonsFailureDetails(l) {
+        if (!l) return '';
+        const lr = l.last_run && typeof l.last_run === 'object' ? l.last_run : null;
+        const error = lr ? (lr.status === 'failed' ? lr.error : '') : (l.status === 'failed' ? l.error : '');
+        return error ? UI.errorDetails(UI.failureError(error)) : '';
     },
 
     lessonsMarkup() {
@@ -2767,7 +2802,7 @@ const MonteurPage = {
                     <span class="spinner spinner-sm" aria-hidden="true"></span> ${t('monteur.lessons.running')}
                 </p>
             ` : ''}
-            ${failure && !running ? html`<p class="post-card-error" dir="auto" id="mt-lessons-failed">${failure}</p>` : ''}
+            ${failure && !running ? html`<p class="post-card-error" dir="auto" id="mt-lessons-failed">${failure}</p>${this.lessonsFailureDetails(l)}` : ''}
             ${!rules.length && !running ? html`
                 <p class="studio-empty-note">${t('monteur.lessons.empty')}</p>
                 <p class="form-hint">${t('monteur.lessons.emptyBody')}</p>
@@ -2815,8 +2850,8 @@ const MonteurPage = {
         if (tenant !== this._tenantEpoch || !this.view) return;
         if (res && typeof res === 'object') this.view.lessons = res;
         const attempt = res && res.last_run && typeof res.last_run === 'object' ? res.last_run : res;
-        if (failure) UI.toast((failure && failure.message) || t('common.error'), 'error');
-        else if (attempt && attempt.status === 'failed') UI.toast(t('monteur.lessons.failed', { message: attempt.error || t('error.unexpected') }), 'error');
+        if (failure) UI.toast(UI.errorLine(failure), 'error');
+        else if (attempt && attempt.status === 'failed') UI.toast(t('monteur.lessons.failed', { message: attempt.error ? this.failureSentence(attempt.error) : t('error.unexpected') }), 'error');
         else UI.toast(t('monteur.lessons.done'));
         // The card is painted from `lessonsBusy`, so it is repainted wherever this page
         // now is — including a re-render that happened while the Analyst was running,
@@ -2880,7 +2915,7 @@ const MonteurPage = {
  * be said out loud rather than left in the console.
  */
 const monteurReport = (value) => {
-    Promise.resolve(value).catch((err) => UI.toast((err && err.message) || t('common.error'), 'error'));
+    Promise.resolve(value).catch((err) => UI.toast(UI.errorLine(err), 'error'));
 };
 
 UI.registerActions('monteur', {

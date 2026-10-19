@@ -649,6 +649,36 @@ describe('the Mac is the owner’s (G1), over the routes', () => {
     });
 });
 
+describe('GET /infographics/next-slot (the Schedule dialog’s preview, UX US1 IG-01)', () => {
+    const stack = () => (studioRouter as unknown as { stack: Array<{ route?: { path: string; methods: Record<string, boolean> } }> }).stack;
+
+    it('is mounted BEFORE /infographics/:id, which would otherwise read "next-slot" as an id', () => {
+        const paths = stack().filter((l) => l.route && l.route.methods.get).map((l) => l.route!.path);
+        const slot = paths.indexOf('/infographics/next-slot');
+        const byId = paths.indexOf('/infographics/:id');
+        assert.ok(slot !== -1, 'mounted');
+        assert.ok(byId !== -1 && slot < byId, `next-slot (${slot}) must come before :id (${byId})`);
+    });
+
+    it('answers the next free slot and the tenant’s zone, and writes nothing', async () => {
+        settingsRow = { schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'] }, monteur: { post_at: ['19:00'] } };
+        const res = await call('get', '/infographics/next-slot');
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.timezone, 'Asia/Riyadh');
+        assert.match(res.body.next_slot, /^\d{4}-\d\d-\d\dT16:00:00\.000Z$/, '19:00 in Riyadh is 16:00Z');
+        assert.ok(!statements.some((s) => /^(INSERT|UPDATE|DELETE)/.test(s.sql)), 'a read');
+    });
+
+    it('a slot a pending post holds is skipped, as Schedule would skip it', async () => {
+        settingsRow = { schedule: { timezone: 'UTC', slots: ['12:00'] }, monteur: { post_at: ['12:00'] } };
+        const first = await call('get', '/infographics/next-slot');
+        const taken = new Date(first.body.next_slot);
+        routes.unshift([/^SELECT p\.scheduled_time FROM scheduled_posts p/, () => ({ rows: [{ scheduled_time: taken }] })]);
+        const second = await call('get', '/infographics/next-slot');
+        assert.equal(Date.parse(second.body.next_slot) - taken.getTime(), 24 * 3600 * 1000, 'the next day at the same time');
+    });
+});
+
 describe('the Monteur’s operator routes', () => {
     it('are all mounted', () => {
         for (const [method, path] of [
