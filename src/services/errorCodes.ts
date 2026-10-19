@@ -11,9 +11,11 @@
  *
  * THE SHAPE. The contract drafted in specs/001-dashboard-ux/contracts/api.md was `{ error: { code, params,
  * message } }`. That is NOT what is sent, because `error` has been a plain string since the first route, and every
- * client reads it as one: `dashboard/js/api.js` does `new Error(body.error || body.message)`, which would turn an
- * object into "[object Object]" on every screen, in every cached copy of the dashboard, the moment one route
- * switched. So the envelope is flat and additive:
+ * client reads it as one: until UX F4 `dashboard/js/api.js` did `new Error(body.error || body.message)`, which would
+ * turn an object into "[object Object]" on every screen, in every cached copy of the dashboard, the moment one route
+ * switched. (api.js now reads the nested form too, and lifts `code` and `params` onto the Error; the flat form below
+ * is what is sent, because the old bundles, the scripts and the tests all still read `error` as a string.) So the
+ * envelope is flat and additive:
  *
  *     { error: "<English sentence>",      // unchanged; what every existing client reads
  *       message: "<same sentence>",       // the contract's name for it

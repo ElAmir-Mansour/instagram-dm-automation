@@ -2,10 +2,10 @@
  * The error-code registry and `sendError` (UX F1, T001).
  *
  * Three promises are pinned here:
- *   1. The envelope is additive. `error` is still the English string every client reads (`api.js` does
- *      `new Error(body.error || body.message)`), and `code`, `params` and `message` sit beside it. A route that
- *      switched to an object `error` would print "[object Object]" on every screen, so the real `api.js` is run
- *      against a coded body below to prove it still reads one.
+ *   1. The envelope is additive. `error` is still the English string every client reads (older cached bundles of
+ *      `api.js` do `new Error(body.error || body.message)`), and `code`, `params` and `message` sit beside it. A route
+ *      that switched to an object `error` would print "[object Object]" in those bundles, so the real `api.js` is run
+ *      against a coded body below to prove it reads the message, the code and the params.
  *   2. Every registered code has an `errors.<CODE>` sentence and an `errors.<CODE>.next` next step in BOTH dashboard
  *      catalogues, and they only interpolate params the registry declares. (`check:i18n` guards that the catalogues agree with each other,
  *      not that a code has a sentence.)
@@ -202,7 +202,7 @@ describe('every code has its sentence and its next step in both catalogues', () 
     });
 });
 
-describe('the dashboard still reads a coded refusal (api.js, unchanged)', () => {
+describe('the dashboard reads a coded refusal (the real api.js)', () => {
     /** The real i18n.js and api.js in a vm, with `fetch` answering the body `sendError` wrote. */
     async function request(status: number, body: unknown): Promise<any> {
         const sandbox: Record<string, any> = {
@@ -233,10 +233,16 @@ describe('the dashboard still reads a coded refusal (api.js, unchanged)', () => 
         assert.equal(err.body.status, 'done', 'a legacy top-level field is still where it was');
     });
 
-    it('is not fooled by an envelope whose `error` were an object: that is the shape this module refuses to send', async () => {
-        const API = await request(409, { error: { code: 'X', params: {}, message: 'nope' } });
-        const err = await API.request('/x').then(() => null, (e: any) => e);
-        assert.equal(err.message, '[object Object]', 'documented: this is what an object `error` would do on every screen');
+    it('exposes `code` and `params` on the Error itself (UX F4), and still the whole body on err.body', async () => {
+        const { res, sent } = fakeRes();
+        sendError(res, 409, 'REEL_DAY_TAKEN', { day: '2026-10-20' }, 'scheduled_time: another reel from this video is already on 2026-10-20. Choose another day.');
+        const API = await request(sent.status, sent.body);
+
+        const err = await API.request('/studio/monteur/clips/x/approve', { method: 'POST' }).then(() => null, (e: any) => e);
+        assert.equal(err.message, 'scheduled_time: another reel from this video is already on 2026-10-20. Choose another day.');
+        assert.equal(err.code, 'REEL_DAY_TAKEN');
+        assert.deepEqual(JSON.parse(JSON.stringify(err.params)), { day: '2026-10-20' });
+        assert.equal(err.body.code, 'REEL_DAY_TAKEN');
     });
 
     it('the profile gate’s 409 still reaches the profile sheet: `code`, `missing` and `agent` stay top-level', () => {
