@@ -47,6 +47,7 @@ import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } fro
 import { queryOne } from '../db/query.js';
 import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
+import { parseTryRequest, tryComment } from '../services/campaignTry.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
 import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
@@ -1579,7 +1580,8 @@ router.use('/onboarding', onboardingDraftsRouter);
 // returned a masked preview rather than the value.
 //
 // Read-only by design, so deliberately NOT gated: /interactions/export/token mints a
-// short-lived token for an export of rows the caller can already read on screen.
+// short-lived token for an export of rows the caller can already read on screen. Likewise
+// POST /campaigns/try, a dry run over campaigns the caller can already list; it writes nothing.
 const canOperate = requireTenantRole('operator');
 const canAdminister = requireTenantRole('owner');
 
@@ -1856,6 +1858,28 @@ router.post('/campaigns', canOperate, async (req, res) => {
     } catch (err) {
         log('error', 'api.campaign_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create campaign.' });
+    }
+});
+
+/**
+ * POST /campaigns/try — "what would my campaigns do with this comment?" A dry run: it writes nothing.
+ *
+ * The decision is `matchCampaign`'s own rule over the same live campaigns the webhook loads
+ * (src/services/campaignTry.ts), plus the unsaved `draft` the editor is holding. Gated like
+ * GET /campaigns, not like the writes: it only reads, so a viewer may try a comment.
+ */
+router.post('/campaigns/try', async (req, res) => {
+    const parsed = parseTryRequest(req.body);
+    if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
+        return;
+    }
+    try {
+        res.json(await tryComment(getTenantId(req), parsed.value));
+    } catch (err) {
+        // The comment is the follower's words; it stays out of the log.
+        log('error', 'api.campaign_try_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to try the comment.' });
     }
 });
 

@@ -247,7 +247,8 @@ acquires a token with clicks instead of a pasted one is [§8](#8-meta-login--a-c
 
 ### 1.10 — Campaign query and `matchCampaign`
 
-**`src/webhook/comments.ts:220-229`** — every active campaign for this creator:
+**`src/webhook/comments.ts:237`** calls `loadLiveCampaigns(creator.id)`; the query is **`LIVE_CAMPAIGNS_SQL`** in
+**`src/services/liveCampaigns.ts:32`** — every active campaign for this creator:
 
 ```sql
 ORDER BY (post_id IS NOT NULL) DESC, length(trigger_keyword) DESC, created_at DESC
@@ -257,11 +258,15 @@ The `ORDER BY` is not cosmetic. Without it Postgres returns heap order, so a glo
 could shadow a post-specific one on the same keyword — and which one won could change after a
 `VACUUM`. Most specific first, then longest keyword, then newest.
 
-**`src/webhook/comments.ts:231`** — `matchCampaign(text, postId, campaigns)`, at
-**`src/services/matching.ts:59`**. It re-sorts defensively with `bySpecificity`
-(**`src/services/matching.ts:45`**, applied at **:68** on a copy) so a caller handing it an
+**`src/webhook/comments.ts:239`** — `matchCampaign(text, postId, campaigns)`, at
+**`src/services/matching.ts:142`**. It re-sorts defensively with `bySpecificity`
+(**`src/services/matching.ts:59`**, applied on a copy) so a caller handing it an
 arbitrarily ordered array — a unit test, a cached list — gets the same winner the database path
-does.
+does. Whether one campaign fires on one comment is `judgeCampaign` (**`src/services/matching.ts:108`**);
+`matchCampaign` takes the first campaign that does. The dashboard's dry run, `POST /api/campaigns/try`
+(**`src/services/campaignTry.ts`**), loads the same query and decides with the same function
+(`rankMatches`, **:169**, for every campaign that fires; `winReason`, **:196**, for why the first
+outranks the second), plus an unsaved draft; it writes nothing.
 
 Per candidate:
 

@@ -152,6 +152,7 @@ const ALLOWED: readonly Allowed[] = [
         'src/services/growth/sync.test.ts',
         'src/services/landingLogos.test.ts',
         'src/services/matching.test.ts',
+        'src/services/matching.try.test.ts',
         'src/services/monteur/clips.test.ts',
         'src/services/monteur/copyKits.test.ts',
         'src/services/monteur/copyRules.test.ts',

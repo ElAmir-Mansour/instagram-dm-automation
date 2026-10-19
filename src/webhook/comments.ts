@@ -4,11 +4,12 @@
  * Handles both platforms. Instagram sends `field: 'comments'`; Facebook Pages send
  * `field: 'feed'` with `item: 'comment'`, and the two payloads name nothing the same way.
  */
-import { queryCount, queryOne, queryRows } from '../db/query.js';
-import type { CampaignRow as CampaignTableRow, InteractionRow } from '../db/rows.js';
+import { queryCount, queryOne } from '../db/query.js';
+import type { InteractionRow } from '../db/rows.js';
 import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from '../services/instagram.js';
 import { getCreatorByPageId } from '../services/tenant.js';
 import { matchCampaign } from '../services/matching.js';
+import { loadLiveCampaigns, type LiveCampaign } from '../services/liveCampaigns.js';
 import { recordPrivateReplyRecipient } from '../services/dmSales/bridge.js';
 import { profileContextOrLegacy, ProfileUnreadableError } from '../services/profile/context.js';
 import type { ArabicRegister } from '../services/profile/types.js';
@@ -17,18 +18,6 @@ import { noteMetaFailure } from '../services/tokenHealth.js';
 import { classifyDmError, dmFallbackReply, shouldPostDmFallback } from './errors.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
-
-/**
- * Exactly the campaign columns this pipeline selects.
- *
- * Derived from the table's row type rather than redeclared, so a column rename shows up here
- * as a compile error instead of as a campaign that silently stops matching.
- */
-type CampaignRow = Pick<
-    CampaignTableRow,
-    'id' | 'trigger_keyword' | 'dm_template' | 'public_reply_template' | 'post_id' | 'is_active'
-    | 'created_at' | 'match_mode'
->;
 
 interface NormalizedComment {
     commentId: string;
@@ -243,21 +232,11 @@ async function processComment(
     }
 
     // Fetch campaigns & match keyword with Arabic normalization & post_id targeting.
-    // ORDER BY is not cosmetic: without it Postgres returns heap order, so a generic campaign
-    // could shadow a post-specific one on the same keyword and the winner could change after
-    // a VACUUM. Most specific first, then longest keyword, then newest.
-    const campaigns = await queryRows<CampaignRow>(
-        // `match_mode` is v14 and NOT NULL DEFAULT 'substring', so selecting it can only ever
-        // narrow a campaign's matching — never widen it — for a campaign whose owner asked.
-        `SELECT id, trigger_keyword, dm_template, public_reply_template, post_id, is_active,
-                created_at, match_mode
-           FROM campaigns
-          WHERE creator_id = $1 AND is_active = true
-          ORDER BY (post_id IS NOT NULL) DESC, length(trigger_keyword) DESC, created_at DESC`,
-        [creator.id]
-    );
+    // The query (live only, most specific first) lives in services/liveCampaigns.ts, shared
+    // with the dashboard's dry run, so what "Try a comment" says is what this line decides.
+    const campaigns = await loadLiveCampaigns(creator.id);
 
-    const matchedCampaign = matchCampaign<CampaignRow>(text, postId, campaigns);
+    const matchedCampaign = matchCampaign<LiveCampaign>(text, postId, campaigns);
 
     if (!matchedCampaign) {
         // The single most common reason for "the automation is not working". A comment that
