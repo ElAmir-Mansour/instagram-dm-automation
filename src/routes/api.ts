@@ -853,6 +853,16 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
  * an account was suspended would have to be rebuilt by hand afterwards. Re-enabling the
  * tenant simply lets the next sweep pick them up, which is what an operator flipping that
  * switch back on expects.
+ *
+ * ── Archived posts (migration v45, UX US1) ──
+ * A row with `archived_at` set is one the owner put away on purpose: a post parked for next
+ * year, or a held one he no longer wants. The sweep does not pick it up, and the claim below
+ * repeats the test, so a row archived between the SELECT and the claim is not published
+ * either. The skip is silent on purpose, unlike the held tenants above: the owner chose it,
+ * and the dashboard lists every archived row under "Archived". It is the ONLY sweep that
+ * stops: the TikTok and Instagram reconcilers still run on a row already in flight, because
+ * archiving a post must not leave a half-published one unreconciled. Unarchiving a PENDING
+ * row whose time has passed makes it due again, and the next sweep publishes it.
  */
 export async function publishDuePosts(): Promise<PublishSweepResult> {
     // `c.is_active` is selected rather than filtered on, so the held rows can be counted and
@@ -862,7 +872,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id, c.is_active
         FROM scheduled_posts s
         JOIN creators c ON c.id = s.creator_id
-        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
+        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW() AND s.archived_at IS NULL
         ORDER BY s.scheduled_time ASC
     `);
 
@@ -890,7 +900,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         const claim = await pool.query(
             `UPDATE scheduled_posts
                 SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-              WHERE id = $1 AND status = 'PENDING'
+              WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
           RETURNING id`,
             [post.id]
         );
@@ -2968,6 +2978,63 @@ router.delete('/posts/scheduled/:id', canOperate, async (req, res) => {
         res.status(500).json({ error: 'Failed to delete scheduled post.' });
     }
 });
+
+/**
+ * Archive and Unarchive one scheduled post (migration v45, UX US1, audit PO-14, FR-003): the owner's way to put away a post that
+ * is not a problem and not an upcoming post either — a failed one parked for next year, a held TikTok draft he has stopped
+ * wanting. Without it such a row sat in "Needs attention" on Posts and on Today for good, and a red badge nobody can clear teaches
+ * him to ignore every red badge.
+ *
+ *   POST    sets `scheduled_posts.archived_at`. The row leaves "Needs attention" and the attention counts, the publish sweep skips it
+ *           (`publishDuePosts`), and the dashboard lists it under "Archived". Nothing is deleted: the row and its media are kept.
+ *   DELETE  clears it. A PENDING row whose time has passed is due again and the next sweep publishes it.
+ *
+ * Any status can be archived, and both calls are idempotent: archiving an archived row keeps its original stamp, unarchiving a row
+ * that is not archived changes nothing. The dashboard offers the button on PENDING, FAILED and held rows only, but the server does
+ * not second-guess it, because the stamp changes what the OWNER sees and what the sweep picks up, never what a platform already has.
+ * It does not touch `status`, `error_log` or the publish ids, so Unarchive puts the row back exactly as it was.
+ *
+ * Operators and owners, as for edit and delete, and scoped to the session's tenant: an id from another tenant is a 404, not a hint
+ * that it exists. Answers the row as the list does (with `archived_at`), so the page can replace its copy. Not written to the audit
+ * ledger: no other post action is (create, edit, delete and publish-now are logged only), and a reversible filing action would only
+ * bury the entries that matter. A database without v45 cannot say, and answers 503 with the migration hint.
+ */
+async function setPostArchived(req: Request, res: Response, archived: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        const updated = await pool.query(
+            archived
+                ? 'UPDATE scheduled_posts SET archived_at = COALESCE(archived_at, NOW()) WHERE id = $1 AND creator_id = $2 RETURNING *'
+                : 'UPDATE scheduled_posts SET archived_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING *',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        log('info', archived ? 'posts.archived' : 'posts.unarchived', {
+            post_id: id, creator_id: tenantId, status: updated.rows[0].status,
+        });
+        res.json(updated.rows[0]);
+    } catch (err) {
+        log('error', 'api.scheduled_archive_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: archived ? 'Failed to archive this post.' : 'Failed to unarchive this post.' });
+    }
+}
+
+router.post('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, true));
+router.delete('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, false));
 
 /**
  * Retry (or fast-forward) one scheduled post from the dashboard's "Publish now" button.
