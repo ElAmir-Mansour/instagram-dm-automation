@@ -98,10 +98,10 @@ async function loadDraft(exec: Exec, creatorId: string, draftId: string, lock = 
 /** Refused once scheduled (STUDIO.md §4) — `/unschedule` reopens it — and while the draft is still being written. */
 function assertEditable(row: CarouselDraftRow, now: number = Date.now()): void {
     if (row.status === 'scheduled') {
-        throw new StudioError(409, 'This draft is scheduled, so it can no longer be changed. Unschedule it first to edit it.');
+        throw new StudioError(409, 'This draft is scheduled, so it can no longer be changed. Unschedule it first to edit it.', undefined, 'DRAFT_SCHEDULED');
     }
     if (row.status === 'generating' && !isStaleGeneration(row, now)) {
-        throw new StudioError(409, 'This draft is still being written. Wait for it to finish.');
+        throw new StudioError(409, 'This draft is still being written. Wait for it to finish.', undefined, 'DRAFT_WRITING');
     }
 }
 
@@ -633,7 +633,7 @@ export async function patchDraft(creatorId: string, draftId: string, body: unkno
           RETURNING id`,
             [draft.id, creatorId, JSON.stringify(carousel), JSON.stringify(shots), campaign ? JSON.stringify(campaign) : null]
         );
-        if (!rows[0]) throw new StudioError(409, 'This draft was scheduled or deleted while you were editing it.');
+        if (!rows[0]) throw new StudioError(409, 'This draft was scheduled or deleted while you were editing it.', undefined, 'CHANGED_MEANWHILE');
         const { draft: rendering } = await enqueueRender(client, creatorId, payload);
         return presentDraft(rendering!);
     });
@@ -687,7 +687,7 @@ export async function rewriteDraftSlide(creatorId: string, draftId: string, body
                 JSON.stringify(draft.carousel), draft.shots ? JSON.stringify(draft.shots) : null,
             ]
         );
-        if (!rows[0]) throw new StudioError(409, 'The draft changed while the slide was being rewritten. Reload it and try again.');
+        if (!rows[0]) throw new StudioError(409, 'The draft changed while the slide was being rewritten. Reload it and try again.', undefined, 'CHANGED_MEANWHILE');
         const { draft: rendering } = await enqueueRender(client, creatorId, payload);
         return presentDraft(rendering!);
     });
@@ -710,7 +710,7 @@ export async function deleteDraft(creatorId: string, draftId: string): Promise<v
     await withTransaction(async (client) => {
         const draft = await loadDraft(client, creatorId, draftId, true);
         if (draft.status === 'scheduled') {
-            throw new StudioError(409, 'A scheduled draft cannot be deleted: it is the record of what was posted.');
+            throw new StudioError(409, 'A scheduled draft cannot be deleted: it is the record of what was posted.', undefined, 'DRAFT_SCHEDULED');
         }
         await cancelRenders(client, creatorId, draft.id, 'The draft was deleted.');
         await client.query('DELETE FROM carousel_drafts WHERE id = $1 AND creator_id = $2', [draft.id, creatorId]);

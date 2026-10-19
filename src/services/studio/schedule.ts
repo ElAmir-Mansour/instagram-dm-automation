@@ -64,10 +64,10 @@ export function studioTikTokOptions(
 export async function assertDirectPostReady(creatorId: string, flags: TikTokPostingFlags): Promise<void> {
     const connection = await getConnection(creatorId);
     if (!connection || connection.status !== 'active') {
-        throw new StudioError(409, 'TikTok is not connected. Connect it in Settings first.');
+        throw new StudioError(409, 'TikTok is not connected. Connect it in Settings first.', undefined, 'TIKTOK_NOT_CONNECTED');
     }
     if (!(connection.scopes ?? []).includes('video.publish') || !flags.directPostEnabled) {
-        throw new StudioError(409, 'Direct Post is not available: switch it on in Settings → TikTok app, then reconnect TikTok.');
+        throw new StudioError(409, 'Direct Post is not available: switch it on in Settings → TikTok app, then reconnect TikTok.', undefined, 'TIKTOK_DIRECT_POST_UNAVAILABLE');
     }
 }
 
@@ -126,7 +126,9 @@ async function planCampaign(exec: Exec, creatorId: string, draft: CarouselDraftR
     const triggers = unique([keyword, ...campaign.variants]);
     const clashes = triggerClashes(triggers, 'substring', active);
     if (clashes.length) {
-        throw problemsError(clashes.map((c) => `campaign.keyword: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this campaign', 409);
+        throw problemsError(clashes.map((c) => `campaign.keyword: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this campaign', 409, 'KEYWORD_CLASH', {
+            trigger: clashes[0]!.trigger, live: clashes[0]!.live, clashes: clashes.map((c) => ({ trigger: c.trigger, live: c.live })),
+        });
     }
     return { create: true, triggers: triggers.join(', '), dm: campaign.dm };
 }
@@ -145,7 +147,7 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
     const b = isPlainObject(body) ? body : {};
     const when = typeof b.scheduled_time === 'string' ? new Date(b.scheduled_time) : new Date(NaN);
     if (Number.isNaN(when.getTime())) {
-        throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-01T10:00:00Z.');
+        throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-01T10:00:00Z.', undefined, 'INVALID_SCHEDULE_TIME');
     }
     const tiktok = (b.tiktok ?? 'none') as DraftTikTokIntent;
     if (!TIKTOK_INTENTS.includes(tiktok)) throw new StudioError(400, `tiktok must be one of ${TIKTOK_INTENTS.join(', ')}.`);
@@ -158,9 +160,9 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
     );
     if (!draft) throw new StudioError(404, 'No such draft.');
     if (draft.status !== 'ready' || !draft.carousel || !draft.render) {
-        throw new StudioError(409, draft.status === 'scheduled'
-            ? 'This draft is already scheduled.'
-            : 'This draft can be scheduled once its slides are rendered.');
+        throw draft.status === 'scheduled'
+            ? new StudioError(409, 'This draft is already scheduled.', undefined, 'DRAFT_SCHEDULED')
+            : new StudioError(409, 'This draft can be scheduled once its slides are rendered.', undefined, 'DRAFT_NOT_READY');
     }
     const { carousel, render } = draft;
 
@@ -196,7 +198,7 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
             'SELECT status, render FROM carousel_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [draft.id, creatorId]
         );
         if (locked[0]?.status !== 'ready' || locked[0]?.render?.job_id !== render.job_id) {
-            throw new StudioError(409, 'The draft changed while it was being scheduled. Reload it and try again.');
+            throw new StudioError(409, 'The draft changed while it was being scheduled. Reload it and try again.', undefined, 'CHANGED_MEANWHILE');
         }
 
         const groupId = crypto.randomUUID();
@@ -325,7 +327,7 @@ export async function unscheduleDraft(creatorId: string, draftId: string): Promi
           RETURNING *`,
             [draft.id, creatorId]
         );
-        if (!saved[0]) throw new StudioError(409, 'The draft changed while it was being unscheduled. Reload it and try again.');
+        if (!saved[0]) throw new StudioError(409, 'The draft changed while it was being unscheduled. Reload it and try again.', undefined, 'CHANGED_MEANWHILE');
         log('info', 'studio.unscheduled', { draft_id: draft.id, deleted: deleted.length });
         return { draft: presentDraft(saved[0]), deleted };
     });

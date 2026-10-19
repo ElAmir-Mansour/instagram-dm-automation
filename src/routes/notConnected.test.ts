@@ -202,6 +202,9 @@ describe('POST /posts/scheduled: a Meta post for a tenant with no connection is 
             assert.equal(res.statusCode, 409);
             assert.equal(res.body.code, 'META_NOT_CONNECTED');
             assert.equal(res.body.error, NOT_CONNECTED_MESSAGE);
+            // The shared envelope (src/services/errorCodes.ts): `error` is still the string every client reads.
+            assert.equal(res.body.message, NOT_CONNECTED_MESSAGE);
+            assert.deepEqual(res.body.params, {});
             assert.deepEqual(writesTo('scheduled_posts'), []);
         });
     }
@@ -222,6 +225,7 @@ describe('GET /settings/token/status for a tenant with no token', () => {
         const res = await call('get', '/settings/token/status', {});
         assert.equal(res.statusCode, 200);
         assert.equal(res.body.status, 'not_connected');
+        assert.equal(res.body.code, 'NOT_CONNECTED', 'the stable name of the state, so the dashboard shows its own sentence and not `message` (SE-01)');
         assert.equal(res.body.message, NOT_CONNECTED_MESSAGE);
         assert.equal(res.body.instagramPageId, null);
         assert.deepEqual(metaCalls, []);
