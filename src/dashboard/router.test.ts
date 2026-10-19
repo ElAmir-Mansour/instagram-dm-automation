@@ -786,10 +786,14 @@ describe('router: a page\'s own stylesheet (T003)', () => {
         assert.ok(declared >= 1);
     });
 
-    it('ships overview.css as a commented, empty file: nothing to cascade yet, and a header that says why', () => {
+    it('ships overview.css with a header that says why it exists, balanced rules, and no colour of its own', () => {
+        // It was an empty file until the first rule only the Overview uses moved here (US1 T042: the two labelled strips); from then on
+        // it holds rules, and what is pinned is that they parse and that colour still comes from tokens.css.
         const css = readFileSync('dashboard/css/pages/overview.css', 'utf8');
-        assert.match(css, /^\/\*[\s\S]*\*\/\s*$/, 'one comment and nothing after it');
-        assert.equal(/[{}]/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), false, 'no rules');
+        assert.match(css, /^\/\*[\s\S]*?\*\//, 'it opens with the header comment');
+        const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+        assert.equal((rules.match(/\{/g) || []).length, (rules.match(/\}/g) || []).length, 'every block closes');
+        assert.equal(/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i.test(rules), false, 'no literal colour: tokens only');
     });
 
     it('adds the <link> once, before the module\'s <script>, with the same ?v= as every other asset', () => {

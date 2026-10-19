@@ -5292,6 +5292,12 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .failure-reason-main .text-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .failure-reason-text { color: var(--text-strong); overflow-wrap: anywhere; }
 .failure-reason-count { font-size: var(--fs-300); color: var(--text-strong); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* The reasons in two groups: what needs the owner, and what the product did on purpose (UX US1 T043). The group's pill carries the
+   meaning (glyph, word, tone); only "Needs you" is red. */
+.failure-group + .failure-group { margin-block-start: var(--space-4); }
+.failure-group-title { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: var(--fs-300); }
+.failure-group-count { color: var(--text-strong); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.failure-group-note { margin: 0 0 var(--space-2); }
 
 @media (max-width: 560px) {
     .analytics-range { inline-size: 100%; }
