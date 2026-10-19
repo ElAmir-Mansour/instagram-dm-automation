@@ -19,8 +19,10 @@
  *
  * ## Addressing
  *
- * `{ messaging_product: 'whatsapp', recipient_type: 'individual', recipient: <BSUID> }` and NO `to`: when both are present Meta takes the phone
- * number, and the contact here is the BSUID. A phone number is addressed with `to` and no `recipient`, only for a contact known by nothing else.
+ * A phone number is addressed `{ messaging_product: 'whatsapp', recipient_type: 'individual', to: <digits> }`; a BSUID
+ * `{ …, recipient: <BSUID> }` and NO `to` (when both are present Meta takes the phone number). Never both. The sender passes the contact's phone
+ * when Meta has given one and the BSUID otherwise (`recipientOf` in services/channels/send.ts): a test number's allowed list is checked by phone,
+ * so a BSUID-addressed reply to a listed number failed with 131030 (2026-10-19).
  * Confirmed on Meta's page for business-scoped user ids (read 2026-10-19): "To message by BSUID, put the BSUID in `recipient` and omit `to`",
  * with this exact body for a text message, and "these changes apply to all message types".
  *   https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids.md

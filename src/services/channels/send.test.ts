@@ -125,6 +125,26 @@ describe('a reply that goes out', () => {
         assert.ok(!JSON.stringify(posts[0]!.body).includes(TOKEN), 'the token is a header, not a field');
     });
 
+    it('is addressed to the phone (to, never recipient) when Meta gave one: a test number checks its allowed list by phone (131030)', async () => {
+        world.thread = threadRow({ wa_phone: '201007475609' });
+        await send();
+        assert.equal(posts.length, 1);
+        assert.deepEqual(posts[0]!.body, {
+            messaging_product: 'whatsapp', recipient_type: 'individual', to: '201007475609', type: 'text', text: { body: WORDS, preview_url: false },
+        });
+        assert.ok(!('recipient' in posts[0]!.body), 'never both');
+    });
+
+    it('keeps the BSUID for a contact with no usable phone (username-only, or a malformed value)', async () => {
+        for (const wa_phone of [null, '', 'not-a-number', '123']) {
+            posts = [];
+            world.thread = threadRow({ wa_phone });
+            await send();
+            assert.equal(posts[0]!.body.recipient, BSUID, String(wa_phone));
+            assert.ok(!('to' in posts[0]!.body), String(wa_phone));
+        }
+    });
+
     it('stores the outbound row with the wamid, the words, and who wrote it', async () => {
         await send();
         const insert = outboundInserts()[0]!;
