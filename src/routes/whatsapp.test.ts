@@ -50,8 +50,14 @@ interface Conn {
     profile: Record<string, unknown> | null; settings: Record<string, unknown>; connected_by_user_id: string | null;
 }
 interface Agent { whatsapp_mode: string; whatsapp_test_senders: string[] }
+/** One `channel_usage` row (the ledger), as the usage read aggregates them. */
+interface LedgerRow { creator_id: string; external_account_id: string; period: string; category: string; delivered: number; billable: number; est_cost_usd: number }
 
 let conns: Conn[];
+/** The usage ledger. Empty unless a test arranges rows. */
+let ledger: LedgerRow[];
+/** Set to make the ledger read fail, as a database that is behind would. */
+let ledgerFails: boolean;
 let agents: Map<string, Agent>;
 let audits: Array<{ action: string; targetId: unknown; detail: any }>;
 let statements: Array<{ sql: string; params: unknown[] }>;
@@ -164,6 +170,17 @@ function fakeQuery(sql: string, params: any[] = []): { rows: any[]; rowCount: nu
             return result([rowOf(c)]);
         }
     }
+    if (q.startsWith('SELECT') && q.includes('FROM channel_usage')) {
+        if (ledgerFails) throw new Error('relation "channel_usage" does not exist');
+        const [creator, phone, period] = params;
+        const rows = ledger.filter((r) => r.creator_id === creator && r.external_account_id === phone && r.period === period);
+        const sum = (pick: (r: LedgerRow) => number) => rows.reduce((n, r) => n + pick(r), 0);
+        return result([{
+            service: String(sum((r) => (r.category === 'service' ? r.delivered : 0))),
+            billable: String(sum((r) => r.billable)),
+            cost: sum((r) => r.est_cost_usd).toFixed(4),
+        }]);
+    }
     if (q.startsWith('SELECT whatsapp_mode, whatsapp_test_senders FROM ai_agents')) {
         const a = agents.get(params[0]);
         return result(a ? [a] : []);
@@ -220,6 +237,8 @@ beforeEach(() => {
     process.env.META_APP_SECRET = 'the-app-secret-never-in-a-log';
 
     conns = [];
+    ledger = [];
+    ledgerFails = false;
     agents = new Map([[TENANT, { whatsapp_mode: 'off', whatsapp_test_senders: [] }]]);
     audits = [];
     statements = [];
@@ -417,13 +436,64 @@ describe('GET /connection', () => {
         noMetaCalls();
     });
 
-    it('carries the usage placeholder, clearly the current month at zero of 1,000, until the ledger exists', async () => {
+    const thisPeriod = () => { const now = new Date(); return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`; };
+    const usageRow = (over: Partial<LedgerRow> = {}): LedgerRow => ({
+        creator_id: TENANT, external_account_id: PHONE, period: thisPeriod(), category: 'service', delivered: 0, billable: 0, est_cost_usd: 0, ...over,
+    });
+
+    it('shows the current UTC month at zero of 1,000 when the ledger has nothing yet', async () => {
         seed();
         const { usage } = (await call('GET', '/connection')).body;
         assert.match(usage.period, /^\d{4}-(0[1-9]|1[0-2])$/);
-        const now = new Date();
-        assert.equal(usage.period, `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`);
+        assert.equal(usage.period, thisPeriod());
         assert.deepEqual({ ...usage, period: undefined }, { period: undefined, free_used: 0, free_limit: 1000, billable: 0, est_cost_usd: 0, projected_cost_usd: 0 });
+    });
+
+    it('reads the meter from the ledger: this number, this month, this tenant, and nothing else', async () => {
+        seed();
+        ledger.push(
+            usageRow({ category: 'service', delivered: 40, billable: 0, est_cost_usd: 0 }),
+            usageRow({ category: 'utility', delivered: 2, billable: 2, est_cost_usd: 0.0072 }),
+            usageRow({ external_account_id: OTHER_PHONE, delivered: 999 }),
+            usageRow({ creator_id: OTHER_TENANT, delivered: 999 }),
+            usageRow({ period: '2020-01', delivered: 999 }),
+        );
+        const { usage } = (await call('GET', '/connection')).body;
+        assert.equal(usage.free_used, 40, 'delivered service messages only, for this number and period');
+        assert.equal(usage.billable, 2);
+        assert.equal(usage.est_cost_usd, 0.0072);
+        assert.ok(usage.projected_cost_usd >= usage.est_cost_usd, 'the month projects to at least what it has cost');
+        const read = statements.find((st) => st.sql.includes('FROM channel_usage'))!;
+        assert.deepEqual(read.params, [TENANT, PHONE, thisPeriod()], 'scoped by tenant, number and period');
+    });
+
+    it('caps free_used at the 1,000 free replies: the rest are billable and say so', async () => {
+        seed();
+        ledger.push(usageRow({ category: 'service', delivered: 1200, billable: 200, est_cost_usd: 0.72 }));
+        const { usage } = (await call('GET', '/connection')).body;
+        assert.equal(usage.free_used, 1000);
+        assert.equal(usage.free_limit, 1000);
+        assert.equal(usage.billable, 200);
+    });
+
+    it('does not read the ledger for a tenant with no live connection', async () => {
+        const { usage } = (await call('GET', '/connection')).body;
+        assert.equal(usage.free_used, 0);
+        assert.ok(!statements.some((st) => st.sql.includes('FROM channel_usage')), 'no number, nothing to count');
+        conns = [];
+        seed({ status: 'revoked' });
+        await call('GET', '/connection');
+        assert.ok(!statements.some((st) => st.sql.includes('FROM channel_usage')), 'a disconnected number is not counted either');
+    });
+
+    it('answers the card with zeros and `unavailable` when the ledger cannot be read, and logs why', async () => {
+        seed();
+        ledgerFails = true;
+        const r = await call('GET', '/connection');
+        assert.equal(r.status, 200, 'the connection and the agent are still true');
+        assert.equal(r.body.usage.unavailable, true);
+        assert.equal(r.body.usage.free_used, 0);
+        assert.ok(logs.some((l) => l.includes('whatsapp.usage_unreadable')), 'said so in the log');
     });
 
     it('lists what stands between the owner and `everyone`, and never says ready in this phase', async () => {

@@ -9,7 +9,10 @@
  * is unavailable — a database that is up enough to serve reads but not the `jobs` insert, or
  * a deployment that has shipped this code before migration v13 has been applied by hand.
  * Both routes call the same `handleCommentChange` / `handleMessagingEvent`, so they cannot
- * drift apart.
+ * drift apart. A WhatsApp body (`whatsapp_business_account`) is planned by its own planner
+ * (`whatsappPlan.ts`) and, on the inline path, run through the same two handlers the jobs
+ * call (`handleWhatsAppInbound`, `handleWhatsAppEvent`); the Instagram and Facebook code below
+ * it is untouched by that branch.
  *
  * The failure mode the per-event isolation exists to kill: the whole batch used to run inside
  * one try/catch, so the first un-wrapped database error aborted the loop over `body.entry` —
@@ -24,6 +27,10 @@ import { handleMessagingEvent } from './messaging.js';
 import { echoFromOwnApp, echoTakeoverEnabled } from './echo.js';
 import { handleCommentChange } from './comments.js';
 import { FINAL_ATTEMPT } from './options.js';
+import { planWhatsAppEntry, WHATSAPP_OBJECT } from './whatsappPlan.js';
+import { handleWhatsAppInbound } from './whatsappInbound.js';
+import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
+import { isWhatsAppDmPayload } from '../jobs/types.js';
 
 /**
  * The id Meta gives this comment, for queue-level deduplication.
@@ -73,6 +80,15 @@ function isActionableMessagingEvent(event: any, options: PlanOptions = {}): bool
     return false;
 }
 
+/**
+ * Whether the webhook gate (`POST /webhook`) takes a body with this `object`: Instagram, a Facebook Page, or a WhatsApp Business Account.
+ * Anything else is acknowledged with a 200 and logged `webhook.unrecognised_object` (src/index.ts): making Meta retry it forever is not an answer.
+ * The signature check in front of it is the same for all three (one app secret).
+ */
+export function isAcceptedWebhookObject(object: unknown): boolean {
+    return object === 'instagram' || object === 'page' || object === WHATSAPP_OBJECT;
+}
+
 export interface PlanOptions {
     /** Echo takeover is on: echoes become jobs. Absent or false is how the queue always behaved. */
     echoes?: boolean;
@@ -93,6 +109,13 @@ export function planJobs(body: any, options: PlanOptions = {}): EnqueueInput[] {
     const object = typeof body?.object === 'string' && body.object ? body.object : undefined;
 
     for (const entry of entries) {
+        // A WhatsApp entry has `changes` and nothing else in common with the two Instagram/Facebook shapes below: its own planner (whatsappPlan.ts)
+        // reads it, and everything after this `if` is exactly what it was before WhatsApp existed.
+        if (object === WHATSAPP_OBJECT) {
+            planned.push(...planWhatsAppEntry(entry));
+            continue;
+        }
+
         const entryId = entry?.id;
 
         // The fair-queueing partition. `entry.id` is the Meta page id the delivery is
@@ -175,8 +198,31 @@ function describe(err: any): string {
     return err?.message ?? String(err);
 }
 
+/**
+ * One WhatsApp entry on the inline path: the same planner as the queue, and the same two handlers the jobs call, so the routes cannot drift.
+ * Each job is isolated: one that throws is logged and the rest still run. There is no retry on this path (`FINAL_ATTEMPT`).
+ */
+async function processWhatsAppEntry(entry: any): Promise<void> {
+    for (const job of planWhatsAppEntry(entry)) {
+        try {
+            if (job.kind === 'dm.process' && isWhatsAppDmPayload(job.payload as any)) {
+                await handleWhatsAppInbound(job.payload as any, FINAL_ATTEMPT);
+            } else if (job.kind === 'wa.event') {
+                await handleWhatsAppEvent(job.payload as any);
+            }
+        } catch (err: any) {
+            log('error', 'webhook.whatsapp_failed', { job_kind: job.kind, ...describeError(err) });
+        }
+    }
+}
+
 async function processEntry(entry: any, objectType: string): Promise<void> {
     const entryId = entry?.id;
+
+    if (objectType === WHATSAPP_OBJECT) {
+        await withLogContext({ entry_id: entryId, object: objectType }, () => processWhatsAppEntry(entry));
+        return;
+    }
 
     await withLogContext({ entry_id: entryId, object: objectType }, async () => {
         // ─── A. Instagram Direct Messages & Postbacks ─────────────────────────────

@@ -16,12 +16,52 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
     return typeof value === 'string' && (JOB_KINDS as readonly string[]).includes(value);
 }
+
+/** A `dm.process` job from `entry.messaging` (Instagram, Messenger). */
+export interface MessagingDmPayload {
+    /** One element of `entry.messaging`, exactly as Meta sent it. */
+    event: unknown;
+    entryId: string;
+    /**
+     * The body's `object` (`'instagram'` | `'page'`): the one field that says which network
+     * a DM came from, and it lives on the body, not the event. Absent on jobs queued before
+     * v26.
+     */
+    object?: string;
+}
+
+/**
+ * A `dm.process` job for one WhatsApp message. `change` is the `value` of the `messages` change it came from, trimmed to this one message and
+ * its own contact, with `metadata` kept: stored raw, as the Instagram event is, so a fixed normaliser can replay a job that failed. `object` is
+ * the app's own name for the network (`'whatsapp'`), NOT the body's `object` (`'whatsapp_business_account'`).
+ */
+export interface WhatsAppDmPayload {
+    object: 'whatsapp';
+    /** `entry.id`: the Messaging account (WABA) id. */
+    entryId: string;
+    /** `value.metadata.phone_number_id`: which number was written to, and so which tenant. Null when Meta sent none. */
+    phoneNumberId: string | null;
+    change: unknown;
+}
+
+export function isWhatsAppDmPayload(payload: MessagingDmPayload | WhatsAppDmPayload): payload is WhatsAppDmPayload {
+    return payload.object === 'whatsapp' && 'change' in payload;
+}
+
+/**
+ * The three things a `wa.event` job can be. `status` and `preference` carry the raw `value` trimmed like `WhatsAppDmPayload.change`; `account`
+ * carries the whole `value` of an account-level change (quality, limits, bans, name review), which has no message in it.
+ */
+export type WaEventPayload =
+    | { kind: 'status'; entryId: string; phoneNumberId: string | null; change: unknown }
+    | { kind: 'account'; entryId: string; field: string; value: unknown; /** Unix seconds: `entry.time`, else the change's own. */ time: number | null }
+    | { kind: 'preference'; entryId: string; phoneNumberId: string | null; change: unknown };
 
 /**
  * What each kind carries.
@@ -39,17 +79,13 @@ export interface JobPayloads {
         /** `entry.id` — the page id the tenant is resolved from. */
         entryId: string;
     };
-    'dm.process': {
-        /** One element of `entry.messaging`, exactly as Meta sent it. */
-        event: unknown;
-        entryId: string;
-        /**
-         * The body's `object` (`'instagram'` | `'page'`): the one field that says which network
-         * a DM came from, and it lives on the body, not the event. Absent on jobs queued before
-         * v26.
-         */
-        object?: string;
-    };
+    /** Instagram and Messenger DMs (`MessagingDmPayload`), and WhatsApp messages (`WhatsAppDmPayload`): told apart by `isWhatsAppDmPayload`. */
+    'dm.process': MessagingDmPayload | WhatsAppDmPayload;
+    /**
+     * A WhatsApp webhook change that is not a customer message: a delivery status of one of OUR messages, an account-level event, or a
+     * preference change (docs/specs/001-whatsapp-agent/contracts/webhook-inbound.md section 3). Never reaches an AI; see `WaEventPayload`.
+     */
+    'wa.event': WaEventPayload;
     /**
      * The one nudge for a link a sales DM sent (docs/DM_SALES_PLAN.md §7, S9), due `dm.sales.followup_minutes` after it. Unlike the two
      * above this is NOT a Meta event: it is written by the sales turn after the link was recorded, and everything it needs to decide is

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { JOB_KINDS, isJobKind } from './types.js';
+import { JOB_KINDS, isJobKind, isWhatsAppDmPayload } from './types.js';
 
 describe('isJobKind', () => {
     it('accepts every kind in the registry', () => {
@@ -32,5 +32,25 @@ describe('isJobKind', () => {
         // `includes` on the tuple, not `in` — guards against a value like 'length'.
         assert.equal(isJobKind('length'), false);
         assert.equal(isJobKind('0'), false);
+    });
+});
+
+describe('the WhatsApp job kinds', () => {
+    it('wa.event is a kind, so a job of that kind in the table is run and not refused', () => {
+        assert.equal(isJobKind('wa.event'), true);
+        assert.ok((JOB_KINDS as readonly string[]).includes('wa.event'));
+    });
+
+    it('a dm.process payload is WhatsApp’s only with the app’s own object name and a change: an Instagram one never is', () => {
+        assert.equal(isWhatsAppDmPayload({ object: 'whatsapp', entryId: 'w', phoneNumberId: 'p', change: {} }), true);
+        for (const payload of [
+            { event: {}, entryId: 'p' },
+            { event: {}, entryId: 'p', object: 'instagram' },
+            { event: {}, entryId: 'p', object: 'page' },
+            { event: {}, entryId: 'p', object: 'whatsapp_business_account' },
+            { event: {}, entryId: 'p', object: 'whatsapp' },
+        ]) {
+            assert.equal(isWhatsAppDmPayload(payload), false, JSON.stringify(payload));
+        }
     });
 });

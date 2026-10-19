@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Nine flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Ten flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -27,7 +27,8 @@ bug it was written to fix.
 [6. TikTok post → inbox → published](#6-tiktok-post--inbox--published) ·
 [7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask) ·
 [8. Meta login → a connected Page](#8-meta-login--a-connected-page) ·
-[9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait)
+[9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait) ·
+[10. WhatsApp message → stored thread](#10-whatsapp-message--stored-thread-w3b-store-only)
 
 ---
 
@@ -2795,6 +2796,112 @@ queued ─claim→ fetching ─sources saved→ drafting ─answers checked→ r
 source, last4}`) and the tenant that reads other people's Instagram (`onboarding.discovery_creator_id`). With neither, the draft still
 runs: YouTube is skipped, and Instagram by handle is read as the owner's tenant.
 
+## 10. WhatsApp message → stored thread (W3b, store-only)
+
+Someone writes to the owner's WhatsApp number. The message is stored, marked "not answered, and here is why", and **nobody is sent anything**:
+the agent has no WhatsApp brain yet, and `whatsappInbound.test.ts` fails if a single Meta call is made. The same delivery URL, signature and
+queue as §1 and §2; what differs is the object, the planner, and what the handler does.
+
+### 10.1 — The delivery and the object gate
+
+Hops 1.1 and 1.2 are identical: `POST /webhook`, verified against the same app secret (WhatsApp events are signed with `META_APP_SECRET`: one app, three
+objects). The gate is **`src/index.ts:399`**, `isAcceptedWebhookObject(body.object)` (**`src/webhook/router.ts:88`**): `instagram`, `page` or
+`whatsapp_business_account`. Anything else logs `webhook.unrecognised_object` and gets a 200, as in 1.3. Then 1.4 to 1.6 unchanged: enqueue first,
+acknowledge, drain under `waitUntil`.
+
+### 10.2 — `planJobs`' WhatsApp branch
+
+**`src/webhook/router.ts:114`** — `if (object === WHATSAPP_OBJECT)` hands the entry to **`planWhatsAppEntry`** (**`src/webhook/whatsappPlan.ts:141`**) and
+`continue`s: the Instagram and Facebook code after it is exactly what it was (`router.test.ts` pins whole-job equality for both). A WhatsApp entry
+is read by `change.field`:
+
+| `field` | job | dedupe key | `tenantKey` |
+|---|---|---|---|
+| `messages`, each message (**`whatsappPlan.ts:88`**, `planMessagesChange`) | `dm.process` `{ object: 'whatsapp', entryId, phoneNumberId, change }` | `dm:<wamid>` (**:117**) | `phone_number_id` |
+| `messages`, each status | `wa.event` `{ kind: 'status' }` | `wa:st:<wamid>:<status>` (**:132**) | `phone_number_id` |
+| `account_update`, `account_alerts`, `phone_number_quality_update`, `phone_number_name_update`, `business_capability_update` (**:159**) | `wa.event` `{ kind: 'account' }` | `wa:acct:<field>:<time>:<sha1(value)>` (**:167**) | `entry.id` |
+| `user_preferences` (**:170**) | `wa.event` `{ kind: 'preference' }` | `wa:pref:<sha1(value)>` (**:176**) | `phone_number_id` |
+| anything else | none | | |
+
+`change` is the `value` of the change **trimmed to one message and its own contact** (**`whatsappPlan.ts:65`** `contactsFor`, **:75** `trimmed`): a batch holds
+several people, and one person's job must not carry another's profile name. The handler re-normalises it with the same `normalizeWhatsAppChange`, and
+`router.test.ts` proves that equals what was planned from, for every message and status in every fixture. The `dm:` prefix is kept: the inbox's
+delivery chip finds a message's job by `dm:<mid>`.
+
+A message that is a **group** message or has **no BSUID anywhere** becomes no job (**:111**). Every other kind of ignored message (a reaction,
+`unsupported`, an edit) still becomes a `dm.process` job, so the handler can store a row that says why or log it.
+
+> **Why the account key has the time in it (review M13).** GREEN → YELLOW → GREEN → YELLOW is four events; a key on the value alone drops the fourth
+> while the first job is still retained, and an alert is lost. With no time anywhere (`entry.time`, else the change's own) the key is omitted rather than
+> guessed: a duplicate is harmless (the handler compares with what is stored), a dropped alert is not.
+
+### 10.3 — The handler adapter, and the inline fallback
+
+**`src/jobs/handlers.ts:38`** — `isWhatsAppDmPayload(payload)` (`object === 'whatsapp'` with a `change`) sends a `dm.process` to **`handleWhatsAppInbound`**
+(**`src/webhook/whatsappInbound.ts:404`**), anything else to `handleMessagingEvent` exactly as before. **`handlers.ts:48`** — `wa.event` →
+**`handleWhatsAppEvent`** (**`src/services/whatsappStatus.ts:146`**). If the queue is down, **`router.ts:222`** → `processWhatsAppEntry` (**:205**) runs the same planner
+and the same two handlers inline, one job at a time, each isolated (`webhook.whatsapp_failed`).
+
+### 10.4 — Tenant
+
+**`src/services/tenant.ts:206`** — `getCreatorByWhatsAppNumber(phone_number_id)`: the connection for the number through `getConnectionByPhoneNumberId`
+(**`whatsappConnections.ts:198`**, any row that is **not `revoked`**), then the creator, which must be active. An **`invalid`** connection still resolves:
+Meta answers a 200 once and never redelivers, so a message that arrives while the token is dead can only be stored now or lost (review H10). No
+connection, a revoked one or no id: **`wa.no_creator`** (**`whatsappInbound.ts:416`**, `warn`) and the job completes; an inactive creator also logs
+`wa.creator_inactive` (**`tenant.ts:217`**).
+
+### 10.5 — Who is a test sender, and what is kept (review C3)
+
+**`whatsappInbound.ts:422`** reads `ai_agents.whatsapp_mode` and `whatsapp_test_senders` (`readWhatsAppSettings`). A read that fails is **retried**
+while an attempt is left; on the last attempt (**:427**, `wa.settings_unreadable`, `error`) the message is stored as for a stranger. **`isTestSender`**
+(**:67**) matches the BSUID or the phone. The public pages do not name WhatsApp yet and there is no go-live gate, so:
+
+| sender | thread (`conversations`) | message (`messages`) |
+|---|---|---|
+| a listed test sender | BSUID, phone, username, parent id, profile name (into `profile_name`, 255 max), entry source | text, interactive reply id, raw event (with the media id, type and caption) |
+| anyone else | the BSUID and entry source only | `text = ''`, no payload, no raw event, `message_type` kept |
+
+`jobs.payload` still holds the event verbatim until the queue prunes it; that retention is the queue's (§5.7), not this file's.
+
+### 10.6 — The thread, and the 24 h window
+
+**`whatsappInbound.ts:159`** `alreadyHandled` is asked **before** the thread is touched: a redelivery must not stamp `last_inbound_at` and reopen a window the
+customer closed days ago (`wa.duplicate_ignored`). **`:228`** — one upsert, `ON CONFLICT (creator_id, instagram_user_id)`; the column holds the BSUID, which cannot
+collide with a numeric IGSID or PSID. It stamps **`last_inbound_at = NOW()` on insert and on update, for every inbound** (review H3): nothing else stamps it for a
+thread no sales turn has answered, and `isWindowOpen` (`channels/window.ts`) reads it. `platform` is set once; `entry_source` is set by the first inbound only (a
+click-to-WhatsApp referral, else `organic`). `conversations.handled_at` (v45) is **not** touched, because the Instagram upsert does not clear it yet either.
+
+### 10.7 — Claim, then conclude
+
+**`:175`** `claimWhatsAppInbound`: the same `ON CONFLICT (meta_message_id) … DO NOTHING` insert and 300 s re-claim window as 2.5, with this channel's
+columns. No row back and no resumable one: `wa.duplicate_ignored`. A resumed one logs `wa.resumed`. **`:204`** `markNotAnswered` is the last write and the only one
+that sets `messages.no_reply_reason`; **`:78`** `noReplyReasonFor`: `unsupported_type` for a reaction or a message the agent cannot read (whatever the mode),
+`agent_off` for mode `off`, `not_test_sender` for mode `test` and a sender not on the list, and `agent_off` for the rest (**W5 replaces that last case**:
+the agent will answer test senders). `wa.inbound_stored` (**:272**) says which, and whether the row is `full` or `metadata_only`.
+
+### 10.8 — A BSUID that changes (review M9)
+
+A `system` message (`user_changed_number`, `user_changed_user_id`) is not the customer writing: **`:343`** `storeSystemEvent` stamps neither `last_inbound_at` nor
+`last_message_at`. **`:292`** `rekeyContact`, one transaction: the thread is re-keyed old → new unless the new id already has one (a `NOT EXISTS` in the statement,
+the unique index behind it; a race that reaches the index rolls back and re-runs without the thread step); `contact_consents.contact_ref` follows the person, so an
+opt-out holds; the id in `whatsapp_test_senders` is replaced (`array_replace`, or just removed when the new id is already listed). **If both threads exist they are
+not merged or deleted**: `wa.contact_rekey_conflict` (`warn`), and the system message goes on the new thread. Concluded as `no_reply_reason = 'system_event'`.
+
+### 10.9 — Statuses, and the usage ledger
+
+**`whatsappStatus.ts:74`** `applyStatus`, one transaction, the row read **`FOR UPDATE`** (**:80**): a status of one of OUR messages (`direction = 'outbound'`, found by
+`meta_message_id = wamid`) moves `delivery_status` only **up** (`sent` < `failed` < `delivered` < `read` < `played`, **:86**); `failed` records `delivery_error_code` and
+`delivery_error` but never moves a delivered or read message back; `pricing_category`, `pricing_type` and `billable` are copied from whichever status carries them.
+**`:110`** — the first status that takes a message from not-delivered to delivered (a `read` that arrived first included) calls **`recordDelivery`**
+(**`src/services/channelUsage.ts:124`**) **in the same transaction**, so a duplicate or out-of-order status cannot count twice and a count that fails rolls the status
+back for the retry to redo. The ledger row is per number, month (UTC for now, `TODO(M12)`), category, pricing type and recipient market (BSUID prefix `EG.`/`SA.` or
+phone `20`/`966`, else `other`). `GET /api/whatsapp/connection` reads it back as the meter (**`src/routes/whatsapp.ts:76`**, `usageOf`).
+
+### 10.10 — Account and preference events
+
+`wa.event` kinds `account` and `preference` are **logged only** (`wa.account_event`, `wa.preference_event`, **`whatsappStatus.ts:165`**, **:169**): W7 and W9 act on them.
+The preference detail names a person's phone number and is deliberately not logged.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -2861,5 +2968,20 @@ error, and several write **no row at all**.
 | 9 | **a draft nobody advances** (no wizard open, worker not running): it stays `queued` | *(none)* until the sweep runs: `onboarding.sweep` | row untouched; ended `expired` by whoever finds it after 30 minutes |
 | 9 | a slow invocation whose lease ran out, or whose draft was superseded — owner-guarded writes | `onboarding.draft_lease_lost` | no (what it did is dropped) |
 | 9 | the draft is ready and nobody applies it | *(none)* | the draft stays a draft: nothing is applied to the profile by the engine |
+| 10 | a message from a group, or with no BSUID anywhere — **`whatsappPlan.ts:111`** | `wa.ignored` (`reason: group` / `no_user_id`) | **no job**, no row |
+| 10 | a `field` the build does not handle (`calls`, `message_template_status_update`, …) — **`whatsappPlan.ts:180`** | `wa.unhandled_field` | no job |
+| 10 | an entry with no changes, a `messages` change with nothing in it, value-level `errors[]` — **`whatsappPlan.ts:149`**, **:92**, **:104**, **:101** | `wa.empty_entry` / `wa.empty_change` / `wa.value_errors` (`warn`) | no job |
+| 10 | a status with no id — **`whatsappPlan.ts:126`** | `wa.status_ignored` | no job |
+| 10 | **no connection for the number** (never connected, revoked, a number that is not ours), or the tenant is switched off — **`whatsappInbound.ts:416`**, **`tenant.ts:217`** | `wa.no_creator` (`warn`), `wa.creator_inactive` | **no row**; Meta has its 200 and will not redeliver, so the message is gone. An `invalid` connection is NOT this: it stores |
+| 10 | an edit, a deletion, `request_welcome` or a message with no id — **`whatsappInbound.ts:449`** | `wa.ignored` | no row |
+| 10 | already handled — **`whatsappInbound.ts:214`**, **:265** | `wa.duplicate_ignored` | no change (the thread's `last_inbound_at` is deliberately not touched) |
+| 10 | **a message nobody answers, which is every message in this phase** — **`whatsappInbound.ts:271`** | `wa.inbound_stored` (`no_reply_reason`) | yes, `handled_at` set + `no_reply_reason`: `agent_off`, `not_test_sender`, `unsupported_type` or `system_event`; for anyone not on the test list the row holds **no text, phone, username, name or raw event** |
+| 10 | a settings read that fails on the last attempt — **`whatsappInbound.ts:427`** | `wa.settings_unreadable` (`error`) | yes, stored as for a stranger (metadata only) |
+| 10 | two threads for one person after a BSUID change — **`whatsappInbound.ts:356`** | `wa.contact_rekey_conflict` (`warn`) | both threads kept, the system message on the new one; consents and the test-sender entry still follow |
+| 10 | a status for a message we have no row for — **`whatsappStatus.ts:133`** | `wa.status_unknown_message` | no (nothing to update; the job completes, nothing is retried) |
+| 10 | a status name Meta added later, or a status job with none — **`whatsappStatus.ts:156`**, **:151** | `wa.status_unrecognised` / `wa.status_empty` (`warn`) | no |
+| 10 | a delivery that could not be counted (the message row has no tenant, or the job no number) — **`whatsappStatus.ts:113`** | `wa.usage_not_counted` (`warn`) | the status is applied; **the ledger misses it** |
+| 10 | an account event or a preference change — **`whatsappStatus.ts:165`**, **:169** | `wa.account_event` / `wa.preference_event` | no (logged only until W7 and W9) |
+| 10 | the meter's ledger cannot be read — **`routes/whatsapp.ts:76`** | `whatsapp.usage_unreadable` (`warn`) | no; the card answers `usage.unavailable: true` with zeros |
 
 `RUNBOOK.md` works these backwards from the symptom.

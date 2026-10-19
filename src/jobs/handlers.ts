@@ -10,7 +10,9 @@
 import { runFollowup } from '../services/dmSales/followupJob.js';
 import { handleCommentChange } from '../webhook/comments.js';
 import { handleMessagingEvent } from '../webhook/messaging.js';
-import type { JobHandlerRegistry } from './types.js';
+import { handleWhatsAppInbound } from '../webhook/whatsappInbound.js';
+import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
+import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
 
 /**
  * Whether this is the attempt after which nothing else will run.
@@ -32,10 +34,19 @@ export const handlers: JobHandlerRegistry = {
         });
     },
     'dm.process': async (payload, job) => {
+        // A WhatsApp message (`object: 'whatsapp'`) is stored by its own handler: nothing is sent from it in this phase (whatsappInbound.ts).
+        if (isWhatsAppDmPayload(payload)) {
+            await handleWhatsAppInbound(payload, { lastAttempt: isLastAttempt(job) });
+            return;
+        }
         await handleMessagingEvent(payload.event, payload.entryId, {
             lastAttempt: isLastAttempt(job),
             object: payload.object,
         });
+    },
+    // A WhatsApp status of one of our messages, an account event or a preference change: never a customer message, never an AI, never a send.
+    'wa.event': async (payload) => {
+        await handleWhatsAppEvent(payload);
     },
     // Not a Meta event: the sales turn queues it after a link (DM plan S9). The handler re-reads the conversation and may well do nothing: a
     // person who answered, clicked or said stop in the meantime is simply not eligible, and the job ends as done. A transient send failure
