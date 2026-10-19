@@ -17,7 +17,7 @@
  *      The ALERT says what really happened (`engine_failed`). Done BEFORE the send, so the flag is there even if the line cannot go out.
  *   2. The customer is sent the handoff line ONCE: the profile's own (`dm.handoff.message`) or the language kit's (`lines.handoff`, "I have passed your message to {owner}…"), with
  *      the automated-service disclosure in front when it has not been given. One quota check, like every reply.
- *   3. The owner is told on Telegram, the same alert a handoff turn sends (`handoff.ts`).
+ *   3. The owner is told on every channel he switched on (Telegram and/or email), the same alert a handoff turn sends (`handoff.ts`).
  *
  * **It cannot loop.** This is the end of the last attempt: it never throws (every step is in its own try/catch and logs), the caller marks
  * the message handled after it whatever happened, and a line that cannot be sent is logged and let go.

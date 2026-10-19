@@ -38,7 +38,8 @@ const KEYS = {
     hotLeads: APP_SETTING_KEYS.notifyTelegramHotLeads,
 } as const;
 
-const ALL_KEYS: readonly AppSettingKey[] = [KEYS.token, KEYS.chatId, KEYS.enabled, KEYS.hotLeads];
+/** The four Telegram settings' keys: `notifyEmail.ts` reads them together with the email ones, in one round trip. */
+export const TELEGRAM_SETTING_KEYS: readonly AppSettingKey[] = [KEYS.token, KEYS.chatId, KEYS.enabled, KEYS.hotLeads];
 
 export interface TelegramSettings {
     /** The bot token, decrypted. Never put in a log line, an error, or a response. */
@@ -63,7 +64,7 @@ export function telegramSettingsOf(values: ReadonlyMap<AppSettingKey, string | n
 
 /** The four settings, in one round trip. */
 export async function readTelegramSettings(): Promise<TelegramSettings> {
-    return telegramSettingsOf(await getSettings(ALL_KEYS));
+    return telegramSettingsOf(await getSettings(TELEGRAM_SETTING_KEYS));
 }
 
 /** Alerts go out only when the owner switched them on AND both halves of the address are there. */
@@ -346,13 +347,22 @@ export interface NoticeInput {
     platform?: string | null;
 }
 
+/**
+ * Who the alert is about, as every channel names them: an Instagram handle with its @, a WhatsApp contact by profile name (a name is not a
+ * handle), and a customer with neither by the last four characters of their id. Cut and cleaned like everything a customer typed. Pure.
+ */
+export function noticeWho(n: Pick<NoticeInput, 'lang' | 'username' | 'senderId' | 'platform'>): string {
+    const t = TEXT[n.lang];
+    const whatsapp = n.platform === 'whatsapp';
+    const name = excerpt(n.username ?? '', 40).replace(/^@/, '');
+    return name ? (whatsapp ? name : `@${name}`) : (whatsapp ? t.whatsapp.anon : t.anon)(String(n.senderId).slice(-4));
+}
+
 /** The alert, as one plain-text message. Pure. */
 export function buildNoticeText(n: NoticeInput): string {
     const t = TEXT[n.lang];
     const whatsapp = n.platform === 'whatsapp';
-    const name = excerpt(n.username ?? '', 40).replace(/^@/, '');
-    // An Instagram handle is written with its @; a WhatsApp contact is a profile name, which is not a handle.
-    const who = name ? (whatsapp ? name : `@${name}`) : (whatsapp ? t.whatsapp.anon : t.anon)(String(n.senderId).slice(-4));
+    const who = noticeWho(n);
     const title = n.kind === 'hot_lead' ? t.hot : `${t.handoff}: ${t.reasons[n.reason] ?? t.reasons['unsure']}`;
     const lines = [title, `${t.customer}: ${who}`, `${t.last}: «${excerpt(n.lastMessage)}»`];
     if (n.windowMs !== null) lines.push(`${t.window}: ${n.windowMs <= 0 ? (whatsapp ? t.whatsapp.windowClosed : t.windowClosed) : t.windowLeft(formatRemaining(n.windowMs, n.lang))}`);

@@ -1569,7 +1569,19 @@ const SettingsPage = {
     // ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────────────
 
     /** The field each input maps to, for marking the one a refusal names. */
-    NOTIFY_FIELDS: { botToken: 'notify-token', chatId: 'notify-chat', enabled: 'notify-enabled', hotLeads: 'notify-hot', takeover: 'notify-echo', ownerAppIds: 'notify-app-ids' },
+    NOTIFY_FIELDS: {
+        botToken: 'notify-token', chatId: 'notify-chat', enabled: 'notify-enabled', hotLeads: 'notify-hot', takeover: 'notify-echo', ownerAppIds: 'notify-app-ids',
+        emailApiKey: 'notify-email-key', emailTo: 'notify-email-to', emailFrom: 'notify-email-from', emailEnabled: 'notify-email-enabled', emailHotLeads: 'notify-email-hot',
+    },
+
+    /**
+     * What the email part of the card showed when it was drawn: a save sends only what the owner CHANGED from this, so pasting a key is all it
+     * takes (an untouched switch is not sent, and the server switches email on with a new key), and an address still following the site contact
+     * email keeps following it. A card never drawn (a test, or a page not yet rendered) has nothing on and nothing typed.
+     */
+    _emailLoaded: { enabled: false, hotLeads: false, to: '', from: '' },
+    /** The test email the server sent right after a save carried a new key: it survives the re-draw that follows the save, and is shown once. */
+    _pendingEmailTest: null,
 
     /**
      * The four steps that make the bot, in the order the owner does them. @BotFather is a name typed in Latin letters, so it goes through
@@ -1586,6 +1598,105 @@ const SettingsPage = {
                     <li>${this.ltrIn('settings.notify.help.step4', { bot: '@userinfobot' }, 'bot')}</li>
                 </ol>
             </details>
+        `;
+    },
+
+    /** The three steps that set email up. `resend.com` is Latin text, so it goes through `ltrIn`. */
+    notifyEmailHelp() {
+        return html`
+            <details class="settings-block mbe-4">
+                <summary class="form-label">${t('settings.notify.email.help.title')}</summary>
+                <ol class="stack gap-2 mbs-4">
+                    <li>${this.ltrIn('settings.notify.email.help.step1', { site: 'resend.com' }, 'site')}</li>
+                    <li>${t('settings.notify.email.help.step2')}</li>
+                    <li>${t('settings.notify.email.help.step3')}</li>
+                </ol>
+            </details>
+        `;
+    },
+
+    /** Where email stands, in one pill: on and where to, off, or not set up. The address is an isolated left-to-right run. */
+    notifyEmailState(em) {
+        const key = em.apiKey || {};
+        if (em.ready && em.to) {
+            return html`
+                <span class="health-pill health-fresh" id="notify-email-state">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    ${this.ltrIn('settings.notify.email.stateOn', { address: em.to }, 'address')}
+                </span>
+            `;
+        }
+        return html`
+            <span class="health-pill health-off" id="notify-email-state">
+                ${key.set ? t('settings.notify.email.stateOff') : t('settings.notify.email.stateNone')}
+            </span>
+        `;
+    },
+
+    /** The Email block of the card: the switch, the address, the key (never filled in), hot leads, an optional own domain, and its test. */
+    notifyEmailBlock(em) {
+        const key = em.apiKey || {};
+        const pending = this._pendingEmailTest;
+        this._pendingEmailTest = null;
+        this._emailLoaded = { enabled: Boolean(em.enabled), hotLeads: Boolean(em.hotLeads), to: em.to || '', from: em.from || '' };
+        return html`
+            <fieldset class="form-group fieldset-plain">
+                <legend class="form-label">${t('settings.notify.email.title')}</legend>
+                <p class="form-hint mbe-4">${t('settings.notify.email.intro')}</p>
+                ${this.notifyEmailHelp()}
+                <p class="mbe-4">${this.notifyEmailState(em)}</p>
+                <div class="form-group">
+                    <div class="check-row">
+                        <input type="checkbox" id="notify-email-enabled" name="emailEnabled" ${em.enabled ? html.raw('checked') : ''}>
+                        <span class="check-text"><label class="check-label" for="notify-email-enabled">${t('settings.notify.email.enabled')}</label></span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="notify-email-to">${t('settings.notify.email.to')}${em.toIsDefault ? html` <span class="label-optional">${t('settings.notify.email.fromContact')}</span>` : ''}</label>
+                    <input class="field field-mono" id="notify-email-to" name="emailTo" type="email" dir="ltr" maxlength="254"
+                           autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="you@example.com"
+                           value="${em.to || ''}" aria-describedby="notify-email-to-hint">
+                    <p class="form-hint" id="notify-email-to-hint">${em.toIsDefault ? t('settings.notify.email.toHintDefault') : t('settings.notify.email.toHint')}</p>
+                </div>
+                <div class="form-group">
+                    <!-- Never prefilled: the key is never sent back. Blank means "keep what is saved". -->
+                    <label class="form-label" for="notify-email-key">${t('settings.notify.email.key')}</label>
+                    <input class="field field-mono" id="notify-email-key" name="emailApiKey" type="password" dir="ltr" maxlength="160"
+                           autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="re_…"
+                           aria-describedby="notify-email-key-hint">
+                    <p class="form-hint" id="notify-email-key-hint">${key.set
+                        ? (key.last4 ? this.ltrIn('settings.notify.email.keySaved', { mask: `••••${key.last4}` }, 'mask') : t('settings.notify.email.keySavedShort'))
+                        : t('settings.notify.email.keyNone')}</p>
+                </div>
+                <div class="form-group">
+                    <div class="check-row">
+                        <input type="checkbox" id="notify-email-hot" name="emailHotLeads" ${em.hotLeads ? html.raw('checked') : ''}>
+                        <span class="check-text"><label class="check-label" for="notify-email-hot">${t('settings.notify.email.hotLeads')}</label></span>
+                    </div>
+                </div>
+                <details class="settings-block mbe-4">
+                    <summary class="form-label">${t('settings.notify.email.advanced')}</summary>
+                    <div class="form-group mbs-4">
+                        <label class="form-label" for="notify-email-from">${t('settings.notify.email.from')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <input class="field field-mono" id="notify-email-from" name="emailFrom" type="text" dir="ltr" maxlength="200"
+                               autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="${em.defaultFrom || ''}"
+                               value="${em.from || ''}" aria-describedby="notify-email-from-hint">
+                        <p class="form-hint" id="notify-email-from-hint">${t('settings.notify.email.fromHint')}</p>
+                    </div>
+                </details>
+                <div class="form-actions">
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'mail',
+                        label: t('settings.notify.email.test'), action: 'settings:testNotifyEmail', id: 'notify-email-test',
+                    })}
+                    ${key.set ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'trash-2',
+                        label: t('settings.notify.email.removeKey'), action: 'settings:removeNotifyEmailKey', id: 'notify-email-remove-key',
+                    }) : ''}
+                </div>
+                <p class="form-hint">${t('settings.notify.email.testHint')}</p>
+                <div id="notify-email-test-result" aria-live="polite">${pending ? this.notifyEmailTestResult(pending) : ''}</div>
+            </fieldset>
         `;
     },
 
@@ -1606,6 +1717,7 @@ const SettingsPage = {
             `;
         }
         const tg = notify.telegram || {};
+        const em = notify.email || {};
         const echo = notify.echo || {};
         const token = tg.botToken || {};
         const documented = (Array.isArray(echo.documentedAppIds) ? echo.documentedAppIds : []).join(', ');
@@ -1646,6 +1758,8 @@ const SettingsPage = {
                                 <span class="check-text"><label class="check-label" for="notify-hot">${t('settings.notify.hotLeads')}</label></span>
                             </div>
                         </div>
+
+                        ${this.notifyEmailBlock(em)}
 
                         <fieldset class="form-group fieldset-plain">
                             <legend class="form-label">${t('settings.notify.echo.title')}</legend>
@@ -1712,12 +1826,16 @@ const SettingsPage = {
         const token = read('botToken');
         if (token) telegram.botToken = token;
         const payload = { telegram, echo: { takeover: data.get('takeover') !== null, ownerAppIds: read('ownerAppIds') } };
+        const email = this.emailChanges(data, read);
+        if (Object.keys(email).length > 0) payload.email = email;
 
         const focus = UI.captureFocus(document.getElementById('page-container'));
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
-            await API.saveNotifySettings(payload);
+            const saved = await API.saveNotifySettings(payload);
+            // A new key was tried by the server with one test email: keep its result for the card that is drawn next.
+            this._pendingEmailTest = saved && saved.emailTest ? saved.emailTest : null;
             UI.toast(t('settings.notify.saved'), 'success');
             await this.render();
             UI.restoreFocus(focus);
@@ -1727,6 +1845,25 @@ const SettingsPage = {
             const known = field && this.NOTIFY_FIELDS[field];
             this.showNotifyError(field, known ? t(`settings.notify.invalid.${field}`) : ((err && err.message) || t('error.unexpected')));
         }
+    },
+
+    /**
+     * The email part of a save: only what differs from what the card showed (see `_emailLoaded`), so a Telegram-only save sends no `email` at
+     * all and pasting a key sends the key alone (the server switches email on with it). A blank key is "keep it": it is never sent back here.
+     */
+    emailChanges(data, read) {
+        const was = this._emailLoaded;
+        const email = {};
+        const key = read('emailApiKey');
+        if (key) email.apiKey = key;
+        const enabled = data.get('emailEnabled') !== null;
+        if (enabled !== was.enabled) email.enabled = enabled;
+        const hotLeads = data.get('emailHotLeads') !== null;
+        if (hotLeads !== was.hotLeads) email.hotLeads = hotLeads;
+        // An address left as the card filled it in (the contact email) is not sent: it keeps following the contact email. Emptied, it is cleared.
+        if (read('emailTo') !== was.to) email.to = read('emailTo');
+        if (read('emailFrom') !== was.from) email.from = read('emailFrom');
+        return email;
     },
 
     /** What the server found when it tried the saved token and chat id: a strip that says so, in words, never the token. */
@@ -1762,6 +1899,60 @@ const SettingsPage = {
         } finally {
             restore();
         }
+    },
+
+    /** The email test's answer: a pill when it went, and each refusal in words with Resend's own (escaped) reason, never the key. */
+    notifyEmailTestResult(r) {
+        const result = r || {};
+        if (result.ok) {
+            return html`
+                <span class="health-pill health-fresh">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    ${t('settings.notify.email.test.ok')}
+                </span>
+            `;
+        }
+        const reason = ['not_configured', 'rejected', 'unreachable'].includes(result.reason) ? result.reason : 'unreachable';
+        const status = Number.isFinite(Number(result.status)) && result.status !== null ? Number(result.status) : '';
+        return UI.errorStrip(t(`settings.notify.email.test.${reason}`, { status }), result.description || '', 'notify-email-test-strip');
+    },
+
+    /** «أرسل بريداً تجريبياً»: the server sends with what is SAVED, so a change has to be saved first (the card says so). */
+    async testNotifyEmail(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        const host = document.getElementById('notify-email-test-result');
+        if (host) host.innerHTML = '';
+        try {
+            const result = await API.testNotifyEmail(I18N.lang === 'en' ? 'en' : 'ar');
+            if (host) { host.innerHTML = esc(this.notifyEmailTestResult(result)); UI.icons(host); }
+        } catch (err) {
+            if (host) {
+                host.innerHTML = esc(UI.errorStrip(t('settings.notify.email.test.requestFailed'), (err && err.message) || '', 'notify-email-test-strip'));
+                UI.icons(host);
+            }
+        } finally {
+            restore();
+        }
+    },
+
+    removeNotifyEmailKey(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.notify.email.removeTitle'),
+            body: t('settings.notify.email.removeBody'),
+            hint: t('settings.notify.email.removeHint'),
+            confirmLabel: t('settings.notify.email.removeKey'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.removeNotifyEmailKeyConfirmed(),
+        });
+    },
+
+    /** Email is switched off with the key: "on" with nothing to send with is refused by the server. */
+    async removeNotifyEmailKeyConfirmed() {
+        await API.saveNotifySettings({ email: { apiKey: null, enabled: false } });
+        UI.toast(t('settings.notify.email.keyRemoved'), 'success');
+        await this.render();
     },
 
     removeNotifyToken(btn) {
@@ -2238,5 +2429,7 @@ UI.registerActions('settings', {
     saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
     testNotify: (el) => SettingsPage.testNotify(el),
     removeNotifyToken: (el) => SettingsPage.removeNotifyToken(el),
+    testNotifyEmail: (el) => SettingsPage.testNotifyEmail(el),
+    removeNotifyEmailKey: (el) => SettingsPage.removeNotifyEmailKey(el),
     saveOnboardingSettings: (el, e) => SettingsPage.saveOnboardingSettings(el, e),
 });

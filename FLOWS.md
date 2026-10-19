@@ -744,11 +744,19 @@ recorded, best effort (`notifyOwner` never throws; a failure is `dm.handoff_noti
 
 1. `noticeFor` (pure): stage `handoff` is a handoff alert (also a conversation paused for looping); a second insult (stage `closed`) and an opt-out
    alone are NOT; a reply that SENT the link (`linkSent`) to an intent in `HOT_INTENTS` (`ready_to_buy`, `price`, `level_fit`) is a hot lead.
-2. `notifyOwner`: Telegram configured and on (`notify.telegram_*` in `app_settings`; the token encrypted, `{set, last4}` to the card), hot leads on
-   (`notify.telegram_hot_leads`, on unless turned off), the conversation is the platform OWNER's tenant (another tenant's customers are never sent
-   to his chat), then the per-conversation allowance (`rate_limit_counters`, buckets `notify:<id>` 3/hour and `notify_hot:<id>` 1/hour), then
-   the facts (username, last inbound message, its time), then one plain-text `sendMessage` (no `parse_mode`; links and bidi controls in the
-   customer's words are taken out): who, why, the last message, how long Meta's 24 h window has left, and `/dashboard#/inbox?c=<id>`.
+2. `notifyOwner` (every alert, from every caller, goes through it): the two channels' settings in ONE read (`readNotifyChannels`). Telegram configured and
+   on (`notify.telegram_*` in `app_settings`; the token encrypted, `{set, last4}` to the card), hot leads on (`notify.telegram_hot_leads`, on unless
+   turned off); and/or email configured and on (`notify.email_*`: a Resend API key, encrypted, `{set, last4}` to the card; the address, else the site
+   contact email; `notify.email_hot_leads`, OFF unless turned on). A channel that is not on and complete is skipped, and with both off nothing is spent.
+   Then the conversation is the platform OWNER's tenant (another tenant's customers are never sent to his chat or inbox), then the per-conversation
+   allowance (`rate_limit_counters`, buckets `notify:<id>` 3/hour and `notify_hot:<id>` 1/hour, spent once per alert whatever the number of channels),
+   then the facts (username, last inbound message, its time), then each channel, at the same time and independently (one refusing, timing out or
+   throwing costs the other nothing): one plain-text `sendMessage` (no `parse_mode`; links and bidi controls in the customer's words are taken out), and/or
+   one plain-text email (`POST https://api.resend.com/emails`, `notifyEmail.ts`; the same text plus a channel line, the subject naming the channel and the
+   customer): who, why, the last message, how long Meta's 24 h window has left, and `/dashboard#/inbox?c=<id>`. Logs: `dm.handoff_notified` /
+   `dm.handoff_notify_failed` for Telegram, `dm.handoff_notified_email` / `dm.handoff_notify_email_failed` for email (the description scrubbed of the key and
+   of any address). Saving a Resend key (`POST /api/settings/notify`, `email.apiKey`) switches email on and sends one test email whose result comes back as
+   `emailTest`; `POST /api/settings/notify/test-email` is the button. Without a verified domain Resend delivers only to the address the account was made with.
 3. The inbox reads `stage`, `handoff_at`, `last_operator_at` and `last_inbound_message_at` (`conversationsQuery`) for "Needs you" (stage `handoff`,
    and nobody has answered since `handoff_at`: **whether the bot is paused or not**, because a sales handoff pauses it and a reply that could not be
    written at all, §2.11, leaves it on) and the window countdown. The follow-up job (§2.6c) already refuses a conversation that was handed over.
