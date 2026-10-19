@@ -8,6 +8,11 @@
  *   DELETE /connection   owner        unsubscribe the app, wipe the token, agent mode off. 204
  *   PUT    /agent        owner        { mode, test_senders? }: who the agent answers. `everyone` is refused (409) until the go-live gate exists
  *   PUT    /billing      owner        { allow_billable, free_tier_alert_at? }: the owner's choices about replies Meta would charge for
+ *   GET    /entry-links          any member   the number's QR codes and short links, read from Meta and joined with the owner's labels
+ *   POST   /entry-links          owner        { label, prefill }: make one at Meta (the prefill gets a ` #ref` tracking code appended). 201
+ *   DELETE /entry-links/:code    owner        delete it at Meta, drop its label. 204
+ *   GET    /ice-breakers         any member   the ice breakers and commands set on the number, and Meta's limits
+ *   PUT    /ice-breakers         owner        { prompts, commands? }: set them at Meta (≤ 4 × ≤ 80 characters, ≤ 30 commands, no emoji)
  *
  * **The token never leaves.** It is read once, in the body of `POST /connect`, validated, encrypted by `whatsappConnections.ts` and stored; no
  * answer, audit row or log line carries it, and every message built from a Meta error is scrubbed of it first. Reads are the same row without
@@ -16,8 +21,12 @@
  * **Reads are open to any member and writes are the owner's**, as for TikTok and YouTube: a membership still means seeing the account, while
  * connecting a number, switching the agent on and agreeing to billable replies each change what real people receive or what it costs.
  *
- * Nothing here sends a WhatsApp message: no route calls `sendMessage`. The only Meta writes are `POST /{waba_id}/subscribed_apps` on connect
- * and `DELETE` on disconnect, each behind a button.
+ * Nothing here sends a WhatsApp message: no route calls `sendMessage`. The Meta writes are `POST /{waba_id}/subscribed_apps` on connect and
+ * `DELETE` on disconnect, and, for the entry points, `message_qrdls` (create, delete) and `conversational_automation` on the number: each
+ * behind a button, and none of them a message to a person.
+ *
+ * **Entry links and ice breakers live at Meta** (docs/specs/001-whatsapp-agent/research.md R13, `whatsappEntryLinks.ts`): the routes read them
+ * from there on every call and write only a label per link into the connection's `settings`, so there is no migration and nothing to sync.
  */
 import axios from 'axios';
 import { Router } from 'express';
@@ -28,6 +37,15 @@ import { isMissingSchema } from '../services/health.js';
 import { MetaApiError } from '../services/instagram.js';
 import { fetchDebugToken } from '../services/tokenHealth.js';
 import { getPhoneNumberHealth, inspectWhatsAppToken, scrubToken, subscribeApp, unsubscribeApp } from '../services/whatsapp.js';
+import {
+    COMMANDS_MAX, COMMAND_DESCRIPTION_MAX_CHARS, COMMAND_NAME_MAX_CHARS, createQrCode, deleteQrCode, getConversationalAutomation, getQrCode,
+    ICE_BREAKER_MAX_CHARS, ICE_BREAKERS_MAX, isQrCodeId, listQrCodes, parseConversationalAutomation, setConversationalAutomation,
+    type ConversationalAutomation,
+} from '../services/whatsapp.js';
+import {
+    composePrefill, dropEntryLinkLabel, ENTRY_ERRORS, entryLinkView, getEntryLinkLabels, mergeEntryLinks, newUniqueRef, parseEntryLinkInput,
+    putEntryLinkLabel, type EntryLinkLabel,
+} from '../services/whatsappEntryLinks.js';
 import { periodOf, periodUsage, projectMonthEnd } from '../services/channelUsage.js';
 import {
     DEFAULT_WHATSAPP_SETTINGS, FREE_REPLIES_PER_MONTH, getAccessToken, getConnection, getConnectionByPhoneNumberId, isAlertThreshold, isAuthRefusal,
@@ -468,5 +486,220 @@ whatsappRouter.put('/billing', canAdminister, async (req, res) => {
         res.json(await currentView(creatorId, connection));
     } catch (err) {
         fail(res, 'api.whatsapp_billing_save_failed', 'Failed to save the WhatsApp billing settings.', err);
+    }
+});
+
+// ─── Entry points: links and QR codes, ice breakers ─────────────────────────────────────
+
+/**
+ * The tenant's live number and the token to ask Meta with, or null after answering 409. Everything below is an object of a CONNECTED number at
+ * Meta, so there is nothing to read or write without one (and a connection Meta refused is not sent through: `getAccessToken` says so).
+ */
+async function numberOf(creatorId: string, res: Response): Promise<{ phoneNumberId: string; token: string } | null> {
+    try {
+        const { accessToken, connection } = await getAccessToken(creatorId);
+        return { phoneNumberId: connection.phoneNumberId, token: accessToken };
+    } catch (err) {
+        if (err instanceof WhatsAppNotConnectedError) {
+            res.status(409).json({ error: err.message, code: 'not_connected' });
+            return null;
+        }
+        throw err;
+    }
+}
+
+/**
+ * A failed Meta call answered, when it is one (false otherwise, and the caller reports a server error). A refusal is the owner's to fix and
+ * carries Meta's words; an unreachable Meta is 502 with the caller's own sentence, because "nothing was saved" is true of a read and a
+ * delete and is NOT true of a create whose answer never came.
+ */
+function answerMetaFailure(res: Response, event: string, err: unknown, token: string, code: string, unreachable: string): boolean {
+    if (!isMetaFailure(err)) return false;
+    log('warn', event, describeScrubbed(err, token));
+    const answer = metaFailureAnswer(err, token, code);
+    res.status(answer.status).json(answer.status === 502 ? { ...answer.body, error: unreachable } : answer.body);
+    return true;
+}
+
+// ── Entry links ──
+
+whatsappRouter.get('/entry-links', async (req, res) => {
+    const creatorId = getTenantId(req);
+    let token = '';
+    try {
+        const number = await numberOf(creatorId, res);
+        if (!number) return;
+        token = number.token;
+        const [codes, labels] = await Promise.all([listQrCodes(number.phoneNumberId, token), getEntryLinkLabels(creatorId)]);
+        res.json(mergeEntryLinks(codes, labels));
+    } catch (err) {
+        if (answerMetaFailure(res, 'whatsapp.entry_links_read_refused', err, token, ENTRY_ERRORS.linksUnreadable, 'Meta could not be reached. Try again in a moment.')) return;
+        fail(res, 'api.whatsapp_entry_links_read_failed', 'Failed to read the WhatsApp entry links.', err);
+    }
+});
+
+whatsappRouter.post('/entry-links', canAdminister, async (req, res) => {
+    const parsed = parseEntryLinkInput(req.body);
+    if ('error' in parsed) {
+        res.status(400).json(parsed);
+        return;
+    }
+    const creatorId = getTenantId(req);
+    let token = '';
+    try {
+        const number = await numberOf(creatorId, res);
+        if (!number) return;
+        token = number.token;
+
+        // The ref is made here, not by Meta, and is unique among this tenant's labels. It goes INTO the message, which is why Meta's
+        // 140 characters are checked on the sum and never cut: a cut would take the ref off the end.
+        const labels = await getEntryLinkLabels(creatorId);
+        const ref = newUniqueRef(new Set(Object.values(labels).map((l) => l.ref)));
+        const message = composePrefill(parsed.value.prefill, ref);
+        if ('error' in message) {
+            res.status(400).json(message);
+            return;
+        }
+
+        // The one Meta write that creates something. Never retried once it may have landed (createQrCode), so an answer that never came
+        // is reported as "may or may not exist": the list is the truth, and a code made twice is a harmless extra, not a silent loss.
+        let qr;
+        try {
+            qr = await createQrCode(number.phoneNumberId, token, message.text);
+        } catch (err) {
+            if (answerMetaFailure(res, 'whatsapp.entry_link_create_refused', err, token, ENTRY_ERRORS.qrRefused,
+                'Meta did not answer, so the link may or may not have been created. Check the list before trying again.')) return;
+            throw err;
+        }
+
+        // From here the link EXISTS at Meta. Saving its label is best effort: if it fails the link is still real and still listed (its
+        // ref is read back from the message), so the answer is the link plus `label_saved: false`, never an error that invites a second one.
+        const entry: EntryLinkLabel = { label: parsed.value.label, ref, created_at: new Date().toISOString() };
+        let labelSaved = false;
+        try {
+            labelSaved = await putEntryLinkLabel(creatorId, qr.code, entry);
+        } catch (err) {
+            log('error', 'whatsapp.entry_link_label_failed', { creator_id: creatorId, code: qr.code, ...describeError(err) });
+        }
+
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.whatsappEntryLinkCreate,
+            targetType: 'creator',
+            targetId: creatorId,
+            detail: { code: qr.code, ref, label_saved: labelSaved },
+        });
+        log('info', 'whatsapp.entry_link_created', { creator_id: creatorId, code: qr.code, label_saved: labelSaved });
+        res.status(201).json({ ...entryLinkView(qr, entry), label_saved: labelSaved });
+    } catch (err) {
+        fail(res, 'api.whatsapp_entry_link_create_failed', 'Failed to create the WhatsApp entry link.', err);
+    }
+});
+
+whatsappRouter.delete('/entry-links/:code', canAdminister, async (req, res) => {
+    const code = req.params.code;
+    if (!isQrCodeId(code)) {
+        res.status(400).json({ error: 'code is not a QR code id.', code: ENTRY_ERRORS.invalidCode });
+        return;
+    }
+    const creatorId = getTenantId(req);
+    let token = '';
+    try {
+        const number = await numberOf(creatorId, res);
+        if (!number) return;
+        token = number.token;
+
+        // The code must be one of THIS number's: Meta is asked for it through the number first, so a code of another business is a 404
+        // here whatever Meta would have done with the delete.
+        if (!(await getQrCode(number.phoneNumberId, token, code))) {
+            res.status(404).json({ error: 'That entry link does not exist on this number.', code: ENTRY_ERRORS.notFound });
+            return;
+        }
+        if (!(await deleteQrCode(number.phoneNumberId, token, code))) {
+            res.status(502).json({ error: 'Meta did not confirm the deletion. Check the list before trying again.', code: ENTRY_ERRORS.notConfirmed });
+            return;
+        }
+
+        // Deleted at Meta: the label is housekeeping now. A failure leaves an orphan the list never shows (it joins from Meta's side).
+        try {
+            await dropEntryLinkLabel(creatorId, code);
+        } catch (err) {
+            log('warn', 'whatsapp.entry_link_label_drop_failed', { creator_id: creatorId, code, ...describeError(err) });
+        }
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.whatsappEntryLinkDelete,
+            targetType: 'creator',
+            targetId: creatorId,
+            detail: { code },
+        });
+        log('info', 'whatsapp.entry_link_deleted', { creator_id: creatorId, code });
+        res.status(204).end();
+    } catch (err) {
+        if (answerMetaFailure(res, 'whatsapp.entry_link_delete_refused', err, token, ENTRY_ERRORS.qrRefused, 'Meta could not be reached — nothing was deleted. Try again in a moment.')) return;
+        fail(res, 'api.whatsapp_entry_link_delete_failed', 'Failed to delete the WhatsApp entry link.', err);
+    }
+});
+
+// ── Ice breakers and commands ──
+
+/** Meta's limits, sent with every read so the card can count against them instead of hardcoding a copy. */
+const ICE_BREAKER_LIMITS = {
+    prompts: ICE_BREAKERS_MAX,
+    prompt_chars: ICE_BREAKER_MAX_CHARS,
+    commands: COMMANDS_MAX,
+    command_name_chars: COMMAND_NAME_MAX_CHARS,
+    command_description_chars: COMMAND_DESCRIPTION_MAX_CHARS,
+} as const;
+
+const iceBreakersView = (state: ConversationalAutomation) => ({ prompts: state.prompts, commands: state.commands, limits: ICE_BREAKER_LIMITS });
+
+whatsappRouter.get('/ice-breakers', async (req, res) => {
+    let token = '';
+    try {
+        const number = await numberOf(getTenantId(req), res);
+        if (!number) return;
+        token = number.token;
+        res.json({ ...iceBreakersView(await getConversationalAutomation(number.phoneNumberId, token)), verified: true });
+    } catch (err) {
+        if (answerMetaFailure(res, 'whatsapp.ice_breakers_read_refused', err, token, ENTRY_ERRORS.iceBreakersUnreadable, 'Meta could not be reached. Try again in a moment.')) return;
+        fail(res, 'api.whatsapp_ice_breakers_read_failed', 'Failed to read the WhatsApp ice breakers.', err);
+    }
+});
+
+whatsappRouter.put('/ice-breakers', canAdminister, async (req, res) => {
+    const parsed = parseConversationalAutomation(req.body);
+    if ('error' in parsed) {
+        res.status(400).json(parsed);
+        return;
+    }
+    const creatorId = getTenantId(req);
+    let token = '';
+    try {
+        const number = await numberOf(creatorId, res);
+        if (!number) return;
+        token = number.token;
+
+        if (!(await setConversationalAutomation(number.phoneNumberId, token, parsed.value))) {
+            res.status(502).json({ error: 'Meta did not confirm the change. Read the ice breakers again to see what is set.', code: ENTRY_ERRORS.notConfirmed });
+            return;
+        }
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.whatsappIceBreakersWrite,
+            targetType: 'creator',
+            targetId: creatorId,
+            detail: { prompt_count: parsed.value.prompts.length, command_count: parsed.value.commands ? parsed.value.commands.length : null },
+        });
+        log('info', 'whatsapp.ice_breakers_set', { creator_id: creatorId, prompts: parsed.value.prompts.length });
+
+        // Meta does not say whether a POST replaces or adds to what is set, so the answer is what Meta holds NOW. If that read fails the
+        // write still stands: say so (`verified: false`), with what was sent and `commands: null` when none were.
+        try {
+            res.json({ ...iceBreakersView(await getConversationalAutomation(number.phoneNumberId, token)), verified: true });
+        } catch (readErr) {
+            log('warn', 'whatsapp.ice_breakers_reread_failed', { creator_id: creatorId, ...describeScrubbed(readErr, token) });
+            res.json({ prompts: parsed.value.prompts, commands: parsed.value.commands ?? null, limits: ICE_BREAKER_LIMITS, verified: false });
+        }
+    } catch (err) {
+        if (answerMetaFailure(res, 'whatsapp.ice_breakers_write_refused', err, token, ENTRY_ERRORS.iceBreakersRefused, 'Meta could not be reached — nothing was changed. Try again in a moment.')) return;
+        fail(res, 'api.whatsapp_ice_breakers_save_failed', 'Failed to save the WhatsApp ice breakers.', err);
     }
 });

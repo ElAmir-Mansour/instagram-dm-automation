@@ -353,14 +353,19 @@ describe('who may call what', () => {
             l.route!.stack.map((s) => s.handle?.minimumRole).find((r): r is string => typeof r === 'string') ?? null,
         ] as const)));
 
-    it('is exactly six routes: one open read, five owner-only writes', () => {
+    it('is exactly eleven routes: three open reads, eight owner-only writes', () => {
         assert.deepEqual([...guards()].sort(), [
             ['DELETE /connection', 'owner'],
+            ['DELETE /entry-links/:code', 'owner'],
             ['GET /connection', null],
+            ['GET /entry-links', null],
+            ['GET /ice-breakers', null],
             ['POST /connect', 'owner'],
+            ['POST /entry-links', 'owner'],
             ['POST /refresh', 'owner'],
             ['PUT /agent', 'owner'],
             ['PUT /billing', 'owner'],
+            ['PUT /ice-breakers', 'owner'],
         ]);
     });
 
@@ -382,6 +387,9 @@ describe('who may call what', () => {
                 ['DELETE', '/connection', undefined],
                 ['PUT', '/agent', { mode: 'test' }],
                 ['PUT', '/billing', { allow_billable: true }],
+                ['POST', '/entry-links', { label: 'Bio', prefill: 'Hello' }],
+                ['DELETE', '/entry-links/4O4YGZEG3RIVE1', undefined],
+                ['PUT', '/ice-breakers', { prompts: ['Hello'] }],
             ] as const) {
                 const r = await call(method, path, { session, body });
                 assert.equal(r.status, 403, `${method} ${path}`);

@@ -10,6 +10,9 @@
  *   markReadWithTyping     POST   /{phone_number_id}/messages        read receipt + typing indicator. Best effort, never retried
  *   getMediaUrl            GET    /{media_id}                        the short-lived URL of an inbound file
  *   downloadMedia          GET    <that url>                         its bytes
+ *   createQrCode           POST   /{phone_number_id}/message_qrdls   an entry link + QR code. A create: NEVER retried once it may have landed
+ *   listQrCodes / getQrCode / deleteQrCode                           …the same edge: list (cursor), one by code, delete
+ *   getConversationalAutomation / setConversationalAutomation        the ice breakers and commands of the number
  *
  * `sendMessage` is called from one place, `channels/send.ts` (`sendWhatsAppReply`), which owns the window, the meter and the shaping
  * (`toWhatsAppMessage`); `markReadWithTyping` from the agent's turn (`webhook/whatsappAnswer.ts`).
@@ -392,5 +395,327 @@ export async function downloadMedia(url: string, token: string, opts: { maxBytes
         return { data, contentType: typeof contentType === 'string' && contentType ? contentType : null };
     } catch (error: any) {
         throw failure('WhatsApp media download failed', error, token);
+    }
+}
+
+// ─── Entry points: QR codes and short links ─────────────────────────────────────────────
+
+/**
+ * QR codes and short links, kept AT META (the object is the source of truth; this app stores only a label for each).
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/qr-codes.md
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/whatsapp-business-qr-code-management-api.md
+ *
+ *   POST   /{phone_number_id}/message_qrdls              { prefilled_message, generate_qr_image: 'PNG'|'SVG' }
+ *                                                        → { code, prefilled_message, deep_link_url, qr_image_url }
+ *   GET    /{phone_number_id}/message_qrdls              ?fields=code,prefilled_message,deep_link_url,qr_image_url.format(PNG)&limit≤25&after=<cursor>
+ *                                                        → { data: [{ code, prefilled_message, deep_link_url, qr_image_url? }], paging? }
+ *                                                        (newest first; `code=<code>` filters to one; no image unless `fields` asks for it)
+ *   DELETE /{phone_number_id}/message_qrdls/{code}       → { success: true }
+ *
+ * Limits: 2,000 per number, the prefilled message ≤ 140 characters. Meta keeps no scan analytics for them.
+ */
+export const QR_PREFILL_MAX_CHARS = 140;
+export const QR_CODES_MAX_PER_NUMBER = 2000;
+/** Meta serves 25 at most per page of the list. */
+const QR_PAGE_SIZE = 25;
+/** A runaway guard for the cursor loop: 2,000 codes are 80 pages. */
+const QR_MAX_PAGES = 100;
+/** Meta documents a 14-character code. The looser class only keeps a changed format from becoming a path injection. */
+const QR_CODE_ID = /^[A-Za-z0-9]{6,32}$/;
+
+export const isQrCodeId = (value: unknown): value is string => typeof value === 'string' && QR_CODE_ID.test(value);
+
+export interface WhatsAppQrCode {
+    code: string;
+    prefilledMessage: string;
+    /** `https://wa.me/message/<code>`: the short link, which also masks the phone number. */
+    deepLinkUrl: string | null;
+    /** Only when the call asked for an image; a signed Meta (fbcdn) URL, so it is read fresh and never stored. */
+    qrImageUrl: string | null;
+}
+
+/** One QR object as Meta answers it, or null when it has no usable code. Pure. */
+export function mapQrCode(raw: unknown): WhatsAppQrCode | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const d = raw as Record<string, unknown>;
+    const code = text(d.code);
+    if (!code || !QR_CODE_ID.test(code)) return null;
+    return {
+        code,
+        prefilledMessage: typeof d.prefilled_message === 'string' ? d.prefilled_message : '',
+        deepLinkUrl: text(d.deep_link_url),
+        qrImageUrl: text(d.qr_image_url),
+    };
+}
+
+/**
+ * Create a QR code + short link. A CREATE: never retried once it may have landed (`creates: true`), because a retried timeout would leave
+ * two codes behind and the owner could not tell which one is printed. Only a 429, the throttling codes and a connection that never went out
+ * are tried again.
+ *
+ * `prefilledMessage` is checked here as well as by the caller: a payload over 140 characters is a TypeError, never a request.
+ */
+export async function createQrCode(
+    phoneNumberId: string,
+    token: string,
+    prefilledMessage: string,
+    opts: { format?: 'PNG' | 'SVG' } = {}
+): Promise<WhatsAppQrCode> {
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}/message_qrdls`;
+    if (typeof prefilledMessage !== 'string' || !prefilledMessage.trim()) throw new TypeError('A QR code needs a prefilled message.');
+    if (prefilledMessage.length > QR_PREFILL_MAX_CHARS) {
+        throw new TypeError(`A QR code's prefilled message is at most ${QR_PREFILL_MAX_CHARS} characters.`);
+    }
+    try {
+        const response = await withRetry(
+            () => metaHttp.post(url, { prefilled_message: prefilledMessage, generate_qr_image: opts.format ?? 'PNG' }, { headers: authorization(token) }),
+            { label: 'whatsapp.createQrCode', creates: true }
+        );
+        const created = mapQrCode(response.data);
+        if (!created) throw new Error('Meta answered without a QR code.');
+        return created;
+    } catch (error: any) {
+        throw failure('WhatsApp QR code creation failed', error, token);
+    }
+}
+
+/** The fields the list asks for. `qr_image_url.format(PNG)` is how the list is made to carry the image (the reference's own example). */
+const QR_LIST_FIELDS_WITH_IMAGE = 'code,prefilled_message,deep_link_url,qr_image_url.format(PNG)';
+const QR_LIST_FIELDS = 'code,prefilled_message,deep_link_url';
+
+/**
+ * Every QR code and short link on the number, newest first, following Meta's cursor (25 a page). A GET, so retried like one.
+ *
+ * The image is asked for in the same call. If Meta refuses that field spec (code 100) the list is asked again without it, so a card that only
+ * needs the labels and links does not die on an image field: the codes then come back with `qrImageUrl: null`.
+ */
+export async function listQrCodes(phoneNumberId: string, token: string): Promise<WhatsAppQrCode[]> {
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}/message_qrdls`;
+    const found: WhatsAppQrCode[] = [];
+    let withImage = true;
+    let after: string | undefined;
+    try {
+        for (let page = 0; page < QR_MAX_PAGES; page++) {
+            let data: any;
+            try {
+                const response = await withRetry(
+                    () => metaHttp.get(url, {
+                        params: { fields: withImage ? QR_LIST_FIELDS_WITH_IMAGE : QR_LIST_FIELDS, limit: QR_PAGE_SIZE, ...(after ? { after } : {}) },
+                        headers: authorization(token),
+                    }),
+                    { label: 'whatsapp.listQrCodes', retries: 2 }
+                );
+                data = response.data;
+            } catch (error: any) {
+                if (withImage && error?.response?.data?.error?.code === 100) {
+                    withImage = false;
+                    log('warn', 'whatsapp.qr_list_image_unavailable', { phone_number_id: phoneNumberId });
+                    page -= 1;
+                    continue;
+                }
+                throw error;
+            }
+            for (const raw of Array.isArray(data?.data) ? data.data : []) {
+                const code = mapQrCode(raw);
+                if (code) found.push(code);
+            }
+            const next = text(data?.paging?.cursors?.after);
+            if (!data?.paging?.next || !next || next === after) break;
+            after = next;
+        }
+        return found;
+    } catch (error: any) {
+        throw failure('WhatsApp QR code list failed', error, token);
+    }
+}
+
+/**
+ * One code on this number, or null when the number has no such code: the check a delete makes before it acts, so a code that belongs to
+ * another number is never found through this one.
+ *
+ * Asked with the list's documented `code` filter first (one cheap call). The answer is trusted only when it IS that code; anything else,
+ * including an empty answer, is checked against the number's whole list, so a filter Meta does not honour can make a delete slower but never
+ * wrongly refused (or, worse, wrongly allowed). A code that is not there therefore costs a full read of the list: rare, and bounded.
+ */
+export async function getQrCode(phoneNumberId: string, token: string, code: string): Promise<WhatsAppQrCode | null> {
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}/message_qrdls`;
+    if (!isQrCodeId(code)) throw new TypeError('code is not a QR code id.');
+    try {
+        const response = await withRetry(
+            () => metaHttp.get(url, { params: { code, fields: QR_LIST_FIELDS, limit: 1 }, headers: authorization(token) }),
+            { label: 'whatsapp.getQrCode', retries: 2 }
+        );
+        const rows: unknown[] = Array.isArray(response.data?.data) ? response.data.data : [];
+        const hit = rows.map((row) => mapQrCode(row)).find((c) => c?.code === code);
+        if (hit) return hit;
+    } catch (error: any) {
+        throw failure('WhatsApp QR code read failed', error, token);
+    }
+    return (await listQrCodes(phoneNumberId, token)).find((c) => c.code === code) ?? null;
+}
+
+/** Delete a QR code: the printed code and the short link both answer "expired" from now on. Returns whether Meta said `success`. */
+export async function deleteQrCode(phoneNumberId: string, token: string, code: string): Promise<boolean> {
+    if (!isQrCodeId(code)) throw new TypeError('code is not a QR code id.');
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}/message_qrdls/${code}`;
+    try {
+        const response = await withRetry(
+            () => metaHttp.delete(url, { headers: authorization(token) }),
+            { label: 'whatsapp.deleteQrCode', retries: 1 }
+        );
+        return response.data?.success === true;
+    } catch (error: any) {
+        throw failure('WhatsApp QR code deletion failed', error, token);
+    }
+}
+
+// ─── Entry points: ice breakers and commands ────────────────────────────────────────────
+
+/**
+ * Conversational components: the tappable ice breakers and the `/commands` of a number.
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/business-phone-numbers/conversational-components.md
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-account/conversational-automation-api.md
+ *
+ *   POST /{phone_number_id}/conversational_automation   { prompts?: string[], commands?: [{ command_name, command_description }] }
+ *                                                       → { success: true }
+ *   GET  /{phone_number_id}?fields=conversational_automation
+ *                                                       → { conversational_automation: { prompts, commands }, id }
+ *
+ * Limits: up to 4 ice breakers of ≤ 80 characters; up to 30 commands, a name ≤ 32 characters (sent WITHOUT the leading slash, unique per
+ * number) and a hint ≤ 256; no emoji in any of them. A tap arrives as an ordinary inbound text message. WhatsApp hides the ice breakers when
+ * the user opened the chat from a `wa.me` link with prefilled text, which is the case for every entry link made here.
+ *
+ * Not documented, and so not assumed: whether a POST replaces or merges what is set, and how to clear it. `prompts: []` is sent as it is and
+ * Meta's own answer decides; the route re-reads the number after a write so the card shows what Meta holds, not what was sent.
+ */
+export const ICE_BREAKERS_MAX = 4;
+export const ICE_BREAKER_MAX_CHARS = 80;
+export const COMMANDS_MAX = 30;
+export const COMMAND_NAME_MAX_CHARS = 32;
+export const COMMAND_DESCRIPTION_MAX_CHARS = 256;
+
+export interface ConversationalCommand {
+    command_name: string;
+    command_description: string;
+}
+
+export interface ConversationalAutomation {
+    prompts: string[];
+    commands: ConversationalCommand[];
+}
+
+/** An emoji or a pictographic symbol. `©`, `®` and `™` are plain text and allowed; digits and `#` are not emoji and are not caught. */
+const EMOJI = /(?![©®™])\p{Extended_Pictographic}|\p{Emoji_Presentation}|[️⃣]/u;
+
+export const hasEmoji = (value: string): boolean => EMOJI.test(value);
+
+export interface ConversationalAutomationInput {
+    prompts: string[];
+    /** Absent when the caller did not send any: the commands already set are left alone. */
+    commands?: ConversationalCommand[];
+}
+
+export type ConversationalAutomationParse =
+    | { value: ConversationalAutomationInput }
+    | { error: string; code: string };
+
+/**
+ * Check what an owner sent for ice breakers (and optionally commands) against Meta's limits. Pure. A value is trimmed, never silently
+ * shortened, rewritten or dropped: anything over a limit is an error that says which limit.
+ */
+export function parseConversationalAutomation(input: unknown): ConversationalAutomationParse {
+    const body = (input && typeof input === 'object' && !Array.isArray(input) ? input : {}) as Record<string, unknown>;
+
+    if (!Array.isArray(body.prompts)) return { error: 'prompts must be a list of strings (an empty list is allowed).', code: 'invalid_prompts' };
+    if (body.prompts.length > ICE_BREAKERS_MAX) {
+        return { error: `WhatsApp allows at most ${ICE_BREAKERS_MAX} ice breakers; ${body.prompts.length} were sent.`, code: 'too_many_prompts' };
+    }
+    const prompts: string[] = [];
+    for (const [i, raw] of body.prompts.entries()) {
+        const prompt = typeof raw === 'string' ? raw.trim() : '';
+        if (!prompt) return { error: `Ice breaker ${i + 1} is empty.`, code: 'invalid_prompts' };
+        if (prompt.length > ICE_BREAKER_MAX_CHARS) {
+            return { error: `Ice breaker ${i + 1} is ${prompt.length} characters; the limit is ${ICE_BREAKER_MAX_CHARS}.`, code: 'prompt_too_long' };
+        }
+        if (hasEmoji(prompt)) return { error: `Ice breaker ${i + 1} has an emoji; WhatsApp does not support emoji in ice breakers.`, code: 'prompt_has_emoji' };
+        prompts.push(prompt);
+    }
+
+    if (body.commands === undefined || body.commands === null) return { value: { prompts } };
+    if (!Array.isArray(body.commands)) return { error: 'commands must be a list of { command_name, command_description }.', code: 'invalid_commands' };
+    if (body.commands.length > COMMANDS_MAX) {
+        return { error: `WhatsApp allows at most ${COMMANDS_MAX} commands; ${body.commands.length} were sent.`, code: 'too_many_commands' };
+    }
+    const commands: ConversationalCommand[] = [];
+    const seen = new Set<string>();
+    for (const [i, raw] of body.commands.entries()) {
+        const c = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        const name = typeof c.command_name === 'string' ? c.command_name.trim() : '';
+        const description = typeof c.command_description === 'string' ? c.command_description.trim() : '';
+        if (!name || /\s/.test(name) || name.startsWith('/')) {
+            return { error: `Command ${i + 1} needs a name with no spaces and no leading slash.`, code: 'invalid_command_name' };
+        }
+        if (name.length > COMMAND_NAME_MAX_CHARS) {
+            return { error: `Command ${i + 1}'s name is ${name.length} characters; the limit is ${COMMAND_NAME_MAX_CHARS}.`, code: 'command_name_too_long' };
+        }
+        if (!description) return { error: `Command ${i + 1} needs a hint (command_description).`, code: 'invalid_command_description' };
+        if (description.length > COMMAND_DESCRIPTION_MAX_CHARS) {
+            return { error: `Command ${i + 1}'s hint is ${description.length} characters; the limit is ${COMMAND_DESCRIPTION_MAX_CHARS}.`, code: 'command_description_too_long' };
+        }
+        if (hasEmoji(name) || hasEmoji(description)) return { error: `Command ${i + 1} has an emoji; WhatsApp does not support emoji in commands.`, code: 'command_has_emoji' };
+        if (seen.has(name)) return { error: `Command name "${name}" is used twice; names must be unique.`, code: 'duplicate_command' };
+        seen.add(name);
+        commands.push({ command_name: name, command_description: description });
+    }
+    return { value: { prompts, commands } };
+}
+
+/** What Meta holds for the number, in the shape the card edits. Pure: a body without the object is "nothing set". */
+export function mapConversationalAutomation(data: unknown): ConversationalAutomation {
+    const root = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    const ca = (root.conversational_automation && typeof root.conversational_automation === 'object' ? root.conversational_automation : {}) as Record<string, unknown>;
+    const prompts = Array.isArray(ca.prompts) ? ca.prompts.filter((p): p is string => typeof p === 'string') : [];
+    const commands: ConversationalCommand[] = [];
+    for (const raw of Array.isArray(ca.commands) ? ca.commands : []) {
+        const c = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        if (typeof c.command_name === 'string' && c.command_name) {
+            commands.push({ command_name: c.command_name, command_description: typeof c.command_description === 'string' ? c.command_description : '' });
+        }
+    }
+    return { prompts, commands };
+}
+
+/** `GET /{phone_number_id}?fields=conversational_automation`: the ice breakers and commands now set on the number. */
+export async function getConversationalAutomation(phoneNumberId: string, token: string): Promise<ConversationalAutomation> {
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}`;
+    try {
+        const response = await withRetry(
+            () => metaHttp.get(url, { params: { fields: 'conversational_automation' }, headers: authorization(token) }),
+            { label: 'whatsapp.getConversationalAutomation', retries: 2 }
+        );
+        return mapConversationalAutomation(response.data);
+    } catch (error: any) {
+        throw failure('WhatsApp ice breakers read failed', error, token);
+    }
+}
+
+/**
+ * `POST /{phone_number_id}/conversational_automation`. Only the parts given are sent: `commands` left out means Meta is not told about
+ * commands. Not a create (the call sets state, and setting it twice is the same state), so an ordinary retry is safe. Returns whether Meta
+ * said `success`. The limits are re-checked here, so a payload that breaks one is a TypeError and never a request.
+ */
+export async function setConversationalAutomation(phoneNumberId: string, token: string, config: ConversationalAutomationInput): Promise<boolean> {
+    const url = `${GRAPH_BASE}/${numericId(phoneNumberId, 'phone_number_id')}/conversational_automation`;
+    const checked = parseConversationalAutomation(config);
+    if ('error' in checked) throw new TypeError(checked.error);
+    const body = { prompts: checked.value.prompts, ...(checked.value.commands ? { commands: checked.value.commands } : {}) };
+    try {
+        const response = await withRetry(
+            () => metaHttp.post(url, body, { headers: authorization(token) }),
+            { label: 'whatsapp.setConversationalAutomation', retries: 1 }
+        );
+        return response.data?.success === true;
+    } catch (error: any) {
+        throw failure('WhatsApp ice breakers update failed', error, token);
     }
 }
