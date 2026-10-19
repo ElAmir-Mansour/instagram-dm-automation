@@ -506,8 +506,8 @@ describe('Analytics (A3 A4 A6 A7 A8)', () => {
             { trigger_keyword: 'orphan', total_triggers: 1, sent_count: 0, failed_count: 0 },
         ]));
         assert.ok(markup.indexOf('price') < markup.indexOf('تم'), 'most sent first');
-        assert.ok(markup.includes('<td class="cell-num text-success">98%</td>'));
-        assert.ok(markup.includes('<td class="cell-num text-danger">20%</td>'));
+        assert.ok(markup.includes('<td class="cell-num text-success">\u206698%\u2069</td>'), 'a percent is a left-to-right isolate');
+        assert.ok(markup.includes('<td class="cell-num text-danger">\u206620%\u2069</td>'));
         assert.ok(markup.includes('<td class="cell-num ">—</td>'), 'nothing attempted: no rate');
         assert.match(markup, /data-action="app:navigate" data-target="activity" data-query="campaign=c-top"/);
         assert.ok(markup.includes(`aria-label="${s.t('analytics.openInActivity', { keyword: 'price' })}"`));
@@ -520,7 +520,7 @@ describe('Analytics (A3 A4 A6 A7 A8)', () => {
         rows[0]!.failed = 5;
         const line = s.pages.Analytics.summary30(rows);
         const busiest = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(new Date('2026-09-12'));
-        assert.equal(line, `30 days: 64 sent · 5 failed (7%) · busiest day ${busiest}`, 'the weekday of the 20s, summed over the window');
+        assert.equal(line, `30 days: 64 sent · 5 failed (\u20667%\u2069) · busiest day ${busiest}`, 'the weekday of the 20s, summed over the window');
         assert.equal(s.pages.Analytics.summary30([{ day: '2026-09-01', sent: 0, failed: 0 }]), '');
     });
 

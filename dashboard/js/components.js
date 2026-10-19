@@ -507,11 +507,15 @@ const UI = {
         try { return n.toLocaleString(I18N.locale()); } catch { return String(n); }
     },
 
-    /** "72%" — the digits stay Latin and the sign stays attached. */
+    /**
+     * "72%" as text, wrapped in a left-to-right isolate (U+2066 … U+2069, the text form of `<bdi dir="ltr">`): the digits stay Latin and
+     * the sign stays attached. Bare, "46%" inside an Arabic sentence shows as "%46" (OV-30), and the value goes through `t()` and into
+     * attributes, where markup cannot follow, so the isolate is part of the string. '—' for a value that is not a number.
+     */
     formatPercent(value) {
         const n = Number(value);
         if (!Number.isFinite(n)) return '—';
-        return `${UI.formatNumber(n)}%`;
+        return `\u2066${UI.formatNumber(n)}%\u2069`;
     },
 
     /**
@@ -1077,12 +1081,24 @@ const UI = {
         return UI._fmt(iso, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
     },
 
-    /** Full stamp for scheduled posts. */
-    formatDateTime(iso) {
-        return UI._fmt(iso, {
+    /**
+     * Full stamp for scheduled posts. With no options it is what it always was, in the browser's zone. Opt in (UX F4, PO-07 / PO-19):
+     *   `weekday: true | 'short' | 'long'`  adds the day's name ("Thu, 23 Oct 2026, 19:00").
+     *   `zone: true | 'Area/City'`          reads the time in the tenant's zone (`UI.zone()`) or the one named, and says which:
+     *                                       "Thu, 23 Oct 2026, 19:00 (Riyadh)".
+     */
+    formatDateTime(iso, opts) {
+        const o = opts || {};
+        const options = {
             year: 'numeric', month: 'short', day: 'numeric',
             hour: '2-digit', minute: '2-digit', hour12: false,
-        });
+        };
+        if (o.weekday) options.weekday = o.weekday === 'long' ? 'long' : 'short';
+        const zone = o.zone ? UI.zone(typeof o.zone === 'string' ? o.zone : undefined) : '';
+        if (zone) options.timeZone = zone;
+        const text = UI._fmt(iso, options);
+        if (!zone || text === '—') return text;
+        return t('time.zoned', { time: text, city: UI.zoneCity(zone) });
     },
 
     formatDay(iso) {
@@ -1161,6 +1177,284 @@ const UI = {
     fromLocalInputValue(value) {
         if (!value) return null;
         const d = new Date(value);
+        return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    },
+
+    // ═══ UX F4 · Primitives A: error sentences, status pills, the tenant zone ════
+    // One section on purpose (Dashboard UX overhaul, T014–T017): each primitive is the one place its pattern is built, so a screen
+    // that needs it calls it rather than writing its own. Constitution I (bidi, zones), III (truthful states), V (one design system).
+
+    // ─── Errors as a sentence ───────────────────────────────────────────────
+    /**
+     * An error as the person should read it: `{ sentence, next, details }`, all plain text.
+     *
+     *   sentence  what happened, in the interface language: `errors.<code>` when the server sent a `code` (`err.code`, from api.js) that
+     *             the catalogue knows, else the server's own message (today's behaviour), else a generic line. Never empty.
+     *   next      what to do about it: `errors.<code>.next` when the catalogue has one, else ''.
+     *   details   what is behind the sentence, for the person who wants it or has to report it: the server's own words when they were
+     *             replaced by a sentence, and the code with the HTTP status. '' when there is nothing more to say.
+     *
+     * The server's text reaches the screen untranslated only as the sentence's last-resort fallback or inside `details`.
+     * `err.params` fill the `{placeholders}`; a string or number is isolated (first-strong) so a Latin value never reorders an Arabic
+     * sentence, and anything else is dropped. `count` stays a number: it is how a plural family picks its form.
+     */
+    errorText(err) {
+        const code = err && typeof err.code === 'string' ? err.code : '';
+        let raw = '';
+        if (typeof err === 'string') raw = err;
+        else if (err && typeof err.message === 'string') raw = err.message;
+        raw = raw.trim();
+
+        let sentence = '';
+        let next = '';
+        if (code) {
+            const params = UI._errorParams(err.params);
+            const key = `errors.${code}`;
+            const said = t(key, params);
+            if (said !== key) {
+                sentence = said;
+                const nextKey = `${key}.next`;
+                const todo = t(nextKey, params);
+                if (todo !== nextKey) next = todo;
+            }
+        }
+        const translated = sentence !== '';
+        if (!translated) sentence = raw || t('common.error');
+
+        const details = [];
+        if (translated && raw && raw !== sentence) details.push(raw);
+        if (code) details.push(err.status ? `${code} (HTTP ${err.status})` : code);
+        return { sentence, next, details: details.join('\n') };
+    },
+
+    /** `err.params` as the `{placeholders}` of a sentence: strings and numbers isolated, `count` left a number, the rest dropped. */
+    _errorParams(params) {
+        const out = {};
+        if (!params || typeof params !== 'object' || Array.isArray(params)) return out;
+        for (const name of Object.keys(params)) {
+            const value = params[name];
+            if (name === 'count' && typeof value === 'number') out[name] = value;
+            else if (typeof value === 'string' || typeof value === 'number') out[name] = `⁨${value}⁩`;
+        }
+        return out;
+    },
+
+    /**
+     * `errorText` as markup, for an error strip, a modal or a toast-like panel: the sentence, the next step under it, and the details
+     * folded behind a native "Details" disclosure (keyboard operable, no script). Everything goes through the escaping `html` tag;
+     * `dir="auto"` lets the server's English sit left to right inside an Arabic page.
+     */
+    errorHtml(err) {
+        const { sentence, next, details } = UI.errorText(err);
+        return html`<div class="error-text">
+            <strong class="error-sentence" dir="auto">${sentence}</strong>
+            ${next ? html`<span class="error-next" dir="auto">${next}</span>` : ''}
+            ${details ? html`<details class="error-details">
+                <summary>${t('error.details')}</summary>
+                <p class="error-details-text" dir="auto">${details}</p>
+            </details>` : ''}
+        </div>`;
+    },
+
+    // ─── Status pills ───────────────────────────────────────────────────────
+    /**
+     * The status vocabulary (specs/001-dashboard-ux/data-model.md, "StatusPill vocabulary"): family → state → `[tone, glyph, busy?]`.
+     * A pill is a glyph, a word and a tone, never colour alone: the glyph differs in SHAPE (● fine, ○ nothing to do, ▲ look at it,
+     * ✕ broken, ◆ it is waiting for you, ◔ it is waiting for its time), and the word is `status.<family>.<state>`.
+     * `busy` states are in progress, so their glyph pulses (not under reduced motion).
+     */
+    STATUS_PILLS: (() => {
+        const family = (rows) => Object.freeze(Object.assign(Object.create(null), rows));
+        return Object.freeze(Object.assign(Object.create(null), {
+            post: family({
+                scheduled: ['info', '◔'],
+                publishing: ['info', '●', 'busy'],
+                processing: ['info', '●', 'busy'],
+                needs_you: ['accent', '◆'],
+                held: ['warning', '▲'],
+                overdue: ['warning', '▲'],
+                failed: ['danger', '✕'],
+                live: ['success', '●'],
+                archived: ['neutral', '○'],
+            }),
+            campaign: family({
+                live: ['success', '●'],
+                dormant: ['warning', '▲'],
+                failing: ['danger', '✕'],
+                paused: ['neutral', '○'],
+                ended: ['neutral', '○'],
+                archived: ['neutral', '○'],
+            }),
+            content: family({
+                making: ['info', '●', 'busy'],
+                review: ['accent', '◆'],
+                scheduled: ['info', '◔'],
+                posted: ['success', '●'],
+                failed: ['danger', '✕'],
+            }),
+            connection: family({
+                fine: ['success', '●'],
+                expiring: ['warning', '▲'],
+                broken: ['danger', '✕'],
+                not_set_up: ['neutral', '○'],
+            }),
+            assistant: family({
+                on: ['success', '●'],
+                off: ['neutral', '○'],
+                paused_here: ['neutral', '○'],
+                sales_test: ['info', '◔'],
+                sales_live: ['success', '●'],
+            }),
+        }));
+    })(),
+
+    /** Tone → the class that paints it: the badge tones, which are token pairs `check:contrast` already measures. A lookup, never interpolation. */
+    STATUS_TONE_CLASS: Object.freeze(Object.assign(Object.create(null), {
+        success: 'badge-success', info: 'badge-info', warning: 'badge-warning',
+        danger: 'badge-danger', neutral: 'badge-neutral', accent: 'badge-accent',
+    })),
+
+    /**
+     * `UI.statusPill('post', 'held')` → `<span class="status-pill badge-warning">▲ Held</span>`.
+     * `opts.label` replaces the word (a count, a platform), nothing else about the pill. `state` is read in lower case. A family or
+     * state outside the vocabulary is drawn neutral with the state as written, not as a success and not as nothing: an unknown
+     * status must never look healthy. `status.<family>.<state>.hint`, when the catalogue has one, says what it means for the person
+     * and what to do about it; it is the pill's `title`.
+     */
+    statusPill(family, state, opts) {
+        const o = opts || {};
+        const name = String(state === null || state === undefined ? '' : state).toLowerCase();
+        const row = UI.STATUS_PILLS[family] && UI.STATUS_PILLS[family][name];
+        const [tone, glyph, busy] = row || ['neutral', '○'];
+
+        let word = o.label;
+        let hint = '';
+        if (row) {
+            const key = `status.${family}.${name}`;
+            const said = t(key);
+            if (!word) word = said === key ? name : said;
+            const hintKey = `${key}.hint`;
+            const hinted = t(hintKey);
+            if (hinted !== hintKey) hint = hinted;
+        }
+        if (!word) word = String(state === null || state === undefined || state === '' ? '—' : state);
+
+        return html`<span class="status-pill ${html.raw(UI.STATUS_TONE_CLASS[tone])}" data-tone="${tone}" data-status="${family}.${name}"${hint ? html` title="${hint}"` : ''}><span class="status-pill-glyph${busy ? html.raw(' is-busy') : ''}" aria-hidden="true">${glyph}</span>${word}</span>`;
+    },
+
+    // ─── The tenant's time zone (R-09) ──────────────────────────────────────
+    /**
+     * One zone for every time the dashboard shows or reads: the tenant's, which is `identity.timezone`, mirrored into
+     * `studio_settings.schedule.timezone`. A screen that has read it says so with `UI.setZone(tz)`; every other screen then shows and
+     * reads times in it without loading the setting itself. Until one has, times are in the browser's zone, which is what they were
+     * before. These were two copies, in studio.js and monteur.js (ST-14).
+     */
+    _zone: '',
+
+    /** Is `zone` an IANA name this browser can format in? */
+    validZone(zone) {
+        if (!zone || typeof zone !== 'string') return false;
+        return UI._formatter({ timeZone: zone }) !== null;
+    },
+
+    /** This browser's zone, 'UTC' when it will not say. */
+    deviceZone() {
+        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+    },
+
+    /**
+     * Record the tenant's zone. A zone this browser cannot format, or none, leaves it UNSET (the browser's zone shows), which is also how
+     * a tenant switch forgets the last one: `UI.setZone('')`. A screen whose answer lacks a zone should not call this with '', or it
+     * would wipe the zone another screen read. Returns the zone now in force for the tenant ('' when unset).
+     */
+    setZone(zone) {
+        UI._zone = UI.validZone(zone) ? zone : '';
+        return UI._zone;
+    },
+
+    /**
+     * The zone to show and read times in: `candidate` when it is a zone (a screen passing what it has just read from its own settings),
+     * else the one `setZone` recorded, else the browser's.
+     */
+    zone(candidate) {
+        if (UI.validZone(candidate)) return candidate;
+        return UI._zone || UI.deviceZone();
+    },
+
+    /** "Riyadh" / «الرياض»: the city part of an IANA zone, in the interface language when the catalogue has it. `zone` defaults to `UI.zone()`. */
+    zoneCity(zone) {
+        const city = String(zone === undefined ? UI.zone() : (zone || 'UTC')).split('/').pop().replace(/_/g, ' ');
+        const key = `studio.city.${city.replace(/\s+/g, '')}`;
+        const named = t(key);
+        return named && named !== key ? named : city;
+    },
+
+    /**
+     * `value` (a Date, an ISO string or a timestamp) formatted by `opts` in the tenant's zone; '' when it is not a time. `opts` are
+     * `Intl.DateTimeFormat` options plus `zone`, which overrides `UI.zone()` for this call. Formatters are cached by `_formatter`.
+     */
+    zoneFormat(value, opts) {
+        const d = UI._date(value);
+        if (!d) return '';
+        const { zone, ...intl } = opts || {};
+        const fmt = UI._formatter({ ...intl, timeZone: UI.zone(zone) });
+        if (fmt) {
+            try { return fmt.format(d); } catch { /* fall through */ }
+        }
+        return UI.formatDateTime(d);
+    },
+
+    /** What `zoneTime` shows unless told otherwise: weekday, day, month and a 24-hour clock, like the settings the times came from. */
+    ZONE_TIME: Object.freeze({ weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }),
+
+    /** "Sun, 28 Sep, 19:00" in the tenant's zone. `opts` override `ZONE_TIME` field by field (and may carry `zone`). */
+    zoneTime(value, opts) {
+        return UI.zoneFormat(value, { ...UI.ZONE_TIME, ...opts });
+    },
+
+    /** Minutes `zone` is ahead of UTC at the instant `at` (ms). 0 for a zone the browser cannot read. */
+    zoneOffsetMin(zone, at) {
+        const when = new Date(Math.floor(Number(at) / 60000) * 60000);
+        try {
+            const f = new Intl.DateTimeFormat('en-US', {
+                timeZone: zone, hourCycle: 'h23',
+                year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+            });
+            const p = {};
+            f.formatToParts(when).forEach((part) => { p[part.type] = part.value; });
+            const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute));
+            return Math.round((wall - when.getTime()) / 60000);
+        } catch {
+            return 0;
+        }
+    },
+
+    /** An instant as `<input type="datetime-local">` shows it: the wall time in the tenant's zone (the inverse of `zoneInput`). '' for a non-time. */
+    zoneInputValue(value, zone) {
+        const d = UI._date(value);
+        if (!d) return '';
+        const offset = UI.zoneOffsetMin(UI.zone(zone), d.getTime());
+        return new Date(d.getTime() + offset * 60000).toISOString().slice(0, 16);
+    },
+
+    /**
+     * A `datetime-local` value (`YYYY-MM-DDTHH:MM`) read as wall time in the tenant's zone, back to an ISO instant; null when it is not
+     * one. Not `fromLocalInputValue`, which reads it in the BROWSER's zone. The offset is looked up at the instant it produces, and
+     * corrected once, so a time either side of a daylight-saving change lands on the right hour.
+     */
+    zoneInput(value, zone) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(value || ''));
+        if (!m) return null;
+        const at = UI.zone(zone);
+        const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+        if (!Number.isFinite(wall)) return null;
+        // `Date.UTC` rolls 02-31 over to 03-03; a wall time that is not on the calendar is not an instant.
+        const back = new Date(wall);
+        if (back.toISOString().slice(0, 16) !== `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}`) return null;
+        let utc = wall - UI.zoneOffsetMin(at, wall) * 60000;
+        const corrected = wall - UI.zoneOffsetMin(at, utc) * 60000;
+        if (corrected !== utc) utc = corrected;
+        const d = new Date(utc);
         return Number.isNaN(d.getTime()) ? null : d.toISOString();
     },
 

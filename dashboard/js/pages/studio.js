@@ -456,9 +456,16 @@ const StudioPage = {
         if (result.status === 'fulfilled') {
             this.settings = (result.value && result.value.settings) || null;
             this.settingsError = null;
+            this.shareZone();
         } else {
             this.settingsError = result.reason;
         }
+    },
+
+    /** Tell the shared tenant zone (`UI.setZone`) what the settings carry, so every screen reads times in it. Nothing to say when they carry none. */
+    shareZone() {
+        const zone = this.settings && this.settings.schedule && this.settings.schedule.timezone;
+        if (zone) UI.setZone(zone);
     },
 
     /** The library folder the worker scans, or null when the tenant has not set one. */
@@ -3826,41 +3833,23 @@ const StudioPage = {
         return slots[0] || 'custom';
     },
 
-    /** The tenant's own time zone (Settings → Schedule): the one its slots are written in. */
+    /** The tenant's own time zone (Settings → Schedule): the one its slots are written in. The helpers are `UI.zone`, `UI.zoneCity`, `UI.zoneTime`. */
     scheduleZone() {
-        const zone = this.settings && this.settings.schedule && this.settings.schedule.timezone;
-        if (typeof zone === 'string' && zone) {
-            try {
-                new Intl.DateTimeFormat('en-US', { timeZone: zone });
-                return zone;
-            } catch { /* not a zone this browser knows: fall back to the device's */ }
-        }
-        return this.deviceZone();
+        return UI.zone(this.settings && this.settings.schedule && this.settings.schedule.timezone);
     },
 
     deviceZone() {
-        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+        return UI.deviceZone();
     },
 
     /** "Riyadh" / «الرياض»: the city part of an IANA zone, in the interface language when we have it. */
     zoneCity(zone) {
-        const city = String(zone || 'UTC').split('/').pop().replace(/_/g, ' ');
-        const key = `studio.city.${city.replace(/\s+/g, '')}`;
-        const named = t(key);
-        return named && named !== key ? named : city;
+        return UI.zoneCity(zone);
     },
 
-    /** "Thu 25 Sep, 9:00 PM" in the tenant's zone, which is the zone the slot was chosen in. */
+    /** "Thu 25 Sep, 9:00 PM" in the tenant's zone, which is the zone the slot was chosen in. The Studio's own clock: the locale's, not 24-hour. */
     zoneTime(iso) {
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return '';
-        try {
-            return new Intl.DateTimeFormat(I18N.locale(), {
-                weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: this.scheduleZone(),
-            }).format(d);
-        } catch {
-            return UI.formatDateTime(iso);
-        }
+        return UI.zoneTime(iso, { zone: this.scheduleZone(), hour: 'numeric', hourCycle: undefined });
     },
 
     /** A slot as the picker lists it: "Thu 25 Sep, 9:00 PM · Riyadh". */
@@ -6006,6 +5995,7 @@ const StudioPage = {
             const res = await API.saveStudioSettings(body);
             if (seq !== this._seq) return;
             this.settings = (res && res.settings) || { ...(this.settings || {}), ...body };
+            this.shareZone();
             this.loadSettingsWork();
             UI.toast(t('studio.settings.saved'));
             this.paintSettingsPage();

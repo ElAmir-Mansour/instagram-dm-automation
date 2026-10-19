@@ -178,8 +178,8 @@ describe('splitBar', () => {
         assert.match(out, /37/);
         // formatPercent() takes an already-scaled number ("72" -> "72%"), not a 0-1
         // fraction — passing the raw fraction here used to render as "0.615%".
-        assert.match(out, /<span class="chart-split-pct">61%<\/span>/);
-        assert.match(out, /<span class="chart-split-pct">39%<\/span>/);
+        assert.match(out, /<span class="chart-split-pct">\u206661%\u2069<\/span>/);
+        assert.match(out, /<span class="chart-split-pct">\u206639%\u2069<\/span>/);
     });
 
     it('gives each bar a unique clip id, so two on one page do not collide', () => {

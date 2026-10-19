@@ -268,11 +268,12 @@ describe('AI settings: the wording experiment, as data', () => {
     it('shows how new conversations will be split, from the shares as typed: each arm\'s part of the whole, retired arms left out', () => {
         const { AiSettingsPage: p } = load('en');
         const split = (...weights: Array<number | string>) => p.variantsSplit({ variants: weights.map((weight, i) => ({ id: 'ABC'[i], weight })) });
-        assert.equal(split(50, 30, 20), 'A 50% · B 30% · C 20%');
-        assert.equal(split(1, 3), 'A 25% · B 75%');
-        assert.equal(split(10, 0), 'A 100%');
+        // UI.formatPercent is a left-to-right isolate (U+2066 … U+2069), so each share reads "50%" and never "%50" in Arabic.
+        assert.equal(split(50, 30, 20), 'A \u206650%\u2069 · B \u206630%\u2069 · C \u206620%\u2069');
+        assert.equal(split(1, 3), 'A \u206625%\u2069 · B \u206675%\u2069');
+        assert.equal(split(10, 0), 'A \u2066100%\u2069');
         assert.equal(split(0, 0), '');
-        assert.equal(split('lots', 5), 'B 100%', 'a share that is not a number is not a share');
+        assert.equal(split('lots', 5), 'B \u2066100%\u2069', 'a share that is not a number is not a share');
     });
 });
 
@@ -299,7 +300,7 @@ describe('AI settings: the wording experiment, loading', () => {
     it('is open in Test as well, and says how conversations are split while it runs', async () => {
         const { dom } = await opened(payloadOf(true, [WARM, { ...DIRECT, weight: 150 - 100 }]), { mode: 'test' });
         assert.equal(dom.get('sales-variants-block')!.classes.has('hidden'), false);
-        assert.match(dom.get('sales-variants-hint')!.textContent, /A 50% · B 50%/);
+        assert.match(dom.get('sales-variants-hint')!.textContent, /A \u206650%\u2069 · B \u206650%\u2069/);
         assert.equal(dom.get('sales-variants-hint')!.classes.has('hidden'), false);
     });
 
