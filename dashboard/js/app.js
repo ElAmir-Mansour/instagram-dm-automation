@@ -1561,12 +1561,19 @@ const App = {
                 answer(typeof confirm === 'function' ? !!confirm(t('common.leaveBody')) : false);
                 return;
             }
-            ask({
+            const question = {
                 title: t('common.leaveTitle'),
                 body: t('common.leaveBody'),
                 confirmLabel: t('common.leaveConfirm'),
                 onConfirm: () => answer(true),
-            });
+            };
+            // Unsaved work inside an open dialog: ask OVER it (`stack`), never in place of it, or Cancel would come back to a
+            // dialog whose fields the question itself destroyed. The stacked layer reports "no" through `onCancel`.
+            if (kind === 'modal' && typeof UI !== 'undefined' && typeof UI.confirm === 'function') {
+                UI.confirm({ ...question, stack: true, onCancel: () => answer(false) });
+                return;
+            }
+            ask(question);
             // The dialog closing without a confirm is a "stay". `showModal` runs the previous dialog's close hook before it draws
             // this one, so this one is set afterwards.
             UI._afterClose = () => answer(false);

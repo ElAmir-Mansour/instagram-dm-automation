@@ -587,6 +587,24 @@ describe('the discard question, drawn over the modal (UI.confirm with stack)', (
         assert.notEqual(l.doc.activeElement, field, 'focus moved into the question');
     });
 
+    it('reports "no" through onCancel exactly once, and never after a "yes" (the router waits on it)', async () => {
+        const l = load();
+        dirtyModal(l);
+        let cancelled = 0;
+        let confirmed = 0;
+        l.UI.confirm({ title: 't', body: 'b', stack: true, onConfirm: () => { confirmed += 1; }, onCancel: () => { cancelled += 1; } });
+        l.UI.cancelConfirm();
+        l.UI.cancelConfirm();
+        assert.equal(cancelled, 1, 'Cancel answers once');
+        assert.equal(l.UI._confirmLayer, null);
+
+        l.UI.confirm({ title: 't', body: 'b', stack: true, onConfirm: () => { confirmed += 1; }, onCancel: () => { cancelled += 1; } });
+        await l.UI.runConfirm(l.doc.add('button', 'admin-confirm-btn', l.content));
+        assert.equal(confirmed, 1, 'Yes runs the action');
+        l.UI.cancelConfirm();
+        assert.equal(cancelled, 1, 'and no cancel follows a yes');
+    });
+
     it('asks once: a second request while it is open does not stack another', () => {
         const l = load();
         dirtyModal(l);

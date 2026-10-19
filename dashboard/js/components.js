@@ -1880,6 +1880,8 @@ const UI = {
      *   tone         'danger' (default) or 'primary'
      *   requireText  the operator must type this string to enable the button
      *   stack        draw it over the open modal instead of in place of it (the discard question)
+     *   onCancel()   stacked only: runs when the question is answered "no" (Cancel, Escape, a click outside), so a caller
+     *                waiting on the answer (the router's leave guard) hears it. In place of the modal, `UI._afterClose` does that.
      *   onConfirm()  runs after the button is pressed; a promise keeps the dialog open until it settles
      *
      * `tone` exists because not every confirmation is destructive. Extending the Meta token is
@@ -1892,6 +1894,9 @@ const UI = {
     confirm(options) {
         const o = options || {};
         UI._confirmPending = typeof o.onConfirm === 'function' ? o.onConfirm : null;
+        // A question already on screen that this one replaces was not answered "yes": tell whoever asked it.
+        if (o.stack) UI._answerCancel();
+        UI._confirmCancel = o.stack && typeof o.onCancel === 'function' ? o.onCancel : null;
         const markup = UI._confirmMarkup(o, !!o.stack);
         if (o.stack) UI._openConfirmLayer(markup);
         else UI.showModal(markup);
@@ -1990,7 +1995,8 @@ const UI = {
 
         const layered = !!UI._confirmLayer;
         const done = () => {
-            if (layered) UI._closeConfirmLayer(true);
+            // Answered "yes": the cancel hook must never also run.
+            if (layered) { UI._confirmCancel = null; UI._closeConfirmLayer(true); }
             else UI.closeModal();
         };
 
@@ -2129,6 +2135,16 @@ const UI = {
     cancelConfirm() {
         UI._confirmPending = null;
         UI._closeConfirmLayer(true);
+        UI._answerCancel();
+    },
+
+    /** The stacked question's `onCancel`, run at most once. */
+    _confirmCancel: null,
+    _answerCancel() {
+        const cancel = UI._confirmCancel;
+        UI._confirmCancel = null;
+        if (typeof cancel !== 'function') return;
+        try { cancel(); } catch (err) { console.warn('confirm onCancel failed:', err); }
     },
 
     // ─── Undo toast ──────────────────────────────────────────────────────────

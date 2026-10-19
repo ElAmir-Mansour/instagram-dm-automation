@@ -46,6 +46,12 @@ function rig(options: LoadOptions & { pageNames?: string[] } = {}): Rig {
     const dashboardRef = { h: null as unknown as Dashboard };
     const h = loadDashboard({ app: true, ...load, globals: { Admin, ...(load.globals ?? {}) } });
     dashboardRef.h = h;
+    // `UI.confirm` exists (UX F5), so the router asks through it. The recorder keeps both of its shapes honest: in place of the
+    // modal it runs the previous dialog's close hook first, as `UI.showModal` does; stacked over a modal (`stack: true`) it
+    // does not, and "no" arrives through `onCancel`.
+    if (h.UI && typeof h.UI.confirm === 'function') {
+        h.UI.confirm = (o: Json): void => { if (!o.stack) h.UI._runAfterClose(); confirms.push(o); };
+    }
     for (const id of ['page-title', 'page-subtitle', 'page-container', 'sidebar', 'mobile-menu-btn']) h.el(id);
     // The person has just clicked a nav item: it is still where focus is, and it is still on screen.
     h.document.activeElement = h.el('nav-link');
@@ -62,8 +68,17 @@ function rig(options: LoadOptions & { pageNames?: string[] } = {}): Rig {
             h.App.onHashChange({ oldURL: `https://example.test/dashboard${from}`, newURL: `https://example.test/dashboard${hash}` });
             await settle();
         },
-        async dismiss(): Promise<void> { h.UI._runAfterClose(); await settle(); },
-        async accept(index = confirms.length - 1): Promise<void> { confirms[index]!.onConfirm(); h.UI._runAfterClose(); await settle(); },
+        async dismiss(): Promise<void> {
+            const last = confirms[confirms.length - 1];
+            if (last && last.stack) last.onCancel(); else h.UI._runAfterClose();
+            await settle();
+        },
+        async accept(index = confirms.length - 1): Promise<void> {
+            const o = confirms[index]!;
+            o.onConfirm();
+            if (!o.stack) h.UI._runAfterClose();
+            await settle();
+        },
     };
     return rigged;
 }
@@ -320,11 +335,12 @@ describe('router: the leave guard (SH-18)', () => {
         r.h.location.hash = '#/overview';
         await r.App.navigate('overview');
         r.h.UI.isModalDirty = () => true;
-        r.h.native.answer = false;
         await r.hashchange('#/inbox');
-        // `Admin.confirm` would draw INTO the modal and destroy the fields it asks about: the browser's own confirm is used.
-        assert.equal(r.confirms.length, 0);
-        assert.deepEqual(r.h.native.confirms, [r.h.t('common.leaveBody')]);
+        // Asked OVER the dialog (`stack`), never in place of it: drawing into the modal would destroy the fields it asks about.
+        assert.equal(r.confirms.length, 1);
+        assert.equal(r.confirms[0]!.stack, true, 'stacked over the open dialog');
+        assert.deepEqual(r.h.native.confirms, [], 'never the browser confirm');
+        await r.dismiss();
         assert.equal(r.App.currentPage, 'overview');
         assert.deepEqual(r.h.replaced, ['#/overview']);
         assert.deepEqual(r.pages['inbox']!.log, []);
@@ -337,8 +353,9 @@ describe('router: the leave guard (SH-18)', () => {
         r.h.UI.isModalDirty = () => true;
         let closed = 0;
         r.h.UI.closeModal = (): void => { closed += 1; };
-        r.h.native.answer = true;
         await r.hashchange('#/inbox');
+        assert.equal(r.confirms[0]!.stack, true);
+        await r.accept();
         assert.equal(r.App.currentPage, 'inbox');
         assert.ok(closed >= 1, 'navigate closes the modal');
         assert.deepEqual(r.h.replaced, []);
@@ -357,6 +374,7 @@ describe('router: the leave guard (SH-18)', () => {
         assert.deepEqual(r.h.native.confirms, []);
 
         const bare = rig({ globals: { Admin: undefined } });
+        bare.h.UI.confirm = undefined as unknown as (o: Json) => void;
         bare.h.location.hash = '#/posts';
         bare.pages['posts'] = fakePage({ canLeave: () => false });
         await bare.App.navigate('posts');
@@ -368,6 +386,7 @@ describe('router: the leave guard (SH-18)', () => {
 
     it('stays when there is nothing at all to ask with: no edit is lost for want of a dialog', async () => {
         const r = rig({ globals: { Admin: undefined, confirm: undefined } });
+        r.h.UI.confirm = undefined as unknown as (o: Json) => void;
         r.h.location.hash = '#/posts';
         r.pages['posts'] = fakePage({ canLeave: () => false });
         await r.App.navigate('posts');
