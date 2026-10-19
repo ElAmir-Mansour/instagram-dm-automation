@@ -37,6 +37,7 @@
  */
 import { pool } from '../../config/db.js';
 import { describeError, log } from '../../utils/log.js';
+import { errorBody, type ErrorBody } from '../errorCodes.js';
 import { loadOnboarding, stepForMissingField, type OnboardingState } from '../onboardingWizard.js';
 import { getPlatformOwnerId } from '../tenant.js';
 import { loadProfile } from './store.js';
@@ -127,9 +128,13 @@ export class ProfileIncomplete extends Error {
     }
 }
 
-/** What the route sends beside the 409. Paths and words only: nothing the tenant typed. */
-export function profileIncompleteBody(err: ProfileIncomplete): { error: string; code: string; agent: GatedAgent; missing: string[]; fixStep: FixStep } {
-    return { error: err.message, code: err.code, agent: err.agent, missing: err.missing, fixStep: err.fixStep };
+/**
+ * What the route sends beside the 409: the shared envelope (src/services/errorCodes.ts), with `agent`, `missing` and `fixStep` also kept
+ * as top-level fields, where `api.js` and the profile sheet read them. Paths and words only: nothing the tenant typed.
+ */
+export function profileIncompleteBody(err: ProfileIncomplete): ErrorBody {
+    const facts = { agent: err.agent, missing: err.missing, fixStep: err.fixStep };
+    return errorBody('PROFILE_INCOMPLETE', facts, err.message, facts);
 }
 
 /**

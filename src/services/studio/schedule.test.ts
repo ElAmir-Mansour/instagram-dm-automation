@@ -461,7 +461,8 @@ describe('scheduleDraft — beside the Monteur', () => {
         campaigns = [{ id: 'reel', trigger_keyword: 'الدفتر', is_active: true, post_id: null, match_mode: 'word', created_at: new Date() }];
         await assert.rejects(scheduleDraft(TENANT, DRAFT, { scheduled_time: WHEN, create_campaign: true }), (err: unknown) =>
             err instanceof StudioError && err.status === 409
-            && (err.problems ?? []).some((p) => /^campaign\.keyword: «دفتر» would fire alongside the live keyword «الدفتر»/.test(p)));
+            && (err.problems ?? []).some((p) => /^campaign\.keyword: «دفتر» would fire alongside the live keyword «الدفتر»/.test(p))
+            && err.code === 'KEYWORD_CLASH' && err.params?.trigger === 'دفتر' && err.params?.live === 'الدفتر');
         assert.equal(inserts().length, 0);
         assert.ok(!statements.some((s) => /^INSERT INTO campaigns/.test(s.sql)));
     });

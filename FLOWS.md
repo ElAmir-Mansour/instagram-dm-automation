@@ -2390,7 +2390,9 @@ for (G1, `src/services/macBrain.ts`).
 deactivating him cannot hand the Mac to tenant #2, and no setting can take it from him. The app setting
 `studio.mac_brain_tenants` (a JSON list of creator ids) names the tenants allowed besides him: unset, `null` and `[]`
 all mean "the owner only", so a tenant created tomorrow is refused by default. With no creators at all, nobody is
-allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409** `{ error, code: 'NEEDS_API_BRAIN' }`.
+allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409** `{ error, message, code: 'NEEDS_API_BRAIN', params }` (the shared refusal
+envelope: `error` stays the English string, `code` and `params` are what the dashboard translates; the registry is
+`src/services/errorCodes.ts`).
 
 1. **A think is queued** only by `think()` (**`src/services/monteur/think.ts:246`**), which checks first, before a
    try is read or queued. `ask()`'s Mac route (`model.ts`) is the only way in, so the pick, the Marketer, the Editor

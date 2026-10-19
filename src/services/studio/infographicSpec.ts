@@ -204,15 +204,50 @@ export function specProblems(spec: unknown): string[] {
  * normalised, Latin case ignored). An empty caption or one over Instagram's limit fails too.
  */
 export function captionProblems(caption: unknown, spec: unknown): string[] {
-    if (typeof caption !== 'string' || !caption.trim()) return ['The caption is empty.'];
-    const problems: string[] = [];
-    if (caption.length > BUDGETS.caption) problems.push(`The caption is ${caption.length} characters; Instagram takes ${BUDGETS.caption}.`);
+    return captionIssues(caption, spec).map((issue) => issue.message);
+}
+
+/** One thing wrong with a caption: the sentence `captionProblems` has always returned, and the code and params the 409 carries. */
+export interface CaptionIssue {
+    code: 'CAPTION_EMPTY' | 'CAPTION_TOO_LONG' | 'CAPTION_MISSING_COLUMNS';
+    params: Record<string, unknown>;
+    message: string;
+}
+
+/**
+ * `captionProblems`, with a code per problem (src/services/errorCodes.ts), in the order it has always listed them. Schedule's 409
+ * sends the most useful one as its `code` (`primaryCaptionIssue`) and the full list as `problems`.
+ */
+export function captionIssues(caption: unknown, spec: unknown): CaptionIssue[] {
+    if (typeof caption !== 'string' || !caption.trim()) return [{ code: 'CAPTION_EMPTY', params: {}, message: 'The caption is empty.' }];
+    const issues: CaptionIssue[] = [];
+    if (caption.length > BUDGETS.caption) {
+        issues.push({
+            code: 'CAPTION_TOO_LONG', params: { length: caption.length, max: BUDGETS.caption },
+            message: `The caption is ${caption.length} characters; Instagram takes ${BUDGETS.caption}.`,
+        });
+    }
     const folded = fold(caption);
     const missing = columnNames(spec).filter((name) => !folded.includes(fold(name)));
     if (missing.length) {
-        problems.push(`The caption doesn't mention ${missing.map((m) => `«${m}»`).join(', ')}: it must talk about what the infographic shows.`);
+        const list = missing.map((m) => `«${m}»`).join(', ');
+        issues.push({
+            code: 'CAPTION_MISSING_COLUMNS', params: { columns: missing, list },
+            message: `The caption doesn't mention ${list}: it must talk about what the infographic shows.`,
+        });
     }
-    return problems;
+    return issues;
+}
+
+/**
+ * The issue a single code stands for when there are several: the owner's rule (name every column) first, then an empty caption,
+ * then the length. The params of every issue travel together, so a sentence for one can still use a number from another.
+ */
+export function primaryCaptionIssue(issues: readonly CaptionIssue[]): { code: CaptionIssue['code']; params: Record<string, unknown> } | null {
+    const order: CaptionIssue['code'][] = ['CAPTION_MISSING_COLUMNS', 'CAPTION_EMPTY', 'CAPTION_TOO_LONG'];
+    const first = order.map((code) => issues.find((issue) => issue.code === code)).find((issue) => issue !== undefined);
+    if (!first) return null;
+    return { code: first.code, params: Object.assign({}, ...issues.map((issue) => issue.params)) as Record<string, unknown> };
 }
 
 const fold = (s: string): string =>

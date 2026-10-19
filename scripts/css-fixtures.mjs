@@ -53,7 +53,7 @@ const fileUrl = (name) => pathToFileURL(`${outDir}/${name}`).href;
 // ─── The sandbox ────────────────────────────────────────────────────────────
 // What index.html loads eagerly, in its order (icons.js and app.js excepted: the icons are
 // hydrated statically below, and app.js boots the whole shell).
-const SHARED = ['dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/components.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js', 'dashboard/js/pages/admin_common.js'];
+const SHARED = ['dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js', 'dashboard/js/pages/admin_common.js'];
 
 class FakeFormData {
     constructor(form) { this.fields = (form && form.fields) || {}; }

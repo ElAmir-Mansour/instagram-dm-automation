@@ -365,8 +365,15 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
 
 export type ErasureOutcome =
     | { ok: true; handle: string; deleted: ErasureCounts; target: ErasureTarget; client: PoolClient }
-    | { ok: false; status: 400 | 409; code: 'INVALID_TOKEN' | 'COUNTS_DRIFTED'; error: string;
+    | { ok: false; status: 400 | 409; code: 'ERASURE_TOKEN_INVALID' | 'ERASURE_PREVIEW_EXPIRED' | 'ERASURE_COUNTS_DRIFTED'; error: string;
         expected?: ErasureCounts; actual?: ErasureCounts };
+
+/** The codes (src/services/errorCodes.ts): an expired token is the one a person can fix by pressing Preview again, so it has its own. */
+const TOKEN_FAILURE_CODE: Record<TokenFailure, 'ERASURE_TOKEN_INVALID' | 'ERASURE_PREVIEW_EXPIRED'> = {
+    malformed: 'ERASURE_TOKEN_INVALID',
+    bad_signature: 'ERASURE_TOKEN_INVALID',
+    expired: 'ERASURE_PREVIEW_EXPIRED',
+};
 
 const TOKEN_FAILURE_MESSAGE: Record<TokenFailure, string> = {
     malformed: 'That is not a valid erasure token. Run the preview again.',
@@ -391,7 +398,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
     const verified = verifyErasureToken(rawToken, now);
     if (!verified.ok) {
         return {
-            ok: false, status: 400, code: 'INVALID_TOKEN',
+            ok: false, status: 400, code: TOKEN_FAILURE_CODE[verified.reason],
             error: TOKEN_FAILURE_MESSAGE[verified.reason],
         };
     }
@@ -409,7 +416,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
         if (countsDrifted(verified.counts, actual)) {
             await client.query('ROLLBACK');
             return {
-                ok: false, status: 409, code: 'COUNTS_DRIFTED',
+                ok: false, status: 409, code: 'ERASURE_COUNTS_DRIFTED',
                 error:
                     'What this handle matches has changed since the preview — a new message or ' +
                     'comment arrived, or part of it has already been erased. Nothing was deleted. ' +

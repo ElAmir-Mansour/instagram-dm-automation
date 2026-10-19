@@ -95,25 +95,44 @@ async function liveCampaigns(exec: Exec, creatorId: string): Promise<CampaignRow
 export async function triggerProblems(
     exec: Exec, creatorId: string, clipId: string | null, copy: Pick<ClipCopy, 'keyword' | 'variants'>
 ): Promise<string[]> {
-    const problems: string[] = [];
+    return (await triggerProblemDetails(exec, creatorId, clipId, copy)).map((p) => p.message);
+}
+
+/** One clash: the sentence, the word that clashes, and the live keyword it fires alongside (null for a reel still in flight). */
+export interface TriggerProblem { message: string; trigger: string; live: string | null }
+
+/** `triggerProblems` with the words in the sentences kept, so a refusal can carry them as `params` (`KEYWORD_CLASH`). */
+export async function triggerProblemDetails(
+    exec: Exec, creatorId: string, clipId: string | null, copy: Pick<ClipCopy, 'keyword' | 'variants'>
+): Promise<TriggerProblem[]> {
+    const problems: TriggerProblem[] = [];
     const variants = copy.variants ?? [];
     const label = (t: string): string => (norm(t) === norm(copy.keyword) ? 'copy.keyword' : 'copy.variants');
     const live = await liveCampaigns(exec, creatorId);
     if (!matchCampaign(copy.keyword, '', live)) {
         for (const c of triggerClashes(unique([copy.keyword, ...variants]), 'word', live)) {
-            problems.push(`${label(c.trigger)}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`);
+            problems.push({ message: `${label(c.trigger)}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`, trigger: c.trigger, live: c.live });
         }
     }
     const other = await inFlightTriggers(exec, creatorId, clipId);
     const theirVariants = new Set(other.variants.map(norm));
     const theirWords = new Set([...other.keywords, ...other.variants].map(norm));
     if (theirVariants.has(norm(copy.keyword))) {
-        problems.push(`copy.keyword: «${copy.keyword}» is another reel's variant: both campaigns would answer it`);
+        problems.push({ message: `copy.keyword: «${copy.keyword}» is another reel's variant: both campaigns would answer it`, trigger: copy.keyword, live: null });
     }
     for (const v of variants) {
-        if (theirWords.has(norm(v))) problems.push(`copy.variants: «${v}» is another reel's keyword or variant: both campaigns would answer it`);
+        if (theirWords.has(norm(v))) problems.push({ message: `copy.variants: «${v}» is another reel's keyword or variant: both campaigns would answer it`, trigger: v, live: null });
     }
     return problems;
+}
+
+/** The params a `KEYWORD_CLASH` carries: the first clash's words for the sentence, every clash for the details. */
+export function keywordClashParams(clashes: readonly { trigger: string; live: string | null }[]): Record<string, unknown> {
+    return {
+        trigger: clashes[0]?.trigger ?? null,
+        live: clashes[0]?.live ?? null,
+        clashes: clashes.map((c) => ({ trigger: c.trigger, live: c.live })),
+    };
 }
 
 // ─── PATCH ──────────────────────────────────────────────────────────────────────────────
@@ -221,8 +240,8 @@ export async function patchClip(creatorId: string, clipId: string, body: unknown
     const patch = parseClipPatch(body);
     return withTransaction(async (client) => {
         const clip = await lockClip(client, creatorId, clipId);
-        if (clip.status === 'scheduled') throw new StudioError(409, 'This reel is scheduled: edit its post in Posts instead.');
-        if (clip.status === 'rejected') throw new StudioError(409, 'This reel was rejected.');
+        if (clip.status === 'scheduled') throw new StudioError(409, 'This reel is scheduled: edit its post in Posts instead.', undefined, 'REEL_SCHEDULED');
+        if (clip.status === 'rejected') throw new StudioError(409, 'This reel was rejected.', undefined, 'REEL_REJECTED');
         const settings = await getStudioSettings(creatorId, client);
 
         const before = clip.copy;
@@ -236,19 +255,27 @@ export async function patchClip(creatorId: string, clipId: string, body: unknown
         // A variant spelled like the keyword adds nothing.
         copy.variants = (copy.variants ?? []).filter((v) => norm(v) !== norm(copy.keyword));
         if (keywordChanged || patch.copy.variants !== undefined) {
-            const clashes = await triggerProblems(client, creatorId, clip.id, copy);
-            if (clashes.length) throw problemsError(clashes, 'this clip', 409);
+            const clashes = await triggerProblemDetails(client, creatorId, clip.id, copy);
+            if (clashes.length) throw problemsError(clashes.map((c) => c.message), 'this clip', 409, 'KEYWORD_CLASH', keywordClashParams(clashes));
         }
 
         const problems: string[] = [];
+        // The first problem's code is the refusal's; both stay in `problems`.
+        let firstCode: 'CLIP_KEYWORD_ASK_MISSING' | 'CLIP_TIKTOK_LINE_MISSING' | undefined;
+        let firstParams: Record<string, unknown> = {};
         if ((patch.copy.caption !== undefined || keywordChanged) && !copy.caption.includes(`«${copy.keyword}»`)) {
             problems.push(`copy.caption must keep the keyword ask with «${copy.keyword}»`);
+            firstCode = 'CLIP_KEYWORD_ASK_MISSING';
+            firstParams = { keyword: copy.keyword };
         }
         if (patch.copy.tiktok_caption !== undefined) {
             const link = tiktokLine(settings);
-            if (link && !copy.tiktok_caption.includes(link)) problems.push(`copy.tiktok_caption must keep the line «${link}»`);
+            if (link && !copy.tiktok_caption.includes(link)) {
+                problems.push(`copy.tiktok_caption must keep the line «${link}»`);
+                if (firstCode === undefined) { firstCode = 'CLIP_TIKTOK_LINE_MISSING'; firstParams = { line: link }; }
+            }
         }
-        if (problems.length) throw problemsError(problems, 'this clip');
+        if (problems.length) throw problemsError(problems, 'this clip', 400, firstCode, firstParams);
 
         const title = patch.title ?? clip.title;
         const rerender = title !== clip.title || keywordChanged;
@@ -302,7 +329,7 @@ async function planCampaign(exec: Exec, creatorId: string, copy: ClipCopy): Prom
     const triggers = unique([keyword, ...(copy.variants ?? [])]);
     const clashes = triggerClashes(triggers, 'word', active);
     if (clashes.length) {
-        throw problemsError(clashes.map((c) => `${norm(c.trigger) === norm(keyword) ? 'copy.keyword' : 'copy.variants'}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this reel\'s keywords', 409);
+        throw problemsError(clashes.map((c) => `${norm(c.trigger) === norm(keyword) ? 'copy.keyword' : 'copy.variants'}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this reel\'s keywords', 409, 'KEYWORD_CLASH', keywordClashParams(clashes));
     }
     return { create: true, triggers: triggers.join(', '), dm: copy.dm };
 }
@@ -370,7 +397,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
     if (b.scheduled_time !== undefined && b.scheduled_time !== null) {
         requested = typeof b.scheduled_time === 'string' ? new Date(b.scheduled_time) : new Date(NaN);
         if (Number.isNaN(requested.getTime())) {
-            throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-01T16:00:00Z.');
+            throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-01T16:00:00Z.', undefined, 'INVALID_SCHEDULE_TIME');
         }
     }
 
@@ -381,9 +408,9 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
     const clip = found[0];
     if (!clip) throw new StudioError(404, 'No such clip.');
     if (clip.status !== 'review' || !clip.render) {
-        throw new StudioError(409, clip.status === 'scheduled'
-            ? 'This reel is already scheduled.'
-            : `This reel is ${clip.status}; only a reel in review can be approved.`);
+        throw clip.status === 'scheduled'
+            ? new StudioError(409, 'This reel is already scheduled.', undefined, 'REEL_SCHEDULED')
+            : new StudioError(409, `This reel is ${clip.status}; only a reel in review can be approved.`, undefined, 'REEL_NOT_IN_REVIEW', { status: clip.status });
     }
 
     const settings = await getStudioSettings(creatorId);
@@ -396,7 +423,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         // TikTok audits the app the post goes out private ("Only me"), as the owner chose.
         const flags = await getTikTokPostingFlags();
         await assertDirectPostReady(creatorId, flags).catch((err: unknown) => {
-            if (err instanceof StudioError) throw new StudioError(err.status, `${err.message} Or take TikTok off the Monteur's platforms.`);
+            if (err instanceof StudioError) throw new StudioError(err.status, `${err.message} Or take TikTok off the Monteur's platforms.`, err.problems, err.code, err.params);
             throw err;
         });
         tiktokOptions = studioTikTokOptions(null, flags.audited, 'video');
@@ -409,7 +436,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         await lockTenantPublishing(client, creatorId);
         const locked = await lockClip(client, creatorId, clip.id);
         if (locked.status !== 'review' || locked.render?.job_id !== clip.render!.job_id) {
-            throw new StudioError(409, 'The reel changed while it was being approved. Reload it and try again.');
+            throw new StudioError(409, 'The reel changed while it was being approved. Reload it and try again.', undefined, 'CHANGED_MEANWHILE');
         }
         const render = locked.render!;
         const copy = locked.copy;
@@ -423,13 +450,14 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         let when: Date;
         if (requested) {
             if (taken.has(localDay(requested.getTime(), timezone))) {
-                throw new StudioError(409, `scheduled_time: another reel from this video is already on ${localDay(requested.getTime(), timezone)}. Choose another day.`);
+                const day = localDay(requested.getTime(), timezone);
+                throw new StudioError(409, `scheduled_time: another reel from this video is already on ${day}. Choose another day.`, undefined, 'REEL_DAY_TAKEN', { day });
             }
             when = requested;
         } else {
             const free = await nextFreeSlots(creatorId, { timezone, slots }, SLOT_LOOKAHEAD, now, { exec: client });
             const slot = free.find((s) => !taken.has(localDay(Date.parse(s), timezone)));
-            if (!slot) throw new StudioError(409, 'There is no free posting slot on a day this video has no reel: choose a time.');
+            if (!slot) throw new StudioError(409, 'There is no free posting slot on a day this video has no reel: choose a time.', undefined, 'NO_FREE_SLOT');
             when = new Date(slot);
         }
         // A DM campaign answers Instagram and Facebook comments only.
@@ -510,7 +538,7 @@ export async function rejectClip(creatorId: string, clipId: string): Promise<Cli
     return withTransaction(async (client) => {
         const clip = await lockClip(client, creatorId, clipId);
         if (clip.status === 'scheduled') {
-            throw new StudioError(409, 'This reel is scheduled: delete its post in Posts instead.');
+            throw new StudioError(409, 'This reel is scheduled: delete its post in Posts instead.', undefined, 'REEL_SCHEDULED');
         }
         if (clip.status !== 'rejected') {
             await cancelClipRenders(client, creatorId, clip.id, 'The clip was rejected.');

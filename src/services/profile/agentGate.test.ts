@@ -242,7 +242,8 @@ describe('a new tenant', () => {
         newcomer(edit(defaultProfile({ lang: 'ar' }), (p) => { p.identity.niche = 'My secret niche'; p.offers = [{ id: 'm', kind: 'other', name: 'My private offer', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: true }]; }));
         const err = await refusal(NEWCOMER, 'dm');
         const body = profileIncompleteBody(err);
-        assert.deepEqual(Object.keys(body).sort(), ['agent', 'code', 'error', 'fixStep', 'missing']);
+        assert.deepEqual(Object.keys(body).sort(), ['agent', 'code', 'error', 'fixStep', 'message', 'missing', 'params']);
+        assert.deepEqual(body.params, { agent: 'dm', missing: body.missing, fixStep: body.fixStep });
         assert.equal(body.code, 'PROFILE_INCOMPLETE');
         assert.equal(JSON.stringify(body).includes('secret'), false);
         assert.equal(JSON.stringify(body).includes('private'), false);

@@ -257,9 +257,14 @@ describe('POST /worker/upload', () => {
         assert.equal(stored.length, 0);
     });
 
-    it('refuses more than 3MB decoded', async () => {
+    it('refuses more than 3MB decoded, as UPLOAD_TOO_LARGE with the cap in params', async () => {
         const big = Buffer.concat([JPEG, Buffer.alloc(MAX_STUDIO_UPLOAD_BYTES)]);
-        assert.equal((await upload('image/jpeg', big)).status, 413);
+        const r = await upload('image/jpeg', big);
+        assert.equal(r.status, 413);
+        assert.equal(r.body.code, 'UPLOAD_TOO_LARGE');
+        assert.match(r.body.error, /^An upload is at most 3MB decoded; this one is 3\.0MB\./);
+        assert.equal(r.body.message, r.body.error);
+        assert.deepEqual(r.body.params, { maxMb: 3, maxBytes: MAX_STUDIO_UPLOAD_BYTES });
         assert.equal(stored.length, 0);
     });
 });
@@ -577,7 +582,8 @@ describe('the Mac is the owner’s (G1), over the routes', () => {
         await withNoProvider(async (asked) => {
             const res = await call('post', '/infographics', { body: { topic: 'RAG vs CAG vs KAG' } });
             assert.equal(res.statusCode, 409);
-            assert.deepEqual(res.body, { error: NEEDS_AI_PROVIDER_MESSAGE, code: 'NEEDS_AI_PROVIDER' });
+            // The shared envelope (src/services/errorCodes.ts): `error` is the string it always was, beside `message`, `code` and `params`.
+            assert.deepEqual(res.body, { error: NEEDS_AI_PROVIDER_MESSAGE, message: NEEDS_AI_PROVIDER_MESSAGE, code: 'NEEDS_AI_PROVIDER', params: {} });
             assert.match(res.body.error, /Nothing was sent to the Mac/);
             assert.deepEqual(asked, [`tenant_infographic:${TENANT_A}`], 'the layer was asked, for this tenant, for this purpose');
             assert.ok(!statements.some((s) => /^INSERT INTO (infographics|studio_jobs)/.test(s.sql)), 'no row, and no job for the Mac or the worker');
@@ -605,7 +611,7 @@ describe('the Mac is the owner’s (G1), over the routes', () => {
     it('the Studio settings answer a tenant switching the Monteur onto the Mac with 400 { error, code }', async () => {
         const res = await call('put', '/settings', { body: { monteur: { brain: 'claude_mac' } } });
         assert.equal(res.statusCode, 400);
-        assert.deepEqual(res.body, { error: NEEDS_API_BRAIN_MESSAGE, code: 'NEEDS_API_BRAIN' });
+        assert.deepEqual(res.body, { error: NEEDS_API_BRAIN_MESSAGE, message: NEEDS_API_BRAIN_MESSAGE, code: 'NEEDS_API_BRAIN', params: {} });
         assert.ok(!statements.some((s) => /^INSERT INTO studio_settings/.test(s.sql)));
     });
 
@@ -658,5 +664,112 @@ describe('the Monteur’s operator routes', () => {
         const res = await call('post', '/monteur/clips/:id/rerender', { params: { id: 'nope' } });
         assert.equal(res.statusCode, 404);
         assert.equal(statements.length, 0);
+    });
+});
+
+// ─── Refusals carry stable codes (src/services/errorCodes.ts, UX F1: ST-08, IG-02) ───────────────────────────
+//
+// What was an English sentence in an Arabic screen is now a sentence AND a code: `error` is unchanged (every client reads it),
+// `code` and `params` are what the dashboard translates, and `problems` stays a top-level field where the editors read it.
+
+describe('the Studio and the Monteur refuse with a code', () => {
+    const ID = '22222222-2222-4222-8222-222222222222';
+    const SPEC = { columns: [{ name: 'RAG' }, { name: 'CAG' }, { name: 'KAG' }], title: ['RAG', 'CAG', 'KAG'] };
+    const infographicRow = (over: Record<string, unknown> = {}) => ({
+        id: ID, creator_id: TENANT_A, topic: 'RAG', notes: null, language: 'en', theme: 'dark', pair_theme: null, status: 'ready', spec: SPEC,
+        caption: 'RAG and CAG are the two I use.', review: null, render: { mp4_url: `${BASE}/api/uploads/a`, cover_url: `${BASE}/api/uploads/b`, gif_url: null },
+        schedule: null, job_id: null, error: null, created_at: new Date(), updated_at: new Date(), ...over,
+    });
+    const arrange = (row: Record<string, unknown>) => routes.unshift(
+        [/^SELECT \* FROM infographics WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/, () => ({ rows: [row] })],
+    );
+    const schedule = (body: Record<string, unknown> = {}) => call('post', '/infographics/:id/schedule', { params: { id: ID }, body });
+
+    it('a caption that leaves a column out is CAPTION_MISSING_COLUMNS, naming the columns, with the list still in `problems`', async () => {
+        arrange(infographicRow());
+        const res = await schedule();
+
+        assert.equal(res.statusCode, 409);
+        assert.equal(res.body.code, 'CAPTION_MISSING_COLUMNS');
+        assert.equal(res.body.error, 'The caption doesn\'t mention «KAG»: it must talk about what the infographic shows.');
+        assert.equal(res.body.message, res.body.error);
+        assert.deepEqual(res.body.params, { columns: ['KAG'], list: '«KAG»' });
+        assert.deepEqual(res.body.problems, [res.body.error], 'the editors read `problems` off the top level');
+        assert.ok(!statements.some((s) => /^INSERT INTO scheduled_posts/.test(s.sql)), 'nothing was scheduled');
+    });
+
+    it('an empty caption is CAPTION_EMPTY, and one that is both too long and incomplete is the owner’s rule first, with both sets of params', async () => {
+        arrange(infographicRow({ caption: '  ' }));
+        const empty = await schedule();
+        assert.equal(empty.body.code, 'CAPTION_EMPTY');
+
+        routes = queueRoutes();
+        arrange(infographicRow({ caption: `RAG ${'x'.repeat(2300)}` }));
+        const both = await schedule();
+        assert.equal(both.statusCode, 409);
+        assert.equal(both.body.code, 'CAPTION_MISSING_COLUMNS');
+        assert.deepEqual(both.body.params, { length: 2304, max: 2200, columns: ['CAG', 'KAG'], list: '«CAG», «KAG»' });
+        assert.equal(both.body.problems.length, 2);
+    });
+
+    it('an infographic that is not ready, or is scheduled already, says which, and keeps its words', async () => {
+        arrange(infographicRow({ status: 'rendering', render: null }));
+        const rendering = await schedule();
+        assert.equal(rendering.statusCode, 409);
+        assert.equal(rendering.body.code, 'INFOGRAPHIC_NOT_READY');
+        assert.equal(rendering.body.error, 'This infographic is rendering; only a ready one can be scheduled.');
+        assert.deepEqual(rendering.body.params, { status: 'rendering' });
+
+        routes = queueRoutes();
+        arrange(infographicRow({ status: 'scheduled' }));
+        const again = await schedule();
+        assert.equal(again.body.code, 'INFOGRAPHIC_SCHEDULED');
+        assert.equal(again.body.error, 'This infographic is already scheduled.');
+    });
+
+    it('a time that is not a date is INVALID_SCHEDULE_TIME, a 400, before the row is read', async () => {
+        const res = await schedule({ scheduled_time: 'tomorrow-ish' });
+        assert.equal(res.statusCode, 400);
+        assert.equal(res.body.code, 'INVALID_SCHEDULE_TIME');
+        assert.match(res.body.error, /^scheduled_time must be a date and time/);
+        assert.ok(!statements.some((s) => /FROM infographics WHERE id/.test(s.sql)));
+    });
+
+    it('editing the caption of an infographic Claude is still writing is INFOGRAPHIC_WRITING', async () => {
+        arrange(infographicRow({ status: 'writing', spec: null, render: null }));
+        const res = await call('patch', '/infographics/:id', { params: { id: ID }, body: { caption: 'x' } });
+        assert.equal(res.statusCode, 409);
+        assert.equal(res.body.code, 'INFOGRAPHIC_WRITING');
+        assert.equal(res.body.error, 'Claude is still writing this infographic.');
+    });
+
+    it('a clip that is already scheduled is REEL_SCHEDULED on edit and on reject', async () => {
+        routes.unshift([/^SELECT id, creator_id, source_id, rank, status.* FROM clip_drafts WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/, () => ({
+            rows: [{ id: ID, creator_id: TENANT_A, source_id: 'src-1', status: 'scheduled', title: 'T', copy: { keyword: 'دفتر', variants: [], caption: 'x', tiktok_caption: 'y' }, render: null }],
+        })]);
+        const edit = await call('patch', '/monteur/clips/:id', { params: { id: ID }, body: { title: 'New title' } });
+        assert.equal(edit.statusCode, 409);
+        assert.equal(edit.body.code, 'REEL_SCHEDULED');
+        assert.equal(edit.body.error, 'This reel is scheduled: edit its post in Posts instead.');
+
+        const reject = await call('post', '/monteur/clips/:id/reject', { params: { id: ID } });
+        assert.equal(reject.body.code, 'REEL_SCHEDULED');
+        assert.equal(reject.body.error, 'This reel is scheduled: delete its post in Posts instead.');
+    });
+
+    it('a draft that is scheduled is DRAFT_SCHEDULED when it is edited', async () => {
+        routes.unshift([/^SELECT \* FROM carousel_drafts WHERE id = \$1/, () => ({
+            rows: [{ id: DRAFT, creator_id: TENANT_A, status: 'scheduled', input: { lessonIds: [] }, carousel: null, shots: {}, campaign: null, updated_at: new Date() }],
+        })]);
+        const res = await call('patch', '/drafts/:id', { params: { id: DRAFT }, body: { carousel: {} } });
+        assert.equal(res.statusCode, 409);
+        assert.equal(res.body.code, 'DRAFT_SCHEDULED');
+        assert.equal(res.body.error, 'This draft is scheduled, so it can no longer be changed. Unschedule it first to edit it.');
+    });
+
+    it('a refusal nobody has coded yet is still a plain { error }: the dashboard falls back to the sentence', async () => {
+        const res = await call('post', '/monteur/clips/:id/rerender', { params: { id: 'nope' } });
+        assert.equal(res.body.code, undefined);
+        assert.equal(res.body.params, undefined);
     });
 });
