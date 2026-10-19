@@ -85,6 +85,11 @@ export interface CampaignRow {
      */
     match_mode: KeywordMatchMode;
     is_active: boolean;
+    /**
+     * v45. When the owner archived the campaign, or NULL. An archived campaign never matches a comment and is listed under the Archived
+     * filter. Separate from `is_active` (paused): pausing is the reversible everyday switch, archiving is "put it away".
+     */
+    archived_at: Timestamptz | null;
     created_at: Timestamptz;
 }
 
@@ -153,6 +158,11 @@ export interface ConversationRow {
     source_campaign_id: string | null;
     /** v42. The A/B wording arm (A, B or C) the sales turn assigned: once, for good. NULL: never assigned. */
     sales_variant: string | null;
+    /**
+     * v45. When the owner pressed "Mark handled", or NULL. A handled thread is left out of To do and the attention counts until a new
+     * inbound message is stored, which clears it. NOT `MessageRow.handled_at` (v14): that marks a pipeline outcome on one inbound message.
+     */
+    handled_at: Timestamptz | null;
 }
 
 /** v26. `conversations.platform`. */
@@ -255,6 +265,11 @@ export interface ScheduledPostRow {
     platform_options: TikTokPostOptions | null;
     /** v22. Instagram reach levers; NULL when none were chosen. See `MetaPostOptions`. */
     meta_options: MetaPostOptions | null;
+    /**
+     * v45. When the owner archived the post, or NULL. An archived post is excluded from "Needs attention" and the attention summary
+     * (`src/services/attention.ts`); the publish sweep skipping it is a later change. Not a delete: the row and its media stay.
+     */
+    archived_at: Timestamptz | null;
     created_at: Timestamptz;
 }
 
