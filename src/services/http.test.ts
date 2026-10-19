@@ -167,3 +167,17 @@ describe('isPermanentMetaError', () => {
         assert.equal(isPermanentMetaError({ response: { data: { error: { code: '190' } } } }), false);
     });
 });
+
+describe('PERMANENT_CODES stays Instagram-only', () => {
+    // The set is not exported, so the pin is behavioural: sweep every code Meta could plausibly return and require
+    // `isPermanentMetaError` to hold for exactly {190, 200, 10903}. WhatsApp's own permanent codes (131047, 131026,
+    // 131050, ...) live in src/services/whatsappErrors.ts; adding one here would change how every Instagram send retries
+    // and hands off (WhatsApp task T010).
+    it('is still exactly 190, 200 and 10903', () => {
+        const permanent: number[] = [];
+        for (let code = 0; code <= 200000; code++) {
+            if (isPermanentMetaError(metaError(code))) permanent.push(code);
+        }
+        assert.deepEqual(permanent, [190, 200, 10903]);
+    });
+});
