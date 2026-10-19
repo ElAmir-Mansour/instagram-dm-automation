@@ -112,6 +112,11 @@ ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_media_upload_id_fkey;
 ALTER TABLE messages ADD CONSTRAINT messages_media_upload_id_fkey
     FOREIGN KEY (media_upload_id) REFERENCES media_uploads(id) ON DELETE SET NULL;
 
+-- The SET NULL above looks messages up by media_upload_id for every upload the retention sweep deletes: without an index that is one scan of
+-- `messages` per deleted upload. Partial, because almost every row has no media.
+CREATE INDEX IF NOT EXISTS idx_messages_media_upload
+    ON messages (media_upload_id) WHERE media_upload_id IS NOT NULL;
+
 -- ─── 6. contact_consents ─────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS contact_consents (

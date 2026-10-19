@@ -1059,6 +1059,10 @@ describe('migration v50: whatsapp (channel CHECKs, contact and delivery columns,
         assert.doesNotMatch(sql, /CREATE UNIQUE INDEX/, 'many rows per contact; and a UNIQUE index named like an old one would silently no-op (v15)');
     });
 
+    it('indexes messages.media_upload_id (partial, non-null only), so the FK\'s SET NULL does not scan messages for every upload the retention sweep deletes', () => {
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_messages_media_upload ON messages \(media_upload_id\) WHERE media_upload_id IS NOT NULL;/);
+    });
+
     it('keeps the usage ledger one row per bucket: a composite primary key, and counters that start at zero', () => {
         const table = /CREATE TABLE IF NOT EXISTS channel_usage \(([^;]*)\);/.exec(sql)![1]!;
         assert.match(table, /PRIMARY KEY \(creator_id, platform, external_account_id, period, category, pricing_type, market\)/);
