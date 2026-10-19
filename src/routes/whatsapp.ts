@@ -28,6 +28,7 @@ import { isMissingSchema } from '../services/health.js';
 import { MetaApiError } from '../services/instagram.js';
 import { fetchDebugToken } from '../services/tokenHealth.js';
 import { getPhoneNumberHealth, inspectWhatsAppToken, scrubToken, subscribeApp, unsubscribeApp } from '../services/whatsapp.js';
+import { periodOf, periodUsage, projectMonthEnd } from '../services/channelUsage.js';
 import {
     DEFAULT_WHATSAPP_SETTINGS, FREE_REPLIES_PER_MONTH, getAccessToken, getConnection, getConnectionByPhoneNumberId, isAlertThreshold, isAuthRefusal,
     refreshHealth, revokeConnection, saveConnection, updateSettings, WhatsAppNotConnectedError, WhatsAppNumberInUseError,
@@ -47,16 +48,47 @@ const MIGRATION_HINT = 'The database is missing migration v50 (src/config/migrat
 
 // ─── The answer ─────────────────────────────────────────────────────────────────────────
 
-/** The free-replies meter. TODO(W3 channelUsage): `free_used`, `billable` and the two costs come from the `channel_usage` ledger; until that exists they are zero. */
-function usagePlaceholder(now: Date = new Date()) {
+/** The meter before there is anything to read: no live connection, or a ledger that could not be read (`unavailable`). */
+function emptyUsage(now: Date, unavailable = false) {
     return {
-        period: `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`,
+        period: periodOf(now),
         free_used: 0,
         free_limit: FREE_REPLIES_PER_MONTH,
         billable: 0,
         est_cost_usd: 0,
         projected_cost_usd: 0,
+        ...(unavailable ? { unavailable: true } : {}),
     };
+}
+
+/**
+ * The free-replies meter, from the `channel_usage` ledger for the current UTC month (channelUsage.ts; the period boundary is UTC until the account's
+ * timezone is read, TODO(M12) there).
+ *
+ *   free_used           delivered service messages, capped at the 1,000 free ones: past that they are billable, and `billable` says how many
+ *   billable            delivered messages Meta marked billable, any category
+ *   est_cost_usd        what those cost so far at the rate table's rates (an estimate: Meta's invoice is the truth)
+ *   projected_cost_usd  the month's estimate if the rest of it looks like the part that has passed
+ *
+ * A ledger that cannot be read does not fail the card (the connection and the agent are still true): it says `unavailable: true`, with zeros,
+ * and the log says why. A tenant with no live connection has no number to count.
+ */
+async function usageOf(creatorId: string, connection: WhatsAppConnection | null, now: Date = new Date()) {
+    if (!connection || connection.status === 'revoked') return emptyUsage(now);
+    try {
+        const used = await periodUsage(creatorId, connection.phoneNumberId, periodOf(now));
+        return {
+            period: used.period,
+            free_used: Math.min(used.serviceDelivered, FREE_REPLIES_PER_MONTH),
+            free_limit: FREE_REPLIES_PER_MONTH,
+            billable: used.billable,
+            est_cost_usd: used.estCostUsd,
+            projected_cost_usd: projectMonthEnd(used.estCostUsd, now),
+        };
+    } catch (err) {
+        log('warn', 'whatsapp.usage_unreadable', { creator_id: creatorId, ...describeError(err) });
+        return emptyUsage(now, true);
+    }
 }
 
 /**
@@ -73,7 +105,7 @@ export function goLiveStatus(connection: WhatsAppConnection | null): { ready: bo
 }
 
 /** The Settings card's state (the contract's `GET /api/whatsapp/connection`). Never a token: the connection type has no such field. */
-function view(connection: WhatsAppConnection | null, agent: WhatsAppAgentSettings) {
+function view(connection: WhatsAppConnection | null, agent: WhatsAppAgentSettings, usage: Awaited<ReturnType<typeof usageOf>>) {
     const live = connection && connection.status !== 'revoked' ? connection : null;
     const profile = live?.profile;
     return {
@@ -92,7 +124,7 @@ function view(connection: WhatsAppConnection | null, agent: WhatsAppAgentSetting
         token_expires_at: live?.accessExpiresAt ?? null,
         mode: agent.mode,
         test_senders: agent.testSenders,
-        usage: usagePlaceholder(),
+        usage,
         allow_billable: live?.settings.allow_billable ?? false,
         free_tier_alert_at: live?.settings.free_tier_alert_at ?? DEFAULT_WHATSAPP_SETTINGS.free_tier_alert_at,
         go_live: goLiveStatus(live),
@@ -104,7 +136,7 @@ async function currentView(creatorId: string, connection?: WhatsAppConnection | 
         connection === undefined ? getConnection(creatorId) : Promise.resolve(connection),
         readWhatsAppSettings(creatorId),
     ]);
-    return view(conn, agent);
+    return view(conn, agent, await usageOf(creatorId, conn));
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
 import { appSecrets, verifyMetaSignature } from './utils/signature.js';
 import { isDiagnosticProbe } from './utils/probe.js';
-import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
+import { enqueueWebhookBody, isAcceptedWebhookObject, processWebhookBody } from './webhook/router.js';
 import { acknowledgeThenRun } from './webhook/ack.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
@@ -381,7 +381,7 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         return;
     }
 
-    // 2. Accept both 'instagram' and 'page' object types
+    // 2. Accept the 'instagram', 'page' and 'whatsapp_business_account' object types
     // Page-level subscriptions (/{page-id}/subscribed_apps) send object:'page'
     // App-level subscriptions (/{app-id}/subscriptions) send object:'instagram'
     const body = req.body;
@@ -395,8 +395,8 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         return;
     }
 
-    const isInstagramEvent = body.object === 'instagram' || body.object === 'page';
-    if (!isInstagramEvent) {
+    // `whatsapp_business_account` is the third object: WhatsApp Cloud API events arrive on this same URL, signed with the same app secret.
+    if (!isAcceptedWebhookObject(body.object)) {
         log('info', 'webhook.unrecognised_object', { object: body.object });
         res.sendStatus(200);
         return;

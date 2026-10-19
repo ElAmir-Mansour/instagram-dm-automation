@@ -17,7 +17,7 @@
  * Reads never select the token columns except `getAccessToken`, so the typed `WhatsAppConnection` the rest of the app sees cannot carry one
  * even by mistake. One WhatsApp number per tenant (`UNIQUE (creator_id, platform)`): reconnecting replaces it in place.
  *
- * `getConnectionByPhoneNumberId` is the tenant lookup for the webhook (a later phase): it answers for any row that is not `revoked`,
+ * `getConnectionByPhoneNumberId` is the tenant lookup for the webhook (`getCreatorByWhatsAppNumber`): it answers for any row that is not `revoked`,
  * because an `invalid` connection must still STORE what arrives — Meta never redelivers it.
  */
 import { decryptSecret, encryptSecret } from '../config/crypto.js';

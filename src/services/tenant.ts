@@ -16,6 +16,8 @@ import { queryOne, queryRows } from '../db/query.js';
 import type { CreatorRow, UserRow } from '../db/rows.js';
 import { decryptSecret } from '../config/crypto.js';
 import { log } from '../utils/log.js';
+import { getConnectionByPhoneNumberId } from './whatsappConnections.js';
+import type { ConnectionStatus } from '../db/rows.js';
 
 /**
  * A creator row, as the column-list API below returns it.
@@ -176,6 +178,46 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
     // Decrypted here rather than at the two webhook call sites, so the comment and DM
     // pipelines keep working unchanged the moment a token is first written encrypted.
     return withDecryptedToken<ConnectedCreator>(row ?? undefined);
+}
+
+/**
+ * The tenant a WhatsApp webhook belongs to: who owns this `phone_number_id`, and the state of the connection that says so.
+ *
+ * `creator` is deliberately thin (an id): a WhatsApp number carries its own token in `platform_connections`, and the tenant's Instagram token
+ * has no business on this path, so nothing here can hand it to a Graph call by mistake.
+ */
+export interface WhatsAppTenant {
+    creator: { id: string };
+    /** `active` or `invalid` (a `revoked` connection is never returned). An `invalid` one still STORES what arrives. */
+    connectionStatus: ConnectionStatus;
+}
+
+/**
+ * Resolve the tenant that owns an incoming WhatsApp webhook, by the number it was addressed to (`value.metadata.phone_number_id`).
+ *
+ * Any connection that is not `revoked` resolves, `invalid` included: Meta answers a 200 once and never redelivers, so a message that arrives
+ * while the token is dead (or a payment method is missing) can only be stored now or lost. What an `invalid` connection may not do is SEND,
+ * and that is the sender's check, not this one's (docs/specs/001-whatsapp-agent review H10).
+ *
+ * Like `getCreatorByPageId`, an inactive creator is not routable: an operator who switched a tenant off has switched its webhooks off too.
+ * Null for no connection, a revoked one, an inactive creator, or no id. The caller logs which (`wa.no_creator`); the inactive case also says
+ * so itself, because "no connection" and "switched off" call for different fixes.
+ */
+export async function getCreatorByWhatsAppNumber(phoneNumberId: string | null | undefined): Promise<WhatsAppTenant | null> {
+    if (!phoneNumberId) return null;
+
+    const connection = await getConnectionByPhoneNumberId(phoneNumberId);
+    if (!connection) return null;
+
+    const creator = await queryOne<Pick<CreatorRow, 'id'>>(
+        `SELECT id FROM creators WHERE id = $1 AND is_active = true`,
+        [connection.creatorId]
+    );
+    if (!creator) {
+        log('warn', 'wa.creator_inactive', { phone_number_id: phoneNumberId, creator_id: connection.creatorId });
+        return null;
+    }
+    return { creator: { id: creator.id }, connectionStatus: connection.status };
 }
 
 /** Drop the cached id — call after any write that could change which creator is active. */

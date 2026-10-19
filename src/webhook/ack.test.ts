@@ -28,6 +28,7 @@ import type { JobQueue } from '../jobs/types.js';
 import { setLogSink } from '../utils/log.js';
 import { setWaitUntil } from '../utils/waitUntil.js';
 import { acknowledgeThenRun } from './ack.js';
+import { isAcceptedWebhookObject } from './router.js';
 
 const REQUEST_CONTEXT = Symbol.for('@vercel/request-context');
 
@@ -277,5 +278,24 @@ describe('index.ts routes the webhook through it', () => {
         // The one remaining `res.sendStatus(200)` is the early return for an object this app ignores.
         assert.equal((handler.match(/res\.sendStatus\(200\)/g) ?? []).length, 1);
         assert.match(handler, /webhook\.unrecognised_object[\s\S]{0,80}res\.sendStatus\(200\)/);
+    });
+
+    it('lets a WhatsApp Business Account body through the object gate, through the one function that decides it', () => {
+        // The gate used to be an inline `object === 'instagram' || object === 'page'`; a copy of the list in two places is how WhatsApp events
+        // would be acknowledged with a 200 and dropped as "unrecognised" while the router happily handled them.
+        assert.match(handler, /if \(!isAcceptedWebhookObject\(body\.object\)\)/);
+        assert.doesNotMatch(handler, /body\.object === '/, 'no inline copy of the accepted objects');
+        assert.equal(isAcceptedWebhookObject('whatsapp_business_account'), true);
+        assert.equal(isAcceptedWebhookObject('instagram'), true);
+        assert.equal(isAcceptedWebhookObject('page'), true);
+        // Anything else is still a logged 200, before any work: the same early return as before.
+        assert.equal(isAcceptedWebhookObject('whatsapp'), false);
+        assert.equal(isAcceptedWebhookObject(undefined), false);
+    });
+
+    it('verifies the signature before it looks at the object, so a WhatsApp body needs the same app secret as any other', () => {
+        const signature = handler.indexOf('verifyMetaSignature');
+        const gate = handler.indexOf('isAcceptedWebhookObject');
+        assert.ok(signature > 0 && gate > signature, 'the HMAC check is first');
     });
 });
