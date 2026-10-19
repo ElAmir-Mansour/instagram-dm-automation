@@ -1302,6 +1302,7 @@ const App = {
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
+        this.revealActiveNavItem();
         this.moveNavIndicator(false);
     },
 
@@ -1379,9 +1380,7 @@ const App = {
      * is a marker pointing at nothing), otherwise as the viewer left it.
      */
     syncAdminGroup(page) {
-        const entry = this.entryOf(page);
-        const reads = (entry && entry.navAs) || page;
-        this.setAdminGroup(this.isAdminPage(page) || this.isAdminPage(reads) || this.readAdminGroupPref());
+        this.setAdminGroup(this.isAdminPage(page) || this.readAdminGroupPref());
     },
 
     /** The heading button: flip the group, remember the choice, and re-measure (the marker may be in the group that just closed). */
@@ -1751,6 +1750,22 @@ const App = {
     },
 
     /**
+     * Scroll the sidebar's list just far enough to show the current item. A window too short for the whole sidebar scrolls the list, and
+     * an admin page opens the Administration group below the fold: the item that says where you are must never be out of sight. Nothing
+     * moves when it is already visible, and the marker is measured after this (its position is in the list's own coordinates, so it does
+     * not depend on how far the list is scrolled).
+     */
+    revealActiveNavItem() {
+        const nav = document.getElementById('sidebar-nav');
+        const item = nav && nav.querySelector('.nav-item.active');
+        if (!nav || !item || item.classList.contains('hidden') || !item.offsetParent) return;
+        const navRect = nav.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        if (itemRect.top < navRect.top) nav.scrollTop -= navRect.top - itemRect.top;
+        else if (itemRect.bottom > navRect.bottom) nav.scrollTop += itemRect.bottom - navRect.bottom;
+    },
+
+    /**
      * Put the active marker over the active item.
      *
      * `translateY` and `height` only — no horizontal component, so the same
@@ -1775,7 +1790,13 @@ const App = {
 
         const item = host.querySelector('.nav-item.active');
         if (!item || item.classList.contains('hidden') || !item.offsetParent) {
+            // Gone at once, and parked at the top of its scope: a marker that is not shown must not keep stretching the list's
+            // scrollable height with the position it last had (a transformed box still counts as overflow).
+            indicator.classList.add('no-transition');
             indicator.classList.remove('is-visible');
+            indicator.style.transform = 'translateY(0)';
+            void indicator.offsetHeight;
+            indicator.classList.remove('no-transition');
             return;
         }
 
@@ -1783,11 +1804,13 @@ const App = {
         const itemRect = item.getBoundingClientRect();
         const y = Math.round(itemRect.top - hostRect.top + host.scrollTop);
 
-        if (!animate) indicator.classList.add('no-transition');
+        // A marker that was not showing has nowhere to slide from: it appears where it belongs, as it does on a re-measurement.
+        const instant = !animate || !indicator.classList.contains('is-visible');
+        if (instant) indicator.classList.add('no-transition');
         indicator.style.transform = `translateY(${y}px)`;
         indicator.style.blockSize = `${Math.round(itemRect.height)}px`;
         indicator.classList.add('is-visible');
-        if (!animate) {
+        if (instant) {
             // Force the value to be adopted before transitions come back, or
             // the next move would animate from the old position.
             void indicator.offsetHeight;
@@ -1934,6 +1957,7 @@ const App = {
             this.currentPage = null;
             this.markNavItem(page);
             this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
             if (typeof HealthStrip !== 'undefined') HealthStrip.hide();
             this.renderSetup();
@@ -1989,8 +2013,10 @@ const App = {
         // transition holds the frame while the callback runs.
         await Motion.transition(() => {
             this.markNavItem(page);
-            // The admin group opens for an admin page BEFORE the marker is measured: it is placed over an item that has a box.
+            // The admin group opens for an admin page BEFORE the marker is measured: it is placed over an item that has a box. And the
+            // list is scrolled to show that item first, so a window too short for the whole sidebar never hides where you are.
             this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
 
             document.getElementById('page-title').textContent = this.title(page);

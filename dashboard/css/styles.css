@@ -305,7 +305,10 @@ bdi { unicode-bidi: isolate; }
     transition: transform var(--motion-slow) var(--ease-standard);
 }
 .sidebar-header {
-    padding: var(--space-5) var(--space-4);
+    /* As tall as the page header, so the two bottom borders are one line; the brand link keeps its 44px target inside it. */
+    min-block-size: var(--header-height);
+    padding-inline: var(--space-4);
+    display: flex; align-items: center;
     border-block-end: 1px solid var(--border-subtle);
 }
 /* The way home (SH-27): a link that looks like the brand it always was. No rule here may touch the mark's paint (design-md.test.ts). */
@@ -326,7 +329,7 @@ bdi { unicode-bidi: isolate; }
 
 .sidebar-nav {
     flex: 1;
-    padding: var(--space-3) var(--space-2);
+    padding: var(--space-2);
     display: flex; flex-direction: column; gap: 2px;
     overflow-y: auto;
     /* Containing block for the indicator below. */
@@ -398,7 +401,7 @@ bdi { unicode-bidi: isolate; }
 .nav-logout:hover { color: var(--danger-text); background: var(--danger-soft); }
 /* The account area (SH-27): who is signed in, then your own password and sign-out. */
 .nav-account {
-    margin-block-start: var(--space-2); padding-block-start: var(--space-2);
+    margin-block-start: var(--space-1); padding-block-start: var(--space-1);
     border-block-start: 1px solid var(--border-subtle);
     display: flex; flex-direction: column; gap: 2px;
 }
@@ -3060,7 +3063,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .nav-group { display: flex; flex-direction: column; }
 .nav-group-label {
     display: block;
-    padding: var(--space-3) var(--space-3) var(--space-1);
+    padding: var(--space-2) var(--space-3) var(--space-1);
     font-size: var(--fs-100);
     font-weight: var(--fw-semibold);
     color: var(--text-muted);
@@ -3069,7 +3072,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .nav-list[hidden] { display: none; }
 
 /* Administration: ONE collapsible group, a heading that is a real button. The dot says the platform has a problem and is there only then. */
-.nav-group--admin { margin-block-start: var(--space-2); padding-block-start: var(--space-1); border-block-start: 1px solid var(--border-subtle); }
+.nav-group--admin { margin-block-start: var(--space-1); padding-block-start: var(--space-1); border-block-start: 1px solid var(--border-subtle); }
 .nav-group-toggle {
     display: flex; align-items: center; gap: var(--space-2);
     inline-size: 100%; min-block-size: var(--tap-target);
@@ -3123,7 +3126,10 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
         box-shadow: var(--elev-3);
     }
     html[dir='rtl'] .sidebar { transform: translateX(100%); }
-    .sidebar.open { transform: none; }
+    /* The RTL selector above is more specific than `.sidebar.open` alone, so in Arabic the open drawer stayed off-screen: the open
+       state has to be as specific as the closed one it undoes. */
+    .sidebar.open,
+    html[dir='rtl'] .sidebar.open { transform: none; }
     /* Just below the drawer, above page content. Created and toggled by app.js —
        the drawer had no scrim, no Escape-to-close and no click-outside-to-close, unlike
        every other overlay in the app (the modal already has all three). */

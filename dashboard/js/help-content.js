@@ -286,7 +286,7 @@ const HelpContent = {
                             { ol: [
                                 'جنب **رمز الوصول** مكتوب **صالح**، وما في تنبيه صلاحيات ناقصة.',
                                 'من حساب ثاني، علّق بكلمة حملة مفعّلة، وتأكد أن الرسالة وصلت.',
-                                'افتح **سجل النشاط**: كل تعليق طابق حملة يظهر هنا مع حالته.',
+                                'افتح **النتائج** ثم **السجل**: كل تعليق طابق حملة يظهر هنا مع حالته.',
                             ] },
                             { note: 'التعليق اللي ما يطابق أي حملة ما يُسجَّل أصلاً. يعني غيابه من السجل مو دليل أن الربط خربان؛ تأكد من الكلمة أول.' },
                         ],
@@ -294,7 +294,7 @@ const HelpContent = {
                             { ol: [
                                 'The **Access token** reads **Valid**, with no missing-permissions warning.',
                                 'From another account, comment the keyword of an active campaign and check the DM arrives.',
-                                'Open the **Activity Log**: every comment that matched a campaign is listed with its status.',
+                                'Open **Results**, then **Log**: every comment that matched a campaign is listed with its status.',
                             ] },
                             { note: 'A comment that matches no campaign is not recorded at all, so its absence from the log does not mean the connection is broken. Check the keyword first.' },
                         ],

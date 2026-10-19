@@ -254,7 +254,7 @@ describe('Administration group: closed by default, open for an admin page, remem
         assert.equal(s.isOpen(), false);
     });
 
-    it('opens for every administration page, and for a page that borrows an admin item (a tenant’s own page)', () => {
+    it('opens for every administration page, a tenant’s own page (which reads as Tenants) included', () => {
         const s = adminShell();
         for (const page of ['operations', 'tenants', 'tenant_detail', 'users', 'jobs', 'audit', 'erasure']) {
             s.App.syncAdminGroup('overview');
@@ -592,6 +592,26 @@ describe('mobile drawer: nobody reaches what is not on screen (SH-06)', () => {
         assert.equal(s.sidebar.hasAttribute('inert'), true, 'narrowed again: closed and inert');
     });
 
+    it('opens in Arabic too: the open rule is as specific as the right-to-left closed one it undoes', () => {
+        // `html[dir='rtl'] .sidebar { transform: translateX(100%) }` (0,2,1) beat `.sidebar.open { transform: none }` (0,2,0), so in Arabic
+        // the hamburger set aria-expanded and the open class and the drawer never moved. Found by opening it in a browser, not by a test.
+        const css = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+        const specificity = (selector: string): number[] => {
+            const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+            const classes = (selector.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) ?? []).length;
+            const bare = selector.replace(/\[[^\]]*\]|\.[\w-]+|#[\w-]+|:[\w-]+/g, ' ');
+            return [ids, classes, (bare.match(/\b[a-z][\w-]*\b/gi) ?? []).length];
+        };
+        const beats = (a: number[], b: number[]): boolean => (a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!) >= 0;
+        const closedRtl = specificity("html[dir='rtl'] .sidebar");
+        const openRule = /([^{}]*\.sidebar\.open[^{}]*)\{\s*transform:\s*none;\s*\}/.exec(css);
+        assert.ok(openRule, 'the open rule is there');
+        const selectors = openRule[1]!.split(',').map((x) => x.trim());
+        const rtlOpen = selectors.find((x) => /^html\[dir='rtl'\] \.sidebar\.open$/.test(x));
+        assert.ok(rtlOpen, 'it names the right-to-left case');
+        assert.ok(beats(specificity(rtlOpen), closedRtl), 'and is at least as specific as the closed one, so in Arabic the open drawer wins');
+    });
+
     it('keeps the 860px breakpoint the stylesheet uses', () => {
         const { App } = rig();
         assert.equal(App.DRAWER_QUERY, '(max-width: 860px)');
@@ -668,6 +688,31 @@ describe('the marker lands on the active item, in both directions, with groups a
         assert.doesNotThrow(() => App.placeIndicator(null, marker, false), 'no scope, no marker: nothing to do');
     });
 
+    it('parks a hidden marker at the top of its scope at once, so it never stretches the list with the position it last had', () => {
+        const { App } = rig();
+        const marker = new FakeEl('nav-indicator');
+        App.placeIndicator(host(0, 0, link(756, 46)), marker, false);
+        assert.equal(marker.style.transform, 'translateY(756px)');
+        // The group closes: the item has no box. A transformed box still counts as scrollable overflow, so the marker goes home.
+        App.placeIndicator(host(0, 0, link(756, 46, () => false)), marker, true);
+        assert.equal(marker.classes.has('is-visible'), false);
+        assert.equal(marker.style.transform, 'translateY(0)');
+        assert.equal(marker.classes.has('no-transition'), false, 'transitions are back for the next time');
+    });
+
+    it('shows a marker that was hidden where it belongs, without sliding in from where it was', () => {
+        const { App } = rig();
+        const marker = new FakeEl('nav-indicator');
+        const adopted: boolean[] = [];
+        const add = marker.classList.add;
+        marker.classList.add = (...names: string[]): void => { if (names.includes('no-transition')) adopted.push(true); add(...names); };
+        App.placeIndicator(host(0, 0, link(300)), marker, true);
+        assert.deepEqual(adopted, [true], 'a navigation asked for a slide, but there is nothing to slide from');
+        adopted.length = 0;
+        App.placeIndicator(host(0, 0, link(400)), marker, true);
+        assert.deepEqual(adopted, [], 'and once it is showing, it slides');
+    });
+
     it('keeps one marker per scope: the list’s for the groups, the foot’s for Settings and Help', () => {
         const r = rig();
         const listMarker = r.h.el('nav-indicator');
@@ -696,6 +741,39 @@ describe('the marker lands on the active item, in both directions, with groups a
         assert.equal(/view-transition-name/.test(rule('.nav-indicator')), false);
         assert.match(rule('.nav-indicator.is-visible'), /view-transition-name:\s*nav-active/);
         assert.match(rule('.nav-indicator--foot'), /inset-inline:\s*0/);
+    });
+});
+
+describe('the list is scrolled to show the current item (a window too short for the whole sidebar)', () => {
+    /** The scrolling list, and an item at `top`..`bottom` in the viewport; the list is `navTop`..`navBottom`. */
+    const scene = (navTop: number, navBottom: number, scrollTop: number, item: Json | null) => {
+        const r = rig();
+        const nav = Object.assign(r.h.el('sidebar-nav'), { scrollTop, getBoundingClientRect: () => ({ top: navTop, bottom: navBottom }), querySelector: (sel: string) => (sel === '.nav-item.active' ? item : null) });
+        return { r, nav };
+    };
+    const at = (top: number, bottom: number, visible = true): Json => ({ classList: { contains: () => false }, offsetParent: visible ? {} : null, getBoundingClientRect: () => ({ top, bottom }) });
+
+    it('scrolls down by what is hidden below, and up by what is hidden above', () => {
+        const below = scene(80, 680, 0, at(650, 700));
+        below.r.App.revealActiveNavItem();
+        assert.equal(below.nav.scrollTop, 20, 'the item’s bottom was 20px under the list’s');
+        const above = scene(80, 680, 200, at(50, 94));
+        above.r.App.revealActiveNavItem();
+        assert.equal(above.nav.scrollTop, 170, 'the item’s top was 30px over the list’s');
+    });
+
+    it('leaves the list alone when the item is already in view, is not drawn, or there is none', () => {
+        for (const item of [at(100, 144), at(900, 944, false), null]) {
+            const s = scene(80, 680, 40, item);
+            s.r.App.revealActiveNavItem();
+            assert.equal(s.nav.scrollTop, 40);
+        }
+    });
+
+    it('runs before the marker is measured, on the first paint and on every navigation', () => {
+        const src = read('dashboard/js/app.js');
+        assert.ok(src.includes('this.syncAdminGroup(page);\n            this.revealActiveNavItem();\n            this.moveNavIndicator(true);'), 'navigate, in the transition');
+        assert.ok(src.includes('this.revealActiveNavItem();\n        this.moveNavIndicator(false);'), 'applyChrome');
     });
 });
 

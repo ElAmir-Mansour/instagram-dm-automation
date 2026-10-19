@@ -367,7 +367,14 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - Items 44px, 14px medium, `--text-default`.
 - Hover: glass-hover.
 - Active: `.nav-indicator` is `--accent-soft` plus a 2px inline-start `--accent` bar; the label turns
-  `--text-strong`.
+  `--text-strong`. The foot (Settings, Help) has a marker of its own, because it is outside the scrolling list.
+- Grouped by the creator's job: Today · Replies · Content · Results. Each group is a `<ul role="list">` named
+  (`aria-labelledby`) by a 12px semibold `--text-muted` heading, never letter-spaced small caps. A page with no item
+  of its own (Reels, Infographics, the Log) reads as the item it belongs to (`navAs`).
+- Administration is one collapsible group, a `<button aria-expanded>` heading, closed by default and open for an admin
+  page. Its dot is `--danger` and means "the platform has a problem"; it is hidden at zero.
+- A count beside an item (people waiting) is `--accent` with `--text-on-accent`: work to do is not a failure. Red is
+  for what broke.
 
 ### Nav, public
 - Sticky `.topbar`: `--surface-raised` with `blur(var(--blur-chrome))`. This is the only blur on public pages.
