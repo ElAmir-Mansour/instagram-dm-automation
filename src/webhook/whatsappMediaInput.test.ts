@@ -23,7 +23,9 @@ import type { SaveInboundMediaResult } from '../services/whatsappMedia.js';
 import { setLogSink } from '../utils/log.js';
 import { ATTACHMENT_ACK_TYPE, WORDLESS_MESSAGE_TYPES } from './attachments.js';
 import { CLAIM_ACK } from './attachmentAck.js';
-import { reasonOfSend, readInboundMedia, saveInboundFile, type MediaDeps, type ReadMediaInput, type SaveFileInput } from './whatsappMediaInput.js';
+import {
+    acknowledgeInbound, reasonOfSend, readInboundMedia, saveInboundFile, WHATSAPP_WORDLESS_MESSAGE_TYPES, type AcknowledgeInput, type MediaDeps, type ReadMediaInput, type SaveFileInput,
+} from './whatsappMediaInput.js';
 import type { WaMedia } from './whatsapp.js';
 
 const CREATOR = '11111111-1111-4111-8111-111111111111';
@@ -224,7 +226,7 @@ describe('readInboundMedia: a voice note', () => {
         const claim = sql('INSERT INTO messages')[0]!;
         assert.deepEqual(claim.params.slice(0, 4), ['conv-1', CREATOR, ATTACHMENT_ACK_TYPE, LINE]);
         assert.deepEqual(JSON.parse(claim.params[5]), { engine: 'rule', reply: ATTACHMENT_ACK_TYPE, kind: 'audio', channel: 'whatsapp' });
-        assert.deepEqual([claim.params[6], claim.params[7]], ['msg-1', WORDLESS_MESSAGE_TYPES]);
+        assert.deepEqual([claim.params[6], claim.params[7]], ['msg-1', WHATSAPP_WORDLESS_MESSAGE_TYPES]);
         assert.deepEqual(sent, [{ creatorId: CREATOR, conversationId: 'conv-1', kind: 'agent', record: false, body: { text: LINE } }]);
         assert.deepEqual(sql('UPDATE messages SET meta_message_id')[0]!.params, ['ack-1', 'wamid.OUT1']);
     });
@@ -309,5 +311,78 @@ describe('the owner\'s switch and the automated-service line', () => {
         await readInboundMedia(deps())(readInput({ saved: null, aiDisclosedAt: new Date() }));
         assert.equal(sent[0]!.body.text, LINE);
         assert.equal(sql('UPDATE conversations SET ai_disclosed_at').length, 0);
+    });
+});
+
+// ─── A sticker, a location, a contact card ───────────────────────────────────────────────────
+
+const ackInput = (over: Partial<AcknowledgeInput> = {}): AcknowledgeInput => ({ creatorId: CREATOR, conversationId: 'conv-1', messageId: 'msg-1', what: 'sticker', aiDisclosedAt: new Date(), ...over });
+
+describe('acknowledgeInbound: the one line for a sticker, a location or a contact card', () => {
+    for (const what of ['sticker', 'location', 'contacts'] as const) {
+        it(`${what}: the kit's own line, claimed first and sent after through the WhatsApp transport, with its wamid attached; NULL on the row because it went out`, async () => {
+            const out = await acknowledgeInbound(deps())(ackInput({ what }));
+            assert.equal(out, null, 'the line went out: the customer was answered');
+            assert.deepEqual(order, ['claim', 'send']);
+            const claim = sql('INSERT INTO messages')[0]!;
+            assert.equal(claim.sql, norm(CLAIM_ACK), 'Instagram\'s own statement: once per burst, never over words, never twice in a day');
+            assert.deepEqual(claim.params.slice(0, 4), ['conv-1', CREATOR, ATTACHMENT_ACK_TYPE, LINE]);
+            assert.deepEqual(JSON.parse(claim.params[5]), { engine: 'rule', reply: ATTACHMENT_ACK_TYPE, kind: what, channel: 'whatsapp' });
+            assert.deepEqual(sent, [{ creatorId: CREATOR, conversationId: 'conv-1', kind: 'agent', record: false, body: { text: LINE } }]);
+            assert.deepEqual(sql('UPDATE messages SET meta_message_id')[0]!.params, ['ack-1', 'wamid.OUT1']);
+            assert.deepEqual([saved.length, transcribed.length], [0, 0], 'nothing is downloaded and nothing is transcribed');
+        });
+    }
+
+    it('counts a location and a contact card as word-less in the claim, so a sticker and a location in one burst are not "words being answered" and a second card the same day is not answered again', async () => {
+        await acknowledgeInbound(deps())(ackInput({ what: 'location' }));
+        const types = sql('INSERT INTO messages')[0]!.params[7] as string[];
+        assert.deepEqual([...types], [...WORDLESS_MESSAGE_TYPES, 'location', 'contacts']);
+        assert.ok(types.includes('sticker') && types.includes('location') && types.includes('contacts'));
+        assert.ok(!types.includes('text'), 'typed words are still words');
+    });
+
+    it('says nothing when the claim is refused (a later message is waiting, words are being answered, or it asked within a day): superseded, no send', async () => {
+        claimRefused = true;
+        const out = await acknowledgeInbound(deps())(ackInput({ what: 'contacts' }));
+        assert.equal(out, 'superseded');
+        assert.equal(sent.length, 0);
+        assert.equal(logged('wa.media_ack_skipped')[0]?.kind, 'contacts');
+    });
+
+    it('an agent the owner switched off says nothing and spends nothing: no claim, no line', async () => {
+        agentOn = false;
+        assert.equal(await acknowledgeInbound(deps())(ackInput()), 'agent_off');
+        assert.deepEqual([sent.length, sql('INSERT INTO messages').length], [0, 0]);
+    });
+
+    it('takes the claim back and says why on the row when the line cannot be sent: a closed window, a billable reply nobody allowed, a refused connection, anything else', async () => {
+        const cases: Array<[Extract<WhatsAppSendResult, { ok: false }>['reason'], string]> = [
+            ['window_closed', 'window_closed'], ['billable_blocked', 'billable_blocked'], ['connection_invalid', 'connection_invalid'], ['rejected', 'failure'],
+        ];
+        for (const [reason, expected] of cases) {
+            order.length = 0;
+            sendImpl = async () => refused(reason);
+            assert.equal(await acknowledgeInbound(deps())(ackInput()), expected, reason);
+            assert.deepEqual(order, ['claim', 'send', 'unclaim']);
+        }
+    });
+
+    it('keeps the claim when the send MAY HAVE LANDED, and takes it back and throws when our own database fails before a request left', async () => {
+        sendImpl = async () => refused('send_failed', { attempted: true, mayHaveLanded: true, permanent: false });
+        assert.equal(await acknowledgeInbound(deps())(ackInput()), 'failure');
+        assert.deepEqual(order, ['claim', 'send']);
+
+        order.length = 0;
+        sendImpl = async () => { throw new Error('connection terminated unexpectedly'); };
+        await assert.rejects(acknowledgeInbound(deps())(ackInput()), /connection terminated/);
+        assert.deepEqual(order, ['claim', 'send', 'unclaim']);
+    });
+
+    it('puts the disclosure in front of the line when it is the first thing said here, and never logs what was sent', async () => {
+        await acknowledgeInbound(deps())(ackInput({ aiDisclosedAt: null }));
+        assert.ok(sent[0]!.body.text.length > LINE.length && sent[0]!.body.text.endsWith(LINE));
+        assert.equal(sql('UPDATE conversations SET ai_disclosed_at').length, 1);
+        assert.ok(!everythingLogged().includes(LINE));
     });
 });

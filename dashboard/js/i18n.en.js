@@ -812,6 +812,7 @@
     'inbox.attach.image': 'Image',
     'inbox.attach.video': 'Video',
     'inbox.attach.audio': 'Audio',
+    'inbox.voiceTranscript': 'Voice note transcript',
     'inbox.attach.file': 'File',
     'inbox.attach.sticker': 'Sticker',
     'inbox.attach.share': 'Shared post',

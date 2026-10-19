@@ -902,6 +902,7 @@
     'inbox.attach.image': 'صورة',
     'inbox.attach.video': 'فيديو',
     'inbox.attach.audio': 'مقطع صوتي',
+    'inbox.voiceTranscript': 'نص الرسالة الصوتية',
     'inbox.attach.file': 'ملف',
     'inbox.attach.sticker': 'ملصق',
     'inbox.attach.share': 'منشور مُشارَك',

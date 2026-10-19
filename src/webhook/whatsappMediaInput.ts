@@ -16,6 +16,11 @@
  *                          Instagram's own statement (`CLAIM_ACK`, `attachmentAck.ts`): once per burst, never over words they are still being answered for, never twice in a day.
  *                          Never silent, and never a model asked to answer "[photo]"
  *
+ * What is not a file and not words either (`acknowledgeInbound`, WhatsApp follow-up 2): a sticker, a location, a contact card. The agent cannot read them and has no media to save
+ * (nothing is downloaded), but the chat must not go silent on a tester, so they get the SAME kit line a photo gets, through the same claim and the same transport. Instagram says
+ * nothing for a sticker (a thumbs-up is not a question); on WhatsApp a sticker is often the whole message, so there it is answered once, like the rest. A stranger's never gets here:
+ * `whatsappInbound.ts` decides `not_test_sender` first.
+ *
  * The line for a voice note that could not be read is the SAME kit line as for a photo: it already says "photos, voice notes and clips" and "write your question", in the owner's
  * register, so there is one wording per persona and no second set of copy to keep in step with it.
  *
@@ -55,6 +60,16 @@ export interface SavedFile {
  */
 const TRANSCRIBE_LANGUAGE = 'ar';
 const ALLOW_PAID_TRANSCRIPTION = false;
+
+/** What WhatsApp sends that is neither typed words nor a file the agent reads, and is answered with the one line: a sticker, a location, a contact card (`messages.message_type`). */
+export type WordlessInbound = 'sticker' | 'location' | 'contacts';
+
+/**
+ * The `message_type`s the claim statement (`CLAIM_ACK`) treats as "no words": Instagram's list plus the two WhatsApp types that are never words. Without them a location row would
+ * read as "words still being answered" (so a sticker and a location in one burst would each skip the line, and the chat would go silent) and as "they wrote something since the
+ * last line" (so a second location would be answered again the same day).
+ */
+export const WHATSAPP_WORDLESS_MESSAGE_TYPES: readonly string[] = [...WORDLESS_MESSAGE_TYPES, 'location', 'contacts'];
 
 export interface MediaDeps {
     /** The connection's token, or a throw when there is none or Meta refused it. */
@@ -158,6 +173,17 @@ export type MediaReading =
 
 export type ReadMediaFn = (input: ReadMediaInput) => Promise<MediaReading>;
 
+/** What the one line needs to know: the thread, the inbound row it answers, and whether the thread has been told it is an automated service yet. */
+type AckTarget = Pick<ReadMediaInput, 'creatorId' | 'conversationId' | 'messageId' | 'aiDisclosedAt'>;
+
+export interface AcknowledgeInput extends AckTarget {
+    /** Which of the three it is: the log's and the row's `kind`. */
+    what: WordlessInbound;
+}
+
+/** The reason the row says: NULL when the one line went out. */
+export type AcknowledgeFn = (input: AcknowledgeInput) => Promise<NoReplyReason | null>;
+
 /** The row's reason for a line that could not be sent: the same words the agent's own sends use. */
 export function reasonOfSend(sent: Extract<WhatsAppSendResult, { ok: false }>): NoReplyReason {
     switch (sent.reason) {
@@ -189,6 +215,20 @@ export const readInboundMedia = (deps: MediaDeps = LIVE): ReadMediaFn => async (
     return acknowledge(input, deps, input.media?.kind === 'document' ? 'file' : input.media?.kind ?? 'attachment');
 };
 
+/**
+ * The one line for a sticker, a location or a contact card from a tester whom the agent may answer (`whatsappInbound.ts` has already asked who, the mode, the connection and
+ * whether a person has the thread). The owner's own switch first, as for every other line; then the kit's line through the claim and the transport of `acknowledge`: once per burst,
+ * never over words, never twice in a day, `no_reply_reason` NULL when it went out.
+ */
+export const acknowledgeInbound = (deps: MediaDeps = LIVE): AcknowledgeFn => async (input) => {
+    const logBase = { creator_id: input.creatorId, conversation_id: input.conversationId };
+    if (!(await deps.agentSpeaks(input.creatorId))) {
+        log('debug', 'wa.media_agent_off', logBase);
+        return 'agent_off';
+    }
+    return (await acknowledge(input, deps, input.what)).reason;
+};
+
 /** The words of a voice note, or why there are none. Never throws for a provider or a file: only the database can. */
 async function transcribeVoice(input: ReadMediaInput, deps: MediaDeps): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
     if (input.resumed) {
@@ -216,7 +256,7 @@ async function transcribeVoice(input: ReadMediaInput, deps: MediaDeps): Promise<
  * row, inserted only when no later message is waiting, no words are being answered and it has not asked already; a send that fails for good takes the claim back, and a send
  * that MAY have landed keeps it, so no retry says it twice.
  */
-async function acknowledge(input: ReadMediaInput, deps: MediaDeps, kind: string): Promise<MediaReading> {
+async function acknowledge(input: AckTarget, deps: MediaDeps, kind: string): Promise<Extract<MediaReading, { kind: 'concluded' }>> {
     const logBase = { creator_id: input.creatorId, conversation_id: input.conversationId };
     const ctx = await deps.profile(input.creatorId);
     const line = kitFor(ctx.language).attachments.media;
@@ -224,7 +264,7 @@ async function acknowledge(input: ReadMediaInput, deps: MediaDeps, kind: string)
     const claimed = await queryOne<{ id: string }>(CLAIM_ACK, [
         input.conversationId, input.creatorId, ATTACHMENT_ACK_TYPE, line, JSON.stringify({ text: line }),
         JSON.stringify({ engine: 'rule', reply: ATTACHMENT_ACK_TYPE, kind, channel: 'whatsapp' }),
-        input.messageId, WORDLESS_MESSAGE_TYPES,
+        input.messageId, WHATSAPP_WORDLESS_MESSAGE_TYPES,
     ]);
     if (!claimed) {
         // A later message of theirs is waiting, or words are being answered, or the line was said already and they have typed nothing since.

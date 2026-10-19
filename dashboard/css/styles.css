@@ -5227,6 +5227,15 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
     color: var(--accent-text);
 }
 
+/* What a voice note said (WhatsApp transcribes it), under its chip: a small label, then the words as in any other bubble. */
+.msg-transcript {
+    display: flex; flex-direction: column; gap: var(--space-1);
+    margin-block-start: var(--space-2); padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+}
+.msg-transcript-label { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); }
+.msg-transcript-text { margin: 0; overflow-wrap: anywhere; }
+
 /* A carousel button's destination, under its picture: a link out as a real (44px) link, a postback as the payload it sends back. */
 .carousel-btn-wrap { display: flex; flex-direction: column; }
 .carousel-btn-url {
