@@ -414,6 +414,21 @@ describe('planAiPatch: what a change may be', () => {
         assert.match(problems({ routing: { onboarding_draft: { provider: 'openai', fallback: 'x' } } })[0]!, /is not a setting/);
     });
 
+    it('refuses to SAVE a WhatsApp route on a provider that may train on what it is sent, and saves one on Groq, Anthropic or OpenAI', () => {
+        for (const provider of ['gemini', 'openrouter', 'custom']) {
+            const found = problems({ routing: { dm_whatsapp: { provider } } });
+            assert.equal(found.length, 1, provider);
+            assert.match(found[0]!, /routing\.dm_whatsapp\.provider must be one of groq, anthropic, openai/, provider);
+        }
+        for (const provider of ['groq', 'anthropic', 'openai']) {
+            const r = plan({ routing: { dm_whatsapp: { provider, model: 'a-model' } } });
+            assert.ok(r.ok, provider);
+            assert.equal(r.plan.routing!.dm_whatsapp!.provider, provider);
+        }
+        // Every other purpose, including `dm`, still takes any provider: Instagram's route is not narrowed.
+        assert.ok(plan({ routing: { dm: { provider: 'gemini', model: 'gemini-3.8-flash' } } }).ok);
+    });
+
     it('saves prices per model, lower-cased, and refuses a figure that is not dollars per million tokens', () => {
         const r = plan({ prices: { 'GPT-6-Astra': { in: 2.5, out: 10 }, 'old-model': null } }, { ...EMPTY, prices: { 'old-model': { in: 1, out: 1 } } });
         assert.ok(r.ok);

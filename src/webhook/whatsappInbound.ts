@@ -1,11 +1,20 @@
 /**
- * A WhatsApp message, stored. The `dm.process` job for `object: 'whatsapp'` (src/jobs/handlers.ts) ends here, and in this phase it ends
- * with NOTHING SENT: the agent has no WhatsApp brain yet, so every message is stored and marked "not answered, and here is why"
- * (`messages.no_reply_reason`). No function in this file, or imported by it, sends a message; `whatsappInbound.test.ts` fails if one is called.
+ * A WhatsApp message, stored and, for the owner's own testers, answered. The `dm.process` job for `object: 'whatsapp'` (src/jobs/handlers.ts) ends here.
+ * Every message is stored and concluded: either ANSWERED by the sales agent (`whatsappAnswer.ts`, phase W5), or marked "not answered, and here is why"
+ * (`messages.no_reply_reason`). The agent answers only when ALL of these hold (`noReplyReasonFor`):
+ *
+ *   - `ai_agents.whatsapp_mode` is `test` (`everyone` is refused by the API until the go-live gate exists, and is treated as `test` here: a listed sender only)
+ *   - the sender is on `whatsapp_test_senders`: the owner's own testers, by BSUID or phone
+ *   - the connection is `active` (an `invalid` one still STORES: Meta never redelivers, so a message is stored now or lost)
+ *   - the message is words the agent can read: text, or a tapped button or list row (media and voice are a later phase)
+ *   - nobody has taken the thread over (`conversations.is_bot_active`)
+ *
+ * Nothing in this file sends. The send is `whatsappAnswer.ts`' (through `channels/send.ts`), and `handleWhatsAppInbound` takes it as a dependency, so what is
+ * tested here is the decision and the bookkeeping, and what is tested there is the answer.
  *
  * It is a file of its own, and not another branch of `answerDm` (messaging.ts), because the Instagram pipeline has to stay exactly what it is: this
  * writes the same tables with the same dedupe rules (the `meta_message_id` claim, the 300 s re-claim window) but a different contact
- * (a BSUID, with optional phone and username), different columns, and no model call.
+ * (a BSUID, with optional phone and username) and different columns.
  *
  * ## What is stored, and for whom (review C3, constitution VI)
  *
@@ -47,6 +56,7 @@ import { redactOnFailure } from '../jobs/redaction.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { dmPromptText } from './messaging.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
+import { answerWhatsApp, type NoReplyReason, type WhatsAppAnswerFn } from './whatsappAnswer.js';
 import { redactedInboundPayload } from './whatsappRedact.js';
 import { normalizeWhatsAppChange, type WaEntrySource, type WaIgnored, type WaInbound, type WaSystemEvent } from './whatsapp.js';
 
@@ -60,8 +70,7 @@ export const WA_CLAIM_VISIBILITY_SECONDS = 300;
 /** `conversations.profile_name` is VARCHAR(255); `messages.message_type` is VARCHAR(50) and Meta's `type` is untrusted text: a type it adds one day must not fail the insert. */
 const PROFILE_NAME_MAX = 255, MESSAGE_TYPE_MAX = 50;
 
-/** Why an inbound message got no reply: `messages.no_reply_reason`. The column is free text; this is the vocabulary this file writes. */
-export type NoReplyReason = 'agent_off' | 'not_test_sender' | 'unsupported_type' | 'system_event';
+export type { NoReplyReason };
 
 /**
  * Whether the person is one of the owner's testers: by any of their ids (the BSUID, or on a re-key both the old and the new), or by phone
@@ -75,15 +84,27 @@ export function isTestSender(testSenders: readonly string[], ids: readonly (stri
 }
 
 /**
- * Why this message is not answered, in this phase. A message the agent cannot read is `unsupported_type` whatever the mode; `off` is
- * `agent_off`; `test` is `not_test_sender` for anyone not listed.
+ * Why this message is not answered, or null when the agent answers it. In this order, so the most basic reason wins:
+ *
+ *   unsupported_type   a reaction or a message the agent cannot read, whatever the mode
+ *   agent_off          mode `off`
+ *   not_test_sender    mode `test` (or `everyone`, which is test-only until the go-live gate) and a sender who is not listed
+ *   unsupported_type   media, a voice note, a location: stored, but not read yet (a later phase)
+ *   connection_invalid the connection is not `active`: stored, nothing is sent
+ *   bot_paused         a person has the thread
+ *
+ * The three optional facts default to "fine", so a caller that knows only the mode and the sender asks the first three questions.
  */
-export function noReplyReasonFor(input: { unsupported: boolean; mode: WhatsAppMode; isTestSender: boolean }): NoReplyReason {
+export function noReplyReasonFor(input: {
+    unsupported: boolean; mode: WhatsAppMode; isTestSender: boolean; answerable?: boolean; connectionActive?: boolean; botActive?: boolean;
+}): NoReplyReason | null {
     if (input.unsupported) return 'unsupported_type';
     if (input.mode === 'off') return 'agent_off';
-    if (input.mode === 'test' && !input.isTestSender) return 'not_test_sender';
-    // W5 replaces this: the agent answers test senders (and, once the go-live gate exists, everyone). Until then nothing is sent in any mode.
-    return 'agent_off';
+    if (!input.isTestSender) return 'not_test_sender';
+    if (input.answerable === false) return 'unsupported_type';
+    if (input.connectionActive === false) return 'connection_invalid';
+    if (input.botActive === false) return 'bot_paused';
+    return null;
 }
 
 /** What a stored message is, whatever shape it came in: a customer's message, or an ignored one that is kept as a row with a reason. */
@@ -103,6 +124,8 @@ interface Incoming {
     timestamp: number | null;
     /** A message the agent cannot read: a reaction, an unsupported type. */
     unsupported: boolean;
+    /** Words the agent can answer: text or a tapped button or list row. Not a photo, a voice note or a location (a later phase), even with a caption. */
+    answerable: boolean;
 }
 
 function incomingOf(message: WaInbound): Incoming {
@@ -119,6 +142,7 @@ function incomingOf(message: WaInbound): Incoming {
         entrySource: message.entrySource,
         timestamp: message.timestamp,
         unsupported: false,
+        answerable: !message.media && !message.needsTranscript && !message.wordless && dmPromptText(message).trim() !== '',
     };
 }
 
@@ -137,6 +161,7 @@ function incomingOfIgnored(message: WaIgnored & { senderId: string; metaMessageI
         entrySource: null,
         timestamp: message.timestamp,
         unsupported: true,
+        answerable: false,
     };
 }
 
@@ -148,6 +173,10 @@ interface Context {
     /** The change as the job stored it, kept as the raw event of a test sender's rows. */
     rawChange: unknown;
     progress: Progress;
+    /** The agent's answer to a message this handler has decided to answer. */
+    answer: WhatsAppAnswerFn;
+    /** No retry follows this attempt. */
+    lastAttempt: boolean;
 }
 
 /** What the job has learned about its payload as it ran. */
@@ -210,8 +239,8 @@ async function claimWhatsAppInbound(
     return resumed ? { id: resumed.id, resumed: true, attempts: resumed.reply_attempts } : null;
 }
 
-/** Terminal: the message is concluded, unanswered, and says why. The one write that sets `no_reply_reason`. */
-async function markNotAnswered(messageId: string, reason: NoReplyReason): Promise<void> {
+/** Terminal: the message is concluded. The one write that sets `no_reply_reason`: a reason when it was not answered, NULL when it was. */
+async function markConcluded(messageId: string, reason: NoReplyReason | null): Promise<void> {
     await queryCount(
         'UPDATE messages SET handled_at = NOW(), reply_claimed_at = NULL, no_reply_reason = $2 WHERE id = $1',
         [messageId, reason]
@@ -235,7 +264,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     //   platform          set once and kept, as Instagram's is
     //   entry_source      only the first inbound sets it: a later message never rewrites how the thread began
     //   username, name   the latest value wins unless it is missing; phone and parent id fill once
-    const conversation = await queryOne<{ id: string }>(
+    const conversation = await queryOne<{ id: string; is_bot_active?: boolean | null; ai_disclosed_at?: Date | string | null }>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status, platform, last_inbound_at,
                                     wa_phone, wa_username, wa_parent_user_id, profile_name, entry_source)
          VALUES ($1, $2, 'active', 'whatsapp', NOW(), $3, $4, $5, $6, $7::jsonb)
@@ -248,7 +277,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
                        wa_parent_user_id = COALESCE(conversations.wa_parent_user_id, EXCLUDED.wa_parent_user_id),
                        profile_name = COALESCE(EXCLUDED.profile_name, conversations.profile_name),
                        entry_source = COALESCE(conversations.entry_source, EXCLUDED.entry_source)
-         RETURNING id`,
+         RETURNING id, is_bot_active, ai_disclosed_at`,
         [
             ctx.creatorId,
             incoming.senderId,
@@ -278,12 +307,24 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     }
     if (claim.resumed) log('info', 'wa.resumed', { message_id: claim.id, reply_attempts: claim.attempts });
 
-    const reason = noReplyReasonFor({ unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test });
-    await markNotAnswered(claim.id, reason);
+    // Answer, or say why not. `is_bot_active` comes back from the upsert; a row that does not say (an older statement) is a thread nobody has taken over.
+    let reason = noReplyReasonFor({
+        unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test, answerable: incoming.answerable,
+        connectionActive: ctx.connectionStatus === 'active', botActive: conversation.is_bot_active !== false,
+    });
+    if (reason === null) {
+        // The agent. It throws only to ask for a retry (the claim is released first); anything else is concluded here, whatever happened.
+        reason = (await ctx.answer({
+            creatorId: ctx.creatorId, conversationId: conversation.id, messageId: claim.id, wamid: incoming.wamid, phoneNumberId: ctx.phoneNumberId,
+            senderId: incoming.senderId, text: incoming.text, payload: incoming.payload, aiDisclosedAt: conversation.ai_disclosed_at ?? null, lastAttempt: ctx.lastAttempt,
+        })).reason;
+    }
+    await markConcluded(claim.id, reason);
     log('info', 'wa.inbound_stored', {
         message_type: incoming.messageType,
         stored: test ? 'full' : 'metadata_only',
         no_reply_reason: reason,
+        answered: reason === null,
         connection_status: ctx.connectionStatus,
         conversation_id: conversation.id,
     });
@@ -401,7 +442,7 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
         log('info', 'wa.duplicate_ignored');
         return;
     }
-    await markNotAnswered(claim.id, 'system_event');
+    await markConcluded(claim.id, 'system_event');
     log('info', 'wa.system_event_stored', { system_type: event.systemType, stored: test ? 'full' : 'metadata_only', conversation_id: conversation.id });
 }
 
@@ -411,7 +452,7 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
  * The `dm.process` job for one WhatsApp message. Every path out of here either stores the message and concludes it, or logs why it did not:
  * `wa.no_creator` (no connection for the number), `wa.ignored` (a message with nothing to store), `wa.duplicate_ignored`, `wa.job_empty`.
  *
- * Throws only for a failure a retry may cure (the database): the runner backs off and the claim is resumed. Nothing is sent, ever.
+ * Throws only for a failure a retry may cure (the database, a throttle): the runner backs off and the claim is resumed.
  *
  * ## What the job keeps (review C3)
  *
@@ -422,10 +463,12 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
  * so the runner applies the same redaction if it is the failure that ENDS the job, and not while a retry is coming. The one window this cannot close
  * is before any of it runs: from the webhook's enqueue until the handler concludes the job, the full event is in `jobs`.
  */
-export async function handleWhatsAppInbound(payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT): Promise<JobResult | undefined> {
+export async function handleWhatsAppInbound(
+    payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT, answer: WhatsAppAnswerFn = answerWhatsApp
+): Promise<JobResult | undefined> {
     const progress: Progress = { keepPayload: false };
     try {
-        await ingest(payload, options, progress);
+        await ingest(payload, options, progress, answer);
     } catch (err) {
         // Not knowing who the sender was (the failure came before the settings were read) is the stranger's case: redact.
         throw progress.keepPayload ? err : redactOnFailure(err, redactedInboundPayload(payload));
@@ -433,7 +476,7 @@ export async function handleWhatsAppInbound(payload: WhatsAppDmPayload, options:
     return progress.keepPayload ? undefined : { redactPayload: redactedInboundPayload(payload) };
 }
 
-async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions, progress: Progress): Promise<void> {
+async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions, progress: Progress, answer: WhatsAppAnswerFn): Promise<void> {
     const change = normalizeWhatsAppChange(payload.change);
     if (change.messages.length === 0) {
         log('warn', 'wa.job_empty', { phone_number_id: payload.phoneNumberId });
@@ -467,6 +510,8 @@ async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions
         settings,
         rawChange: payload.change,
         progress,
+        answer,
+        lastAttempt: options.lastAttempt,
     };
 
     for (const message of change.messages) {

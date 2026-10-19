@@ -176,6 +176,11 @@ export interface SalesKit {
         /** The owner's A/B wording for this conversation's arm (S14): how to open the first reply, and how to word the offer of the link. `text` is the owner's own. */
         variantOpening: (text: string) => string;
         variantCta: (text: string) => string;
+        /**
+         * Where the conversation is, when it is not Instagram or Messenger (the only channels the rules above were written for): so the bot never says
+         * "Instagram" to someone on WhatsApp. Said only for a WhatsApp turn, and not at all for the others, so their facts block is what it always was.
+         */
+        channel: { whatsapp: string };
     };
     lines: SalesLines;
 }
@@ -301,6 +306,7 @@ const ARABIC_SALES_TEXT: Omit<SalesKit, 'lines'> = {
         tapped: (intent) => `ضغط على زر جاهز في المحادثة، وهو يسأل عن: ${intent}. أجب عن هذا السؤال مباشرة.`,
         variantOpening: (text) => `أسلوب افتتاح أول ردّ، من صاحب الحساب: ${text}`,
         variantCta: (text) => `صياغة عرض الرابط، من صاحب الحساب: ${text}`,
+        channel: { whatsapp: 'القناة: واتساب. هذه المحادثة على واتساب، فلا تذكر إنستغرام ولا فيسبوك ولا ماسنجر أبداً.' },
     },
 };
 
@@ -558,6 +564,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
                 tapped: (intent) => `They tapped a ready-made button in the chat; it asks about: ${intent}. Answer that question directly.`,
                 variantOpening: (text) => `How to open your first reply, from the account owner: ${text}`,
                 variantCta: (text) => `How to word the offer of the link, from the account owner: ${text}`,
+                channel: { whatsapp: 'Channel: WhatsApp. This chat is on WhatsApp, so never mention Instagram, Facebook or Messenger.' },
             },
             lines: {
                 handoff: (name) => `I've passed your message to ${name}, and you'll hear back soon 🙏`,

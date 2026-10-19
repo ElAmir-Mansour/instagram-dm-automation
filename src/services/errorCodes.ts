@@ -57,7 +57,7 @@ export const ERROR_CODES = {
     TIKTOK_NOT_CONNECTED: { status: [409], meaning: 'An action that needs TikTok, and TikTok is not connected (or needs reconnecting).' },
     TIKTOK_DIRECT_POST_UNAVAILABLE: { status: [409], meaning: 'Direct Post was asked for, but the portal switch is off or the connection lacks `video.publish`.' },
     TIKTOK_UPLOAD_PERMISSION_MISSING: { status: [409], meaning: 'Sending to TikTok drafts needs `video.upload`, which this connection does not have.' },
-    WHATSAPP_SENDING_NOT_READY: { status: [409], meaning: 'A reply typed on a WhatsApp thread before WhatsApp sending exists (phase W4): the thread is stored, never answered.' },
+    WHATSAPP_WINDOW_CLOSED: { status: [409], meaning: 'A reply typed on a WhatsApp thread more than 24 hours after the customer\'s last message (and outside any free-entry window): WhatsApp takes no free-form message then. `closes_at` says when it closed.', params: ['closes_at'] },
 
     // ─── The AI agents ──────────────────────────────────────────────────────────────────────────────────
     PROFILE_INCOMPLETE: { status: [409], meaning: 'An agent was switched on before the profile holds what it writes from.', params: ['agent', 'missing', 'fixStep'] },

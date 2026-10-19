@@ -69,6 +69,8 @@ import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
 import { whatsappRouter } from './whatsapp.js';
+import { sendWhatsAppReply } from '../services/channels/send.js';
+import { TEXT_BODY_MAX } from '../webhook/whatsappPayload.js';
 import { metaPublicRouter, metaRouter } from './meta.js';
 import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
@@ -3656,6 +3658,62 @@ router.post('/conversations/:id/refresh-profile', canOperate, async (req, res) =
     }
 });
 
+/**
+ * A person's reply to a WhatsApp thread from the inbox: `sendWhatsAppReply` (`kind: 'operator'`), then the bot is paused exactly as the Instagram
+ * branch pauses it (a person has taken the thread over). The sender decides whether the message may go at all, with no request to Meta for a refusal:
+ *
+ *   window closed        409 `WHATSAPP_WINDOW_CLOSED` with `closes_at`: WhatsApp allows no free-form message 24 hours after the customer's last one
+ *   connection invalid   409: Meta refused the token (or the number's payment): reconnect in Settings
+ *   billable blocked     409: the free replies are used up and replies that cost money are switched off
+ *   anything else        502: Meta did not take it, and nothing was stored or paused
+ */
+async function replyOnWhatsApp(res: Response, input: { conversationId: string; tenantId: string; text: unknown }): Promise<void> {
+    const { conversationId, tenantId, text } = input;
+    if (typeof text !== 'string' || !text.trim()) {
+        res.status(400).json({ error: 'Message text is required.' });
+        return;
+    }
+    // Over the limit is refused, not cut: the shaper would cut it at a sentence, and a person who typed a long answer has to know it was not all sent.
+    if (Array.from(text).length > TEXT_BODY_MAX) {
+        res.status(400).json({ error: `A WhatsApp message is at most ${TEXT_BODY_MAX} characters.` });
+        return;
+    }
+    log('info', 'inbox.manual_reply', { conversation_id: conversationId, chars: text.length, channel: 'whatsapp' });
+
+    const result = await sendWhatsAppReply({ creatorId: tenantId, conversationId, kind: 'operator', body: { text } });
+    if (!result.ok) {
+        switch (result.reason) {
+            case 'window_closed': {
+                const closesAt = result.closesAt?.toISOString() ?? null;
+                sendError(
+                    res, 409, 'WHATSAPP_WINDOW_CLOSED', { closes_at: closesAt },
+                    'The 24-hour WhatsApp window has closed: a reply is possible once the customer writes again.',
+                    { closes_at: closesAt }
+                );
+                return;
+            }
+            case 'conversation_not_found':
+            case 'not_whatsapp':
+                res.status(404).json({ error: 'Conversation not found.' });
+                return;
+            case 'connection_invalid':
+            case 'billable_blocked':
+                res.status(409).json({ error: result.detail });
+                return;
+            default:
+                log('error', 'api.manual_send_failed', { conversation_id: conversationId, channel: 'whatsapp', reason: result.reason, code: result.code });
+                res.status(502).json({ error: 'WhatsApp did not accept the message.' });
+                return;
+        }
+    }
+
+    await pool.query(
+        'UPDATE conversations SET last_message_at = NOW(), is_bot_active = false WHERE id = $1 AND creator_id = $2',
+        [conversationId, tenantId]
+    );
+    res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
+}
+
 router.post('/conversations/:id/messages', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
@@ -3690,10 +3748,11 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
 
         const conv = convRes.rows[0];
 
-        // A WhatsApp thread (v50) is stored, never answered, until WhatsApp sending exists (phase W4). Without this the
-        // reply below would go to Instagram's Send API addressed to a WhatsApp user id: a confusing failure at best.
+        // A WhatsApp thread (v50) is answered through WhatsApp's own sender, never Instagram's Send API: the contact is a WhatsApp user id there,
+        // and the tenant's token and number live in `platform_connections`, not `creators`. Whatever the sender refuses (a closed 24 h window, a
+        // billable message nobody agreed to, a connection Meta refused) is answered before anything is written or the bot is paused.
         if (conv.platform === 'whatsapp') {
-            sendError(res, 409, 'WHATSAPP_SENDING_NOT_READY', 'Replying on WhatsApp from the inbox is not available yet.');
+            await replyOnWhatsApp(res, { conversationId: id, tenantId, text });
             return;
         }
 

@@ -23,6 +23,7 @@ import { pool } from '../../config/db.js';
 import { setJobQueue } from '../../jobs/queue.js';
 import type { EnqueueInput, JobQueue } from '../../jobs/types.js';
 import { metaHttp } from '../http.js';
+import { API_VERSION } from '../instagram.js';
 import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
 import { AiError } from '../llm/errors.js';
 import { FITNESS_EN } from '../profile/fixtures.js';
@@ -1514,5 +1515,87 @@ describe('the sales turn: the owner\'s A/B wording experiment (S14)', () => {
         assert.match(ar.variantOpening('x'), /^أسلوب افتتاح أول ردّ/);
         assert.match(ar.variantCta('x'), /^صياغة عرض الرابط/);
         assert.match(kitFor({ code: 'en', register: null }).sales.conversation.variantCta('x'), /^How to word the offer of the link/);
+    });
+});
+
+// ─── The Instagram and Messenger path, pinned (the WhatsApp transport must not move a byte of it) ──────────
+
+describe('the sales turn without a transport: the exact requests Instagram and Messenger have always been sent', () => {
+    const GRAPH = `https://graph.facebook.com/${API_VERSION}`;
+    const DISCLOSURE = '🤖 Automated reply from the AI assistant';
+    const seen = (to: string, endpoint: string) => [
+        { url: `${GRAPH}/${endpoint}/messages`, body: { recipient: { id: to }, sender_action: 'mark_seen' } },
+        { url: `${GRAPH}/${endpoint}/messages`, body: { recipient: { id: to }, sender_action: 'typing_on' } },
+    ];
+
+    it('a first reply on Instagram: mark_seen, typing_on, then ONE message to /me/messages with the disclosure in front and messaging_type RESPONSE', async () => {
+        const r = await run();
+        assert.deepEqual(r.sends, [
+            ...seen('user-1', 'me'),
+            { url: `${GRAPH}/me/messages`, body: { recipient: { id: 'user-1' }, message: { text: `${DISCLOSURE}\nIt is a twelve-week plan for busy parents.` }, messaging_type: 'RESPONSE' } },
+        ]);
+    });
+
+    it('the same on Messenger: through the Page id, with the same body', async () => {
+        const r = await run({ recipient: 'fb-page-1' });
+        assert.deepEqual(r.sends, [
+            ...seen('user-1', 'fb-page-1'),
+            { url: `${GRAPH}/fb-page-1/messages`, body: { recipient: { id: 'user-1' }, message: { text: `${DISCLOSURE}\nIt is a twelve-week plan for busy parents.` }, messaging_type: 'RESPONSE' } },
+        ]);
+    });
+
+    it('quick replies keep Messenger\'s own shape: content_type text, a title and a payload', async () => {
+        const r = await run({ layer: saying(reply({ text: 'Which one?', quick_replies: [{ title: 'The plan', payload: 'PLAN' }, { title: 'Other plans', payload: 'OTHER' }] })) });
+        assert.deepEqual(r.sends[2], {
+            url: `${GRAPH}/me/messages`,
+            body: {
+                recipient: { id: 'user-1' },
+                message: {
+                    text: `${DISCLOSURE}\nWhich one?`,
+                    quick_replies: [{ content_type: 'text', title: 'The plan', payload: 'PLAN' }, { content_type: 'text', title: 'Other plans', payload: 'OTHER' }],
+                },
+                messaging_type: 'RESPONSE',
+            },
+        });
+    });
+
+    it('a link goes after the words on its own line, in the same one message', async () => {
+        const r = await run({ layer: saying(reply({ intent: 'ready_to_buy', next_action: 'send_link', offer_id: 'plan', stage: 'link', text: 'Here you go:' })) });
+        assert.equal(r.sends.length, 3);
+        assert.deepEqual(r.sends[2]!.body, { recipient: { id: 'user-1' }, message: { text: `${DISCLOSURE}\nHere you go:\n${PLAN_URL}` }, messaging_type: 'RESPONSE' });
+    });
+
+    it('spends Instagram\'s hourly quota for the reply, and checks nothing of WhatsApp\'s', async () => {
+        const r = await run();
+        assert.ok(r.executed.some((e) => /INSERT INTO rate_limit_counters/.test(e.sql)));
+        assert.ok(!r.executed.some((e) => /platform_connections|channel_usage/.test(e.sql)));
+    });
+
+    it('asks the model for purpose dm, and tells it nothing of any channel: the facts block is the one it always was', async () => {
+        const r = await run();
+        assert.equal(r.layerCalls[0]!.purpose, 'dm');
+        const turns = r.layerCalls[0]!.user as { role: string; text: string }[];
+        assert.equal(
+            turns[turns.length - 1]!.text,
+            '=== This conversation ===\nStage so far: new\nQualifying questions already asked: 0 of at most 2.\nNo link has been sent yet.\n\nHow much is the plan?'
+        );
+    });
+
+    it('still falls back to Gemini ONCE for a model that failed, when the owner\'s fallback is on: the Instagram policy did not change', async () => {
+        const r = await run({ layer: failing('timeout') });
+        assert.equal(r.layerCalls[0]!.purpose, 'dm');
+        assert.equal(r.geminiCalls, 1);
+        assert.deepEqual(r.sends[2], {
+            url: `${GRAPH}/me/messages`,
+            body: { recipient: { id: 'user-1' }, message: { text: `${DISCLOSURE}\nرد احتياطي` }, messaging_type: 'RESPONSE' },
+        });
+    });
+
+    it('records a hand-off after a failure as it always did, and puts no channel in the ai_meta of an Instagram reply', async () => {
+        const r = await run({ layer: failing('timeout'), agent: { ...AGENT, gemini_fallback: false } });
+        assert.equal(record(r).aiMeta.model_failed, 'timeout');
+        assert.ok(!('channel' in record(r).aiMeta), 'no channel in the ai_meta of an Instagram reply');
+        const ok = await run();
+        assert.ok(!('channel' in record(ok).aiMeta));
     });
 });

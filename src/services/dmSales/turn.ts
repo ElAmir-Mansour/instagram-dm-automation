@@ -33,6 +33,10 @@
  * guidance (how to open the first reply, how to word the offer of the link) rides in the conversation's facts, the arm is written with the turn's own
  * record, and `ai_meta.variant` says which arm a reply came from. Read beside the history; it can only ever mean "no arm", never a failed turn.
  *
+ * **Another channel** (`transport.ts`, WhatsApp): given a `transport`, the turn sends, shows "typing" and finishes its bookkeeping through it, answers on
+ * its own AI purpose (`dm_whatsapp`, providers that do not train on what they are sent) and NEVER falls back to Gemini. Given none, it is Instagram and
+ * Messenger exactly as before: every line that differs is under `transport`, and `turn.test.ts` pins the request bodies of the other path.
+ *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
  * follow-up itself (S9's job does, `followupJob.ts`).
@@ -63,6 +67,7 @@ import { buildSalesPrompt, creatorName, salesFactsBlock } from './prompt.js';
 import { readConversationVariant, readVariantConfig } from './variantStore.js';
 import { activeVariants, chooseVariant, variantGuidance, type VariantChoice } from './variants.js';
 import { salesReplySchema } from './schema.js';
+import type { SalesTransport, SentMessage } from './transport.js';
 import { salesTurns, STRUCTURED_TEMPLATE_TEXT } from './history.js';
 import { loadAgent, loadHistory, loadSalesState, recordTurn, supersession, type SalesState, type TurnRecord } from './store.js';
 import { capUtf8Bytes, utf8Bytes } from './text.js';
@@ -129,6 +134,12 @@ export interface SalesTurnInput {
     ctx: ProfileContext<'dm'>;
     /** Whether the automated-service disclosure goes in front of this reply, and its words (the pipeline's `needsDisclosure`). */
     disclosure: { needed: boolean; line: string };
+    /**
+     * Where the words go when this is not Instagram or Messenger (a WhatsApp conversation): see `transport.ts` for what changes. Absent, the Send API
+     * and everything below are exactly what they were; `creator.page_access_token` and `pageId` are then the Instagram or Messenger ones, and with a
+     * transport they are not read.
+     */
+    transport?: SalesTransport;
 }
 
 export type SalesTurnOutcome =
@@ -141,7 +152,8 @@ export type SalesTurnOutcome =
     | 'agent_off';    // the owner's agent is switched off: nothing to say
 
 export type SalesTurnResult =
-    | { kind: 'done'; outcome: SalesTurnOutcome }
+    /** `modelFailed` is set only for a turn with a transport, when the model could not answer and the conversation was handed to a person: the reason, for the channel's own record. */
+    | { kind: 'done'; outcome: SalesTurnOutcome; modelFailed?: string }
     /** The tenant's (or the app's) hourly send quota is spent: nothing was sent. The pipeline retries or gives up, as it does for the old path. */
     | { kind: 'quota'; count: number; limit: number; blockedBy: string | null };
 
@@ -190,7 +202,7 @@ const sendsModelText = (d: TurnDecision): boolean => d.effect === 'reply' || (d.
 
 export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
     const startedAt = Date.now();
-    const { creator, conversation, inbound, ctx } = input;
+    const { creator, conversation, inbound, ctx, transport } = input;
     const kit = kitFor(ctx.language).sales;
     const owner = creatorName(ctx, kit);
     const logBase = { creator_id: creator.id, conversation_id: conversation.id };
@@ -223,7 +235,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 ...logBase, outcome, effect: decision.effect, stage: decision.stage, action: decision.action, intent: o.intent,
                 handoff_reason: decision.handoffReason, overrides: decision.overrides, engine: o.meta.engine, duration_ms: Date.now() - startedAt,
             });
-            return { kind: 'done', outcome };
+            return { kind: 'done', outcome, ...(transport && typeof o.meta.model_failed === 'string' ? { modelFailed: o.meta.model_failed } : {}) };
         };
 
         /** Recorded: now, and only now, the owner is told (when this turn is one he needs to hear of). `notifyOwner` never throws. */
@@ -241,26 +253,41 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         const payload = o.payload ?? salesPayload(o.text ?? '', o.quick);
         const messageType = o.messageType ?? (payload.quick_replies ? 'quick_reply' : 'text');
 
-        // One quota check per reply, as the old path does it: a disclosure that travels as its own message is still one reply.
-        const quota = await checkFairSendQuota(creator.id, 'dm');
-        if (!quota.allowed) {
-            log('error', 'dm.quota_exhausted', {
-                ...logBase, count: quota.count, limit: quota.limit, blocked_by: quota.blockedBy, app_count: quota.app.count, app_limit: quota.app.limit, source: 'dm',
-            });
-            return { kind: 'quota', count: quota.count, limit: quota.limit, blockedBy: quota.blockedBy };
+        // One quota check per reply, as the old path does it: a disclosure that travels as its own message is still one reply. The quota is Instagram's
+        // (a pool shared by every tenant's Instagram and Messenger sends): WhatsApp's own limits are Meta's, and the sender answers for them.
+        if (!transport) {
+            const quota = await checkFairSendQuota(creator.id, 'dm');
+            if (!quota.allowed) {
+                log('error', 'dm.quota_exhausted', {
+                    ...logBase, count: quota.count, limit: quota.limit, blocked_by: quota.blockedBy, app_count: quota.app.count, app_limit: quota.app.limit, source: 'dm',
+                });
+                return { kind: 'quota', count: quota.count, limit: quota.limit, blockedBy: quota.blockedBy };
+            }
         }
 
         let outgoing = payload;
-        if (input.disclosure.needed) {
-            const disclosed = withDisclosure(payload, input.disclosure.line);
-            outgoing = disclosed.payload;
-            if (disclosed.standalone) {
-                log('info', 'dm.disclosure_standalone', logBase);
-                await sendDirectMessage(inbound.senderId, { text: disclosed.standalone }, creator.page_access_token, input.pageId);
+        let sent: SentMessage | null = null;
+        if (transport) {
+            // One message, whatever it carries (review M14): the disclosure is a line in front of the words, never a bubble of its own. WhatsApp's limits
+            // (4,096 characters, 1,024 beside buttons) leave room for it, and the shaper cuts at a sentence if they ever do not.
+            if (input.disclosure.needed) {
+                const carried = applyDisclosure(payload, input.disclosure.line);
+                outgoing = carried.standalone === null ? carried.payload : { ...payload, text: carried.standalone };
             }
+            sent = await transport.send(outgoing);
+            log('info', 'dm.sent', { ...logBase, message_type: messageType, disclosed: input.disclosure.needed, sales: true, channel: transport.channel });
+        } else {
+            if (input.disclosure.needed) {
+                const disclosed = withDisclosure(payload, input.disclosure.line);
+                outgoing = disclosed.payload;
+                if (disclosed.standalone) {
+                    log('info', 'dm.disclosure_standalone', logBase);
+                    await sendDirectMessage(inbound.senderId, { text: disclosed.standalone }, creator.page_access_token, input.pageId);
+                }
+            }
+            await sendDirectMessage(inbound.senderId, outgoing, creator.page_access_token, input.pageId);
+            log('info', 'dm.sent', { ...logBase, message_type: messageType, disclosed: input.disclosure.needed, sales: true });
         }
-        await sendDirectMessage(inbound.senderId, outgoing, creator.page_access_token, input.pageId);
-        log('info', 'dm.sent', { ...logBase, message_type: messageType, disclosed: input.disclosure.needed, sales: true });
 
         // Recorded only after the send landed, so a failed first reply still discloses next time: the statement the old path uses.
         if (input.disclosure.needed) await queryCount('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversation.id]);
@@ -274,17 +301,21 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 ...o.meta, intent: o.intent, offer_id: o.offerId ?? NO_OFFER, stage: decision.stage, next_action: decision.action,
                 handoff_reason: decision.handoffReason, latency_ms: Date.now() - startedAt,
                 ...(variantId ? { variant: variantId } : {}),
+                ...(transport ? { channel: transport.channel } : {}),
             },
         };
         const recorded = await recordTurn(record);
+        // The channel's own bookkeeping for the row just written (WhatsApp: the id a delivery status finds the message by). Never throws.
+        if (transport && sent) await transport.recorded(recorded.replyId, sent);
 
         // 12. A link just went out: queue the ONE follow-up for it (`followupJob.ts`). After the record, best effort and never throwing, so a
         // failure to queue can never make this job run again and answer the person twice. Only a sales turn is here, so `sales_mode = 'off'`
-        // (and a test sender who is not listed) queues nothing.
+        // (and a test sender who is not listed) queues nothing. A conversation on another channel says so, and `scheduleFollowup` queues nothing for it.
         if (record.linkedOfferId && o.link) {
             await scheduleFollowup({
                 creatorId: creator.id, conversationId: conversation.id, senderId: inbound.senderId, pageId: input.pageId,
                 offerId: record.linkedOfferId, recorded,
+                ...(transport ? { channel: transport.channel } : {}),
             });
         }
         return finish();
@@ -327,10 +358,12 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
     // Where the conversation began (S10), read beside the history: one statement that never throws (`commentSource`). A source is a conversation that
     // began with a comment and the link in its private reply, which moves where a fresh one starts and what the model is told, and nothing else.
+    // Neither is for another channel: a comment's private reply and the owner's A/B wording are Instagram's and Messenger's, and a WhatsApp conversation
+    // is not given an arm in an experiment that was set up to compare how Instagram replies are worded.
     const [source, history, experiment] = await Promise.all([
-        commentSource({ conversationId: conversation.id, creatorId: creator.id, senderId: inbound.senderId, platform: input.pageId ? 'facebook' : 'instagram' }),
+        transport ? Promise.resolve(null) : commentSource({ conversationId: conversation.id, creatorId: creator.id, senderId: inbound.senderId, platform: input.pageId ? 'facebook' : 'instagram' }),
         loadHistory(conversation.id, SALES_HISTORY_WINDOW),
-        readVariantConfig(creator.id),
+        transport ? Promise.resolve(null) : readVariantConfig(creator.id),
     ]);
 
     // S14: the owner's wording experiment, when one is RUNNING. Only a conversation with no bot reply yet is new; the arm is the one it already has, or
@@ -357,6 +390,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         ...(bridged ? { comment: bridged.comment } : {}),
         ...(tappedIntent ? { tapped: { intent: tappedIntent } } : {}),
         ...(guidance ? { variant: guidance } : {}),
+        ...(transport ? { channel: transport.channel } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
@@ -365,6 +399,18 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     /** Never silence: the legacy Gemini path once, when the owner wants it; else a hand-off. */
     const modelFailed = async (failure: DmFailure): Promise<SalesTurnResult> => {
+        if (transport) {
+            // Never the legacy Gemini path for another channel (review C1): its key may be a free-tier one, which trains on what it is sent, and a
+            // customer's WhatsApp words do not go there. Not the engine setting, not `gemini_fallback`: a person has the chat. `dm.engine_failed` says why.
+            log('error', 'dm.engine_failed', {
+                ...logBase, source: 'dm', engine: 'providers', reason: failure.reason, message: failure.message, fallback: 'never', channel: transport.channel, sales: true,
+            });
+            const decision = handoffDecision('unsure', state);
+            return conclude(decision, {
+                intent: null, offerId: null, text: lineFor(decision, null, ctx, kit, owner, 'handoff'), link: null, quick: [],
+                meta: { engine: 'rule', model_failed: failure.reason },
+            });
+        }
         const { geminiFallback } = await readDmEngine(creator.id);
         let legacy: AiResponse | null = null;
         if (geminiFallback) {
@@ -399,7 +445,8 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     const ask = async (turns: LlmTurn[]): Promise<{ ok: true; answer: Answer } | { ok: false; failure: DmFailure }> => {
         try {
             const result = await generate({
-                purpose: 'dm', creatorId: creator.id, system: prompt.prefix, user: turns, schema, maxTokens: DM_MAX_TOKENS, timeoutMs: DM_TIMEOUT_MS, cacheSystem: true,
+                // `dm_whatsapp` answers only from providers that do not train on what they are sent (`aiProviders/purposes.ts`); any other is `no_provider`.
+                purpose: transport ? 'dm_whatsapp' : 'dm', creatorId: creator.id, system: prompt.prefix, user: turns, schema, maxTokens: DM_MAX_TOKENS, timeoutMs: DM_TIMEOUT_MS, cacheSystem: true,
             });
             return { ok: true, answer: { json: result.json, model: result.model, provider: result.provider, usageId: result.usageId, ms: result.elapsed_ms } };
         } catch (err) {
@@ -437,7 +484,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     };
 
     // `mark_seen` and `typing_on` go out while the model thinks, and are done before anything is sent.
-    const seenAndTyping = startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
+    const seenAndTyping = transport ? transport.seen() : startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
 
     // The first try, and ONE more with a correction when the answer broke a rule only a rewrite can mend.
     let chosen: Evaluated | null = null;

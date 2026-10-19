@@ -189,7 +189,7 @@ describe('GET /ai', () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
         assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
-        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']);
+        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']);
         assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
         assert.equal(body.budgets.unlimited, true);
         assert.deepEqual(body.warnings.map((w: any) => w.code), ['no_budget']);
@@ -226,14 +226,26 @@ describe('GET /ai', () => {
         assert.equal(byPurpose.onboarding_draft.saved, null);
     });
 
-    it('lists the DM purpose last: low effort by default, not the Mac\'s, and resolved to the first provider with a key', async () => {
+    it('lists the DM purpose, then WhatsApp\'s: low effort by default, not the Mac\'s, and resolved to the first provider with a key', async () => {
         saveKey('anthropic');
         const { body } = await call('GET', '/ai');
-        const dm = body.purposes.at(-1);
+        const [dm, whatsapp] = body.purposes.slice(-2);
         assert.deepEqual(dm, {
             purpose: 'dm', defaultEffort: 'low', macBrainGuarded: false, saved: null,
             resolved: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' },
         });
+        assert.deepEqual(whatsapp, {
+            purpose: 'dm_whatsapp', defaultEffort: 'low', macBrainGuarded: false, saved: null,
+            resolved: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' },
+        });
+    });
+
+    it('shows WhatsApp\'s purpose resolved to an error, not to Gemini, when Gemini is the only key', async () => {
+        db.setSetting('gemini.api_key', FAKE_KEYS.gemini, true);
+        const { body } = await call('GET', '/ai');
+        const [dm, whatsapp] = body.purposes.slice(-2);
+        assert.equal(dm.resolved.provider, 'gemini', 'Instagram\'s DM route may use it');
+        assert.equal(whatsapp.resolved.error.kind, 'no_provider', 'WhatsApp\'s may not');
     });
 
     it('fails with the migration hint when v34 has not been applied', async () => {
@@ -292,10 +304,22 @@ describe('PUT /ai', () => {
         const saved = await call('PUT', '/ai', { body: { routing: { dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         assert.equal(saved.status, 200);
         assert.deepEqual(JSON.parse(db.settings.get('ai.routing')!.value), { dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } });
-        assert.deepEqual(saved.body.purposes.at(-1).saved, { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' });
+        assert.deepEqual(saved.body.purposes.find((p: any) => p.purpose === 'dm').saved, { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' });
         assert.deepEqual(db.audits.at(-1)!.detail.routes, { dm: 'anthropic/claude-sonnet-5-5/low' });
         await call('PUT', '/ai', { body: { routing: { dm: null } } });
         assert.equal(db.settings.has('ai.routing'), false);
+    });
+
+    it('saves a route for WhatsApp replies on a provider that does not train on its input, and refuses one on Gemini, OpenRouter or Custom', async () => {
+        const ok = await call('PUT', '/ai', { body: { routing: { dm_whatsapp: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' } } } });
+        assert.equal(ok.status, 200);
+        assert.deepEqual(ok.body.purposes.find((p: any) => p.purpose === 'dm_whatsapp').saved, { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' });
+        for (const provider of ['gemini', 'openrouter', 'custom']) {
+            const refused = await call('PUT', '/ai', { body: { routing: { dm_whatsapp: { provider, model: 'x-model', effort: 'low' } } } });
+            assert.equal(refused.status, 400, provider);
+            assert.match(refused.body.error, /routing\.dm_whatsapp\.provider must be one of groq, anthropic, openai/, provider);
+        }
+        assert.deepEqual(JSON.parse(db.settings.get('ai.routing')!.value), { dm_whatsapp: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' } }, 'the refused ones saved nothing');
     });
 
     it('refuses a route for a usage label: `eval` and `key_test` label spend and are not purposes', async () => {

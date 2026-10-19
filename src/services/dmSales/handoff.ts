@@ -52,8 +52,11 @@ export const HOT_LEAD_ALERTS_PER_HOUR = 1;
  * `engine_failed` is a reason for the ALERT only (`failureHandoff.ts`: the reply failed on its last attempt): the conversation records it
  * as `unsure`, the closest value `conversations.handoff_reason` allows, and the owner is told what really happened.
  */
+/** WhatsApp only: why the assistant's reply could not be SENT (`channels/send.ts`): alerts name it, because the customer could not be told and a person must. */
+export type WhatsAppSendBlock = 'window_closed' | 'billable_blocked' | 'connection_invalid';
+
 export type NoticePlan =
-    | { kind: 'handoff'; reason: HandoffReason | 'engine_failed' }
+    | { kind: 'handoff'; reason: HandoffReason | 'engine_failed' | WhatsAppSendBlock }
     | { kind: 'hot_lead' };
 
 /**
@@ -96,6 +99,9 @@ export interface NoticeRequest {
 interface ConversationFacts {
     username: string | null;
     instagram_user_id: string;
+    platform: string | null;
+    profile_name: string | null;
+    wa_username: string | null;
     last_inbound_text: string | null;
     last_inbound_at: Date | string | null;
 }
@@ -136,7 +142,7 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
         }
 
         const facts = await queryOne<ConversationFacts>(
-            `SELECT c.username, c.instagram_user_id,
+            `SELECT c.username, c.instagram_user_id, c.platform, c.profile_name, c.wa_username,
                     (SELECT text FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_text,
                     (SELECT created_at FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_at
                FROM conversations c
@@ -153,7 +159,9 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
             kind,
             reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead',
             lang: noticeLang(req.language),
-            username: facts.username,
+            // A WhatsApp thread has no Instagram username: its contact is the profile name they gave, else the WhatsApp username, else the last digits of the id.
+            username: facts.platform === 'whatsapp' ? facts.profile_name ?? facts.wa_username : facts.username,
+            platform: facts.platform,
             senderId: facts.instagram_user_id,
             lastMessage: facts.last_inbound_text ?? '',
             windowMs: windowRemainingMs(facts.last_inbound_at, req.now ?? new Date()),

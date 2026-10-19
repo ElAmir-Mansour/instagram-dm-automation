@@ -36,7 +36,7 @@ export const handlers: JobHandlerRegistry = {
         });
     },
     'dm.process': async (payload, job) => {
-        // A WhatsApp message (`object: 'whatsapp'`) is stored by its own handler: nothing is sent from it in this phase (whatsappInbound.ts).
+        // A WhatsApp message (`object: 'whatsapp'`) is stored, and answered for the owner's test senders, by its own handler (whatsappInbound.ts).
         // What it returns is the redacted payload the queue stores as the job completes (a stranger's message must not sit in `jobs` for a week).
         if (isWhatsAppDmPayload(payload)) {
             return handleWhatsAppInbound(payload, { lastAttempt: isLastAttempt(job) });
