@@ -1259,14 +1259,22 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 }
 
 /* ─── Toast ──────────────────────────────────────────────────────────────── */
-.toast-container {
+/* One stack holds both live regions (index.html): `#toast-alerts` for errors, announced at once, and
+   `#toast-container` for the rest, announced politely. The stack is what is fixed to the screen, so a toast
+   in one never lands on top of a toast in the other. `--toast-offset` lifts it above a sticky action bar
+   (set below, by the bars it knows); it is 0 when there is none. */
+.toast-stack {
     position: fixed;
-    inset-block-end: var(--space-5);
+    inset-block-end: calc(var(--space-5) + var(--toast-offset, 0px));
     inset-inline-end: var(--space-5);
     z-index: var(--z-toast);
     display: flex; flex-direction: column; gap: var(--space-2);
-    max-width: min(420px, calc(100vw - var(--space-6)));
+    max-inline-size: min(420px, calc(100vw - var(--space-6)));
+    /* An empty stack must not swallow a click meant for the page beneath it. */
+    pointer-events: none;
 }
+.toast-stack > .toast-container { pointer-events: auto; }
+.toast-container { display: flex; flex-direction: column; gap: var(--space-2); }
 .toast {
     display: flex; align-items: center; gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
@@ -1290,6 +1298,37 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .toast.success svg { color: var(--success-text); }
 .toast.error { border-color: var(--border-danger); }
 .toast.error svg { color: var(--danger-text); }
+.toast.info { border-color: var(--border-info); }
+.toast.info svg { color: var(--info-text); }
+.toast.warning { border-color: var(--border-warning); }
+.toast.warning svg { color: var(--warning-text); }
+/* The action (Undo, View): a text button at the end of the message, a full 44px target. */
+.toast-action {
+    flex-shrink: 0;
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-semibold);
+    color: var(--accent-text);
+    touch-action: manipulation;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+.toast-action:hover { background: var(--surface-glass-hover); }
+.toast-action:active { background: color-mix(in srgb, var(--text-strong) 14%, transparent); }
+/* On a phone the stack spans the screen between the gutters, and sits inside the safe area (the home bar). */
+@media (max-width: 768px) {
+    .toast-stack {
+        inset-inline: var(--space-3);
+        inset-block-end: calc(var(--space-3) + var(--toast-offset, 0px) + env(safe-area-inset-bottom, 0px));
+        max-inline-size: none;
+    }
+}
+/* A sticky action bar owns the bottom edge, so toasts rise above it. The bars name themselves here, so no page
+   has to tell the stack; a new bar opts in with `data-sticky-bar`. One bar height: a 44px button and its padding. */
+body:has(.studio-savebar, .welcome-bar, .post-composer .modal-actions, [data-sticky-bar]) {
+    --toast-offset: calc(var(--tap-target) + var(--space-3) * 3);
+}
 /* Physical exception 2/3: toasts slide in from the inline end. */
 @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
 html[dir='rtl'] .toast { animation-name: toastInRtl; }
@@ -5417,3 +5456,166 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .tp-problems { margin-block-start: var(--space-4); }
 .tp-problem-list { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); font-size: var(--fs-100); }
 .tp-missing { font-family: var(--font-mono); font-size: var(--fs-100); padding: 1px var(--space-2); border-radius: var(--radius-xs); background: var(--surface-sunken); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Shared patterns (UX foundation) — the styles of the builders in components.js
+   ═══════════════════════════════════════════════════════════════════════════
+   UI.pageHeader, UI.card, UI.emptyState, UI.confirm (stacked), UI.tabs, UI.secretField, UI.field, UI.filterBar,
+   UI.table and UI.pager. Tokens only, logical properties only, 44px targets; the focus ring is the global
+   `:focus-visible`. Motion uses the --motion tokens, which collapse to 1ms under prefers-reduced-motion. The toast's
+   own styles are with the toast, above. */
+
+/* ─── Page header ────────────────────────────────────────────────────────── */
+.ui-page-head {
+    display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-3) var(--space-4);
+    margin-block-end: var(--space-5);
+}
+.ui-page-head-main { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); flex: 1 1 16rem; min-inline-size: 0; }
+.ui-page-head-title { font-size: var(--fs-500); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+.ui-page-head-subtitle { max-inline-size: 60ch; font-size: var(--fs-200); color: var(--text-muted); }
+.ui-page-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+/* The back link is a ghost button; its label lines up with the title, not with the button's padding. */
+.ui-page-back { margin-inline-start: calc(var(--space-3) * -1); }
+@media (max-width: 768px) {
+    .ui-page-head-actions { inline-size: 100%; }
+    .ui-page-head-actions .btn { flex: 1; }
+}
+
+/* ─── Card ───────────────────────────────────────────────────────────────── */
+.ui-card { padding: var(--space-5); }
+.card-head {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    margin-block-end: var(--space-4);
+}
+.card-title { display: flex; align-items: center; gap: var(--space-2); min-inline-size: 0; font-size: var(--fs-400); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.card-title [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); flex-shrink: 0; }
+.card-head-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-inline-start: auto; }
+/* A tone is an edge and a glyph in the title: it never rests on colour alone. */
+.ui-card--info { border-inline-start: 4px solid var(--info); }
+.ui-card--success { border-inline-start: 4px solid var(--success); }
+.ui-card--warning { border-inline-start: 4px solid var(--warning); }
+.ui-card--danger { border-inline-start: 4px solid var(--danger); }
+.ui-card--info .card-title svg { color: var(--info-text); }
+.ui-card--success .card-title svg { color: var(--success-text); }
+.ui-card--warning .card-title svg { color: var(--warning-text); }
+.ui-card--danger .card-title svg { color: var(--danger-text); }
+@media (max-width: 768px) { .ui-card { padding: var(--space-4); } }
+
+/* ─── Empty state: the next step ─────────────────────────────────────────── */
+.empty-state-actions {
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    margin-block-start: var(--space-2);
+}
+
+/* ─── The question drawn over an open modal (UI.confirm with `stack`) ────── */
+.confirm-layer { z-index: calc(var(--z-modal) + 10); }
+.confirm-content { max-inline-size: 440px; }
+
+/* ─── Tabs: underline for navigation, a pill in a track for a view switch ── */
+.ui-tabs { display: flex; flex-wrap: wrap; align-items: center; max-inline-size: 100%; }
+.ui-tab {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    font-size: var(--fs-200); font-weight: var(--fw-medium);
+    color: var(--text-default);
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.ui-tab [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; }
+.ui-tab:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.ui-tab-count {
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--surface-glass-hover);
+    color: var(--text-default);
+    font-size: var(--fs-100);
+    font-variant-numeric: tabular-nums;
+}
+/* Navigation: it changes the URL, so it reads as a place you are. */
+.ui-tabs--link { gap: var(--space-2); border-block-end: 1px solid var(--border-subtle); }
+.ui-tabs--link .ui-tab {
+    border-block-end: 2px solid transparent;
+    margin-block-end: -1px;
+    border-start-start-radius: var(--radius-xs); border-start-end-radius: var(--radius-xs);
+}
+.ui-tabs--link .ui-tab:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
+.ui-tabs--link .ui-tab[aria-current='page'] { color: var(--text-strong); font-weight: var(--fw-semibold); border-block-end-color: var(--accent); }
+/* A view switch: it changes what the page shows and nothing else, so it reads as a control you press. */
+.ui-tabs--toggle {
+    display: inline-flex; gap: var(--space-1);
+    padding: var(--space-1);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+}
+.ui-tabs--toggle .ui-tab { padding-inline: var(--space-4); border-radius: var(--radius-pill); }
+.ui-tabs--toggle .ui-tab:hover:not(:disabled) { color: var(--text-strong); }
+.ui-tabs--toggle .ui-tab[aria-pressed='true'] { background: var(--surface-solid); color: var(--text-strong); font-weight: var(--fw-semibold); box-shadow: var(--elev-1); }
+@media (max-width: 768px) {
+    .ui-tabs--toggle { inline-size: 100%; }
+    .ui-tabs--toggle .ui-tab { flex: 1; }
+}
+/* Forced colours drop backgrounds and shadows: the current tab keeps an outline there. */
+@media (forced-colors: active) {
+    .ui-tabs--toggle .ui-tab[aria-pressed='true'], .ui-tabs--link .ui-tab[aria-current='page'] { outline: 2px solid currentColor; outline-offset: -2px; }
+}
+
+/* ─── Form field ─────────────────────────────────────────────────────────── */
+.ui-field-error {
+    display: flex; align-items: flex-start; gap: var(--space-2);
+    margin-block-start: var(--space-2);
+    font-size: var(--fs-200);
+    color: var(--danger-text);
+}
+.ui-field-error [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; margin-block-start: 3px; }
+
+/* ─── Secret field ───────────────────────────────────────────────────────── */
+.ui-secret-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.ui-secret-state { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: 0; font-size: var(--fs-200); color: var(--text-strong); }
+.ui-secret-state [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; color: var(--text-muted); }
+.ui-secret-source { color: var(--text-muted); }
+.ui-secret-buttons, .ui-secret-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ui-secret-edit { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-2); }
+.ui-secret-error { margin: var(--space-2) 0 0; font-size: var(--fs-200); color: var(--danger-text); }
+.ui-secret-error:empty { display: none; }
+
+/* ─── Filter bar ─────────────────────────────────────────────────────────── */
+.ui-filter { gap: var(--space-2) var(--space-3); }
+.ui-filter-search { flex: 1 1 14rem; min-inline-size: 0; }
+.ui-filter-search .field { inline-size: 100%; min-inline-size: 0; }
+.ui-filter-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ui-chip {
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-4);
+    font-size: var(--fs-200);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.ui-chip:hover { border-color: var(--border-strong); color: var(--text-strong); }
+/* Pressed is the highlighter plus the selected ring (DESIGN.md: selected is an inset 2px accent, never the focus ring). */
+.ui-chip[aria-pressed='true'] { box-shadow: inset 0 0 0 2px var(--accent); font-weight: var(--fw-semibold); }
+.ui-chip-count { font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+
+/* ─── Table and pager ────────────────────────────────────────────────────── */
+.ui-sort {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: var(--tap-target);
+    padding-inline: 0;
+    font: inherit;
+    color: inherit;
+    text-align: start;
+}
+.ui-sort:hover { color: var(--text-strong); }
+.ui-sort [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; }
+.ui-table-grid th[aria-sort='ascending'], .ui-table-grid th[aria-sort='descending'] { color: var(--text-strong); }
+/* `.log-cards` is a list here; the reset above zeroes its padding, the bullets are this one line. */
+ul.log-cards { list-style: none; }
+.ui-card-fields { display: grid; gap: var(--space-2); margin: 0; }
+.ui-card-field { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.ui-card-field dd { margin: 0; min-inline-size: 0; text-align: end; overflow-wrap: anywhere; }

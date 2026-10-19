@@ -665,24 +665,52 @@ const UI = {
      * to say: a Meta error, in full, in a sentence nobody reads in four and a
      * half seconds. So:
      *
-     *   - an error gets 9s rather than 4.5s;
+     *   - an error gets 9s rather than 4.5s, a warning 7s;
      *   - hovering or focusing the toast cancels the countdown and restarts it
      *     on the way out, which is the WCAG 2.2.1 escape hatch for anything
      *     that disappears on a timer;
      *   - there is a close button, so it can also be dismissed early — and its
      *     presence is what makes the toast focusable enough to pause at all.
+     *
+     *   UI.toast(message)                          success
+     *   UI.toast(message, 'error')                 the original signature, unchanged
+     *   UI.toast(message, { type: 'warning' })     'success' | 'info' | 'warning' | 'error'
+     *   UI.toast(message, { type: 'info', action: { label: t('ui.undo'), onClick } })
+     *
+     * ── Two live regions ──
+     * Errors go to `#toast-alerts` (`role="alert"`, announced at once), everything
+     * else to `#toast-container` (`role="status"`, announced politely). Both are in
+     * index.html because a live region must exist in the accessibility tree before
+     * its contents change. A page without the second region falls back to the first.
+     *
+     * ── The action button ──
+     * A toast with a button is something to act on, not only to read, so it stays at
+     * least 6 seconds (constitution III: an Undo is offered for at least that long).
+     * Pressing it runs `onClick` and dismisses the toast.
+     *
+     * Returns `{ dismiss(), closed }` — `closed` resolves to 'action', 'dismissed' or
+     * 'expired' once the toast is gone — or null when the page has no toast region.
+     * `UI.undoToast` is built on it.
      */
-    toast(message, type = 'success') {
-        const container = document.getElementById('toast-container');
-        if (!container) return;
-        const icon = type === 'success' ? 'check-circle' : 'alert-circle';
-        const lifetime = type === 'error' ? 9000 : 4500;
+    toast(message, arg) {
+        const opts = typeof arg === 'string' ? { type: arg } : (arg && typeof arg === 'object' ? arg : {});
+        // A table, not `toast ${type}`: the tone becomes a class name, and a value that
+        // is not one of these four must not reach the attribute.
+        const type = opts.type === undefined ? 'success' : (UI._TOAST_TONES[opts.type] ? opts.type : 'info');
+        const tone = UI._TOAST_TONES[type];
+        const container = (type === 'error' && document.getElementById('toast-alerts'))
+            || document.getElementById('toast-container');
+        if (!container) return null;
+
+        const action = opts.action && opts.action.label && typeof opts.action.onClick === 'function' ? opts.action : null;
+        let lifetime = Number.isFinite(opts.duration) && opts.duration > 0 ? opts.duration : tone.ms;
+        if (action) lifetime = Math.max(lifetime, 6000);
 
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
 
         const iconEl = document.createElement('i');
-        iconEl.setAttribute('data-lucide', icon);
+        iconEl.setAttribute('data-lucide', tone.icon);
 
         const span = document.createElement('span');
         // Server messages and Meta error strings can be either script.
@@ -699,30 +727,52 @@ const UI = {
 
         toast.appendChild(iconEl);
         toast.appendChild(span);
+        let actionBtn = null;
+        if (action) {
+            actionBtn = document.createElement('button');
+            actionBtn.type = 'button';
+            actionBtn.className = 'toast-action';
+            actionBtn.textContent = String(action.label);
+            toast.appendChild(actionBtn);
+        }
         toast.appendChild(close);
         container.appendChild(toast);
         UI.icons(toast);
 
         let timer = null;
-        const dismiss = () => {
+        let leaving = false;
+        let settle = () => {};
+        const closed = new Promise((resolve) => { settle = resolve; });
+        const dismiss = (reason) => {
             if (timer) { clearTimeout(timer); timer = null; }
+            if (leaving) return;
+            leaving = true;
             // A class, so the exit timing lives with the entrance timing in
             // styles.css and collapses with the rest under reduced motion.
             toast.classList.add('is-leaving');
             setTimeout(() => toast.remove(), 320);
+            settle(reason);
         };
         const start = () => {
+            if (leaving) return;
             if (timer) clearTimeout(timer);
-            timer = setTimeout(dismiss, lifetime);
+            timer = setTimeout(() => dismiss('expired'), lifetime);
         };
         const hold = () => { if (timer) { clearTimeout(timer); timer = null; } };
 
-        close.addEventListener('click', dismiss);
+        close.addEventListener('click', () => dismiss('dismissed'));
+        if (actionBtn) {
+            actionBtn.addEventListener('click', () => {
+                try { action.onClick(); } catch (err) { console.error('Toast action failed:', err); }
+                dismiss('action');
+            });
+        }
         toast.addEventListener('pointerenter', hold);
         toast.addEventListener('pointerleave', start);
         toast.addEventListener('focusin', hold);
         toast.addEventListener('focusout', start);
         start();
+        return { dismiss: () => dismiss('dismissed'), closed };
     },
 
     // ─── Modal ───────────────────────────────────────────────────────────────
@@ -772,6 +822,8 @@ const UI = {
 
         if (UI._onModalKeydown) document.removeEventListener('keydown', UI._onModalKeydown, true);
         UI._onModalKeydown = (e) => {
+            // The discard question (UI.confirm, stacked) has its own Escape and Tab trap.
+            if (UI._confirmLayer) return;
             if (e.key === 'Escape') {
                 e.preventDefault();
                 UI.requestCloseModal();
@@ -805,6 +857,8 @@ const UI = {
     closeModal() {
         const overlay = document.getElementById('modal-overlay');
         if (!overlay) return;
+        // A question drawn over this modal (navigation can close the modal under it) goes with it.
+        UI._closeConfirmLayer(false);
         UI._runAfterClose();
         overlay.classList.add('hidden');
         overlay.onclick = null;
@@ -873,15 +927,23 @@ const UI = {
     /**
      * The operator asked to close. Ask back if there is unsaved work.
      *
-     * The one deliberate `window.confirm()` left in the dashboard. `Admin.confirm`
-     * works by calling `UI.showModal`, and this runs while a modal is already open —
-     * confirming a modal's dismissal by replacing its contents would destroy the very
-     * fields being asked about. Replacing this needs a second modal layer, which is a
-     * larger change than the problem justifies.
+     * The question is `UI.confirm` drawn as a second layer over the modal (`stack: true`),
+     * not in place of it: replacing a modal's contents to ask about its dismissal would
+     * destroy the very fields being asked about. It used to be the one native
+     * `window.confirm()` left in the dashboard, which is browser chrome: unstyled,
+     * untranslatable, and a different look from every other decision here.
      */
     requestCloseModal() {
-        if (UI.isModalDirty() && !confirm(t('common.discardConfirm'))) return;
-        UI.closeModal();
+        if (!UI.isModalDirty()) { UI.closeModal(); return; }
+        if (UI._confirmLayer) return; // the question is already on screen
+        UI.confirm({
+            stack: true,
+            title: t('ui.discard.title'),
+            body: t('common.discardConfirm'),
+            confirmLabel: t('ui.discard.confirm'),
+            cancelLabel: t('ui.discard.keep'),
+            onConfirm: () => UI.closeModal(),
+        });
     },
 
     _focusables(root) {
@@ -1553,6 +1615,1277 @@ const UI = {
             UI.toast(err && err.message ? err.message : t('common.error'), 'error');
         }
     },
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Shared patterns (UX foundation)
+    // ═════════════════════════════════════════════════════════════════════════
+    /**
+     * What every screen builds its chrome from, written once (constitution V; audit SH-09,
+     * SH-11 … SH-17, SH-33). A page moves onto these one story at a time: until it does, its own
+     * markup keeps working and nothing here changes what it renders.
+     *
+     *   UI.pageHeader({ title, subtitle, back, actions, help })
+     *   UI.card({ title, actions, body, tone })
+     *   UI.emptyState({ icon, title, body, action, secondary, help })
+     *   UI.confirm({ title, body, hint, confirmLabel, tone, requireText, onConfirm })
+     *   UI.undoToast(message, { onUndo, seconds })                    -> Promise<boolean>
+     *   UI.tabs(items, { mode, current })
+     *   UI.secretField({ id, label, status, onReplace, onRemove, generate })
+     *   UI.field({ id, label, hint, error, optional, control })
+     *   UI.filterBar({ id, search, chips, sort, counts, value, onChange })
+     *   UI.table({ id, columns, rows, sort, empty })  +  UI.pager({ id, page, total, onPage })
+     *
+     * (`UI.toast` keeps its place above, next to the modal code, with the new tones and the
+     * action button.)
+     *
+     * ── The contract they share ──
+     *   - A builder returns SafeHtml, written with the `html` tag, so a title, a label or a row
+     *     value that came from the server is escaped. A string passed where markup is expected
+     *     is TEXT, never markup; markup is passed as SafeHtml (`html\`…\``, another builder, or
+     *     `html.raw` on a literal written in this codebase).
+     *   - A class name that depends on a word (a tone, a variant, an alignment) comes from one
+     *     of the null-prototype tables below, never from interpolation: a plain `{}` answers
+     *     'constructor' with a function (see the note on BUTTON_VARIANTS).
+     *   - No inline handlers. A callback (`onChange`, `onPage`, `onSort`, `onReplace`) lives in a
+     *     bounded registry keyed by the element's `data-ui-id`, and the delegated handlers at the
+     *     foot of this file look it up. Pass a stable `id`: a page that re-renders then replaces
+     *     its entry, and focus can be put back by `UI.captureFocus` (ids and `data-focus-key`).
+     *   - Logical CSS properties only, 44px targets, a visible focus ring, and every label from
+     *     i18n in both languages.
+     */
+
+    /** The tones a toast can have: the icon (shape as well as colour) and how long it stays. */
+    _TOAST_TONES: Object.assign(Object.create(null), {
+        success: { icon: 'check-circle', ms: 4500 },
+        info: { icon: 'info', ms: 4500 },
+        warning: { icon: 'alert-triangle', ms: 7000 },
+        error: { icon: 'alert-circle', ms: 9000 },
+    }),
+    /** A card's tone: its class and the glyph in its title, so the tone is never colour alone. */
+    _CARD_TONES: Object.assign(Object.create(null), {
+        info: { cls: 'ui-card--info', icon: 'info' },
+        success: { cls: 'ui-card--success', icon: 'check-circle' },
+        warning: { cls: 'ui-card--warning', icon: 'alert-triangle' },
+        danger: { cls: 'ui-card--danger', icon: 'alert-circle' },
+    }),
+    /** Heading levels a header or a card may use. */
+    _HEADING_TAGS: Object.assign(Object.create(null), { 2: 'h2', 3: 'h3', 4: 'h4' }),
+    /** Where a saved secret came from, as the dictionary key that says it. */
+    _SECRET_SOURCES: Object.assign(Object.create(null), {
+        db: 'ui.secret.source.db',
+        env: 'ui.secret.source.env',
+    }),
+    /** A column's alignment as a class (`.cell-num`: end-aligned, tabular figures). */
+    _ALIGN: Object.assign(Object.create(null), { start: '', end: 'cell-num' }),
+
+    _shared: Object.create(null),
+    _sharedOrder: [],
+    _sharedSeq: 0,
+    /** The callback the open confirmation will run. Never written into the DOM. */
+    _confirmPending: null,
+    /** The confirmation drawn over an open modal (`stack: true`), if any. */
+    _confirmLayer: null,
+
+    // ─── Registry for callbacks ──────────────────────────────────────────────
+    /**
+     * Keep a builder's callbacks where its delegated handlers can find them. Bounded: a page
+     * that never passes an `id` and re-renders on every keystroke would otherwise grow it
+     * for the life of the tab, so the oldest entries go first (the newest is the live one).
+     */
+    _remember(id, entry) {
+        const key = String(id);
+        const old = UI._shared[key];
+        if (old && old.timer) clearTimeout(old.timer);
+        if (!old) UI._sharedOrder.push(key);
+        UI._shared[key] = entry;
+        while (UI._sharedOrder.length > 120) delete UI._shared[UI._sharedOrder.shift()];
+        return entry;
+    },
+
+    /** The entry of the builder that rendered `el` (or an ancestor of it). */
+    _recall(el) {
+        const host = el && el.closest ? el.closest('[data-ui-id]') : null;
+        const id = host ? host.getAttribute('data-ui-id') : null;
+        return id ? UI._shared[id] || null : null;
+    },
+
+    /**
+     * A link target: a hash route this app owns (`#/posts?view=live`), or what `safeUrl` allows.
+     * '' for anything else. `safeUrl` alone refuses `#/…`, and escaping alone does not stop `javascript:`.
+     */
+    _href(value) {
+        const v = value === null || value === undefined ? '' : String(value).trim();
+        if (/^#\/[\p{L}\p{N}\-._~/?=&%#,:@+]*$/u.test(v)) return v;
+        return safeUrl(v);
+    },
+
+    /** A link that looks like a button, its classes from the button tables. '' without a usable href. */
+    _anchorButton(o) {
+        const href = UI._href(o.href);
+        if (!href) return '';
+        const variant = BUTTON_VARIANTS[o.variant] !== undefined ? BUTTON_VARIANTS[o.variant] : BUTTON_VARIANTS.secondary;
+        const classes = ['btn', variant, BUTTON_SIZES[o.size] || '', o.className || ''].filter(Boolean).join(' ');
+        const external = /^https?:/i.test(href);
+        return html`<a class="${classes}" href="${href}"${external ? html.raw(' target="_blank" rel="noopener noreferrer"') : ''}>${o.icon ? html`<i data-lucide="${o.icon}" aria-hidden="true"></i> ` : ''}${o.label}</a>`;
+    },
+
+    /** `{ label, action, data }` or `{ label, href }` as a button or a link. '' when it names neither. */
+    _cta(spec, fallbackVariant) {
+        if (!spec || !spec.label) return '';
+        const variant = spec.variant || fallbackVariant;
+        if (spec.href) return UI._anchorButton({ href: spec.href, label: spec.label, icon: spec.icon, variant, size: spec.size });
+        if (!spec.action) return '';
+        return UI.button({ variant, size: spec.size, label: spec.label, icon: spec.icon, action: spec.action, data: spec.data, id: spec.id });
+    },
+
+    /** `help` as `'slug#section'` or `{ target, label }`, through `UI.helpLink` (which renders nothing for a bad target). */
+    _help(help) {
+        if (!help) return '';
+        if (typeof help === 'string') return UI.helpLink(help);
+        return UI.helpLink(help.target, help.label);
+    },
+
+    // ─── Page header ─────────────────────────────────────────────────────────
+    /**
+     * The header inside a page: its title, a line that says what the screen is for, a way back,
+     * the page's actions and a link to the help article that explains it. A detail view says WHICH
+     * tenant, article or draft it shows (SH-09), and the page's one primary action sits here in
+     * the same place on every screen instead of in a toolbar of its own.
+     *
+     *   UI.pageHeader({
+     *     title: tenant.name,                                      text; isolated with dir="auto"
+     *     subtitle: t('tenants.detail.subtitle'),
+     *     back: { label: t('nav.tenants'), href: '#/tenants' },    or { label, action: 'ns:method', data }
+     *     actions: UI.button({ variant: 'primary', … }),           SafeHtml; ONE primary per screen
+     *     help: 'worker#security',                                 or { target, label }
+     *   })
+     *
+     * The shell's own `#page-title` (an h1) is the page's name; this is an h2 (`level: 3` nests it).
+     */
+    pageHeader(options) {
+        const o = options || {};
+        const tag = html.raw(UI._HEADING_TAGS[o.level] || 'h2');
+        const back = o.back && o.back.label
+            ? (o.back.action
+                ? UI.button({ variant: 'ghost', size: 'sm', icon: 'arrow-left', label: o.back.label, action: o.back.action, data: o.back.data, className: 'ui-page-back' })
+                : UI._anchorButton({ href: o.back.href, label: o.back.label, icon: 'arrow-left', variant: 'ghost', size: 'sm', className: 'ui-page-back' }))
+            : '';
+        const help = UI._help(o.help);
+        return html`
+            <header class="ui-page-head">
+                <div class="ui-page-head-main">
+                    ${back}
+                    <${tag} class="ui-page-head-title" dir="auto">${o.title}</${tag}>
+                    ${o.subtitle ? html`<p class="ui-page-head-subtitle" dir="auto">${o.subtitle}</p>` : ''}
+                    ${help}
+                </div>
+                ${o.actions ? html`<div class="ui-page-head-actions">${o.actions}</div>` : ''}
+            </header>
+        `;
+    },
+
+    // ─── Card ────────────────────────────────────────────────────────────────
+    /**
+     * One card: a head (title left, actions at the end) over a body, the same padding, title size
+     * and action placement on every screen (SH-11: there were 32 card classes and 55 title ones).
+     *
+     *   UI.card({ title, actions, body, tone: 'warning', level: 2, solid: false, id, className })
+     *
+     * `tone` ('info' | 'success' | 'warning' | 'danger') tints the edge and puts a glyph in front
+     * of the title, so it reads without colour. `solid` is for a card inside a scrolling grid
+     * (DESIGN.md: cards in a grid are opaque; glass is for a lone panel). `body` and `actions` are
+     * SafeHtml; a plain string is shown as text.
+     */
+    card(options) {
+        const o = options || {};
+        const tone = UI._CARD_TONES[o.tone] || null;
+        const tag = html.raw(UI._HEADING_TAGS[o.level] || 'h2');
+        const base = o.id ? String(o.id) : `ui-card-${++UI._sharedSeq}`;
+        const titleId = `${base}-title`;
+        const classes = ['surface', o.solid ? 'surface--solid' : '', 'ui-card', tone ? tone.cls : '', o.className || '']
+            .filter(Boolean).join(' ');
+        const title = o.title
+            ? html`<${tag} class="card-title" id="${titleId}" dir="auto">${tone ? html`<i data-lucide="${tone.icon}" aria-hidden="true"></i> ` : ''}${o.title}</${tag}>`
+            : '';
+        const head = title || o.actions
+            ? html`
+                <div class="card-head">
+                    ${title}
+                    ${o.actions ? html`<div class="card-head-actions">${o.actions}</div>` : ''}
+                </div>`
+            : '';
+        return html`
+            <section class="${classes}"${o.id ? html` id="${o.id}"` : ''}${o.title ? html` aria-labelledby="${titleId}"` : ''}>
+                ${head}
+                <div class="card-body">${o.body}</div>
+            </section>
+        `;
+    },
+
+    // ─── Empty state ─────────────────────────────────────────────────────────
+    /**
+     * "Nothing here yet", and what to do about it (SH-12). Every empty state carries ONE next step:
+     * "No campaigns yet" is itself the "New campaign" button, not a dead end.
+     *
+     *   UI.emptyState({
+     *     icon: 'inbox', title, body,
+     *     action: { label, action: 'ns:method', data } | { label, href: '#/campaigns' },   the next step
+     *     secondary: { label, href },                       optional, quieter
+     *     help: 'faq#setup',                                optional help article
+     *   })
+     *
+     * With no `action`, `secondary` or `help` the markup is exactly what `Admin.emptyState` always
+     * drew, which now delegates here. Whether a view is empty because nothing is configured or
+     * because nothing has happened yet is the caller's to say (constitution III): they are two
+     * different titles and, usually, two different actions.
+     */
+    emptyState(options) {
+        const o = options || {};
+        const glyph = o.icon ? html`<i data-lucide="${o.icon}" aria-hidden="true"></i>` : '';
+        const body = o.body ? html`<p dir="auto">${o.body}</p>` : '';
+        const actions = [UI._cta(o.action, 'primary'), UI._cta(o.secondary, 'ghost'), UI._help(o.help)].filter(Boolean);
+        if (actions.length === 0) {
+            return html`
+            <div class="empty-state">
+                ${glyph}
+                <h3>${o.title}</h3>
+                ${body}
+            </div>
+        `;
+        }
+        return html`
+            <div class="empty-state">
+                ${glyph}
+                <h3>${o.title}</h3>
+                ${body}
+                <div class="empty-state-actions">${actions}</div>
+            </div>
+        `;
+    },
+
+    // ─── Confirm ─────────────────────────────────────────────────────────────
+    /**
+     * The styled confirmation: one look for every decision in the product. It moved here from
+     * `Admin.confirm`, which is now an alias with the same behaviour.
+     *
+     * `window.confirm()` is a browser chrome dialog: it drops the product's visual identity, cannot
+     * be translated, cannot be styled as dangerous, and appears at exactly the moment the operator
+     * is deciding whether to destroy something. Nothing in the dashboard uses it.
+     *
+     *   title        heading
+     *   body         what will happen, in one sentence
+     *   hint         the consequence that is not obvious
+     *   confirmLabel a VERB
+     *   cancelLabel  the way out, when "Cancel" is not the honest word ("Keep editing")
+     *   tone         'danger' (default) or 'primary'
+     *   requireText  the operator must type this string to enable the button
+     *   stack        draw it over the open modal instead of in place of it (the discard question)
+     *   onConfirm()  runs after the button is pressed; a promise keeps the dialog open until it settles
+     *
+     * `tone` exists because not every confirmation is destructive. Extending the Meta token is
+     * consequential and worth confirming, but it destroys nothing — dressing it in a red button would
+     * be miscommunication, so the danger look is the default and the exception is opt-in.
+     *
+     * Use it for what cannot be taken back. For what can (a campaign, a draft, a scheduled post),
+     * constitution III prefers no question at all and an Undo after (`UI.undoToast`).
+     */
+    confirm(options) {
+        const o = options || {};
+        UI._confirmPending = typeof o.onConfirm === 'function' ? o.onConfirm : null;
+        const markup = UI._confirmMarkup(o, !!o.stack);
+        if (o.stack) UI._openConfirmLayer(markup);
+        else UI.showModal(markup);
+    },
+
+    _confirmMarkup(o, stacked) {
+        const gated = !!o.requireText;
+        const confirmIcon = o.confirmIcon === undefined ? 'trash-2' : o.confirmIcon;
+        const confirmClass = `btn ${BUTTON_VARIANTS[o.tone === 'primary' ? 'primary' : 'danger']}`;
+        const cancelClass = `btn ${BUTTON_VARIANTS.secondary}`;
+        // In place of the modal, the way out is the modal's own close (which asks about unsaved work);
+        // drawn over it, the way out closes only the question.
+        const closeAction = stacked ? 'ui:cancelConfirm' : 'ui:closeModal';
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${o.title}</h2>
+                <button type="button" class="modal-close" data-action="${closeAction}" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+            <p class="modal-body-text" dir="auto">${o.body}</p>
+            ${o.hint ? html`<p class="form-hint">${o.hint}</p>` : ''}
+            ${gated ? html`
+                <div class="form-group mbs-4">
+                    <label class="form-label" for="admin-confirm-echo">${o.requireHint || t('admin.confirmEcho')}</label>
+                    <input class="field field-mono" id="admin-confirm-echo" type="text" dir="ltr"
+                           autocomplete="off" spellcheck="false" data-input="ui:gateConfirm"
+                           data-expect="${o.requireText}" aria-describedby="admin-confirm-echo-hint">
+                    <p class="form-hint" id="admin-confirm-echo-hint">${t('admin.confirmEchoHint', { value: o.requireText })}</p>
+                </div>
+            ` : ''}
+            <div id="admin-confirm-error"></div>
+            <div class="modal-actions">
+                <button type="button" class="${cancelClass}" data-action="${closeAction}">${o.cancelLabel || t('common.cancel')}</button>
+                <button type="button" class="${confirmClass}" id="admin-confirm-btn"
+                        data-action="ui:runConfirm" ${gated ? html.raw('disabled') : ''}>
+                    <i data-lucide="${confirmIcon}" aria-hidden="true"></i> ${o.confirmLabel || t('common.delete')}
+                </button>
+            </div>
+        `;
+    },
+
+    /** The typed-echo gate: the button turns on only on an exact match. */
+    gateConfirm(input) {
+        const btn = document.getElementById('admin-confirm-btn');
+        if (!btn) return;
+        btn.disabled = String(input.value || '').trim() !== String(input.dataset.expect || '');
+    },
+
+    /**
+     * Run the confirmed action WITHOUT throwing the button away first.
+     *
+     * This used to be `UI.closeModal()` and then `fn()`. Closing first destroys the button the
+     * operator just pressed, which meant every confirm-gated destructive action in the product —
+     * delete campaign, delete post, publish now, cancel job, revoke a membership, revoke sessions,
+     * grant platform_admin, GDPR erasure — had *zero* in-flight feedback. The dialog vanished,
+     * nothing else changed, and the operator was left guessing for as long as the request took. On a
+     * cold start that is seconds.
+     *
+     * Worse, the failure path was a toast fired at a screen that had already moved on: "publish now"
+     * could fail and the only trace was a message four and a half seconds long, with the thing the
+     * operator had been looking at already gone.
+     *
+     * So the order is the one `UI.closeModal`'s own docblock asks for — do the work, THEN close:
+     *
+     *   - the button goes busy and stays put, so the press is acknowledged;
+     *   - success closes the dialog;
+     *   - failure keeps it open, restores the button and puts the reason *inside* the dialog, next to
+     *     the action that produced it, with the callback put back so the retry is one click.
+     *
+     * Escape and the close button stay live throughout: a slow request must never become a trap.
+     *
+     * ── What this must NOT break ──
+     * Some callers paint optimistically the moment they are called and rely on that paint being
+     * visible. `posts.js: deletePostConfirmed` removes the card and then returns a `Motion.optimistic`
+     * promise; `publishNowConfirmed` greys the card's buttons and flips its status pill. Both still
+     * work, because both do their painting SYNCHRONOUSLY before returning — the card disappears behind
+     * the dialog exactly as it used to, and the dialog follows a moment later. And `Motion.optimistic`
+     * resolves even on failure (it reverts and toasts internally), so those two keep their own error
+     * handling and never see the in-modal strip.
+     *
+     * A synchronous callback — one that returns no promise — closes the dialog immediately. There is
+     * nothing to wait for.
+     */
+    runConfirm(el) {
+        const btn = (el && el.id === 'admin-confirm-btn') ? el : document.getElementById('admin-confirm-btn');
+        const restore = UI.actionBusy(btn);
+        // Already in flight: the second click of a double-click lands here and is a no-op, which is the
+        // whole point of `actionBusy` returning null.
+        //
+        // This guard comes FIRST, before the pending callback is even read, and that ordering is the whole
+        // fix. Read it first and the second click finds it already nulled by the first, falls into the
+        // "nothing to confirm" branch below, and closes the dialog — out from under a request that is still
+        // running. A double-click would have looked exactly like success.
+        if (restore === null) return undefined;
+
+        const layered = !!UI._confirmLayer;
+        const done = () => {
+            if (layered) UI._closeConfirmLayer(true);
+            else UI.closeModal();
+        };
+
+        const fn = UI._confirmPending;
+        if (typeof fn !== 'function') {
+            done();
+            return undefined;
+        }
+
+        UI._confirmPending = null;
+        UI.clearConfirmError();
+
+        const recover = (err) => {
+            // Put the callback back so the button the operator is looking at still does what it says.
+            UI._confirmPending = fn;
+            restore();
+            UI.regateConfirm();
+            UI.showConfirmError(err);
+        };
+
+        let result;
+        try {
+            result = fn();
+        } catch (err) {
+            recover(err);
+            return undefined;
+        }
+
+        if (!result || typeof result.then !== 'function') {
+            done();
+            return undefined;
+        }
+
+        return result.then(() => { done(); }, recover);
+    },
+
+    /** Re-apply the typed-echo gate after a restore, in case the field changed. */
+    regateConfirm() {
+        const input = document.getElementById('admin-confirm-echo');
+        if (input) UI.gateConfirm(input);
+    },
+
+    clearConfirmError() {
+        const host = document.getElementById('admin-confirm-error');
+        if (host) host.innerHTML = '';
+    },
+
+    /**
+     * The reason, inside the dialog. Falls back to a toast if the dialog is no longer there — the
+     * operator can close a slow confirm with Escape, and an error that arrives afterwards must still
+     * be said out loud rather than written to an element that no longer exists.
+     */
+    showConfirmError(err) {
+        const message = (err && err.message) || t('common.error');
+        const host = document.getElementById('admin-confirm-error');
+        if (!host) {
+            UI.toast(message, 'error');
+            return;
+        }
+        host.innerHTML = esc(UI.errorStrip(message, '', 'admin-confirm-error-strip'));
+        UI.icons(host);
+    },
+
+    /**
+     * Draw a confirmation OVER the open modal. The modal underneath is `inert`, so neither the keyboard
+     * nor a screen reader reaches it, and what it holds (the very fields the question is about) is left
+     * exactly as it was. Escape and the scrim answer "no"; Tab stays inside; focus starts on the way out.
+     */
+    _openConfirmLayer(markup) {
+        UI._closeConfirmLayer(false);
+        const underneath = document.getElementById('modal-overlay');
+        const returnFocus = document.activeElement;
+
+        const layer = document.createElement('div');
+        layer.className = 'modal-overlay confirm-layer';
+        const box = document.createElement('div');
+        box.className = 'modal-content confirm-content';
+        box.setAttribute('role', 'alertdialog');
+        box.setAttribute('aria-modal', 'true');
+        box.setAttribute('tabindex', '-1');
+        box.innerHTML = esc(markup);
+        const title = box.querySelector('.modal-title');
+        if (title) {
+            title.id = `confirm-title-${++UI._modalSeq}`;
+            box.setAttribute('aria-labelledby', title.id);
+        }
+        layer.appendChild(box);
+        document.body.appendChild(layer);
+        UI.icons(box);
+        if (underneath) underneath.setAttribute('inert', '');
+
+        const onKey = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                UI.cancelConfirm();
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            const items = UI._focusables(box);
+            if (items.length === 0) { e.preventDefault(); box.focus(); return; }
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement;
+            if (e.shiftKey && (active === first || !box.contains(active))) {
+                e.preventDefault(); last.focus();
+            } else if (!e.shiftKey && (active === last || !box.contains(active))) {
+                e.preventDefault(); first.focus();
+            }
+        };
+        document.addEventListener('keydown', onKey, true);
+        layer.addEventListener('click', (e) => { if (e.target === layer) UI.cancelConfirm(); });
+        UI._confirmLayer = { layer, underneath, returnFocus, onKey };
+
+        // The first button is the way out: a destructive question never starts on its destructive answer.
+        const wayOut = box.querySelector('.modal-actions .btn');
+        (wayOut || box).focus();
+    },
+
+    /** Remove the stacked question, if there is one. Idempotent. Returns whether one was open. */
+    _closeConfirmLayer(restoreFocus) {
+        const open = UI._confirmLayer;
+        if (!open) return false;
+        UI._confirmLayer = null;
+        document.removeEventListener('keydown', open.onKey, true);
+        if (open.layer && typeof open.layer.remove === 'function') open.layer.remove();
+        if (open.underneath) open.underneath.removeAttribute('inert');
+        const back = open.returnFocus;
+        // Only where it can still take focus: after "discard" the modal it came from is gone.
+        if (restoreFocus && back && typeof back.focus === 'function' && document.contains(back) && back.offsetParent !== null) {
+            back.focus();
+        }
+        return true;
+    },
+
+    /** "No" to the stacked question: it closes, and the modal underneath is as it was. */
+    cancelConfirm() {
+        UI._confirmPending = null;
+        UI._closeConfirmLayer(true);
+    },
+
+    // ─── Undo toast ──────────────────────────────────────────────────────────
+    /**
+     * The reversible way to take a decision (constitution III): do not ask first, tell them it is
+     * done and let them take it back. The toast stays for `seconds` (never under 6) and holds while it
+     * is hovered or focused, like every toast. The promise settles when it is gone:
+     *
+     *   true   the person pressed Undo (`onUndo` has run)
+     *   false  it expired or was dismissed: the decision stands, so the caller carries it out
+     *
+     *   removeRowFromScreen(id);
+     *   const undone = await UI.undoToast(t('campaigns.deleted'), { onUndo: () => putRowBack(id) });
+     *   if (!undone) await API.deleteCampaign(id);       // the real, irreversible request goes last
+     *
+     * Nothing has been sent until the promise settles, so closing the tab inside the window means it
+     * never is: a caller whose action must not be lost flushes it on `pagehide`.
+     * A page with no toast region cannot offer an Undo, so the promise settles `false` at once.
+     */
+    undoToast(message, options) {
+        const o = options || {};
+        const seconds = Math.max(6, Number(o.seconds) || 6);
+        let undone = false;
+        const handle = UI.toast(message, {
+            type: o.type || 'info',
+            duration: seconds * 1000,
+            action: {
+                label: o.label || t('ui.undo'),
+                onClick: () => {
+                    undone = true;
+                    // Someone who pressed Undo does not want the action, so a failed `onUndo` is said out loud
+                    // and the answer is still "undone": better a row left on screen than a surprise delete.
+                    try {
+                        const r = typeof o.onUndo === 'function' ? o.onUndo() : undefined;
+                        if (r && typeof r.then === 'function') {
+                            r.then(null, (err) => UI.toast((err && err.message) || t('common.error'), 'error'));
+                        }
+                    } catch (err) {
+                        UI.toast((err && err.message) || t('common.error'), 'error');
+                    }
+                },
+            },
+        });
+        if (!handle || !handle.closed) return Promise.resolve(false);
+        return handle.closed.then(() => undone);
+    },
+
+    // ─── Tabs ────────────────────────────────────────────────────────────────
+    /**
+     * Two controls that look alike and behave differently, made to look different (SH-17).
+     *
+     *   mode 'link'    NAVIGATION. Each tab is an `<a href>` and the current one carries `aria-current`,
+     *                  so the view survives a reload, Back and a shared link. Underline tabs.
+     *   mode 'toggle'  A VIEW SWITCH inside the page. Each is a button with `aria-pressed`, and it does
+     *                  not change the URL. A pill in a track.
+     *
+     *   UI.tabs([{ key: 'queue', label }, { key: 'live', label, count: 3 }],
+     *           { mode: 'link', current: 'live', route: '#/posts', param: 'view', label: t('nav.posts') })
+     *       → <a href="#/posts?view=live" aria-current="page">
+     *   UI.tabs(items, { mode: 'toggle', current: 'live', action: 'posts:setView', label })
+     *       → <button aria-pressed="true" data-action="posts:setView" data-key="live">
+     *
+     * An item may carry its own `href` (link mode) or `action` and `data` (toggle mode), and an `icon`.
+     * The arrow keys, Home and End move focus between the tabs following the page's direction: in
+     * Arabic the left arrow goes to the NEXT tab. Tab itself still reaches every one.
+     */
+    tabs(items, options) {
+        const o = options || {};
+        const mode = o.mode === 'toggle' ? 'toggle' : 'link';
+        const list = (Array.isArray(items) ? items : []).filter((it) => it && it.key !== undefined && it.key !== null && it.label !== undefined);
+        const label = o.label ? html` aria-label="${o.label}"` : '';
+        const inner = (it) => html`${it.icon ? html`<i data-lucide="${it.icon}" aria-hidden="true"></i>` : ''}<span>${it.label}</span>${it.count !== undefined && it.count !== null ? html`<span class="ui-tab-count">${UI.num(it.count)}</span>` : ''}`;
+        const current = (it) => o.current !== undefined && String(o.current) === String(it.key);
+
+        if (mode === 'toggle') {
+            return html`<div class="ui-tabs ui-tabs--toggle" role="group"${label} data-keydown="ui:tabsKey">${list.map((it) => {
+                const action = it.action || o.action;
+                return html`<button type="button" class="ui-tab" data-ui-tab aria-pressed="${current(it) ? 'true' : 'false'}"${action ? html` data-action="${action}"` : ''} data-key="${it.key}"${it.disabled ? html.raw(' disabled') : ''}>${inner(it)}</button>`;
+            })}</div>`;
+        }
+
+        return html`<nav class="ui-tabs ui-tabs--link"${label} data-keydown="ui:tabsKey">${list.map((it) => {
+            const raw = it.href !== undefined
+                ? it.href
+                : (o.route ? `${o.route}${o.param ? `?${o.param}=${encodeURIComponent(String(it.key))}` : ''}` : '');
+            const href = UI._href(raw);
+            if (!href) return '';
+            return html`<a class="ui-tab" data-ui-tab href="${href}"${current(it) ? html.raw(' aria-current="page"') : ''}>${inner(it)}</a>`;
+        })}</nav>`;
+    },
+
+    /** Is `el` laid out right to left? The element's own computed direction, else the document's. */
+    _isRtl(el) {
+        try {
+            if (el && typeof getComputedStyle === 'function') {
+                const dir = getComputedStyle(el).direction;
+                if (dir) return dir === 'rtl';
+            }
+        } catch { /* no layout engine: use the attribute */ }
+        const root = document.documentElement;
+        const dir = root && (root.dir || (root.getAttribute && root.getAttribute('dir')));
+        return dir === 'rtl';
+    },
+
+    /**
+     * Arrow keys between tabs. Right is "next" in a left-to-right page and "previous" in a right-to-left
+     * one; Home and End are the first and last in reading order. It only moves focus: pressing the tab
+     * (Enter or Space on a button, Enter on a link) is what activates it.
+     */
+    tabsKey(host, event) {
+        const key = event && event.key;
+        const tabs = Array.from(host.querySelectorAll('[data-ui-tab]'))
+            .filter((el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+        if (tabs.length < 2) return;
+        const from = event.target && event.target.closest ? event.target.closest('[data-ui-tab]') : null;
+        const at = tabs.indexOf(from);
+        if (at < 0) return;
+        const rtl = UI._isRtl(host);
+        let to;
+        if (key === 'ArrowRight') to = at + (rtl ? -1 : 1);
+        else if (key === 'ArrowLeft') to = at + (rtl ? 1 : -1);
+        else if (key === 'Home') to = 0;
+        else if (key === 'End') to = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        tabs[(to + tabs.length) % tabs.length].focus();
+    },
+
+    // ─── Form field ──────────────────────────────────────────────────────────
+    /**
+     * The one form-field pattern (constitution V, SH-15): a label, an optional marker, a hint and an
+     * inline error, wired so a screen reader can reach each one from the control.
+     *
+     *   UI.field({ id: 'camp-name', label: t('campaigns.name'), hint: t('campaigns.nameHint'),
+     *              optional: false, error: problem,
+     *              control: ({ attrs }) => html`<input class="field" name="name" ${attrs}>` })
+     *
+     *   - the label points at the control (`for`), and says "(optional)" when `optional` is set;
+     *   - the hint is `aria-describedby`; with an `error`, the error is too, and the control gets
+     *     `aria-invalid="true"` (the red ring in styles.css keys off it);
+     *   - the error has a glyph as well as a colour and is announced when it appears.
+     *
+     * `control` is a function, called with `{ id, describedBy, invalid, attrs }` where `attrs` is the
+     * id, `aria-describedby` and `aria-invalid` as ready-to-place SafeHtml attributes; or SafeHtml, in
+     * which case the wiring is added to the first `<input>`, `<select>` or `<textarea>` in it (a
+     * control that already has an id keeps it, and the label follows). A string is text.
+     *
+     * To show or clear an error after a submit, without re-rendering the form: `UI.setFieldError(el, message)`
+     * and `UI.clearFieldError(el)`, which reuse `UI.markInvalid`.
+     */
+    field(options) {
+        const o = options || {};
+        let id = o.id ? String(o.id) : '';
+        const wanted = !!o.error;
+        const rawControl = o.control;
+
+        // Which id does the control have? The caller's, else the one it already carries, else a new one.
+        if (!id && rawControl instanceof SafeHtml) {
+            const found = /<(?:input|select|textarea)\b[^>]*?\sid="([^"]*)"/i.exec(rawControl.value);
+            if (found) id = found[1];
+        }
+        if (!id) id = `ui-field-${++UI._sharedSeq}`;
+
+        const hintId = o.hint ? `${id}-hint` : '';
+        const errorId = `${id}-error`;
+        const describedBy = [hintId, wanted ? errorId : ''].filter(Boolean).join(' ');
+        const wire = { id, describedBy, invalid: wanted };
+        let control;
+        if (typeof rawControl === 'function') {
+            const attrs = html`${html` id="${id}"`}${describedBy ? html` aria-describedby="${describedBy}"` : ''}${wanted ? html.raw(' aria-invalid="true"') : ''}`;
+            control = rawControl({ id, describedBy, invalid: wanted, attrs });
+        } else {
+            control = UI._wireControl(rawControl, wire);
+        }
+
+        return html`
+            <div class="form-group ui-field${wanted ? ' has-error' : ''}" data-ui-field>
+                <label class="form-label" for="${id}">${o.label}${o.optional ? html` <span class="label-optional">${t('common.optional')}</span>` : ''}</label>
+                ${control}
+                ${hintId ? html`<p class="form-hint" id="${hintId}">${o.hint}</p>` : ''}
+                <p class="ui-field-error${wanted ? '' : ' hidden'}" id="${errorId}" role="alert" data-ui-field-error><i data-lucide="alert-circle" aria-hidden="true"></i> <span dir="auto">${o.error}</span></p>
+            </div>
+        `;
+    },
+
+    /** Add the id, `aria-describedby` and `aria-invalid` to the first form control in `control` (SafeHtml). */
+    _wireControl(control, wire) {
+        if (!(control instanceof SafeHtml)) return control === null || control === undefined ? '' : html`${control}`;
+        const re = /<(input|select|textarea)\b([^>]*)>/i;
+        const m = re.exec(control.value);
+        if (!m) return control;
+        let attrs = m[2];
+        const trailing = /\/\s*$/.test(attrs) ? ' /' : '';
+        attrs = attrs.replace(/\s*\/\s*$/, '');
+        const hasId = /\sid="/i.test(` ${attrs}`);
+        // `aria-invalid` is owned here: whatever the control said is replaced by what the field knows.
+        attrs = attrs.replace(/\saria-invalid="[^"]*"/i, '');
+        const had = /\saria-describedby="([^"]*)"/i.exec(attrs);
+        let described = wire.describedBy;
+        if (had) {
+            attrs = attrs.replace(/\saria-describedby="[^"]*"/i, '');
+            described = [had[1], wire.describedBy].filter(Boolean).join(' ');
+        }
+        const added = [
+            hasId ? '' : ` id="${esc(wire.id)}"`,
+            described ? ` aria-describedby="${esc(described)}"` : '',
+            wire.invalid ? ' aria-invalid="true"' : '',
+        ].join('');
+        const tag = `<${m[1]}${attrs}${added}${trailing}>`;
+        return html.raw(control.value.slice(0, m.index) + tag + control.value.slice(m.index + m[0].length));
+    },
+
+    /**
+     * Show `message` under a field after the fact (a server refusal, a client check) and mark its control
+     * invalid. `el` is the field's wrapper or anything inside it. The control takes focus, as with
+     * `UI.markInvalid`, which this uses. Returns false when `el` is not inside a `UI.field`.
+     */
+    setFieldError(el, message, options) {
+        const host = el && el.closest ? el.closest('[data-ui-field]') : null;
+        const control = host ? host.querySelector('input, select, textarea') : null;
+        const note = host ? host.querySelector('[data-ui-field-error]') : null;
+        if (!host || !control || !note) return false;
+        const span = note.querySelector('span');
+        if (span) span.textContent = message === null || message === undefined ? '' : String(message);
+        note.classList.remove('hidden');
+        host.classList.add('has-error');
+        const kept = String(control.getAttribute('aria-describedby') || '').split(/\s+/).filter((x) => x && x !== note.id);
+        const described = kept.concat(note.id).join(' ');
+        if (options && options.focus === false) {
+            control.setAttribute('aria-invalid', 'true');
+            control.setAttribute('aria-describedby', described);
+        } else {
+            UI.markInvalid(control, described);
+        }
+        return true;
+    },
+
+    /** Take the error away again: the message, the red ring and the description that pointed at it. */
+    clearFieldError(el) {
+        const host = el && el.closest ? el.closest('[data-ui-field]') : null;
+        const control = host ? host.querySelector('input, select, textarea') : null;
+        const note = host ? host.querySelector('[data-ui-field-error]') : null;
+        if (!host || !control || !note) return false;
+        const span = note.querySelector('span');
+        if (span) span.textContent = '';
+        note.classList.add('hidden');
+        host.classList.remove('has-error');
+        control.removeAttribute('aria-invalid');
+        const kept = String(control.getAttribute('aria-describedby') || '').split(/\s+/).filter((x) => x && x !== note.id).join(' ');
+        if (kept) control.setAttribute('aria-describedby', kept);
+        else control.removeAttribute('aria-describedby');
+        return true;
+    },
+
+    // ─── Secret field ────────────────────────────────────────────────────────
+    /**
+     * A key, a token or a client secret, handled the way constitution IV asks: written by the person,
+     * write-only, never echoed back (SE-07). What it shows is what is TRUE:
+     *
+     *   saved          «محفوظ ••••ab12 · من قاعدة البيانات»   with Replace and Remove
+     *   not saved      «غير محفوظ»                              with the input to fill
+     *
+     * There is never an empty field standing for a value that is stored: a field you could "clear and save"
+     * implies the value would be wiped, and it would not. Replace reveals an input (and only then does one
+     * exist in the page); Remove asks first and says what stops working.
+     *
+     *   UI.secretField({
+     *     id: 'meta-token', label: t('settings.token'),
+     *     status: { saved: true, last4: 'ab12', source: 'db' },      source: 'db' | 'env'
+     *     onReplace: (value) => API.saveToken(value),                 may return a promise; a throw stays inline
+     *     onRemove: () => API.removeToken(),                          omit it and there is no Remove
+     *     generate: true,                                             or { bytes: 32 }: a random value + Copy
+     *     hint: t('…'),                                               defaults to "write-only"
+     *   })
+     *
+     * Only the last four characters of `last4` are ever drawn, whatever was passed. The typed value is
+     * cleared from the page the moment `onReplace` settles. After a save the field redraws as «saved».
+     */
+    secretField(options) {
+        const o = options || {};
+        const id = String(o.id || `ui-secret-${++UI._sharedSeq}`);
+        const status = o.status && typeof o.status === 'object' ? o.status : {};
+        const saved = !!status.saved;
+        const editing = !saved || !!o.editing;
+        const entry = UI._remember(id, {
+            kind: 'secret',
+            id,
+            saved,
+            options: o,
+            generate: !!o.generate,
+            bytes: o.generate && typeof o.generate === 'object' ? o.generate.bytes : undefined,
+            onReplace: o.onReplace,
+            onRemove: o.onRemove,
+        });
+        const buttons = saved && !editing
+            ? html`<div class="ui-secret-buttons">
+                    ${UI.button({ variant: 'secondary', size: 'sm', label: t('ui.secret.replace'), action: 'ui:secretReplace', id: `${id}-replace` })}
+                    ${typeof o.onRemove === 'function' ? UI.button({ variant: 'ghost', size: 'sm', label: t('ui.secret.remove'), action: 'ui:secretRemove', id: `${id}-remove` }) : ''}
+                </div>`
+            : '';
+        return html`
+            <div class="form-group ui-secret" id="${id}-field" role="group" aria-labelledby="${id}-label" data-ui-id="${id}">
+                <span class="form-label" id="${id}-label">${o.label}</span>
+                <div class="ui-secret-row">
+                    <p class="ui-secret-state" id="${id}-state">${UI._secretState(status)}</p>
+                    ${buttons}
+                </div>
+                ${editing ? UI._secretEdit(id, entry) : ''}
+                <p class="form-hint" id="${id}-hint">${o.hint || t('ui.secret.writeOnly')}</p>
+                <p class="ui-secret-error" id="${id}-error" role="alert" data-ui-secret-error></p>
+            </div>
+        `;
+    },
+
+    /** «Saved ••••ab12 · from the database», or «Not saved». The mask is isolated: Latin inside Arabic. */
+    _secretState(status) {
+        if (!status || !status.saved) {
+            return html`<i data-lucide="lock" aria-hidden="true"></i> <span>${t('ui.secret.notSet')}</span>`;
+        }
+        const raw = status.last4;
+        const last4 = typeof raw === 'string' || typeof raw === 'number' ? String(raw).slice(-4) : '';
+        const sourceKey = UI._SECRET_SOURCES[status.source];
+        return html`<i data-lucide="key-round" aria-hidden="true"></i> <span>${t('ui.secret.saved')}</span>${last4 ? html` ${UI.ltr(`••••${last4}`)}` : ''}${sourceKey ? html` <span class="ui-secret-source">· ${t(sourceKey)}</span>` : ''}`;
+    },
+
+    /** The input that takes a new value. It never carries a value of its own. */
+    _secretEdit(id, entry) {
+        return html`
+            <div class="ui-secret-edit">
+                <div class="field-row">
+                    <input class="field field-mono" id="${id}" type="password" dir="ltr" autocomplete="new-password"
+                           autocapitalize="off" spellcheck="false" placeholder="${t('ui.secret.newValue')}"
+                           aria-labelledby="${id}-label" aria-describedby="${id}-hint ${id}-error">
+                    ${entry.generate ? UI.button({ variant: 'secondary', icon: 'sparkles', label: t('ui.secret.generate'), action: 'ui:secretGenerate' }) : ''}
+                </div>
+                <div class="ui-secret-actions">
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label: t('common.save'), action: 'ui:secretSave', id: `${id}-save` })}
+                    ${entry.generate ? UI.button({ variant: 'ghost', size: 'sm', icon: 'copy', label: t('common.copy'), action: 'ui:secretCopy' }) : ''}
+                    ${entry.saved ? UI.button({ variant: 'ghost', size: 'sm', label: t('common.cancel'), action: 'ui:secretCancel', id: `${id}-cancel` }) : ''}
+                </div>
+            </div>
+        `;
+    },
+
+    /** Redraw a secret field in place with `changes` (a status, or `editing`), and put focus where the person is. */
+    _secretRedraw(el, changes, focusId) {
+        const host = el && el.closest ? el.closest('[data-ui-id]') : null;
+        const entry = UI._recall(el);
+        if (!host || !entry) return;
+        host.outerHTML = esc(UI.secretField(Object.assign({}, entry.options, changes)));
+        const fresh = document.getElementById(`${entry.id}-field`);
+        if (fresh) UI.icons(fresh);
+        const target = focusId ? document.getElementById(focusId) : null;
+        if (target && typeof target.focus === 'function') target.focus();
+    },
+
+    secretReplace(el) {
+        const entry = UI._recall(el);
+        if (entry) UI._secretRedraw(el, { editing: true }, entry.id);
+    },
+
+    secretCancel(el) {
+        const entry = UI._recall(el);
+        if (entry) UI._secretRedraw(el, { editing: false }, `${entry.id}-replace`);
+    },
+
+    /** Replace: validate, hand the value to `onReplace`, then wipe it from the page. */
+    async secretSave(el) {
+        const host = el && el.closest ? el.closest('[data-ui-id]') : null;
+        const entry = UI._recall(el);
+        if (!host || !entry || typeof entry.onReplace !== 'function') return undefined;
+        const input = host.querySelector('input');
+        const note = host.querySelector('[data-ui-secret-error]');
+        const say = (message) => { if (note) note.textContent = message || ''; };
+        const value = input ? String(input.value || '').trim() : '';
+        say('');
+        if (input) input.removeAttribute('aria-invalid');
+        if (!value) {
+            say(t('ui.secret.empty'));
+            if (input) UI.markInvalid(input, `${entry.id}-hint ${entry.id}-error`);
+            return undefined;
+        }
+        const restore = UI.actionBusy(el);
+        if (restore === null) return undefined;
+        try {
+            await entry.onReplace(value);
+        } catch (err) {
+            restore();
+            say((err && err.message) || t('common.error'));
+            return undefined;
+        }
+        // The value does not stay in the page, and the field says what is stored now.
+        if (input) input.value = '';
+        restore();
+        UI._secretRedraw(el, { editing: false, status: { saved: true, last4: value.slice(-4), source: 'db' } }, `${entry.id}-replace`);
+        return undefined;
+    },
+
+    /** A random value from the platform's CSPRNG, as hex. Never `Math.random`: this is a credential. */
+    randomSecret(bytes) {
+        const n = Math.min(Math.max(Math.floor(Number(bytes) || 32), 16), 128);
+        const source = typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function' ? crypto : null;
+        if (!source) throw new Error(t('common.error'));
+        const buf = new Uint8Array(n);
+        source.getRandomValues(buf);
+        return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+    },
+
+    secretGenerate(el) {
+        const host = el && el.closest ? el.closest('[data-ui-id]') : null;
+        const entry = UI._recall(el);
+        const input = host ? host.querySelector('input') : null;
+        if (!entry || !input) return;
+        input.value = UI.randomSecret(entry.bytes);
+        // Shown once, so it can be copied before it is saved: the one time a secret is in the page in clear.
+        input.type = 'text';
+        input.removeAttribute('aria-invalid');
+        input.focus();
+    },
+
+    secretCopy(el) {
+        const host = el && el.closest ? el.closest('[data-ui-id]') : null;
+        const input = host ? host.querySelector('input') : null;
+        const value = input ? String(input.value || '') : '';
+        if (!value) return;
+        const clip = typeof navigator !== 'undefined' && navigator.clipboard;
+        if (!clip || typeof clip.writeText !== 'function') return;
+        clip.writeText(value).then(
+            () => UI.toast(t('common.copied')),
+            (err) => UI.toast((err && err.message) || t('common.error'), 'error'),
+        );
+    },
+
+    /** Remove: asks first, and says what stops working. */
+    secretRemove(el) {
+        const entry = UI._recall(el);
+        if (!entry || typeof entry.onRemove !== 'function') return;
+        UI.confirm({
+            title: t('ui.secret.removeTitle'),
+            body: t('ui.secret.removeBody'),
+            confirmLabel: t('ui.secret.remove'),
+            onConfirm: () => entry.onRemove(),
+        });
+    },
+
+    // ─── Filter bar ──────────────────────────────────────────────────────────
+    /**
+     * The search, the filter chips and the sort that a list screen carries, in one control that looks and
+     * behaves the same on every screen (CA-10, TN-05). Controlled: it draws what `value` says and calls
+     * `onChange` with the whole next value; the page keeps the state and re-renders.
+     *
+     *   UI.filterBar({
+     *     id: 'campaigns-filter',
+     *     search: { label: t('campaigns.search'), placeholder },     or true
+     *     chips: [{ key: '', label: t('common.all') }, { key: 'failed', label }],   one pressed at a time
+     *     counts: { '': 40, failed: 3 },                              or `count` on a chip
+     *     sort: { label, options: [{ key: 'recent', label }] },
+     *     value: { q: '', filter: '', sort: 'recent' },
+     *     onChange: (next) => { state = next; render(); },
+     *   })
+     *
+     * Typing is debounced (250 ms; `debounceMs` changes it) so a list is not rebuilt per letter. The chips
+     * are toggle buttons (`aria-pressed`) with a count; a count is what the caller knows, never a guess.
+     *
+     * When the page has `App.hashParams` (the router's helper) the state is also written into the hash as
+     * `?q=…&filter=…&sort=…` with `history.replaceState`, so a filtered view survives a reload and can be
+     * shared; `hash: false` opts out. Reading it back at first render is the page's job, from the same
+     * three names.
+     */
+    filterBar(options) {
+        const o = options || {};
+        const id = String(o.id || `ui-filter-${++UI._sharedSeq}`);
+        const value = Object.assign({ q: '', filter: '', sort: '' }, o.value && typeof o.value === 'object' ? o.value : {});
+        UI._remember(id, {
+            kind: 'filter',
+            value,
+            onChange: o.onChange,
+            debounceMs: Number.isFinite(o.debounceMs) ? o.debounceMs : 250,
+            hash: o.hash !== false,
+            timer: null,
+        });
+
+        const search = o.search ? (typeof o.search === 'object' ? o.search : {}) : null;
+        const chips = (Array.isArray(o.chips) ? o.chips : []).filter((c) => c && c.key !== undefined && c.key !== null && c.label !== undefined);
+        const counts = o.counts && typeof o.counts === 'object' ? o.counts : {};
+        const sort = o.sort && Array.isArray(o.sort.options) ? o.sort : (Array.isArray(o.sort) ? { options: o.sort } : null);
+        const sortOptions = sort ? sort.options.filter((s) => s && s.key !== undefined && s.key !== null && s.label !== undefined) : [];
+
+        const chip = (c) => {
+            const pressed = String(value.filter || '') === String(c.key);
+            const count = Object.hasOwn(counts, c.key) ? counts[c.key] : c.count;
+            const hasCount = count !== undefined && count !== null;
+            return html`<button type="button" class="chip ui-chip${pressed ? ' chip-accent' : ''}" aria-pressed="${pressed ? 'true' : 'false'}" data-action="ui:filterChip" data-key="${c.key}" data-focus-key="${id}-chip-${c.key}">${c.label}${hasCount ? html` <span class="ui-chip-count">${UI.num(count)}</span>` : ''}</button>`;
+        };
+
+        return html`
+            <div class="filter-bar ui-filter" role="group" aria-label="${o.label || t('ui.filter.label')}" data-ui-id="${id}">
+                ${search ? html`
+                    <div class="ui-filter-search">
+                        <label class="sr-only" for="${id}-search">${search.label || t('common.search')}</label>
+                        <input class="field" type="search" id="${id}-search" value="${value.q}" dir="auto"
+                               placeholder="${search.placeholder || search.label || t('common.search')}"
+                               autocomplete="off" enterkeyhint="search" data-input="ui:filterSearch">
+                    </div>` : ''}
+                ${chips.length ? html`<div class="ui-filter-chips" role="group" aria-label="${o.chipsLabel || t('ui.filter.chips')}">${chips.map(chip)}</div>` : ''}
+                ${sortOptions.length ? html`
+                    <div class="ui-filter-sort">
+                        <label class="sr-only" for="${id}-sort">${sort.label || t('ui.filter.sort')}</label>
+                        <select class="select" id="${id}-sort" data-change="ui:filterSort">${sortOptions.map((s) => html`<option value="${s.key}"${String(value.sort || '') === String(s.key) ? html.raw(' selected') : ''}>${s.label}</option>`)}</select>
+                    </div>` : ''}
+            </div>
+        `;
+    },
+
+    /** Tell the page, and the hash, what the filter is now. */
+    _filterEmit(entry) {
+        UI._mirrorToHash(entry.value, entry.hash);
+        if (typeof entry.onChange !== 'function') return;
+        try {
+            entry.onChange(Object.assign({}, entry.value));
+        } catch (err) {
+            console.error('Filter change failed:', err);
+            UI.toast(err && err.message ? err.message : t('common.error'), 'error');
+        }
+    },
+
+    filterSearch(el) {
+        const entry = UI._recall(el);
+        if (!entry || entry.kind !== 'filter') return;
+        entry.value = Object.assign({}, entry.value, { q: String(el.value || '') });
+        if (entry.timer) clearTimeout(entry.timer);
+        if (entry.debounceMs > 0) {
+            entry.timer = setTimeout(() => { entry.timer = null; UI._filterEmit(entry); }, entry.debounceMs);
+        } else {
+            UI._filterEmit(entry);
+        }
+    },
+
+    filterChip(el) {
+        const entry = UI._recall(el);
+        if (!entry || entry.kind !== 'filter') return;
+        entry.value = Object.assign({}, entry.value, { filter: String(el.getAttribute('data-key') || '') });
+        UI._filterEmit(entry);
+    },
+
+    filterSort(el) {
+        const entry = UI._recall(el);
+        if (!entry || entry.kind !== 'filter') return;
+        entry.value = Object.assign({}, entry.value, { sort: String(el.value || '') });
+        UI._filterEmit(entry);
+    },
+
+    /**
+     * Mirror `{ q, filter, sort }` into the hash's query when the router can read it back. The other
+     * parameters of the hash are kept. `replaceState` does not fire `hashchange`, so nothing navigates.
+     */
+    _mirrorToHash(value, enabled) {
+        if (enabled === false) return false;
+        if (typeof App === 'undefined' || !App || typeof App.hashParams !== 'function') return false;
+        try {
+            const current = App.hashParams();
+            const entries = current && typeof current.entries === 'function' ? Array.from(current.entries()) : Object.entries(current || {});
+            const own = ['q', 'filter', 'sort'];
+            const params = new URLSearchParams();
+            for (const [k, v] of entries) {
+                if (!own.includes(k) && v !== undefined && v !== null && v !== '') params.set(k, String(v));
+            }
+            for (const k of own) {
+                if (value && value[k]) params.set(k, String(value[k]));
+            }
+            const hash = String(window.location.hash || '#/');
+            const path = hash.split('?')[0];
+            const query = params.toString();
+            const next = query ? `${path}?${query}` : path;
+            if (next !== hash) window.history.replaceState(window.history.state, '', next);
+            return true;
+        } catch {
+            return false;
+        }
+    },
+
+    // ─── Table and pager ─────────────────────────────────────────────────────
+    /**
+     * A table with sortable headers that becomes a list of cards on a phone (SH-33; DESIGN.md: tables become
+     * `.log-cards` under 40rem). The same rows are drawn twice and CSS shows one, so a cell must not carry an id.
+     *
+     *   UI.table({
+     *     id: 'jobs-table', caption: t('jobs.title'),
+     *     columns: [
+     *       { key: 'name', label, sortable: true },                           plain value, escaped, dir="auto"
+     *       { key: 'status', label, render: (row) => statusPill(row), card: 'badge' },
+     *       { key: 'when', label, sortable: true, sortValue: (row) => row.at, align: 'end' },
+     *       { key: 'id', label, card: false },                                 left out of the card
+     *     ],
+     *     rows,
+     *     sort: { key: 'when', dir: 'desc' },                                 or { …, server: true }: already sorted
+     *     onSort: ({ key, dir }) => { sort = { key, dir }; render(); },
+     *     empty: { icon, title, body, action } | SafeHtml | 'text',
+     *   })
+     *
+     * Headers are buttons only when the column is `sortable` AND there is an `onSort`. The sorted column's
+     * `th` carries `aria-sort` (the others `none`). Rows are sorted here unless `sort.server`, numbers as
+     * numbers and text with the locale's collation; an empty value goes last in either direction.
+     * In a card, the first column (or the ones marked `card: 'head'`) is the title, `card: 'badge'` sits at
+     * its end (a status), and the rest are label and value pairs. `render(row, index)` returns SafeHtml; a
+     * string is text. Only what a column renders can be markup, so a row value from the server cannot be.
+     *
+     * No rows draws `empty` alone, never a header over nothing. Say why it is empty: that is the caller's.
+     */
+    table(options) {
+        const o = options || {};
+        const id = String(o.id || `ui-table-${++UI._sharedSeq}`);
+        const columns = (Array.isArray(o.columns) ? o.columns : []).filter((c) => c && c.key !== undefined && c.label !== undefined);
+        const sort = o.sort && typeof o.sort === 'object' ? o.sort : null;
+        const onSort = typeof o.onSort === 'function' ? o.onSort : null;
+        const source = Array.isArray(o.rows) ? o.rows : [];
+        if (onSort) UI._remember(id, { kind: 'table', sort, onSort });
+
+        if (source.length === 0) {
+            return html`<div class="ui-table ui-table--empty" data-ui-id="${id}">${UI._emptyMarkup(o.empty)}</div>`;
+        }
+
+        const rows = UI._sortRows(source, columns, sort);
+        const head = columns.map((c) => {
+            const interactive = !!c.sortable && !!onSort;
+            const active = !!c.sortable && !!sort && sort.key === c.key;
+            const ariaSort = active ? (sort.dir === 'desc' ? 'descending' : 'ascending') : (interactive ? 'none' : '');
+            const icon = active ? (sort.dir === 'desc' ? 'chevron-down' : 'chevron-up') : 'chevrons-up-down';
+            const align = UI._ALIGN[c.align] || '';
+            return html`<th scope="col"${ariaSort ? html` aria-sort="${ariaSort}"` : ''}${align ? html` class="${align}"` : ''}>${
+                interactive
+                    ? html`<button type="button" class="ui-sort" data-action="ui:tableSort" data-key="${c.key}">${c.label}<i data-lucide="${icon}" aria-hidden="true"></i></button>`
+                    : c.label
+            }</th>`;
+        });
+        const body = rows.map((row, i) => html`<tr>${columns.map((c) => UI._cell(c, row, i))}</tr>`);
+
+        const inCard = columns.filter((c) => c.card !== false);
+        let titleCols = inCard.filter((c) => c.card === 'head');
+        if (titleCols.length === 0 && inCard.length > 0) titleCols = [inCard[0]];
+        const badgeCols = inCard.filter((c) => c.card === 'badge' && !titleCols.includes(c));
+        const fieldCols = inCard.filter((c) => !titleCols.includes(c) && !badgeCols.includes(c));
+        const cards = rows.map((row, i) => html`
+            <li class="log-card">
+                <div class="log-card-head">
+                    <span>${titleCols.map((c) => UI._cellContent(c, row, i))}</span>
+                    ${badgeCols.length ? html`<span>${badgeCols.map((c) => UI._cellContent(c, row, i))}</span>` : ''}
+                </div>
+                ${fieldCols.length ? html`<dl class="ui-card-fields">${fieldCols.map((c) => html`<div class="ui-card-field"><dt class="text-meta">${c.label}</dt><dd>${UI._cellContent(c, row, i)}</dd></div>`)}</dl>` : ''}
+            </li>
+        `);
+
+        return html`
+            <div class="ui-table" data-ui-id="${id}">
+                <div class="table-wrapper log-table">
+                    <table class="data-table ui-table-grid">
+                        ${o.caption ? html`<caption class="sr-only">${o.caption}</caption>` : ''}
+                        <thead><tr>${head}</tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+                <ul class="log-cards"${o.caption ? html` aria-label="${o.caption}"` : ''}>${cards}</ul>
+            </div>
+        `;
+    },
+
+    /** What a column shows for a row: its `render`, else the plain value (an em dash for nothing). */
+    _cellContent(column, row, index) {
+        if (typeof column.render === 'function') return column.render(row, index);
+        const v = row ? row[column.key] : undefined;
+        return v === null || v === undefined || v === '' ? '—' : v;
+    },
+
+    _cell(column, row, index) {
+        const own = typeof column.render === 'function';
+        const classes = [UI._ALIGN[column.align] || '', column.className || ''].filter(Boolean).join(' ');
+        return html`<td${classes ? html` class="${classes}"` : ''}${own ? '' : html.raw(' dir="auto"')}>${UI._cellContent(column, row, index)}</td>`;
+    },
+
+    /** `empty` as markup: a SafeHtml as it is, an object as an empty state, a string as a line. Never nothing. */
+    _emptyMarkup(empty) {
+        if (empty instanceof SafeHtml) return empty;
+        if (empty && typeof empty === 'object') return UI.emptyState(empty);
+        return html`<p class="table-empty-cell">${typeof empty === 'string' && empty ? empty : t('ui.table.empty')}</p>`;
+    },
+
+    /** The rows in `sort` order: stable, numbers as numbers, text by the locale, empty values last either way. */
+    _sortRows(rows, columns, sort) {
+        const column = sort ? columns.find((c) => c.sortable && c.key === sort.key) : null;
+        if (!column || sort.server) return rows;
+        const read = (row) => (typeof column.sortValue === 'function' ? column.sortValue(row) : (row ? row[column.key] : undefined));
+        const sign = sort.dir === 'desc' ? -1 : 1;
+        let collator = null;
+        try { collator = new Intl.Collator(I18N.locale(), { numeric: true, sensitivity: 'base' }); } catch { /* compared as text below */ }
+        const empty = (v) => v === null || v === undefined || v === '' || (typeof v === 'number' && Number.isNaN(v));
+        // By tag, not `instanceof`: a Date made in another frame is still a date.
+        const isDate = (v) => Object.prototype.toString.call(v) === '[object Date]';
+        return rows.map((row, index) => ({ row, index, value: read(row) })).sort((a, b) => {
+            const ea = empty(a.value);
+            const eb = empty(b.value);
+            if (ea || eb) return ea && eb ? a.index - b.index : (ea ? 1 : -1);
+            let order;
+            if (typeof a.value === 'number' && typeof b.value === 'number') order = a.value - b.value;
+            else if (isDate(a.value) && isDate(b.value)) order = a.value.getTime() - b.value.getTime();
+            else {
+                const x = String(a.value);
+                const y = String(b.value);
+                order = collator ? collator.compare(x, y) : (x < y ? -1 : x > y ? 1 : 0);
+            }
+            return order === 0 ? a.index - b.index : order * sign;
+        }).map((x) => x.row);
+    },
+
+    /** A header was pressed: the same column flips direction, a new one starts ascending. */
+    tableSort(el) {
+        const entry = UI._recall(el);
+        const key = el.getAttribute('data-key');
+        if (!entry || entry.kind !== 'table' || !key || typeof entry.onSort !== 'function') return;
+        const dir = entry.sort && entry.sort.key === key && entry.sort.dir !== 'desc' ? 'desc' : 'asc';
+        entry.onSort({ key, dir });
+    },
+
+    /**
+     * Page navigation, drawn the way Activity draws it. `total` is the number of PAGES. Nothing is drawn for
+     * one page or none. The buttons have stable ids (`<id>-prev`, `<id>-next`) because they are what a keyboard
+     * user is holding when the list is rebuilt under them.
+     *
+     *   UI.pager({ id: 'jobs-pager', page: 2, total: 9, onPage: (n) => { page = n; load(); } })
+     */
+    pager(options) {
+        const o = options || {};
+        const total = Math.max(0, Math.floor(Number(o.total) || 0));
+        if (total <= 1) return '';
+        const page = Math.min(Math.max(1, Math.floor(Number(o.page) || 1)), total);
+        const id = String(o.id || `ui-pager-${++UI._sharedSeq}`);
+        UI._remember(id, { kind: 'pager', total, onPage: o.onPage });
+        return html`
+            <nav class="pagination" aria-label="${o.label || t('ui.pager.label')}" data-ui-id="${id}">
+                <button type="button" class="page-btn" id="${id}-prev"${page <= 1 ? html.raw(' disabled') : ''}
+                        data-action="ui:pagerGo" data-page="${page - 1}">
+                    <i data-lucide="chevron-left" aria-hidden="true"></i> ${t('ui.pager.prev')}
+                </button>
+                <span class="page-position">${t('ui.pager.position', { page: UI.formatNumber(page), total: UI.formatNumber(total) })}</span>
+                <button type="button" class="page-btn" id="${id}-next"${page >= total ? html.raw(' disabled') : ''}
+                        data-action="ui:pagerGo" data-page="${page + 1}">
+                    ${t('ui.pager.next')} <i data-lucide="chevron-right" aria-hidden="true"></i>
+                </button>
+            </nav>
+        `;
+    },
+
+    pagerGo(el) {
+        const entry = UI._recall(el);
+        const n = Number(el.getAttribute('data-page'));
+        if (!entry || entry.kind !== 'pager' || typeof entry.onPage !== 'function') return;
+        if (Number.isInteger(n) && n >= 1 && n <= entry.total) entry.onPage(n);
+    },
 };
 
 UI.registerActions('ui', {
@@ -1599,11 +2932,33 @@ UI.registerActions('ui', {
     },
 });
 
+// ─── Shared patterns (UX foundation): their delegated handlers ───────────────────────────────────────────
+// Every method is defined in the "Shared patterns" section of `UI` above; these are the names markup can call.
+UI.registerActions('ui', {
+    runConfirm: (el) => UI.runConfirm(el),
+    gateConfirm: (el) => UI.gateConfirm(el),
+    cancelConfirm: () => UI.cancelConfirm(),
+    tabsKey: (el, event) => UI.tabsKey(el, event),
+    filterSearch: (el) => UI.filterSearch(el),
+    filterChip: (el) => UI.filterChip(el),
+    filterSort: (el) => UI.filterSort(el),
+    tableSort: (el) => UI.tableSort(el),
+    pagerGo: (el) => UI.pagerGo(el),
+    secretReplace: (el) => UI.secretReplace(el),
+    secretCancel: (el) => UI.secretCancel(el),
+    secretSave: (el) => UI.secretSave(el),
+    secretGenerate: (el) => UI.secretGenerate(el),
+    secretCopy: (el) => UI.secretCopy(el),
+    secretRemove: (el) => UI.secretRemove(el),
+});
+
 // One set of delegated listeners for the whole dashboard.
 document.addEventListener('click', (e) => UI._dispatch(e, 'data-action'));
 document.addEventListener('change', (e) => UI._dispatch(e, 'data-change'));
 document.addEventListener('input', (e) => UI._dispatch(e, 'data-input'));
 document.addEventListener('submit', (e) => UI._dispatch(e, 'data-submit'));
+// Arrow keys between tabs (`data-keydown="ui:tabsKey"`).
+document.addEventListener('keydown', (e) => UI._dispatch(e, 'data-keydown'));
 
 // ─── ProfileAsk: the one-field sheet an agent opens when it lacks something it writes from (P30) ─────────────
 
