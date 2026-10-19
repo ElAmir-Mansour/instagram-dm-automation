@@ -26,8 +26,13 @@ const UNKNOWN = { status: 'unknown', message: 'Meta could not be reached to chec
 const INVALID = { status: 'invalid', message: 'Token validation failed — token may be expired or revoked.', error: 'Meta reports the token as not valid: Session has expired', expiresAt: null, dataAccessExpiresAt: null, instagramPageId: 'ig-1', facebookPageId: 'fb-1', isActive: true };
 const VALID = { status: 'valid', type: 'PAGE', expiresAt: null, dataAccessExpiresAt: null, scopes: ['instagram_basic'], instagramPageId: 'ig-1', facebookPageId: 'fb-1', isActive: true };
 
-/** The Settings page, rendered whole against `tokenStatus`; every other call it makes fails, which is isolated per card. */
-async function renderSettings(lang: 'ar' | 'en', tokenStatus: Json, role: { canAdminister: boolean } = { canAdminister: true }) {
+/**
+ * The Settings page, rendered whole against `tokenStatus`; every other call it makes fails, which is isolated per card.
+ *
+ * The access token card moved to the Advanced tab, which only a platform admin sees (UX US10, SE-03), so the card's own states are read as
+ * the platform admin; `settingsTabs.test.ts` holds what a tenant owner sees instead (the Connections summary).
+ */
+async function renderSettings(lang: 'ar' | 'en', tokenStatus: Json, role: { canAdminister: boolean; isAdmin?: boolean } = { canAdminister: true }) {
     const stubs: Json = {
         token: 't',
         getTokenStatus: async () => tokenStatus,
@@ -40,8 +45,9 @@ async function renderSettings(lang: 'ar' | 'en', tokenStatus: Json, role: { canA
         globals: {
             API: api,
             App: {
-                canAdminister: () => role.canAdminister, isAdmin: () => false, canOperate: () => true,
-                hashParam: () => '', currentTheme: () => 'auto', loadPageModule: async () => null,
+                canAdminister: () => role.canAdminister, isAdmin: () => role.isAdmin !== false, canOperate: () => true,
+                hashParam: () => '', hashParams: () => ({}), route: (page: string, params: Record<string, string> = {}) => `#/${page}?${new URLSearchParams(params)}`,
+                currentTheme: () => 'auto', loadPageModule: async () => null,
             },
         },
     });

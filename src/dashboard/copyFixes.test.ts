@@ -31,8 +31,8 @@ describe('T057: the copy says what is true', () => {
         }
     });
 
-    it('the Settings subtitle names connections, appearance, notifications and storage', () => {
-        const names = { ar: ['الاتصالات', 'المظهر', 'التنبيهات', 'التخزين'], en: ['Connections', 'appearance', 'notifications', 'storage'] };
+    it('the Settings subtitle names connections, alerts, appearance and storage (SE-15)', () => {
+        const names = { ar: ['الاتصالات', 'التنبيهات', 'المظهر', 'التخزين'], en: ['Connections', 'alerts', 'appearance', 'storage'] };
         for (const lang of ['ar', 'en'] as const) {
             const said = words(lang)('page.settings.subtitle');
             for (const name of names[lang]) assert.ok(said.includes(name), `${lang} names ${name}`);
