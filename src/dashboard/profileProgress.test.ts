@@ -112,7 +112,7 @@ function load(options: { lang?: 'ar' | 'en'; role?: 'owner' | 'operator' | 'view
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const file of [
-        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/api.js', 'dashboard/js/pages/admin_common.js',
+        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/api.js', 'dashboard/js/pages/admin_common.js',
         'dashboard/js/pages/overview.js', 'dashboard/js/pages/operations.js',
     ]) vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
     vm.runInContext(`I18N.lang = '${lang}'`, ctx);

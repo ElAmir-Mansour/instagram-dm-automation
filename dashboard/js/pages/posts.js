@@ -98,9 +98,6 @@ const PostsPage = {
     QUEUE_POLL_MS: 15000,
     /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
     _doneOpen: false,
-    /** The composer's own leave-page guard, bound while it is open and dirty. */
-    _onComposerUnload: null,
-    _composerWatch: null,
     /** Per-browser memory: the last platform and type a post was created with. Colons: not an i18n key. */
     PREFS_KEY: 'posts:prefs',
     /** Instagram's caption limit, counted in UTF-16 units as Studio's counters count. */
@@ -109,7 +106,6 @@ const PostsPage = {
     destroy() {
         this._seq++;
         this.stopQueuePoll();
-        this.unbindComposerUnload();
     },
 
     /** Is this `render()` still the one on screen? */
@@ -1243,38 +1239,14 @@ const PostsPage = {
     },
 
     /**
-     * The browser's own "leave this page?" while the composer holds unsaved work
-     * — an upload took time and a closed tab would lose it. Bound when the modal
-     * opens; unbound when it closes (watched on the overlay, since navigation
-     * closes it without asking), on a successful submit, and on `destroy()`.
-     * Same guard Studio's editor carries.
+     * False while the composer holds work leaving would lose: typed-in fields (`UI.isModalDirty()`) or an upload still in flight (an
+     * upload took time, and a closed tab or another page would drop it). The router asks before it changes page, and the shell's
+     * `beforeunload` asks before a reload or a closed tab; the composer used to bind a `beforeunload` of its own and watch the overlay to
+     * unbind it, which no other screen could share. Same rule Studio's editor and AI Settings now state as `canLeave()`.
      */
-    bindComposerUnload() {
-        this.unbindComposerUnload();
-        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
-        this._onComposerUnload = (event) => {
-            if (!PostsPage.composerOpen()) return;
-            if (!UI.isModalDirty() && !(PostsPage._uploadsInFlight > 0)) return;
-            event.preventDefault();
-            event.returnValue = '';
-        };
-        window.addEventListener('beforeunload', this._onComposerUnload);
-        const overlay = document.getElementById('modal-overlay');
-        if (overlay && typeof MutationObserver === 'function') {
-            this._composerWatch = new MutationObserver(() => {
-                if (overlay.classList.contains('hidden')) PostsPage.unbindComposerUnload();
-            });
-            this._composerWatch.observe(overlay, { attributes: true, attributeFilter: ['class'] });
-        }
-    },
-
-    unbindComposerUnload() {
-        if (this._onComposerUnload && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-            window.removeEventListener('beforeunload', this._onComposerUnload);
-        }
-        if (this._composerWatch && typeof this._composerWatch.disconnect === 'function') this._composerWatch.disconnect();
-        this._onComposerUnload = null;
-        this._composerWatch = null;
+    canLeave() {
+        if (!PostsPage.composerOpen()) return true;
+        return !(UI.isModalDirty() || PostsPage._uploadsInFlight > 0);
     },
 
     /**
@@ -3406,7 +3378,6 @@ const PostsPage = {
         this._uploadsInFlight = 0;
         this.watchPreviewDuration();
         this.applyPlatformMatrix();
-        this.bindComposerUnload();
     },
 
     /** The caption with its Instagram counter beside the label (shown while Instagram is a target). */
@@ -3498,7 +3469,6 @@ const PostsPage = {
         this._uploadsInFlight = 0;
         this.watchPreviewDuration();
         this.applyPlatformMatrix();
-        this.bindComposerUnload();
     },
 
     /**
@@ -3783,7 +3753,6 @@ const PostsPage = {
             // "New post" button and the re-render then destroyed it, leaving
             // focus on a control inside the hidden overlay.
             await this.render();
-            this.unbindComposerUnload();
             UI.closeModal();
         } catch (err) {
             const failure = this.publishFailure(null, err);
@@ -3824,7 +3793,6 @@ const PostsPage = {
             await API.updateScheduledPost(id, payload);
             UI.toast(t('posts.updatedOk'));
             await this.render();
-            this.unbindComposerUnload();
             UI.closeModal();
         } catch (err) {
             restore();

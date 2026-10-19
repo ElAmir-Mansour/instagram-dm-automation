@@ -269,6 +269,10 @@
     'common.loaded': 'Loaded',
     'common.showFull': 'Show the full text',
     'common.discardConfirm': 'You have unsaved changes. Close and lose them?',
+    // The router's "leave this page?" (App.confirmLeave): another page is about to replace one that holds unsaved work.
+    'common.leaveTitle': 'Discard changes?',
+    'common.leaveBody': 'You have unsaved changes on this page. If you leave, they will be lost.',
+    'common.leaveConfirm': 'Discard and leave',
     'ai.temperatureLabel': 'Temperature',
     'ai.draftRestored': 'Your unsaved edits from last time were restored.',
     'inbox.stale': 'The conversation list has stopped updating — it may be out of date.',

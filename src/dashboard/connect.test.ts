@@ -125,7 +125,7 @@ function load(options: {
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const file of [
-        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/pages/admin_common.js', 'dashboard/js/pages/meta_connect.js',
+        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/pages/admin_common.js', 'dashboard/js/pages/meta_connect.js',
         'dashboard/js/pages/settings.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/overview.js', 'dashboard/js/app.js',
     ]) {
         vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });

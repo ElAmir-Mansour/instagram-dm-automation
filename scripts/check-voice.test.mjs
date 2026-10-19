@@ -99,7 +99,10 @@ describe('the strings B3 wrote', () => {
         assert.equal(index.match(/<meta name="description" content="([^"]*)">/)[1], ar['app.description']);
         // The shell's subtitle lights one word with a <span class="kw"> (B2, data-i18n-kw): the words are the dictionary's.
         assert.equal(index.match(/data-i18n="login\.subtitle"[^>]*>(.*?)<\/p>/)[1].replace(/<[^>]+>/g, ''), ar['login.subtitle']);
-        assert.match(app, /document\.title = `\$\{t\('app\.name'\)\} — \$\{t\('app\.tagline'\)\}`/);
+        // The app's own title is one function (`appTitle`), set at boot and put back on the login, invite and wizard screens; the router
+        // writes "<Page> · <app name>" over it while a page is open.
+        assert.match(app, /appTitle\(\) \{\s*return `\$\{t\('app\.name'\)\} — \$\{t\('app\.tagline'\)\}`;/);
+        assert.match(app, /this\.setBaseTitle\(this\.appTitle\(\)\);\s*\/\/ The shell's static description/);
         assert.match(app, /meta\[name="description"\]'\)\?\.setAttribute\('content', t\('app\.description'\)\)/);
     });
 

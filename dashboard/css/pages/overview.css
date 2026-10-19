@@ -1,0 +1,7 @@
+/*
+ * Overview (Today): the rules only this page uses.
+ *
+ * Loaded by App.loadPageModule next to dashboard/js/pages/overview.js, with the same ?v=, because the page's entry in App.pages
+ * declares `css: true`. The shared tokens and components stay in tokens.css and styles.css; a rule moves here once nothing but the
+ * Overview uses it, which keeps the first load lighter (UX plan R-14). Empty on purpose until the first of them moves.
+ */

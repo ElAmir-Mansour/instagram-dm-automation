@@ -29,7 +29,8 @@ const AiSettingsPage = {
     /** The dirty prompt/knowledge text, parked across a navigation. */
     _draft: null,
 
-    _onBeforeUnload: null,
+    /** Set by `discardChanges()`: the person was asked, and said to lose the edits, so `destroy()` must not park them. */
+    _discarded: false,
 
     render() {
         const container = document.getElementById('page-container');
@@ -41,35 +42,37 @@ const AiSettingsPage = {
         Motion.clearSkeleton(container);
 
         // The two textareas hold the product: a half-written system prompt is
-        // work nobody wants to retype. A reload or a tab close is caught here;
-        // an in-app navigation is caught in destroy(), which cannot cancel the
-        // navigation but CAN keep the text and hand it back.
-        if (!this._onBeforeUnload) {
-            this._onBeforeUnload = (e) => {
-                if (!this.isDirty()) return undefined;
-                e.preventDefault();
-                e.returnValue = '';
-                return '';
-            };
-            window.addEventListener('beforeunload', this._onBeforeUnload);
-        }
-
+        // work nobody wants to retype. The router asks `canLeave()` before it
+        // changes page, and its one shared `beforeunload` asks it for a reload,
+        // a closed tab and the language switch: this page binds no handler of its own.
         this.loadSettings();
+    },
+
+    /**
+     * False while something on this screen is unsaved: the router then asks before another page replaces it, and the shell's
+     * `beforeunload` asks before a reload. The page's own idea of "unsaved" (`hasUnsavedChanges`), the one the note beside Save counts:
+     * the two texts, the switch, the model, the temperature, the engine, the sales choice, the follow-up delay and the A/B wordings.
+     */
+    canLeave() {
+        return !this.hasUnsavedChanges();
+    },
+
+    /** Called after the person agreed to lose the edits (`App.discardCurrent`): the parked draft would bring them back. */
+    discardChanges() {
+        this._discarded = true;
+        this._draft = null;
     },
 
     destroy() {
         this._seq++;
-        if (this._onBeforeUnload) {
-            window.removeEventListener('beforeunload', this._onBeforeUnload);
-            this._onBeforeUnload = null;
-        }
-        // Navigation is already happening by the time this runs, so the honest
-        // move is not a confirm() that cannot be honoured — it is to keep the
+        // Navigation is already happening by the time this runs (the router has asked, if it was going to), so the honest
+        // move for a LOGOUT or a tenant switch, which never ask, is to keep the
         // text and restore it the next time this screen opens. That is
         // announced THEN rather than now: on logout App.resetTenantState()
         // clears the draft immediately after this, and a "your draft is safe"
-        // toast would have been a lie.
-        if (this.isDirty()) this._draft = this.currentValues();
+        // toast would have been a lie. A person who was asked and said "discard" is not given the draft back.
+        if (this.isDirty() && !this._discarded) this._draft = this.currentValues();
+        this._discarded = false;
     },
 
     resetTenantState() {

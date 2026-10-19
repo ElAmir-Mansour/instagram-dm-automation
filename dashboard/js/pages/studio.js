@@ -177,7 +177,8 @@ const StudioPage = {
     GEN_SLOW_S: 80,
     _renderTimer: null,
     _onKeydown: null,
-    _onBeforeUnload: null,
+    /** The view whose keys are bound ('editor' | 'settings' | null): what `canLeave()` reads, since the two views hold different unsaved work. */
+    _guardView: null,
     /** The drafts grid's filter: 'all' | 'review' | 'scheduled' | 'failed'. Page state, not remembered. */
     draftFilter: 'all',
     DRAFT_FILTERS: Object.freeze(['all', 'review', 'scheduled', 'failed']),
@@ -535,29 +536,37 @@ const StudioPage = {
      */
     bindKeys(view) {
         this.unbindKeys();
+        this._guardView = view;
         if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
         this._onKeydown = (event) => StudioPage.onKeydown(event, view);
         document.addEventListener('keydown', this._onKeydown);
-        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-            this._onBeforeUnload = (event) => {
-                const dirty = view === 'settings' ? StudioPage.settingsDirty() : StudioPage.isDirty();
-                if (!dirty) return;
-                event.preventDefault();
-                event.returnValue = '';
-            };
-            window.addEventListener('beforeunload', this._onBeforeUnload);
-        }
     },
 
     unbindKeys() {
         if (this._onKeydown && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
             document.removeEventListener('keydown', this._onKeydown);
         }
-        if (this._onBeforeUnload && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-            window.removeEventListener('beforeunload', this._onBeforeUnload);
-        }
         this._onKeydown = null;
-        this._onBeforeUnload = null;
+        this._guardView = null;
+    },
+
+    /**
+     * False while the view on screen holds unsaved work: the editor's draft edits, or the settings form. The router asks before it
+     * changes page, and the shell's `beforeunload` asks before a reload or a closed tab; this page binds no handler of its own. Only the
+     * view whose keys are bound counts (a view that is still loading holds nothing), as before.
+     */
+    canLeave() {
+        if (this._guardView === 'settings') return !this.settingsDirty();
+        if (this._guardView === 'editor') return !this.isDirty();
+        return true;
+    },
+
+    /**
+     * Called after the person agreed to lose the edits (`App.discardCurrent`). The editor keeps a copy of its edits in this browser and
+     * offers it back on the next visit; "discard" has to mean that copy too.
+     */
+    discardChanges() {
+        if (this._guardView === 'editor') this.forgetEdits();
     },
 
     modalOpen() {
