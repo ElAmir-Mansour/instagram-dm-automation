@@ -100,6 +100,12 @@ export interface QueueCounts {
     failed: number;
 }
 
+/** One tenant's queue: the counts, and how long its oldest due, unclaimed job has been waiting (null when none is). */
+export interface TenantQueue extends QueueCounts {
+    /** `MIN(run_after)` over this tenant's pending jobs that are already due. The same rule as `GlobalQueueHealth.oldestPendingAt`. */
+    oldestPendingAt: string | null;
+}
+
 export interface TenantHealth {
     tenantId: string;
     tokenStatus: string | null;
@@ -113,7 +119,7 @@ export interface TenantHealth {
     lastInboundDmAt: string | null;
     dmThisHour: number;
     dmCeiling: number;
-    queue: QueueCounts;
+    queue: TenantQueue;
     postsPending: number;
     postsFailed7d: number;
 }
@@ -145,6 +151,7 @@ interface HealthDbRow {
     jobs_pending: number;
     jobs_running: number;
     jobs_failed: number;
+    jobs_oldest_pending_at: Date | null;
     posts_pending: number;
     posts_failed_7d: number;
 }
@@ -198,6 +205,7 @@ const TENANT_HEALTH_SQL = `
         q.jobs_pending,
         q.jobs_running,
         q.jobs_failed,
+        q.jobs_oldest_pending_at,
         p.posts_pending,
         p.posts_failed_7d
     FROM creators c
@@ -206,7 +214,9 @@ const TENANT_HEALTH_SQL = `
             MAX(j.created_at)                                        AS last_job_at,
             COUNT(*) FILTER (WHERE j.status = 'pending')::int        AS jobs_pending,
             COUNT(*) FILTER (WHERE j.status = 'running')::int        AS jobs_running,
-            COUNT(*) FILTER (WHERE j.status = 'failed')::int         AS jobs_failed
+            COUNT(*) FILTER (WHERE j.status = 'failed')::int         AS jobs_failed,
+            -- Due and unclaimed, like the global figure: a job scheduled for next Tuesday is not stranded.
+            MIN(j.run_after) FILTER (WHERE j.status = 'pending' AND j.run_after <= NOW()) AS jobs_oldest_pending_at
           FROM jobs j
          WHERE j.creator_id = c.id
             OR (j.tenant_key IS NOT NULL
@@ -248,6 +258,7 @@ function toTenantHealthRow(row: HealthDbRow): TenantHealthRow {
             pending: row.jobs_pending ?? 0,
             running: row.jobs_running ?? 0,
             failed: row.jobs_failed ?? 0,
+            oldestPendingAt: toIso(row.jobs_oldest_pending_at),
         },
         postsPending: row.posts_pending ?? 0,
         postsFailed7d: row.posts_failed_7d ?? 0,

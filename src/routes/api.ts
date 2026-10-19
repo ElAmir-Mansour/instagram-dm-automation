@@ -41,6 +41,7 @@ import {
     describeInspection, inspectionStatus, noteMetaFailure, recheckTenantToken,
 } from '../services/tokenHealth.js';
 import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
@@ -1613,6 +1614,29 @@ router.get('/health/tenant', async (req, res) => {
             return;
         }
         res.status(500).json({ error: 'Failed to read tenant health.' });
+    }
+});
+
+// ─── Attention ──────────────────────────────────────────────────────────────
+
+/**
+ * What needs the owner, for every page at once (UX overhaul, research R-02): the heartbeat, the items Today lists, and the count
+ * beside each nav entry. Any role may read it, as every role may open the screens it counts. Tenant-scoped like every route here;
+ * `counts.platform` is added for a platform_admin session and for no one else.
+ *
+ * Aggregate reads of columns only, no Graph call (`src/services/attention.ts`). A failed read is a 500, never a partial answer: a
+ * summary that dropped the section it could not read would say "nothing needs you".
+ */
+router.get('/attention', async (req, res) => {
+    try {
+        res.json(await getAttention(getTenantId(req), { platformAdmin: req.session?.role === 'platform_admin' }));
+    } catch (err) {
+        log('error', 'api.attention_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(500).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to read what needs attention.' });
     }
 });
 

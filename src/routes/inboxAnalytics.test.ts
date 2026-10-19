@@ -249,7 +249,7 @@ describe('GET /stats/failures (A5)', () => {
         assert.deepEqual((await call('get', '/stats/failures', { query: { days: '99999' } })).sent[0]!.params, [TENANT, 365]);
     });
 
-    it('answers { days, total, reasons: [{ reason_code, count, sample, last_at }] }, top six', async () => {
+    it('answers { days, total, reasons: [{ reason_code, count, expected, expected_count, sample, last_at }] }, top six', async () => {
         const rows = [
             { error_log: 'Private Reply Failed: Error validating access token (Code: 190)', count: 7, last_at: new Date('2026-09-26T08:00:00Z'), total: 12 },
             { error_log: 'Skipped: recipient already received an automated DM within 24 hours.', count: 5, last_at: new Date('2026-09-27T08:00:00Z'), total: 12 },
@@ -259,8 +259,9 @@ describe('GET /stats/failures (A5)', () => {
             days: 30,
             total: 12,
             reasons: [
-                { reason_code: '190', count: 7, sample: rows[0]!.error_log, last_at: '2026-09-26T08:00:00.000Z' },
-                { reason_code: 'recipient_cap', count: 5, sample: rows[1]!.error_log, last_at: '2026-09-27T08:00:00.000Z' },
+                // `expected`: a designed skip, not a fault (src/services/failureReasons.ts). A dead token is a fault; the 24 h cap is by design.
+                { reason_code: '190', count: 7, expected: false, expected_count: 0, sample: rows[0]!.error_log, last_at: '2026-09-26T08:00:00.000Z' },
+                { reason_code: 'recipient_cap', count: 5, expected: true, expected_count: 5, sample: rows[1]!.error_log, last_at: '2026-09-27T08:00:00.000Z' },
             ],
         });
     });
