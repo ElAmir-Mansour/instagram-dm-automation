@@ -312,11 +312,11 @@ describe('refusals carry stable codes', () => {
     const restore: Array<() => void> = [];
     afterEach(() => { while (restore.length) restore.pop()!(); });
 
-    function stubPool(handler: (sql: string) => { rows: any[]; rowCount?: number }): void {
+    function stubPool(handler: (sql: string, params?: unknown[]) => { rows: any[]; rowCount?: number }): void {
         const originalQuery = pool.query;
         const originalConnect = pool.connect;
         const previousSink = setLogSink(() => {});
-        const run = async (sql: string) => { const r = handler(sql); return { rows: r.rows, rowCount: r.rowCount ?? r.rows.length }; };
+        const run = async (sql: string, params?: unknown[]) => { const r = handler(sql, params); return { rows: r.rows, rowCount: r.rowCount ?? r.rows.length }; };
         (pool as unknown as { query: unknown }).query = run;
         (pool as unknown as { connect: unknown }).connect = async () => ({ query: run, release() {} });
         restore.push(() => {
@@ -405,6 +405,28 @@ describe('refusals carry stable codes', () => {
             assert.deepEqual(reply.body.expected, COUNTS);
             assert.deepEqual(reply.body.actual, { messages: 5, conversations: 1, interactions: 0, dmSendLog: 0 });
             assert.deepEqual(writes, [], 'a drifted token deletes nothing');
+        });
+
+        it('records the contact\'s private uploads it deleted in the audit detail, beside the counts, and not inside them', async () => {
+            const CONV = '33333333-3333-4333-8333-333333333333';
+            let auditDetail: any = null;
+            stubPool((sql, params) => {
+                if (/FROM conversations\s+WHERE instagram_user_id/.test(sql)) return { rows: [{ id: CONV, instagram_user_id: 'someone', username: null }] };
+                if (/SELECT\s+\(SELECT COUNT/.test(sql)) return { rows: [{ messages: 2, conversations: 1, interactions: 0, dm_send_log: 0 }] };
+                if (/^\s*DELETE FROM media_uploads/.test(sql)) return { rows: [], rowCount: 3 };
+                if (/^\s*DELETE FROM messages/.test(sql)) return { rows: [], rowCount: 2 };
+                if (/^\s*DELETE FROM conversations/.test(sql)) return { rows: [], rowCount: 1 };
+                if (/^\s*DELETE/.test(sql)) return { rows: [], rowCount: 0 };
+                if (/INSERT INTO audit_log/.test(sql)) { auditDetail = JSON.parse(String(params?.[5])); return { rows: [{ id: 'audit-1' }] }; }
+                return { rows: [] };
+            });
+
+            const reply = await call('POST', '/erasure', { session: ADMIN, body: { token: mintErasureToken('someone', COUNTS) } });
+
+            assert.equal(reply.status, 200, JSON.stringify(reply.body));
+            assert.ok(auditDetail, 'the audit row was written');
+            assert.equal(auditDetail.media_deleted, 3);
+            assert.deepEqual(auditDetail.deleted, { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0 }, 'the counts are the preview\'s, unchanged');
         });
     });
 });

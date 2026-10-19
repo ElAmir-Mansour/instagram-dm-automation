@@ -33,9 +33,15 @@
  * `GET /api/uploads/:id` (which calls `open`) answers 404 for it exactly as for an id that never
  * existed, and a scheduled post can neither publish it nor pass validation with it. Only
  * `privateFor: <creator id>` reaches it, and only when the row belongs to that tenant: the
- * authenticated inbox route and the transcription. The bucket `media` is a public bucket, so
- * what makes the file private is this check plus the fact that the object's own Supabase URL is
- * never handed out; a private object lives under `private/` (see `objectPathFor`).
+ * authenticated inbox route and the transcription.
+ *
+ * With Supabase Storage configured a private upload's bytes are an object in the PRIVATE bucket
+ * `media-private` (created on first use with `public: false`, and refused if it exists and is
+ * public), at `private/<creator>/<id><ext>`; the app reads it with the secret key, like every
+ * object. The public bucket `media` never receives one. Without Storage configured (legacy BYTEA
+ * mode) the bytes stay in `data`, and `is_private` alone keeps the public route away from them.
+ * The `private/` prefix names the bucket from a path alone (`bucketForPath`), which is all the
+ * deletion queue has to go on.
  *
  * Reads select `is_private` and fall back to the pre-v51 statement on `undefined_column`: no
  * private row can exist before the migration, so a deployment ahead of its database serves every
@@ -48,8 +54,8 @@ import { describeError, log } from '../utils/log.js';
 import type { MediaObjectDeletionRow, MediaUploadRow } from '../db/rows.js';
 import { APP_SETTING_KEYS, getMediaStorageConfig, getSetting, maskValue, type MediaStorageConfig } from './appSettings.js';
 import {
-    MEDIA_BUCKET, MAX_REMOVE_PER_REQUEST, objectPathFor, StorageApiError, storageKeyKind, SupabaseStorageClient,
-    type StorageKeyKind,
+    bucketForPath, MEDIA_BUCKET, MAX_REMOVE_PER_REQUEST, objectPathFor, PRIVATE_MEDIA_BUCKET, StorageApiError, storageKeyKind,
+    SupabaseStorageClient, type StorageKeyKind,
 } from './supabaseStorage.js';
 
 export interface PutMediaInput {
@@ -286,16 +292,55 @@ export class PostgresMediaStore implements MediaStore {
 }
 
 /**
+ * The private bucket exists and is PUBLIC: someone made it so, by hand. A customer's file must not be written to it, so nothing is.
+ * The operator turns the bucket private in Supabase (Storage, `media-private`, Edit bucket), or deletes it if it is empty.
+ */
+export class PrivateBucketIsPublicError extends Error {
+    constructor() {
+        super(`The Storage bucket "${PRIVATE_MEDIA_BUCKET}" is public, so no customer file was written to it. Make it private in Supabase (Storage, ${PRIVATE_MEDIA_BUCKET}, Edit bucket) and try again.`);
+        this.name = 'PrivateBucketIsPublicError';
+    }
+}
+
+/**
  * Bytes in the Supabase Storage bucket `media`, at `<creatorId>/<id><ext>`; the row keeps the
- * metadata with `data` NULL. Legacy rows are still served from `data`.
+ * metadata with `data` NULL. Legacy rows are still served from `data`. A private upload goes to
+ * the private bucket instead (see the header): `clientFor(path)` picks the bucket from the path.
  */
 export class SupabaseStorageMediaStore implements MediaStore {
     readonly client: SupabaseStorageClient;
+    /** The private bucket's client: customer files only, never a post's media. */
+    readonly privateClient: SupabaseStorageClient;
     /** Checked once per instance, and instances are kept per config (`getMediaStore`). */
     private bucketReady: Promise<unknown> | null = null;
+    private privateBucketReady: Promise<unknown> | null = null;
 
     constructor(readonly config: MediaStorageConfig) {
         this.client = new SupabaseStorageClient({ url: config.url, key: config.key, bucket: MEDIA_BUCKET });
+        this.privateClient = new SupabaseStorageClient({ url: config.url, key: config.key, bucket: PRIVATE_MEDIA_BUCKET });
+    }
+
+    /** The client of the bucket this path lives in: `private/…` in the private bucket, everything else in `media`. */
+    private clientFor(path: string): SupabaseStorageClient {
+        return bucketForPath(path) === PRIVATE_MEDIA_BUCKET ? this.privateClient : this.client;
+    }
+
+    /**
+     * Creates the private bucket `media-private` the first time this instance needs it, with `public: false`, exactly as `ensureBucket`
+     * does for `media`, and checks what is there: a bucket that exists and is public is refused (`PrivateBucketIsPublicError`), on every call
+     * until it is fixed. Only a bucket seen to be private is remembered.
+     */
+    private ensurePrivateBucket(): Promise<unknown> {
+        this.privateBucketReady ??= this.privateClient.ensureBucket({ public: false }).then((outcome) => {
+            if (outcome.public) throw new PrivateBucketIsPublicError();
+            if (outcome.created) log('info', 'media.bucket_created', { bucket: PRIVATE_MEDIA_BUCKET, public: false });
+            return outcome;
+        }).catch((err) => {
+            this.privateBucketReady = null; // try again on the next upload rather than failing forever
+            if (err instanceof PrivateBucketIsPublicError) log('error', 'media.private_bucket_public', { bucket: PRIVATE_MEDIA_BUCKET });
+            throw err;
+        });
+        return this.privateBucketReady;
     }
 
     /** Creates the public bucket `media` the first time this instance needs it, if it is missing. */
@@ -316,8 +361,10 @@ export class SupabaseStorageMediaStore implements MediaStore {
         const id = randomUUID();
         const path = objectPathFor(input.creatorId, id, input.mimeType, { private: input.private === true });
 
-        await this.ensureBucket();
-        await this.client.upload(path, input.data, input.mimeType);
+        // A customer's file goes to the private bucket and ONLY there; a post's media to `media`, as it always did.
+        if (input.private) await this.ensurePrivateBucket();
+        else await this.ensureBucket();
+        await this.clientFor(path).upload(path, input.data, input.mimeType);
 
         let row: Pick<MediaUploadRow, 'id'> | null;
         try {
@@ -356,7 +403,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
     /** The object was written but its row was not: nothing will ever name it, so take it back out. */
     private async discard(path: string): Promise<void> {
         try {
-            await this.client.remove([path]);
+            await this.clientFor(path).remove([path]);
         } catch (err) {
             log('error', 'media.orphan_object', { storage_path: path, message: (err as Error)?.message });
         }
@@ -367,7 +414,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
         if (!row || !mayRead(row, options.privateFor)) return null;
         if (!row.storage_path) return row.data ? { id, mimeType: row.mime_type, data: row.data } : null;
 
-        const data = await this.client.download(row.storage_path);
+        const data = await this.clientFor(row.storage_path).download(row.storage_path);
         if (!data) {
             log('error', 'media.object_missing', { media_id: id, storage_path: row.storage_path });
             return null;
@@ -385,7 +432,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
         const recorded = sizeOf(row.size_bytes);
         if (options.headOnly) return { kind: 'stream', id, mimeType: row.mime_type, size: recorded, body: null };
 
-        const object = await this.client.openStream(row.storage_path);
+        const object = await this.clientFor(row.storage_path).openStream(row.storage_path);
         if (!object) {
             // The row says the object exists and Storage says it does not. Nothing the caller can
             // do about it, so a 404 — but loudly, because it means a file was lost.
@@ -510,29 +557,44 @@ export async function removeQueuedMediaObjects(limit = MAX_REMOVE_PER_REQUEST): 
         return { removed: 0, failed: 0, skipped: true, reason: 'unconfigured', waiting: paths.length };
     }
 
-    const client = new SupabaseStorageClient({ url: config.url, key: config.key, bucket: MEDIA_BUCKET });
-    try {
-        await client.remove(paths);
-    } catch (err) {
-        const message = (err as Error)?.message ?? 'unknown error';
-        log('error', 'media.objects_remove_failed', { count: paths.length, message });
-        await queryCount(
-            `UPDATE media_object_deletions
-                SET attempts = attempts + 1, last_error = $2
-              WHERE storage_path = ANY($1::text[])`,
-            [paths, message.slice(0, 500)]
-        ).catch(() => undefined);
-        return { removed: 0, failed: paths.length, skipped: false };
+    // The queue holds paths and nothing else, so the bucket is read off each path (`private/…` is the private bucket's). One request per
+    // bucket; a bucket that fails keeps its entries and does not hold back the other's.
+    const byBucket = new Map<string, string[]>();
+    for (const path of paths) {
+        const bucket = bucketForPath(path);
+        byBucket.set(bucket, [...(byBucket.get(bucket) ?? []), path]);
     }
 
-    try {
-        await queryCount('DELETE FROM media_object_deletions WHERE storage_path = ANY($1::text[])', [paths]);
-    } catch (err) {
-        // The objects are gone; the entries stay and the next sweep deletes nothing twice over.
-        log('warn', 'media.object_queue_not_cleared', describeError(err));
+    const removed: string[] = [];
+    let failed = 0;
+    for (const [bucket, group] of byBucket) {
+        const client = new SupabaseStorageClient({ url: config.url, key: config.key, bucket });
+        try {
+            await client.remove(group);
+            removed.push(...group);
+        } catch (err) {
+            const message = (err as Error)?.message ?? 'unknown error';
+            log('error', 'media.objects_remove_failed', { count: group.length, bucket, message });
+            await queryCount(
+                `UPDATE media_object_deletions
+                    SET attempts = attempts + 1, last_error = $2
+                  WHERE storage_path = ANY($1::text[])`,
+                [group, message.slice(0, 500)]
+            ).catch(() => undefined);
+            failed += group.length;
+        }
     }
-    log('info', 'media.objects_removed', { count: paths.length });
-    return { removed: paths.length, failed: 0, skipped: false };
+
+    if (removed.length > 0) {
+        try {
+            await queryCount('DELETE FROM media_object_deletions WHERE storage_path = ANY($1::text[])', [removed]);
+        } catch (err) {
+            // The objects are gone; the entries stay and the next sweep deletes nothing twice over.
+            log('warn', 'media.object_queue_not_cleared', describeError(err));
+        }
+        log('info', 'media.objects_removed', { count: removed.length });
+    }
+    return { removed: removed.length, failed, skipped: false };
 }
 
 // ─── What the Settings card shows ────────────────────────────────────────────────────────────

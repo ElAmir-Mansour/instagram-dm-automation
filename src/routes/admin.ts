@@ -2062,6 +2062,8 @@ router.post('/erasure', async (req, res) => {
                 targetId: outcome.handle,
                 detail: {
                     deleted: outcome.deleted,
+                    // The contact's private uploads (customer files) deleted with them: not part of `deleted`, which is what the preview counted.
+                    media_deleted: outcome.mediaDeleted ?? 0,
                     matched_usernames: outcome.target.usernames,
                     matched_instagram_user_ids: outcome.target.instagramUserIds,
                     conversation_ids: outcome.target.conversationIds,
@@ -2085,6 +2087,7 @@ router.post('/erasure', async (req, res) => {
         log('warn', 'erasure.executed', {
             audit_id: recorded.id,
             ...outcome.deleted,
+            media_deleted: outcome.mediaDeleted ?? 0,
         });
 
         res.json({

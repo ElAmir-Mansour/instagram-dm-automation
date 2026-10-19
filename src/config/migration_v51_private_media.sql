@@ -4,7 +4,9 @@ SET LOCAL lock_timeout = '5s'; -- fail in 5 s rather than queue the upload route
 -- `media_uploads` is served PUBLICLY by its uuid: `GET /api/uploads/:id` is unauthenticated on purpose, because Meta and TikTok fetch post media
 -- from it themselves, and the Storage bucket `media` is a public bucket. That is right for a post's image and wrong for what a customer sends
 -- on WhatsApp (a voice note, a receipt, a screenshot of an error): a private person's file must not be one guessable-looking URL away from
--- anyone who holds the id.
+-- anyone who holds the id, nor sit in a bucket that serves any object to whoever has its URL. So a private upload's object goes to a separate
+-- PRIVATE bucket, `media-private` (created on first use with public:false; the app reads it with the secret key), at `private/<creator>/<id><ext>`;
+-- the prefix names the bucket from a path alone, which is all the deletion queue (v23) holds. No bucket is created by this migration (it is SQL).
 --
 --   is_private   TRUE for a customer's file. Every public read in src/services/storage.ts (`open`, `get`, `mimeTypes`) answers "no such
 --                upload" for such a row, so `/api/uploads/:id` answers 404 for it exactly as for an id that does not exist. Only an explicit,

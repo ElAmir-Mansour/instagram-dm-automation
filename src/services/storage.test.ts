@@ -16,11 +16,11 @@ import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    canServePrivately, canServePublicly, getMediaStore, MediaStorageUnavailableError, PostgresMediaStore, removeQueuedMediaObjects, setMediaStore,
+    canServePrivately, canServePublicly, getMediaStore, MediaStorageUnavailableError, PostgresMediaStore, PrivateBucketIsPublicError, removeQueuedMediaObjects, setMediaStore,
     SupabaseStorageMediaStore, uploadIdFromSegment, uploadIdFromUrl, type MediaStore,
 } from './storage.js';
 import {
-    MEDIA_BUCKET, objectPathFor, SERVER_USER_AGENT, setStorageFetch, storageAuthHeaders, storageKeyKind,
+    bucketForPath, MEDIA_BUCKET, objectPathFor, PRIVATE_MEDIA_BUCKET, SERVER_USER_AGENT, setStorageFetch, storageAuthHeaders, storageKeyKind,
     storageKeyProblem, StorageApiError, SupabaseStorageClient,
 } from './supabaseStorage.js';
 
@@ -76,6 +76,10 @@ const removedPrefixes = (call: Call) =>
 const OBJECT = (path: string) => `/storage/v1/object/${MEDIA_BUCKET}/${path}`;
 const AUTHED = (path: string) => `/storage/v1/object/authenticated/${MEDIA_BUCKET}/${path}`;
 const BUCKET = `/storage/v1/bucket/${MEDIA_BUCKET}`;
+// The PRIVATE bucket, where a customer's file goes (migration v51). Never `media`.
+const PRIVATE_BUCKET = `/storage/v1/bucket/${PRIVATE_MEDIA_BUCKET}`;
+const PRIVATE_OBJECT = (path: string) => `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}/${path}`;
+const PRIVATE_AUTHED = (path: string) => `/storage/v1/object/authenticated/${PRIVATE_MEDIA_BUCKET}/${path}`;
 
 // ─── Fake database ──────────────────────────────────────────────────────────────────────────
 
@@ -688,7 +692,7 @@ describe('private uploads: the public read never reaches a customer\'s file', ()
         }],
         ['SupabaseStorageMediaStore', () => new SupabaseStorageMediaStore(config()), () => {
             media.set(PRIVATE, { id: PRIVATE, creator_id: CREATOR, filename: 'v.ogg', mime_type: 'audio/ogg', data: null, storage_path: PRIVATE_PATH, size_bytes: String(VOICE.length), is_private: true });
-            on('GET', AUTHED(PRIVATE_PATH), () => new Response(VOICE, { status: 200, headers: { 'content-length': String(VOICE.length) } }));
+            on('GET', PRIVATE_AUTHED(PRIVATE_PATH), () => new Response(VOICE, { status: 200, headers: { 'content-length': String(VOICE.length) } }));
         }],
     ];
 
@@ -754,19 +758,62 @@ describe('private uploads: the public read never reaches a customer\'s file', ()
             assert.doesNotMatch(statements.join('\n'), /is_private/);
         });
 
-        it('Supabase: the object goes under private/<creator>/ with its own extension, and the row says is_private; a public one keeps <creator>/<id>.<ext>', async () => {
+        it('Supabase: a private upload is written to the PRIVATE bucket, created with public:false, and never touches the public one', async () => {
+            on('GET', PRIVATE_BUCKET, () => storageSays('404', 'NoSuchBucket', 'Bucket not found'));
+            on('POST', '/storage/v1/bucket', () => json(200, { name: PRIVATE_MEDIA_BUCKET }));
+            on('POST', new RegExp(`^/storage/v1/object/${PRIVATE_MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
+            const store = new SupabaseStorageMediaStore(config());
+
+            const { id } = await store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
+
+            const objectPath = `private/${CREATOR}/${id}.ogg`;
+            assert.deepEqual(calls.map((c) => `${c.method} ${c.path}`), [
+                `GET ${PRIVATE_BUCKET}`, 'POST /storage/v1/bucket', `POST ${PRIVATE_OBJECT(objectPath)}`,
+            ]);
+            assert.deepEqual(JSON.parse(calls[1]!.body!.toString()), { id: PRIVATE_MEDIA_BUCKET, name: PRIVATE_MEDIA_BUCKET, public: false }, 'public:false is SENT, not left to a default');
+            assert.deepEqual(calls[2]!.body, OGG);
+            assert.equal(calls[2]!.headers.apikey, SECRET_KEY, 'written server-side with the secret key');
+            assert.ok(!calls.some((c) => c.path.startsWith(`/storage/v1/object/${MEDIA_BUCKET}/`) || c.path === BUCKET), 'the public bucket was not touched');
+            assert.equal(media.get(id)!.storage_path, objectPath);
+            assert.equal(media.get(id)!.is_private, true);
+            assert.equal(bucketForPath(objectPath), PRIVATE_MEDIA_BUCKET);
+        });
+
+        it('Supabase: a public upload keeps going to `media` at <creator>/<id>.<ext>, and asks nothing of the private bucket', async () => {
             on('GET', BUCKET, () => json(200, { id: MEDIA_BUCKET, public: true }));
             on('POST', new RegExp(`^/storage/v1/object/${MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
             const store = new SupabaseStorageMediaStore(config());
 
-            const { id } = await store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
-            assert.equal(media.get(id)!.storage_path, `private/${CREATOR}/${id}.ogg`);
-            assert.equal(media.get(id)!.is_private, true);
-            assert.ok(calls.some((c) => c.method === 'POST' && c.path === OBJECT(`private/${CREATOR}/${id}.ogg`)));
-
             const pub = await store.put({ creatorId: CREATOR, filename: 's.jpg', mimeType: 'image/jpeg', data: Buffer.from([0xff, 0xd8]) });
+
             assert.equal(media.get(pub.id)!.storage_path, `${CREATOR}/${pub.id}.jpg`, 'a post\'s media is where it always was');
             assert.equal(media.get(pub.id)!.is_private, undefined);
+            assert.ok(!calls.some((c) => c.path.includes(PRIVATE_MEDIA_BUCKET)), 'the private bucket was not touched');
+            assert.equal(bucketForPath(media.get(pub.id)!.storage_path!), MEDIA_BUCKET);
+        });
+
+        it('Supabase: the private bucket is checked once per instance; an existing private bucket is used as it is', async () => {
+            on('GET', PRIVATE_BUCKET, () => json(200, { id: PRIVATE_MEDIA_BUCKET, public: false }));
+            on('POST', new RegExp(`^/storage/v1/object/${PRIVATE_MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
+            const store = new SupabaseStorageMediaStore(config());
+            await store.put({ creatorId: CREATOR, filename: 'a.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
+            await store.put({ creatorId: CREATOR, filename: 'b.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
+            assert.equal(calls.filter((c) => c.method === 'GET').length, 1, 'one bucket check');
+            assert.ok(!calls.some((c) => c.method === 'POST' && c.path === '/storage/v1/bucket'), 'nothing created');
+        });
+
+        it('Supabase: a private bucket that is PUBLIC is refused, every time, and no file is written to it or to the public bucket instead', async () => {
+            on('GET', PRIVATE_BUCKET, () => json(200, { id: PRIVATE_MEDIA_BUCKET, public: true }));
+            const store = new SupabaseStorageMediaStore(config());
+            for (let attempt = 0; attempt < 2; attempt++) {
+                await assert.rejects(
+                    store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: OGG, private: true }),
+                    PrivateBucketIsPublicError
+                );
+            }
+            assert.equal(calls.filter((c) => c.method === 'GET').length, 2, 'asked again, not remembered as fine');
+            assert.ok(!calls.some((c) => c.method === 'POST'), 'nothing was uploaded anywhere');
+            assert.equal(media.size, 1, 'only the public fixture row exists');
         });
 
         it('objectPathFor: the private prefix is opt-in, and a voice note has an extension', () => {
@@ -797,16 +844,103 @@ describe('private uploads: the public read never reaches a customer\'s file', ()
             assert.equal([...media.values()].filter((r) => r.mime_type === 'audio/ogg').length, 0, 'nothing was stored');
         });
 
-        it('Supabase: the object is taken back out when the private row cannot be written', async () => {
-            on('GET', BUCKET, () => json(200, { id: MEDIA_BUCKET, public: true }));
-            on('POST', new RegExp(`^/storage/v1/object/${MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
-            on('DELETE', `/storage/v1/object/${MEDIA_BUCKET}`, removedPrefixes);
+        it('Supabase: the object is taken back out of the PRIVATE bucket when the private row cannot be written', async () => {
+            on('GET', PRIVATE_BUCKET, () => json(200, { id: PRIVATE_MEDIA_BUCKET, public: false }));
+            on('POST', new RegExp(`^/storage/v1/object/${PRIVATE_MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
+            on('DELETE', `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}`, removedPrefixes);
             await assert.rejects(
                 new SupabaseStorageMediaStore(config()).put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: Buffer.from('x'), private: true }),
                 (err: { code?: string }) => err.code === '42703'
             );
-            assert.ok(calls.some((c) => c.method === 'DELETE'), 'the orphan object is removed');
+            const removed = calls.find((c) => c.method === 'DELETE')!;
+            assert.equal(removed.path, `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}`, 'from the bucket it was written to');
+            assert.match(JSON.parse(removed.body!.toString()).prefixes[0], /^private\//);
             assert.equal(media.size, 1, 'only the public fixture row exists');
         });
+    });
+});
+
+describe('private uploads and the legacy (Postgres) path', () => {
+    const LEGACY_PRIVATE = '6b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const OTHER_TENANT = '22222222-2222-4222-8222-222222222222';
+    const NOTE = Buffer.from('a voice note saved before Storage was configured');
+
+    beforeEach(() => {
+        media.set(LEGACY_PRIVATE, { id: LEGACY_PRIVATE, creator_id: CREATOR, filename: 'v.ogg', mime_type: 'audio/ogg', data: NOTE, storage_path: null, size_bytes: String(NOTE.length), is_private: true });
+    });
+
+    it('with no Storage configured a private upload stays in the data column, gated by is_private alone: no Storage call at all', async () => {
+        const store = await getMediaStore();
+        assert.ok(store instanceof PostgresMediaStore);
+        const { id } = await store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: NOTE, private: true });
+
+        assert.deepEqual(media.get(id)!.data, NOTE);
+        assert.equal(media.get(id)!.storage_path, null);
+        assert.equal(media.get(id)!.is_private, true);
+        assert.equal(await store.open(id), null, 'the public read never returns it');
+        assert.equal(await store.get(id), null);
+        assert.deepEqual((await store.get(id, { privateFor: CREATOR }))?.data, NOTE);
+        assert.deepEqual(calls, [], 'Supabase was never asked');
+    });
+
+    it('once Storage IS configured, a private row still in `data` is read from `data`, to its tenant only, with no bucket call', async () => {
+        const store = new SupabaseStorageMediaStore(config());
+        assert.deepEqual((await store.get(LEGACY_PRIVATE, { privateFor: CREATOR }))?.data, NOTE);
+        assert.equal((await store.open(LEGACY_PRIVATE, { privateFor: CREATOR }))?.kind, 'bytes');
+        assert.equal(await store.open(LEGACY_PRIVATE), null, 'not through the public read');
+        assert.equal(await store.get(LEGACY_PRIVATE, { privateFor: OTHER_TENANT }), null);
+        assert.deepEqual(calls, []);
+    });
+
+    it('bucketForPath: only `private/…` is the private bucket, and a public path never starts with it', () => {
+        assert.equal(bucketForPath(`private/${CREATOR}/x.ogg`), PRIVATE_MEDIA_BUCKET);
+        for (const path of [`${CREATOR}/x.jpg`, 'unassigned/x.jpg', 'privateer/x.jpg', 'x/private/y.jpg']) assert.equal(bucketForPath(path), MEDIA_BUCKET, path);
+        const id = '0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+        for (const creator of [CREATOR, null, 'not-a-uuid']) assert.equal(bucketForPath(objectPathFor(creator, id, 'image/jpeg')), MEDIA_BUCKET);
+    });
+});
+
+describe('removing the objects of deleted rows, public and private', () => {
+    const PUBLIC_PATH = `${CREATOR}/0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab.jpg`;
+    const PRIVATE_PATH = `private/${CREATOR}/1b8a7a0e-3c1f-4f7e-9d0a-1234567890ab.ogg`;
+    const prefixesOf = (call: Call): string[] => JSON.parse(call.body!.toString()).prefixes;
+
+    beforeEach(() => { saved(PROJECT, SECRET_KEY); });
+
+    it('sends each queued path to ITS bucket, one request per bucket, then clears the queue', async () => {
+        queue.set(PUBLIC_PATH, { attempts: 0, last_error: null });
+        queue.set(PRIVATE_PATH, { attempts: 0, last_error: null });
+        on('DELETE', `/storage/v1/object/${MEDIA_BUCKET}`, removedPrefixes);
+        on('DELETE', `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}`, removedPrefixes);
+
+        const out = await removeQueuedMediaObjects();
+
+        assert.deepEqual(out, { removed: 2, failed: 0, skipped: false });
+        const toPublic = calls.find((c) => c.path === `/storage/v1/object/${MEDIA_BUCKET}`)!;
+        const toPrivate = calls.find((c) => c.path === `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}`)!;
+        assert.deepEqual(prefixesOf(toPublic), [PUBLIC_PATH], 'a private path is never sent to the public bucket');
+        assert.deepEqual(prefixesOf(toPrivate), [PRIVATE_PATH], 'and a public one is never sent to the private bucket');
+        assert.equal(queue.size, 0);
+    });
+
+    it('a queue of public paths only never touches the private bucket: what it did before v51', async () => {
+        queue.set(PUBLIC_PATH, { attempts: 0, last_error: null });
+        on('DELETE', `/storage/v1/object/${MEDIA_BUCKET}`, removedPrefixes);
+        assert.deepEqual(await removeQueuedMediaObjects(), { removed: 1, failed: 0, skipped: false });
+        assert.deepEqual(calls.map((c) => c.path), [`/storage/v1/object/${MEDIA_BUCKET}`]);
+    });
+
+    it('when one bucket refuses, its entries stay (counted, with the reason) and the other bucket\'s are cleared', async () => {
+        queue.set(PUBLIC_PATH, { attempts: 0, last_error: null });
+        queue.set(PRIVATE_PATH, { attempts: 0, last_error: null });
+        on('DELETE', `/storage/v1/object/${MEDIA_BUCKET}`, removedPrefixes);
+        on('DELETE', `/storage/v1/object/${PRIVATE_MEDIA_BUCKET}`, () => json(401, { message: 'Invalid API key' }));
+
+        const out = await removeQueuedMediaObjects();
+
+        assert.deepEqual(out, { removed: 1, failed: 1, skipped: false });
+        assert.deepEqual([...queue.keys()], [PRIVATE_PATH], 'only the private entry is left to retry');
+        assert.equal(queue.get(PRIVATE_PATH)!.attempts, 1);
+        assert.match(queue.get(PRIVATE_PATH)!.last_error ?? '', /Invalid API key/);
     });
 });

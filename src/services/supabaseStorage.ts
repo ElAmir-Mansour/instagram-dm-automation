@@ -32,8 +32,37 @@
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
-/** The bucket every tenant's media goes into, under a folder per creator. */
+/** The bucket every tenant's media goes into, under a folder per creator. PUBLIC: posts' images and reels are fetched by Meta and TikTok. */
 export const MEDIA_BUCKET = 'media';
+
+/**
+ * The bucket a CUSTOMER's files go into (WhatsApp voice notes, photos, documents; migration v51): a PRIVATE bucket, so an object is not
+ * readable by anyone holding its URL. The app reads and writes it server-side with the secret key.
+ *
+ * What Supabase says (read 2026-10-19):
+ *   - `POST /storage/v1/bucket` takes `{ id, name, public }` and `public` defaults to false, so a bucket made without it is private
+ *     (the route handler: `isPublic ?? false`, github.com/supabase/storage src/http/routes/bucket/createBucket.ts).
+ *   - Every operation on a private bucket, downloads included, is governed by RLS policies on `storage.objects`
+ *     (https://supabase.com/docs/guides/storage/buckets/fundamentals), while a public bucket serves its objects to anyone who has the URL.
+ *   - A service key / secret key bypasses those policies ("entirely bypass RLS policies, granting you unrestricted access to all Storage
+ *     APIs", https://supabase.com/docs/guides/storage/security/access-control), so the app, which holds one, needs no policy to write or
+ *     read here; and with no policy written (the app writes none) the other keys are left with nothing: that is Supabase's default-deny, not
+ *     something this app enforces, so the bucket's own `public` flag is checked before every private write (`ensurePrivateBucket`).
+ *   - `GET /object/authenticated/{bucket}/{path}` (already how this file reads `media`) is the download for a private object.
+ */
+export const PRIVATE_MEDIA_BUCKET = 'media-private';
+
+/**
+ * Every private object's path starts with this, inside `media-private`. It is what tells a path which bucket it lives in WITHOUT a lookup:
+ * `media_object_deletions` (migration v23) holds paths and nothing else, so the daily sweep reads the bucket off the path (`bucketForPath`).
+ * A public path starts with a creator uuid or `unassigned/`, never with this.
+ */
+export const PRIVATE_PATH_PREFIX = 'private/';
+
+/** The bucket a `storage_path` lives in. */
+export function bucketForPath(path: string): string {
+    return path.startsWith(PRIVATE_PATH_PREFIX) ? PRIVATE_MEDIA_BUCKET : MEDIA_BUCKET;
+}
 
 /** Any non-browser string will do. This one says who is calling. */
 export const SERVER_USER_AGENT = 'autoreply-pro-server/1.0 (media storage)';
@@ -140,10 +169,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function objectPathFor(creatorId: string | null, id: string, mimeType: string, options: { private?: boolean } = {}): string {
     if (!UUID.test(id)) throw new Error(`Not an upload id: ${JSON.stringify(id)}`);
     const folder = creatorId && UUID.test(creatorId) ? creatorId.toLowerCase() : 'unassigned';
-    // A customer's file (migration v51) goes under `private/`, apart from the posts' media: the bucket `media` is public, so the prefix is
-    // what lets a later Storage rule, or a person reading the bucket, tell the two kinds apart. The gate that keeps it private today is the
-    // app's: the object's own Supabase URL is never handed out, and `media_uploads.is_private` makes every public read answer "no such upload".
-    return `${options.private ? 'private/' : ''}${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
+    // A customer's file (migration v51) lives in the PRIVATE bucket, under `private/` (see `PRIVATE_PATH_PREFIX`: the prefix names the bucket).
+    return `${options.private ? PRIVATE_PATH_PREFIX : ''}${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
 }
 
 /** Supabase said no, or could not be reached (`status` 0). */
@@ -278,15 +305,16 @@ export class SupabaseStorageClient {
     }
 
     /**
-     * Create the bucket, public. Public because the objects are exactly as public as the
+     * Create the bucket, public unless `public: false`. `media` is public because its objects are exactly as public as the
      * /api/uploads/<id> URLs that serve them — anyone holding the id could already fetch them —
-     * and it keeps a public URL available. The app itself always reads with the key.
+     * and it keeps a public URL available. The app itself always reads with the key. `media-private` is created with `public: false`:
+     * `public` is always sent, never left to Supabase's default.
      */
-    async createBucket(): Promise<void> {
+    async createBucket(options: { public?: boolean } = {}): Promise<void> {
         const response = await this.send(`${this.base}/bucket`, {
             method: 'POST',
             headers: this.headers({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ id: this.bucket, name: this.bucket, public: true }),
+            body: JSON.stringify({ id: this.bucket, name: this.bucket, public: options.public !== false }),
             signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
         }, 'create the bucket');
         if (response.ok) return;
@@ -296,12 +324,15 @@ export class SupabaseStorageClient {
         throw err;
     }
 
-    /** Make sure the bucket exists. Returns what was found, and whether this call created it. */
-    async ensureBucket(): Promise<{ created: boolean; public: boolean }> {
+    /**
+     * Make sure the bucket exists. Returns what was found, and whether this call created it. `public` is what the bucket IS, read back, not
+     * what was asked for: a caller that needs it private must check the answer (a bucket someone made public by hand stays public).
+     */
+    async ensureBucket(options: { public?: boolean } = {}): Promise<{ created: boolean; public: boolean }> {
         const existing = await this.getBucket();
         if (existing) return { created: false, public: existing.public };
-        await this.createBucket();
-        return { created: true, public: true };
+        await this.createBucket(options);
+        return { created: true, public: options.public !== false };
     }
 
     /**
