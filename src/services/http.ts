@@ -83,6 +83,23 @@ export function isPermanentMetaError(err: any): boolean {
     return typeof code === 'number' && PERMANENT_CODES.has(code);
 }
 
+/**
+ * True when a Graph call failed WITHOUT Meta having answered about the thing asked: no HTTP response at all (a refused or reset
+ * connection, DNS, a timeout: `metaHttp` gives every call 10 s), a 5xx, a 429, or one of Meta's own "try again" codes.
+ *
+ * A caller that is CHECKING something (is this token valid?) must read that as "I could not tell", never as "no". A definitive
+ * answer, such as a 400 with code 190 for a dead token, is not this: it has a response, and a code that is not on the transient
+ * list. Permanent codes are never "unavailable", whatever status carried them.
+ */
+export function isMetaUnavailable(err: any): boolean {
+    if (isPermanentMetaError(err)) return false;
+    if (!err?.response) return true;
+    const status = err.response.status;
+    if (typeof status === 'number' && (status >= 500 || status === 429)) return true;
+    const code = metaErrorCode(err);
+    return typeof code === 'number' && TRANSIENT_CODES.has(code);
+}
+
 function isRetryable(err: any): boolean {
     if (isPermanentMetaError(err)) return false;
 
