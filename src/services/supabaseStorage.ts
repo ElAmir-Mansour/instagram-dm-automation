@@ -119,6 +119,13 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
     'video/mp4': '.mp4',
     'video/quicktime': '.mov',
     'image/gif': '.gif',
+    // What a customer sends on WhatsApp (private uploads, migration v51). Only the name in the bucket: the route and the inbox serve the stored mime type.
+    'audio/ogg': '.ogg',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'audio/aac': '.aac',
+    'audio/amr': '.amr',
+    'application/pdf': '.pdf',
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,10 +137,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * extension is only for a human reading the bucket: the route serves the stored mime type,
  * and the URL Meta and TikTok hold is still /api/uploads/<id>.
  */
-export function objectPathFor(creatorId: string | null, id: string, mimeType: string): string {
+export function objectPathFor(creatorId: string | null, id: string, mimeType: string, options: { private?: boolean } = {}): string {
     if (!UUID.test(id)) throw new Error(`Not an upload id: ${JSON.stringify(id)}`);
     const folder = creatorId && UUID.test(creatorId) ? creatorId.toLowerCase() : 'unassigned';
-    return `${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
+    // A customer's file (migration v51) goes under `private/`, apart from the posts' media: the bucket `media` is public, so the prefix is
+    // what lets a later Storage rule, or a person reading the bucket, tell the two kinds apart. The gate that keeps it private today is the
+    // app's: the object's own Supabase URL is never handed out, and `media_uploads.is_private` makes every public read answer "no such upload".
+    return `${options.private ? 'private/' : ''}${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
 }
 
 /** Supabase said no, or could not be reached (`status` 0). */

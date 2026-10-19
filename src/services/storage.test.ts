@@ -16,7 +16,7 @@ import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    getMediaStore, MediaStorageUnavailableError, PostgresMediaStore, removeQueuedMediaObjects, setMediaStore,
+    canServePrivately, canServePublicly, getMediaStore, MediaStorageUnavailableError, PostgresMediaStore, removeQueuedMediaObjects, setMediaStore,
     SupabaseStorageMediaStore, uploadIdFromSegment, uploadIdFromUrl, type MediaStore,
 } from './storage.js';
 import {
@@ -82,6 +82,8 @@ const BUCKET = `/storage/v1/bucket/${MEDIA_BUCKET}`;
 interface MediaRow {
     id: string; creator_id: string | null; filename: string; mime_type: string;
     data: Buffer | null; storage_path: string | null; size_bytes: string | null;
+    /** v51. Absent means false, as the column's default does. */
+    is_private?: boolean;
 }
 
 let media: Map<string, MediaRow>;
@@ -90,11 +92,15 @@ let queue: Map<string, { attempts: number; last_error: string | null }>;
 let statements: string[];
 let failNextInsert = false;
 let nextPostgresId = 0;
+/** The database has not had migration v51: any statement that names `is_private` fails with undefined_column. */
+let preV51 = false;
 
 async function fakeQuery(sql: string, params: any[] = []) {
     const flat = sql.replace(/\s+/g, ' ').trim();
     statements.push(flat);
     const none = { rows: [], rowCount: 0 };
+
+    if (preV51 && /\bis_private\b/.test(flat)) throw Object.assign(new Error('column "is_private" does not exist'), { code: '42703' });
 
     if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(flat)) {
         const row = settings.get(String(params[0]));
@@ -108,9 +114,22 @@ async function fakeQuery(sql: string, params: any[] = []) {
             rows: [{
                 mime_type: row.mime_type, storage_path: row.storage_path, size_bytes: row.size_bytes,
                 data: storageFirst && row.storage_path ? null : row.data,
+                // Only the v51 statement asks for these two, so only it is answered with them.
+                ...(/\bis_private\b/.test(flat) ? { is_private: row.is_private ?? false, creator_id: row.creator_id } : {}),
             }],
             rowCount: 1,
         };
+    }
+    if (/^INSERT INTO media_uploads \(id, creator_id, filename, mime_type, data, storage_path, size_bytes, is_private\) VALUES \(\$1, \$2, \$3, \$4, NULL, \$5, \$6, true\) RETURNING id$/.test(flat)) {
+        const [id, creator_id, filename, mime_type, storage_path, size] = params;
+        media.set(id, { id, creator_id, filename, mime_type, data: null, storage_path, size_bytes: String(size), is_private: true });
+        return { rows: [{ id }], rowCount: 1 };
+    }
+    if (/^INSERT INTO media_uploads \(creator_id, filename, mime_type, data, size_bytes, is_private\) VALUES \(\$1, \$2, \$3, \$4, \$5, true\) RETURNING id$/.test(flat)) {
+        const id = `00000000-0000-4000-8000-${String(++nextPostgresId).padStart(12, '0')}`;
+        const [creator_id, filename, mime_type, data, size] = params;
+        media.set(id, { id, creator_id, filename, mime_type, data, storage_path: null, size_bytes: String(size), is_private: true });
+        return { rows: [{ id }], rowCount: 1 };
     }
     if (/^INSERT INTO media_uploads \(id, creator_id, filename, mime_type, data, storage_path, size_bytes\) VALUES \(\$1, \$2, \$3, \$4, NULL, \$5, \$6\) RETURNING id$/.test(flat)) {
         if (failNextInsert) { failNextInsert = false; throw new Error('connection reset'); }
@@ -125,7 +144,8 @@ async function fakeQuery(sql: string, params: any[] = []) {
         return { rows: [{ id }], rowCount: 1 };
     }
     if (/^SELECT id, mime_type FROM media_uploads WHERE id = ANY/.test(flat)) {
-        const found = (params[0] as string[]).map((id) => media.get(id)).filter(Boolean) as MediaRow[];
+        const publicOnly = /AND NOT is_private$/.test(flat);
+        const found = (params[0] as string[]).map((id) => media.get(id)).filter((r): r is MediaRow => Boolean(r) && !(publicOnly && r!.is_private));
         return { rows: found.map((r) => ({ id: r.id, mime_type: r.mime_type })), rowCount: found.length };
     }
     if (/^SELECT storage_path FROM media_object_deletions/.test(flat)) {
@@ -173,6 +193,7 @@ beforeEach(() => {
     calls = [];
     routes = [];
     failNextInsert = false;
+    preV51 = false;
     envBefore = Object.fromEntries(ENV_NAMES.map((name) => [name, process.env[name]]));
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -628,5 +649,164 @@ describe('SupabaseStorageClient.headObject', () => {
         on('HEAD', AUTHED(PATH), () => new Response(null, { status: 400 }));
         const client = new SupabaseStorageClient({ url: PROJECT, key: SECRET_KEY });
         assert.equal(await client.headObject(PATH), null);
+    });
+});
+
+// ─── Private media (migration v51) ──────────────────────────────────────────────────────────
+
+describe('private uploads: the public read never reaches a customer\'s file', () => {
+    const PRIVATE = '3b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const PUBLIC = '4b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const OTHER_TENANT = '22222222-2222-4222-8222-222222222222';
+    const VOICE = Buffer.from('a customer voice note');
+    const PRIVATE_PATH = `private/${CREATOR}/${PRIVATE}.ogg`;
+
+    beforeEach(() => {
+        media.set(PUBLIC, { id: PUBLIC, creator_id: CREATOR, filename: 'slide.jpg', mime_type: 'image/jpeg', data: Buffer.from('a post image'), storage_path: null, size_bytes: '12' });
+    });
+
+    describe('the decision itself', () => {
+        it('a public read serves everything except a private row, and a row from before v51 (no column) is public', () => {
+            assert.equal(canServePublicly({ is_private: true }), false);
+            for (const row of [{ is_private: false }, { is_private: null }, {}]) assert.equal(canServePublicly(row), true, JSON.stringify(row));
+        });
+
+        it('a private read needs BOTH: the row is private and it is this tenant\'s', () => {
+            assert.equal(canServePrivately({ is_private: true, creator_id: CREATOR }, CREATOR), true);
+            assert.equal(canServePrivately({ is_private: true, creator_id: CREATOR.toUpperCase() }, CREATOR), true, 'uuids compare without regard to case');
+            assert.equal(canServePrivately({ is_private: true, creator_id: CREATOR }, OTHER_TENANT), false, 'another tenant\'s file');
+            assert.equal(canServePrivately({ is_private: false, creator_id: CREATOR }, CREATOR), false, 'a public row is not a private read');
+            assert.equal(canServePrivately({ creator_id: CREATOR }, CREATOR), false);
+            assert.equal(canServePrivately({ is_private: true, creator_id: null }, CREATOR), false, 'a file with no owner is nobody\'s');
+            assert.equal(canServePrivately({ is_private: true, creator_id: CREATOR }, ''), false, 'no tenant is not every tenant');
+        });
+    });
+
+    const stores: Array<[string, () => MediaStore, () => void]> = [
+        ['PostgresMediaStore', () => new PostgresMediaStore(), () => {
+            media.set(PRIVATE, { id: PRIVATE, creator_id: CREATOR, filename: 'v.ogg', mime_type: 'audio/ogg', data: VOICE, storage_path: null, size_bytes: String(VOICE.length), is_private: true });
+        }],
+        ['SupabaseStorageMediaStore', () => new SupabaseStorageMediaStore(config()), () => {
+            media.set(PRIVATE, { id: PRIVATE, creator_id: CREATOR, filename: 'v.ogg', mime_type: 'audio/ogg', data: null, storage_path: PRIVATE_PATH, size_bytes: String(VOICE.length), is_private: true });
+            on('GET', AUTHED(PRIVATE_PATH), () => new Response(VOICE, { status: 200, headers: { 'content-length': String(VOICE.length) } }));
+        }],
+    ];
+
+    for (const [name, makeStore, arrange] of stores) {
+        describe(name, () => {
+            beforeEach(arrange);
+
+            it('open() without privateFor is null for a private row: /api/uploads/:id answers 404 for it, exactly as for an id that does not exist', async () => {
+                const store = makeStore();
+                assert.equal(await store.open(PRIVATE), null);
+                assert.equal(await store.open(PRIVATE, { headOnly: true }), null, 'a HEAD does not confirm that it exists either');
+                assert.equal(await store.open('5b8a7a0e-3c1f-4f7e-9d0a-1234567890ab'), null);
+                assert.deepEqual(calls, [], 'and nothing was fetched from Storage to find out');
+            });
+
+            it('get() without privateFor is null: a scheduled post (TikTok, YouTube read their bytes through get) can never publish a customer\'s file', async () => {
+                assert.equal(await makeStore().get(PRIVATE), null);
+                assert.deepEqual(calls, []);
+            });
+
+            it('mimeTypes() leaves a private id out: a post cannot name one and pass validation', async () => {
+                const types = await makeStore().mimeTypes([PRIVATE, PUBLIC]);
+                assert.deepEqual([...types.keys()], [PUBLIC]);
+            });
+
+            it('a public row is served exactly as before', async () => {
+                const store = makeStore();
+                assert.deepEqual(await store.open(PUBLIC), { kind: 'bytes', id: PUBLIC, mimeType: 'image/jpeg', data: Buffer.from('a post image') });
+                assert.deepEqual(await store.get(PUBLIC), { id: PUBLIC, mimeType: 'image/jpeg', data: Buffer.from('a post image') });
+            });
+
+            it('privateFor reaches the file of that tenant: through get() (the transcription) and open() (the inbox route)', async () => {
+                const store = makeStore();
+                assert.deepEqual(await store.get(PRIVATE, { privateFor: CREATOR }), { id: PRIVATE, mimeType: 'audio/ogg', data: VOICE });
+                const content = await store.open(PRIVATE, { privateFor: CREATOR });
+                assert.ok(content);
+                assert.equal(content!.mimeType, 'audio/ogg');
+            });
+
+            it('privateFor another tenant is null, and so is privateFor on a public row', async () => {
+                const store = makeStore();
+                assert.equal(await store.get(PRIVATE, { privateFor: OTHER_TENANT }), null);
+                assert.equal(await store.open(PRIVATE, { privateFor: OTHER_TENANT }), null);
+                assert.equal(await store.get(PUBLIC, { privateFor: CREATOR }), null);
+                assert.equal(await store.open(PUBLIC, { privateFor: CREATOR }), null);
+            });
+        });
+    }
+
+    describe('storing one', () => {
+        const OGG = Buffer.from('OggS voice');
+
+        it('Postgres: put({ private: true }) writes is_private true, and a public put names no such column (the statement it always was)', async () => {
+            const store = new PostgresMediaStore();
+            const { id } = await store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
+            assert.equal(media.get(id)!.is_private, true);
+            assert.equal(media.get(id)!.creator_id, CREATOR);
+            assert.match(statements.find((s) => s.startsWith('INSERT INTO media_uploads'))!, /is_private\) VALUES \(\$1, \$2, \$3, \$4, \$5, true\)/);
+
+            statements = [];
+            const pub = await store.put({ creatorId: CREATOR, filename: 'a.png', mimeType: 'image/png', data: Buffer.from('png') });
+            assert.equal(media.get(pub.id)!.is_private, undefined);
+            assert.doesNotMatch(statements.join('\n'), /is_private/);
+        });
+
+        it('Supabase: the object goes under private/<creator>/ with its own extension, and the row says is_private; a public one keeps <creator>/<id>.<ext>', async () => {
+            on('GET', BUCKET, () => json(200, { id: MEDIA_BUCKET, public: true }));
+            on('POST', new RegExp(`^/storage/v1/object/${MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
+            const store = new SupabaseStorageMediaStore(config());
+
+            const { id } = await store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: OGG, private: true });
+            assert.equal(media.get(id)!.storage_path, `private/${CREATOR}/${id}.ogg`);
+            assert.equal(media.get(id)!.is_private, true);
+            assert.ok(calls.some((c) => c.method === 'POST' && c.path === OBJECT(`private/${CREATOR}/${id}.ogg`)));
+
+            const pub = await store.put({ creatorId: CREATOR, filename: 's.jpg', mimeType: 'image/jpeg', data: Buffer.from([0xff, 0xd8]) });
+            assert.equal(media.get(pub.id)!.storage_path, `${CREATOR}/${pub.id}.jpg`, 'a post\'s media is where it always was');
+            assert.equal(media.get(pub.id)!.is_private, undefined);
+        });
+
+        it('objectPathFor: the private prefix is opt-in, and a voice note has an extension', () => {
+            const id = '0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+            assert.equal(objectPathFor(CREATOR, id, 'audio/ogg', { private: true }), `private/${CREATOR}/${id}.ogg`);
+            assert.equal(objectPathFor(CREATOR, id, 'audio/ogg'), `${CREATOR}/${id}.ogg`);
+            assert.equal(objectPathFor(CREATOR, id, 'image/jpeg'), `${CREATOR}/${id}.jpg`, 'unchanged');
+        });
+    });
+
+    describe('a database that has not had v51 yet', () => {
+        beforeEach(() => { preV51 = true; });
+
+        it('serves every upload exactly as before, because no private row can exist: the read falls back to the statement it always ran', async () => {
+            const store = new PostgresMediaStore();
+            assert.deepEqual(await store.open(PUBLIC), { kind: 'bytes', id: PUBLIC, mimeType: 'image/jpeg', data: Buffer.from('a post image') });
+            assert.deepEqual(await store.get(PUBLIC), { id: PUBLIC, mimeType: 'image/jpeg', data: Buffer.from('a post image') });
+            assert.deepEqual([...(await store.mimeTypes([PUBLIC])).keys()], [PUBLIC]);
+        });
+
+        it('a public upload still works, and a PRIVATE one fails loudly instead of being stored as public', async () => {
+            const store = new PostgresMediaStore();
+            await store.put({ creatorId: CREATOR, filename: 'a.png', mimeType: 'image/png', data: Buffer.from('png') });
+            await assert.rejects(
+                store.put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: Buffer.from('x'), private: true }),
+                (err: { code?: string }) => err.code === '42703'
+            );
+            assert.equal([...media.values()].filter((r) => r.mime_type === 'audio/ogg').length, 0, 'nothing was stored');
+        });
+
+        it('Supabase: the object is taken back out when the private row cannot be written', async () => {
+            on('GET', BUCKET, () => json(200, { id: MEDIA_BUCKET, public: true }));
+            on('POST', new RegExp(`^/storage/v1/object/${MEDIA_BUCKET}/.+`), (call) => json(200, { Key: call.path }));
+            on('DELETE', `/storage/v1/object/${MEDIA_BUCKET}`, removedPrefixes);
+            await assert.rejects(
+                new SupabaseStorageMediaStore(config()).put({ creatorId: CREATOR, filename: 'v.ogg', mimeType: 'audio/ogg', data: Buffer.from('x'), private: true }),
+                (err: { code?: string }) => err.code === '42703'
+            );
+            assert.ok(calls.some((c) => c.method === 'DELETE'), 'the orphan object is removed');
+            assert.equal(media.size, 1, 'only the public fixture row exists');
+        });
     });
 });

@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { EFFORTS } from '../llm/types.js';
-import { AI_PURPOSES, EVAL, isAiPurpose, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, type UsagePurpose } from './purposes.js';
+import { AI_PURPOSES, EVAL, isAiPurpose, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, TRANSCRIBE, type UsagePurpose } from './purposes.js';
 import { ProviderKeys } from './settings.js';
 import { describeAi } from './view.js';
 
@@ -79,6 +79,15 @@ describe('the usage labels', () => {
     it('a UsagePurpose is a purpose or one of the two labels, so a harness can ask for the `dm` route and be recorded as `eval`', () => {
         const labels: UsagePurpose[] = [...AI_PURPOSES, KEY_TEST, EVAL];
         assert.equal(new Set(labels).size, AI_PURPOSES.length + 2);
+    });
+
+    it('`transcribe` labels speech-to-text spend and is NOT a routable purpose: no routing row, so no chat model can be saved for it (T034)', () => {
+        assert.equal(TRANSCRIBE, 'transcribe');
+        assert.equal(isAiPurpose(TRANSCRIBE), false);
+        assert.equal((AI_PURPOSES as readonly string[]).includes(TRANSCRIBE), false);
+        assert.equal(Object.keys(PURPOSE_DEFAULT_EFFORT).includes(TRANSCRIBE), false);
+        const label: UsagePurpose = TRANSCRIBE;
+        assert.equal(label, 'transcribe');
     });
 
     it('a Test asks for no thinking at all', () => {

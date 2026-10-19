@@ -16,10 +16,17 @@ export const isAiPurpose = (value: unknown): value is AiPurpose => typeof value 
  * What `ai_usage.purpose` can say: a purpose, or one of two labels that route like a purpose and are not one (spend that belongs to no tenant):
  * `key_test`, the operator checking a key or pressing "Test" on a route, and `eval`, a run of the DM evaluation harness (docs/DM_SALES_PLAN.md
  * §11), which asks for the `dm` route with `usageAs: EVAL` so its spend is read apart from real conversations.
+ *
+ * And `transcribe`, speech to text for a WhatsApp voice note (`services/transcribe.ts`, docs/specs/001-whatsapp-agent T034). It is deliberately a
+ * label and NOT an `AiPurpose`: the purposes are CHAT routes (a provider and a chat model the operator picks, shown in the routing table, resolved
+ * by `pickRoute` to the first provider with a key at its chat default), and a speech model is none of that. Listed there it would show the
+ * operator a row whose "Automatic" resolved to a chat model that cannot transcribe, and let a chat model be saved on it. Which providers may
+ * serve it is not a routing choice but a privacy rule (only those whose terms forbid training: `TRANSCRIBE_PROVIDERS`).
  */
 export const KEY_TEST = 'key_test';
 export const EVAL = 'eval';
-export type UsagePurpose = AiPurpose | typeof KEY_TEST | typeof EVAL;
+export const TRANSCRIBE = 'transcribe';
+export type UsagePurpose = AiPurpose | typeof KEY_TEST | typeof EVAL | typeof TRANSCRIBE;
 
 /**
  * How hard each purpose thinks when its route does not say (06's table). Always sent explicitly: Opus 5.5's own default is medium,

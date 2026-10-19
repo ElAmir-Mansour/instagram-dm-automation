@@ -24,6 +24,22 @@
  * Deleting a row queues its object (a trigger, migration v23) and `removeQueuedMediaObjects`
  * removes it from Storage on the daily retention sweep — so a rolled-back delete never leaves a
  * row whose object is gone.
+ *
+ * ── Private rows (migration v51) ──
+ *
+ * A customer's file (a WhatsApp voice note, a receipt) is stored with `is_private = true`. Every
+ * read here decides in one place, `mayRead`, and the default is the public one: without
+ * `privateFor`, `open`, `get` and `mimeTypes` answer "no such upload" for a private row, so
+ * `GET /api/uploads/:id` (which calls `open`) answers 404 for it exactly as for an id that never
+ * existed, and a scheduled post can neither publish it nor pass validation with it. Only
+ * `privateFor: <creator id>` reaches it, and only when the row belongs to that tenant: the
+ * authenticated inbox route and the transcription. The bucket `media` is a public bucket, so
+ * what makes the file private is this check plus the fact that the object's own Supabase URL is
+ * never handed out; a private object lives under `private/` (see `objectPathFor`).
+ *
+ * Reads select `is_private` and fall back to the pre-v51 statement on `undefined_column`: no
+ * private row can exist before the migration, so a deployment ahead of its database serves every
+ * upload as it always did. Nothing is cached — once the column exists the next read sees it.
  */
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
@@ -41,6 +57,11 @@ export interface PutMediaInput {
     filename: string;
     mimeType: string;
     data: Buffer;
+    /**
+     * A customer's file (WhatsApp inbound media): stored `is_private`, never served by the public route. Needs migration v51 and fails
+     * loudly without it, rather than quietly storing a customer's file as public.
+     */
+    private?: boolean;
 }
 
 export interface StoredMedia {
@@ -62,18 +83,31 @@ export type MediaContent =
 export interface OpenOptions {
     /** A HEAD request: answer from the row, without fetching the object. */
     headOnly?: boolean;
+    /**
+     * Read a PRIVATE upload of this tenant instead of a public one. Without it a private row is "not found"; with it only a private row
+     * of exactly this creator is found. For the authenticated inbox route, never for `/api/uploads/:id`.
+     */
+    privateFor?: string;
+}
+
+export interface GetOptions {
+    /** As `OpenOptions.privateFor`: the bytes of a private upload of this tenant (the transcription reads a voice note this way). */
+    privateFor?: string;
 }
 
 export interface MediaStore {
     /** Store bytes and return the id the public URL is built from. */
     put(input: PutMediaInput): Promise<{ id: string }>;
-    /** The whole file, or null when it does not exist. For callers that need every byte (TikTok's FILE_UPLOAD). */
-    get(id: string): Promise<StoredMedia | null>;
+    /**
+     * The whole file, or null when it does not exist. For callers that need every byte (TikTok's FILE_UPLOAD). A private upload is null
+     * unless `privateFor` names its tenant.
+     */
+    get(id: string, options?: GetOptions): Promise<StoredMedia | null>;
     /** What the upload route serves: a stream for a Storage row, never the object buffered. */
     open(id: string, options?: OpenOptions): Promise<MediaContent | null>;
     /**
      * What each id is stored as, without reading its bytes — validating a 35-photo carousel
-     * must not pull 35 files. Ids that do not exist are absent.
+     * must not pull 35 files. Ids that do not exist are absent, and so are private ones: a post cannot name a customer's file.
      */
     mimeTypes(ids: readonly string[]): Promise<Map<string, string>>;
     /**
@@ -101,22 +135,64 @@ interface LocatedRow {
     /** BIGINT, which pg returns as a string. */
     size_bytes: string | number | null;
     data: Buffer | null;
+    /** Absent when the row was read by the pre-v51 statement: such a row is public. */
+    is_private?: boolean | null;
+    creator_id?: string | null;
+}
+
+/** `undefined_column`: the database is behind this build (migration v51 not applied). */
+const isMissingColumn = (err: unknown): boolean => (err as { code?: string } | null)?.code === '42703';
+
+/**
+ * Whether a row may be served to the public: `GET /api/uploads/:id`, a post's media, Meta's and TikTok's fetchers. Everything but a
+ * private row. The one question the public route's answer depends on, kept apart so a test can pin it.
+ */
+export function canServePublicly(row: { is_private?: boolean | null }): boolean {
+    return row.is_private !== true;
+}
+
+/** Whether a PRIVATE row may be read by this tenant: it is private, and it is theirs. Both, or neither. */
+export function canServePrivately(row: { is_private?: boolean | null; creator_id?: string | null }, creatorId: string): boolean {
+    return row.is_private === true
+        && typeof creatorId === 'string' && creatorId !== ''
+        && typeof row.creator_id === 'string'
+        && row.creator_id.toLowerCase() === creatorId.toLowerCase();
+}
+
+/** The decision every read goes through: the public rule by default, the tenant's private rule only when `privateFor` is given. */
+function mayRead(row: { is_private?: boolean | null; creator_id?: string | null }, privateFor: string | undefined): boolean {
+    return privateFor === undefined ? canServePublicly(row) : canServePrivately(row, privateFor);
 }
 
 /**
  * Where a row's bytes are, fetching `data` only when it is what will be served. A row part way
  * through the backfill has both; Storage wins where Storage is configured, because the copy was
  * verified before `storage_path` was set.
+ *
+ * Selects `is_private` and `creator_id` for `mayRead`; before migration v51 the first statement fails with `undefined_column` and the
+ * statement this file always ran answers instead (no row is private yet).
  */
 async function locate(id: string, prefer: 'storage' | 'database'): Promise<LocatedRow | null> {
-    return queryOne<LocatedRow>(
-        prefer === 'storage'
-            ? `SELECT mime_type, storage_path, size_bytes,
-                      CASE WHEN storage_path IS NULL THEN data END AS data
-                 FROM media_uploads WHERE id = $1`
-            : 'SELECT mime_type, storage_path, size_bytes, data FROM media_uploads WHERE id = $1',
-        [id]
-    );
+    try {
+        return await queryOne<LocatedRow>(
+            prefer === 'storage'
+                ? `SELECT mime_type, storage_path, size_bytes, is_private, creator_id,
+                          CASE WHEN storage_path IS NULL THEN data END AS data
+                     FROM media_uploads WHERE id = $1`
+                : 'SELECT mime_type, storage_path, size_bytes, is_private, creator_id, data FROM media_uploads WHERE id = $1',
+            [id]
+        );
+    } catch (err) {
+        if (!isMissingColumn(err)) throw err;
+        return queryOne<LocatedRow>(
+            prefer === 'storage'
+                ? `SELECT mime_type, storage_path, size_bytes,
+                          CASE WHEN storage_path IS NULL THEN data END AS data
+                     FROM media_uploads WHERE id = $1`
+                : 'SELECT mime_type, storage_path, size_bytes, data FROM media_uploads WHERE id = $1',
+            [id]
+        );
+    }
 }
 
 function sizeOf(value: string | number | null): number | null {
@@ -127,10 +203,20 @@ function sizeOf(value: string | number | null): number | null {
 
 async function mimeTypesOf(ids: readonly string[]): Promise<Map<string, string>> {
     if (ids.length === 0) return new Map();
-    const rows = await queryRows<Pick<MediaUploadRow, 'id' | 'mime_type'>>(
-        'SELECT id, mime_type FROM media_uploads WHERE id = ANY($1::uuid[])',
-        [[...ids]]
-    );
+    let rows: Pick<MediaUploadRow, 'id' | 'mime_type'>[];
+    try {
+        // Public rows only: a post cannot name a customer's file (see the header). Before v51 there is no such row, so the old statement is exact.
+        rows = await queryRows<Pick<MediaUploadRow, 'id' | 'mime_type'>>(
+            'SELECT id, mime_type FROM media_uploads WHERE id = ANY($1::uuid[]) AND NOT is_private',
+            [[...ids]]
+        );
+    } catch (err) {
+        if (!isMissingColumn(err)) throw err;
+        rows = await queryRows<Pick<MediaUploadRow, 'id' | 'mime_type'>>(
+            'SELECT id, mime_type FROM media_uploads WHERE id = ANY($1::uuid[])',
+            [[...ids]]
+        );
+    }
     return new Map(rows.map((row) => [String(row.id).toLowerCase(), row.mime_type]));
 }
 
@@ -143,12 +229,21 @@ function uploadsUrl(id: string, origin: string): string {
  */
 export class PostgresMediaStore implements MediaStore {
     async put(input: PutMediaInput): Promise<{ id: string }> {
-        const row = await queryOne<Pick<MediaUploadRow, 'id'>>(
-            `INSERT INTO media_uploads (creator_id, filename, mime_type, data, size_bytes)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id`,
-            [input.creatorId, input.filename, input.mimeType, input.data, input.data.length]
-        );
+        // The statement of a public upload is exactly what it was before v51. A private one names the column, so a database without it fails
+        // here instead of storing a customer's file as public.
+        const row = input.private
+            ? await queryOne<Pick<MediaUploadRow, 'id'>>(
+                `INSERT INTO media_uploads (creator_id, filename, mime_type, data, size_bytes, is_private)
+                 VALUES ($1, $2, $3, $4, $5, true)
+                 RETURNING id`,
+                [input.creatorId, input.filename, input.mimeType, input.data, input.data.length]
+            )
+            : await queryOne<Pick<MediaUploadRow, 'id'>>(
+                `INSERT INTO media_uploads (creator_id, filename, mime_type, data, size_bytes)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING id`,
+                [input.creatorId, input.filename, input.mimeType, input.data, input.data.length]
+            );
 
         if (!row) {
             // An INSERT ... RETURNING that returns nothing means the row was not written.
@@ -162,20 +257,21 @@ export class PostgresMediaStore implements MediaStore {
             bytes: input.data.length,
             mime_type: input.mimeType,
             backend: 'postgres',
+            ...(input.private ? { private: true } : {}),
         });
         return { id: row.id };
     }
 
-    async get(id: string): Promise<StoredMedia | null> {
+    async get(id: string, options: GetOptions = {}): Promise<StoredMedia | null> {
         const row = await locate(id, 'database');
-        if (!row) return null;
+        if (!row || !mayRead(row, options.privateFor)) return null;
         if (row.data) return { id, mimeType: row.mime_type, data: row.data };
         throw new MediaStorageUnavailableError(id);
     }
 
-    async open(id: string): Promise<MediaContent | null> {
+    async open(id: string, options: OpenOptions = {}): Promise<MediaContent | null> {
         const row = await locate(id, 'database');
-        if (!row) return null;
+        if (!row || !mayRead(row, options.privateFor)) return null;
         if (row.data) return { kind: 'bytes', id, mimeType: row.mime_type, data: row.data };
         throw new MediaStorageUnavailableError(id);
     }
@@ -218,19 +314,26 @@ export class SupabaseStorageMediaStore implements MediaStore {
         // The id is made here, not by Postgres, because the object is written first and its path
         // carries the id. Same uuid shape as ever, so the URL is unchanged.
         const id = randomUUID();
-        const path = objectPathFor(input.creatorId, id, input.mimeType);
+        const path = objectPathFor(input.creatorId, id, input.mimeType, { private: input.private === true });
 
         await this.ensureBucket();
         await this.client.upload(path, input.data, input.mimeType);
 
         let row: Pick<MediaUploadRow, 'id'> | null;
         try {
-            row = await queryOne<Pick<MediaUploadRow, 'id'>>(
-                `INSERT INTO media_uploads (id, creator_id, filename, mime_type, data, storage_path, size_bytes)
-                 VALUES ($1, $2, $3, $4, NULL, $5, $6)
-                 RETURNING id`,
-                [id, input.creatorId, input.filename, input.mimeType, path, input.data.length]
-            );
+            row = input.private
+                ? await queryOne<Pick<MediaUploadRow, 'id'>>(
+                    `INSERT INTO media_uploads (id, creator_id, filename, mime_type, data, storage_path, size_bytes, is_private)
+                     VALUES ($1, $2, $3, $4, NULL, $5, $6, true)
+                     RETURNING id`,
+                    [id, input.creatorId, input.filename, input.mimeType, path, input.data.length]
+                )
+                : await queryOne<Pick<MediaUploadRow, 'id'>>(
+                    `INSERT INTO media_uploads (id, creator_id, filename, mime_type, data, storage_path, size_bytes)
+                     VALUES ($1, $2, $3, $4, NULL, $5, $6)
+                     RETURNING id`,
+                    [id, input.creatorId, input.filename, input.mimeType, path, input.data.length]
+                );
         } catch (err) {
             await this.discard(path);
             throw err;
@@ -245,6 +348,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
             bytes: input.data.length,
             mime_type: input.mimeType,
             backend: 'supabase',
+            ...(input.private ? { private: true } : {}),
         });
         return { id: row.id };
     }
@@ -258,9 +362,9 @@ export class SupabaseStorageMediaStore implements MediaStore {
         }
     }
 
-    async get(id: string): Promise<StoredMedia | null> {
+    async get(id: string, options: GetOptions = {}): Promise<StoredMedia | null> {
         const row = await locate(id, 'storage');
-        if (!row) return null;
+        if (!row || !mayRead(row, options.privateFor)) return null;
         if (!row.storage_path) return row.data ? { id, mimeType: row.mime_type, data: row.data } : null;
 
         const data = await this.client.download(row.storage_path);
@@ -273,7 +377,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
 
     async open(id: string, options: OpenOptions = {}): Promise<MediaContent | null> {
         const row = await locate(id, 'storage');
-        if (!row) return null;
+        if (!row || !mayRead(row, options.privateFor)) return null;
         if (!row.storage_path) {
             return row.data ? { kind: 'bytes', id, mimeType: row.mime_type, data: row.data } : null;
         }

@@ -441,7 +441,8 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
 // ─── Execute ────────────────────────────────────────────────────────────────────────────
 
 export type ErasureOutcome =
-    | { ok: true; handle: string; deleted: ErasureCounts; target: ErasureTarget; client: PoolClient }
+    /** `mediaDeleted`: the contact's private uploads removed with them (migration v51). Not part of `deleted`, so the preview's counts and the token are unchanged. */
+    | { ok: true; handle: string; deleted: ErasureCounts; mediaDeleted?: number; target: ErasureTarget; client: PoolClient }
     | { ok: false; status: 400 | 409; code: 'ERASURE_TOKEN_INVALID' | 'ERASURE_PREVIEW_EXPIRED' | 'ERASURE_COUNTS_DRIFTED'; error: string;
         expected?: ErasureCounts; actual?: ErasureCounts };
 
@@ -457,6 +458,46 @@ const TOKEN_FAILURE_MESSAGE: Record<TokenFailure, string> = {
     bad_signature: 'That erasure token does not verify. Run the preview again.',
     expired: 'That erasure token has expired. Run the preview again and confirm within 10 minutes.',
 };
+
+/**
+ * Delete the private uploads (customer files: WhatsApp voice notes, photos, documents; migration v51) that the contact's messages point at.
+ *
+ * Runs inside the erasure transaction and BEFORE the messages are deleted, because the messages are the only link from a person to a file:
+ * `messages.media_upload_id` (v50). Only rows with `is_private` are touched, so a message pointing at anything else can never take a post's
+ * media with it. Deleting a row also queues its Storage object (the v23 trigger, same transaction), and the daily sweep removes the object, so
+ * a rolled-back erasure keeps the file and a committed one loses it. The foreign key's ON DELETE SET NULL clears the message's pointer first.
+ *
+ * Not counted in `ErasureCounts`: the preview, the signed token and the drift check stay what they were, and a file is evidence of a message
+ * the counts already name. A file whose message was never stored has no link to follow and ages out with the retention sweep.
+ *
+ * Tolerant of a database behind the code: without v50 (`messages.media_upload_id`) or v51 (`is_private`) there is no customer media, and the
+ * statement fails with `undefined_column`. A failed statement aborts the whole transaction in Postgres, so it runs under a SAVEPOINT that is
+ * rolled back to, and the erasure goes on. Any other failure propagates and the transaction rolls back: a file that cannot be deleted must not
+ * be reported as erased.
+ */
+export async function eraseCustomerMedia(exec: Queryable, conversationIds: readonly string[]): Promise<number> {
+    if (conversationIds.length === 0) return 0;
+    await exec.query('SAVEPOINT erase_customer_media');
+    try {
+        const deleted = await exec.query(
+            `DELETE FROM media_uploads
+              WHERE is_private
+                AND id IN (SELECT media_upload_id FROM messages
+                            WHERE conversation_id = ANY($1::uuid[]) AND media_upload_id IS NOT NULL)`,
+            [conversationIds]
+        );
+        await exec.query('RELEASE SAVEPOINT erase_customer_media');
+        return deleted.rowCount ?? 0;
+    } catch (err) {
+        await exec.query('ROLLBACK TO SAVEPOINT erase_customer_media');
+        await exec.query('RELEASE SAVEPOINT erase_customer_media');
+        if ((err as { code?: string } | null)?.code === '42703') {
+            log('warn', 'erasure.media_columns_missing', { fix: 'npm run migrate (migration_v50 and migration_v51)' });
+            return 0;
+        }
+        throw err;
+    }
+}
 
 /**
  * Perform the deletion, inside one transaction, and hand the open client back to the caller.
@@ -503,6 +544,8 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
             };
         }
 
+        // The customer's files first: the messages are the only thing that names them (see `eraseCustomerMedia`).
+        const mediaDeleted = await eraseCustomerMedia(client, target.conversationIds);
         const deletedMessages = await client.query(
             'DELETE FROM messages WHERE conversation_id = ANY($1::uuid[])',
             [target.conversationIds]
@@ -541,6 +584,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
                 interactions: deletedInteractions.rowCount ?? 0,
                 dmSendLog: deletedSendLog.rowCount ?? 0,
             },
+            mediaDeleted,
             client,
         };
     } catch (err) {

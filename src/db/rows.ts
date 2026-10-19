@@ -505,6 +505,8 @@ export interface MediaUploadRow {
     storage_path: string | null;
     /** BIGINT, so pg returns it as a string. */
     size_bytes: string | null;
+    /** TRUE for a customer's file (WhatsApp inbound media): never served by the public /api/uploads/:id. Migration v51; absent before it. */
+    is_private?: boolean;
     created_at: Timestamptz;
 }
 

@@ -1092,3 +1092,52 @@ describe('migration v50: whatsapp (channel CHECKs, contact and delivery columns,
         assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b|\bDROP COLUMN\b/i, 'a foreign key\'s ON DELETE SET NULL is not a DELETE');
     });
 });
+
+// ─── v51: customer media is private ────────────────────────────────────────────────────────────
+
+describe('migration v51: private media (media_uploads.is_private)', () => {
+    const FILE = 'migration_v51_private_media.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    /** The files the runner applies before v51, in order. */
+    const before = (): SqlFile[] => {
+        const earlier = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        return allMigrationFiles().filter((f) => earlier.includes(f.name));
+    };
+
+    it('is registered after v50 (v46-v49 belong to other work and may sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v50_whatsapp.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds exactly one column, is_private, to media_uploads: BOOLEAN NOT NULL with a CONSTANT default, so no row is rewritten and every existing upload stays public', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]*);/g)].map((m) => [m[1], m[2], m[3]!.trim()]);
+        assert.deepEqual(added, [['media_uploads', 'is_private', 'BOOLEAN NOT NULL DEFAULT false']]);
+        assert.doesNotMatch(sql, /DEFAULT\s+(now|random|gen_random|uuid|clock|\()/i, 'a volatile default would rewrite the table');
+    });
+
+    it('is idempotent and cheap: IF NOT EXISTS, no index build, no row touched, nothing dropped', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.doesNotMatch(sql, /\bCREATE\s+(UNIQUE\s+)?INDEX\b/i, 'no index to build while holding a lock on media_uploads');
+        assert.doesNotMatch(sql, /CONCURRENTLY/, 'the runner applies each file inside a transaction, where it is refused');
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b/i, 'it changes no row and removes nothing');
+    });
+
+    it('alters a table that exists by the time it runs, and no other', () => {
+        const earlier = new Set(before().flatMap((f) => [...withoutComments(f.sql).matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/gi)].map((m) => m[1]!.toLowerCase())));
+        assert.ok(earlier.has('media_uploads'));
+        assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['media_uploads']);
+    });
+
+    it('creates no table, so there is no new table to enable row level security on', () => {
+        assert.doesNotMatch(sql, /CREATE TABLE/i);
+    });
+});
