@@ -62,6 +62,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v44_tiktok_profile.sql',
     'migration_v45_ux_archive_handled.sql',
     'migration_v50_whatsapp.sql',
+    'migration_v51_private_media.sql',
 ] as const;
 
 export interface SchemaState {

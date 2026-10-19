@@ -307,7 +307,7 @@ const NAMED_BY_POST = `(
  * time, as a reel's are; after that they go like any posted file. The portrait its brand shows is
  * kept while the settings name it, and (v33) while the Creator Profile names it, with the logo.
  */
-const MEDIA_CANDIDATES_BASE_SQL = `
+const MEDIA_CANDIDATES_HEAD_SQL = `
                     SELECT m.id
                       FROM media_uploads m
                      WHERE (
@@ -316,7 +316,18 @@ const MEDIA_CANDIDATES_BASE_SQL = `
                                SELECT 1 FROM scheduled_posts s
                                 WHERE s.status = 'PUBLISHED' AND ${NAMED_BY_POST}
                            ))
-                       )
+                       )`;
+
+/**
+ * A customer's file (`is_private`, migration v51) is never a candidate here, whatever its age and whatever names it or not. It follows its
+ * own rule, below (`pruneOrphanedPrivateMedia`): the posts' rules (a published post, a week unnamed) are about a post's media, and a
+ * customer's file is named by a message, not a post. Without this line the age rule would delete a voice note 7 to 30 days old that a
+ * message in the inbox still points at.
+ */
+const PUBLIC_ONLY_SQL = `
+                       AND NOT m.is_private`;
+
+const MEDIA_CANDIDATES_GUARDS_SQL = `
                        AND NOT EXISTS (
                            SELECT 1
                              FROM scheduled_posts s
@@ -358,6 +369,8 @@ const MEDIA_CANDIDATES_BASE_SQL = `
                             WHERE ss.infographic->>'photo_url' LIKE '%' || m.id::text || '%'
                        )`;
 
+const MEDIA_CANDIDATES_BASE_SQL = MEDIA_CANDIDATES_HEAD_SQL + PUBLIC_ONLY_SQL + MEDIA_CANDIDATES_GUARDS_SQL;
+
 /**
  * The portrait and logo a stored Creator Profile names (v33). The portrait is mirrored into
  * `studio_settings.infographic.photo_url`, which the guard above already keeps; this is the guard for the day
@@ -384,25 +397,49 @@ const KEPT_BY_PROFILE_SQL = `
 
 export const MEDIA_CANDIDATES_SQL = MEDIA_CANDIDATES_BASE_SQL + KEPT_BY_PROFILE_SQL;
 
+/** The candidate query without the guards a database behind the code cannot run: no `creator_profiles` (v33), no `is_private` (v51). */
+function candidatesSql(guards: { profile: boolean; publicOnly: boolean }): string {
+    return MEDIA_CANDIDATES_HEAD_SQL
+        + (guards.publicOnly ? PUBLIC_ONLY_SQL : '')
+        + MEDIA_CANDIDATES_GUARDS_SQL
+        + (guards.profile ? KEPT_BY_PROFILE_SQL : '');
+}
+
 /** Logged once per process: the daily sweep and the clean-up screen both come here. */
 let profileTableWarned = false;
+
+/** `undefined_column` for this column: a database that has not had the migration that adds it. */
+function isMissingColumn(err: unknown, column: string): boolean {
+    const e = err as { code?: unknown; message?: unknown } | null;
+    return e?.code === '42703' && typeof e.message === 'string' && e.message.includes(column);
+}
 
 /**
  * Runs `run` with the candidate query. A database that has not had v33 applied yet has no `creator_profiles`, and
  * the query would fail whole, so the media sweep would stop until `npm run migrate` ran. With no table no profile
  * names a file, so the clause is vacuous and the query runs again without it: what it deletes is what it deleted
- * before the clause existed. Any other failure, about any other table, is still the caller's.
+ * before the clause existed. The same for a database behind v51: with no `is_private` column no file is private, so the
+ * "not private" line is vacuous and the query runs again without it. Any other failure, about any other table or column,
+ * is still the caller's.
  */
-async function withProfileTable<T>(run: (candidatesSql: string) => Promise<T>): Promise<T> {
-    try {
-        return await run(MEDIA_CANDIDATES_SQL);
-    } catch (err) {
-        if (!isMissingTable(err, 'creator_profiles')) throw err;
-        if (!profileTableWarned) {
-            profileTableWarned = true;
-            log('warn', 'retention.profile_table_missing', { fix: 'npm run migrate (migration_v33_creator_profiles.sql)' });
+async function withOptionalGuards<T>(run: (candidatesSql: string) => Promise<T>): Promise<T> {
+    const guards = { profile: true, publicOnly: true };
+    for (;;) {
+        try {
+            return await run(candidatesSql(guards));
+        } catch (err) {
+            if (guards.profile && isMissingTable(err, 'creator_profiles')) {
+                guards.profile = false;
+                if (!profileTableWarned) {
+                    profileTableWarned = true;
+                    log('warn', 'retention.profile_table_missing', { fix: 'npm run migrate (migration_v33_creator_profiles.sql)' });
+                }
+            } else if (guards.publicOnly && isMissingColumn(err, 'is_private')) {
+                guards.publicOnly = false;
+            } else {
+                throw err;
+            }
         }
-        return run(MEDIA_CANDIDATES_BASE_SQL);
     }
 }
 
@@ -433,7 +470,7 @@ export async function pruneOrphanedMedia(policy?: MediaCleanupPolicy): Promise<M
     }
 
     try {
-        const deleted = await withProfileTable((candidates) => queryCount(
+        const deleted = await withOptionalGuards((candidates) => queryCount(
             `DELETE FROM media_uploads
               WHERE id IN (${candidates}
                      LIMIT $3
@@ -456,12 +493,66 @@ export async function pruneOrphanedMedia(policy?: MediaCleanupPolicy): Promise<M
     }
 }
 
+/**
+ * How long a customer's file that NO message names is kept before it is deleted. 30 days, from when it was saved.
+ *
+ * A private upload (a WhatsApp voice note, photo or document, migration v51) is kept for as long as a message points at it
+ * (`messages.media_upload_id`): the message is the reason it exists, the inbox shows it, and erasure deletes both together
+ * (`eraseCustomerMedia`). A file that no message names is a download whose message never landed, or a message that was deleted
+ * (the foreign key then clears its pointer): nothing will ever show it, and keeping a person's file with no owner is the thing
+ * the privacy pages promise not to do. The window is generous, not tight: the message is written right after the download, so
+ * 30 days only has to outlast a stuck job and a retry or two, and a file saved a minute ago is never a candidate.
+ */
+export const PRIVATE_MEDIA_ORPHAN_DAYS = 30;
+
+/**
+ * The DELETE of `pruneOrphanedPrivateMedia`. Every condition is ANDed: private, older than the window, and named by no message. Oldest first,
+ * so a backlog converges in order.
+ */
+export const PRIVATE_ORPHANS_SQL = `
+            DELETE FROM media_uploads
+             WHERE id IN (
+                   SELECT m.id
+                     FROM media_uploads m
+                    WHERE m.is_private
+                      AND m.created_at < NOW() - make_interval(days => $1)
+                      AND NOT EXISTS (SELECT 1 FROM messages x WHERE x.media_upload_id = m.id)
+                    ORDER BY m.created_at
+                    LIMIT $2
+             )`;
+
+export type PrivateMediaPruneOutcome =
+    | { deleted: number; skipped: false }
+    /** The database is behind the code (no `is_private`, v51, or no `messages.media_upload_id`, v50): no customer file exists to prune. */
+    | { deleted: 0; skipped: true; reason: 'unmigrated' }
+    | { deleted: 0; skipped: true; reason: 'error' };
+
+/**
+ * Delete the customer files nothing names. Not behind `MEDIA_RETENTION_DAYS` or "Delete files once posted": those are about reclaiming the
+ * space posts' media takes, and are off by default; this is about not keeping a private person's file with no reason to, and runs on every
+ * sweep. Never throws (the sweep runs ahead of the scheduled posts in the same cron invocation). The deleted rows' Storage objects are
+ * queued by the v23 trigger and removed from the PRIVATE bucket by the same sweep, right after.
+ */
+export async function pruneOrphanedPrivateMedia(): Promise<PrivateMediaPruneOutcome> {
+    try {
+        const deleted = await queryCount(PRIVATE_ORPHANS_SQL, [PRIVATE_MEDIA_ORPHAN_DAYS, PRUNE_BATCH_SIZE]);
+        if (deleted > 0) {
+            log('info', 'retention.private_media_pruned', { deleted, window_days: PRIVATE_MEDIA_ORPHAN_DAYS, more_likely: deleted === PRUNE_BATCH_SIZE });
+        }
+        return { deleted, skipped: false };
+    } catch (err) {
+        if (isMissingColumn(err, 'is_private') || isMissingColumn(err, 'media_upload_id')) return { deleted: 0, skipped: true, reason: 'unmigrated' };
+        log('error', 'retention.private_media_prune_failed', { message: (err as Error)?.message });
+        return { deleted: 0, skipped: true, reason: 'error' };
+    }
+}
+
 /** The rule "Delete files once posted" applies, whatever is saved: what the button runs and previews. */
 export const CLEANUP_NOW_POLICY: Extract<MediaCleanupPolicy, { enabled: true }> = { enabled: true, days: MIN_RETENTION_DAYS, published: true, source: 'setting' };
 
 /** What a clean-up would remove now: the files and their bytes. */
 export async function previewMediaCleanup(): Promise<{ files: number; bytes: number }> {
-    const row = await withProfileTable((candidates) => queryOne<{ files: string; bytes: string | null }>(
+    const row = await withOptionalGuards((candidates) => queryOne<{ files: string; bytes: string | null }>(
         `SELECT count(*) AS files, COALESCE(sum(COALESCE(u.size_bytes, octet_length(u.data))), 0) AS bytes
            FROM media_uploads u WHERE u.id IN (${candidates})`,
         [CLEANUP_NOW_POLICY.days, true]
@@ -505,6 +596,8 @@ export interface RetentionSweepResult {
     onboarding: OnboardingPruneResult;
     /** Clicks on tracked links older than `LINK_CLICK_RETENTION_DAYS` (S7). Once per sweep, not per pass. */
     linkClicksDeleted: number;
+    /** Customer files (private uploads) no message named for `PRIVATE_MEDIA_ORPHAN_DAYS`. Once per sweep, in batches. */
+    privateMediaDeleted: number;
 }
 
 /** Injected only so the loop's termination rules can be exercised without a database. */
@@ -517,6 +610,8 @@ export interface RetentionSweepDeps {
     pruneOnboarding?: typeof pruneOnboardingData;
     /** Optional for the same reason; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
     pruneLinkClicks?: typeof pruneLinkClicks;
+    /** Optional for the same reason; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
+    prunePrivateMedia?: typeof pruneOrphanedPrivateMedia;
 }
 
 export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
@@ -526,6 +621,7 @@ export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
     removeObjects: removeQueuedMediaObjects,
     pruneOnboarding: pruneOnboardingData,
     pruneLinkClicks,
+    prunePrivateMedia: pruneOrphanedPrivateMedia,
 };
 
 /**
@@ -542,10 +638,21 @@ export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETEN
     const result: RetentionSweepResult = {
         rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, mediaObjectsRemoved: 0, passes: 0, moreRemaining: false,
         onboarding: { eventsDeleted: 0, invitesDeleted: 0, draftSourcesCleared: 0, moreRemaining: false },
-        linkClicksDeleted: 0,
+        linkClicksDeleted: 0, privateMediaDeleted: 0,
     };
 
     await sweepPasses(deps, result);
+
+    // Customer files nothing names, before the object queue drains so their objects go in this same run. Regardless of the media retention
+    // setting: it is a privacy rule, not storage housekeeping. Converges like the passes above, and never throws.
+    if (deps.prunePrivateMedia) {
+        for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
+            const out = await deps.prunePrivateMedia();
+            result.privateMediaDeleted += out.deleted;
+            if (out.deleted < PRUNE_BATCH_SIZE) break;
+            if (pass === MAX_SWEEP_PASSES - 1) result.moreRemaining = true;
+        }
+    }
 
     // After the passes, and whatever they found: the queue also holds objects whose rows the
     // Studio or a tenant deletion removed, and it must drain even with MEDIA_RETENTION_DAYS unset.

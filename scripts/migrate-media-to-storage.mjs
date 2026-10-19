@@ -15,6 +15,10 @@
  *   3. set `storage_path` and `size_bytes` and clear `data`, in one statement, so there is never a
  *      moment when the row has no bytes anywhere. From then on the app streams the Storage copy.
  *
+ * A PRIVATE row (`is_private`, migration v51: a customer's file) is never picked up. This script copies into the PUBLIC bucket `media`, and a
+ * customer's file must not go there; from v51 on the app writes such a file to the private bucket `media-private` from the start, and one saved
+ * while Storage was not configured stays in `data`, served only to its tenant. The run says how many it left alone.
+ *
  * Nothing about a row changes until its copy is proven, so it is safe to stop at any point and run
  * it again: finished rows no longer have `data` and are not picked up twice. A row whose copy does
  * not verify keeps its bytes in Postgres, is reported, and makes the run exit non-zero.
@@ -180,6 +184,41 @@ export async function resolveStorageConfig(db, env = process.env) {
     };
 }
 
+// ─── Which rows ─────────────────────────────────────────────────────────────────────────────
+
+/** Whether this database has `media_uploads.is_private` (migration v51). Asked up front: a statement that names a missing column would abort a transaction. */
+export async function hasPrivateColumn(db) {
+    const { rows } = await db.query(
+        `SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'media_uploads' AND column_name = 'is_private'`
+    );
+    return rows.length > 0;
+}
+
+/**
+ * The rows that still hold their bytes in `data`, oldest first. With `skipPrivate` (the column exists) a private row is never one of them:
+ * this script copies into the public bucket, and a customer's file does not go there.
+ */
+export async function selectCandidates(db, { limit = null, skipPrivate }) {
+    const { rows } = await db.query(
+        `SELECT id, creator_id, mime_type, storage_path, octet_length(data) AS bytes
+           FROM media_uploads
+          WHERE data IS NOT NULL${skipPrivate ? ' AND NOT is_private' : ''}
+          ORDER BY created_at, id
+          ${limit ? 'LIMIT $1' : ''}`,
+        limit ? [limit] : []
+    );
+    return rows;
+}
+
+/** The private rows that still hold bytes in `data`, which the run leaves alone: how many, and how big. */
+export async function countPrivateInPostgres(db) {
+    const { rows: [row] } = await db.query(
+        'SELECT count(*) AS files, COALESCE(sum(octet_length(data)), 0) AS bytes FROM media_uploads WHERE is_private AND data IS NOT NULL'
+    );
+    return { files: Number(row?.files ?? 0), bytes: Number(row?.bytes ?? 0) };
+}
+
 // ─── One row ────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -203,9 +242,10 @@ export async function verifyCopy(storage, objectPath, original) {
  * exactly as it was. Returns `{ status: 'moved', path, bytes, sha256 }`, or `{ status: 'gone' }`
  * when the row was deleted (or finished by another run) while this one worked.
  */
-export async function migrateRow({ db, storage }, row) {
+export async function migrateRow({ db, storage, skipPrivate = false }, row) {
+    // `skipPrivate` again, at the row: whatever picked it, a private row is never copied into the public bucket.
     const { rows: [fresh] } = await db.query(
-        'SELECT data FROM media_uploads WHERE id = $1 AND data IS NOT NULL', [row.id]
+        `SELECT data FROM media_uploads WHERE id = $1 AND data IS NOT NULL${skipPrivate ? ' AND NOT is_private' : ''}`, [row.id]
     );
     if (!fresh) return { status: 'gone' };
     const data = fresh.data;
@@ -275,17 +315,17 @@ async function main() {
         // and unlike SET SESSION nothing outlives it on a pooled connection.
         if (!apply) await db.query('BEGIN READ ONLY');
 
-        const { rows: candidates } = await db.query(
-            `SELECT id, creator_id, mime_type, storage_path, octet_length(data) AS bytes
-               FROM media_uploads
-              WHERE data IS NOT NULL
-              ORDER BY created_at, id
-              ${limit ? 'LIMIT $1' : ''}`,
-            limit ? [limit] : []
-        );
+        const skipPrivate = await hasPrivateColumn(db);
+        const candidates = await selectCandidates(db, { limit, skipPrivate });
         const { rows: [size] } = await db.query(`SELECT pg_total_relation_size('media_uploads') AS bytes`);
         const total = candidates.reduce((sum, row) => sum + Number(row.bytes), 0);
         console.log(`media_uploads is ${fmtBytes(Number(size.bytes))} on disk. ${candidates.length} file(s) still in Postgres${limit ? ` (first ${limit})` : ''}: ${fmtBytes(total)}.`);
+        if (skipPrivate) {
+            const kept = await countPrivateInPostgres(db);
+            if (kept.files) console.log(`${kept.files} private upload(s) (${fmtBytes(kept.bytes)}, customers' files) stay in Postgres: they are never moved into the public bucket "${MEDIA_BUCKET}".`);
+        } else {
+            console.log('Migration v51 (private uploads) is not applied here, so no upload is private yet.');
+        }
 
         if (!apply) {
             if (storage) {
@@ -316,7 +356,7 @@ async function main() {
         const failed = [];
         for (const row of candidates) {
             try {
-                const outcome = await migrateRow({ db, storage }, row);
+                const outcome = await migrateRow({ db, storage, skipPrivate }, row);
                 if (outcome.status === 'moved') {
                     moved++;
                     movedBytes += outcome.bytes;

@@ -235,3 +235,90 @@ describe('resolveStorageConfig — the app\'s own config', () => {
         assert.equal(config.url, 'https://env5678.supabase.co');
     });
 });
+
+describe('private uploads (migration v51): a customer\'s file is never copied into the public bucket', () => {
+    const PRIVATE_ID = '7b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    let seen: Array<{ sql: string; params: unknown[] }>;
+    let steps: string[];
+
+    /** A database whose `media_uploads` holds one public and one private legacy row, and that honours `NOT is_private`. */
+    function database(options: { column?: boolean } = {}) {
+        const rows = [
+            { id: ID, creator_id: CREATOR, mime_type: 'video/mp4', storage_path: null, bytes: BYTES.length, is_private: false },
+            { id: PRIVATE_ID, creator_id: CREATOR, mime_type: 'audio/ogg', storage_path: null, bytes: 9, is_private: true },
+        ];
+        return {
+            async query(sql: string, params: unknown[] = []) {
+                const flat = sql.replace(/\s+/g, ' ').trim();
+                seen.push({ sql: flat, params });
+                if (/information_schema\.columns/.test(flat)) return { rows: options.column === false ? [] : [{ '?column?': 1 }], rowCount: options.column === false ? 0 : 1 };
+                if (/^SELECT id, creator_id, mime_type, storage_path, octet_length\(data\) AS bytes FROM media_uploads/.test(flat)) {
+                    const wanted = /AND NOT is_private/.test(flat) ? rows.filter((r) => !r.is_private) : rows;
+                    return { rows: wanted, rowCount: wanted.length };
+                }
+                if (/^SELECT count\(\*\) AS files, COALESCE\(sum\(octet_length\(data\)\), 0\) AS bytes FROM media_uploads WHERE is_private AND data IS NOT NULL$/.test(flat)) {
+                    return { rows: [{ files: '1', bytes: '9' }], rowCount: 1 };
+                }
+                if (/^SELECT data FROM media_uploads WHERE id = \$1/.test(flat)) {
+                    const row = rows.find((r) => r.id === params[0]);
+                    const hidden = row?.is_private && /AND NOT is_private/.test(flat);
+                    return row && !hidden ? { rows: [{ data: Buffer.from(BYTES) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+                }
+                if (/^UPDATE media_uploads/.test(flat)) { steps.push('update'); return { rows: [], rowCount: 1 }; }
+                throw new Error(`unexpected SQL: ${flat}`);
+            },
+        };
+    }
+
+    beforeEach(() => { seen = []; steps = []; });
+
+    it('asks whether the column exists, because a statement that names a missing one would abort the dry run\'s transaction', async () => {
+        assert.equal(await script.hasPrivateColumn(database()), true);
+        assert.equal(await script.hasPrivateColumn(database({ column: false })), false);
+    });
+
+    it('selects only public rows once the column exists, and keeps the old statement before it does', async () => {
+        const withColumn = await script.selectCandidates(database(), { limit: null, skipPrivate: true });
+        assert.deepEqual(withColumn.map((r: Json) => r.id), [ID], 'the private row is not a candidate');
+        assert.match(seen[0]!.sql, /WHERE data IS NOT NULL AND NOT is_private ORDER BY created_at, id/);
+
+        seen = [];
+        const before = await script.selectCandidates(database({ column: false }), { limit: 5, skipPrivate: false });
+        assert.equal(before.length, 2);
+        assert.doesNotMatch(seen[0]!.sql, /is_private/, 'no mention of a column that is not there');
+        assert.match(seen[0]!.sql, /LIMIT \$1$/);
+        assert.deepEqual(seen[0]!.params, [5]);
+    });
+
+    it('counts the private rows it leaves in Postgres, so the run can say so', async () => {
+        assert.deepEqual(await script.countPrivateInPostgres(database()), { files: 1, bytes: 9 });
+    });
+
+    it('migrateRow refuses a private row even when something else picked it: nothing is uploaded, nothing is changed', async () => {
+        const uploads: string[] = [];
+        const storage = {
+            async upload(path: string) { uploads.push(path); },
+            async download() { return Buffer.from(BYTES); },
+            async remove() {},
+        };
+        const outcome = await script.migrateRow(
+            { db: database(), storage, skipPrivate: true },
+            { id: PRIVATE_ID, creator_id: CREATOR, mime_type: 'audio/ogg', storage_path: null }
+        );
+        assert.deepEqual(outcome, { status: 'gone' });
+        assert.deepEqual(uploads, [], 'nothing reached the bucket');
+        assert.deepEqual(steps, [], 'and no row was updated');
+        assert.match(seen[0]!.sql, /AND NOT is_private$/);
+
+        // The public row, through the same door, still moves.
+        const moved = await script.migrateRow({ db: database(), storage, skipPrivate: true }, { id: ID, creator_id: CREATOR, mime_type: 'video/mp4', storage_path: null });
+        assert.equal(moved.status, 'moved');
+        assert.deepEqual(uploads, [PATH]);
+    });
+
+    it('is the statement it always was when the caller does not say skipPrivate (a database before v51)', async () => {
+        const storage = { async upload() {}, async download() { return Buffer.from(BYTES); }, async remove() {} };
+        await script.migrateRow({ db: database({ column: false }), storage }, { id: ID, creator_id: CREATOR, mime_type: 'video/mp4', storage_path: null });
+        assert.equal(seen[0]!.sql, 'SELECT data FROM media_uploads WHERE id = $1 AND data IS NOT NULL');
+    });
+});
