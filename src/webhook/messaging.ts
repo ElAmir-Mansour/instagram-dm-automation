@@ -385,12 +385,17 @@ async function answerDm(
     //    The DO UPDATE also replaces the separate last_message_at write.
     //    `platform` (v26) is set once and kept: COALESCE fills a thread written before v26 on
     //    its next DM, and never flips one that already has an answer.
+    //    `handled_at` (v45) is cleared here, in the statement that stores a customer's message: "Mark handled"
+    //    means "nothing more to do until they write again", so a new question puts the thread back in the owner's
+    //    To do. Only this path clears it: the owner's own reply, an echo of his Instagram-app reply and the bot's
+    //    messages move `last_message_at` elsewhere and leave the stamp alone.
     const platform = dmPlatform(options.object, creator, [recipientId, entryId]);
     const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at'>>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status, platform)
          VALUES ($1, $2, 'active', $3)
          ON CONFLICT (creator_id, instagram_user_id)
          DO UPDATE SET last_message_at = NOW(),
+                       handled_at = NULL,
                        platform = COALESCE(conversations.platform, EXCLUDED.platform)
          RETURNING id, is_bot_active, ai_disclosed_at`,
         [creator.id, dm.senderId, platform]

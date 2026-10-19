@@ -4925,6 +4925,32 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .composer-hint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
 .composer-hint > span { flex: 1 1 24ch; min-inline-size: 0; }
 
+/* US1 (IN-01, IN-02): "Mark handled", and the effective assistant state. */
+/* The strip above the list: said once when nobody is being answered automatically, or sales is only in test. Neutral on purpose: it is
+   something to act on, not an error, and the glyph says which kind (○ off, ◔ test) so colour is never the only signal. */
+.assistant-strip {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+    padding: var(--space-3);
+    background: var(--surface-sunken);
+    border-block-end: 1px solid var(--border-subtle);
+    font-size: var(--fs-100); color: var(--text-default);
+}
+.assistant-strip.hidden { display: none; }
+.assistant-strip-glyph { line-height: 1; color: var(--text-muted); }
+.assistant-strip-text { flex: 1 1 24ch; min-inline-size: 0; }
+/* The row's own "Mark handled" sits beside the row's button, over its end corner, and the badges leave it room. */
+.threads-list > [role='listitem'] { position: relative; }
+.thread-row-actions:empty { display: none; }
+.thread-row-actions { position: absolute; inset-block-end: var(--space-1); inset-inline-end: var(--space-1); }
+.threads-list > [role='listitem']:has(.thread-row-action) .thread-badges { padding-inline-end: calc(var(--tap-target) + var(--space-1)); }
+/* In the header, the button and the state words share a row that wraps on a phone. */
+.chat-handled-slot { display: inline-flex; align-items: center; }
+.chat-handled-slot:empty { display: none; }
+/* Above the composer once the window has closed. */
+.composer-window { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-block-end: var(--space-2); }
+.composer-window:empty { display: none; }
+.composer-window-text { flex: 1 1 24ch; min-inline-size: 0; margin: 0; font-size: var(--fs-100); color: var(--text-default); }
+
 /* G6: a range switch dims the numbers it is replacing instead of blanking them. */
 /* Only the page's own regions: a busy BUTTON inside them (Sync) says so with its spinner. */
 .growth-page > [aria-busy='true'] { opacity: 0.55; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-standard); }

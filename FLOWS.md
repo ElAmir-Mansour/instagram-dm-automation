@@ -584,9 +584,14 @@ reliable); `entry.id` could be the IG id or the FB Page id depending on subscrip
 ```sql
 INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
 ON CONFLICT (creator_id, instagram_user_id)
-DO UPDATE SET last_message_at = NOW(), platform = COALESCE(conversations.platform, EXCLUDED.platform)
+DO UPDATE SET last_message_at = NOW(), handled_at = NULL, platform = COALESCE(conversations.platform, EXCLUDED.platform)
 RETURNING id, is_bot_active, ai_disclosed_at
 ```
+
+`handled_at = NULL` (v45) is how a new question returns a thread to the owner's To do: "Mark handled"
+(`POST /api/conversations/:id/handled`) stamps the column, and the next message **from the customer**
+clears it, in this same statement. Nothing else clears it: the owner's own reply, an Instagram-app
+echo and the bot's messages move `last_message_at` or the AI switch elsewhere and leave it alone.
 
 `platform` (v26) comes from the webhook body's `object` (`instagram` or `page`), carried in the DM
 job; a job queued before v26 falls back to which page id the message was addressed to

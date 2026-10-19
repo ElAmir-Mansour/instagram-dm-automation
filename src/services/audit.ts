@@ -169,6 +169,10 @@ export const AUDIT_ACTIONS = {
     dmIceBreakersPublish: 'dm.ice_breakers_publish',
     /** The owner pressed "Remove from Instagram" (S13): the ice breakers and the persistent menu were deleted from the account's Instagram profile. */
     dmIceBreakersRemove: 'dm.ice_breakers_remove',
+    /** The owner pressed "Mark handled" on a DM thread (UX US1): it left his To do and every "needs you" count until the person writes again. `detail` holds the tenant id, never the person's handle or words. */
+    dmConversationHandled: 'dm.conversation_handled',
+    /** The owner took "Mark handled" back: the thread is in his To do again if it still needs a person. */
+    dmConversationUnhandled: 'dm.conversation_unhandled',
     /** The A/B wording experiment of the DM sales turn was saved from AI settings (S14). `detail` holds whether it is running, the variants' ids and weights and the length of their texts, never the texts. */
     dmVariantsWrite: 'dm.variants_write',
 } as const;

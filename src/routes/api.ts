@@ -52,6 +52,7 @@ import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { parseTryRequest, tryComment } from '../services/campaignTry.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
 import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
@@ -3309,12 +3310,21 @@ router.get('/conversations', async (req, res) => {
         const { rows: result, count: countRes } = answered;
         // How many times a person opened the links sent in each thread (DM plan S11): its own optional lookup, so a database without the
         // tracked-links tables answers the list without counts rather than not at all.
-        const clicks = await loadLinkClicks(tenantId, result.rows.map((row) => String(row.id)));
+        // And what the assistant is set to (UX US1, FR-006): each item's `effective_ai` is read from it, and the page's "assistant is off" strip
+        // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
+        const [clicks, assistant] = await Promise.all([
+            loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
+            loadAssistantState(tenantId),
+        ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
-            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state.
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)))),
+            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
+            // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant)),
+            // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
+            // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
+            assistant,
             pagination: {
                 page,
                 limit,
@@ -3549,6 +3559,80 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
         res.status(500).json({ error: 'Failed to toggle bot.' });
     }
 });
+
+/**
+ * One conversation as the list item it is (the same query, so the same fields): what "Mark handled" answers, so the page can replace its
+ * copy of the thread. Null when there is no such thread for this tenant.
+ */
+async function conversationSummary(tenantId: string, id: string) {
+    const found = await pool.query(conversationsQuery('c.creator_id = $1 AND c.id = $2', 3, 4), [tenantId, id, 1, 0]);
+    const row = found.rows[0];
+    if (!row) return null;
+    const [clicks, assistant] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId)]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant);
+}
+
+/**
+ * "Mark handled" and its undo (UX US1, audit IN-01, FR-003). A thread answered from the Instagram app (the only way to answer once Meta's
+ * 24 h window has closed) is not recorded anywhere, so it stayed "Needs you" and in every count forever; this is the way out.
+ *
+ *   POST    sets `conversations.handled_at` (v45): the thread leaves To do and every "needs you" count, and stays findable in the inbox.
+ *   DELETE  clears it: the thread is back in To do if it still needs a person.
+ *
+ * A new inbound message clears the stamp by itself (the upsert in `src/webhook/messaging.ts`), so "handled" never hides a customer who
+ * asks again. Neither direction touches the thread's AI switch, stage or messages: it changes what the OWNER sees, not who answers.
+ * Operators and owners (the people who can reply); scoped to the session's tenant; both directions are written to the audit log, with the
+ * conversation id and never the person's handle or words.
+ *
+ * The answer is the thread as a list item. A database that has not had v45 applied cannot say: 503 with the migration hint.
+ */
+async function setConversationHandled(req: Request, res: Response, handled: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        // `RETURNING handled_at` so the answer has the stamp even if the summary below cannot be built.
+        const updated = await pool.query(
+            handled
+                ? 'UPDATE conversations SET handled_at = NOW() WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at'
+                : 'UPDATE conversations SET handled_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        await writeAudit(await actorFromSession(req.session), {
+            action: handled ? AUDIT_ACTIONS.dmConversationHandled : AUDIT_ACTIONS.dmConversationUnhandled,
+            targetType: 'conversation', targetId: id, detail: { tenant_id: tenantId },
+        });
+        log('info', handled ? 'inbox.marked_handled' : 'inbox.unmarked_handled', { conversation_id: id, creator_id: tenantId });
+
+        let summary = null;
+        try {
+            summary = await conversationSummary(tenantId, id);
+        } catch (err) {
+            // The change is made and recorded: a summary that cannot be built is not a failed request.
+            log('warn', 'api.handled_summary_failed', describeError(err));
+        }
+        res.json(summary ?? { id, handled_at: updated.rows[0].handled_at ? new Date(updated.rows[0].handled_at).toISOString() : null });
+    } catch (err) {
+        log('error', 'api.conversation_handled_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to update the conversation.' });
+    }
+}
+
+router.post('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, true));
+router.delete('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, false));
 
 /**
  * The sales funnel of this tenant's DMs over the last 7, 30 (the default) or 90 days: conversations by the step they reached, the plan's
