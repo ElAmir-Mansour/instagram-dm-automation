@@ -14,6 +14,14 @@
  *
  * Retry is cheap and reversible, so it happens on click. Cancel throws work
  * away, so it goes through the styled confirmation.
+ *
+ * The buttons offer only what the server will do (JB-01, FR-009): it re-queues a
+ * job that has STOPPED (failed or cancelled) and cancels one that has not STARTED
+ * (pending), and refuses everything else with a 409. A button the server would
+ * refuse is disabled and SAYS WHY: in its `title`, in a description the button
+ * points at with `aria-describedby`, and, on a phone where a `title` never shows,
+ * as a line of text on the card. A refusal that still gets through (the page was
+ * stale) is told in the interface language through `UI.errorText` (JB-05).
  */
 const JobsPage = {
     jobs: [],
@@ -176,30 +184,54 @@ const JobsPage = {
         }</span>`;
     },
 
-    /** Can this job usefully be retried or cancelled? */
+    /**
+     * What the server will do (src/routes/admin.ts: retry `status IN ('failed', 'cancelled')`, cancel `status = 'pending'`).
+     * A job whose status is blank or unknown is neither: a button that might be refused is not offered as available.
+     */
     canRetry(job) {
-        return job.status === 'failed' || job.status === 'pending' || job.status === '';
+        return job.status === 'failed' || job.status === 'cancelled';
     },
 
     canCancel(job) {
-        return job.status !== 'done' && job.status !== 'cancelled';
+        return job.status === 'pending';
     },
 
-    actions(job) {
+    /** Why a button is off, as a sentence the person can act on: `jobs.retryWhy.<status>`, else the general rule. */
+    whyOff(verb, job) {
+        const specific = `jobs.${verb}Why.${job.status}`;
+        const said = t(specific);
+        return said === specific ? t(`jobs.${verb}Why.other`) : said;
+    },
+
+    /**
+     * The two row buttons and, for a button that is off, the sentence that says why. `scope` ('row' | 'card') keeps the description
+     * ids unique, because the table and the cards are both in the page and CSS shows one: the table's descriptions are for
+     * assistive technology, the card's are visible (a phone has no hover for a `title`).
+     */
+    actions(job, scope) {
+        const retryOk = this.canRetry(job);
+        const cancelOk = this.canCancel(job);
+        const retryWhy = retryOk ? '' : this.whyOff('retry', job);
+        const cancelWhy = cancelOk ? '' : this.whyOff('cancel', job);
+        const retryId = `jobs-retry-why-${scope}-${job.id}`;
+        const cancelId = `jobs-cancel-why-${scope}-${job.id}`;
+        const whyClass = scope === 'card' ? 'text-meta' : 'sr-only';
         return html`
             <div class="row-actions">
                 <button type="button" class="icon-btn" data-action="jobs:retry" data-id="${job.id}"
-                        aria-label="${t('jobs.retryFor', { kind: job.kind })}" title="${t('jobs.retry')}"
-                        ${this.canRetry(job) ? '' : html.raw('disabled')}>
+                        aria-label="${t('jobs.retryFor', { kind: job.kind })}" title="${retryOk ? t('jobs.retry') : retryWhy}"
+                        ${retryOk ? '' : html` disabled aria-describedby="${retryId}"`}>
                     <i data-lucide="rotate-cw" aria-hidden="true"></i>
                 </button>
                 <button type="button" class="icon-btn icon-btn-danger" data-action="jobs:confirmCancel"
                         data-id="${job.id}" data-kind="${job.kind}"
-                        aria-label="${t('jobs.cancelFor', { kind: job.kind })}" title="${t('jobs.cancel')}"
-                        ${this.canCancel(job) ? '' : html.raw('disabled')}>
+                        aria-label="${t('jobs.cancelFor', { kind: job.kind })}" title="${cancelOk ? t('jobs.cancel') : cancelWhy}"
+                        ${cancelOk ? '' : html` disabled aria-describedby="${cancelId}"`}>
                     <i data-lucide="ban" aria-hidden="true"></i>
                 </button>
             </div>
+            ${retryOk ? '' : html`<p class="${whyClass}" id="${retryId}" dir="auto">${retryWhy}</p>`}
+            ${cancelOk ? '' : html`<p class="${whyClass}" id="${cancelId}" dir="auto">${cancelWhy}</p>`}
         `;
     },
 
@@ -221,7 +253,7 @@ const JobsPage = {
                     })}</span>` : ''}
                 </td>
                 <td class="cell-error" dir="auto">${job.lastError || html`<span class="text-meta">—</span>`}</td>
-                <td>${this.actions(job)}</td>
+                <td>${this.actions(job, 'row')}</td>
             </tr>
         `;
     },
@@ -244,7 +276,7 @@ const JobsPage = {
                     ${job.tenantKey ? Admin.field(t('jobs.table.tenant'), UI.ltr(job.tenantKey)) : ''}
                 </dl>
                 ${job.lastError ? html`<p class="job-error" dir="auto">${job.lastError}</p>` : ''}
-                ${this.actions(job)}
+                ${this.actions(job, 'card')}
             </article>
         `;
     },
@@ -267,6 +299,19 @@ const JobsPage = {
 
     // ─── Actions ─────────────────────────────────────────────────────────────
 
+    /**
+     * A refusal or failure as one sentence for a toast: the translated sentence and its next step when the server sent a code the
+     * catalogue knows (JOB_NOT_RETRYABLE, JOB_NOT_CANCELLABLE), the already-translated network message when there was no answer, and
+     * otherwise this screen's own line. The server's English is never shown as the sentence (FR-007, JB-05).
+     */
+    failureText(err, fallbackKey) {
+        if (err && (err.isNetworkError || (typeof err.code === 'string' && err.code))) {
+            const { sentence, next } = UI.errorText(err);
+            return next ? `${sentence} ${next}` : sentence;
+        }
+        return t(fallbackKey);
+    },
+
     async retry(btn) {
         btn.disabled = true;
         try {
@@ -274,7 +319,9 @@ const JobsPage = {
             UI.toast(t('jobs.retried'));
         } catch (err) {
             btn.disabled = false;
-            UI.toast((err && err.message) || t('jobs.retryFailed'), 'error');
+            UI.toast(this.failureText(err, 'jobs.retryFailed'), 'error');
+            // A 409 means the page was stale: the job is in another state than the row said. Show the state it is in now.
+            if (err && err.status === 409) await this.load();
             return;
         }
         await this.load();
@@ -298,7 +345,7 @@ const JobsPage = {
             await API.cancelAdminJob(id);
             UI.toast(t('jobs.cancelled'));
         } catch (err) {
-            UI.toast((err && err.message) || t('jobs.cancelFailed'), 'error');
+            UI.toast(this.failureText(err, 'jobs.cancelFailed'), 'error');
         }
         await this.load();
     },
