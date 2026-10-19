@@ -112,7 +112,7 @@ export const ERROR_CODES = {
     /**
      * Not sent by a route: RECOGNISED by the dashboard (`UI.failureError`) in the failure text a worker stored on a source, a clip or a draft.
      * Supabase Storage answers a signed upload that is over its file-size limit with 413 "Payload too large", and the Mac worker records
-     * that as `storage answered HTTP 400 to the upload: {"statusCode":"413"…}` (aicourse-captions, scripts/monteur/upload.mjs). The text
+     * that as `storage answered HTTP 400 to the upload: {"statusCode":"413"…}` (the Mac worker's upload script). The text
      * names no limit and no size, so no number is shown: UPLOAD_TOO_LARGE's sentence needs `{maxMb}`, and its next step (host the file
      * elsewhere) is wrong for a rendered reel.
      */

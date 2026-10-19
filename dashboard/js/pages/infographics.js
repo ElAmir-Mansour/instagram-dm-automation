@@ -591,6 +591,13 @@ const InfographicsPage = {
         this.syncSchedule(form);
     },
 
+    /** Focus landed on something in the dialog: when it is the time field, that is the choice. */
+    atFocus(target) {
+        if (!target || target.name !== 'at') return;
+        const form = target.closest && target.closest('form');
+        if (form && this.whenChoice(form) !== 'at') this.chooseAt(form);
+    },
+
     /** The dialog that is open for `id`, or null: the preview may land after it was closed, or after another was opened. */
     openScheduleForm(id) {
         const form = document.getElementById('ig-schedule');
@@ -904,14 +911,6 @@ UI.registerActions('infographics', {
         P.chooseAt(form);
         const at = form.elements && form.elements.at;
         if (at && typeof at.focus === 'function') at.focus();
-    },
-
-    /** Focus landed on something in the dialog: when it is the time field, that is the choice. */
-    atFocus(target) {
-        const P = InfographicsPage;
-        if (!target || target.name !== 'at') return;
-        const form = target.closest && target.closest('form');
-        if (form && P.whenChoice(form) !== 'at') P.chooseAt(form);
     },
 
     async schedule(form, event) {
