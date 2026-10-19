@@ -1107,17 +1107,25 @@ the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
 **`src/routes/api.ts:600`**.
 
 1. **Select due rows** (**:602-608**) — `scheduled_posts` joined to `creators`,
-   `status = 'PENDING' AND scheduled_time <= NOW()`, oldest first.
+   `status = 'PENDING' AND scheduled_time <= NOW() AND s.archived_at IS NULL`, oldest first.
 2. **Claim each one atomically** (**:623-629**):
 
    ```sql
    UPDATE scheduled_posts SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-    WHERE id = $1 AND status = 'PENDING'
+    WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
    RETURNING id
    ```
 
    `rowCount === 0` means someone else took it: log `cron.publish_already_claimed` and
    `continue` (**:631-634**).
+
+> **Archived posts are skipped, silently and on purpose** (v45, UX US1). `POST /api/posts/scheduled/:id/archive`
+> stamps `archived_at`; the select leaves such a row out, and the claim repeats the test so a row archived
+> between the two is not published either (it matches no row and is logged as `cron.publish_already_claimed`).
+> This is the one sweep that stops: the TikTok and Instagram reconcilers (`reconcileTikTokPosts`,
+> the YouTube visibility check, the growth sync) never mention `archived_at`, so a row already in flight
+> still settles. Unarchiving a `PENDING` row whose time has passed makes it due again, and the next sweep
+> publishes it, which is why the dashboard asks first. Nothing about an archived row is a delete.
 
 > **Why the claim is an `UPDATE … WHERE status = 'PENDING'`.** The old form was SELECT-then-
 > UPDATE, which let two concurrent cron hits both read the row as PENDING and both publish it —

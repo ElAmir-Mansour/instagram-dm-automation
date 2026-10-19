@@ -46,7 +46,7 @@ interface Rig {
     failWith(err: Error | null): void;
 }
 
-function load(lang: 'ar' | 'en' = 'en', zone = 'Asia/Riyadh'): Rig {
+function load(lang: 'ar' | 'en' = 'en', zone = 'Asia/Kuwait'): Rig {
     const calls: Rig['calls'] = [];
     let failure: Error | null = null;
     const api: Json = {
@@ -156,6 +156,20 @@ describe('a PENDING post more than 15 minutes past its time is overdue (PO-11)',
         }
     });
 
+    it('a HELD post (TikTok\'s drafts, a reel still processing) is not also "overdue": it says it is held and why', () => {
+        const r = load();
+        const now = Date.now();
+        const held = post({ platform: 'tiktok', error_log: 'Waiting for TikTok: 5 drafts are pending.', scheduled_time: at(-3 * HOUR) });
+        const markup = card(r, held);
+        assert.equal(r.P.queueGroupOf(held, now), 'attention', 'still in Needs attention: a person should look');
+        assert.doesNotMatch(markup, /post\.overdue/);
+        assert.doesNotMatch(markup, /data-timing=/);
+        assert.ok(text(markup).includes('Held until the next sweep'), text(markup));
+        assert.ok(text(markup).includes('Waiting for TikTok: 5 drafts are pending.'), 'its own note says why');
+        assert.ok(actions(markup).includes('publishNow') && actions(markup).includes('archivePost'));
+        assert.equal(r.P.timingNote(held, now), null);
+    });
+
     it('uses ONE grace: the server\'s, Overview\'s and this page\'s are the same 15 minutes', () => {
         const r = load();
         assert.equal(r.P.OVERDUE_GRACE_MS, OVERDUE_GRACE_MINUTES * MIN);
@@ -198,15 +212,15 @@ describe('no card promises minutes, for any post at any hour (PO-11)', () => {
 // ─── The tenant's zone ─────────────────────────────────────────────────────────────────────────
 
 describe('a card\'s time is weekday + date + clock + the CITY of the tenant\'s zone (PO-07)', () => {
-    const INSTANT = '2027-01-01T00:00:00.000Z'; // Friday 03:00 in Riyadh (UTC+3), 04:00 in Dubai (UTC+4)
+    const INSTANT = '2027-01-01T00:00:00.000Z'; // Friday 03:00 in Kuwait (UTC+3), 04:00 in Dubai (UTC+4)
 
     it('reads it in the tenant\'s zone and names the city, in English', () => {
-        const r = load('en', 'Asia/Riyadh');
+        const r = load('en', 'Asia/Kuwait');
         const markup = text(card(r, post({ scheduled_time: INSTANT })));
         assert.match(markup, /Fri/, 'the weekday');
         assert.match(markup, /Jan 1, 2027|1 Jan 2027/, 'the date, with the year');
-        assert.match(markup, /\b03:00\b/, 'the clock in Riyadh, not in UTC and not in the browser\'s zone');
-        assert.match(markup, /\(Riyadh\)/, 'and the city');
+        assert.match(markup, /\b03:00\b/, 'the clock in Kuwait, not in UTC and not in the browser\'s zone');
+        assert.match(markup, /\(Kuwait\)/, 'and the city');
         assert.doesNotMatch(markup, /\b00:00\b/);
     });
 
@@ -218,20 +232,20 @@ describe('a card\'s time is weekday + date + clock + the CITY of the tenant\'s z
     });
 
     it('says it in Arabic: the Arabic weekday and the Arabic name of the city', () => {
-        const r = load('ar', 'Asia/Riyadh');
+        const r = load('ar', 'Asia/Kuwait');
         const markup = text(card(r, post({ scheduled_time: INSTANT })));
-        const weekday = new Intl.DateTimeFormat(r.h.I18N.locale(), { weekday: 'short', timeZone: 'Asia/Riyadh' }).format(new Date(INSTANT));
+        const weekday = new Intl.DateTimeFormat(r.h.I18N.locale(), { weekday: 'short', timeZone: 'Asia/Kuwait' }).format(new Date(INSTANT));
         assert.ok(markup.includes(weekday), `the weekday "${weekday}" in: ${markup}`);
-        assert.ok(markup.includes(`(${r.h.t('studio.city.Riyadh')})`), markup);
-        assert.ok(markup.includes('الرياض'));
+        assert.ok(markup.includes(`(${r.h.t('studio.city.Kuwait')})`), markup);
+        assert.ok(markup.includes('الكويت'));
     });
 
     it('is the same wording on the card\'s accessible name, so a screen reader hears the city too', () => {
-        const r = load('en', 'Asia/Riyadh');
+        const r = load('en', 'Asia/Kuwait');
         const markup = card(r, post({ scheduled_time: INSTANT }));
         const label = /<article[^>]*aria-label="([^"]*)"/.exec(markup)![1]!;
         assert.match(label, /Fri/);
-        assert.match(label, /\(Riyadh\)/);
+        assert.match(label, /\(Kuwait\)/);
     });
 
     it('is read from the settings Studio and the Monteur read (schedule.timezone), when the page loads', async () => {
@@ -242,12 +256,12 @@ describe('a card\'s time is weekday + date + clock + the CITY of the tenant\'s z
             getScheduledPosts: () => Promise.resolve([post({ scheduled_time: INSTANT })]),
             getLivePosts: () => Promise.resolve([]),
             getTikTokConnection: () => Promise.resolve(null),
-            getStudioSettings: () => Promise.resolve({ settings: { schedule: { timezone: 'Asia/Riyadh' } } }),
+            getStudioSettings: () => Promise.resolve({ settings: { schedule: { timezone: 'Asia/Kuwait' } } }),
         });
         await r.P.render();
         await settle();
-        assert.equal(r.h.UI.zone(), 'Asia/Riyadh', 'the shared tenant zone is now Studio\'s');
-        assert.match(text(container.innerHTML), /\b03:00\b.*\(Riyadh\)/);
+        assert.equal(r.h.UI.zone(), 'Asia/Kuwait', 'the shared tenant zone is now Studio\'s');
+        assert.match(text(container.innerHTML), /\b03:00\b.*\(Kuwait\)/);
     });
 
     it('a failed settings read does not blank the page or change the zone: times stay in the zone already known, and say which', async () => {
@@ -266,20 +280,20 @@ describe('a card\'s time is weekday + date + clock + the CITY of the tenant\'s z
     });
 
     it('settings with no zone say nothing: the zone is left as it was', () => {
-        const r = load('en', 'Asia/Riyadh');
+        const r = load('en', 'Asia/Kuwait');
         r.P.shareZone({ status: 'fulfilled', value: { settings: { schedule: {} } } });
         r.P.shareZone({ status: 'fulfilled', value: {} });
         r.P.shareZone({ status: 'rejected', reason: new Error('x') });
         r.P.shareZone(null);
-        assert.equal(r.h.UI.zone(), 'Asia/Riyadh');
+        assert.equal(r.h.UI.zone(), 'Asia/Kuwait');
     });
 
     it('a tenant switch forgets the zone and the Archived view, so the next tenant\'s times are never read in this one\'s', () => {
-        const r = load('en', 'Asia/Riyadh');
+        const r = load('en', 'Asia/Kuwait');
         r.P.queueView = 'archived';
         r.P.resetTenantState();
         assert.equal(r.P.queueView, 'active');
-        assert.notEqual(r.h.UI.zone(), 'Asia/Riyadh');
+        assert.notEqual(r.h.UI.zone(), 'Asia/Kuwait');
     });
 });
 
@@ -439,6 +453,38 @@ describe('an archived post is never in Needs attention, and is listed under Arch
         assert.equal(r.P.queueNeedsPoll([late(null)], now), true);
         assert.equal(r.P.queueNeedsPoll([late('2026-10-19T09:00:00.000Z')], now), false);
         assert.equal(r.P.queueNeedsPoll([post({ status: 'IN_INBOX', archived_at: '2026-10-19T09:00:00.000Z' })], now), false);
+    });
+});
+
+describe('Today\'s alerts leave an archived post out too (the "gone from Today" half of Archive)', () => {
+    const ok = (value: unknown) => ({ status: 'fulfilled', value });
+    const pending = { status: 'rejected', reason: new Error('not under test') };
+    const alerts = (rows: Json[]): Json[] => {
+        const O = loadDashboard({ files: ['dashboard/js/pages/overview.js'], globals: { API: {}, App: {}, Admin: {} } }).run('OverviewPage');
+        return plain(O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok(rows), ok({ data: [] }), pending));
+    };
+    const title = (list: Json[], needle: string): string | undefined => list.map((a) => a.title).find((x: string) => x.includes(needle));
+    const parked = '2026-10-19T09:00:00.000Z';
+
+    it('counts failed and overdue posts that are not archived, and only those', () => {
+        const rows = [
+            post({ id: 'f1', status: 'FAILED', error_log: 'x' }),
+            post({ id: 'f2', status: 'FAILED', error_log: 'x', archived_at: parked }),
+            post({ id: 'o1', scheduled_time: at(-3 * HOUR) }),
+            post({ id: 'o2', scheduled_time: at(-3 * HOUR), archived_at: parked }),
+            post({ id: 'o3', scheduled_time: at(-5 * DAY), archived_at: parked }),
+        ];
+        const list = alerts(rows);
+        assert.equal(title(list, 'failed to publish'), '1 post failed to publish', 'one failed post, not two');
+        assert.equal(title(list, 'past its time'), '1 post is past its time', 'one overdue post, not three');
+    });
+
+    it('raises no alert at all when every failed or late post is archived', () => {
+        const list = alerts([
+            post({ id: 'f2', status: 'FAILED', error_log: 'x', archived_at: parked }),
+            post({ id: 'o2', scheduled_time: at(-3 * HOUR), archived_at: parked }),
+        ]);
+        assert.deepEqual(list.filter((a) => a.icon === 'image-off' || a.icon === 'calendar-clock'), []);
     });
 });
 

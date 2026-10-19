@@ -700,7 +700,9 @@ const OverviewPage = {
 
         // 4. The publishing queue.
         if (postsRes.status === 'fulfilled' && Array.isArray(postsRes.value)) {
-            const posts = postsRes.value;
+            // A post the owner archived is parked on purpose, so it is never a failure or a stuck post here: this is the "gone from
+            // Today" half of Archive (UX US1, FR-003). `archived_at` is on every row of GET /posts/scheduled (v45).
+            const posts = postsRes.value.filter((p) => !(p && p.archived_at));
             // Overdue by more than the sweep can explain. The Heroku worker polls
             // every 60s and a video container can take ~75s, so a row two minutes
             // past its time is on its way, not stuck; fifteen minutes is stuck.

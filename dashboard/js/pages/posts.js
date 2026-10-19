@@ -635,10 +635,10 @@ const PostsPage = {
      *   in the future         nothing: the time is on the card, and a promise of minutes for a post months away is not true
      *   past it, within grace "due": it goes out at the next check
      *   past it by more       "overdue", by how long, and that the last check did not publish it (Publish now is on the card)
-     * An archived post, and any status but PENDING, has none.
+     * An archived post, a held one (its own note says why it waits), and any status but PENDING, has none.
      */
     timingNote(post, now) {
-        if (!post || this.isArchived(post) || post.status !== 'PENDING') return null;
+        if (!post || this.isArchived(post) || post.status !== 'PENDING' || UI.heldReason(post)) return null;
         const at = new Date(post.scheduled_time).getTime();
         if (Number.isNaN(at)) return null;
         const late = (typeof now === 'number' ? now : Date.now()) - at;
@@ -936,7 +936,9 @@ const PostsPage = {
         // none of the prompts to act (the TikTok kit, Publish now, Edit). Unarchive is its way back.
         const parked = this.isArchived(post);
         const now = Date.now();
-        const overdue = !parked && this.isOverdue(post, now);
+        // A held post (TikTok's five drafts, an Instagram reel still processing) is late on purpose and says so: its own pill and note
+        // explain the wait, so it is not also called overdue (data-model.md: held outranks overdue).
+        const overdue = !parked && !UI.heldReason(post) && this.isOverdue(post, now);
         const when = this.whenText(post.scheduled_time);
         const timing = this.timingNote(post, now);
 
