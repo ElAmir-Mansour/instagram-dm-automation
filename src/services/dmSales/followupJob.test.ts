@@ -175,6 +175,22 @@ describe('scheduleFollowup', () => {
         }, 'keyed');
     });
 
+    it('queues NOTHING for a WhatsApp conversation, however the rest is arranged, and says why (a free-form message hours later may be outside the window)', async () => {
+        await scheduling(null, async (queue, logged) => {
+            assert.equal(await scheduleFollowup({ ...SCHEDULE, senderId: 'EG.13491208655302741918', channel: 'whatsapp' }), 'unsupported_channel');
+            assert.equal(queue.calls.length, 0);
+            assert.equal(logged.find((l) => l.event === 'dm.followup_not_scheduled')?.reason, 'channel');
+        });
+    });
+
+    it('does not put a channel in the payload of an Instagram or Messenger job: it is byte for byte what it was', async () => {
+        await scheduling(null, async (queue) => {
+            await scheduleFollowup(SCHEDULE);
+            await scheduleFollowup({ ...SCHEDULE, pageId: 'fb-page-1' });
+            for (const call of queue.calls) assert.ok(!('channel' in (call.payload as object)));
+        });
+    });
+
     it('queues nothing when the link was not recorded (the statement matched no conversation)', async () => {
         await scheduling(null, async (queue, logged) => {
             assert.equal(await scheduleFollowup({ ...SCHEDULE, recorded: { linkAt: null, replyId: null } }), 'unrecorded');
@@ -462,6 +478,26 @@ describe('runFollowup: nothing is sent when the conversation has moved on (the j
         const r = await running({}, [{ ...PAYLOAD, linkAt: 'yesterday-ish' }]);
         assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'bad_payload' });
         assert.equal(r.executed.length, 0, 'not even a read');
+    });
+
+    it('a job that names WhatsApp (none is ever written) sends nothing and reads nothing: an Instagram message is never sent to a WhatsApp user id', async () => {
+        const r = await running({}, [{ ...PAYLOAD, senderId: 'EG.13491208655302741918', channel: 'whatsapp' }]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'channel' });
+        assert.equal(nudges(r).length, 0);
+        assert.equal(r.sends.length, 0);
+        assert.equal(claims(r), 0);
+        assert.equal(r.executed.length, 0, 'not even a read');
+        assert.deepEqual(skipped(r), ['channel']);
+    });
+
+    it('a payload with NO channel, as every job queued before the field existed, is exactly what it was: Instagram, or Messenger with a Page id', async () => {
+        assert.ok(!('channel' in PAYLOAD));
+        const instagram = await running({}, [PAYLOAD]);
+        assert.deepEqual(instagram.outcome, { kind: 'sent' });
+        assert.match(nudges(instagram)[0]!.url, /\/me\/messages$/);
+        const messenger = await running({}, [{ ...PAYLOAD, pageId: 'fb-page-1' }]);
+        assert.deepEqual(messenger.outcome, { kind: 'sent' });
+        assert.match(nudges(messenger)[0]!.url, /\/fb-page-1\/messages$/);
     });
 
     it('the send quota is spent: the nudge is the first thing to give way, and nothing is claimed', async () => {

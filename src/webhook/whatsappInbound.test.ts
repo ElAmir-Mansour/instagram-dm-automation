@@ -1,6 +1,8 @@
 /**
- * A WhatsApp message, stored and not answered (`handleWhatsAppInbound`), through the whole path a real one takes: Meta's own sample payloads ->
- * `planJobs` -> the job's stored change -> the handler -> the database. Nothing here is a mock of the code under test.
+ * A WhatsApp message, stored and either answered or marked "not answered, and here is why" (`handleWhatsAppInbound`), through the whole path a real one
+ * takes: Meta's own sample payloads -> `planJobs` -> the job's stored change -> the handler -> the database. Nothing here is a mock of the code under test,
+ * except the agent: the handler takes its answer as a dependency (`whatsappAnswer.ts` is tested on its own, with a model, a sender and a profile), and
+ * here it is a stub that FAILS THE TEST if it is asked for a message the handler should not have sent to it.
  *
  * The database is a small in-memory model that answers by SQL, with the semantics the statements depend on: the unique index on a contact and on
  * a message id, `COALESCE` on conflict, a transaction that really rolls back. It throws on a statement the handler was not expected to make, and
@@ -10,7 +12,8 @@
  * What is pinned, because each is a way this could go wrong in front of real people:
  *   - a person who is not on the owner's test list leaves no words, phone, username, name, media or raw event behind (C3): swept over every
  *     statement parameter and every log line, not just the columns it should be in
- *   - nothing is sent, in any mode, for any sender, ever
+ *   - the agent is asked for a listed test sender's words in mode `test`, an active connection, an unpaused thread, and for nobody else, ever; a reason is
+ *     recorded for every message it is not asked for
  *   - every inbound stamps `last_inbound_at`, and a redelivery does not
  *   - a BSUID that changes follows the person through the thread, their consents and the test list, and never merges or deletes a thread
  */
@@ -21,6 +24,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { pool } from '../config/db.js';
 import { handlers } from '../jobs/handlers.js';
+import { failureRedaction } from '../jobs/redaction.js';
 import { drainJobs } from '../jobs/runner.js';
 import { memoryQueue } from '../jobs/testSupport.js';
 import type { Job, JobKind, WhatsAppDmPayload } from '../jobs/types.js';
@@ -28,6 +32,7 @@ import { metaHttp } from '../services/http.js';
 import { setLogSink } from '../utils/log.js';
 import { planJobs, processWebhookBody } from './router.js';
 import { handleWhatsAppInbound, isTestSender, noReplyReasonFor } from './whatsappInbound.js';
+import type { WhatsAppAnswerFn, WhatsAppAnswerInput } from './whatsappAnswer.js';
 
 const CREATOR = '11111111-1111-4111-8111-111111111111';
 const PHONE_ID = '106540352242922';
@@ -48,6 +53,7 @@ interface Conv {
     id: string; creator_id: string; instagram_user_id: string; platform: string | null; status: string;
     last_message_at: number; last_inbound_at: number | null;
     wa_phone: string | null; wa_username: string | null; wa_parent_user_id: string | null; profile_name: string | null; entry_source: any | null;
+    is_bot_active?: boolean; ai_disclosed_at?: string | null;
 }
 interface Msg {
     id: string; conversation_id: string; creator_id: string; direction: string; message_type: string; text: string; payload: string | null;
@@ -71,6 +77,11 @@ let failNextThreadRekey: boolean;
 let failConversationUpsert: boolean;
 let nextId: number;
 let snapshot: string | null;
+/** What the agent was asked, and what it says. The default FAILS: a test that expects an answer says so with `answers(...)`. */
+let answerCalls: WhatsAppAnswerInput[];
+let answerImpl: WhatsAppAnswerFn;
+const unexpectedAnswer: WhatsAppAnswerFn = async () => { throw new Error('the agent must not be asked for this message'); };
+const answers = (impl: WhatsAppAnswerFn = async () => ({ reason: null })) => { answerImpl = impl; };
 
 const originalQuery = pool.query;
 const originalConnect = pool.connect;
@@ -131,14 +142,14 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
                 existing.wa_parent_user_id = existing.wa_parent_user_id ?? parent;
                 existing.profile_name = name ?? existing.profile_name;
                 existing.entry_source = existing.entry_source ?? JSON.parse(entry);
-                return result([{ id: existing.id }]);
+                return result([{ id: existing.id, is_bot_active: existing.is_bot_active ?? true, ai_disclosed_at: existing.ai_disclosed_at ?? null }]);
             }
             const c: Conv = {
                 id: `conv-${++nextId}`, creator_id: creator, instagram_user_id: userId, platform: 'whatsapp', status: 'active', last_message_at: clock, last_inbound_at: clock,
                 wa_phone: phone, wa_username: username, wa_parent_user_id: parent, profile_name: name, entry_source: JSON.parse(entry),
             };
             db.convs.push(c);
-            return result([{ id: c.id }]);
+            return result([{ id: c.id, is_bot_active: true, ai_disclosed_at: null }]);
         }
         // The system-message variant: no `last_inbound_at`, no `last_message_at` bump.
         const [, , phone, parent] = params;
@@ -176,6 +187,7 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
         return result([{ id: m.id, reply_attempts: m.reply_attempts }]);
     }
     if (sql.startsWith('UPDATE messages SET handled_at = NOW(), reply_claimed_at = NULL, no_reply_reason = $2 WHERE id = $1')) {
+        // `$2` is NULL for a message the agent answered.
         const m = db.msgs.find((x) => x.id === params[0]);
         if (m) { m.handled_at = clock; m.reply_claimed_at = null; m.no_reply_reason = params[1]; }
         return result([], m ? 1 : 0);
@@ -227,6 +239,8 @@ beforeEach(() => {
     agentReadFails = false;
     failNextThreadRekey = false;
     failConversationUpsert = false;
+    answerCalls = [];
+    answerImpl = unexpectedAnswer;
     db = { convs: [], msgs: [], consents: [], agent: { whatsapp_mode: 'off', whatsapp_test_senders: [] } };
 
     const previous = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
@@ -245,7 +259,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    // Whatever the test did, nothing was sent.
+    // Whatever the test did, THIS file's code sent nothing and wrote no outbound row: the send is the agent's (`whatsappAnswer.ts`), and here it is a stub.
     assert.deepEqual(metaCalls, [], 'a Meta call was made');
     assert.ok(!statements.some((s) => /INSERT INTO messages[\s\S]*'outbound'/.test(s.sql)), 'an outbound row was written');
     restoreSink?.();
@@ -290,7 +304,8 @@ const jobsOf = (body: any): WhatsAppDmPayload[] => planJobs(body).filter((j) => 
 
 /** What the runner does with a delivery: plan it, then hand each message job to the handler. */
 async function deliver(body: any, options = { lastAttempt: true }): Promise<void> {
-    for (const payload of jobsOf(body)) await handleWhatsAppInbound(payload, options);
+    const answer: WhatsAppAnswerFn = async (input) => { answerCalls.push(input); return answerImpl(input); };
+    for (const payload of jobsOf(body)) await handleWhatsAppInbound(payload, options, answer);
 }
 
 const agent = (mode: string, senders: string[] = []) => { db.agent = { whatsapp_mode: mode, whatsapp_test_senders: senders }; };
@@ -320,20 +335,37 @@ describe('isTestSender', () => {
 });
 
 describe('noReplyReasonFor', () => {
-    it('says why, in this phase', () => {
+    it('answers (null) only a listed test sender in mode test, and says why for everyone else', () => {
+        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'test', isTestSender: true }), null);
         assert.equal(noReplyReasonFor({ unsupported: false, mode: 'off', isTestSender: true }), 'agent_off');
         assert.equal(noReplyReasonFor({ unsupported: false, mode: 'off', isTestSender: false }), 'agent_off');
         assert.equal(noReplyReasonFor({ unsupported: false, mode: 'test', isTestSender: false }), 'not_test_sender');
-        // W5 replaces this: the agent answers test senders. Nothing is sent until it does.
-        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'test', isTestSender: true }), 'agent_off');
-        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'everyone', isTestSender: false }), 'agent_off');
-        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'everyone', isTestSender: true }), 'agent_off');
+    });
+
+    it('treats mode everyone as test-only until the go-live gate exists: a listed sender is answered, a stranger never is', () => {
+        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'everyone', isTestSender: true }), null);
+        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'everyone', isTestSender: false }), 'not_test_sender');
     });
 
     it('puts a message the agent cannot read first, in every mode', () => {
         for (const mode of ['off', 'test', 'everyone'] as const) {
             for (const isTest of [true, false]) assert.equal(noReplyReasonFor({ unsupported: true, mode, isTestSender: isTest }), 'unsupported_type');
         }
+    });
+
+    it('then asks, in this order: words it can read, an active connection, a thread nobody has taken over', () => {
+        const base = { unsupported: false, mode: 'test' as const, isTestSender: true };
+        assert.equal(noReplyReasonFor({ ...base, answerable: false, connectionActive: false, botActive: false }), 'unsupported_type');
+        assert.equal(noReplyReasonFor({ ...base, connectionActive: false, botActive: false }), 'connection_invalid');
+        assert.equal(noReplyReasonFor({ ...base, botActive: false }), 'bot_paused');
+        assert.equal(noReplyReasonFor({ ...base, answerable: true, connectionActive: true, botActive: true }), null);
+    });
+
+    it('never lets a fact about the message or the thread decide for someone who is not a listed test sender', () => {
+        for (const mode of ['test', 'everyone'] as const) {
+            assert.equal(noReplyReasonFor({ unsupported: false, mode, isTestSender: false, answerable: true, connectionActive: true, botActive: true }), 'not_test_sender');
+        }
+        assert.equal(noReplyReasonFor({ unsupported: false, mode: 'off', isTestSender: false, answerable: false, connectionActive: false, botActive: false }), 'agent_off');
     });
 });
 
@@ -489,39 +521,223 @@ describe('a message from anyone who is not a listed test sender', () => {
         await assert.rejects(() => deliver(textBody(BODY, 'wamid.S5'), { lastAttempt: false }), /connection terminated/);
         assert.equal(db.convs.length + db.msgs.length, 0);
         agentReadFails = false;
+        answers();
         await deliver(textBody(BODY, 'wamid.S5'), { lastAttempt: false });
         assert.equal(only(db.msgs).text, BODY, 'the retry stores it in full: the sender is a tester');
+        assert.equal(answerCalls.length, 1, 'and, mode test with the sender listed, answers it');
     });
 });
 
 // ─── Nobody is answered ────────────────────────────────────────────────────────────────
 
-describe('what each mode says about a message nobody answers', () => {
-    const cases: Array<[string, string[], string]> = [
+describe('what each mode does with a message', () => {
+    const cases: Array<[string, string[], string | null]> = [
         ['off', [], 'agent_off'],
         ['off', [BSUID], 'agent_off'],
         ['test', [], 'not_test_sender'],
-        ['test', [BSUID], 'agent_off'],
-        ['everyone', [], 'agent_off'],
-        ['everyone', [BSUID], 'agent_off'],
+        ['test', [BSUID], null],
+        ['everyone', [], 'not_test_sender'],
+        ['everyone', [BSUID], null],
     ];
     for (const [mode, senders, expected] of cases) {
-        it(`mode ${mode}, ${senders.length ? 'a listed sender' : 'a stranger'}: ${expected}, and nothing is sent`, async () => {
+        it(`mode ${mode}, ${senders.length ? 'a listed sender' : 'a stranger'}: ${expected === null ? 'the agent answers, and the row says nothing went unanswered' : `${expected}, and the agent is never asked`}`, async () => {
             agent(mode, senders);
+            answers();
             await deliver(textBody(BODY, `wamid.M-${mode}-${senders.length}`));
             const msg = only(db.msgs);
             assert.equal(msg.no_reply_reason, expected);
             assert.notEqual(msg.handled_at, null);
+            assert.equal(answerCalls.length, expected === null ? 1 : 0);
             assert.deepEqual(metaCalls, []);
-            assert.ok(!statements.some((s) => /'outbound'/.test(s.sql)), 'no outbound row');
+            assert.ok(!statements.some((s) => /'outbound'/.test(s.sql)), 'this handler wrote no outbound row: that is the agent\'s');
         });
     }
 
-    it('never reads the agent for a reply: no engine, no profile, no model, no quota: only the connection, the settings and the thread', async () => {
-        agent('test', [BSUID]);
+    it('touches only the connection, the settings and the thread for a message nobody answers: no engine, no profile, no model, no quota', async () => {
+        agent('test', []);
         await deliver(textBody(BODY, 'wamid.N1'));
         const touched = new Set(statements.map((s) => /(?:FROM|INTO|UPDATE)\s+([a-z_]+)/i.exec(s.sql)?.[1]));
         assert.deepEqual([...touched].sort(), ['ai_agents', 'conversations', 'creators', 'messages', 'platform_connections']);
+    });
+});
+
+// ─── The agent is asked ────────────────────────────────────────────────────────────────
+
+describe('a message the agent answers', () => {
+    it('is handed to it whole: the thread, the row, the wamid, the number, the contact, the words, and when the line was last said', async () => {
+        agent('test', [BSUID]);
+        answers();
+        await deliver(textBody(BODY, 'wamid.A1'));
+        const conv = only(db.convs);
+        const msg = only(db.msgs);
+        assert.deepEqual(answerCalls, [{
+            creatorId: CREATOR, conversationId: conv.id, messageId: msg.id, wamid: 'wamid.A1', phoneNumberId: PHONE_ID, senderId: BSUID,
+            text: BODY, payload: null, aiDisclosedAt: null, lastAttempt: true,
+        }]);
+    });
+
+    it('is concluded with NO reason when the agent answered, after the agent has run, and says so in the log', async () => {
+        agent('test', [BSUID]);
+        let concludedBeforeAnswer = true;
+        answers(async () => { concludedBeforeAnswer = db.msgs.some((m) => m.handled_at !== null); return { reason: null }; });
+        await deliver(textBody(BODY, 'wamid.A2'));
+        assert.equal(concludedBeforeAnswer, false, 'the row is claimed and open while the agent works, and concluded after');
+        const msg = only(db.msgs);
+        assert.equal(msg.no_reply_reason, null);
+        assert.notEqual(msg.handled_at, null);
+        assert.equal(msg.reply_claimed_at, null);
+        const said = only(logged('wa.inbound_stored'));
+        assert.deepEqual([said.answered, said.no_reply_reason], [true, null]);
+    });
+
+    it('records the reason the agent gives when it did not answer: a provider that failed, a closed window, a billable reply, a refused connection', async () => {
+        agent('test', [BSUID]);
+        let n = 0;
+        for (const reason of ['provider_unavailable', 'window_closed', 'billable_blocked', 'connection_invalid', 'failure', 'superseded', 'bot_paused', 'agent_off'] as const) {
+            answers(async () => ({ reason }));
+            await deliver(textBody(BODY, `wamid.R${n++}`));
+            assert.equal(db.msgs[db.msgs.length - 1]!.no_reply_reason, reason);
+        }
+        assert.equal(logged('wa.inbound_stored').filter((l) => l.answered === false).length, 8);
+    });
+
+    it('is asked with the button\'s title as the words and its id as the payload for a tapped button', async () => {
+        agent('test', [BSUID]);
+        answers();
+        const reply = fixture('interactive-button-reply');
+        const v = reply.entry[0].changes[0].value;
+        v.contacts[0].user_id = BSUID;
+        v.messages[0].from_user_id = BSUID;
+        await deliver(reply);
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.text, v.messages[0].interactive.button_reply.title);
+        assert.equal(answerCalls[0]!.payload, v.messages[0].interactive.button_reply.id);
+    });
+
+    it('is asked for a list row too, and for a text from a phone-only match on the list', async () => {
+        agent('test', [PHONE]);
+        answers();
+        await deliver(textBody(BODY, 'wamid.A3', { userId: 'EG.somebody-else-entirely' }));
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.senderId, 'EG.somebody-else-entirely', 'the contact is the BSUID, never the phone');
+    });
+
+    it('is not asked again for a redelivery: a message already concluded is never answered twice', async () => {
+        agent('test', [BSUID]);
+        answers();
+        const body = textBody(BODY, 'wamid.A4');
+        await deliver(body);
+        clock += 60 * 1000;
+        await deliver(body);
+        assert.equal(answerCalls.length, 1);
+        assert.equal(logged('wa.duplicate_ignored').length, 1);
+    });
+
+    it('stays open for a retry when the agent asks for one (it throws, after releasing the claim), and is answered when the runner comes back', async () => {
+        agent('test', [BSUID]);
+        answers(async (input) => {
+            // What `answerWhatsApp` does before it rethrows: the claim is handed back so the retry can take it at once.
+            const m = db.msgs.find((x) => x.id === input.messageId)!;
+            m.reply_claimed_at = null;
+            throw new Error('connection terminated unexpectedly');
+        });
+        await assert.rejects(() => deliver(textBody(BODY, 'wamid.A5'), { lastAttempt: false }), /connection terminated/);
+        let msg = only(db.msgs);
+        assert.equal(msg.handled_at, null, 'not concluded: the job will run again');
+        assert.equal(answerCalls[0]!.lastAttempt, false, 'the agent was told a retry is coming');
+
+        answers();
+        await deliver(textBody(BODY, 'wamid.A5'), { lastAttempt: false });
+        msg = only(db.msgs);
+        assert.equal(msg.reply_attempts, 2, 'the same row, claimed again');
+        assert.notEqual(msg.handled_at, null);
+        assert.equal(msg.no_reply_reason, null);
+    });
+
+    it('lets an error from the agent through for a listed sender with the job\'s payload left whole, on a retry and on the failure that ends the job', async () => {
+        agent('test', [BSUID]);
+        answers(async () => { throw new Error('boom'); });
+        const [payload] = jobsOf(textBody(BODY, 'wamid.A6'));
+        const stub: WhatsAppAnswerFn = async (input) => { answerCalls.push(input); return answerImpl(input); };
+        for (const lastAttempt of [false, true]) {
+            // What `answerWhatsApp` does before it rethrows: the claim is given back, so the next attempt can take it.
+            for (const m of db.msgs) m.reply_claimed_at = null;
+            await assert.rejects(() => handleWhatsAppInbound(payload!, { lastAttempt }, stub), (err: unknown) => {
+                assert.equal((err as Error).message, 'boom');
+                // A tester's words are kept in `messages` anyway, so the operator can replay the job: the error carries no request to redact its payload.
+                assert.equal(failureRedaction(err), null);
+                return true;
+            });
+        }
+        assert.equal(answerCalls.map((c) => c.lastAttempt).join(), 'false,true');
+    });
+});
+
+describe('a message the agent is NOT asked for, even from a listed test sender', () => {
+    const body = (over: Record<string, unknown> = {}) => textBody(BODY, `wamid.N-${Math.random()}`, {}, over);
+
+    it('is not asked for media: a photo with a caption is stored in full and concluded as unsupported_type, not answered from its caption', async () => {
+        agent('test', [BSUID]);
+        const image = fixture('image');
+        const iv = image.entry[0].changes[0].value;
+        iv.contacts[0].user_id = BSUID;
+        iv.messages[0].from_user_id = BSUID;
+        await deliver(image);
+        const photo = only(db.msgs);
+        assert.equal(photo.no_reply_reason, 'unsupported_type');
+        assert.equal(photo.text, iv.messages[0].image.caption, 'still stored: it is the tester\'s');
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is not asked for a voice note, a location, a reaction or a type Meta added', async () => {
+        agent('test', [BSUID]);
+        for (const name of ['audio-voice', 'location', 'reaction'] as const) {
+            let f: any;
+            try { f = fixture(name); } catch { continue; }
+            const v = f.entry[0].changes[0].value;
+            v.contacts[0].user_id = BSUID;
+            v.messages[0].from_user_id = BSUID;
+            await deliver(f);
+        }
+        assert.equal(answerCalls.length, 0);
+        assert.ok(db.msgs.every((m) => m.no_reply_reason === 'unsupported_type'), db.msgs.map((m) => m.no_reply_reason).join(','));
+    });
+
+    it('is not asked while the connection is not active: stored in full, concluded as connection_invalid, nothing sent', async () => {
+        agent('test', [BSUID]);
+        connection = connectionRow({ status: 'invalid', last_error: 'Meta reports the token as not valid.' });
+        await deliver(body());
+        const msg = only(db.msgs);
+        assert.equal(msg.no_reply_reason, 'connection_invalid');
+        assert.equal(msg.text, BODY);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is not asked while a person has the thread (the bot is paused): concluded as bot_paused', async () => {
+        agent('test', [BSUID]);
+        db.convs.push({
+            id: 'conv-paused', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+            wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null, is_bot_active: false,
+        });
+        await deliver(body());
+        assert.equal(only(db.msgs).no_reply_reason, 'bot_paused');
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is not asked for a system message (a BSUID that changed), for anyone', async () => {
+        agent('test', [BSUID]);
+        const sys = fixture('system-user-changed-number');
+        await deliver(sys);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is not asked for a stranger in any mode, with every other fact in its favour', async () => {
+        for (const mode of ['test', 'everyone'] as const) {
+            agent(mode, ['EG.the.owner.tester']);
+            await deliver(textBody(BODY, `wamid.X-${mode}`));
+        }
+        assert.equal(answerCalls.length, 0);
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), ['not_test_sender', 'not_test_sender']);
     });
 });
 

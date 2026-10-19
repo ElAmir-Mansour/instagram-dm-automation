@@ -11,8 +11,8 @@ import { ProviderKeys } from './settings.js';
 import { describeAi } from './view.js';
 
 describe('AI_PURPOSES', () => {
-    it('is the five existing purposes in their order, then `dm`', () => {
-        assert.deepEqual([...AI_PURPOSES], ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']);
+    it('is the five existing purposes in their order, then `dm` and `dm_whatsapp`', () => {
+        assert.deepEqual([...AI_PURPOSES], ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']);
     });
 
     it('has a default effort for every purpose, a real level each, and no other keys', () => {

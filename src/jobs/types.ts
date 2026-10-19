@@ -104,6 +104,12 @@ export interface JobPayloads {
         linkMessageId: string;
         /** When the link went out (ISO 8601): a later link makes this job stale (a newer job exists for it). */
         linkAt: string;
+        /**
+         * The channel, when the scheduler named one. Only a job for ANOTHER channel (`whatsapp`) is written with it, and no follow-up is ever scheduled for one
+         * (`scheduleFollowup`); the field is what stops a job that somehow exists from sending on the wrong network. Absent, as in every job queued before it
+         * existed and every Instagram and Messenger one, the channel is what it always was: Messenger with a `pageId`, Instagram without.
+         */
+        channel?: 'instagram' | 'facebook' | 'whatsapp';
     };
 }
 

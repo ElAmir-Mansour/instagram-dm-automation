@@ -276,6 +276,10 @@ const TEXT = {
             wants_human: 'طلب التحدث مع شخص',
             hot_lead: 'جاهز للشراء',
             abuse: 'رسائل مسيئة',
+            // WhatsApp: why a reply could not be sent at all (the bot could not answer, and the customer could not be told).
+            window_closed: 'انتهت نافذة الـ 24 ساعة فلم يمكن إرسال رد',
+            billable_blocked: 'انتهت الردود المجانية على واتساب وردود المدفوعة متوقفة',
+            connection_invalid: 'اتصال واتساب يحتاج إلى إعادة ربط',
         } as Record<string, string>,
         customer: 'العميل',
         last: 'آخر رسالة',
@@ -284,6 +288,11 @@ const TEXT = {
         windowClosed: 'أُغلقت، يمكنك الرد من تطبيق إنستغرام',
         open: 'افتح المحادثة',
         anon: (id: string) => `مستخدم إنستغرام …${id}`,
+        // A WhatsApp conversation is answered from the dashboard (there is no app to reply from outside the window), so it says so.
+        whatsapp: {
+            windowClosed: 'أُغلقت، ويمكنك الرد من لوحة التحكم عندما يراسلك العميل من جديد',
+            anon: (id: string) => `مستخدم واتساب …${id}`,
+        },
         test: 'رسالة تجريبية من AutoReply Pro. إذا وصلتك فالتنبيهات ستصل إلى هذه المحادثة.',
     },
     en: {
@@ -297,6 +306,10 @@ const TEXT = {
             wants_human: 'asked for a person',
             hot_lead: 'ready to buy',
             abuse: 'abusive messages',
+            // WhatsApp: why a reply could not be sent at all (the bot could not answer, and the customer could not be told).
+            window_closed: 'the 24-hour window had closed, so no reply could be sent',
+            billable_blocked: 'the free WhatsApp replies are used up and paid replies are switched off',
+            connection_invalid: 'the WhatsApp connection needs reconnecting',
         } as Record<string, string>,
         customer: 'Customer',
         last: 'Last message',
@@ -305,6 +318,11 @@ const TEXT = {
         windowClosed: 'closed, so reply from the Instagram app',
         open: 'Open',
         anon: (id: string) => `Instagram user …${id}`,
+        // A WhatsApp conversation is answered from the dashboard (there is no app to reply from outside the window), so it says so.
+        whatsapp: {
+            windowClosed: 'closed, so reply from the dashboard once they write again',
+            anon: (id: string) => `WhatsApp user …${id}`,
+        },
         test: 'Test message from AutoReply Pro. If you can read this, alerts will reach this chat.',
     },
 } as const;
@@ -324,16 +342,20 @@ export interface NoticeInput {
     windowMs: number | null;
     /** `inboxLink`, or null. */
     link: string | null;
+    /** The conversation's channel when it is WhatsApp: its words name WhatsApp and the dashboard, not Instagram. Anything else is the Instagram wording, as it was. */
+    platform?: string | null;
 }
 
 /** The alert, as one plain-text message. Pure. */
 export function buildNoticeText(n: NoticeInput): string {
     const t = TEXT[n.lang];
+    const whatsapp = n.platform === 'whatsapp';
     const name = excerpt(n.username ?? '', 40).replace(/^@/, '');
-    const who = name ? `@${name}` : t.anon(String(n.senderId).slice(-4));
+    // An Instagram handle is written with its @; a WhatsApp contact is a profile name, which is not a handle.
+    const who = name ? (whatsapp ? name : `@${name}`) : (whatsapp ? t.whatsapp.anon : t.anon)(String(n.senderId).slice(-4));
     const title = n.kind === 'hot_lead' ? t.hot : `${t.handoff}: ${t.reasons[n.reason] ?? t.reasons['unsure']}`;
     const lines = [title, `${t.customer}: ${who}`, `${t.last}: «${excerpt(n.lastMessage)}»`];
-    if (n.windowMs !== null) lines.push(`${t.window}: ${n.windowMs <= 0 ? t.windowClosed : t.windowLeft(formatRemaining(n.windowMs, n.lang))}`);
+    if (n.windowMs !== null) lines.push(`${t.window}: ${n.windowMs <= 0 ? (whatsapp ? t.whatsapp.windowClosed : t.windowClosed) : t.windowLeft(formatRemaining(n.windowMs, n.lang))}`);
     if (n.link) lines.push(`${t.open}: ${n.link}`);
     return lines.join('\n');
 }

@@ -1761,6 +1761,8 @@
     'ops.ai.purpose.tenant_infographic.hint': 'Writes an account’s infographic pages and their captions.',
     'ops.ai.purpose.dm': 'Direct-message replies',
     'ops.ai.purpose.dm.hint': 'Used by the sales assistant (Test or On), and by the reply engine when it is set to AI providers.',
+    'ops.ai.purpose.dm_whatsapp': 'WhatsApp replies',
+    'ops.ai.purpose.dm_whatsapp.hint': 'Writes the replies on WhatsApp. With no route saved here it uses the direct-message route above. Only Anthropic, OpenAI and Groq may answer, because their terms forbid training on what customers write; any other provider hands the chat to a person.',
     'ops.ai.purpose.key_test': 'Checks and tests',
     'ops.ai.purpose.eval': 'Evaluation runs',
     'ops.ai.prices': 'Prices',

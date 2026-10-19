@@ -70,9 +70,15 @@ export interface FollowupSchedule {
     offerId: string;
     /** What the recording statement said about the reply that carried the link. */
     recorded: RecordedTurn;
+    /**
+     * The channel, for a conversation that is not Instagram or Messenger. WhatsApp's is refused: a nudge is a free-form message hours later, which the 24 hour
+     * window may no longer allow, and there is no consent or template layer yet to send one outside it (docs/specs/001-whatsapp-agent, out of W5's scope).
+     * Absent for Instagram and Messenger, whose job is exactly what it was.
+     */
+    channel?: 'whatsapp';
 }
 
-export type ScheduleOutcome = 'scheduled' | 'deduped' | 'disabled' | 'unrecorded' | 'failed';
+export type ScheduleOutcome = 'scheduled' | 'deduped' | 'disabled' | 'unrecorded' | 'unsupported_channel' | 'failed';
 
 /**
  * Queue the nudge for a link that was just sent. Best effort, and made to be called after the DM went out: it NEVER throws, because a failure here
@@ -83,6 +89,10 @@ export async function scheduleFollowup(input: FollowupSchedule): Promise<Schedul
     const { creatorId, conversationId, offerId } = input;
     const { linkAt, replyId } = input.recorded;
     const logBase = { creator_id: creatorId, conversation_id: conversationId, offer_id: offerId };
+    if (input.channel === 'whatsapp') {
+        log('info', 'dm.followup_not_scheduled', { ...logBase, reason: 'channel', channel: input.channel });
+        return 'unsupported_channel';
+    }
     if (!linkAt || !replyId) {
         // The recording statement matched no conversation (or a database without the row): there is no link on record to follow up.
         log('warn', 'dm.followup_not_scheduled', { ...logBase, reason: 'link_not_recorded' });
@@ -225,7 +235,7 @@ export function isFinalSendFailure(err: unknown): boolean {
 
 export type FollowupOutcome =
     | { kind: 'sent' }
-    | { kind: 'skipped'; reason: FollowupReason | 'bad_payload' | 'conversation_gone' | 'not_connected' | 'quota' | 'claim_lost' | 'send_refused' };
+    | { kind: 'skipped'; reason: FollowupReason | 'bad_payload' | 'conversation_gone' | 'not_connected' | 'quota' | 'claim_lost' | 'send_refused' | 'channel' };
 
 export interface RunFollowupOptions {
     /** Injected for tests. */
@@ -244,6 +254,9 @@ export async function runFollowup(payload: JobPayloads['dm.followup'], options: 
         log('info', 'dm.followup_skipped', { ...logBase, reason, ...extra });
         return { kind: 'skipped', reason };
     };
+
+    // A job for WhatsApp is never written (`scheduleFollowup`); one that somehow exists must not send an Instagram message to a WhatsApp user id.
+    if (payload.channel === 'whatsapp') return skip('channel');
 
     const linkAt = new Date(payload.linkAt);
     if (Number.isNaN(linkAt.getTime())) return skip('bad_payload');

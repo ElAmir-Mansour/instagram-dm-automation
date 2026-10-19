@@ -17,7 +17,7 @@
 import { isMacBrainAllowed } from '../macBrain.js';
 import { defaultModelOf, loadAiSettings, providerProblem, type AiConfig, type ProviderKeys } from './settings.js';
 import { AiError } from '../llm/errors.js';
-import { MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, type AiPurpose } from './purposes.js';
+import { MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, type AiPurpose } from './purposes.js';
 import { PROVIDER_IDS, providerById, providerName, type ProviderId } from '../llm/registry.js';
 import type { Effort, JsonMode } from '../llm/types.js';
 
@@ -60,16 +60,27 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
         };
     };
 
-    const saved = config.routing[purpose];
+    // A purpose with an allow-list (WhatsApp replies: only providers that do not train on what they are sent) answers only from it, and a purpose with
+    // no route of its own may borrow another's SAVED route. Both are checked before the provider's key: a route that may not be used is refused
+    // whatever its key says, and never quietly replaced by a provider the operator did not choose.
+    const allowed = PURPOSE_PROVIDER_ALLOWLIST[purpose];
+    const fallback = PURPOSE_ROUTE_FALLBACK[purpose];
+    const own = config.routing[purpose];
+    const saved = own ?? (fallback ? config.routing[fallback] : undefined);
     if (saved) {
+        const named = own ? purpose : `${purpose} (taken from the ${fallback} route)`;
+        if (allowed && !allowed.includes(saved.provider)) {
+            throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which is not on the list of providers that may answer this purpose (${allowed.map(providerName).join(', ')}). Choose one of them.`);
+        }
         const problem = providerProblem(saved.provider, config, keys);
-        if (problem) throw noProvider(`The route for ${purpose} uses ${providerName(saved.provider)}, which ${problem}. Fix the key or choose another provider for this purpose.`);
+        if (problem) throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which ${problem}. Fix the key or choose another provider for this purpose.`);
         const model = saved.model || defaultModelOf(saved.provider, config);
-        if (!model) throw noProvider(`The route for ${purpose} uses ${providerName(saved.provider)}, which has no model: name one on the route or set the provider's default model.`);
+        if (!model) throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which has no model: name one on the route or set the provider's default model.`);
         return route(saved.provider, model, saved.effort, 'saved');
     }
 
     for (const id of PROVIDER_IDS) {
+        if (allowed && !allowed.includes(id)) continue;
         if (providerProblem(id, config, keys)) continue;
         const model = defaultModelOf(id, config);
         if (model) return route(id, model, PURPOSE_DEFAULT_EFFORT[purpose], 'default');
