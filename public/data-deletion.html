@@ -99,6 +99,18 @@
       idea and product facts (src/services/studio/prompts.ts:149-212,
       generate.ts:242-262).
 
+  WHATSAPP (2026-10-19) — sections 1 to 5. A WhatsApp contact is erased by the same route as an Instagram one, keyed on the WhatsApp user id
+  (the instagram_user_id column) or a username: resolveErasureTarget(), src/services/erasure.ts:88. executeErasure(), :515-558, deletes the
+  messages (the raw event included), the conversation (the phone, profile name, WhatsApp username and entry source live on that row), the
+  tracked links sent in it and their clicks (the schema's cascade, :551-558), and FIRST the contact's private files: eraseCustomerMedia(),
+  :478, whose docblock (:462-477) says the Storage object goes with the next daily sweep. NO ROUTE SEARCHES BY PHONE: the page asks for the phone
+  number or WhatsApp username because the operator maps it to the user id by hand (conversations.wa_phone / wa_username). Not reached by
+  erasure, and section 5 says so: failed `jobs` rows (item 3 above), the alert emails and Telegram messages (they sit at Resend, at
+  Telegram and in the owner's mailbox and chat), Meta's copy (at most 30 days, per Meta's data-privacy page), and the AI providers' copies
+  (Groq, Anthropic, OpenAI; a voice note: Groq or OpenAI). A file no message names is deleted after 30 days without any request:
+  PRIVATE_MEDIA_ORPHAN_DAYS, src/services/retention.ts:506; pruneOrphanedPrivateMedia(), :536. Voice notes and files are worded "if a copy
+  was kept" because nothing in the pipeline saves or transcribes them yet: see the WhatsApp block in public/privacy.html.
+
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
     · Contact email for deletion requests: the contact email in Settings → Public site —
       section 2 (the first route) and section 8, both languages.
@@ -995,10 +1007,10 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>حذف بياناتك</h1>
-                <p class="stamp">آخر تحديث: 15 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 19 أكتوبر 2026</p>
 
                 <p>
-                    إن علّقت على منشور أو أرسلت رسالة خاصة إلى حساب يستخدم «أوتوريبلاي برو»،
+                    إن علّقت على منشور، أو أرسلت رسالة خاصة أو رسالة على واتساب، إلى حساب أو رقم يستخدم «أوتوريبلاي برو»،
                     يمكنك طلب حذف بياناتك في أي وقت ودون إبداء سبب. هذه الصفحة تشرح كيف، وتشرح
                     أيضاً ما لا يستطيع الحذف الوصول إليه — لأن نصف الحقيقة هنا لا يفيدك.
                 </p>
@@ -1023,6 +1035,13 @@
                         حرفياً — وهو نسخة ثانية من نصّ رسالتك.
                     </li>
                     <li>
+                        <strong>إن أرسلتَ رسالة على واتساب:</strong> نصّ رسائلك كما كتبتها ونصّ الردود التي أُرسلت إليك،
+                        واسمك في ملفك على واتساب، ورقم هاتفك إن وصل إلينا، ومعرّفك عند ميتا واسم المستخدم على واتساب إن
+                        وُجد، وكيف بدأت المحادثة، والحدث الأصلي كما ورد من ميتا حرفياً — وهو نسخة ثانية من ذلك كله — وما
+                        حُفظ من مقاطعك الصوتية وصورك وملفاتك. وقد يكون المخزَّن أقلّ من ذلك، ولا يكون أكثر. التفاصيل في
+                        القسم 1 من <a href="/privacy">سياسة الخصوصية</a>.
+                    </li>
+                    <li>
                         <strong>إن ربطتَ حساباً على تيك توك</strong> (لأصحاب الحسابات فقط): معرّف
                         الحساب <span class="code" lang="en" dir="ltr">open_id</span> والاسم المعروض
                         ورابط الصورة الرمزية، ونبذة الحساب واسم المستخدم والرابط وحالة التوثيق إن منحتَ
@@ -1041,13 +1060,14 @@
                     <li>
                         اختر أي طريق من الثلاثة: <strong>راسلنا</strong> على
                         <a href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>؛
-                        أو <strong>ردّ على الحساب نفسه</strong> الذي راسلك على إنستجرام أو فيسبوك
+                        أو <strong>ردّ على الحساب نفسه</strong> الذي راسلك على إنستجرام أو فيسبوك (أو على رقم واتساب الذي راسلته)
                         واطلب حذف بياناتك؛ أو افتح موضوعاً على
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>.
                     </li>
                     <li>
                         اذكر <strong>اسم المستخدم</strong> الذي علّقت أو راسلت منه. هو المفتاح
-                        الوحيد الذي يُعرَف به ما هو لك؛ فبدونه لا يمكن تمييز بياناتك عن بيانات غيرك.
+                        الوحيد الذي يُعرَف به ما هو لك؛ فبدونه لا يمكن تمييز بياناتك عن بيانات غيرك. وعلى واتساب اذكر رقم هاتفك الذي
+                        راسلتَ منه، أو اسم المستخدم على واتساب إن كان لك؛ فنبحث بهما يدوياً عن محادثتك.
                     </li>
                     <li>
                         ستصلك رسالة تأكيد، ويُحذف كل ما يتعلّق بك <strong>في غضون 30 يوماً</strong>
@@ -1066,6 +1086,12 @@
                     البيانات. هذا يعني أنه يعتمد على إنسان، ولذلك يُفضَّل أن تحصل على تأكيد
                     بالتنفيذ ولا تفترضه.
                 </p>
+                <p>
+                    وحين تُحذف محادثتك على واتساب يُحذف معها: كل رسائلها بنصّها وحدثها الأصلي كما ورد من ميتا، وما
+                    خُزّن عنك فيها (اسمك على واتساب، ورقم هاتفك، ومعرّفك، واسم المستخدم، وكيف بدأت المحادثة)،
+                    والروابط القصيرة التي أُرسلت فيها ونقراتها، وما حُفظ من ملفاتك — مقاطع صوتية وصور وغيرها —
+                    ويُزال الملف نفسه من مساحة التخزين في التنظيف اليومي التالي.
+                </p>
 
                 <h2>3. ما يُحذف دون أن تطلب</h2>
                 <ul>
@@ -1083,6 +1109,10 @@
                         <strong>سجلّ «رسالة آلية واحدة في اليوم»</strong> — معرّف حسابك ووقت
                         الإرسال — يُحذف بعد 48 ساعة.
                     </li>
+                    <li>
+                        <strong>ملف أُرسل على واتساب وحُفظت منه نسخة لا تشير إليها أي رسالة</strong> يُحذف بعد 30 يوماً من
+                        حفظه.
+                    </li>
                 </ul>
 
                 <h2>4. ما يبقى إلى أن تطلب حذفه</h2>
@@ -1090,7 +1120,8 @@
                     <strong>نصوص رسائلك الخاصة، ومحادثتك، وسجلّ تفاعلك مع التعليقات، تبقى بلا مدة
                     انتهاء تلقائية.</strong> السبب أنها هي ما يقرأه صاحب الحساب في صندوق رسائله —
                     حذفها تلقائياً كان سيمحو المحادثة من الجهتين. لذلك إن أردت إزالتها، فالطلب في
-                    القسم 2 هو الطريق الوحيد.
+                    القسم 2 هو الطريق الوحيد. وهذا يسري على واتساب كذلك: نصّ رسائلك واسمك على واتساب ورقم هاتفك وما حُفظ من
+                    ملفاتك مع المحادثة.
                 </p>
 
                 <h2>5. ما لا يستطيع الحذف الوصول إليه</h2>
@@ -1101,6 +1132,13 @@
                         إنستجرام أو فيسبوك، وهذه نسخة ميتا لا نملكها ولا نتحكّم بها. لحذفها،
                         احذف التعليق أو المحادثة من حسابك، أو استخدم
                         <a href="https://accountscenter.instagram.com/" target="_blank" rel="noopener noreferrer">إعدادات حسابك في ميتا</a>.
+                    </li>
+                    <li>
+                        <strong>ميتا (واتساب):</strong> رسائلك موجودة أصلاً في تطبيق واتساب لديك، وتلك نسختك. وتمرّ رسائلك
+                        عبر واجهة ميتا لواتساب للأعمال، وتفيد وثائق ميتا بأن الرسالة يُحتفَظ بها لديها مدة أقصاها 30 يوماً؛
+                        وهذه نسخة ميتا لا نملكها ولا نتحكّم بها. لحذف نسختك احذف المحادثة من تطبيق واتساب، ولما لدى ميتا
+                        راجع
+                        <a href="https://www.whatsapp.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية واتساب</a>.
                     </li>
                     <li>
                         <strong>جوجل:</strong> لتوليد الردّ الآلي، أُرسل نصّ رسالتك إلى واجهة
@@ -1118,6 +1156,20 @@
                         المزوّدين يكتب ردوده، فقد وصل نصّ محادثتك إلى ذلك المزوّد بدلاً من جوجل (القسم 3 من <a href="/privacy">سياسة الخصوصية</a>).
                         ونسخة كل مزوّد تخضع لسياسته، ولا نستطيع حذفها نيابةً عنك. ولا يصلهم شيء غير ذلك عمّن يعلّق أو يراسل على
                         إنستجرام أو فيسبوك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
+                    </li>
+                    <li>
+                        <strong>مزوّدو الذكاء الاصطناعي — واتساب:</strong> إن راسلتَ رقماً على واتساب، فقد وصل نصّ رسالتك وما
+                        يصل إلى آخر اثنتي عشرة رسالة من محادثتك إلى <bdi lang="en" dir="ltr">Groq</bdi> أو
+                        <bdi lang="en" dir="ltr">Anthropic</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi> ليكتب الردّ، ولم
+                        يصل إلى جوجل. وإن أرسلتَ مقطعاً صوتياً فقد يكون وصل إلى <bdi lang="en" dir="ltr">Groq</bdi> أو
+                        <bdi lang="en" dir="ltr">OpenAI</bdi> ليُحوَّل إلى نصّ. ونسخة كل منهم تخضع لسياسته، ولا نستطيع
+                        حذفها نيابةً عنك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
+                    </li>
+                    <li>
+                        <strong>تنبيهات صاحب الحساب:</strong> قد يكون مقتطف من آخر رسالة كتبتَها قد أُرسل إلى بريد صاحب
+                        الحساب عبر <bdi lang="en" dir="ltr">Resend</bdi> أو إلى تيليجرام (القسم 1 من
+                        <a href="/privacy">سياسة الخصوصية</a>). هذه نسخ لا تحتفظ بها قاعدة بياناتنا: هي في بريد صاحب
+                        الحساب أو محادثته على تيليجرام وعند هاتين الجهتين، تخضع لسياستيهما، ولا يمحوها حذف محادثتك.
                     </li>
                     <li>
                         <strong>سجلّات التشغيل:</strong> تحتوي سجلّات المنصّة المستضيفة على أسماء
@@ -1250,11 +1302,11 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Deleting your data</h1>
-                <p class="stamp">Last updated: 15 October 2026</p>
+                <p class="stamp">Last updated: 19 October 2026</p>
 
                 <p>
-                    If you commented on a post or sent a direct message to an account running
-                    AutoReply Pro, you can ask for your data to be deleted at any time and
+                    If you commented on a post, or sent a direct message or a WhatsApp message, to an
+                    account or number running AutoReply Pro, you can ask for your data to be deleted at any time and
                     without giving a reason. This page explains how — and also what deletion
                     cannot reach, because half the truth would not help you here.
                 </p>
@@ -1282,6 +1334,14 @@
                         second copy of your message text.
                     </li>
                     <li>
+                        <strong>If you sent a message on WhatsApp:</strong> the text of your messages as you wrote them and
+                        of the replies sent to you, your name on your WhatsApp profile, your phone number if it reached us,
+                        your Meta user ID and your WhatsApp username if you have one, how the conversation began, the
+                        verbatim event received from Meta — a second copy of all of that — and whatever was kept of your
+                        voice notes, photos and files. Less than this may be stored, never more. The detail is in section 1
+                        of the <a href="/privacy">privacy policy</a>.
+                    </li>
+                    <li>
                         <strong>If you connected a TikTok account</strong> (account owners only):
                         the account's <span class="code">open_id</span>, display name and avatar
                         URL, its bio, username, profile link and verified status if you granted
@@ -1303,13 +1363,14 @@
                         Pick any of three routes: <strong>email</strong>
                         <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>;
                         <strong>reply to the same account</strong> that messaged you on Instagram or
-                        Facebook and ask for your data to be deleted; or open an issue on the
+                        Facebook (or to the same WhatsApp number) and ask for your data to be deleted; or open an issue on the
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>.
                     </li>
                     <li>
                         Include the <strong>username</strong> you commented or messaged from. It
                         is the only key by which your records can be identified; without it
-                        yours cannot be told apart from anyone else's.
+                        yours cannot be told apart from anyone else's. On WhatsApp, give the phone number you wrote from, or your WhatsApp
+                        username if you have one; the person handling the request looks your conversation up from it by hand.
                     </li>
                     <li>
                         You will get a confirmation, and everything relating to you is deleted
@@ -1330,6 +1391,13 @@
                     a person, so it is worth getting confirmation that it happened rather than
                     assuming it.
                 </p>
+                <p>
+                    When your WhatsApp conversation is deleted, these go with it: all its messages with their text and
+                    the verbatim event received from Meta, what was stored about you in it (your WhatsApp name, your
+                    phone number, your ID, your username, how the conversation began), the short links sent in it and
+                    their clicks, and whatever was kept of your files — voice notes, photos and the rest — with the file
+                    itself removed from storage at the next daily clean-up.
+                </p>
 
                 <h2>3. What is deleted without asking</h2>
                 <ul>
@@ -1348,6 +1416,10 @@
                         <strong>The one-automated-DM-per-day log</strong> — your account ID and a
                         timestamp — is deleted after 48 hours.
                     </li>
+                    <li>
+                        <strong>A file sent on WhatsApp</strong>, if a copy of it was kept and no message points to it, is
+                        deleted 30 days after it was saved.
+                    </li>
                 </ul>
 
                 <h2>4. What stays until you ask</h2>
@@ -1356,7 +1428,8 @@
                     comment interaction log have no automatic expiry.</strong> They are what the
                     account owner reads in their own inbox, and deleting them automatically would
                     erase the conversation for both sides. So if you want them removed, the
-                    request in section 2 is the only route.
+                    request in section 2 is the only route. That holds on WhatsApp too: the text of your messages, your WhatsApp name
+                    and phone number, and whatever was kept of your files with the conversation.
                 </p>
 
                 <h2>5. What deletion cannot reach</h2>
@@ -1368,6 +1441,13 @@
                         Meta's and we neither own nor control it. To remove it, delete the comment
                         or the conversation from your own account, or use your
                         <a href="https://accountscenter.instagram.com/" target="_blank" rel="noopener noreferrer">Meta account settings</a>.
+                    </li>
+                    <li>
+                        <strong>Meta (WhatsApp):</strong> your messages already exist in the WhatsApp app on your phone;
+                        that copy is yours. They also pass through Meta's WhatsApp Business API, and Meta's documentation
+                        says it keeps a message for at most 30 days; that copy is Meta's, and we neither own nor control
+                        it. To remove your own copy, delete the chat in WhatsApp; for what Meta holds, see
+                        <a href="https://www.whatsapp.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">WhatsApp's privacy policy</a>.
                     </li>
                     <li>
                         <strong>Google:</strong> to generate the automated reply, the text of your
@@ -1386,6 +1466,21 @@
                         Each provider's copy is governed by its own policy and we cannot delete it on your behalf. Nothing else about
                         people who comment or message on Instagram or Facebook is sent to them. The list, and what is sent, is in
                         section 5 of the <a href="/privacy">privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>AI providers — WhatsApp:</strong> if you messaged a WhatsApp number, the text of your message
+                        and up to the last twelve messages of your conversation reached Groq, Anthropic or OpenAI so that it
+                        could write the reply, and did not reach Google. If you sent a voice note, it may have reached Groq or
+                        OpenAI to be turned into text. Each provider's copy is governed by its own policy and we cannot delete
+                        it on your behalf. The list, and what is sent, is in section 5 of the
+                        <a href="/privacy">privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Alerts to the account owner:</strong> an excerpt of the last thing you wrote may have been
+                        sent to the account owner's email through Resend, or to Telegram (section 1 of the
+                        <a href="/privacy">privacy policy</a>). Those copies are not held in our database: they sit in the
+                        owner's mailbox or Telegram chat and at those two services, under their policies, and deleting
+                        your conversation does not remove them.
                     </li>
                     <li>
                         <strong>Operational logs:</strong> the hosting platform's logs contain

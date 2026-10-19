@@ -62,6 +62,20 @@
           disconnect() src/services/tiktokConnections.ts:376-393;
           deleteConnectionByOpenId() :401-406, via applyWebhookEvent()
           src/services/tiktokPublish.ts:656-660
+    WhatsApp — ADDED 2026-10-19 against the shipped pipeline, not the plan (the full list, with file:line and the parts that are
+    worded conditionally, is the WhatsApp block in public/privacy.html). Sections 2, 3, 4, 6 and 7 claim:
+      the assistant answers messages to the connected number, and its first reply to a person says it is automated
+          answerWhatsApp(), src/webhook/whatsappAnswer.ts:187; the disclosure, :205
+      replies come from Groq, Anthropic or OpenAI only, never Gemini
+          PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp, src/services/aiProviders/purposes.ts:70; src/services/dmSales/turn.ts:37
+      a person on request: the model's wants_human intent forces a hand-off that pauses the assistant
+          src/services/dmSales/coerce.ts:137; turn.ts:224
+      «إيقاف» / "stop" ends the replies and the follow-ups
+          prefilter.ts:126, :208; dmSales/store.ts:181; dmSales/followup.ts:148
+      connected with a token Meta issues, stored encrypted; Disconnect unsubscribes the app, wipes the token and switches the agent off
+          src/routes/whatsapp.ts:8; src/services/whatsappConnections.ts:314
+      Meta's terms for the WhatsApp Business Platform and the WhatsApp Business Messaging Policy apply to the owner's number
+          (the URLs are those in research/02-policy-pricing.md "Sources"; business.whatsapp.com/policy redirects to whatsappbusiness.com/policy)
 
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
     1. Contact email: the contact email in Settings → Public site — section 12, both languages.
@@ -977,10 +991,10 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>شروط خدمة <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: <time datetime="2026-10-15" dir="ltr">2026-10-15</time></p>
+                <p class="stamp">آخر تحديث: <time datetime="2026-10-19" dir="ltr">2026-10-19</time></p>
                 <p class="applies">تحكم شروط الخدمة هذه استخدامك لتطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
-                    بما في ذلك ربطه بحساباتك على إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
+                    بما في ذلك ربطه بحساباتك على إنستجرام وفيسبوك وتيك توك ويوتيوب، وبرقمك على واتساب للأعمال.</p>
 
                 <nav class="toc" aria-labelledby="toc-h-ar">
                     <p class="toc-h" id="toc-h-ar">المحتويات</p>
@@ -1007,7 +1021,7 @@
                 </p>
                 <p>
                     «أوتوريبلاي برو» أداة صغيرة تُدار بشكل مستقل، لا شركة كبيرة. تتّصل بحساباتك على
-                    إنستجرام وفيسبوك وتيك توك عبر الواجهات البرمجية الرسمية لكل منصّة، ولا تتصرّف في
+                    إنستجرام وفيسبوك وواتساب وتيك توك عبر الواجهات البرمجية الرسمية لكل منصّة، ولا تتصرّف في
                     تلك الحسابات إلا على النحو الموضّح أدناه.
                 </p>
 
@@ -1054,6 +1068,15 @@
                         (<bdi lang="en" dir="ltr">Google Gemini</bdi> افتراضياً، أو مزوّد ذكاء اصطناعي آخر يختاره المُشغّل
                         كما توضّح <a href="/privacy">سياسة الخصوصية</a>)، لا إنسان.
                     </li>
+                    <li>
+                        <strong>واتساب:</strong> إن ربطتَ رقماً على واتساب للأعمال عبر
+                        <bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi> من ميتا، يردّ المساعد على الرسائل الواردة إلى
+                        ذلك الرقم نيابةً عنك. تكتب الردودَ نماذجُ ذكاء اصطناعي لا إنسان، لدى مزوّدين تنصّ شروطهم على ألّا
+                        يدرّبوا نماذجهم على ما يُرسَل إليهم (<a href="/privacy">سياسة الخصوصية</a>)، وأول ردّ يصل إلى أي
+                        شخص يقول إنه ردّ آلي. وإن طلب الشخص التحدّث إلى إنسان فالمساعد مصمَّم على أن يتوقّف عن الردّ
+                        وتُحوَّل المحادثة إليك لتردّ بنفسك؛ وإن كتب «إيقاف» أو <bdi lang="en" dir="ltr">stop</bdi> فيتوقّف
+                        ولا يرسل له متابعات.
+                    </li>
                 </ul>
                 <p>
                     على تيك توك لا تقرأ الأداة شيئاً سوى بيانات ملفك الأساسية، وإعدادات النشر في
@@ -1064,7 +1087,8 @@
                 <h2 id="connecting-ar">3. ربط حساباتك، وما تأذن به</h2>
                 <p>
                     يُربَط إنستجرام وفيسبوك عبر رمز وصول تُصدره ميتا لصفحتك، ويُربَط تيك توك بتسجيل
-                    الدخول في صفحة تيك توك نفسها. في الحالتين لا نطلب كلمة مرور حسابك ولا نخزّنها.
+                    الدخول في صفحة تيك توك نفسها، ويُربَط واتساب برمز وصول تُصدره ميتا لحسابك على واتساب للأعمال
+                    ورقمه. في كل الحالات لا نطلب كلمة مرور حسابك ولا نخزّنها.
                 </p>
                 <p>
                     بربط أي حساب، <strong>فأنت تأذن لـ«أوتوريبلاي برو» بأن يتصرّف نيابةً عنك</strong>
@@ -1115,6 +1139,14 @@
                         و<a href="https://www.tiktok.com/legal/terms-of-service" target="_blank" rel="noopener noreferrer">شروط خدمة تيك توك</a>
                         و<a href="https://www.tiktok.com/community-guidelines" target="_blank" rel="noopener noreferrer">إرشادات مجتمع تيك توك</a>.
                         هذه القواعد تسري على حسابك أيّاً كان ما تقوله هذه الشروط.
+                    </li>
+                    <li id="whatsapp-ar">
+                        <strong>على واتساب تحديداً:</strong> يسري على استخدامك لواتساب عبر الخدمة
+                        <a href="https://www.facebook.com/legal/Meta-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">شروط ميتا لمنصّة واتساب للأعمال</a>
+                        و<a href="https://www.whatsapp.com/legal/WhatsApp-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">شروط واتساب لمنصّة واتساب للأعمال</a>
+                        و<a href="https://business.whatsapp.com/policy" target="_blank" rel="noopener noreferrer">سياسة واتساب للمراسلة التجارية</a>،
+                        بما فيها ما تقوله عن الردود الآلية وعن موافقة الأشخاص على مراسلتهم وعن إيقاف الرسائل. وأنت
+                        مسؤول عن الردّ على المحادثة بنفسك حين يحوّلها المساعد إليك.
                     </li>
                     <li>
                         <strong>على تيك توك تحديداً:</strong> يسري
@@ -1184,7 +1216,7 @@
                 </p>
                 <p>
                     لا ترتبط «أوتوريبلاي برو» بميتا ولا بتيك توك ولا بجوجل أو يوتيوب، ولا تحظى بتأييد أيٍّ منها أو
-                    رعايته. إنستجرام وفيسبوك وتيك توك ويوتيوب علامات تجارية مملوكة لأصحابها.
+                    رعايته. إنستجرام وفيسبوك وواتساب وتيك توك ويوتيوب علامات تجارية مملوكة لأصحابها.
                 </p>
 
                 <h2 id="disconnecting-ar">7. فصل الحسابات وسحب الإذن</h2>
@@ -1203,6 +1235,11 @@
                         <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>،
                         فيُلغى الوصول فوراً، وتُحذف الرموز وبيانات القناة المخزّنة في الفحص اليومي التالي
                         للخدمة.
+                    </li>
+                    <li>
+                        <strong>واتساب:</strong> افصله من <strong>الإعدادات</strong> في لوحة التحكم، فيُلغي التطبيق
+                        اشتراكه في رقمك لدى ميتا ويمحو الرمز المخزَّن ويوقف المساعد؛ أو ألغِ الرمز لدى ميتا، فيتوقّف
+                        عن العمل.
                     </li>
                     <li>
                         <strong>إنستجرام وفيسبوك:</strong> أزِل التطبيق من «عمليات تكامل الأعمال»
@@ -1273,9 +1310,9 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Terms of Service</h1>
-                <p class="stamp">Last updated: <time datetime="2026-10-15">2026-10-15</time></p>
+                <p class="stamp">Last updated: <time datetime="2026-10-19">2026-10-19</time></p>
                 <p class="applies">These Terms of Service govern your use of <strong>AutoReply Pro</strong> (the “App”), available at
-                    https://msg-response-auto.vercel.app, including connecting it to your Instagram, Facebook, TikTok and YouTube accounts.</p>
+                    https://msg-response-auto.vercel.app, including connecting it to your Instagram, Facebook, TikTok and YouTube accounts and to your WhatsApp Business number.</p>
 
                 <nav class="toc" aria-labelledby="toc-h-en">
                     <p class="toc-h" id="toc-h-en">Contents</p>
@@ -1302,7 +1339,7 @@
                 </p>
                 <p>
                     AutoReply Pro is a small, independently run tool, not a large company. It
-                    connects to your Instagram, Facebook and TikTok accounts through each
+                    connects to your Instagram, Facebook, WhatsApp and TikTok accounts through each
                     platform's official API, and acts on those accounts only in the ways described
                     below.
                 </p>
@@ -1354,6 +1391,15 @@
                         Gemini by default, or another AI provider the operator chooses, as the
                         <a href="/privacy">privacy policy</a> describes), not a person.
                     </li>
+                    <li>
+                        <strong>WhatsApp:</strong> if you connect a WhatsApp Business number through Meta's
+                        <span class="code">WhatsApp Cloud API</span>, the assistant answers the messages that arrive at that
+                        number on your behalf. The replies are written by AI models, not a person, at providers whose
+                        terms say they do not train their models on what is sent to them (see the
+                        <a href="/privacy">privacy policy</a>), and the first reply to anyone says it is automated. If the
+                        person asks for a human, the assistant is built to stop replying and hand the conversation to you,
+                        to answer yourself; if they write «إيقاف» or “stop”, it stops and sends no follow-ups.
+                    </li>
                 </ul>
                 <p>
                     On TikTok the service reads nothing except your basic profile, your account's
@@ -1364,7 +1410,8 @@
                 <h2 id="connecting-en">3. Connecting your accounts, and what you authorise</h2>
                 <p>
                     Instagram and Facebook are connected with an access token Meta issues for
-                    your Page; TikTok is connected by signing in on TikTok's own page. Either way,
+                    your Page; WhatsApp with an access token Meta issues for your WhatsApp Business account and number;
+                    TikTok is connected by signing in on TikTok's own page. In every case,
                     we never ask for or store your account password.
                 </p>
                 <p>
@@ -1417,6 +1464,15 @@
                         and <a href="https://www.tiktok.com/legal/terms-of-service" target="_blank" rel="noopener noreferrer">TikTok's Terms of Service</a>
                         and <a href="https://www.tiktok.com/community-guidelines" target="_blank" rel="noopener noreferrer">TikTok's Community Guidelines</a>.
                         Those rules apply to your account whatever these terms say.
+                    </li>
+                    <li id="whatsapp-en">
+                        <strong>On WhatsApp specifically:</strong> your use of WhatsApp through the service is subject to
+                        <a href="https://www.facebook.com/legal/Meta-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">Meta's Terms for the WhatsApp Business Platform</a>,
+                        <a href="https://www.whatsapp.com/legal/WhatsApp-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">WhatsApp's Terms for the WhatsApp Business Platform</a>
+                        and the <a href="https://business.whatsapp.com/policy" target="_blank" rel="noopener noreferrer">WhatsApp Business Messaging Policy</a>,
+                        including what they say about automated replies, about people's consent to be messaged, and about
+                        stopping messages. And you are responsible for answering a conversation yourself once the assistant
+                        hands it over to you.
                     </li>
                     <li>
                         <strong>On TikTok specifically:</strong> TikTok's
@@ -1489,7 +1545,7 @@
                 </p>
                 <p>
                     AutoReply Pro is not affiliated with, endorsed by, or sponsored by Meta,
-                    TikTok, Google or YouTube. Instagram, Facebook, TikTok and YouTube are
+                    TikTok, Google or YouTube. Instagram, Facebook, WhatsApp, TikTok and YouTube are
                     trademarks of their respective owners.
                 </p>
 
@@ -1510,6 +1566,11 @@
                         <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>,
                         which revokes access at once; the stored tokens and channel details are then
                         deleted at the service's next daily check.
+                    </li>
+                    <li>
+                        <strong>WhatsApp:</strong> disconnect it from <strong>Settings</strong> in the dashboard, which
+                        unsubscribes the app from your number at Meta, deletes the stored token and switches the assistant
+                        off; or revoke the token at Meta, after which it stops working.
                     </li>
                     <li>
                         <strong>Instagram and Facebook:</strong> remove the app from Business
