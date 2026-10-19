@@ -23,6 +23,7 @@ import { handlers } from '../jobs/handlers.js';
 import { drainJobs } from '../jobs/runner.js';
 import { memoryQueue } from '../jobs/testSupport.js';
 import type { WaEventPayload } from '../jobs/types.js';
+import { isWindowOpen } from './channels/window.js';
 import { metaHttp } from './http.js';
 import { telegramHttp } from './notify.js';
 import { setLogSink } from '../utils/log.js';
@@ -40,9 +41,12 @@ const OCTOBER = 1760875200; // 2025-10-19: any October; the period comes from th
 interface Row {
     id: string; creator_id: string | null; direction: string; meta_message_id: string; delivery_status: string | null;
     delivery_error_code: number | null; delivery_error: string | null; pricing_category: string | null; pricing_type: string | null; billable: boolean | null;
+    conversation_id?: string;
 }
 interface Bucket { key: string; delivered: number; billable: number; est_cost_usd: number }
-interface Db { rows: Row[]; ledger: Bucket[] }
+interface Thread { id: string; creator_id: string; instagram_user_id: string; platform: string; wa_phone: string | null; free_window_expires_at: Date | null }
+interface Consent { creator_id: string; conversation_id: string | null; platform: string; contact_ref: string; category: string; action: string; source: string; wording: string | null; created_at: Date | null }
+interface Db { rows: Row[]; ledger: Bucket[]; threads?: Thread[]; consents?: Consent[] }
 
 let db: Db;
 let statements: Array<{ sql: string; params: unknown[] }>;
@@ -67,7 +71,7 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
 
     if (sql === 'BEGIN') { snapshot = JSON.stringify(db); return result([]); }
     if (sql === 'COMMIT') { snapshot = null; return result([]); }
-    if (sql === 'ROLLBACK') { if (snapshot) db = JSON.parse(snapshot); snapshot = null; return result([]); }
+    if (sql === 'ROLLBACK') { if (snapshot) db = JSON.parse(snapshot, (key, value) => (key === 'free_window_expires_at' && typeof value === 'string' ? new Date(value) : value)); snapshot = null; return result([]); }
 
     if (sql.startsWith('SELECT id, creator_id, delivery_status, pricing_category, pricing_type, billable FROM messages WHERE meta_message_id = $1')) {
         // The statement's own filter and lock are part of what is under test: both must be in the text.
@@ -93,6 +97,29 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
         const b = db.ledger.find((x) => x.key === key);
         if (b) { b.delivered += 1; b.billable += billable; b.est_cost_usd += cost; }
         else db.ledger.push({ key, delivered: 1, billable, est_cost_usd: cost });
+        return result([], 1);
+    }
+    // A preference event: the tenant of the number, the contact's thread, and the consent row (WhatsApp agent W7, `consentPreferences.ts`).
+    if (sql.startsWith('SELECT id FROM creators WHERE id = $1 AND is_active = true')) return result(params[0] === CREATOR ? [{ id: CREATOR }] : []);
+    if (sql.startsWith("SELECT id, instagram_user_id FROM conversations WHERE creator_id = $1 AND platform = 'whatsapp'")) {
+        const [creator, ids] = params as [string, string[]];
+        return result((db.threads ?? []).filter((t) => t.creator_id === creator && t.platform === 'whatsapp' && (ids.includes(t.instagram_user_id) || (t.wa_phone !== null && ids.includes(t.wa_phone)))).map((t) => ({ id: t.id, instagram_user_id: t.instagram_user_id })));
+    }
+    if (sql.startsWith('INSERT INTO contact_consents')) {
+        const [creator_id, conversation_id, platform, contact_ref, category, action, source, wording, at] = params;
+        const consent: Consent = { creator_id, conversation_id, platform, contact_ref, category, action, source, wording, created_at: at ?? null };
+        (db.consents ??= []).push(consent);
+        return result([{ id: `consent-${db.consents.length}`, ...consent }]);
+    }
+    // The free-entry window (T049): the one statement `applyFreeEntryWindow` makes, with the semantics it depends on.
+    if (sql.startsWith('UPDATE conversations SET free_window_expires_at = $3 WHERE id = (SELECT conversation_id FROM messages WHERE id = $1)')) {
+        assert.match(sql, /creator_id = \$2 AND platform = 'whatsapp'/);
+        assert.match(sql, /\(free_window_expires_at IS NULL OR free_window_expires_at < \$3\)$/);
+        const [messageId, creator, end] = params as [string, string, Date];
+        const conversationId = db.rows.find((r) => r.id === messageId)?.conversation_id;
+        const thread = (db.threads ?? []).find((t) => t.id === conversationId && t.creator_id === creator && t.platform === 'whatsapp');
+        if (!thread || (thread.free_window_expires_at !== null && thread.free_window_expires_at.getTime() >= end.getTime())) return result([], 0);
+        thread.free_window_expires_at = end;
         return result([], 1);
     }
     // The connection, the owner's alert settings and the ledger's free-reply count: what the account events and the free-reply alert read.
@@ -160,6 +187,7 @@ const outbound = (over: Partial<Row> = {}): Row => ({
 
 interface StatusOver {
     status?: string; timestamp?: number; recipient_id?: string | null; recipient_user_id?: string | null; pricing?: Record<string, unknown> | null; errors?: unknown[]; id?: string;
+    conversation?: Record<string, unknown>;
 }
 const FREE = { billable: false, pricing_model: 'PMP', type: 'free_customer_service', category: 'service' };
 const PAID = { billable: true, pricing_model: 'PMP', type: 'regular', category: 'marketing' };
@@ -172,6 +200,7 @@ function statusBody(over: StatusOver = {}): any {
         ...(over.recipient_user_id ? { recipient_user_id: over.recipient_user_id } : {}),
         ...(over.pricing === null ? {} : { pricing: over.pricing ?? FREE }),
         ...(over.errors ? { errors: over.errors } : {}),
+        ...(over.conversation ? { conversation: over.conversation } : {}),
     };
     return {
         object: 'whatsapp_business_account',
@@ -541,11 +570,48 @@ describe('account and preference events', () => {
         assert.equal(logged('wa.account_health_read_failed').length, 1);
     });
 
-    it('a preference is logged with its field and number and changes nothing', async () => {
-        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [{ wa_id: '201001234567', detail: 'User requested to stop marketing messages', value: 'stop' }] } });
+    it('a preference event is the tenant\'s marketing consent row: found by the number the event came in on, source user_preferences, dated by Meta', async () => {
+        db.threads = [{ id: 'conv-9', creator_id: CREATOR, instagram_user_id: 'EG.123', platform: 'whatsapp', wa_phone: '201001234567', free_window_expires_at: null }];
+        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [
+            { wa_id: '201001234567', user_id: 'EG.123', detail: 'User requested to stop marketing messages', category: 'marketing_messages', value: 'stop', timestamp: 1731705721 },
+        ] } });
         const preference = logged('wa.preference_event');
         assert.deepEqual([preference.length, preference[0]!.field, preference[0]!.phone_number_id], [1, 'user_preferences', PHONE_ID]);
-        assert.equal(statements.length, 0, 'nothing was read or written');
+        assert.equal(db.consents!.length, 1);
+        const c = db.consents![0]!;
+        assert.deepEqual([c.creator_id, c.conversation_id, c.platform, c.contact_ref, c.category, c.action, c.source], [CREATOR, 'conv-9', 'whatsapp', 'EG.123', 'marketing', 'withdrawn', 'user_preferences']);
+        assert.equal(c.created_at!.getTime(), 1731705721 * 1000);
+        assert.equal(logged('consent.user_preference').length, 1);
+    });
+
+    it('a resume is a granted row, and Meta\'s feedback buttons (another category) write nothing', async () => {
+        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [
+            { user_id: 'EG.123', category: 'marketing_messages', value: 'resume', timestamp: 1731705800 },
+            { user_id: 'EG.123', category: 'offers_and_announcements', value: 'interested', timestamp: 1731705801 },
+        ] } });
+        assert.deepEqual(db.consents!.map((c) => [c.category, c.action]), [['marketing', 'granted']]);
+    });
+
+    it('a preference for a number nobody connected is logged wa.no_creator and writes no consent: a retry would find the same nothing', async () => {
+        conns.connections.length = 0;
+        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [{ user_id: 'EG.123', category: 'marketing_messages', value: 'stop' }] } });
+        assert.equal(logged('wa.no_creator').length, 1);
+        assert.deepEqual(db.consents ?? [], []);
+    });
+
+    it('a preference with no phone_number_id on it is not applied to anyone: it names no tenant', async () => {
+        await handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: null, change: { user_preferences: [{ user_id: 'EG.123', category: 'marketing_messages', value: 'stop' }] } });
+        assert.equal(logged('wa.no_creator').length, 1);
+        assert.deepEqual(db.consents ?? [], []);
+    });
+
+    it('a failure to write the consent THROWS, so the job is retried and the stop is not lost', async () => {
+        const failing = fakeQuery;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            if (norm(sql).startsWith('INSERT INTO contact_consents')) throw new Error('connection terminated unexpectedly');
+            return failing(sql, params as any[]);
+        };
+        await assert.rejects(handleWhatsAppEvent({ kind: 'preference', entryId: WABA, phoneNumberId: PHONE_ID, change: { user_preferences: [{ user_id: 'EG.123', category: 'marketing_messages', value: 'stop' }] } }), /connection terminated/);
     });
 
     it('an account event with no connection behind it is logged and completes', async () => {
@@ -567,6 +633,84 @@ describe('account and preference events', () => {
     it('warn, and do not throw, for a kind this build does not know', async () => {
         await handleWhatsAppEvent({ kind: 'surprise' } as unknown as WaEventPayload);
         assert.equal(logged('wa.event_unknown_kind').length, 1);
+    });
+});
+
+
+// ─── The free-entry window (T049, review M20) ──────────────────────────────────────────
+
+describe('free_window_expires_at comes from a free_entry_point status, and from nothing else', () => {
+    const NOW = Math.floor(Date.now() / 1000);
+    const DAY = 24 * 60 * 60;
+    const FEP = { billable: false, pricing_model: 'PMP', type: 'free_entry_point', category: 'service' };
+    const thread = (over: Partial<Thread> = {}): Thread => ({ id: 'conv-1', creator_id: CREATOR, instagram_user_id: 'EG.123', platform: 'whatsapp', wa_phone: null, free_window_expires_at: null, ...over });
+    const window = (expiresAt: number) => ({ id: 'conv.window', expiration_timestamp: String(expiresAt), origin: { type: 'referral_conversion' } });
+
+    beforeEach(() => {
+        db.threads = [thread()];
+        db.rows.push(outbound({ conversation_id: 'conv-1' }));
+    });
+
+    it('stores the end Meta names in the status, for the thread of the message the status is about', async () => {
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at?.getTime(), (NOW + 5 * DAY) * 1000);
+    });
+
+    it('is not set by a status that is not a free_entry_point one, even when it carries a conversation expiry', async () => {
+        for (const type of ['free_customer_service', 'regular']) {
+            await receive({ status: 'sent', timestamp: NOW, pricing: { ...FEP, type }, conversation: window(NOW + 5 * DAY) });
+        }
+        await receive({ status: 'sent', timestamp: NOW, pricing: null, conversation: window(NOW + 5 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at, null);
+        assert.ok(!statements.some((s) => s.sql.includes('free_window_expires_at')), 'no statement even tried');
+    });
+
+    it('is not set by a free_entry_point status that names no end: there is nothing to store, and nothing is guessed', async () => {
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP });
+        assert.equal(db.threads![0]!.free_window_expires_at, null);
+    });
+
+    it('never makes the window longer than 7 days from the status, whatever the status says', async () => {
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP, conversation: window(NOW + 40 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at?.getTime(), (NOW + 7 * DAY) * 1000);
+    });
+
+    it('never moves a stored window earlier, and a window that is already over is not stored', async () => {
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) });
+        await receive({ status: 'delivered', timestamp: NOW, pricing: FEP, conversation: window(NOW + 2 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at?.getTime(), (NOW + 5 * DAY) * 1000);
+
+        db.threads = [thread()];
+        await receive({ status: 'read', timestamp: NOW - 9 * DAY, pricing: FEP, conversation: window(NOW - 2 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at, null);
+    });
+
+    it('is scoped to the tenant that owns the message, and to WhatsApp', async () => {
+        db.threads = [thread({ creator_id: '22222222-2222-4222-8222-222222222222' })];
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) });
+        assert.equal(db.threads![0]!.free_window_expires_at, null);
+        const update = statements.find((s) => s.sql.includes('free_window_expires_at'))!;
+        assert.deepEqual(update.params.slice(0, 2), ['msg-1', CREATOR]);
+        assert.match(update.sql, /platform = 'whatsapp'/);
+    });
+
+    it('is written in the status\'s own transaction: a count that fails takes the window back too, and the retry stores both', async () => {
+        ledgerFails = true;
+        await assert.rejects(() => receive({ status: 'delivered', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) }), /deadlock detected/);
+        const expiry = () => db.threads![0]!.free_window_expires_at?.getTime() ?? null;
+        assert.equal(expiry(), null, 'rolled back with the status');
+        ledgerFails = false;
+        await receive({ status: 'delivered', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) });
+        assert.equal(expiry(), (NOW + 5 * DAY) * 1000);
+        assert.equal(delivered(), 1);
+    });
+
+    it('lets the sender send inside the window once the 24 h are over (the window is what isWindowOpen reads)', async () => {
+        await receive({ status: 'sent', timestamp: NOW, pricing: FEP, conversation: window(NOW + 5 * DAY) });
+        const stored = db.threads![0]!.free_window_expires_at!;
+        const longAgo = new Date((NOW - 3 * DAY) * 1000);
+        assert.equal(isWindowOpen({ lastInboundAt: longAgo, freeWindowExpiresAt: stored, now: new Date(NOW * 1000) }), true);
+        assert.equal(isWindowOpen({ lastInboundAt: longAgo, freeWindowExpiresAt: null, now: new Date(NOW * 1000) }), false);
     });
 });
 

@@ -34,8 +34,9 @@
  * record, and `ai_meta.variant` says which arm a reply came from. Read beside the history; it can only ever mean "no arm", never a failed turn.
  *
  * **Another channel** (`transport.ts`, WhatsApp): given a `transport`, the turn sends, shows "typing" and finishes its bookkeeping through it, answers on
- * its own AI purpose (`dm_whatsapp`, providers that do not train on what they are sent) and NEVER falls back to Gemini. Given none, it is Instagram and
- * Messenger exactly as before: every line that differs is under `transport`, and `turn.test.ts` pins the request bodies of the other path.
+ * its own AI purpose (`dm_whatsapp`, providers that do not train on what they are sent) and NEVER falls back to Gemini. The history's customer rows pass through
+ * the transport's `readable` (a WhatsApp entry link's ` #ref` is not for the model; the stored row is untouched). Given none, it is Instagram and
+ * Messenger exactly as before: every line that differs is under `transport`, and `turn.test.ts` pins the request bodies of the other path and the history it reads.
  *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
@@ -69,7 +70,7 @@ import { activeVariants, chooseVariant, variantGuidance, type VariantChoice } fr
 import { salesReplySchema } from './schema.js';
 import type { SalesTransport, SentMessage } from './transport.js';
 import { salesTurns, STRUCTURED_TEMPLATE_TEXT } from './history.js';
-import { loadAgent, loadHistory, loadSalesState, recordTurn, supersession, type SalesState, type TurnRecord } from './store.js';
+import { loadAgent, loadHistory, loadSalesState, recordTurn, supersession, type HistoryRow, type SalesState, type TurnRecord } from './store.js';
 import { capUtf8Bytes, utf8Bytes } from './text.js';
 import { MAX_REPLY_BYTES, NO_OFFER, type Intent, type SalesQuickReply, type SalesReply } from './types.js';
 
@@ -362,7 +363,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     // is not given an arm in an experiment that was set up to compare how Instagram replies are worded.
     const [source, history, experiment] = await Promise.all([
         transport ? Promise.resolve(null) : commentSource({ conversationId: conversation.id, creatorId: creator.id, senderId: inbound.senderId, platform: input.pageId ? 'facebook' : 'instagram' }),
-        loadHistory(conversation.id, SALES_HISTORY_WINDOW),
+        loadHistory(conversation.id, SALES_HISTORY_WINDOW).then((rows) => readableHistory(rows, transport)),
         transport ? Promise.resolve(null) : readVariantConfig(creator.id),
     ]);
 
@@ -540,6 +541,16 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         quick: sendsModelText(decision) ? chosen.reply.quick_replies : [],
         meta: answerMeta(answer, attempts, retried, chosen),
     });
+}
+
+/**
+ * The history as the model reads it, for a channel that cleans the customer's words (`SalesTransport.readable`): only the INBOUND rows pass through it, and a
+ * turn with no transport (Instagram, Messenger) gets the very array it was handed, so what those channels read is not touched by any of this.
+ */
+function readableHistory(rows: HistoryRow[], transport: SalesTransport | undefined): HistoryRow[] {
+    const readable = transport?.readable;
+    if (!readable) return rows;
+    return rows.map((row) => (row.direction === 'inbound' && typeof row.text === 'string' ? { ...row, text: readable(row.text) } : row));
 }
 
 /** The prefilter's verdict as the decision `flow.ts` makes of it. */

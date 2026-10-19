@@ -62,9 +62,10 @@ export type WordlessAckResult = 'sent' | 'no_line' | 'agent_off' | 'skipped' | '
  * already. `$7` is the inbound claim, `$8` the word-less `message_type`s (a row is word-less exactly when its type is one of them; `'text'`
  * stands for a row written before `message_type` existed). The 15 minutes bound "still being answered": an unhandled row older than that is
  * one a job abandoned, and must not silence the ack for ever. Explicit casts on the values only because the statement has no VALUES for
- * Postgres to take the types from.
+ * Postgres to take the types from. Exported so the WhatsApp acknowledgement (`whatsappMediaInput.ts`) claims with the SAME statement: the rules of "once per burst,
+ * never over words, never twice in a day" are one text, not two that could drift.
  */
-const CLAIM_ACK = `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta)
+export const CLAIM_ACK = `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta)
 SELECT $1, $2, 'outbound', $3::text, $4::text, $5::jsonb, 'ai', $6::jsonb
  WHERE NOT EXISTS (  -- a later message from them is waiting: it is the one to answer (and a burst acks once, on its newest)
         SELECT 1 FROM messages n

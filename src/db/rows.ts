@@ -184,12 +184,14 @@ export interface ConversationRow {
 }
 
 /**
- * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried, `ad_id`, `ctwa_clid` and `headline`
- * come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601).
+ * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried (and `label` the owner's name for
+ * that link, copied when the thread began: a link renamed or deleted later does not rewrite how an old thread began), `ad_id`, `ctwa_clid` and
+ * `headline` come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601). A QR code and a short link are both `link`.
  */
 export interface ConversationEntrySource {
     kind: 'link' | 'qr' | 'ctwa' | 'ig_bridge' | 'ice_breaker' | 'organic';
     ref?: string;
+    label?: string;
     ad_id?: string;
     ctwa_clid?: string;
     headline?: string;

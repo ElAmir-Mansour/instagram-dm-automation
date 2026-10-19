@@ -22,6 +22,8 @@
  *   bot_paused             a person has the thread (the inbox's manual reply, a hand-off) or the flow ended it (a loop, a second insult)
  *   superseded             a later message took its place, or somebody replied after it
  *   agent_off              the owner's agent is switched off
+ *   opted_out              the contact asked to be left alone with a stop phrase and `whatsappOptOut.ts` decided: never reaches this file. (A stop the TURN's own
+ *                          prefilter catches, «ما ابي رسايل», is answered here with the opt-out line, like Instagram: NULL, and the consent is recorded below)
  *
  * A reply that could not be sent leaves the customer unanswered, so the conversation is STAMPED as handed over (the inbox's "Needs you") and the owner is
  * told what happened. `conversations.handoff_reason` allows only a closed list (`migration_v39`, VARCHAR(16)), so the stamp says `unsure` and the cause is
@@ -41,6 +43,8 @@ import { FAILURE_HANDOFF_REASON } from '../services/dmSales/failureHandoff.js';
 import { SalesSendRefused, type SalesTransport } from '../services/dmSales/transport.js';
 import { attachWamid, sendWhatsAppReply } from '../services/channels/send.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
+import { stripRef } from '../services/whatsappEntryLinks.js';
+import { withdrawAll } from '../services/consent.js';
 import { markReadWithTyping } from '../services/whatsapp.js';
 import { getAccessToken } from '../services/whatsappConnections.js';
 import { describeError, log } from '../utils/log.js';
@@ -52,7 +56,7 @@ import { needsDisclosure } from './messaging.js';
  * (the schema's own list, v50: agent_off, not_test_sender, handed_off, window_closed, opted_out, billable_blocked, provider_unavailable, unsupported_type, failure).
  */
 export type NoReplyReason =
-    | 'agent_off' | 'not_test_sender' | 'unsupported_type' | 'system_event'
+    | 'agent_off' | 'not_test_sender' | 'unsupported_type' | 'system_event' | 'opted_out'
     | 'provider_unavailable' | 'window_closed' | 'billable_blocked' | 'connection_invalid' | 'failure' | 'bot_paused' | 'superseded';
 
 export interface WhatsAppAnswerInput {
@@ -71,6 +75,11 @@ export interface WhatsAppAnswerInput {
     payload: string | null;
     /** `conversations.ai_disclosed_at`: when the automated-service line was last said on this thread. */
     aiDisclosedAt: Date | string | null;
+    /**
+     * The entry-link tracking code this thread came in through (`conversations.entry_source.ref`), when it has one. The model never reads it: it is taken out of the
+     * customer's words in the history (`SalesTransport.readable`), while the stored row, and what the inbox shows, keep the message as it arrived.
+     */
+    entryRef?: string | null;
     /** No retry follows this attempt: every outcome is written down as final. */
     lastAttempt: boolean;
 }
@@ -102,11 +111,12 @@ export function reasonOfTurn(turn: SalesTurnResult): NoReplyReason | null {
 }
 
 /** The WhatsApp transport for one message: the sender for the words, the read receipt for "typing", the wamid for the row. */
-export function whatsappTransport(input: Pick<WhatsAppAnswerInput, 'creatorId' | 'conversationId' | 'wamid' | 'phoneNumberId'>): SalesTransport & { readonly sent: boolean } {
+export function whatsappTransport(input: Pick<WhatsAppAnswerInput, 'creatorId' | 'conversationId' | 'wamid' | 'phoneNumberId' | 'entryRef'>): SalesTransport & { readonly sent: boolean } {
     let sent = false;
     return {
         channel: 'whatsapp',
         get sent() { return sent; },
+        readable: (text) => withoutEntryRef(text, input.entryRef ?? null),
         async send(payload) {
             // At most one message per turn (review M14, T037): the turn is written to send one, and a change that made it send two (a disclosure of its
             // own, a link after the words) is refused HERE, before a second request leaves, and fails a test instead of spamming a customer.
@@ -138,6 +148,14 @@ export function whatsappTransport(input: Pick<WhatsAppAnswerInput, 'creatorId' |
             await attachWamid(replyId, message.wamid);
         },
     };
+}
+
+/**
+ * The customer's words without the ` #ref` an entry link's prefilled message ends with. The identity when there is no ref or the text has none: the inbound handler
+ * passes the turn the SAME function's output as `inbound.text`, which is what keeps the message being answered from being read twice (`salesTurns`).
+ */
+export function withoutEntryRef(text: string, ref: string | null): string {
+    return ref && text.includes('#') ? stripRef(text, ref) : text;
 }
 
 /** What a refused or failed send means for the inbound row, and whether another attempt could change it. */
@@ -182,6 +200,23 @@ async function handOver(input: WhatsAppAnswerInput, block: Extract<NoticePlan, {
 }
 
 /**
+ * The turn itself ended the conversation because the person asked to be left alone (the prefilter's `opt_out`, or the model's own intent: «ما ابي رسايل», "stop
+ * messaging me"): it has already sent the opt-out line, paused the bot, closed the stage and stamped `opted_out_at`, exactly as it does on Instagram. What Instagram has
+ * no place for is the consent history, so it is written here: `withdrawn` for every category, and the contact's pending follow-ups cancelled. `withdrawAll` finds the
+ * thread already opted out, so it sends nothing: the one confirmation was the turn's line. It never throws and nothing is retried: the customer HAS been answered,
+ * `opted_out_at` stands (it is what every sender and follow-up checks), and answering twice is the one thing worse than a history row that is missing.
+ */
+async function recordTurnOptOut(input: WhatsAppAnswerInput): Promise<void> {
+    try {
+        await withdrawAll({
+            creatorId: input.creatorId, platform: 'whatsapp', contactRef: input.senderId, conversationId: input.conversationId, wording: input.text,
+        });
+    } catch (err) {
+        log('error', 'wa.optout_consent_unrecorded', { creator_id: input.creatorId, conversation_id: input.conversationId, ...describeError(err), effect: 'the thread is opted out; the consent history misses this stop' });
+    }
+}
+
+/**
  * Answer one WhatsApp message. Returns what the inbound row should say; throws only to ask for a retry, after releasing the claim (see the top of the file).
  */
 export async function answerWhatsApp(input: WhatsAppAnswerInput): Promise<WhatsAppAnswerResult> {
@@ -207,6 +242,7 @@ export async function answerWhatsApp(input: WhatsAppAnswerInput): Promise<WhatsA
         });
         const reason = reasonOfTurn(turn);
         log('info', 'wa.answered', { ...logBase, outcome: turn.kind === 'done' ? turn.outcome : 'quota', no_reply_reason: reason });
+        if (turn.kind === 'done' && turn.outcome === 'opt_out') await recordTurnOptOut(input);
         return { reason };
     } catch (err) {
         const failure = failureOf(err, transport.sent);

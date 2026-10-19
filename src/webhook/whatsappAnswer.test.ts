@@ -27,7 +27,7 @@ import type { CreatorProfile } from '../services/profile/types.js';
 import { withSales } from '../services/dmSales/testFixtures.js';
 import { invalidateTenantCache } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
-import { answerWhatsApp, reasonOfTurn, whatsappTransport, type WhatsAppAnswerInput, type WhatsAppAnswerResult } from './whatsappAnswer.js';
+import { answerWhatsApp, reasonOfTurn, whatsappTransport, withoutEntryRef, type WhatsAppAnswerInput, type WhatsAppAnswerResult } from './whatsappAnswer.js';
 import { SalesSendRefused } from '../services/dmSales/transport.js';
 
 type Row = Record<string, unknown>;
@@ -162,10 +162,16 @@ async function run(world: World = {}): Promise<Run> {
         [/UPDATE messages SET reply_claimed_at = NULL WHERE id/, { rowCount: 1 }],
         [/UPDATE platform_connections SET status = 'invalid'/, { rowCount: 1 }],
         [/INSERT INTO rate_limit_counters|INSERT INTO app_rate_limit_counters/, { rows: [{ count: 1 }] }],
+        // The consent history a turn's own opt-out writes after the reply (`recordTurnOptOut`, through `withdrawAll`'s transaction).
+        [/^(BEGIN|COMMIT|ROLLBACK)$/, {}],
+        [/INSERT INTO contact_consents/, { rows: [{ id: 'consent-1' }] }],
+        [/UPDATE conversations\s+SET opted_out_at/, { rowCount: 0 }],
+        [/UPDATE jobs\s+SET status = 'cancelled'/, { rowCount: 0 }],
     ];
     invalidateTenantCache();
 
     const originalQuery = pool.query;
+    const originalConnect = pool.connect;
     const originalAxios = axios.post;
     const originalMeta = metaHttp.post;
     if (world.baseUrl) process.env.PUBLIC_BASE_URL = world.baseUrl;
@@ -184,6 +190,7 @@ async function run(world: World = {}): Promise<Run> {
         const { rows = [], rowCount } = route[1];
         return { rows, rowCount: rowCount ?? rows.length };
     };
+    (pool as any).connect = async () => ({ query: (sql: string, params: any[] = []) => (pool as any).query(sql, params), release: () => {} });
     (axios as any).post = async () => { geminiCalls++; throw new Error('Gemini must never be called for a WhatsApp customer'); };
     (metaHttp as any).post = async (url: string, body: any) => {
         posts.push({ url, body });
@@ -198,6 +205,7 @@ async function run(world: World = {}): Promise<Run> {
         error = err;
     } finally {
         (pool as any).query = originalQuery;
+        (pool as any).connect = originalConnect;
         (axios as any).post = originalAxios;
         (metaHttp as any).post = originalMeta;
         setAiCaller(previousCaller);
@@ -629,5 +637,111 @@ describe('a tapped button', () => {
         const turns = r.layerCalls[0]!.user as { role: string; text: string }[];
         assert.match(turns[turns.length - 1]!.text, /Other plans \(tapped: OTHER_PLANS\)/);
         assert.equal(messages(r).length, 1);
+    });
+});
+
+// ─── W7 wired in: what a turn's own opt-out leaves behind ──────────────────────────────
+
+describe('a stop the TURN decides («ما ابي رسايل», "stop messaging me"): the Instagram rule, and the consent history W7 adds', () => {
+    const STOP = 'ما ابي رسايل';
+
+    it('is answered with the opt-out line as ONE message, the thread paused and opted out by the turn, and the consent withdrawn for every category afterwards', async () => {
+        const r = await run({ input: { text: STOP }, history: [{ direction: 'inbound', text: STOP }] });
+        assert.equal(r.error, null);
+        assert.deepEqual(r.result, { reason: null });
+        assert.equal(messages(r).length, 1, 'one line, and no second confirmation from the consent step');
+        assert.match(messages(r)[0]!.body.text.body, /we won't message you again/);
+
+        const rec = record(r);
+        assert.deepEqual([rec.stage, rec.optOut, rec.pauseBot, rec.intent], ['closed', true, true, 'opt_out'], 'what the turn writes: Instagram\'s rule');
+
+        const consents = executedSql(r, /INSERT INTO contact_consents/);
+        assert.deepEqual(consents.map((c) => c.params.slice(0, 8)), ['service', 'updates', 'marketing'].map((category) => [CREATOR, CONVERSATION, 'whatsapp', BSUID, category, 'withdrawn', 'stop_phrase', STOP]));
+        const order = r.executed.map((e) => e.sql);
+        assert.ok(order.findIndex((q) => /INSERT INTO contact_consents/.test(q)) > order.findIndex((q) => /UPDATE conversations SET stage = \$3/.test(q)), 'after the reply was recorded, never before');
+        assert.equal(executedSql(r, /is_bot_active = FALSE/).length, 0, 'the turn already closed the thread: the consent step does not close it a second time');
+        assert.equal(logs(r, 'wa.answered')[0]?.outcome, 'opt_out');
+    });
+
+    it('a consent history that cannot be written does not undo the reply, answer twice or retry: the thread is opted out, and the log says the history missed this stop', async () => {
+        const r = await run({
+            input: { text: STOP }, history: [{ direction: 'inbound', text: STOP }],
+            failSql: [[/INSERT INTO contact_consents/, new Error('connection terminated unexpectedly')]],
+        });
+        assert.equal(r.error, null, 'nothing is rethrown: the customer HAS been answered');
+        assert.deepEqual(r.result, { reason: null });
+        assert.equal(messages(r).length, 1);
+        assert.equal(logs(r, 'wa.optout_consent_unrecorded')[0]?.level, 'error');
+        assert.ok(r.executed.some((e) => e.sql === 'ROLLBACK'));
+    });
+
+    it('an ordinary reply writes no consent at all, and neither does a hand-off', async () => {
+        const plain = await run();
+        assert.equal(executedSql(plain, /contact_consents/).length, 0);
+        const refund = await run({ input: { text: 'I want a refund' }, history: [{ direction: 'inbound', text: 'I want a refund' }] });
+        assert.equal(executedSql(refund, /contact_consents/).length, 0);
+    });
+});
+
+// ─── W8 wired in: the entry link's tracking code is not for the model ──────────────────
+
+describe('the entry link\'s tracking code, out of what the model reads (review M20)', () => {
+    const REF = 'K7M3QA';
+    const turnsOf = (r: Run) => r.layerCalls[0]!.user as { role: string; text: string }[];
+    const readText = (r: Run) => turnsOf(r).map((t) => t.text).join('\n');
+
+    it('reads the message being answered ONCE and without the code: the stored row says it with the code, the input without it, and the history passes through the same function', async () => {
+        const stored = `How much is the plan? #${REF}`;
+        const r = await run({ input: { text: 'How much is the plan?', entryRef: REF }, history: [{ direction: 'inbound', text: stored }] });
+        const turns = turnsOf(r);
+        assert.equal(turns.length, 1);
+        assert.ok(!readText(r).includes(REF), 'the model never sees the code');
+        assert.equal((readText(r).match(/How much is the plan\?/g) ?? []).length, 1, 'and reads the message once, not as two lines');
+    });
+
+    it('is the identity for a thread with no ref: the history is read exactly as stored', async () => {
+        const stored = `How much is the plan? #${REF}`;
+        const r = await run({ input: { text: stored }, history: [{ direction: 'inbound', text: stored }] });
+        assert.ok(readText(r).includes(`#${REF}`), 'a ref nobody attributed is the customer\'s own text');
+        assert.equal((readText(r).match(/How much is the plan\?/g) ?? []).length, 1);
+    });
+
+    it('takes the code out of EARLIER customer messages too, and leaves the bot\'s own words and every other hashtag alone', async () => {
+        const r = await run({
+            input: { text: 'and the price?', entryRef: REF },
+            history: [
+                { direction: 'inbound', text: `hello #${REF}` },
+                { direction: 'outbound', sender: 'ai', text: `Welcome! (we tag links like #${REF})` },
+                { direction: 'inbound', text: 'I am a #1 fan' },
+                { direction: 'inbound', text: 'and the price?' },
+            ],
+        });
+        const turns = turnsOf(r);
+        assert.ok(turns[0]!.text.endsWith('hello'), turns[0]!.text);
+        assert.ok(turns[1]!.text.includes(`#${REF}`), 'what the bot said is not the customer\'s to clean');
+        assert.ok(turns[2]!.text.includes('#1 fan'));
+    });
+
+    it('is handed to the transport as `readable`, and a transport with no ref cleans nothing', () => {
+        const withRef = whatsappTransport({ creatorId: CREATOR, conversationId: CONVERSATION, wamid: 'w', phoneNumberId: PHONE_ID, entryRef: REF });
+        const without = whatsappTransport({ creatorId: CREATOR, conversationId: CONVERSATION, wamid: 'w', phoneNumberId: PHONE_ID });
+        assert.equal(withRef.readable!(`hi #${REF}`), 'hi');
+        assert.equal(without.readable!(`hi #${REF}`), `hi #${REF}`);
+    });
+});
+
+describe('withoutEntryRef', () => {
+    it('takes the ref out as the owner\'s prefilled message ends with it, in either case, and trims what is left', () => {
+        assert.equal(withoutEntryRef('مرحبا، أبغى أعرف عن الخطة #K7M3QA', 'K7M3QA'), 'مرحبا، أبغى أعرف عن الخطة');
+        assert.equal(withoutEntryRef('hello #k7m3qa', 'K7M3QA'), 'hello');
+    });
+
+    it('is the SAME string, untrimmed, when there is no ref or the text holds no `#`: the history and the message being answered stay equal', () => {
+        assert.equal(withoutEntryRef('  hello  ', null), '  hello  ');
+        assert.equal(withoutEntryRef('  hello  ', 'K7M3QA'), '  hello  ');
+    });
+
+    it('leaves another code, and a hashtag that is not the ref, alone', () => {
+        assert.equal(withoutEntryRef('hello #ZZ9ZZ9 #1', 'K7M3QA'), 'hello #ZZ9ZZ9 #1');
     });
 });

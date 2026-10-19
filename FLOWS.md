@@ -2821,7 +2821,8 @@ runs: YouTube is skipped, and Instagram by handle is read as the owner's tenant.
 
 Someone writes to the owner's WhatsApp number. The message is stored, and then either **answered** (only for a listed test sender, §10.11) or
 marked "not answered, and here is why" (§10.7). The same delivery URL, signature and queue as §1 and §2; what differs is the object, the planner,
-and what the handler does. A person typing in the inbox is §10.12.
+and what the handler does. A person typing in the inbox is §10.12. What a listed tester's **stop phrase, voice note, file and entry link** do (W6, W7 and W8
+wired in) is §10.13, and what each of them does when it goes quiet is in the index at the bottom.
 
 ### 10.1 — The delivery and the object gate
 
@@ -2859,7 +2860,7 @@ A message that is a **group** message or has **no BSUID anywhere** becomes no jo
 ### 10.3 — The handler adapter, and the inline fallback
 
 **`src/jobs/handlers.ts:41`** — `isWhatsAppDmPayload(payload)` (`object === 'whatsapp'` with a `change`) sends a `dm.process` to **`handleWhatsAppInbound`**
-(**`src/webhook/whatsappInbound.ts:466`**), anything else to `handleMessagingEvent` exactly as before. **`handlers.ts:52`** — `wa.event` →
+(**`src/webhook/whatsappInbound.ts:629`**), anything else to `handleMessagingEvent` exactly as before. **`handlers.ts:52`** — `wa.event` →
 **`handleWhatsAppEvent`** (**`src/services/whatsappStatus.ts:163`**). If the queue is down, **`router.ts:222`** → `processWhatsAppEntry` (**:205**) runs the same planner
 and the same two handlers inline, one job at a time, each isolated (`webhook.whatsapp_failed`).
 
@@ -2868,22 +2869,22 @@ and the same two handlers inline, one job at a time, each isolated (`webhook.wha
 **`src/services/tenant.ts:206`** — `getCreatorByWhatsAppNumber(phone_number_id)`: the connection for the number through `getConnectionByPhoneNumberId`
 (**`whatsappConnections.ts:198`**, any row that is **not `revoked`**), then the creator, which must be active. An **`invalid`** connection still resolves:
 Meta answers a 200 once and never redelivers, so a message that arrives while the token is dead can only be stored now or lost (review H10). No
-connection, a revoked one or no id: **`wa.no_creator`** (**`whatsappInbound.ts:491`**, `warn`) and the job completes; an inactive creator also logs
+connection, a revoked one or no id: **`wa.no_creator`** (**`whatsappInbound.ts:654`**, `warn`) and the job completes; an inactive creator also logs
 `wa.creator_inactive` (**`tenant.ts:217`**).
 
 ### 10.5 — Who is a test sender, and what is kept (review C3)
 
-**`whatsappInbound.ts:497`** reads `ai_agents.whatsapp_mode` and `whatsapp_test_senders` (`readWhatsAppSettings`). A read that fails is **retried**
-while an attempt is left; on the last attempt (**:502**, `wa.settings_unreadable`, `error`) the message is stored as for a stranger. **`isTestSender`**
-(**:79**) matches the BSUID or the phone. The public pages do not name WhatsApp yet and there is no go-live gate, so:
+**`whatsappInbound.ts:660`** reads `ai_agents.whatsapp_mode` and `whatsapp_test_senders` (`readWhatsAppSettings`). A read that fails is **retried**
+while an attempt is left; on the last attempt (**:665**, `wa.settings_unreadable`, `error`) the message is stored as for a stranger. **`isTestSender`**
+(**:104**) matches the BSUID or the phone. The public pages do not name WhatsApp yet and there is no go-live gate, so:
 
 | sender | thread (`conversations`) | message (`messages`) |
 |---|---|---|
-| a listed test sender | BSUID, phone, username, parent id, profile name (into `profile_name`, 255 max), entry source | text, interactive reply id, raw event (with the media id, type and caption) |
-| anyone else | the BSUID and entry source only | `text = ''`, no payload, no raw event, `message_type` kept |
+| a listed test sender | BSUID, phone, username, parent id, profile name (into `profile_name`, 255 max), entry source | text, interactive reply id, raw event (with the media id, type and caption), and the **private copy of a file or voice note** they sent (`media_upload_id`, §10.13) |
+| anyone else | the BSUID and entry source only (a link source is the owner's own tag, not their words) | `text = ''`, no payload, no raw event, `message_type` kept, and **no file: a stranger's media is never downloaded** |
 
 **The job's own payload is redacted too.** The queue keeps a `done` row 7 days (§5.7) and a `failed` row for good, and the payload is the event verbatim. So
-`handleWhatsAppInbound` (**`whatsappInbound.ts:466`**) returns `{ redactPayload }` for every job that did not store a listed test sender's message in full (a stranger's, no
+`handleWhatsAppInbound` (**`whatsappInbound.ts:629`**) returns `{ redactPayload }` for every job that did not store a listed test sender's message in full (a stranger's, no
 connection, a duplicate, an edit), and the queue's `complete` writes it **in the same `UPDATE` that marks the job `done`** (**`queue.ts`** `complete`, **`runner.ts`** `runInScope`); what is
 left is the object, account, number, wamid, type, time and BSUID (**`whatsappRedact.ts`**). A failure that will be **retried** keeps the whole payload (the next attempt needs it);
 the failure that **ends** the job redacts too (`redactOnFailure`, **`jobs/redaction.ts`**), because a failed row is never pruned. A status or preference `wa.event` is cut down the
@@ -2893,25 +2894,28 @@ job whose last attempt dies without reaching the handler's end (`reapStale` aban
 
 ### 10.6 — The thread, and the 24 h window
 
-**`whatsappInbound.ts:198`** `alreadyHandled` is asked **before** the thread is touched: a redelivery must not stamp `last_inbound_at` and reopen a window the
-customer closed days ago (`wa.duplicate_ignored`). **`:268`** — one upsert, `ON CONFLICT (creator_id, instagram_user_id)`; the column holds the BSUID, which cannot
+**`whatsappInbound.ts:269`** `alreadyHandled` is asked **before** the thread is touched: a redelivery must not stamp `last_inbound_at` and reopen a window the
+customer closed days ago (`wa.duplicate_ignored`). **`:373`** — one upsert, `ON CONFLICT (creator_id, instagram_user_id)`; the column holds the BSUID, which cannot
 collide with a numeric IGSID or PSID. It stamps **`last_inbound_at = NOW()` on insert and on update, for every inbound** (review H3): nothing else stamps it for a
 thread no sales turn has answered, and `isWindowOpen` (`channels/window.ts`) reads it. `platform` is set once; `entry_source` is set by the first inbound only (a
-click-to-WhatsApp referral, else `organic`). `conversations.handled_at` (v45) is **not** touched, because the Instagram upsert does not clear it yet either.
+click-to-WhatsApp referral, else a known entry-link ref as `link`, else `organic`: §10.13). The upsert hands `entry_source` back, so the turn can take the thread's tracking code out of what
+the model reads. **`free_window_expires_at` is not written here**: not from a referral, not from a link (§10.9). `conversations.handled_at` (v45) is **not** touched, because the
+Instagram upsert does not clear it yet either.
 
 ### 10.7 — Claim, then conclude
 
-**`whatsappInbound.ts:214`** `claimWhatsAppInbound`: the same `ON CONFLICT (meta_message_id) … DO NOTHING` insert and 300 s re-claim window as 2.5, with this channel's
-columns. No row back and no resumable one: `wa.duplicate_ignored`. A resumed one logs `wa.resumed`. **`:243`** `markConcluded` is the last write and the only one
-that sets `messages.no_reply_reason` (NULL when the customer was answered). **`:98`** `noReplyReasonFor` decides, in this order: `unsupported_type` for a reaction or a message the
+**`whatsappInbound.ts:285`** `claimWhatsAppInbound`: the same `ON CONFLICT (meta_message_id) … DO NOTHING` insert and 300 s re-claim window as 2.5, with this channel's
+columns. No row back and no resumable one: `wa.duplicate_ignored`. A resumed one logs `wa.resumed` and is handed to the file and voice steps as `resumed` (§10.13). **`:314`** `markConcluded` is the last write and the only one
+that sets `messages.no_reply_reason` (NULL when the customer was answered). **`:123`** `noReplyReasonFor` decides, in this order: `unsupported_type` for a reaction or a message the
 agent cannot read (whatever the mode); `agent_off` for mode `off`; `not_test_sender` for anyone not on the list (mode `everyone` is refused by the API until the go-live
-gate and is treated as `test` here); `unsupported_type` again for media and voice (a later phase), even with a caption; `connection_invalid` when the connection is not `active`
-(stored, nothing sent); `bot_paused` when a person has the thread; otherwise **null: the agent answers** (§10.11). `wa.inbound_stored` says which, and whether the row is `full` or `metadata_only`.
+gate and is treated as `test` here); `unsupported_type` again for a **sticker, a location or a contact card** (a photo, video, document and voice note are read since W6: §10.13); `connection_invalid` when the connection is not `active`
+(stored, nothing sent); `bot_paused` when a person has the thread; otherwise **null: the agent may answer** (§10.11). **A tester's stop phrase is looked at BEFORE this verdict is acted on** (**`:462`**, §10.13) and wins over every one of its answers but the first two:
+`opted_out`. `wa.inbound_stored` (**`:418`**, `conclude`) says which, and whether the row is `full` or `metadata_only`.
 
 ### 10.8 — A BSUID that changes (review M9)
 
-A `system` message (`user_changed_number`, `user_changed_user_id`) is not the customer writing: **`:395`** `storeSystemEvent` stamps neither `last_inbound_at` nor
-`last_message_at`. **`:344`** `rekeyContact`, one transaction: the thread is re-keyed old → new unless the new id already has one (a `NOT EXISTS` in the statement,
+A `system` message (`user_changed_number`, `user_changed_user_id`) is not the customer writing: **`:558`** `storeSystemEvent` stamps neither `last_inbound_at` nor
+`last_message_at`. **`:507`** `rekeyContact`, one transaction: the thread is re-keyed old → new unless the new id already has one (a `NOT EXISTS` in the statement,
 the unique index behind it; a race that reaches the index rolls back and re-runs without the thread step); `contact_consents.contact_ref` follows the person, so an
 opt-out holds; the id in `whatsapp_test_senders` is replaced (`array_replace`, or just removed when the new id is already listed). **If both threads exist they are
 not merged or deleted**: `wa.contact_rekey_conflict` (`warn`), and the system message goes on the new thread. Concluded as `no_reply_reason = 'system_event'`.
@@ -2925,6 +2929,12 @@ not merged or deleted**: `wa.contact_rekey_conflict` (`warn`), and the system me
 (**`src/services/channelUsage.ts:124`**) **in the same transaction**, so a duplicate or out-of-order status cannot count twice and a count that fails rolls the status
 back for the retry to redo. The ledger row is per number, month (UTC for now, `TODO(M12)`), category, pricing type and recipient market (BSUID prefix `EG.`/`SA.` or
 phone `20`/`966`, else `other`). `GET /api/whatsapp/connection` reads it back as the meter (**`src/routes/whatsapp.ts:76`**, `usageOf`).
+
+**The free-entry window (W8, T049, review M20).** In the same transaction (**`whatsappStatus.ts:155`**, `applyFreeEntryWindow`): a status of ours whose `pricing.type` is **`free_entry_point`** and whose
+`conversation.expiration_timestamp` is a number stores that end in `conversations.free_window_expires_at` for the thread of the message the status is about (one statement keyed on the message, scoped to
+the tenant and to WhatsApp). It is clamped to 7 days from the status, never moved earlier than what is stored, and not stored at all when it is already over. **Nothing else sets it**: a click-to-WhatsApp
+`referral`, an entry link and an ad say where a thread began (§10.13), and a referral proves nothing about cost (it needs a real click on a phone). `isWindowOpen` (`channels/window.ts`) then lets the sender
+reply after the 24 h are over. A failing count rolls the window back with the status, and the retry stores both.
 
 ### 10.10 — Account events: the connection's health, and who is told
 
@@ -2967,11 +2977,15 @@ permission (190, 200, 10) makes the connection `invalid` and tells the owner onc
 anything else changes nothing. What changed since the last read (quality, messaging limit via `whatsapp_business_manager_messaging_limit`, number status, name review) is told once by the same rule
 (**`healthChanges`**, **:46**), a first reading is recorded without an alert, and a connection that comes back says so once. `TODO(M12)`: the account timezone is not read yet.
 
-`wa.event` kind `preference` is **logged only** (`wa.preference_event`, **`whatsappStatus.ts:195`**). The preference detail names a person's phone number and is deliberately not logged.
+`wa.event` kind `preference` (Meta's own "stop / resume marketing messages" button, W7 wired in) logs `wa.preference_event` (the number it came in on, never the person), finds the tenant by that number
+(**`whatsappStatus.ts:233`** `getCreatorByWhatsAppNumber`; a number nobody connected is `wa.no_creator`, `source: 'user_preferences'`, and completes) and calls **`handleUserPreference`**
+(**`src/services/consentPreferences.ts`**): a `marketing` row in `contact_consents`, `withdrawn` for `stop` and `granted` for `resume`, source `user_preferences`, dated by Meta's own timestamp (never in the future, so an old
+`resume` that arrives late cannot outrank a newer `stop`). It does NOT set `opted_out_at`: the button ends promotions, not the conversation (a person who writes «إيقاف» is §10.13). A database failure throws, so the
+job is retried and the stop is not lost.
 
 ### 10.11 — The agent answers a test sender (W5)
 
-When `noReplyReasonFor` says null (**`whatsappInbound.ts:317`**), the handler asks `answerWhatsApp` (**`src/webhook/whatsappAnswer.ts:187`**; the handler takes it as a
+When `noReplyReasonFor` says null (**`whatsappInbound.ts:488`**), the handler asks `answerWhatsApp` (**`src/webhook/whatsappAnswer.ts:187`**; the handler takes it as a
 dependency, so `whatsappInbound.test.ts` tests the decision and `whatsappAnswer.test.ts` the answer). It is **the same sales turn that answers Instagram**, `runSalesTurn`
 (§2), given a WhatsApp `transport` (**`dmSales/transport.ts`**, **`whatsappAnswer.ts:105`** `whatsappTransport`), whatever the tenant's Instagram `sales_mode` says:
 
@@ -3003,6 +3017,26 @@ the customer is never answered twice (`wa.answered_unrecorded`).
 **`routes/api.ts:3525`** — `POST /conversations/:id/messages` hands a WhatsApp thread to **`replyOnWhatsApp`** (**:3441**) before anything Instagram-shaped runs: `sendWhatsAppReply`,
 `kind: 'operator'`, then the bot is paused exactly as the Instagram branch pauses it. A closed window is **`409 WHATSAPP_WINDOW_CLOSED`** with `closes_at`, no request to Meta;
 a refused connection or a billable reply is a 409; a message Meta did not take is a 502 with nothing stored and the bot still on; text over 4,096 characters is a 400, not a cut.
+
+### 10.13 — A tester says stop, sends a voice note or a file, or arrives through a link (W6, W7, W8 wired in)
+
+All of this is behind **`isTestSender`**: a stranger's message is stored as metadata only, as in §10.5. For a listed tester the handler (**`whatsappInbound.ts:351`** `storeInbound`) does these things, in this order,
+after the row is claimed and before the agent is asked. Each step is a dependency the handler is given (`InboundSteps`, **:235**), so `whatsappInbound.test.ts` tests the decision with stand-ins that fail the
+test when asked for what they should not be asked for, and each step is tested where it lives.
+
+| hop | what happens |
+|---|---|
+| 13.1 | **Where the thread began** (**`:331`** `entryLinkOf`, before the thread upsert). The pure `refFromText` looks for a ` #ref` in the words first, so a message with none costs no query. A ref that is one of THIS tenant's entry links (`platform_connections.settings.entry_links`, `getEntryLinkLabels`) makes the first inbound's `entry_source` `{ kind: 'link', ref, label, at }`: a QR code and a short link share a ref, so they are one kind, and the label is the owner's, copied when the thread began. A click-to-WhatsApp `referral` stays `ctwa`; an unknown ref is not trusted (anyone can type one) and the thread is `organic`; labels that cannot be read are `wa.entry_link_unreadable` (`warn`) and the message is stored without a link source. It is metadata, so it is recorded for a stranger too, with none of their words |
+| 13.2 | **What the agent will read** (**`:430`**). The words the agent reads are the stored words **without the ` #ref`** (`withoutEntryRef`, **`whatsappAnswer.ts:157`**); the stored row keeps them as they arrived. The turn is told the thread's ref (`entryRef`, from the upsert's `entry_source`), and the WhatsApp transport's `readable` (**`whatsappAnswer.ts:119`**) puts the history's customer rows through the same function (**`dmSales/turn.ts:549`** `readableHistory`), so the model never reads the code and never reads the message being answered twice (`salesTurns` adds a row whose text differs from the stored one). Instagram and Messenger have no transport, so their history is the array they always got (`turn.test.ts` pins it) |
+| 13.3 | **A stop** (**`:462`**). The typed words of a tester (text, a tapped button, a photo's caption) go through `matchStopMessage` (**`services/consent.ts`**): the WHOLE message, normalised, must equal a phrase in the list (at most three words), never a substring (`عايز إلغاء الطلب`, `موقف`, "stop by tomorrow?" are not stops). If it is one, **`optOutWhatsAppContact`** (**`whatsappOptOut.ts:96`**) decides and **the turn is never run** (one path: a message cannot be an opt-out twice). It runs in every mode (`off` included) and while a person has the thread, because an opt-out is honoured wherever the system knows it is them |
+| 13.4 | **What a stop does: Instagram's rule, plus W7's records.** One transaction (**`consent.ts`** `withdrawAll` with `closeThread`): `withdrawn` rows for service, updates and marketing (append-only, with the wording and source `stop_phrase`), `opted_out_at` for a thread not opted out before, **the bot paused and the stage `closed` with `last_intent = 'opt_out'`** (the stage comes from `optOutDecision`, the decision Instagram's turn makes for «stop», **`whatsappOptOut.ts:49`**; `recordTurn` pauses for exactly `decision.optOut`), and the contact's pending `dm.followup` jobs cancelled. The row says **`opted_out`** |
+| 13.5 | **The confirmation, once.** `confirmationText(lang)` in the language of the phrase, through `sendWhatsAppReply` (`kind: 'agent'`, the sender writes the outbound row), only when this is the thread's FIRST opt-out (`conversationsNewlyOptedOut > 0`) **and** the agent may speak now (not `off`, an `active` connection, no person on the thread). A refusal or an error is `wa.optout_confirmation_not_sent` and **the opt-out stands**; nothing is retried. A stop written while the agent is off is therefore silent |
+| 13.6 | **When an opted-out contact writes again** (the Instagram rule). The thread is paused, so the message is stored and concluded `bot_paused` and shows in the inbox as "Needs you"; the owner may answer by hand or switch the bot back on, which does NOT clear `opted_out_at`, so no follow-up is ever sent (`followup.ts` `opted_out`) and the stage stays `closed` (no pitch: `staysClosed`, `flow.ts`). A second stop phrase is recorded again, concluded `opted_out`, and gets no second confirmation |
+| 13.7 | **What only the turn understands.** A stop the strict list does not name («ما ابي رسايل», "stop messaging me") goes to the agent, whose own prefilter decides it (`turn.ts` step 4): the opt-out line, `opted_out_at`, the pause and the closed stage are written by the turn exactly as on Instagram, and **`answerWhatsApp` then records the consent history** (**`whatsappAnswer.ts:209`** `recordTurnOptOut`, `withdrawAll` without `closeThread`: the thread is already closed, so it sends nothing and the turn's line was the one confirmation). A history that cannot be written is `wa.optout_consent_unrecorded` (`error`) and is not retried (the customer has been answered; `opted_out_at` stands). **Gap:** a refund AND a stop in one message is a hand-off whose `optOut` flag stamps `opted_out_at` (the turn's result does not carry the flag), so its consent rows are not written |
+| 13.8 | **A stop that cannot be written** throws while an attempt is left (the claim is given back first: `wa.optout_retrying`) and, on the last attempt, is `wa.optout_not_recorded` (`error`) with the row concluded `failure`: nothing is sent to someone who said stop, whatever happens. |
+| 13.9 | **The file** (**`:469`**, **`whatsappMediaInput.ts:96`** `saveInboundFile`). A tester's photo, video, document or voice note is downloaded with the connection's token, as soon as the job has it (Meta keeps it 7 days, the URL 5 minutes) and saved **privately** (`media_uploads.is_private`: never served by the public `/api/uploads/:id`), and `messages.media_upload_id` points at it so the erasure flow finds it with the contact. **In every mode** and while a person has the thread, and not on an `invalid` connection (no token). **A stranger's file is never downloaded**: the call sits behind `isTestSender`. A sticker, a location and a contact card are never downloaded (`unsupported_type`). A retried message whose row already holds the file is not downloaded again; a file that cannot be had (too large, expired, an unsupported type, no id) is `wa.media_not_saved` and the message is handled without it |
+| 13.10 | **Words from a file, only when the agent will answer** (**`:475`**, **`whatsappMediaInput.ts:171`** `readInboundMedia`). The owner's own switch (`ai_agents.is_active`) is checked first (`agent_off`: nothing is transcribed, nothing is said). A photo, video or document **with a caption**: the caption is the message, answered as typed text (the model does not see the image). **A voice note** (**:193** `transcribeVoice`): `transcribeAudio` (**`services/transcribe.ts`**) from the private copy, language `ar`, Groq only (a provider that does not train on what it is sent; paid OpenAI stays off), the transcript stored as the row's `text` (`UPDATE messages SET text`), and the turn runs on it; a transcript that is itself a stop phrase is a stop (13.3). A retried voice note whose row holds a transcript is not sent to Groq again |
+| 13.11 | **A voice note that cannot be read** (no file, a format Groq refuses, a **429**, a timeout, silence, no provider): **ONE line** asking for text, whatever the reason, never a retry (`wa.voice_unreadable` with the reason). **A file with no caption**: the same line, the kit's `attachments.media` in the owner's register. Both go through **Instagram's own claim** (`CLAIM_ACK`, **`attachmentAck.ts`**, exported for this): the outbound row is inserted FIRST and only when no later message of theirs is waiting, no words are being answered, and the line was not said within a day; a send that fails for good takes the claim back, a send that MAY have landed keeps it. The line carries the automated-service disclosure when it is the first thing said (`ai_disclosed_at` is stamped after). The row says NULL when the line went out, `superseded` when the claim was refused (`wa.media_ack_skipped`), else why it could not be sent (`window_closed`, `billable_blocked`, `connection_invalid`, `failure`) |
 
 ## Where each flow can silently do nothing
 
@@ -3074,13 +3108,13 @@ error, and several write **no row at all**.
 | 10 | a `field` the build does not handle (`calls`, `message_template_status_update`, …) — **`whatsappPlan.ts:180`** | `wa.unhandled_field` | no job |
 | 10 | an entry with no changes, a `messages` change with nothing in it, value-level `errors[]` — **`whatsappPlan.ts:149`**, **:92**, **:104**, **:101** | `wa.empty_entry` / `wa.empty_change` / `wa.value_errors` (`warn`) | no job |
 | 10 | a status with no id — **`whatsappPlan.ts:126`** | `wa.status_ignored` | no job |
-| 10 | **no connection for the number** (never connected, revoked, a number that is not ours), or the tenant is switched off — **`whatsappInbound.ts:491`**, **`tenant.ts:217`** | `wa.no_creator` (`warn`), `wa.creator_inactive` | **no row**; Meta has its 200 and will not redeliver, so the message is gone. An `invalid` connection is NOT this: it stores |
-| 10 | an edit, a deletion, `request_welcome` or a message with no id — **`whatsappInbound.ts:527`** | `wa.ignored` | no row |
-| 10 | already handled — **`whatsappInbound.ts:253`**, **:305** | `wa.duplicate_ignored` | no change (the thread's `last_inbound_at` is deliberately not touched) |
-| 10 | **every message, once concluded** — **`whatsappInbound.ts:323`** | `wa.inbound_stored` (`no_reply_reason`, `answered`) | yes, `handled_at` set + `no_reply_reason` (NULL for an answer); for anyone not on the test list the row holds **no text, phone, username, name or raw event** |
-| 10 | a stranger's job ends (done, or failed for good) — **`whatsappInbound.ts:466`**, **`runner.ts`** | *(none: the payload is replaced in the ending statement)* | the job row stays with the audit minimum only (`change.redacted: true`); a retried failure keeps the whole payload until its last attempt |
-| 10 | a settings read that fails on the last attempt — **`whatsappInbound.ts:502`** | `wa.settings_unreadable` (`error`) | yes, stored as for a stranger (metadata only) |
-| 10 | two threads for one person after a BSUID change — **`whatsappInbound.ts:409`** | `wa.contact_rekey_conflict` (`warn`) | both threads kept, the system message on the new one; consents and the test-sender entry still follow |
+| 10 | **no connection for the number** (never connected, revoked, a number that is not ours), or the tenant is switched off — **`whatsappInbound.ts:654`**, **`tenant.ts:217`** | `wa.no_creator` (`warn`), `wa.creator_inactive` | **no row**; Meta has its 200 and will not redeliver, so the message is gone. An `invalid` connection is NOT this: it stores |
+| 10 | an edit, a deletion, `request_welcome` or a message with no id — **`whatsappInbound.ts:691`** | `wa.ignored` | no row |
+| 10 | already handled — **`whatsappInbound.ts:353`**, **:410** | `wa.duplicate_ignored` | no change (the thread's `last_inbound_at` is deliberately not touched) |
+| 10 | **every message, once concluded** — **`whatsappInbound.ts:418`** | `wa.inbound_stored` (`no_reply_reason`, `answered`) | yes, `handled_at` set + `no_reply_reason` (NULL for an answer); for anyone not on the test list the row holds **no text, phone, username, name or raw event** |
+| 10 | a stranger's job ends (done, or failed for good) — **`whatsappInbound.ts:629`**, **`runner.ts`** | *(none: the payload is replaced in the ending statement)* | the job row stays with the audit minimum only (`change.redacted: true`); a retried failure keeps the whole payload until its last attempt |
+| 10 | a settings read that fails on the last attempt — **`whatsappInbound.ts:665`** | `wa.settings_unreadable` (`error`) | yes, stored as for a stranger (metadata only) |
+| 10 | two threads for one person after a BSUID change — **`whatsappInbound.ts:572`** | `wa.contact_rekey_conflict` (`warn`) | both threads kept, the system message on the new one; consents and the test-sender entry still follow |
 | 10 | a status for a message we have no row for — **`whatsappStatus.ts:133`** | `wa.status_unknown_message` | no (nothing to update; the job completes, nothing is retried) |
 | 10 | a status name Meta added later, or a status job with none — **`whatsappStatus.ts:156`**, **:151** | `wa.status_unrecognised` / `wa.status_empty` (`warn`) | no |
 | 10 | a delivery that could not be counted (the message row has no tenant, or the job no number) — **`whatsappStatus.ts:113`** | `wa.usage_not_counted` (`warn`) | the status is applied; **the ledger misses it** |
@@ -3090,10 +3124,22 @@ error, and several write **no row at all**.
 | 10 | an owner alert while alerts are off, or Telegram unreachable — **`whatsappNotify.ts:243`** | `wa.alert_not_sent` (`info`) / `wa.alert_failed` (`warn`) | the state is stored; a failed send releases the claim and the job retries |
 | 10 | a quality event's follow-up read of the number fails — **`whatsappStatus.ts:180`** | `wa.account_health_read_failed` (`warn`) | the event is applied; the daily read tries again tomorrow |
 | 10 | the free-reply alert check fails — **`whatsappAccount.ts:550`** | `wa.free_tier_check_failed` (`warn`) | the delivery is counted; the next delivery decides again |
-| 10 | a preference change — **`whatsappStatus.ts:195`** | `wa.preference_event` | no (logged only) |
+| 10 | a preference change for a number nobody connected, or with no `phone_number_id` — **`whatsappStatus.ts:233`** | `wa.no_creator` (`warn`, `source: 'user_preferences'`) | no consent row: it names no tenant; Meta has its 200 and a retry would find the same nothing |
+| 10 | Meta's "interested / not interested" feedback buttons, or a preference value this build does not know — **`consentPreferences.ts`** | `consent.user_preference` (`warn`, `recorded: 0`, `ignored: n`) | no (only `stop` / `resume` of `marketing_messages` is a consent row) |
+| 10 | a stop phrase from a listed tester — **`whatsappInbound.ts:462`**, **`whatsappOptOut.ts:96`** | `wa.opted_out` (`newly`, `confirmation`), `consent.withdrawn_all` | yes: three `withdrawn` rows, the thread paused and `closed`, `opted_out_at`, follow-ups cancelled; the inbound row says `opted_out` and **the agent is never asked**. A stranger's «stop» is stored as metadata and not read |
+| 10 | a stop while the agent is off, the connection is refused or a person has the thread — **`whatsappOptOut.ts`** | `wa.optout_confirmation_skipped` (`reason: 'agent_cannot_speak'`) | the opt-out is recorded; **no confirmation is sent, and a repeat gets none either** |
+| 10 | the confirmation of a stop could not be sent — **`whatsappOptOut.ts`** | `wa.optout_confirmation_not_sent` (`warn` for a refusal, `error` for a thrown one; `effect: 'the opt-out stands'`) | the opt-out stands; **no outbound row**; nothing is retried |
+| 10 | a stop that could not be written, last attempt — **`whatsappInbound.ts:453`** | `wa.optout_not_recorded` (`error`); `wa.optout_retrying` while attempts remain | **nothing recorded**, nothing sent to the contact; the row says `failure` |
+| 10 | a stop the turn decided, whose consent history could not be written — **`whatsappAnswer.ts:209`** | `wa.optout_consent_unrecorded` (`error`) | the thread is opted out and the line went out; **the consent history misses this stop**; not retried |
+| 10 | a tester's file that could not be saved (no media id, no token, too large, expired, an unsupported type, a refused connection) — **`whatsappMediaInput.ts:96`** | `wa.media_not_saved` (`reason`), `whatsapp.media_failed` / `whatsapp.media_skipped` | the message is stored with its media id in the raw event; **no private copy, and Meta drops the file after 7 days** |
+| 10 | a voice note that could not be read — **`whatsappMediaInput.ts:193`** | `wa.voice_unreadable` (`reason`: `rate_limited`, `provider_unavailable`, `unsupported_media`, `empty`, `no_file`, …) | the one line asking for text goes out (row NULL); **a second unreadable voice note inside a day, with nothing typed between, gets none** (`wa.media_ack_skipped`, row `superseded`) |
+| 10 | a file with no caption — **`whatsappMediaInput.ts:219`** | `wa.media_ack_sent` / `wa.media_ack_skipped` / `wa.media_ack_not_sent` | the kit's one line, once per burst; the agent is never asked. A sticker, a location and a contact card get **nothing** (`unsupported_type`) |
+| 10 | a voice note or file for an agent that is off, or while a person has the thread — **`whatsappInbound.ts:469`** | `wa.inbound_stored` (`agent_off` / `bot_paused`) | the file is saved privately; **no transcription is paid for and no line is sent** |
+| 10 | a ` #ref` that is not one of the tenant's own, or labels that cannot be read — **`whatsappInbound.ts:331`** | `wa.entry_link_unreadable` (`warn`) for the second | the thread is `organic`; the customer's words are unchanged |
+| 10 | a `free_entry_point` status with no end, an end already past, or on a message with no row — **`whatsappStatus.ts:90`** | *(none)* / `wa.status_unknown_message` | `free_window_expires_at` is left as it was (never set from a referral, a link or an ad) |
 | 10 | a daily health read of one number fails (a timeout, a database error) — **`whatsappHealth.ts:149`** | `wa.health_sweep_row_failed` (`warn`); a listing failure is `wa.health_sweep_failed` (`error`) | that number is left as it was; the rest are read |
 | 10 | the meter's ledger cannot be read — **`routes/whatsapp.ts:76`** | `whatsapp.usage_unreadable` (`warn`) | no; the card answers `usage.unavailable: true` with zeros |
-| 10 | **a message nobody answers** — `noReplyReasonFor`, **`whatsappInbound.ts:98`** | `wa.inbound_stored` (`no_reply_reason`, `answered: false`) | yes: the inbound row, `handled_at` set, `no_reply_reason` = `agent_off` / `not_test_sender` / `unsupported_type` / `connection_invalid` / `bot_paused` |
+| 10 | **a message nobody answers** — `noReplyReasonFor`, **`whatsappInbound.ts:123`** | `wa.inbound_stored` (`no_reply_reason`, `answered: false`) | yes: the inbound row, `handled_at` set, `no_reply_reason` = `agent_off` / `not_test_sender` / `unsupported_type` (a sticker, a location, a card, a reaction) / `connection_invalid` / `bot_paused` / `opted_out` / `superseded` |
 | 10 | the agent's reply could not be sent: a closed window, a billable reply nobody allowed, a refused connection — **`channels/send.ts:124`** | `wa.send_refused` (`warn`), `wa.answer_failed` (`error`) | the inbound row says `window_closed` / `billable_blocked` / `connection_invalid`; **no outbound row**; the thread is stamped "Needs you" and the owner is told; **Meta is not called** |
 | 10 | the model cannot answer (no allowed provider, a 429, a timeout, a budget) — **`turn.ts:402`** | `dm.engine_failed` (`fallback: 'never'`), `ai.call_refused` | the hand-off line goes out as the one reply; inbound `provider_unavailable`; the bot is paused. **Never Gemini** |
 | 10 | a send that may have landed (a timeout, a 5xx) — **`channels/send.ts`** `failedSend` | `wa.send_failed` (`may_have_landed: true`) | **never retried**; inbound `failure`; stamped; no outbound row, so a delivery that did happen is invisible in the thread |
