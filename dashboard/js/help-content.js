@@ -68,7 +68,7 @@ const HelpContent = {
                             { ul: [
                                 '**ردود الكلمات المفتاحية:** متابع يكتب كلمة تحددها في التعليقات (مثل «سعر»)، فتوصله رسالة خاصة فيها الرابط، ويشوف رداً علنياً على تعليقه إذا حبيت.',
                                 '**وكيل ذكي للرسائل:** أي رسالة توصلك في الخاص يرد عليها وكيل يعرف منتجك ويتكلم بأسلوبك، وتقدر توقفه في أي محادثة.',
-                                '**جدولة المنشورات:** صورة أو فيديو أو ريل أو كاروسيل، على إنستجرام وفيسبوك معاً، ومعها تيك توك إذا ربطته.',
+                                '**الجدولة:** صورة أو فيديو أو ريل أو كاروسيل، على إنستجرام وفيسبوك معاً، ومعها تيك توك إذا ربطته.',
                                 '**استوديو الكاروسيل:** يحوّل دروسك المصوّرة إلى منشورات كاروسيل جاهزة، بالنص والكلمة المفتاحية والرسالة الخاصة.',
                             ] },
                         ],
@@ -91,10 +91,10 @@ const HelpContent = {
                             'عشر دقائق تكفي عشان يبدأ الحساب يشتغل عنك. امشِ عليها بالترتيب:',
                             { ol: [
                                 'افتح **الإعدادات** وتأكد أن قسم **رمز الوصول** مكتوب فيه **صالح**. لو شفت تنبيه **صلاحيات ميتا ناقصة**، الحل في [[connect-meta#token-health]].',
-                                'روح **الحملات** واضغط **حملة جديدة**: اكتب الكلمة المفتاحية، ونص الرسالة الخاصة، ورداً علنياً قصيراً. وقبل ما تختار الكلمة اقرأ [[campaigns#matching|كيف تشتغل المطابقة]].',
+                                'روح **الردود التلقائية** واضغط **حملة جديدة**: اكتب الكلمة المفتاحية، ونص الرسالة الخاصة، ورداً علنياً قصيراً. وقبل ما تختار الكلمة اقرأ [[campaigns#matching|كيف تشتغل المطابقة]].',
                                 'جرّبها بنفسك: من حساب ثاني علّق بالكلمة على أحد منشوراتك، وخلال ثوانٍ توصلك الرسالة في الخاص. وكل اللي صار تلقاه في **سجل النشاط**.',
-                                'افتح **إعدادات الذكاء الاصطناعي**، فعّل **تشغيل الردّ الآلي**، واكتب في **الشخصية والتعليمات** من هو الوكيل وكيف يتكلم. جرّبه في **اختبار الوكيل** قبل ما يرد على أي عميل.',
-                                'من **جدولة المنشورات** اضغط **جدوِل منشوراً** وجرّب منشوراً بسيطاً. التفاصيل في [[scheduling]].',
+                                'افتح **مساعد الرسائل**، فعّل **تشغيل الردّ الآلي**، واكتب في **الشخصية والتعليمات** من هو الوكيل وكيف يتكلم. جرّبه في **اختبار الوكيل** قبل ما يرد على أي عميل.',
+                                'من **الجدولة** اضغط **جدوِل منشوراً** وجرّب منشوراً بسيطاً. التفاصيل في [[scheduling]].',
                                 'اختياري: اربط تيك توك من **الإعدادات** ← **اربط تيك توك**، واقرأ [[tiktok]] قبل أول منشور.',
                                 'اختياري: إذا عندك كورس أو دروس مصوّرة، جهّز **الاستوديو**. البداية من [[studio]].',
                             ] },
@@ -104,10 +104,10 @@ const HelpContent = {
                             'Ten minutes is enough to get the account working for you. Go through these in order:',
                             { ol: [
                                 'Open **Settings** and check that the **Access token** section says **Valid**. If you see **Missing Meta permissions**, the fix is in [[connect-meta#token-health]].',
-                                'Go to **Campaigns** and press **New campaign**: enter a keyword, the DM text and a short public reply. Before you pick the keyword, read [[campaigns#matching|how matching works]].',
+                                'Go to **Keyword replies** and press **New campaign**: enter a keyword, the DM text and a short public reply. Before you pick the keyword, read [[campaigns#matching|how matching works]].',
                                 'Test it yourself: from another account, comment the keyword on one of your posts. The DM arrives within seconds, and everything that happened shows up in the **Activity Log**.',
-                                'Open **AI Settings**, switch on **Turn on auto-replies**, and describe in **Voice and instructions** who the agent is and how it talks. Try it in the **Agent sandbox** before it answers a real customer.',
-                                'In the **Posts Scheduler**, press **Schedule a post** and try a simple one. The details are in [[scheduling]].',
+                                'Open **DM assistant**, switch on **Turn on auto-replies**, and describe in **Voice and instructions** who the agent is and how it talks. Try it in the **Agent sandbox** before it answers a real customer.',
+                                'In the **Scheduler**, press **Schedule a post** and try a simple one. The details are in [[scheduling]].',
                                 'Optional: connect TikTok from **Settings** → **Connect TikTok**, and read [[tiktok]] before your first post.',
                                 'Optional: if you have a course or recorded lessons, set up the **Studio**. Start with [[studio]].',
                             ] },
@@ -325,7 +325,7 @@ const HelpContent = {
                                 'إذا لقى، يرسل له **قالب الرسالة الخاصة** كرد خاص على تعليقه.',
                                 'ويرد على التعليق علناً بواحد من ردودك، إذا كتبت **الردّ العلني على التعليق**.',
                             ] },
-                            'أنشئ حملة من **الحملات** ← **حملة جديدة**، أو أضف كذا حملة مرة وحدة من **استورد من CSV**. وتقدر توقف أي حملة بدون ما تحذفها من مفتاح **تفعيل الحملة**.',
+                            'أنشئ حملة من **الردود التلقائية** ← **حملة جديدة**، أو أضف كذا حملة مرة وحدة من **استورد من CSV**. وتقدر توقف أي حملة بدون ما تحذفها من مفتاح **تفعيل الحملة**.',
                             '**معرّف المنشور المستهدف** اختياري: إذا حددته (أو اخترته من **اختر منشوراً**)، الحملة تشتغل على تعليقات هذا المنشور بس. وإذا تركته فاضي، تشتغل على كل منشوراتك.',
                         ],
                         en: [
@@ -335,7 +335,7 @@ const HelpContent = {
                                 'When one matches, it sends them your **DM template** as a private reply to that comment.',
                                 'It also answers the comment in public with one of your replies, if you filled in **Public comment reply**.',
                             ] },
-                            'Create one from **Campaigns** → **New campaign**, or add several at once with **Import CSV**. The **Campaign active** switch pauses a campaign without deleting it.',
+                            'Create one from **Keyword replies** → **New campaign**, or add several at once with **Import CSV**. The **Campaign active** switch pauses a campaign without deleting it.',
                             '**Target post ID** is optional. Set it (or choose one with **Pick a post**) and the campaign only answers comments under that post; leave it empty and it works on all your posts.',
                         ],
                     },
@@ -485,7 +485,7 @@ const HelpContent = {
                     title: { ar: 'أنواع المنشورات', en: 'Post types' },
                     body: {
                         ar: [
-                            'من **جدولة المنشورات** ← **جدوِل منشوراً**، اختر **المنصة** وبعدها **نوع المنشور**:',
+                            'من **الجدولة** ← **جدوِل منشوراً**، اختر **المنصة** وبعدها **نوع المنشور**:',
                             { dl: [
                                 ['صورة', 'صورة وحدة.'],
                                 ['فيديو / ريل', 'فيديو، ينزل ريل على إنستجرام وفيديو على فيسبوك.'],
@@ -496,7 +496,7 @@ const HelpContent = {
                             'الأنواع اللي ما تنفع على المنصة اللي اخترتها ما تطلع لك في القائمة أصلاً.',
                         ],
                         en: [
-                            'In the **Posts Scheduler**, press **Schedule a post**, then choose the **Platform** and the **Post type**:',
+                            'In the **Scheduler**, press **Schedule a post**, then choose the **Platform** and the **Post type**:',
                             { dl: [
                                 ['Single image', 'One image.'],
                                 ['Video / Reel', 'A video: a reel on Instagram, a video on Facebook.'],
@@ -1137,18 +1137,18 @@ const HelpContent = {
                         ar: [
                             'مساعد واتساب يرد على الرسائل اللي توصل لرقم نشاطك، بأسلوبك، وأنت مشغول أو نايم. وهذي حدوده:',
                             { ul: [
-                                'يجاوب عن نشاطك بس: منتجاتك وأسعارك وعروضك اللي كتبتها أنت في **إعدادات الذكاء الاصطناعي**. وإذا سألوه عن شي بعيد، يرجّعهم بلطف لموضوعك.',
+                                'يجاوب عن نشاطك بس: منتجاتك وأسعارك وعروضك اللي كتبتها أنت في **مساعد الرسائل**. وإذا سألوه عن شي بعيد، يرجّعهم بلطف لموضوعك.',
                                 'يقول من أول رد إنه مساعد آلي، وما يتخفّى في صورة إنسان.',
-                                'إذا العميل طلب يكلّم شخص، المساعد يوقف ويأكد له أن شخصاً بيرد عليه، وتكمل أنت من **صندوق الرسائل**.',
+                                'إذا العميل طلب يكلّم شخص، المساعد يوقف ويأكد له أن شخصاً بيرد عليه، وتكمل أنت من **الرسائل**.',
                             ] },
                             { note: 'كل رقم جديد يبدأ **متوقف**: ما يرد المساعد على أحد لين تشغّله أنت بنفسك. وتقدر تجرّبه على جوالك أول: شوف [[whatsapp#test]].' },
                         ],
                         en: [
                             'The WhatsApp assistant answers the messages that reach your business number, in your voice, while you are busy or asleep. These are its limits:',
                             { ul: [
-                                'It answers about your business only: the products, prices and offers you wrote in **AI Settings**. Asked about something unrelated, it steers politely back to your topic.',
+                                'It answers about your business only: the products, prices and offers you wrote in **DM assistant**. Asked about something unrelated, it steers politely back to your topic.',
                                 'It says it is an automated assistant from its first reply. It never passes as a person.',
-                                'When a customer asks for a person, the assistant stops, confirms that someone will reply, and you carry on from the **DM Inbox**.',
+                                'When a customer asks for a person, the assistant stops, confirms that someone will reply, and you carry on from the **Inbox**.',
                             ] },
                             { note: 'Every new number starts **Off**: the assistant answers no one until you switch it on yourself. You can try it on your own phone first: see [[whatsapp#test]].' },
                         ],
@@ -1247,7 +1247,7 @@ const HelpContent = {
                                 'اكتب رقم جوالك في **مرسلو الاختبار**: بالأرقام الدولية مع رمز الدولة، بلا + ولا صفر في أوله (مثل `201001234567` أو `966501234567`)، ورقم في كل سطر.',
                                 'اضغط **احفظ**.',
                                 'من جوالك أرسل رسالة للرقم التجريبي.',
-                                'افتح **صندوق الرسائل**: لازم تلقى رسالتك هناك. لا تنتظر رداً الحين: هذه الخطوة تثبت بس أن الرسالة توصل.',
+                                'افتح **الرسائل**: لازم تلقى رسالتك هناك. لا تنتظر رداً الحين: هذه الخطوة تثبت بس أن الرسالة توصل.',
                             ] },
                             { tip: 'خيار **الجميع** معطّل لين تكتمل شروط الإطلاق: صفحات الخصوصية والفحوصات المطلوبة. وتقدر ترجع تطفي المساعد بأي وقت باختيار **متوقف**.' },
                         ],
@@ -1258,7 +1258,7 @@ const HelpContent = {
                                 'Enter your own phone number in **Test senders**: in international digits with the country code, no + and no leading zero (like `201001234567` or `966501234567`), one number per line.',
                                 'Press **Save**.',
                                 'From your phone, send a message to the test number.',
-                                'Open the **DM Inbox**: your message should be there. Don’t expect a reply yet: this step only proves that the message gets in.',
+                                'Open the **Inbox**: your message should be there. Don’t expect a reply yet: this step only proves that the message gets in.',
                             ] },
                             { tip: '**Everyone** stays disabled until the go-live conditions are met: public privacy pages and the required checks. You can switch the assistant off again at any time by choosing **Off**.' },
                         ],
@@ -2158,17 +2158,17 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'ينضاف منشور كاروسيل على إنستجرام وفيسبوك معاً في **جدولة المنشورات**، بالشرائح المرسومة ونص إنستجرام. حالاته في [[scheduling#statuses]].',
+                                'ينضاف منشور كاروسيل على إنستجرام وفيسبوك معاً في **الجدولة**، بالشرائح المرسومة ونص إنستجرام. حالاته في [[scheduling#statuses]].',
                                 'تنشأ حملة للكلمة المفتاحية، إلا إذا عندك حملة مفعّلة ترد على نفس الكلمة من قبل.',
-                                'المسودّة تصير **مجدول** ويتسكّر التعديل. تبي تغيّرها؟ احذف المنشور من **جدولة المنشورات**.',
+                                'المسودّة تصير **مجدول** ويتسكّر التعديل. تبي تغيّرها؟ احذف المنشور من **الجدولة**.',
                                 '**افتح في المنشورات** يوديك للمنشور.',
                             ] },
                         ],
                         en: [
                             { ul: [
-                                'A carousel post for Instagram and Facebook together is added to the **Posts Scheduler**, with the drawn slides and the Instagram caption. Its statuses are in [[scheduling#statuses]].',
+                                'A carousel post for Instagram and Facebook together is added to the **Scheduler**, with the drawn slides and the Instagram caption. Its statuses are in [[scheduling#statuses]].',
                                 'A keyword campaign is created, unless an active campaign already answers that keyword.',
-                                'The draft becomes **Scheduled** and editing closes. To change it, delete the post from the **Posts Scheduler**.',
+                                'The draft becomes **Scheduled** and editing closes. To change it, delete the post from the **Scheduler**.',
                                 '**Open in Posts** takes you to the post.',
                             ] },
                         ],
@@ -2451,7 +2451,7 @@ const HelpContent = {
                         ar: [
                             'كل الذكاء الاصطناعي في المنتج من **Gemini** من Google، في ثلاثة أماكن:',
                             { dl: [
-                                ['ردود الرسائل', 'الوكيل الذكي يرد على الرسائل الخاصة بالنموذج اللي تختاره في **إعدادات الذكاء الاصطناعي** ← **النموذج**.'],
+                                ['ردود الرسائل', 'الوكيل الذكي يرد على الرسائل الخاصة بالنموذج اللي تختاره في **مساعد الرسائل** ← **النموذج**.'],
                                 ['كتابة الكاروسيل', '**أنشئ الكاروسيل** و**أعد الكتابة بالذكاء الاصطناعي** و**اكتبه من جديد** و**خطّط أسبوعي**، وكلها على الخادم.'],
                                 ['فهرسة الدروس', 'على العامل في جهازك، بمفتاح Gemini اللي في ملف إعداداته.'],
                             ] },
@@ -2459,7 +2459,7 @@ const HelpContent = {
                         en: [
                             'All the AI in the product is Google’s **Gemini**, used in three places:',
                             { dl: [
-                                ['DM replies', 'The AI agent answers DMs with the model you choose in **AI Settings** → **Model**.'],
+                                ['DM replies', 'The AI agent answers DMs with the model you choose in **DM assistant** → **Model**.'],
                                 ['Writing carousels', '**Generate carousel**, **Rewrite with AI**, **Write it again** and **Plan my week**, all on the server.'],
                                 ['Indexing lessons', 'On the worker on your computer, with the Gemini key in its config file.'],
                             ] },
@@ -2721,7 +2721,7 @@ const HelpContent = {
                                 ['**سجل النشاط** فاضي تماماً', 'التعليق اللي ما يطابق أي حملة ما يُسجَّل أصلاً. جرّب بكلمة حملة مفعّلة.'],
                                 ['ناس وصلتهم رسالة ما طلبوها', 'كلمة قصيرة قاعدة تطابق داخل كلمات ثانية: [[campaigns#pitfall]].'],
                                 ['الرسالة وصلت والرد العلني ما ظهر', 'الرد على تعليقات فيسبوك يحتاج صلاحية `pages_manage_engagement`: [[connect-meta#token-health]].'],
-                                ['الوكيل ما يرد على الرسائل', ['تأكد أن **تشغيل الردّ الآلي** مفعّل في **إعدادات الذكاء الاصطناعي**.', 'وتأكد أن الرد الآلي مو موقوف في المحادثة (**الردّ الآلي متوقف** في **صندوق الرسائل**). أي رد يدوي منك يوقفه في تلك المحادثة.', 'ولو خلصت حصة Gemini: [[ai-usage#quotas]].']],
+                                ['الوكيل ما يرد على الرسائل', ['تأكد أن **تشغيل الردّ الآلي** مفعّل في **مساعد الرسائل**.', 'وتأكد أن الرد الآلي مو موقوف في المحادثة (**الردّ الآلي متوقف** في **الرسائل**). أي رد يدوي منك يوقفه في تلك المحادثة.', 'ولو خلصت حصة Gemini: [[ai-usage#quotas]].']],
                                 ['بعض الرسائل **فشلت** ومعها سبب عن الحد', 'الحد 180 رسالة في الساعة لكل حساب، ورسالة وحدة لكل شخص كل 24 ساعة.'],
                             ] },
                         ],
@@ -2738,7 +2738,7 @@ const HelpContent = {
                                 ['The **Activity Log** is completely empty', 'A comment that matches no campaign is not recorded at all. Test with the keyword of an active campaign.'],
                                 ['People got a DM they never asked for', 'A short keyword is matching inside other words: [[campaigns#pitfall]].'],
                                 ['The DM arrived but the public reply didn’t', 'Replying to Facebook comments needs the `pages_manage_engagement` permission: [[connect-meta#token-health]].'],
-                                ['The AI agent isn’t answering DMs', ['Check **Turn on auto-replies** is on in **AI Settings**.', 'Check the AI isn’t paused in that conversation (**AI paused** in the **DM Inbox**). Any manual reply from you pauses it there.', 'And if your Gemini quota ran out: [[ai-usage#quotas]].']],
+                                ['The AI agent isn’t answering DMs', ['Check **Turn on auto-replies** is on in **DM assistant**.', 'Check the AI isn’t paused in that conversation (**AI paused** in the **Inbox**). Any manual reply from you pauses it there.', 'And if your Gemini quota ran out: [[ai-usage#quotas]].']],
                                 ['Some DMs **Failed** with a note about a limit', 'The limits are 180 DMs an hour per account, and one DM per person every 24 hours.'],
                             ] },
                         ],
@@ -2767,7 +2767,7 @@ const HelpContent = {
                                 ['لازم أخلي جهازي شغّالاً؟', 'للحملات والرسائل والجدولة لا، كلها على الخادم وتشتغل وجهازك مطفّي. الاستوديو بس: الفهرسة والرسم يحتاجون العامل على جهازك.'],
                                 ['ممكن ينشر شي بدون موافقتي؟', 'لا. المنشور ينزل لما تجدوله أنت، والردود تطلع من حملاتك ووكيلك وبتعليماتك.'],
                                 ['يشتغل مع حساب إنستجرام شخصي؟', 'لا، لازم حساب احترافي (أعمال أو صانع محتوى) مربوط بصفحة فيسبوك: [[connect-meta#needs]].'],
-                                ['أقدر أوقف الرد الآلي لعميل معيّن؟', 'إيه. في **صندوق الرسائل** افتح المحادثة وطفّ **الردّ الآلي في هذه المحادثة**. وأي رد يدوي منك يوقفه في تلك المحادثة لحاله.'],
+                                ['أقدر أوقف الرد الآلي لعميل معيّن؟', 'إيه. في **الرسائل** افتح المحادثة وطفّ **الردّ الآلي في هذه المحادثة**. وأي رد يدوي منك يوقفه في تلك المحادثة لحاله.'],
                                 ['أقدر أغيّر لغة اللوحة؟', 'إيه، من الزر أعلى الصفحة، أو من **الإعدادات** ← **المظهر واللغة**.'],
                             ] },
                         ],
@@ -2776,7 +2776,7 @@ const HelpContent = {
                                 ['Does my computer have to stay on?', 'Not for campaigns, DMs or scheduling: they all run on the server, even with your computer off. Only the Studio needs it: indexing and drawing slides need the worker on your computer.'],
                                 ['Can anything be posted without my approval?', 'No. A post goes out when you schedule it, and replies come from your own campaigns and your agent, following your instructions.'],
                                 ['Does it work with a personal Instagram account?', 'No: you need a professional (Business or Creator) account connected to a Facebook Page. See [[connect-meta#needs]].'],
-                                ['Can I stop the AI for one customer?', 'Yes. In the **DM Inbox**, open the conversation and switch off **AI assistant for this conversation**. A manual reply from you pauses it there too.'],
+                                ['Can I stop the AI for one customer?', 'Yes. In the **Inbox**, open the conversation and switch off **AI assistant for this conversation**. A manual reply from you pauses it there too.'],
                                 ['Can I change the dashboard’s language?', 'Yes, with the button at the top of the page, or in **Settings** → **Appearance & language**.'],
                             ] },
                         ],
@@ -2791,7 +2791,7 @@ const HelpContent = {
                                 ['فيديوهاتي تطلع من جهازي؟', 'لا. للفهرسة تروح نسخة صغيرة لـ Gemini وتنحذف بعدها، والأصلي يبقى عندك: [[worker#security]].'],
                                 ['أقدر أستخدم الاستوديو بدون دروس؟', 'إيه، اكتب **من فكرة**. بس رسم الشرائح يحتاج العامل.'],
                                 ['العامل يشتغل على ويندوز؟', 'حالياً على الماك بس.'],
-                                ['أقدر أعدّل الكاروسيل بعد ما أجدوله؟', 'لا، التعديل يتسكّر بعد الجدولة. احذف المنشور من **جدولة المنشورات** وارجع عدّله.'],
+                                ['أقدر أعدّل الكاروسيل بعد ما أجدوله؟', 'لا، التعديل يتسكّر بعد الجدولة. احذف المنشور من **الجدولة** وارجع عدّله.'],
                                 ['ليش الأرقام في الشرائح هندية (١٢٣)؟', 'غيّرها من **الأرقام** في إعدادات الاستوديو: [[studio-settings#voice]].'],
                                 ['الكاروسيل ينكتب بلهجتي؟', 'يلتزم بـ**دليل الأسلوب** في الإعدادات، فاكتب فيه لهجتك ونبرتك بالتفصيل.'],
                             ] },
@@ -2801,7 +2801,7 @@ const HelpContent = {
                                 ['Do my videos leave my computer?', 'No. For indexing, a small copy goes to Gemini and is deleted afterwards; the original stays with you. See [[worker#security]].'],
                                 ['Can I use the Studio without lessons?', 'Yes, write **From an idea**. Drawing the slides still needs the worker.'],
                                 ['Does the worker run on Windows?', 'For now, on a Mac only.'],
-                                ['Can I edit a carousel after scheduling it?', 'No, editing closes once it is scheduled. Delete the post from the **Posts Scheduler** and edit it again.'],
+                                ['Can I edit a carousel after scheduling it?', 'No, editing closes once it is scheduled. Delete the post from the **Scheduler** and edit it again.'],
                                 ['Why are the digits on my slides Arabic-Indic (١٢٣)?', 'Change **Digits** in the Studio settings: [[studio-settings#voice]].'],
                                 ['Will the carousel sound like me?', 'It follows the **Voice guide** in the settings, so describe your dialect and tone there in detail.'],
                             ] },

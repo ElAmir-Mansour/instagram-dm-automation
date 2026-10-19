@@ -59,6 +59,15 @@
                    (App.isInviteHash). A bare #/welcome is the wizard, not an invite. */
                 var isInviteLink = /^#\/invite(?:[?\/#]|$)/.test(location.hash || '') || /^#\/welcome\?(?:[^#]*&)?invite=/.test(location.hash || '');
                 if (isInviteLink) document.documentElement.setAttribute('data-invite', '1');
+                /* A stored session opens on the shell skeleton, never on the password form (SH-03). The login card is in the HTML and
+                   visible by default, so a signed-in owner used to see it flash on every open and then a blank page for the length of
+                   /auth/me. `data-session` hides it from the first frame and shows #shell-skeleton instead; App.settleFirstFrame()
+                   lifts it once the session is confirmed (or refused: App.showLogin()). `data-gated` is the last /auth/me's
+                   `onboarding.gated`: a tenant that is sent to the setup wizard has no sidebar to flash. An invite link is not a session. */
+                if (!isInviteLink && localStorage.getItem('auth_token')) {
+                    document.documentElement.setAttribute('data-session', '1');
+                    if (localStorage.getItem('onboarding_gated') === '1') document.documentElement.setAttribute('data-gated', '1');
+                }
                 var inviteLang = isInviteLink ? /^#\/(?:invite|welcome)\?(?:[^#]*&)?lang=(ar|en)(?:&|$)/.exec(location.hash || '') : null;
                 if (inviteLang) {
                     lang = inviteLang[1];
@@ -137,6 +146,32 @@
          public/landing.html; the login shows it once, and the invite and welcome screens keep the glow. -->
     <svg id="rows-ink" width="0" height="0" style="position:absolute;color:var(--pattern-ink)" aria-hidden="true" focusable="false"><pattern id="rows" width="576" height="192" patternUnits="userSpaceOnUse"><path d="M4 12h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h56m16 0h16M4 36h24m16 0h56m16 0h16m16 0h40m16 0h8m16 0h24m16 0h56m16 0h40m16 0h16M36 60h16m16 0h40m16 0h24m16 0h8M4 84h56m16 0h8m16 0h24m16 0h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16M4 108h16m16 0h40m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16M36 132h40m16 0h16m16 0h56m16 0h8m16 0h24M4 156h24m16 0h56m16 0h8m16 0h40m16 0h16m16 0h24m16 0h56m16 0h40M4 180h8m16 0h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16m16 0h24m16 0h56" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"/></pattern></svg>
 
+    <!-- ─── Shell skeleton ───────────────────────────────────────────────── -->
+    <!-- Shown only while `html[data-session]` is set (the head script, for a stored session) and until App confirms the session: the
+         shape of the sidebar and the header, so the first frame is the app's frame and not a password form. Static: no text, nothing
+         focusable, hidden from assistive technology. -->
+    <div id="shell-skeleton" class="shell-skeleton" aria-hidden="true">
+        <div class="shell-skeleton-side">
+            <div class="shell-skeleton-brand"><span class="skel shell-skel-mark"></span><span class="skel shell-skel-line shell-skel-w-md"></span></div>
+            <div class="shell-skeleton-rows">
+                <span class="skel shell-skel-line shell-skel-w-xs"></span>
+                <span class="skel shell-skel-row"></span><span class="skel shell-skel-row"></span>
+                <span class="skel shell-skel-line shell-skel-w-xs"></span>
+                <span class="skel shell-skel-row"></span><span class="skel shell-skel-row"></span>
+                <span class="skel shell-skel-line shell-skel-w-xs"></span>
+                <span class="skel shell-skel-row"></span><span class="skel shell-skel-row"></span>
+                <span class="skel shell-skel-line shell-skel-w-xs"></span>
+                <span class="skel shell-skel-row"></span><span class="skel shell-skel-row"></span>
+            </div>
+        </div>
+        <div class="shell-skeleton-main">
+            <div class="shell-skeleton-header"><span class="skel shell-skel-line shell-skel-w-md"></span></div>
+            <div class="shell-skeleton-page">
+                <span class="skel shell-skel-card"></span><span class="skel shell-skel-card"></span><span class="skel shell-skel-card shell-skel-tall"></span>
+            </div>
+        </div>
+    </div>
+
     <!-- ─── Login ────────────────────────────────────────────────────────── -->
     <div id="login-screen" class="login-screen">
         <svg class="rows" aria-hidden="true"><rect width="100%" height="100%" fill="url(#rows)"/><rect class="lit" x="70%" y="9%" width="63" height="7" rx="3.5"/></svg>
@@ -214,10 +249,11 @@
 
         <nav id="sidebar" class="sidebar" data-i18n-attr="aria-label:app.mainNav" aria-label="التنقل الرئيسي">
             <div class="sidebar-header">
-                <div class="sidebar-logo">
+                <!-- The brand mark is the way home (SH-27). It is a plain link, not a nav item: the marker below belongs to the pages. -->
+                <a href="#/overview" class="sidebar-logo" data-nav-home>
                     <div class="logo-mark"><svg viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></div>
                     <span class="sidebar-brand" data-i18n="app.name">أوتوريبلاي برو</span>
-                </div>
+                </a>
             </div>
 
             <div class="sidebar-nav" id="sidebar-nav">
@@ -228,117 +264,152 @@
                      transition the browser morphs it by its own name. -->
                 <span class="nav-indicator" id="nav-indicator" aria-hidden="true"></span>
 
-                <a href="#/overview" class="nav-item active" data-page="overview">
-                    <i data-lucide="layout-dashboard" aria-hidden="true"></i>
-                    <span data-i18n="nav.overview">نظرة عامة</span>
-                </a>
-                <a href="#/campaigns" class="nav-item" data-page="campaigns">
-                    <i data-lucide="megaphone" aria-hidden="true"></i>
-                    <span data-i18n="nav.campaigns">الحملات</span>
-                </a>
-                <a href="#/posts" class="nav-item" data-page="posts">
-                    <i data-lucide="calendar-days" aria-hidden="true"></i>
-                    <span data-i18n="nav.posts">جدولة المنشورات</span>
-                </a>
-                <a href="#/studio" class="nav-item" data-page="studio">
-                    <i data-lucide="layers" aria-hidden="true"></i>
-                    <span data-i18n="nav.studio">الاستوديو</span>
-                </a>
-                <!-- Right under Studio: it is the Studio's second tab, reels cut from the
-                     creator's own videos, waiting here for approval. -->
-                <a href="#/monteur" class="nav-item" data-page="monteur">
-                    <i data-lucide="scissors" aria-hidden="true"></i>
-                    <span data-i18n="nav.monteur">المونتير</span>
-                </a>
-                <!-- The Studio's third tab: animated infographics, GIF and MP4, in the creator's brand. -->
-                <a href="#/infographics" class="nav-item" data-page="infographics">
-                    <i data-lucide="images" aria-hidden="true"></i>
-                    <span data-i18n="nav.infographics">الإنفوجرافيك</span>
-                </a>
-                <a href="#/inbox" class="nav-item" data-page="inbox">
-                    <i data-lucide="message-square" aria-hidden="true"></i>
-                    <span data-i18n="nav.inbox">صندوق الرسائل</span>
-                </a>
-                <a href="#/ai_settings" class="nav-item" data-page="ai_settings">
-                    <i data-lucide="bot" aria-hidden="true"></i>
-                    <span data-i18n="nav.ai_settings">إعدادات الذكاء الاصطناعي</span>
-                </a>
-                <a href="#/analytics" class="nav-item" data-page="analytics">
-                    <i data-lucide="bar-chart-3" aria-hidden="true"></i>
-                    <span data-i18n="nav.analytics">التحليلات</span>
-                </a>
-                <!-- Beside Analytics on purpose: that is how the automation performs,
-                     this is how the content performs (Meta insights), plus the SEO
-                     tools and the AI coach. -->
-                <a href="#/growth" class="nav-item" data-page="growth">
-                    <i data-lucide="trending-up" aria-hidden="true"></i>
-                    <span data-i18n="nav.growth">النمو والتسويق</span>
-                </a>
-                <a href="#/activity" class="nav-item" data-page="activity">
-                    <i data-lucide="scroll-text" aria-hidden="true"></i>
-                    <span data-i18n="nav.activity">سجل النشاط</span>
-                </a>
-                <a href="#/settings" class="nav-item" data-page="settings">
-                    <i data-lucide="settings" aria-hidden="true"></i>
-                    <span data-i18n="nav.settings">الإعدادات</span>
-                </a>
-                <!-- Last in the operator's own list, before the admin group: the
-                     Help Center is for every role, and its articles deep-link as
-                     #/help/<slug>#<section>. -->
-                <a href="#/help" class="nav-item" data-page="help">
-                    <i data-lucide="circle-help" aria-hidden="true"></i>
-                    <span data-i18n="nav.help">المساعدة</span>
-                </a>
+                <!-- The sidebar is organised by the creator's JOB, not by build order (UX overhaul US6, SH-01): Today · Replies ·
+                     Content · Results. Each group is a list named by its visible heading (`aria-labelledby`). Settings and Help
+                     are at the foot, and Administration is one collapsible group of its own. -->
+                <div class="nav-group">
+                    <span class="nav-group-label" id="nav-group-today" data-i18n="nav.group.today">اليوم</span>
+                    <ul class="nav-list" role="list" aria-labelledby="nav-group-today">
+                        <li><a href="#/overview" class="nav-item active" data-page="overview">
+                            <i data-lucide="layout-dashboard" aria-hidden="true"></i>
+                            <span data-i18n="nav.overview">اليوم</span>
+                        </a></li>
+                        <li><a href="#/inbox" class="nav-item" data-page="inbox">
+                            <i data-lucide="message-square" aria-hidden="true"></i>
+                            <span data-i18n="nav.inbox">الرسائل</span>
+                        </a></li>
+                    </ul>
+                </div>
 
-                <!-- Platform administration. Revealed by App.applyChrome() only when
-                     /auth/me reports role === 'platform_admin'; every one of these
-                     routes 404s for anyone else, so the links are not there rather
-                     than being there and failing.
+                <div class="nav-group">
+                    <span class="nav-group-label" id="nav-group-replies" data-i18n="nav.group.replies">الردود</span>
+                    <ul class="nav-list" role="list" aria-labelledby="nav-group-replies">
+                        <li><a href="#/campaigns" class="nav-item" data-page="campaigns">
+                            <i data-lucide="message-circle" aria-hidden="true"></i>
+                            <span data-i18n="nav.campaigns">الردود التلقائية</span>
+                        </a></li>
+                        <li><a href="#/ai_settings" class="nav-item" data-page="ai_settings">
+                            <i data-lucide="bot" aria-hidden="true"></i>
+                            <span data-i18n="nav.ai_settings">مساعد الرسائل</span>
+                        </a></li>
+                    </ul>
+                </div>
 
-                     Order is the order you reach for them: Operations answers "is
-                     the platform healthy" and is the morning screen; Erasure is
-                     last because it is the only hard delete in the product. -->
-                <span class="nav-group-label hidden" data-admin-only data-i18n="nav.group.admin">الإدارة</span>
-                <a href="#/operations" class="nav-item hidden" data-page="operations" data-admin-only>
-                    <i data-lucide="activity" aria-hidden="true"></i>
-                    <span data-i18n="nav.operations">التشغيل</span>
-                </a>
-                <a href="#/tenants" class="nav-item hidden" data-page="tenants" data-admin-only>
-                    <i data-lucide="building-2" aria-hidden="true"></i>
-                    <span data-i18n="nav.tenants">الحسابات</span>
-                </a>
-                <a href="#/users" class="nav-item hidden" data-page="users" data-admin-only>
-                    <i data-lucide="users" aria-hidden="true"></i>
-                    <span data-i18n="nav.users">المستخدمون</span>
-                </a>
-                <a href="#/jobs" class="nav-item hidden" data-page="jobs" data-admin-only>
-                    <i data-lucide="list-checks" aria-hidden="true"></i>
-                    <span data-i18n="nav.jobs">طابور المهام</span>
-                </a>
-                <a href="#/audit" class="nav-item hidden" data-page="audit" data-admin-only>
-                    <i data-lucide="file-clock" aria-hidden="true"></i>
-                    <span data-i18n="nav.audit">سجل التدقيق</span>
-                </a>
-                <a href="#/erasure" class="nav-item hidden" data-page="erasure" data-admin-only>
-                    <i data-lucide="user-x" aria-hidden="true"></i>
-                    <span data-i18n="nav.erasure">حذف بيانات شخص</span>
-                </a>
+                <div class="nav-group">
+                    <span class="nav-group-label" id="nav-group-content" data-i18n="nav.group.content">المحتوى</span>
+                    <ul class="nav-list" role="list" aria-labelledby="nav-group-content">
+                        <!-- ONE entry for the whole Studio. Its carousels, reels (#/monteur) and infographics (#/infographics) are
+                             tabs inside it, and while either of those two is open this item reads as current (`navAs`, app.js). -->
+                        <li><a href="#/studio" class="nav-item" data-page="studio">
+                            <i data-lucide="layers" aria-hidden="true"></i>
+                            <span data-i18n="nav.studio">الاستوديو</span>
+                        </a></li>
+                        <li><a href="#/posts" class="nav-item" data-page="posts">
+                            <i data-lucide="calendar-days" aria-hidden="true"></i>
+                            <span data-i18n="nav.posts">الجدولة</span>
+                        </a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <span class="nav-group-label" id="nav-group-results" data-i18n="nav.group.results">النتائج</span>
+                    <ul class="nav-list" role="list" aria-labelledby="nav-group-results">
+                        <!-- The automation's numbers. The activity log is its second view (a link strip at the top of both pages),
+                             so it has no item of its own and this one reads as current on #/activity (`navAs`). -->
+                        <li><a href="#/analytics" class="nav-item" data-page="analytics">
+                            <i data-lucide="bar-chart-3" aria-hidden="true"></i>
+                            <span data-i18n="nav.analytics">النتائج</span>
+                        </a></li>
+                        <!-- Beside the numbers on purpose: that is how the automation performs, this is how the content performs
+                             (Meta insights), plus the SEO tools and the AI coach. -->
+                        <li><a href="#/growth" class="nav-item" data-page="growth">
+                            <i data-lucide="trending-up" aria-hidden="true"></i>
+                            <span data-i18n="nav.growth">النمو والتسويق</span>
+                        </a></li>
+                    </ul>
+                </div>
+
+                <!-- Platform administration: ONE collapsible group (SH-04), collapsed by default and remembered per viewer. Revealed
+                     by App.applyChrome() only when /auth/me reports role === 'platform_admin'; every one of these routes 404s for
+                     anyone else, so the links are not there rather than being there and failing. The heading is a real button
+                     (aria-expanded); App.syncAdminGroup() opens it while an admin page is open; the dot is the platform-wide problem
+                     count from GET /api/attention (`counts.platform`), hidden at zero.
+
+                     Order is the order you reach for them: Operations answers "is the platform healthy" and is the morning screen;
+                     Erasure is last because it is the only hard delete in the product. -->
+                <div class="nav-group nav-group--admin hidden" id="nav-admin" data-admin-only>
+                    <button type="button" class="nav-group-toggle" id="nav-admin-toggle" aria-expanded="false" aria-controls="nav-admin-list"
+                            data-action="app:toggleAdminGroup">
+                        <span class="nav-group-label-text" id="nav-group-admin" data-i18n="nav.group.admin">الإدارة</span>
+                        <span class="nav-dot" id="nav-admin-dot" hidden><span class="sr-only" data-i18n="nav.adminAttention">يحتاج انتباهك</span></span>
+                        <i data-lucide="chevron-down" aria-hidden="true"></i>
+                    </button>
+                    <ul class="nav-list" id="nav-admin-list" role="list" aria-labelledby="nav-group-admin" hidden>
+                        <li><a href="#/operations" class="nav-item" data-page="operations">
+                            <i data-lucide="activity" aria-hidden="true"></i>
+                            <span data-i18n="nav.operations">التشغيل</span>
+                        </a></li>
+                        <li><a href="#/tenants" class="nav-item" data-page="tenants">
+                            <i data-lucide="building-2" aria-hidden="true"></i>
+                            <span data-i18n="nav.tenants">العملاء</span>
+                        </a></li>
+                        <li><a href="#/users" class="nav-item" data-page="users">
+                            <i data-lucide="users" aria-hidden="true"></i>
+                            <span data-i18n="nav.users">المستخدمون</span>
+                        </a></li>
+                        <li><a href="#/jobs" class="nav-item" data-page="jobs">
+                            <i data-lucide="list-checks" aria-hidden="true"></i>
+                            <span data-i18n="nav.jobs">طابور المهام</span>
+                        </a></li>
+                        <li><a href="#/audit" class="nav-item" data-page="audit">
+                            <i data-lucide="file-clock" aria-hidden="true"></i>
+                            <span data-i18n="nav.audit">سجل التدقيق</span>
+                        </a></li>
+                        <li><a href="#/erasure" class="nav-item" data-page="erasure">
+                            <i data-lucide="user-x" aria-hidden="true"></i>
+                            <span data-i18n="nav.erasure">حذف بيانات شخص</span>
+                        </a></li>
+                    </ul>
+                </div>
             </div>
 
             <div class="sidebar-footer">
-                <!-- Your own password. Hidden for the shared-password path, which
-                     has no user identity for POST /api/auth/password to change.
-                     It lives here, not on the admin-only Users page, because an
-                     ORDINARY user is exactly who needs it. -->
-                <button id="password-btn" type="button" class="nav-item hidden" data-user-only
-                        data-action="app:showPasswordModal">
-                    <i data-lucide="key-round" aria-hidden="true"></i>
-                    <span data-i18n="password.change">تغيير كلمة المرور</span>
-                </button>
-                <button id="logout-btn" type="button" class="nav-item nav-logout">
-                    <i data-lucide="log-out" aria-hidden="true"></i>
-                    <span data-i18n="app.logout">تسجيل الخروج</span>
-                </button>
+                <!-- Settings and Help: for every role, outside the job groups. The Help Center's articles deep-link as
+                     #/help/<slug>#<section>. They have a marker of their own (`#nav-indicator-foot`): this block is not inside
+                     the scrolling list, so the one in the list cannot reach it. -->
+                <div class="sidebar-foot-nav" id="sidebar-foot-nav">
+                    <span class="nav-indicator nav-indicator--foot" id="nav-indicator-foot" aria-hidden="true"></span>
+                    <ul class="nav-list" role="list">
+                        <li><a href="#/settings" class="nav-item" data-page="settings">
+                            <i data-lucide="settings" aria-hidden="true"></i>
+                            <span data-i18n="nav.settings">الإعدادات</span>
+                        </a></li>
+                        <li><a href="#/help" class="nav-item" data-page="help">
+                            <i data-lucide="circle-help" aria-hidden="true"></i>
+                            <span data-i18n="nav.help">المساعدة</span>
+                        </a></li>
+                    </ul>
+                </div>
+
+                <!-- The account area: who is signed in (SH-27), then the two things you do to your own session. -->
+                <div class="nav-account">
+                    <p class="nav-identity" id="nav-identity" hidden>
+                        <i data-lucide="user" aria-hidden="true"></i>
+                        <span class="sr-only" data-i18n="nav.account.signedInAs">تسجيل الدخول باسم</span>
+                        <span class="nav-identity-text" id="nav-identity-text"></span>
+                    </p>
+                    <!-- Your own password. Hidden for the shared-password path, which has no user identity for POST /api/auth/password
+                         to change. It lives here, not on the admin-only Users page, because an ORDINARY user is exactly who needs it. -->
+                    <button id="password-btn" type="button" class="nav-item hidden" data-user-only
+                            data-action="app:showPasswordModal">
+                        <i data-lucide="key-round" aria-hidden="true"></i>
+                        <span data-i18n="password.change">تغيير كلمة المرور</span>
+                    </button>
+                    <button id="logout-btn" type="button" class="nav-item nav-logout">
+                        <i data-lucide="log-out" aria-hidden="true"></i>
+                        <span data-i18n="app.logout">تسجيل الخروج</span>
+                    </button>
+                </div>
             </div>
         </nav>
 
@@ -354,7 +425,7 @@
                     <div>
                         <!-- No lang= here: the title is written in the interface language, which <html lang> already names. A fixed lang="ar" made an
                              English title read in an Arabic voice. tabindex="-1": App.navigate() moves focus here after a keyboard navigation. -->
-                        <h1 id="page-title" class="page-title" data-i18n="nav.overview" tabindex="-1">نظرة عامة</h1>
+                        <h1 id="page-title" class="page-title" data-i18n="nav.overview" tabindex="-1">اليوم</h1>
                         <p id="page-subtitle" class="page-subtitle"></p>
                     </div>
                 </div>

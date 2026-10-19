@@ -996,25 +996,25 @@ describe('Monteur — every string in Arabic and English, and the page wired int
 
     it('route: App.pages.monteur loads monteur.js, and #/monteur is the Monteur', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
-        assert.match(app, /monteur: \{ src: 'monteur', page: \(\) => MonteurPage \}/);
+        assert.match(app, /monteur: \{ src: 'monteur', page: \(\) => MonteurPage, navAs: 'studio' \}/);
         const s = load(['dashboard/js/app.js'], 'App');
         const App = s.Page;
         assert.equal(App.pages.monteur.src, 'monteur');
         assert.equal(App.pages.monteur.adminOnly, undefined, 'for every operator, not the admin group');
+        assert.equal(App.pages.monteur.navAs, 'studio', 'no sidebar item of its own: Studio reads as current while it is open');
         for (const hash of ['#/monteur', '#/monteur?x=1']) {
             (s.run<Json>('location')).hash = hash;
             assert.equal(App.pageFromHash(), 'monteur', hash);
         }
     });
 
-    it('sidebar: its own item right under Studio, preloaded by its hash; the Studio tab bar links to it', () => {
+    it('sidebar: no item of its own (Studio is the one entry), preloaded by its hash; the Studio tab bar links to it', () => {
         const index = readFileSync('dashboard/index.html', 'utf8');
-        const item = index.match(/<a href="#\/monteur" class="nav-item" data-page="monteur">[\s\S]*?<\/a>/);
-        assert.ok(item, 'the nav item exists');
-        assert.match(item[0], /data-lucide="scissors"/);
-        assert.match(item[0], /data-i18n="nav\.monteur">المونتير</);
-        const at = (needle: string): number => index.indexOf(needle);
-        assert.ok(at('data-page="studio"') < at('data-page="monteur"') && at('data-page="monteur"') < at('data-page="inbox"'));
+        // US6: Studio is ONE sidebar entry. The reels page is its second tab and stays reachable (#/monteur, the tab bar below), and
+        // Studio reads as current while it is open (`navAs`, pinned in the route test above).
+        assert.equal(index.includes('data-page="monteur"'), false, 'no sidebar item of its own');
+        assert.equal(index.includes('data-i18n="nav.monteur"'), false);
+        assert.equal((index.match(/data-page="studio"/g) ?? []).length, 1, 'Studio is one entry');
         assert.match(index, /var PAGES = \[[^\]]*'monteur'/);
 
         // All three tab bars list the same four links in the same order, and each marks its own.
