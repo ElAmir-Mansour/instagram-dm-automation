@@ -7,8 +7,8 @@
  *   - L5, per language: exactly one title, description and og:image; the share card is the committed PNG for that language; the
  *     JSON-LD parses and claims no price, offer, rating or review; `/robots.txt` and `/sitemap.xml` answer on the wire, name the
  *     saved origin, and list exactly the pages that declare themselves indexable.
- *   - L6: no `<!--` survives into any served page, in either language, with any settings; each page is at most 215 KB (1 KB = 1000
- *     bytes, as in the other size tests); and the sweep removed comments and indentation and nothing else.
+ *   - L6: no `<!--` survives into any served page, in either language, with any settings; each page is at most 220 KB (1 KB = 1000
+ *     bytes, as in the other size tests; 215 KB until the landing's platform strip, 2026-10-19); and the sweep removed comments and indentation and nothing else.
  *   - The tokenizer behind L6, on the inputs a regex gets wrong: a comment that mentions `<style>`, a `<!--` inside a script, a
  *     style string or an attribute, a conditional comment, `<pre>`.
  *
@@ -327,9 +327,10 @@ describe('L5 — /robots.txt and /sitemap.xml, on the wire', () => {
 
 // ─── L6: what is served ──────────────────────────────────────────────────────────────────────────────────────────────
 
-const BUDGET = 215 * 1000;
+// 215 KB until 2026-10-19: the landing's platform strip (+4.0 KB served) was asked for by the owner. See brandMotif.test.ts, which holds the same figure.
+const BUDGET = 220 * 1000;
 
-describe('L6 — what is served: no comment, and at most 215 KB', () => {
+describe('L6 — what is served: no comment, and at most 220 KB', () => {
     for (const file of SERVED) {
         it(`${file}: no "<!--" in either language, with every setting on or off`, () => {
             for (const lang of LANGS) {

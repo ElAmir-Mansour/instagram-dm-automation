@@ -35,6 +35,12 @@
  * non-text shape at 3:1 (LOGO PAIRS below). checkPlatformColourUsage also reads the `<style>` of every
  * public page, so a platform colour cannot come back as a solid fill there either.
  *
+ * ONE exception, on the owner's instruction (2026-10-19): the platform strip at the top of the landing page draws four
+ * marks in their platform's own colour (WhatsApp, Instagram, Facebook, YouTube; TikTok's brand colour is black, so its
+ * mark stays --logo-mono). checkPlatformStrip() below is the only reader of those four values: they may be written
+ * once, as `--pb-*` custom properties in the `.pstrip` rule of public/landing.html, they must be simple-icons@16.33.0's
+ * own hexes, and every other use of a platform hex on a public page still fails above.
+ *
  * The logo mark (Kufi «رد», DESIGN.md §4) paints two tokens, `--mark-tile` and `--mark-glyph`: Cardamom in dark and
  * Ink in light. The glyph is measured on its own tile at 4.5:1 (it is the whole drawing), and the tile as a shape against
  * the page and the card it sits on at 3:1 (MARK PAIRS below).
@@ -337,6 +343,8 @@ for (const [name, t] of Object.entries(THEMES)) {
 // stylesheet still paints these inks on these grounds, so a pair measured here is a pair that exists.
 
 const MIN_LOGO = 3.0;
+/** One `--pb-<brand>: #rrggbb;` declaration of the landing page's platform strip. */
+const STRIP_DECLARATION = /--pb-(?:whatsapp|instagram|facebook|youtube)\s*:\s*#[0-9a-fA-F]{6}\s*;/g;
 const TILE = (brand) => [`brand-${brand}-soft`, 'surface-raised', 'surface-page'];
 const LOGO_PAIRS = [
     ['logo-mono', [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page'],
@@ -503,8 +511,11 @@ function checkPlatformColourUsage() {
                 + `visualisation: use --brand-*-soft as a tint, and the --logo-* ink for a mark.`
             );
         }
-        const hex = styles.match(BRAND_HEX);
-        if (hex) failures.push(`${file}: the platform colour ${hex[0]} is written out in its CSS. A mark is monochrome (--logo-*), a tile is a -soft tint.`);
+        // The strip's four declarations are the one allowed place, and only on the landing page; checkPlatformStrip() pins them.
+        const scanned = file === 'public/landing.html' ? styles.replace(STRIP_DECLARATION, '') : styles;
+        const hex = scanned.match(BRAND_HEX);
+        if (hex) failures.push(`${file}: the platform colour ${hex[0]} is written out in its CSS. A mark is monochrome (--logo-*), a tile is a -soft tint; the one exception is the landing page's \`.pstrip\` (--pb-*).`);
+        if (file !== 'public/landing.html' && /--pb-|\.pstrip|\.pmark/.test(styles)) failures.push(`${file}: carries the platform strip's colour tokens or classes, which belong to public/landing.html alone.`);
     }
 }
 
@@ -527,6 +538,91 @@ function checkLogoRules() {
     ];
     for (const [sel, re, what] of want) {
         if (!re.test(rule(sel))) failures.push(`${sel} no longer says what check-contrast measures: ${what}.`);
+    }
+}
+
+/**
+ * THE PLATFORM STRIP (2026-10-19): the one place on the public pages where a mark wears its platform's colour.
+ *
+ * What is pinned, and why each is here:
+ *   - the four colours are simple-icons@16.33.0's `hex` for each brand (landingLogos.test.ts compares them to the package,
+ *     so a bump of the package fails there; this file holds the same four so a plain `node` run needs no dependency), and
+ *     they are declared once, as `--pb-*` in the `.pstrip` rule, never written anywhere else on a public page;
+ *   - each `.pmark-<brand>` paints its own token and no other, `.pmark` itself is --logo-mono (TikTok's two inks: white in
+ *     dark, black in light), and TikTok has no rule of its own: its brand colour is black and would vanish on the dark page;
+ *   - the colour never leaves the landing page (the scan in checkPlatformColourUsage);
+ *   - each mark is a graphic, so the floor is the non-text 3:1 against the card it sits on (--surface-raised over the page),
+ *     in both themes, and ALSO against the card at the hero glow's peak: the strip is the first thing in the hero and the
+ *     glow is brightest behind it (--accent-ring x --lp-glow, over the page, under the translucent card), which is the
+ *     measurement the landing's header comment records for its other panels. The names and lines are text: --text-strong
+ *     and --text-default must clear 4.5:1 on that same worst-case card.
+ *
+ * THE EXEMPTION, and it is one pair: WhatsApp green on the light card is 1.9:1, under 3:1, and no WhatsApp-green mark can
+ * clear it on a light ground (the brand's own colour is that light). A logo is an "essential" graphic under WCAG 1.4.11, the
+ * platform's name is real text beside it, and the owner asked for the brand colour, so the pair is allowed down to
+ * STRIP_EXEMPT_FLOOR and no further. The exemption is a named constant, so it cannot widen without an edit here.
+ */
+const STRIP_COLOURS = { whatsapp: '#25d366', instagram: '#ff0069', facebook: '#0866ff', youtube: '#ff0000' };
+const STRIP_EXEMPT = { 'whatsapp:light': 'brand green on a light card (WCAG 1.4.11 essential-graphic exception; the name is real text)' };
+const STRIP_EXEMPT_FLOOR = 1.5;
+const STRIP_PEAK_FLOOR = 2.5;   // the glow's peak lifts the ground, and is where the mark is at its tightest; see above
+const stripResult = { pairs: 0, tightest: {}, tightestPeak: {}, textTightest: {} };
+
+function checkPlatformStrip() {
+    const html = readFileSync('public/landing.html', 'utf8');
+    const styles = (html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const ruleBody = (sel) => (styles.match(new RegExp(`(?:^|\\n)[ \\t]*${sel.replace(/[.>]/g, '\\$&')}[ \\t]*\\{([^}]*)\\}`)) || [])[1];
+    const strip = ruleBody('.pstrip');
+    if (strip === undefined) { failures.push('public/landing.html has no `.pstrip` rule, so the platform strip is unchecked.'); return; }
+
+    // 1. the four colours, once, and exactly the brands' own
+    const declared = Object.fromEntries([...strip.matchAll(/--pb-([a-z]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g)].map((m) => [m[1], m[2].toLowerCase()]));
+    if (JSON.stringify(Object.entries(declared).sort()) !== JSON.stringify(Object.entries(STRIP_COLOURS).sort())) {
+        failures.push(`The \`.pstrip\` rule declares ${JSON.stringify(declared)}, not the four simple-icons@16.33.0 hexes ${JSON.stringify(STRIP_COLOURS)}.`);
+    }
+    if ((styles.match(/--pb-[a-z]+\s*:/g) ?? []).length !== 4) failures.push('A `--pb-*` colour is declared outside the `.pstrip` rule, or twice.');
+
+    // 2. each mark paints its own token; TikTok paints none
+    if ((styles.match(/var\(--pb-/g) ?? []).length !== 4) failures.push('`var(--pb-*)` is used somewhere other than the four `.pmark-<brand>` fills.');
+    for (const b of Object.keys(STRIP_COLOURS)) {
+        if (!new RegExp(`(?<![-\\w])fill:\\s*var\\(--pb-${b}\\)`).test(ruleBody(`.pmark-${b}`) ?? '')) failures.push(`.pmark-${b} no longer fills with var(--pb-${b}).`);
+    }
+    if (ruleBody('.pmark-tiktok') !== undefined) failures.push('.pmark-tiktok has a rule: TikTok keeps --logo-mono (its brand colour is black).');
+    if (!/(?<![-\w])fill:\s*var\(--logo-mono\)/.test(ruleBody('.pmark') ?? '')) failures.push('.pmark is no longer painted in --logo-mono, which is what TikTok\'s mark takes.');
+
+    // 3. the pairs, per theme: on the card, and on the card at the glow's peak
+    const lpBlocks = {
+        dark: blockIn(styles, /:root\s*\{/),
+        light: blockIn(styles, /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-theme='dark'\]\)\s*\{/),
+    };
+    for (const [name, t] of Object.entries(LOGO_THEMES)) {
+        const glow = Number(lpBlocks[name]['lp-glow']);
+        const ring = resolve(t, t['accent-ring']);
+        const page = flatten(t, ['surface-page']);
+        const raised = resolve(t, t['surface-raised']);
+        if (!(glow > 0) || !ring || !page || !raised) { failures.push(`The strip's grounds could not be read for the ${name} theme (--lp-glow, --accent-ring, --surface-raised, --surface-page).`); continue; }
+        const card = flatten(t, ['surface-raised', 'surface-page']);
+        const peak = over(raised, over([ring[0], ring[1], ring[2], ring[3] * glow], page));
+        const note = (key, ink, label) => {
+            const rNominal = ratio(ink, card);
+            const rPeak = ratio(ink, peak);
+            stripResult.pairs += 2;
+            if (!stripResult.tightest[name] || rNominal < stripResult.tightest[name].r) stripResult.tightest[name] = { r: rNominal, label };
+            if (!stripResult.tightestPeak[name] || rPeak < stripResult.tightestPeak[name].r) stripResult.tightestPeak[name] = { r: rPeak, label };
+            const exempt = STRIP_EXEMPT[`${key}:${name}`];
+            const floor = exempt ? STRIP_EXEMPT_FLOOR : MIN_LOGO;
+            if (rNominal < floor) failures.push(`${rNominal.toFixed(2)}:1 - ${label} on the card (${name} theme) is below the ${floor}:1 ${exempt ? 'exemption floor' : 'non-text floor'}.`);
+            if (rPeak < (exempt ? STRIP_EXEMPT_FLOOR : STRIP_PEAK_FLOOR)) failures.push(`${rPeak.toFixed(2)}:1 - ${label} on the card at the hero glow's peak (${name} theme) is below ${exempt ? STRIP_EXEMPT_FLOOR : STRIP_PEAK_FLOOR}:1.`);
+        };
+        for (const [b, hex] of Object.entries(STRIP_COLOURS)) note(b, parse(hex).slice(0, 3), `--pb-${b} (${hex})`);
+        const mono = resolve(t, t['logo-mono']);
+        if (mono) note('tiktok', mono.slice(0, 3), '--logo-mono (TikTok)');
+        for (const txt of ['text-strong', 'text-default']) {
+            const fg = resolve(t, t[txt]);
+            const r = fg ? ratio(fg.slice(0, 3), peak) : 0;
+            if (!stripResult.textTightest[name] || r < stripResult.textTightest[name].r) stripResult.textTightest[name] = { r, label: `--${txt}` };
+            if (r < MIN) failures.push(`${r.toFixed(2)}:1 - --${txt} on the strip's card at the hero glow's peak (${name} theme) is below the ${MIN}:1 AA floor.`);
+        }
     }
 }
 
@@ -602,6 +698,7 @@ for (const [name, t] of Object.entries(THEMES)) {
 checkPlatformColourUsage();
 checkBubbleFurniture();
 checkLogoRules();
+checkPlatformStrip();
 
 if (failures.length > 0) {
     console.error('\n\u274c contrast check failed:\n');
@@ -619,6 +716,7 @@ console.log(
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
     + `platform colours solid only in data viz (and nowhere on the public pages); `
     + `${logoTotal} platform-logo pairs clear ${MIN_LOGO}:1 as shapes (tightest ${Object.entries(logoTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')}); `
+    + `the platform strip: ${stripResult.pairs} pairs (marks tightest ${Object.entries(stripResult.tightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')}; at the glow's peak ${Object.entries(stripResult.tightestPeak).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; its text ${Object.entries(stripResult.textTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; one named exemption: whatsapp:light); `
     + `the mark: glyph on tile ${Object.entries(markGlyph).map(([th, r]) => `${r.toFixed(2)}:1 ${th}`).join(', ')}, tile vs ground ${Object.entries(markTile).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; `
     + `Rows ink within ${MAX_INK}:1 of its grounds (loudest ${Object.entries(rowsInk).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')})`
 );

@@ -12,7 +12,10 @@
  *   - a logo with no word beside it (a glyph never replaces the platform's name, and a screen reader
  *     gets the name from real text because every glyph is aria-hidden);
  *   - a Arabic page with a different set of glyphs from the English one;
- *   - a platform colour: the glyphs are monochrome (DESIGN.md §2), painted only by the --logo-* tokens.
+ *   - a platform colour: the glyphs are monochrome (DESIGN.md §2), painted only by the --logo-* tokens. ONE exception, on the owner's
+ *     instruction (2026-10-19): the platform strip at the top of the landing page draws WhatsApp, Instagram, Facebook and YouTube in their
+ *     own colour (TikTok's is black, so it keeps --logo-mono). Its colours, its markup and its CSS are pinned in the last describe of this
+ *     file, and check:contrast reads the same four values; nothing else on any page may use them.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -248,18 +251,21 @@ describe('platform logos — served the way src/index.ts serves them', () => {
     const uses = (html: string, id = '') => (html.match(new RegExp(`href="#plogo-${id}`, 'g')) ?? []).length;
 
     for (const lang of ['ar', 'en'] as const) {
-        it(`landing (${lang}): 65 glyphs with a WhatsApp number, 60 without, and none of the missing ones is a WhatsApp mark`, () => {
+        it(`landing (${lang}): 75 glyphs with a WhatsApp number, 70 without, and the missing ones are the buttons' and the footer's WhatsApp marks`, () => {
             const src = read('landing');
             const full = renderSiteTemplate(src, WITH, lang);
             const bare = renderSiteTemplate(src, WITHOUT, lang);
             // Each language: 15 (buttons, rows, samples) + 13 in the L9 diagrams (the flow chips: 2 + 3 + 4, and
             // the platform map's four row heads) + 2 in the hero poster (L10: Instagram and Facebook, on the two
             // ghost bubbles; they are <use> in an aria-hidden SVG, not .plogo, so the tests below do not read them
-            // as labelled logos). Two languages, plus the footer's five.
-            assert.equal(uses(full), 65, 'two languages x 30, plus the footer\'s five');
-            assert.equal(uses(full, 'whatsapp'), 5, 'hero and contact in each language, and the footer');
-            assert.equal(uses(bare), 60);
-            assert.equal(uses(bare, 'whatsapp'), 0, 'a link that is removed takes its glyph with it');
+            // as labelled logos) + 5 in the platform strip (2026-10-19: one per platform, `.pmark`, pinned in the last
+            // describe). Two languages, plus the footer's five.
+            assert.equal(uses(full), 75, 'two languages x 35, plus the footer\'s five');
+            assert.equal(uses(full, 'whatsapp'), 7, 'hero button, contact button and the strip in each language, and the footer');
+            assert.equal(uses(bare), 70);
+            // A button's glyph goes with its link. The strip's WhatsApp mark is the channel, not a link to the owner's number, so it stays
+            // when the number is removed: two of them, one per language.
+            assert.equal(uses(bare, 'whatsapp'), 2, 'a link that is removed takes its glyph with it; the strip names the channel and stays');
             assert.equal(bare.includes('class="foot-wa"'), false);
         });
     }
@@ -273,16 +279,18 @@ describe('platform logos — served the way src/index.ts serves them', () => {
     }
 });
 
-describe('platform logos — a glyph without .plogo is only ever the hero poster\'s', () => {
+describe('platform logos — a glyph without .plogo is only ever the hero poster\'s or the platform strip\'s', () => {
     // IDENTITY.md section 5 says a platform's mark always sits beside its name. The hero poster (L10) is the one exception the
     // spec makes: it is the still of the 3D scene, a decorative SVG with two ghost bubbles carrying the Instagram and Facebook
     // glyphs as bare <use>, aria-hidden, with no name beside them (the scene's bubbles have none either). Anywhere else a glyph
-    // is a .plogo, which markupProblems above holds to the name rule.
+    // is a .plogo, which markupProblems above holds to the name rule. The platform strip (2026-10-19) is the second: its marks are
+    // `<svg class="pmark pmark-…">`, a shape of their own, each followed by its platform's name in a <strong>; the last describe holds them to that.
 
-    /** Every `href="#plogo-*"` that is neither inside a `<svg class="plogo…">` nor inside the hero poster. */
+    /** Every `href="#plogo-*"` that is neither inside a `<svg class="plogo…">`, nor inside the hero poster, nor a strip mark. */
     function strayGlyphs(html: string): string[] {
         const covered: Array<[number, number]> = glyphsOf(html).map((g) => [g.at, g.end]);
         for (const m of html.matchAll(/<svg class="stage-poster"[\s\S]*?<\/svg>/g)) covered.push([m.index!, m.index! + m[0].length]);
+        for (const m of html.matchAll(/<svg class="pmark pmark-[a-z]+" aria-hidden="true" focusable="false"><use href="#plogo-[a-z]+"\/><\/svg>/g)) covered.push([m.index!, m.index! + m[0].length]);
         const strays: string[] = [];
         for (const m of html.matchAll(/href="#plogo-([a-z]+)"/g)) {
             if (!covered.some(([a, b]) => m.index! >= a && m.index! < b)) strays.push(`#plogo-${m[1]} @${m.index}`);
@@ -291,7 +299,7 @@ describe('platform logos — a glyph without .plogo is only ever the hero poster
     }
 
     for (const page of PAGES) {
-        it(`${page}: every glyph is a .plogo, or sits inside the hero poster`, () => {
+        it(`${page}: every glyph is a .plogo, a strip mark, or sits inside the hero poster`, () => {
             assert.deepEqual(strayGlyphs(HTML.get(page)!), []);
         });
     }
@@ -317,6 +325,8 @@ describe('platform logos — a glyph without .plogo is only ever the hero poster
         assert.equal(strayGlyphs(`${bare}${inPoster}${labelled}`).length, 1, 'only the bare one');
         assert.equal(strayGlyphs('<svg class="plogo big" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>').length, 0);
         assert.equal(strayGlyphs('<svg class="not-the-poster"><use href="#plogo-facebook"/></svg>').length, 1);
+        assert.equal(strayGlyphs('<svg class="pmark pmark-facebook" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>').length, 0, 'a strip mark');
+        assert.equal(strayGlyphs('<svg class="pmark pmark-facebook"><use href="#plogo-facebook"/></svg>').length, 1, 'a strip mark that is not aria-hidden is not in the shape');
     });
 });
 
@@ -508,5 +518,131 @@ describe('platform logos — the shared footer', () => {
         const wa = rules.find((r) => r.selectors.includes('.pagefoot .foot-wa .plogo'))!;
         assert.match(wa.body, /--lp-logo:\s*1rem/);
         assert.match(wa.body, /margin-inline-end:\s*var\(--space-2\)/);
+    });
+});
+
+describe('platform logos — the platform strip at the top of the landing page (2026-10-19)', () => {
+    // The one place a mark wears its platform's colour, on the owner's instruction. What a person can get wrong here:
+    // a colour that is not the brand's own, a colour used anywhere else, a mark with no name beside it, a mark that is mirrored or moves,
+    // a strip that is not first, or one that drifts between the two languages. check:contrast reads the same four values.
+    const html = HTML.get('landing')!;
+    const ranges = landingRanges(html);
+    const docs = { ar: html.slice(...ranges.ar), en: html.slice(...ranges.en) } as const;
+    const ORDER = ['whatsapp', 'instagram', 'facebook', 'tiktok', 'youtube'] as const;
+    const COLOURS = { whatsapp: siWhatsapp, instagram: siInstagram, facebook: siFacebook, youtube: siYoutube } as const;
+    const css = styleOf(html);
+    const heroOf = (doc: string) => /<section class="hero"[\s\S]*?<\/section>/.exec(doc)![0];
+    const ITEM = /<li><svg class="pmark pmark-([a-z]+)" aria-hidden="true" focusable="false"><use href="#plogo-([a-z]+)"\/><\/svg><strong>([^<]+)<\/strong><span>([\s\S]*?)<\/span><\/li>/g;
+
+    /** What is wrong with the CSS rules that name `.pstrip` or `.pmark`. */
+    function stripCssProblems(sheet: string): string[] {
+        const problems: string[] = [];
+        for (const rule of rulesIn(sheet)) {
+            const sel = rule.selectors.join(', ');
+            if (!/\.pstrip|\.pmark/.test(sel)) continue;
+            if (FLIPS.test(rule.body)) problems.push(`${sel}: transforms, flips or sets direction (${rule.body.trim()})`);
+            if (/animation|transition|@keyframes/.test(rule.body)) problems.push(`${sel}: moves (the strip has no motion)`);
+            if (/:dir\(|\[dir|:lang\(|\[lang|html\[/.test(sel)) problems.push(`${sel}: is scoped by direction or language, which is how a logo gets mirrored`);
+            // The four declarations are the only colour literals; anything else is a colour the guard did not see.
+            const rest = rule.body.replace(/--pb-(?:whatsapp|instagram|facebook|youtube)\s*:\s*#[0-9a-fA-F]{6}\s*;/g, '');
+            if (COLOUR_LITERAL.test(rest)) problems.push(`${sel}: a colour literal outside the four --pb-* declarations`);
+            for (const d of rule.body.matchAll(/(?<![-\w])fill\s*:\s*([^;}]+)/g)) {
+                const want = sel === '.pmark' ? 'var(--logo-mono)' : /^\.pmark-([a-z]+)$/.test(sel) ? `var(--pb-${/^\.pmark-([a-z]+)$/.exec(sel)![1]})` : null;
+                if (want === null || d[1]!.trim() !== want) problems.push(`${sel}: fill ${d[1]!.trim()} is not ${want ?? 'allowed on this selector'}`);
+            }
+        }
+        return problems;
+    }
+
+    it('each language opens its hero with one strip of five items: WhatsApp, Instagram, Facebook, TikTok, YouTube, each with its name as text', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const hero = heroOf(docs[lang]);
+            assert.equal((hero.match(/<ul class="card pstrip"/g) ?? []).length, 1, lang);
+            assert.ok(hero.indexOf('<ul class="card pstrip"') < hero.indexOf('<div class="hero-grid">'), `${lang}: the strip comes before the headline's grid`);
+            const strip = /<ul class="card pstrip" aria-label="([^"]+)">([\s\S]*?)<\/ul>/.exec(hero)!;
+            assert.ok(strip[1]!.length > 4, `${lang}: the list is named`);
+            assert.equal((strip[2]!.match(/<li>/g) ?? []).length, 5, lang);
+            const items = [...strip[2]!.matchAll(ITEM)];
+            assert.equal(items.length, 5, `${lang}: every item is in the one shape (a mark, a <strong> name, a <span> line)`);
+            assert.deepEqual(items.map((m) => m[1]), [...ORDER], `${lang}: the order`);
+            assert.deepEqual(items.map((m) => m[2]), [...ORDER], `${lang}: each mark draws its own platform's glyph`);
+            items.forEach((m, i) => {
+                const p = PLATFORMS.find((x) => x.id === ORDER[i])!;
+                assert.equal(m[3], lang === 'ar' ? p.ar : p.en, `${lang}: ${p.id}'s name is real text beside its mark`);
+                assert.ok(m[4]!.replace(/<[^>]+>/g, '').trim().length > 20, `${lang}: ${p.id} has its line`);
+            });
+            assert.equal(/<a\b|<img\b|<button\b|onclick|tabindex/i.test(strip[0]), false, `${lang}: it is not interactive and loads no picture`);
+        }
+    });
+
+    it('is on the landing page and nowhere else', () => {
+        for (const page of PAGES.filter((p) => p !== 'landing')) {
+            assert.equal(/pstrip|pmark|--pb-/.test(HTML.get(page)!), false, page);
+        }
+        assert.equal((html.match(/<ul class="card pstrip"/g) ?? []).length, 2, 'once per language');
+    });
+
+    it('draws the four colours from simple-icons\' own hexes, declares them once, in the .pstrip rule, and gives TikTok none', () => {
+        assert.equal(siTiktok.hex, '000000', 'TikTok\'s brand colour is black: it would vanish on the dark page, so its mark is --logo-mono');
+        const rule = rulesIn(css).find((r) => r.selectors.length === 1 && r.selectors[0] === '.pstrip')!;
+        assert.ok(rule, 'the .pstrip rule');
+        const declared = Object.fromEntries([...rule.body.matchAll(/--pb-([a-z]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g)].map((m) => [m[1], m[2]!.toLowerCase()]));
+        assert.deepEqual(declared, Object.fromEntries(Object.entries(COLOURS).map(([id, icon]) => [id, `#${icon.hex.toLowerCase()}`])), 'the brand\'s own hex, per simple-icons@16.33.0');
+        assert.equal((css.match(/--pb-[a-z]+\s*:/g) ?? []).length, 4, 'declared once each, nowhere else');
+        assert.equal((css.match(/var\(--pb-/g) ?? []).length, 4, 'used by the four marks and nothing else');
+        // Nothing else on the page is written in a platform colour.
+        const outside = css.replace(/--pb-[a-z]+\s*:\s*#[0-9a-fA-F]{6}\s*;/g, '');
+        for (const icon of [siWhatsapp, siInstagram, siFacebook, siYoutube]) {
+            assert.equal(new RegExp(`#${icon.hex}\\b`, 'i').test(outside), false, `${icon.title}'s hex is written out somewhere else`);
+        }
+    });
+
+    it('paints each mark in its own token, and TikTok\'s in --logo-mono (white in dark, black in light) through the base rule', () => {
+        const rules = rulesIn(css);
+        const body = (sel: string) => rules.find((r) => r.selectors.length === 1 && r.selectors[0] === sel)?.body;
+        for (const id of Object.keys(COLOURS)) assert.match(body(`.pmark-${id}`) ?? '', new RegExp(`fill:\\s*var\\(--pb-${id}\\)`), id);
+        assert.match(body('.pmark') ?? '', /fill:\s*var\(--logo-mono\)/);
+        assert.equal(body('.pmark-tiktok'), undefined, 'TikTok has no colour rule');
+        assert.deepEqual(stripCssProblems(css), []);
+    });
+
+    it('is big where there is room and never under 44px: 48px on a phone, 80px from 1280px', () => {
+        const m = /--pm:\s*clamp\(([\d.]+)rem,\s*([^,]+),\s*([\d.]+)rem\)/.exec(css)!;
+        assert.ok(m, '--pm is a clamp');
+        assert.ok(Number(m[1]) * 16 >= 44, `the floor is ${Number(m[1]) * 16}px`);
+        assert.ok(Number(m[3]) * 16 >= 72 && Number(m[3]) * 16 <= 96, `the ceiling is ${Number(m[3]) * 16}px`);
+        const mark = rulesIn(css).find((r) => r.selectors.length === 1 && r.selectors[0] === '.pmark')!;
+        assert.match(mark.body, /inline-size:\s*var\(--pm\)/);
+        assert.match(mark.body, /block-size:\s*var\(--pm\)/);
+    });
+
+    it('five columns from 40rem and five rows below it, with logical properties only: the first item is the reading start in both directions', () => {
+        const columns = /@media \(min-width: 40rem\) \{\s*\.pstrip \{ display: grid; grid-template-columns: repeat\(5, minmax\(0, 1fr\)\); \}/;
+        assert.match(css, columns);
+        const mine = rulesIn(css).filter((r) => /\.pstrip|\.pmark/.test(r.selectors.join(','))).map((r) => r.body).join('\n');
+        for (const re of [/\b(?:margin|padding)-(?:left|right)\b/, /\bborder-(?:left|right)\b/, /(?<![-\w])(?:left|right)\s*:/, /\bfloat\s*:/, /text-align\s*:\s*(?:left|right)\b/]) {
+            assert.equal(re.test(mine), false, String(re));
+        }
+        assert.match(mine, /border-inline-start:\s*1px solid var\(--border-subtle\)/, 'the dividers are inline-start borders');
+    });
+
+    it('the guard is not blind: it flags each fault it is for', () => {
+        const ok = '.pstrip { --pb-whatsapp: #25d366; --pb-instagram: #ff0069; --pb-facebook: #0866ff; --pb-youtube: #ff0000; } .pmark { fill: var(--logo-mono); } .pmark-whatsapp { fill: var(--pb-whatsapp); }';
+        assert.deepEqual(stripCssProblems(ok), []);
+        for (const bad of [
+            '.pmark-whatsapp { fill: #25d366; }',
+            '.pmark-whatsapp { fill: var(--pb-instagram); }',
+            '.pmark { fill: currentColor; }',
+            '.pmark { transform: scaleX(-1); }',
+            '.pstrip { direction: ltr; }',
+            ':dir(rtl) .pmark { margin: 0; }',
+            'html[dir=rtl] .pmark { margin: 0; }',
+            '.pmark { transition: opacity 1s; }',
+            '.pmark { animation: spin 1s; }',
+            '.pstrip { color: #ff0000; }',
+            '.pstrip > li { background: rgb(0 0 0); }',
+        ]) {
+            assert.notDeepEqual(stripCssProblems(bad), [], bad);
+        }
     });
 });
