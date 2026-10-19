@@ -27,6 +27,7 @@ import {
     activeVariants, MAX_VARIANTS, MIN_VARIANTS, parseVariantConfig, VARIANT_IDS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX,
 } from '../services/dmSales/variants.js';
 import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
+import { sendError } from '../services/errorCodes.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -2186,6 +2187,8 @@ router.get('/settings/token/status', async (req, res) => {
         if (!token) {
             res.json({
                 status: 'not_connected',
+                // The stable name of this state (src/services/errorCodes.ts), so the dashboard shows its own sentence and not `message`.
+                code: 'NOT_CONNECTED',
                 message: NOT_CONNECTED_MESSAGE,
                 expiresAt: null,
                 dataAccessExpiresAt: null,
@@ -2426,7 +2429,7 @@ router.post('/settings/token/extend', canAdminister, async (req, res) => {
         const currentToken = creator.page_access_token;
         // Nothing to extend: a tenant created by name has no token (v34).
         if (!currentToken) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 
@@ -2526,13 +2529,13 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         const alsoTikTok = req.body?.also_tiktok === true && platform !== 'tiktok';
 
         if (!platform || !post_type || !scheduled_time) {
-            res.status(400).json({ error: 'platform, post_type, and scheduled_time are required.' });
+            sendError(res, 400, 'POST_FIELDS_REQUIRED', 'platform, post_type, and scheduled_time are required.');
             return;
         }
 
         const when = new Date(scheduled_time);
         if (Number.isNaN(when.getTime())) {
-            res.status(400).json({ error: 'scheduled_time is not a valid date.' });
+            sendError(res, 400, 'INVALID_SCHEDULE_TIME', 'scheduled_time is not a valid date.');
             return;
         }
 
@@ -2542,7 +2545,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         const unsupported = unsupportedPlatformCombination(platform, post_type)
             ?? (alsoTikTok ? unsupportedPlatformCombination('tiktok', post_type) : null);
         if (unsupported) {
-            res.status(400).json({ error: unsupported });
+            sendError(res, 400, 'POST_UNSUPPORTED_COMBINATION', { platform: String(platform), postType: String(post_type) }, unsupported);
             return;
         }
 
@@ -2553,7 +2556,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             platform, postType: post_type, mediaUrl: media_url, mediaUrls: req.body?.media_urls,
         });
         if (!media.ok) {
-            res.status(400).json({ error: media.error });
+            sendError(res, 400, 'POST_MEDIA_INVALID', media.error);
             return;
         }
         // Instagram's reach levers (GROWTH.md §4): alt text, collaborators, trial reel. Checked
@@ -2563,7 +2566,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             slideCount: post_type === 'carousel' ? (media.mediaUrls?.length ?? null) : null,
         });
         if (!metaOptions.ok) {
-            res.status(400).json({ error: metaOptions.error });
+            sendError(res, 400, 'POST_OPTIONS_INVALID', metaOptions.error);
             return;
         }
         // The TikTok sibling may bring its own images — 9:16 versions of the same slides — and
@@ -2578,7 +2581,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             })
             : null;
         if (tiktokMedia && !tiktokMedia.ok) {
-            res.status(400).json({ error: tiktokMedia.error });
+            sendError(res, 400, 'POST_MEDIA_INVALID', tiktokMedia.error);
             return;
         }
 
@@ -2593,7 +2596,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         // Said now, to the person scheduling, rather than at publish time in a card nobody is looking at: a tenant created
         // by name (v34) has no Meta token until it connects, and the sweep would only fail the row.
         if (isMetaPlatform(platform) && !creator.page_access_token) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 
@@ -2603,14 +2606,14 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         if (wantsTikTok) {
             // A photo post's image was checked with the rest of the media above.
             if (tiktokKind === 'video' && !media_url) {
-                res.status(400).json({ error: 'TikTok needs a video — upload one first.' });
+                sendError(res, 400, 'TIKTOK_NEEDS_VIDEO', 'TikTok needs a video — upload one first.');
                 return;
             }
             // Said now, to the person scheduling, rather than at publish time in a card nobody
             // is looking at.
             const connection = await getTikTokConnection(creatorId);
             if (!connection || connection.status !== 'active') {
-                res.status(409).json({ error: 'TikTok is not connected — connect it in Settings first.' });
+                sendError(res, 409, 'TIKTOK_NOT_CONNECTED', 'TikTok is not connected — connect it in Settings first.');
                 return;
             }
             // Direct Post or inbox is decided now, not at publish time, because Direct Post
@@ -2629,7 +2632,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                 ? validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited, media: tiktokKind })
                 : validateTikTokInboxOptions(req.body?.tiktok_options, tiktokKind);
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', checked.error);
                 return;
             }
             tiktokOptions = checked.options;
@@ -2771,13 +2774,14 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // Once the video is with TikTok, the row describes something that already happened;
         // editing it would change the record without changing the post.
         if (current.status === 'PUBLISHING' || current.status === 'PROCESSING' || current.status === 'IN_INBOX') {
-            res.status(409).json({ error: `This post is already ${current.status === 'IN_INBOX' ? 'in your TikTok inbox' : 'being published'} and can no longer be edited.` });
+            sendError(res, 409, 'POST_LOCKED', { status: current.status },
+                `This post is already ${current.status === 'IN_INBOX' ? 'in your TikTok inbox' : 'being published'} and can no longer be edited.`);
             return;
         }
 
         const unsupported = unsupportedAfterEdit({ platform, post_type }, current);
         if (unsupported) {
-            res.status(400).json({ error: unsupported });
+            sendError(res, 400, 'POST_UNSUPPORTED_COMBINATION', { platform: String(platform ?? current.platform), postType: String(post_type ?? current.post_type) }, unsupported);
             return;
         }
 
@@ -2798,7 +2802,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 mediaUrls: rawMediaUrls ?? current.media_urls,
             });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'POST_MEDIA_INVALID', checked.error);
                 return;
             }
             mediaUrlParam = checked.mediaUrl;
@@ -2813,12 +2817,12 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             if (!audited && rawTikTokOptions?.mode === 'inbox') {
                 const connection = await getTikTokConnection(tenantId);
                 if (!(connection?.scopes ?? []).includes('video.upload')) {
-                    res.status(409).json({ error: 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.' });
+                    sendError(res, 409, 'TIKTOK_UPLOAD_PERMISSION_MISSING', 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.');
                     return;
                 }
                 const inbox = validateTikTokInboxOptions(rawTikTokOptions, tiktokKind);
                 if (!inbox.ok) {
-                    res.status(400).json({ error: inbox.error });
+                    sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', inbox.error);
                     return;
                 }
                 tiktokOptionsJson = JSON.stringify(inbox.options);
@@ -2828,7 +2832,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             const { audited } = await getTikTokPostingFlags();
             const checked = validateTikTokOptions(rawTikTokOptions, { audited, media: tiktokKind });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', checked.error);
                 return;
             }
             tiktokOptionsJson = JSON.stringify(checked.options);
@@ -2847,7 +2851,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 current: current.meta_options ?? null,
             });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'POST_OPTIONS_INVALID', checked.error);
                 return;
             }
             metaOptionsJson = checked.options ? JSON.stringify(checked.options) : null;
@@ -2972,9 +2976,8 @@ router.post('/posts/scheduled/:id/publish-now', canOperate, async (req, res) => 
                 res.status(404).json({ error: 'Scheduled post not found.' });
                 return;
             }
-            res.status(409).json({
-                error: `Cannot publish now — this post is already ${existing.rows[0].status}.`,
-            });
+            sendError(res, 409, 'POST_NOT_PUBLISHABLE', { status: existing.rows[0].status },
+                `Cannot publish now — this post is already ${existing.rows[0].status}.`);
             return;
         }
 
@@ -3113,16 +3116,15 @@ router.post('/upload', canOperate, async (req, res) => {
         const { filename, mime_type, base64_data } = req.body;
 
         if (!filename || !mime_type || !base64_data) {
-            res.status(400).json({ error: 'filename, mime_type, and base64_data are required.' });
+            sendError(res, 400, 'UPLOAD_FIELDS_REQUIRED', 'filename, mime_type, and base64_data are required.');
             return;
         }
 
         // /api/uploads/:id echoes this value back as Content-Type to anyone who asks, on the
         // same origin the dashboard is served from. Pin it to what Meta will actually ingest.
         if (!ALLOWED_MIME_TYPES.has(mime_type)) {
-            res.status(400).json({
-                error: `Unsupported file type "${mime_type}". Allowed: ${[...ALLOWED_MIME_TYPES].join(', ')}.`
-            });
+            sendError(res, 400, 'UPLOAD_TYPE_UNSUPPORTED', { mimeType: String(mime_type) },
+                `Unsupported file type "${mime_type}". Allowed: ${[...ALLOWED_MIME_TYPES].join(', ')}.`);
             return;
         }
 
@@ -3139,9 +3141,8 @@ router.post('/upload', canOperate, async (req, res) => {
         // ~3.3MB of file is the true ceiling: the old 10MB limit could never be reached, the
         // platform 413'd first with nothing useful to show the user.
         if (buffer.length > MAX_UPLOAD_BYTES) {
-            res.status(400).json({
-                error: 'File is too large. This endpoint tops out at 3.2MB because Vercel caps the whole request at 4.5MB and the file is sent as base64. For anything bigger, write it straight into media_uploads over the database connection.'
-            });
+            sendError(res, 400, 'UPLOAD_TOO_LARGE', { maxMb: MAX_UPLOAD_BYTES / 1024 / 1024, maxBytes: MAX_UPLOAD_BYTES },
+                'File is too large. This endpoint tops out at 3.2MB because Vercel caps the whole request at 4.5MB and the file is sent as base64. For anything bigger, write it straight into media_uploads over the database connection.');
             return;
         }
 
@@ -3431,7 +3432,7 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
 
         // A thread outlives the connection that made it (v34: a tenant can be disconnected): nothing to send it with.
         if (!conv.page_access_token) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 

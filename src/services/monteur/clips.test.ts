@@ -291,7 +291,8 @@ describe('approveClip — the slot', () => {
         assert.equal(outcome.scheduled_time, '2026-09-28T10:00:00.000Z');
 
         await assert.rejects(approveClip(TENANT, CLIP, { scheduled_time: '2026-09-27T16:00:00Z' }, NOW), (err: unknown) =>
-            err instanceof StudioError && err.status === 409 && /another reel from this video is already on 2026-09-27/.test(err.message));
+            err instanceof StudioError && err.status === 409 && /another reel from this video is already on 2026-09-27/.test(err.message)
+            && err.code === 'REEL_DAY_TAKEN' && err.params?.day === '2026-09-27');
     });
 });
 
@@ -340,7 +341,9 @@ describe('approveClip — the campaign', () => {
         clip = { ...clip, copy: { ...COPY, variants: ['السعر'] } };
         await assert.rejects(approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW), (err: unknown) =>
             err instanceof StudioError && err.status === 409
-            && (err.problems ?? []).some((p) => /^copy\.variants: «السعر» would fire alongside the live keyword «سعر»/.test(p)));
+            && (err.problems ?? []).some((p) => /^copy\.variants: «السعر» would fire alongside the live keyword «سعر»/.test(p))
+            // The refusal says which refusal it is, and names the words (src/services/errorCodes.ts).
+            && err.code === 'KEYWORD_CLASH' && err.params?.trigger === 'السعر' && err.params?.live === 'سعر');
         assert.equal(inserts().length, 0);
         assert.equal(db.ran(/^INSERT INTO campaigns/).length, 0);
     });
@@ -429,7 +432,8 @@ describe('patchClip', () => {
         campaigns = [];
         inFlight = ['ملخص'];
         await assert.rejects(patchClip(TENANT, CLIP, { copy: { variants: ['ملخص'] } }), (err: unknown) =>
-            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.variants: «ملخص» is another reel's keyword or variant/.test(p)));
+            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.variants: «ملخص» is another reel's keyword or variant/.test(p))
+            && err.code === 'KEYWORD_CLASH' && err.params?.trigger === 'ملخص' && err.params?.live === null);
         assert.equal(db.ran(/^UPDATE/).length, 0);
         inFlight = [];
         await patchClip(TENANT, CLIP, { copy: { variants: ['دفاتر', 'دفتر'] } });
@@ -444,9 +448,11 @@ describe('patchClip', () => {
 
     it('refuses a caption that no longer asks for «keyword», writing nothing', async () => {
         await assert.rejects(patchClip(TENANT, CLIP, { copy: { caption: 'no ask here, just دفتر' } }), (err: unknown) =>
-            err instanceof StudioError && err.status === 400 && /^copy\.caption must keep the keyword ask with «دفتر»/.test(err.message));
+            err instanceof StudioError && err.status === 400 && /^copy\.caption must keep the keyword ask with «دفتر»/.test(err.message)
+            && err.code === 'CLIP_KEYWORD_ASK_MISSING' && err.params?.keyword === 'دفتر');
         await assert.rejects(patchClip(TENANT, CLIP, { copy: { tiktok_caption: 'no link line' } }), (err: unknown) =>
-            err instanceof StudioError && /^copy\.tiktok_caption must keep the line/.test(err.message));
+            err instanceof StudioError && /^copy\.tiktok_caption must keep the line/.test(err.message)
+            && err.code === 'CLIP_TIKTOK_LINE_MISSING' && typeof err.params?.line === 'string');
         assert.equal(db.ran(/^UPDATE/).length, 0);
     });
 

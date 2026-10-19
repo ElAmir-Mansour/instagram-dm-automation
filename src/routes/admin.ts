@@ -54,6 +54,7 @@ import { pageIdConflict, validateSuppliedToken } from '../services/metaLogin.js'
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
+import { sendError } from '../services/errorCodes.js';
 import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
@@ -1935,11 +1936,9 @@ router.post('/jobs/:id/retry', async (req, res) => {
                 res.status(404).json({ error: 'Job not found.' });
                 return;
             }
-            res.status(409).json({
-                code: 'JOB_NOT_RETRYABLE',
-                error: `That job is "${existing.rows[0].status}", not failed or cancelled — only a job that has stopped can be retried.`,
-                status: existing.rows[0].status,
-            });
+            sendError(res, 409, 'JOB_NOT_RETRYABLE', { status: existing.rows[0].status },
+                `That job is "${existing.rows[0].status}", not failed or cancelled — only a job that has stopped can be retried.`,
+                { status: existing.rows[0].status });
             return;
         }
 
@@ -1992,11 +1991,9 @@ router.post('/jobs/:id/cancel', async (req, res) => {
                 res.status(404).json({ error: 'Job not found.' });
                 return;
             }
-            res.status(409).json({
-                code: 'JOB_NOT_CANCELLABLE',
-                error: `That job is "${existing.rows[0].status}", not pending — only a job that has not started can be cancelled.`,
-                status: existing.rows[0].status,
-            });
+            sendError(res, 409, 'JOB_NOT_CANCELLABLE', { status: existing.rows[0].status },
+                `That job is "${existing.rows[0].status}", not pending — only a job that has not started can be cancelled.`,
+                { status: existing.rows[0].status });
             return;
         }
 
@@ -2048,12 +2045,8 @@ router.post('/erasure', async (req, res) => {
         const outcome = await executeErasure(req.body?.token);
 
         if (!outcome.ok) {
-            res.status(outcome.status).json({
-                code: outcome.code,
-                error: outcome.error,
-                expected: outcome.expected,
-                actual: outcome.actual,
-            });
+            // `expected` and `actual` stay top-level fields: they are the counts a person compares after a drift.
+            sendError(res, outcome.status, outcome.code, {}, outcome.error, { expected: outcome.expected, actual: outcome.actual });
             return;
         }
 
@@ -2080,11 +2073,10 @@ router.post('/erasure', async (req, res) => {
         if (!recorded.written) {
             await rollbackErasure(outcome.client);
             log('error', 'erasure.rolled_back_unaudited', { handle_length: outcome.handle.length });
-            res.status(500).json({
-                error: 'The erasure could not be recorded in the audit log, so nothing was deleted. '
+            sendError(res, 500, 'ERASURE_AUDIT_FAILED', {},
+                'The erasure could not be recorded in the audit log, so nothing was deleted. '
                     + 'Apply migration v15 (migration_v15_admin.sql) and try again.',
-                migrationPending: true,
-            });
+                { migrationPending: true });
             return;
         }
 

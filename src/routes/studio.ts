@@ -22,6 +22,7 @@ import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { getPublicBaseUrl, getTikTokPostingFlags } from '../services/appSettings.js';
+import { sendError } from '../services/errorCodes.js';
 import { isMissingSchema } from '../services/health.js';
 import { getMediaStore } from '../services/storage.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
@@ -68,10 +69,15 @@ function handle(event: string, fallback: string, fn: Handler) {
                 return;
             }
             if (err instanceof StudioError) {
+                // A coded refusal is the shared envelope (`error` stays the English sentence; `code` and `params` are for the
+                // dashboard to translate); `problems` stays a top-level field, where `studio.js` and `monteur.js` read it.
+                if (err.code) {
+                    sendError(res, err.status, err.code, err.params, err.message, err.problems ? { problems: err.problems } : undefined);
+                    return;
+                }
                 res.status(err.status).json({
                     error: err.message,
                     ...(err.problems ? { problems: err.problems } : {}),
-                    ...(err.code ? { code: err.code } : {}),
                 });
                 return;
             }
@@ -207,7 +213,8 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
     const data = Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
     if (data.length === 0) throw new StudioError(400, 'base64_data decodes to nothing.');
     if (data.length > MAX_STUDIO_UPLOAD_BYTES) {
-        throw new StudioError(413, `An upload is at most 3MB decoded; this one is ${(data.length / 1024 / 1024).toFixed(1)}MB.`);
+        throw new StudioError(413, `An upload is at most 3MB decoded; this one is ${(data.length / 1024 / 1024).toFixed(1)}MB.`, undefined,
+            'UPLOAD_TOO_LARGE', { maxMb: MAX_STUDIO_UPLOAD_BYTES / 1024 / 1024, maxBytes: MAX_STUDIO_UPLOAD_BYTES });
     }
     const actual = sniffImageType(data);
     if (actual !== mimeType) {

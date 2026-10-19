@@ -386,3 +386,80 @@ describe('GET /uploads/:id — with a file extension', () => {
         assert.deepEqual(fetched, []);
     });
 });
+
+// ─── Refusals carry stable codes (src/services/errorCodes.ts, UX F1) ───────────────────────────────────────
+//
+// `error` stays the English sentence every client reads; `code` and `params` are for the dashboard to translate, and
+// `message` mirrors `error` (the contract's name for it). The sentences themselves are pinned above and elsewhere: what is
+// pinned here is that each refusal named in the PO-17 audit now says which refusal it is.
+
+describe('posts and uploads: refusals say which refusal they are', () => {
+    /** The four fields every coded refusal has, and the text it has always had. */
+    const refusal = (res: ReturnType<typeof fakeRes>, status: number, code: string, error: string | RegExp) => {
+        assert.equal(res.statusCode, status, JSON.stringify(res.body));
+        assert.equal(res.body.code, code);
+        assert.equal(typeof res.body.error, 'string', 'the legacy string, which api.js reads');
+        assert.equal(res.body.message, res.body.error, 'message mirrors error');
+        assert.ok(res.body.params && typeof res.body.params === 'object', 'params is always an object');
+        if (typeof error === 'string') assert.equal(res.body.error, error);
+        else assert.match(res.body.error, error);
+    };
+
+    it('create: a missing field, and a time that is not a date', async () => {
+        refusal(await call('post', '/posts/scheduled', { body: { platform: 'instagram', post_type: 'image' } }), 400,
+            'POST_FIELDS_REQUIRED', 'platform, post_type, and scheduled_time are required.');
+        refusal(await create({ platform: 'instagram', post_type: 'image', scheduled_time: 'next tuesday' }), 400,
+            'INVALID_SCHEDULE_TIME', 'scheduled_time is not a valid date.');
+        assert.deepEqual(inserts(), [], 'nothing was written');
+    });
+
+    it('create: a platform and type that cannot go together carries both', async () => {
+        const res = await create({ platform: 'both', post_type: 'story', media_url: 'https://example.com/a.jpg' });
+        refusal(res, 400, 'POST_UNSUPPORTED_COMBINATION', /Facebook Page stories are not supported/);
+        assert.deepEqual(res.body.params, { platform: 'both', postType: 'story' });
+    });
+
+    it('create: media that breaks a platform rule', async () => {
+        refusal(await create({ platform: 'instagram', post_type: 'carousel', media_urls: [up(JPEG)] }), 400,
+            'POST_MEDIA_INVALID', 'A carousel takes 2 to 10 images — this one has 1.');
+    });
+
+    it('create: TikTok that is not connected is a 409 with its own code', async () => {
+        refusal(await create({ platform: 'tiktok', post_type: 'video', media_url: 'https://example.com/a.mp4' }), 409,
+            'TIKTOK_NOT_CONNECTED', 'TikTok is not connected — connect it in Settings first.');
+    });
+
+    it('create: a TikTok video with no video', async () => {
+        tiktokConnected(false);
+        refusal(await create({ platform: 'tiktok', post_type: 'video' }), 400, 'TIKTOK_NEEDS_VIDEO', 'TikTok needs a video — upload one first.');
+    });
+
+    it('edit: a post already with TikTok says which state it is in', async () => {
+        currentRow = { platform: 'tiktok', post_type: 'video', status: 'IN_INBOX', media_url: 'https://example.com/a.mp4', media_urls: null, meta_options: null };
+        const res = await edit({ caption: 'new' });
+        refusal(res, 409, 'POST_LOCKED', /already in your TikTok inbox/);
+        assert.deepEqual(res.body.params, { status: 'IN_INBOX' });
+        assert.deepEqual(updates(), [], 'and the row was not touched');
+    });
+
+    it('edit: the two-step edit the guard exists for is a coded 400', async () => {
+        currentRow = { platform: 'instagram', post_type: 'story', status: 'PENDING', media_url: 'https://example.com/a.jpg', media_urls: null, meta_options: null };
+        const res = await edit({ platform: 'both' });
+        refusal(res, 400, 'POST_UNSUPPORTED_COMBINATION', /Facebook Page stories/);
+        assert.deepEqual(res.body.params, { platform: 'both', postType: 'story' });
+    });
+
+    it('upload: no file, a type the platforms cannot ingest, and a file over the cap', async () => {
+        refusal(await call('post', '/upload', { body: { filename: 'a.jpg' } }), 400,
+            'UPLOAD_FIELDS_REQUIRED', 'filename, mime_type, and base64_data are required.');
+
+        const type = await call('post', '/upload', { body: { filename: 'a.exe', mime_type: 'application/x-msdownload', base64_data: 'AAAA' } });
+        refusal(type, 400, 'UPLOAD_TYPE_UNSUPPORTED', /Unsupported file type "application\/x-msdownload"/);
+        assert.deepEqual(type.body.params, { mimeType: 'application/x-msdownload' });
+
+        const big = Buffer.alloc(3.3 * 1024 * 1024, 1).toString('base64');
+        const large = await call('post', '/upload', { body: { filename: 'big.jpg', mime_type: 'image/jpeg', base64_data: big } });
+        refusal(large, 400, 'UPLOAD_TOO_LARGE', /^File is too large\. This endpoint tops out at 3\.2MB/);
+        assert.equal(large.body.params.maxMb, 3.2);
+    });
+});

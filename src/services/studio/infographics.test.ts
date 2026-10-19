@@ -19,8 +19,8 @@ import { contextFor } from '../profile/context.js';
 import { legacyBase } from '../profile/legacy.js';
 import { StudioError } from './common.js';
 import {
-    BUDGETS, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, specProblems, WRITE_SCHEMA, writeSystemPrompt,
-    writeUserPrompt, type InfographicSpec,
+    BUDGETS, captionIssues, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, primaryCaptionIssue, specProblems,
+    WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt, type InfographicSpec,
 } from './infographicSpec.js';
 import { answerToWritten, layerWriteSchema, writeInfographicOnServer } from './infographicWriter.js';
 import {
@@ -155,6 +155,32 @@ describe('captionProblems — the caption is about the GIF', () => {
     it('refuses an empty caption and one past Instagram’s limit', () => {
         assert.match(captionProblems('  ', SPEC).join(), /empty/);
         assert.match(captionProblems(`${CAPTION}${'x'.repeat(BUDGETS.caption)}`, SPEC).join(), /Instagram takes 2200/);
+    });
+
+    it('says which problem each one is, in the order it always listed them, and `captionProblems` is just their sentences', () => {
+        const long = `RAG ${'x'.repeat(BUDGETS.caption)}`;
+        for (const caption of ['', '  ', 'RAG وحده', long, CAPTION, 7, null]) {
+            assert.deepEqual(captionProblems(caption, SPEC), captionIssues(caption, SPEC).map((issue) => issue.message), JSON.stringify(caption)?.slice(0, 20));
+        }
+        assert.deepEqual(captionIssues('', SPEC).map((i) => i.code), ['CAPTION_EMPTY']);
+        assert.deepEqual(captionIssues(long, SPEC).map((i) => i.code), ['CAPTION_TOO_LONG', 'CAPTION_MISSING_COLUMNS']);
+        assert.deepEqual(captionIssues('RAG وحده', SPEC), [{
+            code: 'CAPTION_MISSING_COLUMNS', params: { columns: ['CAG', 'KAG'], list: '«CAG», «KAG»' },
+            message: 'The caption doesn\'t mention «CAG», «KAG»: it must talk about what the infographic shows.',
+        }]);
+        assert.deepEqual(captionIssues(CAPTION, SPEC), []);
+    });
+
+    it('picks the owner’s rule (name every column) as the one code when several apply, and merges every issue’s params', () => {
+        assert.equal(primaryCaptionIssue([]), null);
+        const long = `RAG ${'x'.repeat(BUDGETS.caption)}`;
+        const primary = primaryCaptionIssue(captionIssues(long, SPEC));
+        assert.equal(primary?.code, 'CAPTION_MISSING_COLUMNS');
+        assert.deepEqual(primary?.params, { length: long.length, max: BUDGETS.caption, columns: ['CAG', 'KAG'], list: '«CAG», «KAG»' });
+        assert.equal(primaryCaptionIssue(captionIssues(' ', SPEC))?.code, 'CAPTION_EMPTY');
+        // Too long alone, with every column named.
+        const tooLong = `${CAPTION}${'x'.repeat(BUDGETS.caption)}`;
+        assert.equal(primaryCaptionIssue(captionIssues(tooLong, SPEC))?.code, 'CAPTION_TOO_LONG');
     });
 
     it('makes the headline from the names and the subtitle', () => {

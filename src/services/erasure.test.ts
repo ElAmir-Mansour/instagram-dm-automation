@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
-    countsDrifted, countsTotal, ERASURE_TOKEN_TTL_MS, mintErasureToken, verifyErasureToken,
+    countsDrifted, countsTotal, ERASURE_TOKEN_TTL_MS, executeErasure, mintErasureToken, verifyErasureToken,
 } from './erasure.js';
 
 const COUNTS = { messages: 12, conversations: 1, interactions: 3, dmSendLog: 0 };
@@ -129,6 +129,39 @@ describe('erasure preview token', () => {
         const signed = mintErasureToken('someone', COUNTS).split('.')[1];
 
         assert.equal(verifyErasureToken(`${body}.${signed}`).ok, false);
+    });
+});
+
+describe('executeErasure: a token it will not spend is refused with a code, before the database is touched', () => {
+    let savedPassword: string | undefined;
+    let savedAppSecret: string | undefined;
+    beforeEach(() => {
+        savedPassword = process.env.DASHBOARD_PASSWORD;
+        savedAppSecret = process.env.META_APP_SECRET;
+        process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+        process.env.META_APP_SECRET = 'meta-app-secret';
+    });
+    afterEach(() => {
+        setEnv('DASHBOARD_PASSWORD', savedPassword);
+        setEnv('META_APP_SECRET', savedAppSecret);
+    });
+
+    it('an expired preview is ERASURE_PREVIEW_EXPIRED: the one a person fixes by previewing again', async () => {
+        const token = mintErasureToken('someone', COUNTS);
+        const outcome = await executeErasure(token, Date.now() + ERASURE_TOKEN_TTL_MS + 1000);
+        assert.equal(outcome.ok, false);
+        assert.ok(!outcome.ok);
+        assert.deepEqual([outcome.status, outcome.code], [400, 'ERASURE_PREVIEW_EXPIRED']);
+        assert.match(outcome.error, /has expired\. Run the preview again and confirm within 10 minutes\./);
+    });
+
+    it('a forged, edited or malformed token is ERASURE_TOKEN_INVALID', async () => {
+        const [body, signature] = mintErasureToken('someone', COUNTS).split('.') as [string, string];
+        for (const raw of [`${body}.${'0'.repeat(64)}`, `${body}x.${signature}`, 'made-up', undefined, null, 42, {}]) {
+            const outcome = await executeErasure(raw);
+            assert.ok(!outcome.ok, JSON.stringify(raw));
+            assert.deepEqual([outcome.status, outcome.code], [400, 'ERASURE_TOKEN_INVALID'], JSON.stringify(raw));
+        }
     });
 });
 
