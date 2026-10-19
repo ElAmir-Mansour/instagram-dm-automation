@@ -372,8 +372,12 @@ UI.registerActions('admin', {
    it entirely independent of the page module below it.
    ═══════════════════════════════════════════════════════════════════════════ */
 const HealthStrip = {
-    /** Pages that get the strip. */
-    PAGES: ['settings'],
+    /**
+     * Pages that get the strip. None today: Settings' Connections health summary (UX US10) now carries the
+     * last-webhook age per connection, and Settings had to stop growing upward (the owner: "too much scrolling").
+     * The strip stays available for a page that wants it.
+     */
+    PAGES: [],
 
     _seq: 0,
 
