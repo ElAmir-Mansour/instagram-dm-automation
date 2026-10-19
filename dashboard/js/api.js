@@ -430,6 +430,14 @@ const API = {
     disconnectWhatsApp: () => API.request('/whatsapp/connection', { method: 'DELETE' }),
     saveWhatsAppAgent: (data) => API.request('/whatsapp/agent', { method: 'PUT', body: JSON.stringify(data) }),
     saveWhatsAppBilling: (data) => API.request('/whatsapp/billing', { method: 'PUT', body: JSON.stringify(data) }),
+    // Entry points (T052 / T053): the number's QR codes and short links, and its ice breakers. Meta holds them, so every answer is read from
+    // Meta. `getWhatsAppEntryLinks()` answers a list; `createWhatsAppEntryLink({ label, prefill })` answers the new link (201); deleting answers
+    // nothing (204). `saveWhatsAppIceBreakers({ prompts })` answers what Meta holds after the write. Everything but the reads is the owner's.
+    getWhatsAppEntryLinks: () => API.request('/whatsapp/entry-links'),
+    createWhatsAppEntryLink: (data) => API.request('/whatsapp/entry-links', { method: 'POST', body: JSON.stringify(data) }),
+    deleteWhatsAppEntryLink: (code) => API.request(`/whatsapp/entry-links/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+    getWhatsAppIceBreakers: () => API.request('/whatsapp/ice-breakers'),
+    saveWhatsAppIceBreakers: (data) => API.request('/whatsapp/ice-breakers', { method: 'PUT', body: JSON.stringify(data) }),
 
     // Instagram & Facebook (P27, P28) — the connection is per tenant; the switch and the configuration id are platform-admin only.
     // `startMetaConnect({ returnTo, reconnect, authType })` answers `{ url }`: Facebook's Login dialog, with the state cookie set.
