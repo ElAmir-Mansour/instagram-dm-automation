@@ -165,6 +165,7 @@ const SettingsPage = {
         this._seq++;
         this._view = null;
         this._acted = null;
+        this._saving.clear();
         this.unbindEdits();
         // The Page picker may still be open over the next screen; what it repaints on a change must not be this one.
         if (typeof MetaConnect !== 'undefined' && this._afterMeta && MetaConnect.afterChange === this._afterMeta) MetaConnect.afterChange = null;
@@ -266,7 +267,10 @@ const SettingsPage = {
         if (!container) return;
         const painted = typeof container.querySelector === 'function' ? container.querySelector('[data-settings-root]') : null;
         const scrollY = painted && typeof window.scrollY === 'number' ? window.scrollY : null;
+        // The card the person just acted on is being saved (or disconnected, or cleaned up): it is redrawn from the answer, never carried.
+        // Remembered until a render lands, so one that is overtaken by a later one still hands it on.
         const acted = this.takeActed();
+        if (acted) this._saving.add(acted);
         const focus = UI.captureFocus(container);
         const gate = painted ? { done() {} } : Motion.beginLoad(container, () => this.skeleton());
         const seq = ++this._seq;
@@ -275,12 +279,14 @@ const SettingsPage = {
         const ctx = await this.load();
         if (!live()) return;
         gate.done();
+        const saved = new Set(this._saving);
+        this._saving.clear();
 
         const view = this.resolveView(App.hashParams());
         this._view = view;
 
         // The live elements of the cards to keep, taken BEFORE the page is replaced: the new markup holds an empty stand-in for each.
-        const keep = painted ? this.dirtyCards(container).filter((id) => id !== acted && this.cardById(id)) : [];
+        const keep = painted ? this.dirtyCards(container).filter((id) => !saved.has(id) && this.cardById(id)) : [];
         const elements = {};
         keep.forEach((id) => { elements[id] = container.querySelector(`[data-settings-card="${id}"]`); });
         const carried = keep.filter((id) => elements[id]);
@@ -504,6 +510,8 @@ const SettingsPage = {
     /** How long, in ms, "the card they just acted on" stays that. */
     ACTED_MS: 30000,
     _acted: null,
+    /** Cards acted on by a render that has not landed yet. */
+    _saving: new Set(),
 
     /** A button or a form in a card was used: that card is the one being saved, so its own edits are not the ones to keep. */
     noteActed(el) {
