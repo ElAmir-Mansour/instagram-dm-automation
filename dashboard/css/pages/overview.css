@@ -5,3 +5,28 @@
  * declares `css: true`. The shared tokens and components stay in tokens.css and styles.css; a rule moves here once nothing but the
  * Overview uses it, which keeps the first load lighter (UX plan R-14). Empty on purpose until the first of them moves.
  */
+
+/* The last-7-days card: two labelled strips (comment auto-replies, assistant replies), one under the other. Each strip names itself and
+   its own total above its cells, so the two series are told apart by their words and not by their colour (UX US1 T042). */
+.strip-series + .strip-series { margin-block-start: var(--space-4); }
+.strip-series-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-3);
+    margin-block-end: var(--space-1);
+}
+.strip-series-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-semibold);
+    color: var(--text-strong);
+}
+.strip-series-total {
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}

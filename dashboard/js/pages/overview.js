@@ -80,6 +80,15 @@ const OverviewPage = {
     GROWTH_DAYS: 14,
 
     /**
+     * The views tile reads its own seven-day answer, so the comparison is the server's and not a derivation here (audit OV-06). The
+     * 14-day read above still feeds the followers' change and the skip rate; slicing its daily series into "this week" and "last
+     * week" summed the six days that had been measured against seven, which read as -92%. `GET /growth/overview?days=7` answers
+     * `kpis.views` and `previous.views` over the same span a week apart, and `previous.views` is null whenever the two do not
+     * compare exactly.
+     */
+    VIEWS_DAYS: 7,
+
+    /**
      * The skip rate's bands (% of views gone in the first 3 s): above
      * `SKIP_DANGER_ABOVE` the hook is losing most people, from
      * `SKIP_WARNING_FROM` half of them. Same numbers as growth.js, which is
@@ -219,8 +228,10 @@ const OverviewPage = {
         // ~201KB on the critical path of all ten screens.
         const statsP = this._settle(API.getStats());
         const recentP = this._settle(API.getInteractions({ limit: 8 }));
+        // `outcome: 'actionable'`, not `status: 'FAILED'`: a DM skipped on purpose (the 24 h cap, a person who already had their
+        // reply) is written FAILED and needs nobody, so counting it made this alert red for things that went right (audit OV-03).
         const failedP = this._settle(API.getInteractions({
-            status: 'FAILED', limit: this.FAILED_TODAY_LIMIT, since: this.localMidnight().toISOString(),
+            outcome: 'actionable', limit: this.FAILED_TODAY_LIMIT, since: this.localMidnight().toISOString(),
         }));
         const tokenP = this._settle(API.getTokenStatus());
         // The stored Facebook connection (columns only, no call to Meta): "reconnect due" comes from the daily recheck (P29).
@@ -231,6 +242,7 @@ const OverviewPage = {
         const dailyP = this._settle(API.getDailyStats(7));
         const growth = this.canSeeGrowth();
         const growthP = growth ? this._settle(API.getGrowthOverview(this.GROWTH_DAYS)) : null;
+        const viewsP = growth ? this._settle(API.getGrowthOverview(this.VIEWS_DAYS)) : null;
         // The profile card: for an operator or an owner (a viewer's answer is a 403 and the region stays empty).
         if (growth) {
             this._settle(API.getProfileProgress()).then((progressRes) => {
@@ -273,11 +285,11 @@ const OverviewPage = {
 
         // ── The content region ──────────────────────────────────────────────
         if (growth) {
-            Promise.all([growthP, goalsP]).then(([growthRes, goalsRes]) => {
+            Promise.all([growthP, goalsP, viewsP]).then(([growthRes, goalsRes, viewsRes]) => {
                 if (!live()) return;
                 const host = this.region('growth');
                 if (!host) return;
-                host.innerHTML = esc(this.renderGrowth(growthRes, goalsRes));
+                host.innerHTML = esc(this.renderGrowth(growthRes, goalsRes, viewsRes));
                 UI.icons(host);
             });
         }
@@ -345,7 +357,7 @@ const OverviewPage = {
                                     <td>${UI.userCell(i)}</td>
                                     <td dir="auto">${i.trigger_keyword || '—'}</td>
                                     <td>
-                                        <span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span>
+                                        ${UI.outcomePill(i)}
                                         ${i.status === 'FAILED' && i.error_log ? html`<span class="cell-note" dir="auto">${i.error_log}</span>` : ''}
                                     </td>
                                     <td class="nowrap">${UI.formatDate(i.timestamp)}</td>
@@ -542,6 +554,35 @@ const OverviewPage = {
         return this.threadsOf(threadsRes).filter((thread) => Attention.needsHuman(thread));
     },
 
+    /**
+     * What one day of `/stats/daily` says about the comment DMs, as `{ delivered, actionable, byDesign, split }`. `split` is false for
+     * a row without the outcome split, which is read as it always was (sent, failed): never a split invented from nothing.
+     * `actionable` is what needs the owner, so it is the only red number; `byDesign` is what the product skipped on purpose.
+     */
+    dayOutcomes(row) {
+        const d = row || {};
+        const n = (v) => Number(v) || 0;
+        if ('delivered' in d || 'actionable' in d) {
+            return { delivered: n(d.delivered), actionable: n(d.actionable), byDesign: n(d.by_design), split: true };
+        }
+        return { delivered: n(d.sent), actionable: n(d.failed), byDesign: 0, split: false };
+    },
+
+    /** The sum of `dayOutcomes` over a series, with `assistant` (null when the series carries no `assistant_replies`). */
+    weekOutcomes(daily) {
+        const rows = Array.isArray(daily) ? daily : [];
+        const out = { delivered: 0, actionable: 0, byDesign: 0, assistant: null, split: false };
+        rows.forEach((row) => {
+            const day = this.dayOutcomes(row);
+            out.delivered += day.delivered;
+            out.actionable += day.actionable;
+            out.byDesign += day.byDesign;
+            out.split = out.split || day.split;
+            if (row && 'assistant_replies' in row) out.assistant = (out.assistant || 0) + (Number(row.assistant_replies) || 0);
+        });
+        return out;
+    },
+
     /** "3h" / "2d" — how long the oldest customer has been waiting, as a duration. */
     waitAge(iso) {
         const at = iso ? new Date(iso).getTime() : NaN;
@@ -668,7 +709,8 @@ const OverviewPage = {
             const rows = Array.isArray(failedRes.value.data) ? failedRes.value.data : [];
             const failedToday = rows.filter((row) => {
                 const at = row.timestamp ? new Date(row.timestamp) : null;
-                return at && !Number.isNaN(at.getTime()) && at >= startOfToday;
+                // The route was asked for `outcome=actionable`; a row that says it is anything else is not one that needs the owner.
+                return at && !Number.isNaN(at.getTime()) && at >= startOfToday && (!row.outcome || row.outcome === 'actionable');
             }).length;
             const total = Number(failedRes.value.pagination && failedRes.value.pagination.total);
             const truncated = failedToday >= this.FAILED_TODAY_LIMIT && Number.isFinite(total) && total > failedToday;
@@ -690,8 +732,11 @@ const OverviewPage = {
         //    Reads the SAME daily series the chart below already fetches
         //    (dailyP), so this costs no extra request.
         if (dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value)) {
-            const trailingSent = dailyRes.value.reduce((sum, d) => sum + (Number(d.sent) || 0), 0);
-            const trailingFailed = dailyRes.value.reduce((sum, d) => sum + (Number(d.failed) || 0), 0);
+            // Delivered ÷ (delivered + actionable), the one success definition (audit OV-20): a DM skipped on purpose is not an attempt
+            // that failed, so a week of "already had its reply" no longer reads as a failing account.
+            const week = this.weekOutcomes(dailyRes.value);
+            const trailingSent = week.delivered;
+            const trailingFailed = week.actionable;
             const trailingTotal = trailingSent + trailingFailed;
             if (trailingTotal > 0) {
                 const rate = Math.round((trailingSent / trailingTotal) * 100);
@@ -886,10 +931,11 @@ const OverviewPage = {
         return actions.length ? actions[0].title : null;
     },
 
-    /** Sum of the measured days; null when not one day was measured. */
-    sumMeasured(rows, key) {
-        const values = rows.map((r) => (r && r[key] !== null && r[key] !== undefined && r[key] !== '' ? Number(r[key]) : NaN)).filter(Number.isFinite);
-        return values.length ? values.reduce((s, v) => s + v, 0) : null;
+    /** A number the server measured, or null: a missing, null or non-numeric value is "not measured", never 0. */
+    measured(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
     },
 
     /** The follower change over the last 7 days of the series, or null when the series cannot say. */
@@ -915,12 +961,18 @@ const OverviewPage = {
     },
 
     /**
-     * "What happened to my content, and what should I do today": views this
-     * week against last week, followers against the goal, the skip rate in its
-     * band, and the coach's first action. Every number is the API's; anything
-     * it could not measure is "—" with the reason, never a zero.
+     * "What happened to my content, and what should I do today": views over the
+     * last 7 days to yesterday against the same days a week earlier, followers
+     * against the goal, the skip rate in its band, and the coach's first action.
+     * Every number is the API's; anything it could not measure is "—" with the
+     * reason, never a zero.
+     *
+     * `viewsRes` is the settled `getGrowthOverview(VIEWS_DAYS)`. The views and the
+     * week before them are `kpis.views` and `previous.views`, which the server
+     * compares over exactly the same span (or answers null when it cannot): this
+     * page no longer sums a daily series itself (audit OV-06).
      */
-    renderGrowth(growthRes, goalsRes) {
+    renderGrowth(growthRes, goalsRes, viewsRes) {
         const failed = !growthRes || growthRes.status !== 'fulfilled';
         const o = !failed && growthRes.value && typeof growthRes.value === 'object' ? growthRes.value : {};
         const k = o.kpis && typeof o.kpis === 'object' ? o.kpis : {};
@@ -931,12 +983,15 @@ const OverviewPage = {
         const goal = Number(settings.goal_followers);
         const noData = failed ? '' : t('overview.growth.noData');
 
-        // Views: the last 7 days of the daily series against the 7 before.
-        const week = trend.slice(-7);
-        const prevWeek = trend.slice(-14, -7);
-        const views = this.sumMeasured(week, 'views');
-        const prevViews = this.sumMeasured(prevWeek, 'views');
-        let viewsSub = noData;
+        // Views: the server's own answer for the last 7 days, and its exact comparison with the same days a week earlier.
+        const viewsFailed = !viewsRes || viewsRes.status !== 'fulfilled';
+        const vo = !viewsFailed && viewsRes.value && typeof viewsRes.value === 'object' ? viewsRes.value : {};
+        const views = this.measured(vo.kpis && vo.kpis.views);
+        const prevViews = this.measured(vo.previous && vo.previous.views);
+        // A views read that failed on its own says why under "—"; when the whole region failed it has already said so above.
+        let viewsSub = viewsFailed
+            ? (failed ? '' : t('overview.growth.unavailable', { reason: (viewsRes && viewsRes.reason && viewsRes.reason.message) || t('error.unexpected') }))
+            : noData;
         if (views !== null) {
             if (prevViews === null) {
                 viewsSub = t('overview.growth.noPrev');
@@ -1007,18 +1062,23 @@ const OverviewPage = {
 
     /**
      * Sent today · failed today · waiting for you · active campaigns. "Today"
-     * is the last row of the gap-filled daily series (local midnight on the
-     * server's calendar), the same day the "failed today" alert counts — it
+     * is the last row of the gap-filled daily series (the tenant's own day, cut
+     * on the server), the same day the "failed today" alert counts — it
      * used to be a rolling 24 hours of every status, two numbers called
      * "today" on one screen. The all-time totals are Analytics'.
+     *
+     * "Failed" is what needs the owner (`actionable`): a DM skipped on purpose
+     * is not a failure, so it is named under the number and is not red in it.
      */
     renderStats(stats, dailyRes, threadsRes) {
         const daily = dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value) ? dailyRes.value : null;
-        const today = daily && daily.length ? daily[daily.length - 1] || {} : null;
-        const sentToday = today ? Number(today.sent) || 0 : null;
-        const failedToday = today ? Number(today.failed) || 0 : null;
-        const weekSent = daily ? daily.reduce((s, d) => s + (Number(d.sent) || 0), 0) : null;
-        const weekFailed = daily ? daily.reduce((s, d) => s + (Number(d.failed) || 0), 0) : null;
+        const today = daily && daily.length ? this.dayOutcomes(daily[daily.length - 1]) : null;
+        const sentToday = today ? today.delivered : null;
+        const failedToday = today ? today.actionable : null;
+        const week = daily ? this.weekOutcomes(daily) : null;
+        const weekSent = week ? week.delivered : null;
+        const weekFailed = week ? week.actionable : null;
+        const weekByDesign = week ? week.byDesign : 0;
         const dailyReason = t('overview.alert.trendUnknown');
 
         const threadsOk = threadsRes && threadsRes.status === 'fulfilled';
@@ -1043,7 +1103,9 @@ const OverviewPage = {
                         <span class="stat-icon"><i data-lucide="alert-circle" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value${failedToday > 0 ? html.raw(' text-danger') : ''}" id="stat-failed-today">${failedToday === null ? '—' : UI.formatNumber(failedToday)}</p>
-                    <p class="stat-sub">${weekFailed === null ? dailyReason : t('overview.stat.inWeek', { n: UI.formatNumber(weekFailed) })}</p>
+                    <p class="stat-sub">${weekFailed === null ? dailyReason : (weekByDesign > 0
+                        ? t('overview.stat.inWeekByDesign', { n: UI.formatNumber(weekFailed), d: UI.formatNumber(weekByDesign) })
+                        : t('overview.stat.inWeek', { n: UI.formatNumber(weekFailed) }))}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -1066,9 +1128,15 @@ const OverviewPage = {
     },
 
     /**
-     * The chart region: the 7-day strip, with its total as one line under it
-     * ("7 days: 84 sent · 6 failed (7%)") where a legend paragraph used to
-     * explain the encoding and give no number at all.
+     * The chart region: two labelled 7-day strips, with what they add up to as one line under them.
+     *
+     *   Comment auto-replies  the private DMs sent in answer to a comment: a cell is the day's delivered DMs, the red foot is what
+     *                         needs the owner. A DM skipped on purpose is not drawn red; it is in the tooltip and the table.
+     *   Assistant replies     the DMs the assistant sent to people who wrote first. Overview used to draw only the first and read
+     *                         all zeros in a week the assistant had answered people (audit OV-18).
+     *
+     * A series the answer does not carry (a daily row without `assistant_replies`) is left out, not drawn as a row of zeros: a
+     * number that was not measured is not 0. A daily read that failed says so, and is not drawn as a quiet week.
      *
      * No library and no canvas: `Charts.dayStrip` returns an SVG string, so
      * this renders synchronously from data it already has.
@@ -1077,34 +1145,74 @@ const OverviewPage = {
         const host = this.region('charts');
         if (!host) return;
 
-        const daily = (dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value))
-            ? dailyRes.value
-            : [];
-        const sent = daily.reduce((s, d) => s + (Number(d.sent) || 0), 0);
-        const failed = daily.reduce((s, d) => s + (Number(d.failed) || 0), 0);
-        const total = sent + failed;
-
-        host.innerHTML = esc(html`
+        const frame = (body) => html`
             <div class="chart-grid chart-grid--one">
                 <div class="chart-card surface">
                     <div class="chart-card-header">
                         <h2 class="chart-card-title">${t('overview.chart.activity')}</h2>
                     </div>
-                    ${Charts.dayStrip(daily, {
-                        label: t('overview.chart.activity'),
-                        emptyMessage: t('overview.chart.noActivity'),
-                        dayHeader: t('common.day'),
-                        sentHeader: t('common.sent'),
-                        failedHeader: t('common.failed'),
-                    })}
-                    ${total > 0 ? html`<p class="chart-foot" id="overview-week-summary">${t('overview.chart.summary', {
-                        sent: UI.formatNumber(sent),
-                        failed: UI.formatNumber(failed),
-                        rate: UI.formatPercent(Math.round((failed / total) * 100)),
-                    })}</p>` : ''}
+                    ${body}
                 </div>
             </div>
-        `);
+        `;
+
+        if (!dailyRes || dailyRes.status !== 'fulfilled' || !Array.isArray(dailyRes.value)) {
+            host.innerHTML = esc(frame(html`<p class="chart-empty" id="overview-strip-unavailable" role="status">${t('overview.chart.unavailable')}</p>`));
+            return;
+        }
+
+        const daily = dailyRes.value;
+        const week = this.weekOutcomes(daily);
+        const strip = (id, labelKey, tone, total, options) => html`
+            <div class="strip-series" id="${id}">
+                <div class="strip-series-head">
+                    <span class="strip-series-label">
+                        <span class="chart-dot" style="background: ${Charts.token(tone.token, tone.fallback)}" aria-hidden="true"></span>${t(labelKey)}
+                    </span>
+                    <span class="strip-series-total">${t('overview.stat.inWeek', { n: UI.formatNumber(total) })}</span>
+                </div>
+                ${Charts.dayStrip(daily, Object.assign({
+                    label: t(labelKey),
+                    emptyMessage: t('overview.chart.noActivity'),
+                    dayHeader: t('common.day'),
+                }, options))}
+            </div>
+        `;
+
+        // The comment strip draws what became of each DM when the server says so, and what it always drew when it does not.
+        const commentOptions = week.split
+            ? {
+                valueKey: 'delivered', badKey: 'actionable', noteKey: 'by_design',
+                valueHeader: t('status.outcome.delivered'), badHeader: t('status.outcome.actionable'), noteHeader: t('status.outcome.by_design'),
+            }
+            : { sentHeader: t('common.sent'), failedHeader: t('common.failed') };
+
+        let summary = '';
+        if (week.split) {
+            if (week.delivered + week.actionable + week.byDesign > 0) {
+                summary = t('overview.chart.summaryOutcomes', {
+                    delivered: UI.formatNumber(week.delivered),
+                    actionable: UI.formatNumber(week.actionable),
+                    byDesign: UI.formatNumber(week.byDesign),
+                });
+            }
+        } else if (week.delivered + week.actionable > 0) {
+            summary = t('overview.chart.summary', {
+                sent: UI.formatNumber(week.delivered),
+                failed: UI.formatNumber(week.actionable),
+                rate: UI.formatPercent(Math.round((week.actionable / (week.delivered + week.actionable)) * 100)),
+            });
+        }
+
+        host.innerHTML = esc(frame(html`
+            ${strip('overview-series-comments', 'overview.chart.series.comments', { token: '--success', fallback: '#34c759' }, week.delivered, commentOptions)}
+            ${week.assistant === null ? '' : strip('overview-series-assistant', 'overview.chart.series.assistant',
+                { token: '--chart-accent', fallback: 'currentColor' }, week.assistant, {
+                    valueKey: 'assistant_replies', badKey: null, valueToken: '--chart-accent', valueFallback: 'currentColor',
+                    valueHeader: t('overview.chart.series.assistant'),
+                })}
+            ${summary ? html`<p class="chart-foot" id="overview-week-summary">${summary}</p>` : ''}
+        `));
         UI.icons(host);
     },
 };

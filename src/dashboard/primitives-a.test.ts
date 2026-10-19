@@ -250,6 +250,8 @@ const VOCABULARY: Record<string, Record<string, string>> = {
     content: { making: 'info', review: 'accent', scheduled: 'info', posted: 'success', failed: 'danger' },
     connection: { fine: 'success', expiring: 'warning', broken: 'danger', not_set_up: 'neutral' },
     assistant: { on: 'success', off: 'neutral', paused_here: 'neutral', sales_test: 'info', sales_live: 'success' },
+    // Added by UX US1 (T042): what became of one comment DM, from src/services/outcomes.ts. Only `actionable` is red.
+    outcome: { delivered: 'success', by_design: 'neutral', actionable: 'danger', pending: 'info', blocked: 'neutral' },
 };
 const BUSY = new Set(['post.publishing', 'post.processing', 'content.making']);
 const TONE_CLASS: Record<string, string> = { success: 'badge-success', info: 'badge-info', warning: 'badge-warning', danger: 'badge-danger', neutral: 'badge-neutral', accent: 'badge-accent' };

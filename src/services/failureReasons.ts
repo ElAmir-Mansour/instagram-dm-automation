@@ -38,8 +38,15 @@ export const FAILURE_TEXT_GROUPS = 500;
 /** A reason with no code and no pipeline wording: the text itself, normalised. */
 export const TEXT_REASON_PREFIX = 'text:';
 
-/** The pipeline's own sentences, in the order they are tested. */
-const OWN_WORDING: ReadonlyArray<readonly [RegExp, string]> = [
+/**
+ * The pipeline's own sentences, in the order they are tested.
+ *
+ * `OWN_WORDING`, `META_CODE`, `EXPECTED_REASONS` and `PUBLIC_FALLBACK_SENT` are exported for one reader besides this file:
+ * `expectedFailureSql` (src/services/outcomes.ts) renders them as SQL, so the stats routes can count outcomes in the database with
+ * the SAME patterns this file judges one row with. A pattern changed here therefore changes both, and a pattern that cannot be
+ * rendered as SQL is refused by that function at load, not silently dropped.
+ */
+export const OWN_WORDING: ReadonlyArray<readonly [RegExp, string]> = [
     // classifyDmError's code-100 sentence (src/webhook/errors.ts).
     [/won't accept a private reply/i, '100'],
     // classifyDmError's already-replied sentence, and Meta's own words for it.
@@ -51,7 +58,7 @@ const OWN_WORDING: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 
 /** `(Code: 190)`, `(Code 10903)`, `(Code: -1)`. Not `(Code: N/A)`. */
-const META_CODE = /\bCode:?\s*(-?\d+)\b/i;
+export const META_CODE = /\bCode:?\s*(-?\d+)\b/i;
 
 /**
  * The reasons that are the pipeline doing what it was built to do, by `failureReasonCode`:
@@ -63,7 +70,7 @@ const META_CODE = /\bCode:?\s*(-?\d+)\b/i;
  * Deliberately NOT here: `-1`. Instagram sends the refusal as -1 *with* "already has a reply", which `OWN_WORDING` turns into
  * `already_replied` before any code is read. A bare `-1` is Graph's generic "unknown error", which is a real failure.
  */
-const EXPECTED_REASONS: ReadonlySet<string> = new Set(['recipient_cap', 'quota_hourly', 'quota_app', 'already_replied', '10900']);
+export const EXPECTED_REASONS: ReadonlySet<string> = new Set(['recipient_cap', 'quota_hourly', 'quota_app', 'already_replied', '10900']);
 
 /**
  * What `comments.ts` appends to a DM failure's `error_log` once the public reply that stands in for it has gone out. The DM
@@ -71,7 +78,7 @@ const EXPECTED_REASONS: ReadonlySet<string> = new Set(['recipient_cap', 'quota_h
  * Checked on the TEXT, not the reason code, because the same code-100 refusal with this sentence worked as designed and
  * without it (the fallback failed too: `... The public fallback reply failed too: ...`) did not.
  */
-const PUBLIC_FALLBACK_SENT = /Replied publicly with the link instead/i;
+export const PUBLIC_FALLBACK_SENT = /Replied publicly with the link instead/i;
 
 /**
  * True when this `error_log` is a failure the pipeline expected (see `EXPECTED_REASONS`, `PUBLIC_FALLBACK_SENT`): not something
@@ -110,6 +117,8 @@ export interface FailureTextGroup {
     last_at: unknown;
     /** Every FAILED row in the window, the same on every row (a window SUM). */
     total?: number | string;
+    /** Of those, the ones the SQL judged expected (`expectedFailureSql`), the same on every row. Absent: counted from the groups. */
+    expected_total?: number | string;
 }
 
 export interface FailureReason {
@@ -130,6 +139,13 @@ export interface FailureReason {
 
 export interface FailureSummary {
     total: number;
+    /**
+     * How many of `total` were failures the pipeline expected (`isExpectedFailure`), and how many the owner has to look at: the
+     * two halves of "Why DMs fail" (audit OV-20). Counted over every text group, not only the top reasons, and taken from the
+     * query's own sum when it sent one, like `total`. `actionable_total` is `total - expected_total`.
+     */
+    expected_total: number;
+    actionable_total: number;
     reasons: FailureReason[];
 }
 
@@ -139,6 +155,7 @@ const time = (iso: string | null): number => (iso ? Date.parse(iso) : 0) || 0;
 export function summariseFailures(rows: readonly FailureTextGroup[], top = FAILURE_REASON_TOP): FailureSummary {
     const byReason = new Map<string, FailureReason>();
     let counted = 0;
+    let countedExpected = 0;
     for (const row of rows) {
         const count = Number(row.count) || 0;
         if (count <= 0) continue;
@@ -146,6 +163,7 @@ export function summariseFailures(rows: readonly FailureTextGroup[], top = FAILU
         const reason_code = failureReasonCode(row.error_log);
         const lastAt = toIso(row.last_at);
         const expectedHere = isExpectedFailure(row.error_log) ? count : 0;
+        countedExpected += expectedHere;
         const current = byReason.get(reason_code);
         if (!current) {
             byReason.set(reason_code, {
@@ -166,5 +184,11 @@ export function summariseFailures(rows: readonly FailureTextGroup[], top = FAILU
     const reasons = [...byReason.values()]
         .sort((a, b) => (b.count - a.count) || (time(b.last_at) - time(a.last_at)))
         .slice(0, Math.max(0, top));
-    return { total: Number.isFinite(declared) && declared >= counted ? declared : counted, reasons };
+    const total = Number.isFinite(declared) && declared >= counted ? declared : counted;
+    // The SQL's own count wins when it came and is sane (the same rule as `total`), so a month with more distinct texts than the
+    // query hands over still splits exactly. It can never exceed `total`.
+    const declaredExpected = Number(rows[0]?.expected_total);
+    const expected_total = Number.isFinite(declaredExpected) && declaredExpected >= countedExpected && declaredExpected <= total
+        ? declaredExpected : Math.min(countedExpected, total);
+    return { total, expected_total, actionable_total: total - expected_total, reasons };
 }

@@ -1428,6 +1428,15 @@ const UI = {
                 sales_test: ['info', '◔'],
                 sales_live: ['success', '●'],
             }),
+            // What became of one comment's DM (src/services/outcomes.ts). Only `actionable` is red: it is the one the owner has to
+            // act on. A send the product skipped on purpose, and a person whose DMs are closed, are neutral (audit OV-03).
+            outcome: family({
+                delivered: ['success', '●'],
+                by_design: ['neutral', '○'],
+                actionable: ['danger', '✕'],
+                pending: ['info', '◔'],
+                blocked: ['neutral', '○'],
+            }),
         }));
     })(),
 
@@ -1463,6 +1472,32 @@ const UI = {
         if (!word) word = String(state === null || state === undefined || state === '' ? '—' : state);
 
         return html`<span class="status-pill ${html.raw(UI.STATUS_TONE_CLASS[tone])}" data-tone="${tone}" data-status="${family}.${name}"${hint ? html` title="${hint}"` : ''}><span class="status-pill-glyph${busy ? html.raw(' is-busy') : ''}" aria-hidden="true">${glyph}</span>${word}</span>`;
+    },
+
+    // ─── What became of a DM (outcomes) ─────────────────────────────────────
+    /**
+     * The outcome of one `interactions` row: the server's `outcome` (every row of `GET /interactions` carries it, classified once, in
+     * src/services/outcomes.ts, so the dashboard never holds a second copy of which failures were expected), or, for an answer that
+     * has none, what the row's own status says. Without the server's word a FAILED row is `actionable`, because "we cannot tell" is
+     * never quietly fine; a status nobody planned for is `actionable` for the same reason.
+     */
+    OUTCOME_STATES: Object.freeze(['delivered', 'by_design', 'actionable', 'pending', 'blocked']),
+
+    outcomeOf(row) {
+        const given = row && typeof row.outcome === 'string' ? row.outcome : '';
+        if (UI.OUTCOME_STATES.includes(given)) return given;
+        switch (row && row.status) {
+            case 'SENT': return 'delivered';
+            case 'PENDING': return 'pending';
+            case 'USER_BLOCKED_DMS': return 'blocked';
+            case 'SKIPPED': return 'by_design';
+            default: return 'actionable';
+        }
+    },
+
+    /** The pill for one interaction row's outcome: a glyph, a word and a tone, by-design neutral and only a real failure red. */
+    outcomePill(row) {
+        return UI.statusPill('outcome', UI.outcomeOf(row));
     },
 
     // ─── The tenant's time zone (R-09) ──────────────────────────────────────

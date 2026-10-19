@@ -266,7 +266,8 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         O.render();
         await settle();
         assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getConversations').map((c) => c.args[0])), [{ limit: 100 }]);
-        assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getGrowthOverview').map((c) => c.args[0])), [14]);
+        // The followers and the skip rate read two weeks; the views tile reads its own seven days (the server's exact comparison).
+        assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getGrowthOverview').map((c) => c.args[0])), [14, 7]);
         assert.deepEqual(s.waiting, [1], 'SH3: the count reaches the nav');
         const before = s.calls.length;
         O.onVisibilityChange();
@@ -294,12 +295,15 @@ describe('Overview — the content region (O1 + G1)', () => {
         }));
         const views = [100, 100, 100, 100, 100, 100, 100, 150, 150, 150, 150, 150, 100, 110];
         const followers = [140, 141, 141, 142, 143, 143, 144, 146, 147, 148, 149, 150, 152, 154];
+        // The views are the server's own seven-day answer and its exact comparison (US1 T050), not a sum of the 14-day series below.
         const markup = String(s.pages.Overview.renderGrowth(
             ok({ kpis: { followers: 154, skip_rate: 83 }, trend: trend(views, followers) }),
             ok({ settings: { goal_followers: 10000, goal_views: 1000000 } }),
+            ok({ kpis: { views: 960 }, previous: { views: 700, days: 7 } }),
         ));
         const words = text(markup);
-        assert.match(markup, /id="overview-views"[\s\S]*?class="stat-value">960</, 'this week: the last seven days');
+        assert.match(markup, /id="overview-views"[\s\S]*?class="stat-value">960</, 'the server’s kpis.views');
+        assert.ok(words.includes('Views, last 7 days to yesterday'), 'labelled with the span it covers');
         assert.ok(markup.includes('stat-trend is-up') && markup.includes('trending-up'));
         assert.ok(words.includes('+37%'), '960 against 700');
         assert.ok(words.includes(s.t('overview.growth.vsPrev', { n: '700' })));
@@ -313,16 +317,22 @@ describe('Overview — the content region (O1 + G1)', () => {
 
     it('draws nothing it did not measure, and says why the whole region is empty when the read failed', () => {
         const s = load();
-        const none = String(s.pages.Overview.renderGrowth(ok({ kpis: { followers: null, skip_rate: null }, trend: trend([null, null]) }), ok({ settings: {} })));
+        const none = String(s.pages.Overview.renderGrowth(
+            ok({ kpis: { followers: null, skip_rate: null }, trend: trend([null, null]) }), ok({ settings: {} }),
+            ok({ kpis: { views: null }, previous: { views: null } }),
+        ));
         assert.equal((none.match(/class="stat-value">—</g) || []).length, 3);
         assert.ok(text(none).includes(s.t('overview.growth.noData')));
         assert.ok(text(none).includes(s.t('overview.growth.noPlan')), 'no stored plan: says how to get one');
         assert.ok(!/\b0\b/.test(text(none).replace(/\d+ days?/g, '')), 'no zeros standing in for nothing');
 
-        const down = String(s.pages.Overview.renderGrowth(failed('Growth is asleep'), failed('x')));
+        const down = String(s.pages.Overview.renderGrowth(failed('Growth is asleep'), failed('x'), failed('Growth is asleep')));
         assert.ok(text(down).includes(s.t('overview.growth.unavailable', { reason: 'Growth is asleep' })));
-        const partial = String(s.pages.Overview.renderGrowth(ok({ kpis: { followers: 36, skip_rate: 40 }, trend: trend([5, 5]) }), ok({ settings: {} })));
-        assert.ok(text(partial).includes(s.t('overview.growth.noPrev')), 'two days: nothing to compare with');
+        const partial = String(s.pages.Overview.renderGrowth(
+            ok({ kpis: { followers: 36, skip_rate: 40 }, trend: trend([5, 5]) }), ok({ settings: {} }),
+            ok({ kpis: { views: 10 }, previous: { views: null, days: 7 } }),
+        ));
+        assert.ok(text(partial).includes(s.t('overview.growth.noPrev')), 'the server could not compare exactly: no arrow, and it says so');
         assert.ok(text(partial).includes(s.t('growth.small.delta')), 'under 100 followers Instagram keeps the change back');
         assert.match(partial, /class="stat-value text-success">40%</);
         assert.ok(!/36 of/.test(text(partial)), 'no goal read: no "of" line');
@@ -520,7 +530,8 @@ describe('Analytics (A3 A4 A6 A7 A8)', () => {
         rows[0]!.failed = 5;
         const line = s.pages.Analytics.summary30(rows);
         const busiest = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(new Date('2026-09-12'));
-        assert.equal(line, `30 days: 64 sent · 5 failed (\u20667%\u2069) · busiest day ${busiest}`, 'the weekday of the 20s, summed over the window');
+        // A series without the outcome split is read as sent / failed, and the rate is the page's one definition: 64 ÷ (64 + 5).
+        assert.equal(line, `30 days: 64 delivered · 5 need you · 0 by design · success \u206693%\u2069 · busiest day ${busiest}`, 'the weekday of the 20s, summed over the window');
         assert.equal(s.pages.Analytics.summary30([{ day: '2026-09-01', sent: 0, failed: 0 }]), '');
     });
 

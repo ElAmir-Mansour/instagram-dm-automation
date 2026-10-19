@@ -23,6 +23,7 @@ interface Loaded {
         dayStrip: (days: unknown[], opts?: Record<string, unknown>) => { toString(): string };
         splitBar: (parts: unknown[], opts?: Record<string, unknown>) => { toString(): string };
         sparkline: (values: number[], opts?: Record<string, unknown>) => { toString(): string };
+        dayLabel: (day: unknown) => string;
     };
     setRtl: (on: boolean) => void;
 }
@@ -63,6 +64,8 @@ function load(): Loaded {
     }
     // I18N.isRtl is what the strip consults; override it rather than mutating language state.
     vm.runInContext('I18N.isRtl = () => globalThis.__rtl === true;', ctx);
+    // English, so a label can be asserted by what it says ("Oct 19"); direction is `isRtl`'s, set above, not the language's.
+    vm.runInContext("I18N.lang = 'en';", ctx);
     const Charts = vm.runInContext('Charts', ctx) as Loaded['Charts'];
     return {
         Charts,
@@ -158,6 +161,60 @@ describe('dayStrip', () => {
         const full = s(Charts.dayStrip(DAYS));
         const maxWidthFull = Number(full.match(/max-width:(\d+)px/)?.[1]);
         assert.ok(maxWidth < maxWidthFull, `2-cell cap (${maxWidth}) should be smaller than 3-cell cap (${maxWidthFull})`);
+    });
+});
+
+describe('dayStrip — any series, and a calendar day is a calendar day (US1 T042)', () => {
+    const SPLIT = [
+        { day: '2026-10-17', delivered: 0, actionable: 0, by_design: 0, assistant_replies: 0 },
+        { day: '2026-10-18', delivered: 6, actionable: 0, by_design: 4, assistant_replies: 2 },
+        { day: '2026-10-19', delivered: 2, actionable: 3, by_design: 0, assistant_replies: 0 },
+    ];
+
+    it('draws the column it is told to, with a red foot only for the column it is told is bad', () => {
+        const out = s(Charts.dayStrip(SPLIT, { valueKey: 'delivered', badKey: 'actionable', noteKey: 'by_design' }));
+        // Three cells; one foot rect (the day with 3 that need the owner). The 4 skipped on purpose draw nothing red.
+        assert.equal((out.match(/<rect /g) || []).length, 4);
+        assert.equal((out.match(/fill="#ff3b30"/g) || []).length, 1);
+    });
+
+    it('names the neutral count in the tooltip and the screen-reader table, and draws it nowhere', () => {
+        const out = s(Charts.dayStrip(SPLIT, {
+            valueKey: 'delivered', badKey: 'actionable', noteKey: 'by_design',
+            valueHeader: 'Delivered', badHeader: 'Needs you', noteHeader: 'By design', dayHeader: 'Day', label: 'Replies',
+        }));
+        assert.match(out, /<title>Oct 18: 6 Delivered, 0 Needs you, 4 By design<\/title>/);
+        assert.match(out, /<th scope="col">Delivered<\/th><th scope="col">Needs you<\/th><th scope="col">By design<\/th>/);
+        assert.match(out, /<td>Oct 18<\/td><td>6<\/td><td>0<\/td><td>4<\/td>/);
+    });
+
+    it('draws a series with nothing to flag (badKey null): no foot, no empty "bad" column', () => {
+        const out = s(Charts.dayStrip(SPLIT, { valueKey: 'assistant_replies', badKey: null, valueHeader: 'Assistant replies', valueToken: '--chart-accent', valueFallback: 'currentColor' }));
+        assert.equal((out.match(/<rect /g) || []).length, 3, 'one cell per day and no foot');
+        assert.equal((out.match(/fill="currentColor"/g) || []).length, 1, 'the one day with replies');
+        assert.match(out, /<title>Oct 18: 2 Assistant replies<\/title>/);
+        assert.ok(!/<th scope="col">Failed<\/th>/.test(out));
+        assert.equal((out.match(/<th /g) || []).length, 2, 'day and the series');
+    });
+
+    it('scales each strip to its own peak, so a quiet series is not flattened by a busy one', () => {
+        const quiet = s(Charts.dayStrip([{ day: '2026-10-18', assistant_replies: 1 }, { day: '2026-10-19', assistant_replies: 2 }], { valueKey: 'assistant_replies', badKey: null }));
+        const opacities = [...quiet.matchAll(/fill-opacity="([0-9.]+)"/g)].map((m) => Number(m[1]));
+        assert.equal(Math.max(...opacities), 1, 'the busiest day is fully drawn');
+    });
+
+    it('keeps the defaults when no keys are given: sent and failed, as before', () => {
+        const out = s(Charts.dayStrip([{ day: '2026-10-19', sent: 5, failed: 5 }], { sentHeader: 'Sent', failedHeader: 'Failed' }));
+        assert.match(out, /<title>Oct 19: 5 Sent, 5 Failed<\/title>/);
+    });
+
+    it('labels a calendar day as that day, not as the evening before it in a zone west of UTC', () => {
+        // Parsed as an instant, '2026-10-19' is 2026-10-18 20:00 in New York. A calendar day is read, and formatted, in UTC.
+        assert.equal(Charts.dayLabel('2026-10-19'), 'Oct 19');
+        assert.equal(Charts.dayLabel('2026-03-01'), 'Mar 1');
+        // An instant is still an instant.
+        assert.notEqual(Charts.dayLabel('2026-10-19T23:30:00Z'), '—');
+        assert.equal(Charts.dayLabel('nope'), '—');
     });
 });
 
