@@ -16,6 +16,9 @@ import axios from 'axios';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { planJobs } from '../webhook/router.js';
+import { handlers } from '../jobs/handlers.js';
+import { drainJobs } from '../jobs/runner.js';
+import { memoryQueue } from '../jobs/testSupport.js';
 import type { WaEventPayload } from '../jobs/types.js';
 import { metaHttp } from './http.js';
 import { setLogSink } from '../utils/log.js';
@@ -435,5 +438,76 @@ describe('account and preference events', () => {
     it('warn, and do not throw, for a kind this build does not know', async () => {
         await handleWhatsAppEvent({ kind: 'surprise' } as unknown as WaEventPayload);
         assert.equal(logged('wa.event_unknown_kind').length, 1);
+    });
+});
+
+// ─── What the job table holds afterwards (review C3) ───────────────────────────────────
+
+describe('the stored payload of a wa.event job', () => {
+    const PHONE = '201001234567';
+    const drain = (queue: ReturnType<typeof memoryQueue>['queue'], maxJobs = 50) =>
+        drainJobs({ queue, handlers, budgetMs: 10_000, maxJobs, random: () => 0.5 });
+    const stored = (job: { payload: unknown }) => JSON.stringify(job.payload);
+
+    it('cuts a status down as the job completes: the wamid, status and pricing stay, the recipient’s phone does not', async () => {
+        db.rows.push(outbound());
+        const planned = planJobs(statusBody({ status: 'delivered', recipient_id: PHONE, pricing: PAID }));
+        const { jobs, queue, completed } = memoryQueue(planned);
+        assert.ok(stored(jobs[0]!).includes(PHONE), 'whole before the handler runs');
+
+        await drain(queue);
+
+        assert.equal(jobs[0]!.status, 'done');
+        assert.deepEqual(completed, [{ id: 'job-1', redacted: true }]);
+        assert.ok(!stored(jobs[0]!).includes(PHONE), 'the phone is gone');
+        const kept = (jobs[0]!.payload as any).change.statuses[0];
+        assert.deepEqual([kept.id, kept.status, kept.pricing.category], [WAMID, 'delivered', 'marketing']);
+        assert.equal(row().delivery_status, 'delivered', 'and the status itself was applied');
+    });
+
+    it('keeps a status job whole while it will be retried, and redacts it on the failure that ends it', async () => {
+        db.rows.push(outbound());
+        ledgerFails = true;
+        const planned = planJobs(statusBody({ status: 'delivered', recipient_id: PHONE }));
+        const { jobs, queue } = memoryQueue(planned, 3);
+
+        await drain(queue, 1);
+        await drain(queue, 1);
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['pending', 2]);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload, 'two attempts failed and a third is coming: the payload is whole');
+
+        await drain(queue, 1);
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['failed', 3]);
+        assert.match(jobs[0]!.last_error!, /deadlock detected/);
+        assert.ok(!stored(jobs[0]!).includes(PHONE));
+        assert.equal((jobs[0]!.payload as any).change.statuses[0].id, WAMID);
+    });
+
+    it('cuts a preference down to what was chosen: no phone, no id, no wording', async () => {
+        const body = {
+            object: 'whatsapp_business_account',
+            entry: [{ id: WABA, changes: [{ field: 'user_preferences', value: {
+                messaging_product: 'whatsapp', metadata: { phone_number_id: PHONE_ID },
+                user_preferences: [{ wa_id: PHONE, user_id: 'EG.77', detail: 'User requested to stop marketing messages', category: 'marketing_messages', value: 'stop', timestamp: 1731705721 }],
+            } }] }],
+        };
+        const { jobs, queue } = memoryQueue(planJobs(body));
+        await drain(queue);
+        assert.equal(jobs[0]!.status, 'done');
+        for (const gone of [PHONE, 'EG.77', 'stop marketing']) assert.ok(!stored(jobs[0]!).includes(gone), gone);
+        assert.deepEqual((jobs[0]!.payload as any).change.user_preferences, [{ category: 'marketing_messages', value: 'stop', timestamp: 1731705721 }]);
+        assert.equal(logs.filter((l) => l.event === 'wa.preference_event').length, 1);
+    });
+
+    it('leaves an account event’s payload alone: it names no one', async () => {
+        const planned = planJobs({
+            object: 'whatsapp_business_account',
+            entry: [{ id: WABA, time: 1745612159, changes: [{ field: 'phone_number_quality_update', value: { display_phone_number: '15550783881', event: 'FLAGGED', current_limit: 'TIER_250' } }] }],
+        });
+        const { jobs, queue, completed } = memoryQueue(planned);
+        await drain(queue);
+        assert.equal(jobs[0]!.status, 'done');
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload);
+        assert.deepEqual(completed, [{ id: 'job-1', redacted: false }]);
     });
 });

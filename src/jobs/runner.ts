@@ -14,7 +14,8 @@
  */
 import { withProfileCache } from '../services/profile/cache.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
-import type { Job, JobHandlerRegistry, JobQueue } from './types.js';
+import { failureRedaction } from './redaction.js';
+import type { Job, JobHandlerRegistry, JobQueue, JobResult } from './types.js';
 
 /**
  * How long a claim is considered live before a reaper may take it back.
@@ -102,10 +103,13 @@ async function runInScope(
                 // per-kind payload types make the pairing unprovable to the compiler without
                 // a discriminated switch at every call site. The queue guarantees the two
                 // agree, so this is asserted once, here, rather than in each handler.
-                const handler = handlers[job.kind] as (payload: unknown, job: Job) => Promise<void>;
-                await handler(job.payload, job);
+                const handler = handlers[job.kind] as (payload: unknown, job: Job) => Promise<void | JobResult>;
+                const result = await handler(job.payload, job);
 
-                await queue.complete(job.id);
+                // A handler that asks for its payload to be replaced (WhatsApp, for a stranger's message) has it replaced in the statement that
+                // completes the job. Every other handler returns nothing and completes exactly as it always did.
+                if (result && result.redactPayload !== undefined) await queue.complete(job.id, { payload: result.redactPayload });
+                else await queue.complete(job.id);
                 log('info', 'job.succeeded', { duration_ms: Date.now() - startedAt });
                 return true;
             } catch (err) {
@@ -124,7 +128,12 @@ async function runInScope(
                 });
 
                 try {
-                    await queue.fail(job.id, String(fields['message'] ?? 'unknown error'), retryIn);
+                    // The payload a handler asked to have redacted is replaced only by the failure that ENDS the job: while a retry is coming,
+                    // the next attempt needs it.
+                    const redact = exhausted ? failureRedaction(err) : null;
+                    const message = String(fields['message'] ?? 'unknown error');
+                    if (redact) await queue.fail(job.id, message, retryIn, redact);
+                    else await queue.fail(job.id, message, retryIn);
                 } catch (bookkeepingErr) {
                     // The database is the queue, so if this write fails the job stays
                     // `running` and the reaper is the backstop. Nothing else to do but say so.

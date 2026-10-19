@@ -21,6 +21,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { pool } from '../config/db.js';
 import { handlers } from '../jobs/handlers.js';
+import { drainJobs } from '../jobs/runner.js';
+import { memoryQueue } from '../jobs/testSupport.js';
 import type { Job, JobKind, WhatsAppDmPayload } from '../jobs/types.js';
 import { metaHttp } from '../services/http.js';
 import { setLogSink } from '../utils/log.js';
@@ -66,6 +68,7 @@ let connection: Record<string, unknown> | null;
 let creatorActive: boolean;
 let agentReadFails: boolean;
 let failNextThreadRekey: boolean;
+let failConversationUpsert: boolean;
 let nextId: number;
 let snapshot: string | null;
 
@@ -109,7 +112,11 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
         return result(db.msgs.filter((m) => m.meta_message_id === params[0] && m.handled_at !== null).map((m) => ({ id: m.id })));
     }
 
+    // The Instagram pipeline's tenant lookup: nobody owns the page, so an Instagram job in these tests ends at `dm.no_creator`.
+    if (sql.includes('FROM creators') && sql.includes('instagram_page_id = ANY')) return result([]);
+
     if (sql.startsWith('INSERT INTO conversations')) {
+        if (failConversationUpsert) throw new Error('disk full');
         const withInbound = sql.includes('last_inbound_at');
         const [creator, userId] = params;
         const existing = db.convs.find((c) => c.creator_id === creator && c.instagram_user_id === userId);
@@ -219,6 +226,7 @@ beforeEach(() => {
     creatorActive = true;
     agentReadFails = false;
     failNextThreadRekey = false;
+    failConversationUpsert = false;
     db = { convs: [], msgs: [], consents: [], agent: { whatsapp_mode: 'off', whatsapp_test_senders: [] } };
 
     const previous = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
@@ -925,5 +933,152 @@ describe('the two routes into the handler', () => {
     it('the inline path also handles a status, and an account event, by logging them', async () => {
         await processWebhookBody(fixture('phone-number-quality-update'));
         assert.equal(only(logged('wa.account_event')).field, 'phone_number_quality_update');
+    });
+});
+
+// ─── What the job table holds afterwards (review C3) ───────────────────────────────────
+
+/**
+ * The same messages, but through the REAL runner and the real handler registry, into a queue that applies what `complete` and `fail` would write
+ * (src/jobs/testSupport.ts). The assertion is on the stored payload: a stranger's words, phone, name and username must be nowhere in the JSON the
+ * table would hold for the next seven days (or, for a failed job, for good).
+ */
+describe('the stored payload of a job (the queue keeps it 7 days, a failed one for good)', () => {
+    const EVERY_SECRET = [BODY, PHONE, NAME, USERNAME];
+    const drain = (queue: ReturnType<typeof memoryQueue>['queue'], maxJobs = 50) =>
+        drainJobs({ queue, handlers, budgetMs: 10_000, maxJobs, random: () => 0.5 });
+    const stored = (job: { payload: unknown }) => JSON.stringify(job.payload);
+    const assertNoSecrets = (job: { payload: unknown }, secrets = EVERY_SECRET) => {
+        for (const secret of secrets) assert.ok(!stored(job).includes(secret), `"${secret}" is still in the stored payload`);
+    };
+
+    it('redacts a stranger’s message as the job completes: no words, phone, name or username, and only the audit minimum stays', async () => {
+        agent('off', []);
+        const planned = planJobs(textBody(BODY, 'wamid.P1'));
+        const { jobs, queue, completed } = memoryQueue(planned);
+        for (const secret of EVERY_SECRET) assert.ok(stored(jobs[0]!).includes(secret), 'before the handler runs the full event is in the table: said in FLOWS.md');
+
+        await drain(queue);
+
+        const job = jobs[0]!;
+        assert.equal(job.status, 'done');
+        assert.deepEqual(completed, [{ id: 'job-1', redacted: true }], 'redacted by the completing statement, not by a second write');
+        assertNoSecrets(job);
+        assert.deepEqual(job.payload, {
+            object: 'whatsapp', entryId: WABA, phoneNumberId: PHONE_ID,
+            change: { redacted: true, metadata: { phone_number_id: PHONE_ID }, messages: [{ id: 'wamid.P1', type: 'text', timestamp: '1760875200', from_user_id: BSUID }] },
+        });
+        assert.deepEqual(db.msgs.map((m) => m.text), [''], 'and the message row never had them either');
+    });
+
+    it('leaves a listed test sender’s payload whole', async () => {
+        agent('off', [BSUID]);
+        const planned = planJobs(textBody(BODY, 'wamid.P2'));
+        const { jobs, queue, completed } = memoryQueue(planned);
+        await drain(queue);
+        assert.equal(jobs[0]!.status, 'done');
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload);
+        assert.deepEqual(completed, [{ id: 'job-1', redacted: false }]);
+        assert.equal(db.msgs[0]!.text, BODY);
+    });
+
+    it('redacts the stranger and keeps the tester when one delivery holds both', async () => {
+        agent('off', ['EG.the.tester']);
+        const body = textBody('from the stranger', 'wamid.P3a');
+        const tester = textBody('from the tester', 'wamid.P3b', { userId: 'EG.the.tester', phone: '201005550000', name: 'Tester Person', username: 'tester_handle' });
+        body.entry[0].changes[0].value.contacts.push(...tester.entry[0].changes[0].value.contacts);
+        body.entry[0].changes[0].value.messages.push(...tester.entry[0].changes[0].value.messages);
+        const planned = planJobs(body);
+        const { jobs, queue } = memoryQueue(planned);
+        await drain(queue);
+        assert.equal(jobs.length, 2);
+        assertNoSecrets(jobs[0]!, ['from the stranger', PHONE, NAME, USERNAME]);
+        assert.deepEqual(jobs[1]!.payload, planned[1]!.payload);
+    });
+
+    it('redacts a job that ends without storing anything: no connection, a switched-off tenant, a duplicate, an edit', async () => {
+        agent('off', []);
+        const redactedAfter = async (body: any) => {
+            const { jobs, queue } = memoryQueue(planJobs(body));
+            await drain(queue);
+            assert.equal(jobs[0]!.status, 'done');
+            return jobs[0]!;
+        };
+
+        connection = null;
+        assertNoSecrets(await redactedAfter(textBody(BODY, 'wamid.N1')));
+
+        connection = connectionRow();
+        creatorActive = false;
+        assertNoSecrets(await redactedAfter(textBody(BODY, 'wamid.N2')));
+
+        creatorActive = true;
+        await deliver(textBody(BODY, 'wamid.N3'));
+        assertNoSecrets(await redactedAfter(textBody(BODY, 'wamid.N3')));
+        assert.equal(logged('wa.duplicate_ignored').length, 1);
+
+        const edit = fixture('edit');
+        edit.entry[0].changes[0].value.contacts[0].user_id = BSUID;
+        edit.entry[0].changes[0].value.messages[0].from_user_id = BSUID;
+        const editJob = await redactedAfter(edit);
+        const original = JSON.stringify(planJobs(edit)[0]!.payload);
+        for (const secret of ['Sheena Nelson', '16505551234']) assert.ok(original.includes(secret) && !stored(editJob).includes(secret), secret);
+    });
+
+    it('leaves an Instagram job’s payload exactly as it was', async () => {
+        const event = { sender: { id: 'u9' }, recipient: { id: 'ig-page-1' }, message: { mid: 'mid-ig-1', text: 'hello, private words' } };
+        const planned = planJobs({ object: 'instagram', entry: [{ id: 'ig-page-1', messaging: [event] }] });
+        const { jobs, queue, completed } = memoryQueue(planned);
+        await drain(queue);
+        assert.equal(jobs[0]!.status, 'done');
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload, 'byte for byte');
+        assert.deepEqual(completed, [{ id: 'job-1', redacted: false }]);
+        assert.ok(stored(jobs[0]!).includes('hello, private words'));
+    });
+
+    it('keeps the payload of a stranger’s job while it will be RETRIED, and redacts it on the failure that ends it', async () => {
+        agent('off', []);
+        const planned = planJobs(textBody(BODY, 'wamid.F1'));
+        const { jobs, queue } = memoryQueue(planned, 3);
+        failConversationUpsert = true;
+
+        await drain(queue, 1);
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['pending', 1]);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload, 'attempt 1 failed and a retry is coming: the payload is whole');
+        await drain(queue, 1);
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['pending', 2]);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload, 'attempt 2 too');
+
+        await drain(queue, 1);
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['failed', 3]);
+        assert.match(jobs[0]!.last_error!, /disk full/);
+        assertNoSecrets(jobs[0]!);
+        assert.equal((jobs[0]!.payload as any).change.messages[0].id, 'wamid.F1', 'what an operator needs to find it is still there');
+    });
+
+    it('keeps a listed test sender’s payload even on the failure that ends the job: the operator can replay it', async () => {
+        agent('off', [BSUID]);
+        const planned = planJobs(textBody(BODY, 'wamid.F2'));
+        const { jobs, queue } = memoryQueue(planned, 3);
+        failConversationUpsert = true;
+        await drain(queue); // all three attempts
+        assert.deepEqual([jobs[0]!.status, jobs[0]!.attempts], ['failed', 3]);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload);
+    });
+
+    it('treats a failure before it knows who the sender is as a stranger’s: redacted at the end, whole before', async () => {
+        agent('test', [BSUID]);
+        const planned = planJobs(textBody(BODY, 'wamid.F3'));
+        const { jobs, queue } = memoryQueue(planned, 3);
+        agentReadFails = true;
+        await drain(queue, 1);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload);
+        await drain(queue, 1);
+        assert.deepEqual(jobs[0]!.payload, planned[0]!.payload);
+        // The last attempt stores it as for a stranger and completes (wa.settings_unreadable): redacted.
+        await drain(queue, 1);
+        assert.equal(jobs[0]!.status, 'done');
+        assertNoSecrets(jobs[0]!);
+        assert.equal(logged('wa.settings_unreadable').length, 1);
     });
 });

@@ -164,11 +164,32 @@ export interface EnqueueInput<K extends JobKind = JobKind> {
  * outcome — a handler that wants to give up permanently should return, having recorded why
  * in its own domain table (`interactions.error_log`), because that is where an operator
  * looks. `jobs.last_error` is for the runner's own failures, not for business outcomes.
+ *
+ * One optional extra, for WhatsApp only so far: a handler may return a `JobResult` asking for the
+ * stored payload to be replaced as the job completes (see `JobResult`). Returning nothing is what
+ * every other handler does, and changes nothing.
  */
 export type JobHandler<K extends JobKind = JobKind> = (
     payload: JobPayloads[K],
     job: Job<K>
-) => Promise<void>;
+) => Promise<void | JobResult>;
+
+/** A replacement for a job's stored payload, written in the same statement that ends the job. */
+export interface PayloadRedaction {
+    payload: unknown;
+}
+
+/**
+ * What a handler may hand back when it finishes. `redactPayload`, when present, replaces `jobs.payload` in the UPDATE that marks the job `done`.
+ *
+ * It exists because a job's payload is the Meta event verbatim, kept until the queue prunes it (7 days for a `done` row, never for a `failed`
+ * one). For a WhatsApp message from a person the owner has not listed as a tester, that is a customer's words, phone and name sitting in the
+ * queue after the message itself was deliberately stored without them (docs/specs/001-whatsapp-agent review C3). A job that fails and will be
+ * retried keeps its payload: the next attempt needs it. A failure that ends the job redacts through `redactOnFailure` (./redaction.ts).
+ */
+export interface JobResult {
+    redactPayload?: unknown;
+}
 
 export type JobHandlerRegistry = { [K in JobKind]: JobHandler<K> };
 
@@ -193,9 +214,13 @@ export interface JobQueue {
      * drains.
      */
     claim(limit: number): Promise<Job[]>;
-    complete(jobId: string): Promise<void>;
-    /** Record a failure and either schedule a retry after `retryInSeconds` or give up. */
-    fail(jobId: string, error: string, retryInSeconds: number | null): Promise<void>;
+    /** Mark the job done. With `redact`, its stored payload is replaced in the same statement. */
+    complete(jobId: string, redact?: PayloadRedaction): Promise<void>;
+    /**
+     * Record a failure and either schedule a retry after `retryInSeconds` or give up. With `redact` and no retry (`retryInSeconds` null), the
+     * stored payload is replaced in the same statement; a job that will run again keeps the payload it needs.
+     */
+    fail(jobId: string, error: string, retryInSeconds: number | null, redact?: PayloadRedaction): Promise<void>;
     /** Return claims older than the visibility timeout to `pending`. Returns how many. */
     reapStale(olderThanSeconds: number): Promise<number>;
     /** Delete `done` rows older than the retention window. Returns how many. */

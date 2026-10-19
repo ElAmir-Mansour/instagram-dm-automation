@@ -11,7 +11,9 @@ import { runFollowup } from '../services/dmSales/followupJob.js';
 import { handleCommentChange } from '../webhook/comments.js';
 import { handleMessagingEvent } from '../webhook/messaging.js';
 import { handleWhatsAppInbound } from '../webhook/whatsappInbound.js';
+import { redactedPreferencePayload, redactedStatusPayload } from '../webhook/whatsappRedact.js';
 import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
+import { redactOnFailure } from './redaction.js';
 import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
 
 /**
@@ -35,9 +37,9 @@ export const handlers: JobHandlerRegistry = {
     },
     'dm.process': async (payload, job) => {
         // A WhatsApp message (`object: 'whatsapp'`) is stored by its own handler: nothing is sent from it in this phase (whatsappInbound.ts).
+        // What it returns is the redacted payload the queue stores as the job completes (a stranger's message must not sit in `jobs` for a week).
         if (isWhatsAppDmPayload(payload)) {
-            await handleWhatsAppInbound(payload, { lastAttempt: isLastAttempt(job) });
-            return;
+            return handleWhatsAppInbound(payload, { lastAttempt: isLastAttempt(job) });
         }
         await handleMessagingEvent(payload.event, payload.entryId, {
             lastAttempt: isLastAttempt(job),
@@ -45,8 +47,20 @@ export const handlers: JobHandlerRegistry = {
         });
     },
     // A WhatsApp status of one of our messages, an account event or a preference change: never a customer message, never an AI, never a send.
+    // A status or a preference change names a customer's phone number, and nothing is needed from the payload once the handler has run: it is cut
+    // down as the job completes, and, if the job fails for good, as it fails (a failed row is never pruned). An account event names no one.
     'wa.event': async (payload) => {
-        await handleWhatsAppEvent(payload);
+        if (payload.kind === 'account') {
+            await handleWhatsAppEvent(payload);
+            return;
+        }
+        const redacted = payload.kind === 'status' ? redactedStatusPayload(payload) : redactedPreferencePayload(payload);
+        try {
+            await handleWhatsAppEvent(payload);
+        } catch (err) {
+            throw redactOnFailure(err, redacted);
+        }
+        return { redactPayload: redacted };
     },
     // Not a Meta event: the sales turn queues it after a link (DM plan S9). The handler re-reads the conversation and may well do nothing: a
     // person who answered, clicked or said stop in the meantime is simply not eligible, and the job ends as done. A transient send failure

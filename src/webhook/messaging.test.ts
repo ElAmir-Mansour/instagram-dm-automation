@@ -915,7 +915,7 @@ describe('handleMessagingEvent — which network, and who wrote it (v26)', () =>
         const job = { attempts: 1, max_attempts: 3 } as unknown as Job<'dm.process'>;
         const { executed } = await runDm(
             textEvent({ recipient: { id: 'ig-page-1' } }), {}, undefined, 'ig-page-1',
-            (event, entryId) => handlers['dm.process']({ event, entryId, object: 'page' }, job)
+            async (event, entryId) => { await handlers['dm.process']({ event, entryId, object: 'page' }, job); }
         );
         assert.equal(upsertOf(executed).params[2], 'facebook', 'the object wins over the Instagram recipient id');
     });

@@ -18,8 +18,9 @@
  *                          `text = ''`, no payload, no raw event, and its `message_type`. So the owner can see that someone wrote and when, and
  *                          nothing about what they said
  *
- * The queue is where this stops being true: the `jobs` row of a not-yet-handled message holds the event verbatim until it is pruned (that is
- * what makes a replay possible). That is the queue's retention, not this file's.
+ * The queue is the other place the words would live: the `jobs` row holds the event verbatim (that is what makes a replay possible), and a `done`
+ * row is kept 7 days. So the job's payload is redacted too, in the statement that ends the job (see `handleWhatsAppInbound`). What cannot be closed is
+ * the time before the handler runs: from the webhook's enqueue until the job concludes, the full event is in `jobs`.
  *
  * ## The thread
  *
@@ -38,13 +39,15 @@
  * system message goes on the new one. Consents and the test-sender id are re-keyed all the same.
  */
 import { queryOne, queryCount } from '../db/query.js';
-import type { WhatsAppDmPayload } from '../jobs/types.js';
+import type { JobResult, WhatsAppDmPayload } from '../jobs/types.js';
 import { getCreatorByWhatsAppNumber } from '../services/tenant.js';
 import { withTransaction } from '../services/studio/common.js';
 import { readWhatsAppSettings, type WhatsAppAgentSettings, type WhatsAppMode } from '../services/whatsappAgent.js';
+import { redactOnFailure } from '../jobs/redaction.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { dmPromptText } from './messaging.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
+import { redactedInboundPayload } from './whatsappRedact.js';
 import { normalizeWhatsAppChange, type WaEntrySource, type WaIgnored, type WaInbound, type WaSystemEvent } from './whatsapp.js';
 
 /**
@@ -144,6 +147,13 @@ interface Context {
     settings: WhatsAppAgentSettings;
     /** The change as the job stored it, kept as the raw event of a test sender's rows. */
     rawChange: unknown;
+    progress: Progress;
+}
+
+/** What the job has learned about its payload as it ran. */
+interface Progress {
+    /** True once a message in this job is known to be a listed test sender's: its payload is kept whole, on success and on a failure that ends the job. */
+    keepPayload: boolean;
 }
 
 const isoOf = (seconds: number | null): string => {
@@ -216,6 +226,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     }
 
     const test = isTestSender(ctx.settings.testSenders, [incoming.senderId], incoming.phone);
+    if (test) ctx.progress.keepPayload = true;
     const entrySource = { ...(incoming.entrySource ?? { kind: 'organic' as const }), at: isoOf(incoming.timestamp) };
 
     // The thread. One statement, not SELECT-then-INSERT (two messages a second apart race on `unique_creator_user`). Who the person is
@@ -347,6 +358,7 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
     }
 
     const test = isTestSender(ctx.settings.testSenders, [event.userId, event.rekey?.from, event.rekey?.to], event.phone);
+    if (test) ctx.progress.keepPayload = true;
 
     if (event.rekey) {
         const { from, to } = event.rekey;
@@ -400,8 +412,28 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
  * `wa.no_creator` (no connection for the number), `wa.ignored` (a message with nothing to store), `wa.duplicate_ignored`, `wa.job_empty`.
  *
  * Throws only for a failure a retry may cure (the database): the runner backs off and the claim is resumed. Nothing is sent, ever.
+ *
+ * ## What the job keeps (review C3)
+ *
+ * The job's payload is the event verbatim, and the queue keeps a `done` row 7 days and a `failed` one for good. Whatever happened, a payload whose
+ * customer was not stored in full is redacted (`redactedInboundPayload`) in the statement that ends the job: a stranger's message, a message for
+ * a number nobody connected, a duplicate, an edit. Only a listed test sender's message, whose words are kept in `messages` anyway, leaves the payload
+ * alone. The redaction is returned as `{ redactPayload }` for the queue to apply on completion; an error thrown from here is tagged (`redactOnFailure`)
+ * so the runner applies the same redaction if it is the failure that ENDS the job, and not while a retry is coming. The one window this cannot close
+ * is before any of it runs: from the webhook's enqueue until the handler concludes the job, the full event is in `jobs`.
  */
-export async function handleWhatsAppInbound(payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT): Promise<void> {
+export async function handleWhatsAppInbound(payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT): Promise<JobResult | undefined> {
+    const progress: Progress = { keepPayload: false };
+    try {
+        await ingest(payload, options, progress);
+    } catch (err) {
+        // Not knowing who the sender was (the failure came before the settings were read) is the stranger's case: redact.
+        throw progress.keepPayload ? err : redactOnFailure(err, redactedInboundPayload(payload));
+    }
+    return progress.keepPayload ? undefined : { redactPayload: redactedInboundPayload(payload) };
+}
+
+async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions, progress: Progress): Promise<void> {
     const change = normalizeWhatsAppChange(payload.change);
     if (change.messages.length === 0) {
         log('warn', 'wa.job_empty', { phone_number_id: payload.phoneNumberId });
@@ -434,6 +466,7 @@ export async function handleWhatsAppInbound(payload: WhatsAppDmPayload, options:
         connectionStatus: tenant.connectionStatus,
         settings,
         rawChange: payload.change,
+        progress,
     };
 
     for (const message of change.messages) {
