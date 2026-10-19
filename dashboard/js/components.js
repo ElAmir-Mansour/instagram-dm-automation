@@ -961,9 +961,12 @@ const UI = {
             message = t('error.unexpected'),
             hint = '',
             icon = 'alert-circle',
+            // Markup kept above the panel (SafeHtml: a string is shown as text): a page whose view switch must survive its own failure.
+            before = '',
         } = options || {};
 
         container.innerHTML = esc(html`
+            ${before}
             <div class="error-panel surface" role="alert">
                 <div class="error-panel-icon"><i data-lucide="${icon}" aria-hidden="true"></i></div>
                 <h3>${title}</h3>
@@ -2330,6 +2333,18 @@ const UI = {
             if (!href) return '';
             return html`<a class="ui-tab" data-ui-tab href="${href}"${current(it) ? html.raw(' aria-current="page"') : ''}>${inner(it)}</a>`;
         })}</nav>`;
+    },
+
+    /**
+     * The two views of Results (UX overhaul US6): the numbers (`#/analytics`) and the log (`#/activity`). The log has no sidebar entry
+     * of its own, so this strip, at the top of BOTH pages, is how it is reached, and the Results item reads as current on either.
+     * `current` is 'numbers' or 'log'. Link tabs: each view has its own address, so a reload, Back and a shared link keep it.
+     */
+    resultsTabs(current) {
+        return html`<div class="page-tabs">${UI.tabs([
+            { key: 'numbers', label: t('results.tabs.numbers'), href: '#/analytics' },
+            { key: 'log', label: t('results.tabs.log'), href: '#/activity' },
+        ], { mode: 'link', current, label: t('results.tabs.label') })}</div>`;
     },
 
     /** Is `el` laid out right to left? The element's own computed direction, else the document's. */

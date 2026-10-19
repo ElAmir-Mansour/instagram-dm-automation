@@ -47,6 +47,17 @@
  * On Cancel the address is put back to the one the person left (`history.replaceState`), so Back and a nav click both leave the screen
  * and the address bar saying the same thing.
  *
+ * ─── The sidebar (UX overhaul US6) ──────────────────────────────────────────
+ * Organised by the creator's job (Today · Replies · Content · Results), each group a `<ul role="list">` named by its heading, with
+ * Settings, Help and the account area at the foot and Administration as ONE collapsible group (`syncAdminGroup`: collapsed unless the
+ * viewer opened it, remembered per browser, open while an admin page is). A page with no item of its own reads as the item it belongs
+ * to (`navAs`: Monteur and Infographics as Studio, the Log as Results). The shell also owns what a nav item must not lose:
+ *   - a modified click (Cmd, Ctrl, Shift, middle button) is the browser's, so "open in a new tab" works (`isModifiedClick`, SH-24);
+ *   - at <= 860px the sidebar is a drawer, and a drawer nobody can see must not be reachable: closed it is `inert`, open the page behind
+ *     it is (`syncDrawerInert`, SH-06);
+ *   - a stored session opens on a static skeleton, not on the login form (`settleFirstFrame`, SH-03);
+ *   - two markers slide, one over the scrolling list and one over the foot, each measured from geometry (`moveNavIndicator`).
+ *
  * ─── Addresses ──────────────────────────────────────────────────────────────
  * `#/<page>?<query>`, built by `route()` and read by `hashParams()`. The query names the pages share are listed at `hashParams`.
  * An entry in `App.pages` that is `{ aliasOf, tab }` is an OLD address that now lives inside another page: `#/old` is rewritten
@@ -81,11 +92,11 @@ const App = {
         posts: { src: 'posts', page: () => PostsPage },
         studio: { src: 'studio', page: () => StudioPage },
         // The Studio's second tab (#/monteur): reels cut from the creator's own videos,
-        // reviewed and approved into the scheduler. Its own sidebar entry, under Studio.
-        monteur: { src: 'monteur', page: () => MonteurPage },
+        // reviewed and approved into the scheduler. No sidebar entry of its own: while it is open the Studio item is current (`navAs`).
+        monteur: { src: 'monteur', page: () => MonteurPage, navAs: 'studio' },
         // The Studio's third tab (#/infographics): animated comparisons in the creator's own
-        // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4.
-        infographics: { src: 'infographics', page: () => InfographicsPage },
+        // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4. Studio's item is current here too.
+        infographics: { src: 'infographics', page: () => InfographicsPage, navAs: 'studio' },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -93,8 +104,10 @@ const App = {
         // content's (Meta insights), plus the SEO tools and the coach. `?tab=seo` is its
         // second view and is handled in place through `onHashChange`.
         growth: { src: 'growth', page: () => GrowthPage },
-        activity: { src: 'activity', page: () => ActivityPage },
-        settings: { src: 'settings', page: () => SettingsPage },
+        // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
+        // (`analytics`) is current while it is open.
+        activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
+        settings: { src: 'settings', page: () => SettingsPage, css: true },
         // The Help Center owns sub-routes (`#/help/<slug>#<section>`) and
         // handles them itself through `onHashChange`, so opening an article
         // never tears the page down and rebuilds it.
@@ -145,7 +158,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.49',
+    ASSET_VERSION: '12.50',
 
     _modules: Object.create(null),
 
@@ -297,19 +310,7 @@ const App = {
             }
         });
 
-        // Sidebar navigation — real links, so they also work with the hash router.
-        // Hover and focus warm the page module so the click has nothing to wait
-        // for; `pointerenter` rather than `mouseover` so it fires once per item
-        // and not on touch, where there is no hover to warm from.
-        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.go(item.dataset.page);
-            });
-            const warm = () => this.prefetchPageModule(item.dataset.page);
-            item.addEventListener('pointerenter', warm, { once: true });
-            item.addEventListener('focus', warm, { once: true });
-        });
+        this.bindNavLinks();
 
         // The indicator is positioned from measured geometry, so it has to be
         // re-measured whenever the nav's box can change.
@@ -341,6 +342,11 @@ const App = {
             if (sidebar.classList.contains('open')) this.closeMobileDrawer(false);
             else this.openMobileDrawer();
         });
+
+        // Closed at drawer width the sidebar is `inert` (Tab and a screen reader's cursor skip its 15 off-screen links), and widening the
+        // window past the breakpoint with the drawer open puts everything back (SH-06).
+        this.syncDrawerInert();
+        this.watchDrawerLayout();
 
         // Click-outside-to-close: the scrim is the only thing behind the
         // drawer at this width, so any click on it is the operator asking to
@@ -428,6 +434,8 @@ const App = {
         sidebar.classList.add('open');
         if (this._sidebarBackdrop) this._sidebarBackdrop.classList.add('open');
         menuBtn.setAttribute('aria-expanded', 'true');
+        // Before the focus move: an `inert` drawer cannot take focus, and the page behind it must stop being reachable at once.
+        this.syncDrawerInert();
         const nav = document.getElementById('sidebar-nav');
         const target = (nav && nav.querySelector('.nav-item[data-page]')) || sidebar;
         if (typeof target.focus === 'function') target.focus();
@@ -447,7 +455,93 @@ const App = {
         sidebar.classList.remove('open');
         if (this._sidebarBackdrop) this._sidebarBackdrop.classList.remove('open');
         if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+        // Before the focus move: the page is `inert` while the drawer is open, and the menu button is on the page.
+        this.syncDrawerInert();
         if (returnFocus && menuBtn) menuBtn.focus();
+    },
+
+    /** At this width and below the sidebar is an off-canvas drawer (the `@media (max-width: 860px)` block in styles.css). */
+    DRAWER_QUERY: '(max-width: 860px)',
+
+    isDrawerLayout() {
+        try {
+            return typeof window.matchMedia === 'function' && !!window.matchMedia(this.DRAWER_QUERY).matches;
+        } catch {
+            return false;
+        }
+    },
+
+    /** `inert` on or off. The attribute, not the property, so it works wherever the attribute is understood and a test can read it. */
+    setInert(el, on) {
+        if (!el) return;
+        if (on) el.setAttribute('inert', '');
+        else el.removeAttribute('inert');
+    },
+
+    /**
+     * Who can be reached while the sidebar is a drawer (SH-06). Closed, the drawer is only translated off-screen, so Tab walked 13 to 19
+     * invisible links before it reached the page and focus left on a nav item after a tap sat in a panel nobody could see: it is `inert`.
+     * Open, the page behind the scrim is `inert` instead, so Tab cannot escape the drawer into content the person cannot see. Wider than
+     * the breakpoint the sidebar is a column of the layout and nothing is inert.
+     */
+    syncDrawerInert() {
+        const sidebar = document.getElementById('sidebar');
+        const main = document.getElementById('main-content');
+        const drawer = this.isDrawerLayout();
+        const open = !!(sidebar && sidebar.classList.contains('open'));
+        this.setInert(sidebar, drawer && !open);
+        this.setInert(main, drawer && open);
+    },
+
+    /** The window crossing the breakpoint: an open drawer is closed (the column layout has no scrim) and the inert state follows the width. */
+    watchDrawerLayout() {
+        let list = null;
+        try { list = typeof window.matchMedia === 'function' ? window.matchMedia(this.DRAWER_QUERY) : null; } catch { list = null; }
+        if (!list) return;
+        const changed = () => {
+            const sidebar = document.getElementById('sidebar');
+            if (!this.isDrawerLayout() && sidebar && sidebar.classList.contains('open')) this.closeMobileDrawer(false);
+            else this.syncDrawerInert();
+        };
+        if (typeof list.addEventListener === 'function') list.addEventListener('change', changed);
+        else if (typeof list.addListener === 'function') list.addListener(changed);
+    },
+
+    /**
+     * Sidebar navigation: real links, so they also work with the hash router. Hover and focus warm the page module so the click has
+     * nothing to wait for; `pointerenter` rather than `mouseover` so it fires once per item and not on touch, where there is no hover to
+     * warm from. The brand mark is the way home (SH-27): the same link rules as an item, without being one (it has no marker).
+     * Apart from `init()` so a test can bind them to fake links.
+     */
+    bindNavLinks() {
+        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+            item.addEventListener('click', (e) => { this.handleNavClick(e, item.dataset.page); });
+            const warm = () => this.prefetchPageModule(item.dataset.page);
+            item.addEventListener('pointerenter', warm, { once: true });
+            item.addEventListener('focus', warm, { once: true });
+        });
+        const home = document.querySelector('[data-nav-home]');
+        if (home) home.addEventListener('click', (e) => { this.handleNavClick(e, this.DEFAULT_PAGE); });
+    },
+
+    /** A click on a navigation link: the router's, unless it is a modified click, which is the browser's. True when the router took it. */
+    handleNavClick(event, page) {
+        if (this.isModifiedClick(event)) return false;
+        event.preventDefault();
+        this.go(page);
+        return true;
+    },
+
+    /**
+     * Is this click one the browser should handle itself? Cmd/Ctrl/Shift/Alt-click and the middle button open the link in a new tab,
+     * a new window or a download, and `preventDefault()` on them used to swallow all four (SH-24). A plain click and a keyboard
+     * activation (Enter on a link is a click with button 0 and no modifier) are the router's.
+     */
+    isModifiedClick(event) {
+        if (!event) return false;
+        if (event.defaultPrevented) return true;
+        if (typeof event.button === 'number' && event.button !== 0) return true;
+        return !!(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
     },
 
     // ─── Language & theme ────────────────────────────────────────────────────
@@ -769,8 +863,12 @@ const App = {
         // A signed-out tab must not keep saying "(3)" in its title, nor the last page's name.
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
+        this.rememberGated(false);
         // Lifted: the head script hid the login card from the first frame of an invite link (index.html), and this is where it is wanted.
         document.documentElement.removeAttribute('data-invite');
+        // And the stored-session skeleton (SH-03) has nothing left to stand in for: the session is gone or was never there.
+        this.settleFirstFrame();
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
@@ -886,6 +984,8 @@ const App = {
         this.currentPage = null;
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
+        this.settleFirstFrame();
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
         this.hideWelcome();
@@ -978,6 +1078,7 @@ const App = {
         }
         this.hideWelcome();
         document.getElementById('app').classList.remove('hidden');
+        this.settleFirstFrame();
 
         this.applyChrome();
 
@@ -1012,6 +1113,8 @@ const App = {
             const me = await API.getMe();
             this.session = {
                 userId: (me && me.userId) || null,
+                // The address, when the server says it (it does not today: the account area then falls back, see `identityLabel`).
+                email: (me && typeof me.email === 'string') ? me.email : '',
                 role: (me && me.role) || 'user',
                 tenantId: (me && me.tenantId) || null,
                 // The role INSIDE the current tenant, which is a different axis from
@@ -1027,11 +1130,39 @@ const App = {
                 onboarding: (me && me.onboarding && typeof me.onboarding === 'object') ? me.onboarding : null,
                 available: true,
             };
+            this.rememberGated(this.mustOnboard());
         } catch (err) {
             if (err && err.status === 401) return false;
-            this.session = { userId: null, role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
+            this.session = { userId: null, email: '', role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
         }
         return true;
+    },
+
+    // ─── The first frame (SH-03) ─────────────────────────────────────────────
+
+    GATED_KEY: 'onboarding_gated',
+
+    /**
+     * The last `/auth/me` said whether this session is sent to the setup wizard. index.html's head script reads it before anything else
+     * runs, so a tenant that is about to be taken to the wizard is not shown a sidebar skeleton for the length of that answer. Written
+     * only from an answer (never from a failure), and forgotten at sign-out.
+     */
+    rememberGated(gated) {
+        try {
+            if (gated) localStorage.setItem(this.GATED_KEY, '1');
+            else localStorage.removeItem(this.GATED_KEY);
+        } catch { /* private mode: the first frame shows the sidebar skeleton, which is only a skeleton */ }
+    },
+
+    /**
+     * The stored-session skeleton has done its job (the dashboard, the wizard, the invite page or the login is on screen now): lift the
+     * attributes the head script set. Safe to call at any time and any number of times.
+     */
+    settleFirstFrame() {
+        const root = document.documentElement;
+        if (!root) return;
+        root.removeAttribute('data-session');
+        root.removeAttribute('data-gated');
     },
 
     // ─── The setup wizard (#/welcome) ────────────────────────────────────────
@@ -1080,6 +1211,7 @@ const App = {
         this.currentPage = null;
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
         document.documentElement.removeAttribute('data-invite');
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
@@ -1087,6 +1219,7 @@ const App = {
         if (invite) invite.classList.add('hidden');
         const screen = document.getElementById('welcome-screen');
         if (screen) screen.classList.remove('hidden');
+        this.settleFirstFrame();
         this.renderLanguageToggle();
 
         // Sent here from another route: the address says where they are.
@@ -1159,10 +1292,157 @@ const App = {
 
         this.renderTenantSwitcher();
         this.renderRoleBadge();
+        this.renderIdentity();
+
+        // Administration: its open/closed state follows the page on screen (or the one the address names, on the first paint), and the
+        // dot that says the platform has a problem is polled for as long as this session is an admin's.
+        this.syncAdminGroup(this.currentPage || this.pageFromHash());
+        if (admin) this.startAdminStatusPoll();
+        else this.stopAdminStatusPoll();
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
+        this.revealActiveNavItem();
         this.moveNavIndicator(false);
+    },
+
+    // ─── Who is signed in (SH-27) ────────────────────────────────────────────
+
+    /**
+     * The identity line in the sidebar's account area, as `{ kind, text }`, or null when the shell cannot say (an older deployment whose
+     * /auth/me did not answer: nothing is better than a guess). The shared dashboard password has no user: "Shared dashboard login". An
+     * account is its email when the session has one; `/auth/me` carries none today, so it is the address typed at this browser's last
+     * account sign-in (`rememberedEmail`, kept by both the login form and the invite), and without that, only the fact.
+     */
+    identityLabel() {
+        const s = this.session;
+        if (!s || !s.available) return null;
+        const email = typeof s.email === 'string' ? s.email.trim() : '';
+        if (email) return { kind: 'email', text: email };
+        if (s.userId) {
+            const remembered = this.rememberedEmail();
+            return remembered ? { kind: 'email', text: remembered } : { kind: 'account', text: t('nav.account.signedIn') };
+        }
+        return { kind: 'shared', text: t('nav.account.shared') };
+    },
+
+    renderIdentity() {
+        const line = document.getElementById('nav-identity');
+        const text = document.getElementById('nav-identity-text');
+        if (!line || !text) return;
+        const who = this.identityLabel();
+        line.hidden = !who;
+        if (!who) {
+            text.textContent = '';
+            line.removeAttribute('title');
+            return;
+        }
+        // An address is Latin text inside an Arabic sentence: its own left-to-right run (`dir`), so it never reorders against its neighbour
+        // and, cut at the end of the line, it is cut at the end of the address. The words are read in the interface's direction. The
+        // label before it ("Signed in as") is for a screen reader only, and the title carries the whole line when it is truncated.
+        text.setAttribute('dir', who.kind === 'email' ? 'ltr' : 'auto');
+        text.textContent = who.text;
+        line.setAttribute('title', who.text);
+    },
+
+    // ─── Administration: one collapsible group (SH-04) ───────────────────────
+
+    ADMIN_GROUP_KEY: 'dashboard_admin_group',
+
+    /** The viewer's remembered choice: open only if they opened it. A browser that will not store it opens the group closed. */
+    readAdminGroupPref() {
+        try { return localStorage.getItem(this.ADMIN_GROUP_KEY) === 'open'; } catch { return false; }
+    },
+
+    writeAdminGroupPref(open) {
+        try { localStorage.setItem(this.ADMIN_GROUP_KEY, open ? 'open' : 'closed'); } catch { /* private mode: it opens closed next time */ }
+    },
+
+    /** Is `page` an administration screen: one only a platform admin reaches, and a screen rather than a dialog module? */
+    isAdminPage(page) {
+        const entry = this.entryOf(page);
+        return !!(entry && entry.adminOnly === true && entry.routable !== false);
+    },
+
+    /** Draw the group open or closed: the button says so (`aria-expanded`), the list is not rendered, so its links are not focusable either. */
+    setAdminGroup(open) {
+        const toggle = document.getElementById('nav-admin-toggle');
+        const list = document.getElementById('nav-admin-list');
+        const group = document.getElementById('nav-admin');
+        if (!toggle || !list) return;
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        list.hidden = !open;
+        if (group) group.classList.toggle('is-open', !!open);
+    },
+
+    /**
+     * The group for the page on screen: open while an admin page is (the item that reads as current is in it, and a hidden current item
+     * is a marker pointing at nothing), otherwise as the viewer left it.
+     */
+    syncAdminGroup(page) {
+        this.setAdminGroup(this.isAdminPage(page) || this.readAdminGroupPref());
+    },
+
+    /** The heading button: flip the group, remember the choice, and re-measure (the marker may be in the group that just closed). */
+    toggleAdminGroup() {
+        const toggle = document.getElementById('nav-admin-toggle');
+        const open = !(toggle && toggle.getAttribute('aria-expanded') === 'true');
+        this.setAdminGroup(open);
+        this.writeAdminGroupPref(open);
+        this.moveNavIndicator(false);
+    },
+
+    // ─── Administration: the status dot ──────────────────────────────────────
+
+    /** How often the shell asks whether the platform has a problem, while the tab is visible. */
+    ADMIN_STATUS_MS: 120000,
+    _adminStatusTimer: null,
+
+    /** `counts.platform` of a `GET /api/attention` answer, as a whole number: 0 when absent, which is every non-admin session. */
+    platformProblemCount(summary) {
+        const n = summary && summary.counts ? Math.floor(Number(summary.counts.platform)) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+
+    /** The dot beside "Administration": there at one problem or more, gone at zero. It states a count of failures, so it is the danger tone. */
+    renderAdminStatus(count) {
+        const dot = document.getElementById('nav-admin-dot');
+        if (!dot) return;
+        dot.hidden = !(Number(count) > 0);
+    },
+
+    /**
+     * Ask the server. Only an admin's session is asked (`counts.platform` is sent to nobody else). A failed read leaves the dot as it was:
+     * the Operations screen is the place that says why, and a 401 has already sent the person to the login.
+     */
+    async refreshAdminStatus() {
+        if (!this.isAdmin()) {
+            this.renderAdminStatus(0);
+            return;
+        }
+        try {
+            const summary = await API.request('/attention');
+            if (!this.isAdmin()) return;
+            this.renderAdminStatus(this.platformProblemCount(summary));
+        } catch { /* keep what the dot said */ }
+    },
+
+    /** Start asking, once: now, then every ADMIN_STATUS_MS while the tab is visible. A second call while it runs changes nothing. */
+    startAdminStatusPoll() {
+        if (this._adminStatusTimer) return;
+        this.refreshAdminStatus();
+        this._adminStatusTimer = setInterval(() => {
+            if (document.visibilityState === 'visible') this.refreshAdminStatus();
+        }, this.ADMIN_STATUS_MS);
+    },
+
+    /** Stop asking and clear the dot: a signed-out tab, the wizard and a session that is not an admin's have none to show. */
+    stopAdminStatusPoll() {
+        if (this._adminStatusTimer) {
+            clearInterval(this._adminStatusTimer);
+            this._adminStatusTimer = null;
+        }
+        this.renderAdminStatus(0);
     },
 
     /**
@@ -1470,6 +1750,22 @@ const App = {
     },
 
     /**
+     * Scroll the sidebar's list just far enough to show the current item. A window too short for the whole sidebar scrolls the list, and
+     * an admin page opens the Administration group below the fold: the item that says where you are must never be out of sight. Nothing
+     * moves when it is already visible, and the marker is measured after this (its position is in the list's own coordinates, so it does
+     * not depend on how far the list is scrolled).
+     */
+    revealActiveNavItem() {
+        const nav = document.getElementById('sidebar-nav');
+        const item = nav && nav.querySelector('.nav-item.active');
+        if (!nav || !item || item.classList.contains('hidden') || !item.offsetParent) return;
+        const navRect = nav.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        if (itemRect.top < navRect.top) nav.scrollTop -= navRect.top - itemRect.top;
+        else if (itemRect.bottom > navRect.bottom) nav.scrollTop += itemRect.bottom - navRect.bottom;
+    },
+
+    /**
      * Put the active marker over the active item.
      *
      * `translateY` and `height` only — no horizontal component, so the same
@@ -1479,25 +1775,42 @@ const App = {
      * slide from the previous position would be motion with no meaning.
      */
     moveNavIndicator(animate) {
-        const nav = document.getElementById('sidebar-nav');
-        const indicator = document.getElementById('nav-indicator');
-        if (!nav || !indicator) return;
+        // Two scopes, two markers: the scrolling list (job groups and Administration) and the foot (Settings and Help). A marker is
+        // positioned inside the box that scrolls with its items, so one cannot reach across to the other.
+        this.placeIndicator(document.getElementById('sidebar-nav'), document.getElementById('nav-indicator'), animate);
+        this.placeIndicator(document.getElementById('sidebar-foot-nav'), document.getElementById('nav-indicator-foot'), animate);
+    },
 
-        const item = nav.querySelector('.nav-item.active');
+    /**
+     * Put `indicator` over the active item inside `host`, or hide it when `host` has none that can be seen: the item is in another
+     * scope, in a group that is closed, or its group is not shown to this session.
+     */
+    placeIndicator(host, indicator, animate) {
+        if (!host || !indicator) return;
+
+        const item = host.querySelector('.nav-item.active');
         if (!item || item.classList.contains('hidden') || !item.offsetParent) {
+            // Gone at once, and parked at the top of its scope: a marker that is not shown must not keep stretching the list's
+            // scrollable height with the position it last had (a transformed box still counts as overflow).
+            indicator.classList.add('no-transition');
             indicator.classList.remove('is-visible');
+            indicator.style.transform = 'translateY(0)';
+            void indicator.offsetHeight;
+            indicator.classList.remove('no-transition');
             return;
         }
 
-        const navRect = nav.getBoundingClientRect();
+        const hostRect = host.getBoundingClientRect();
         const itemRect = item.getBoundingClientRect();
-        const y = Math.round(itemRect.top - navRect.top + nav.scrollTop);
+        const y = Math.round(itemRect.top - hostRect.top + host.scrollTop);
 
-        if (!animate) indicator.classList.add('no-transition');
+        // A marker that was not showing has nowhere to slide from: it appears where it belongs, as it does on a re-measurement.
+        const instant = !animate || !indicator.classList.contains('is-visible');
+        if (instant) indicator.classList.add('no-transition');
         indicator.style.transform = `translateY(${y}px)`;
         indicator.style.blockSize = `${Math.round(itemRect.height)}px`;
         indicator.classList.add('is-visible');
-        if (!animate) {
+        if (instant) {
             // Force the value to be adopted before transitions come back, or
             // the next move would animate from the old position.
             void indicator.offsetHeight;
@@ -1643,6 +1956,8 @@ const App = {
             this.teardownCurrentPage();
             this.currentPage = null;
             this.markNavItem(page);
+            this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
             if (typeof HealthStrip !== 'undefined') HealthStrip.hide();
             this.renderSetup();
@@ -1698,6 +2013,10 @@ const App = {
         // transition holds the frame while the callback runs.
         await Motion.transition(() => {
             this.markNavItem(page);
+            // The admin group opens for an admin page BEFORE the marker is measured: it is placed over an item that has a box. And the
+            // list is scrolled to show that item first, so a window too short for the whole sidebar never hides where you are.
+            this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
 
             document.getElementById('page-title').textContent = this.title(page);
@@ -1901,6 +2220,10 @@ UI.registerActions('app', {
     },
     showPasswordModal() {
         App.showPasswordModal();
+    },
+    /** The Administration heading: open or close the group (and remember it). */
+    toggleAdminGroup() {
+        App.toggleAdminGroup();
     },
     handlePasswordChange(el, e) {
         const result = App.handlePasswordChange(el, e);
