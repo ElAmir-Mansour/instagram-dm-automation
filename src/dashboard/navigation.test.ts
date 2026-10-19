@@ -780,7 +780,7 @@ describe('the list is scrolled to show the current item (a window too short for 
 // ─── The first frame ────────────────────────────────────────────────────────────────────────
 
 /** Run index.html's inline head script against fake globals and report the attributes it set on <html>. */
-function headScript(opts: { token?: string | null; gated?: boolean; hash?: string; lang?: string; throwing?: boolean }): Record<string, string> {
+function headScript(opts: { token?: string | null; gated?: boolean; hash?: string; lang?: string; throwing?: boolean; timers?: Array<{ fn: () => void; ms: number }> }): Record<string, string> {
     const open = INDEX.indexOf('<script>', INDEX.indexOf('<head>'));
     const code = INDEX.slice(open + '<script>'.length, INDEX.indexOf('</script>', open));
     const attrs: Record<string, string> = {};
@@ -791,6 +791,7 @@ function headScript(opts: { token?: string | null; gated?: boolean; hash?: strin
     const root = { lang: 'ar', dir: 'rtl', setAttribute: (k: string, v: string): void => { attrs[k] = v; }, removeAttribute: (k: string): void => { delete attrs[k]; } };
     const noopEl = () => ({ setAttribute() {}, appendChild() {} });
     const ctx = {
+        setTimeout: (fn: () => void, ms: number): number => { opts.timers?.push({ fn, ms }); return 0; },
         document: { documentElement: root, createElement: noopEl, head: { appendChild() {} } },
         location: { hash: opts.hash ?? '' },
         navigator: { languages: ['ar'], language: 'ar' },
@@ -800,6 +801,28 @@ function headScript(opts: { token?: string | null; gated?: boolean; hash?: strin
     };
     vm.runInNewContext(code, ctx);
     return Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k.replace(/^data-/, ''), v]));
+}
+
+/** The same script, with its timers run: the attributes still on <html> afterwards. */
+function headScriptLift(opts: { token?: string | null; gated?: boolean }): Record<string, string> {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const open = INDEX.indexOf('<script>', INDEX.indexOf('<head>'));
+    const code = INDEX.slice(open + '<script>'.length, INDEX.indexOf('</script>', open));
+    const attrs: Record<string, string> = {};
+    const store = new Map<string, string>();
+    if (opts.token) store.set('auth_token', opts.token);
+    if (opts.gated) store.set('onboarding_gated', '1');
+    const root = { lang: 'ar', dir: 'rtl', setAttribute: (k: string, v: string): void => { attrs[k] = v; }, removeAttribute: (k: string): void => { delete attrs[k]; } };
+    const noopEl = () => ({ setAttribute() {}, appendChild() {} });
+    vm.runInNewContext(code, {
+        setTimeout: (fn: () => void, ms: number): number => { timers.push({ fn, ms }); return 0; },
+        document: { documentElement: root, createElement: noopEl, head: { appendChild() {} } },
+        location: { hash: '' },
+        navigator: { languages: ['ar'], language: 'ar' },
+        localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } },
+    });
+    timers.forEach((t) => t.fn());
+    return attrs;
 }
 
 describe('first frame: a stored session opens on a skeleton, not on the login form (T119, SH-03)', () => {
@@ -823,6 +846,16 @@ describe('first frame: a stored session opens on a skeleton, not on the login fo
             assert.equal(attrs.invite, '1', `${hash}: the invite gate still works`);
         }
         assert.equal(headScript({ token: 'abc', hash: '#/welcome' }).session, '1', 'a bare #/welcome is the wizard, and a session');
+    });
+
+    it('gives the login form back after 15 seconds if nothing has settled the skeleton (scripts blocked or crashed)', () => {
+        const timers: Array<{ fn: () => void; ms: number }> = [];
+        assert.equal(headScript({ token: 'abc', gated: true, timers }).session, '1');
+        assert.deepEqual(timers.map((t) => t.ms), [15000]);
+        assert.deepEqual(headScriptLift({ token: 'abc', gated: true }), {}, 'when the timer fires, both attributes are gone');
+        const none: Array<{ fn: () => void; ms: number }> = [];
+        headScript({ token: null, timers: none });
+        assert.equal(none.length, 0, 'no session, no timer');
     });
 
     it('survives a browser that will not let it read storage', () => {

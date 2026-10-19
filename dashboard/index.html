@@ -67,6 +67,12 @@
                 if (!isInviteLink && localStorage.getItem('auth_token')) {
                     document.documentElement.setAttribute('data-session', '1');
                     if (localStorage.getItem('onboarding_gated') === '1') document.documentElement.setAttribute('data-gated', '1');
+                    /* A skeleton must not be the whole page for ever. If the app never settles it (scripts blocked or crashed, /auth/me
+                       hanging), the login form comes back after 15 s, which is what the first frame used to be. */
+                    setTimeout(function () {
+                        document.documentElement.removeAttribute('data-session');
+                        document.documentElement.removeAttribute('data-gated');
+                    }, 15000);
                 }
                 var inviteLang = isInviteLink ? /^#\/(?:invite|welcome)\?(?:[^#]*&)?lang=(ar|en)(?:&|$)/.exec(location.hash || '') : null;
                 if (inviteLang) {
