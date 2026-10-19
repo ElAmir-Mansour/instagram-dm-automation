@@ -262,11 +262,12 @@ const OverviewPage = {
             this.renderCharts(dailyRes);
         });
 
-        // SH3: the waiting count on the Inbox nav item, from this screen too.
+        // SH3: the count on the Inbox nav item, from this screen too. The same rule the Inbox applies to the same threads
+        // (`Attention.needsHuman`), so the badge is one number on every screen and not a different one on each.
         threadsP.then((threadsRes) => {
             if (!live() || threadsRes.status !== 'fulfilled') return;
             if (typeof App !== 'undefined' && typeof App.setInboxWaiting === 'function') {
-                App.setInboxWaiting(this.waitingThreads(threadsRes).length);
+                App.setInboxWaiting(this.needsHumanThreads(threadsRes).length);
             }
         });
 
@@ -523,12 +524,22 @@ const OverviewPage = {
 
     // ─── Shared readings ─────────────────────────────────────────────────────
 
-    /** Threads where the AI is off and the customer spoke last, oldest wait first. */
-    waitingThreads(threadsRes) {
+    /** The threads a settled `/conversations` read holds, or []: the one place this page opens the response. */
+    threadsOf(threadsRes) {
         if (!threadsRes || threadsRes.status !== 'fulfilled' || !threadsRes.value) return [];
-        return ((threadsRes.value.data) || [])
-            .filter((thread) => thread.is_bot_active === false && thread.last_message_direction === 'inbound')
+        return Array.isArray(threadsRes.value.data) ? threadsRes.value.data : [];
+    },
+
+    /** Threads where the AI is off and the customer spoke last (`Attention.isWaiting`), oldest wait first. */
+    waitingThreads(threadsRes) {
+        return this.threadsOf(threadsRes)
+            .filter((thread) => Attention.isWaiting(thread))
             .sort((a, b) => String(a.last_message_at || '').localeCompare(String(b.last_message_at || '')));
+    },
+
+    /** Threads a person has to act on (`Attention.needsHuman`): waiting, or handed over, and not marked handled. What the nav badge counts. */
+    needsHumanThreads(threadsRes) {
+        return this.threadsOf(threadsRes).filter((thread) => Attention.needsHuman(thread));
     },
 
     /** "3h" / "2d" — how long the oldest customer has been waiting, as a duration. */

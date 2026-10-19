@@ -49,7 +49,7 @@
  * What the sales flow knows about a thread, drawn where the operator already looks:
  *   - a stage chip on each thread, in the list and in the header (the v39 stages: `STAGES`, one tone each);
  *   - the "Hot" filter: a person opened the link we sent, or said they are ready to buy, or the bot flagged
- *     a hot lead (`isHot`), and not someone who asked to be left alone;
+ *     a hot lead (`Attention.isHot`), and not someone who asked to be left alone;
  *   - the link clicks in the header: how many times a PERSON opened the thread's links, and when last. The
  *     server leaves preview crawlers and prefetches out of that number, and the chip says so;
  *   - under each AI bubble, what the bot decided (`messages.ai_meta`): intent, stage, next action, offer,
@@ -76,8 +76,6 @@ const InboxPage = {
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
     FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused']),
-    /** Meta's standard messaging window: a reply is allowed for 24 h after the customer's last message (DM plan §2). */
-    WINDOW_MS: 24 * 60 * 60 * 1000,
     /** A conversation id as the alert's link carries it (`#/inbox?c=<id>`); anything else in the hash is data. */
     ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
@@ -535,56 +533,8 @@ const InboxPage = {
         return this.FILTERS.includes(raw) ? raw : 'all';
     },
 
-    /** The customer spoke last and nobody is going to answer unless a human does. */
-    isWaiting(thread) {
-        return !!thread && thread.is_bot_active === false && thread.last_message_direction === 'inbound';
-    },
-
-    /**
-     * The bot handed this conversation to a person and nobody has answered yet: a refund, a complaint, "I want to talk to someone" (the
-     * bot is PAUSED for these), or a reply that could not be written at all, because the model was down (the bot is left ON, so the
-     * customer's next message gets a normal reply: DM plan §8, S8). The bot being on or off is therefore not part of the answer.
-     * `stage` and `handoff_at` are the v39 columns, so a database that is behind flags nothing. `last_operator_at` is the owner's last
-     * reply, from here or from the Instagram app: a reply after the handoff ends it. So does turning the AI back on (the server moves the
-     * stage on: `toggle-bot`), and so does the bot's own next turn in the sales flow, which leaves the `handoff` stage by answering.
-     */
-    isNeedsYou(thread) {
-        if (!thread || thread.stage !== 'handoff') return false;
-        const handedAt = Date.parse(thread.handoff_at);
-        const answeredAt = Date.parse(thread.last_operator_at);
-        return !(Number.isFinite(handedAt) && Number.isFinite(answeredAt) && answeredAt >= handedAt);
-    },
-
-    /**
-     * A thread worth the owner's attention first (DM plan §8, "Hot"): a PERSON opened the link we sent (`link_clicks.clicks` leaves out preview
-     * crawlers and prefetches), or their last message said they are ready to buy, or the bot flagged it a hot lead. Not for someone who has
-     * asked to be left alone or has been closed: a click from before that is not a lead any more. The v39 columns and the click counts are
-     * read as they come, so a database that is behind has no hot threads rather than an error.
-     */
-    isHot(thread) {
-        if (!thread) return false;
-        if (thread.stage === 'closed' || thread.opted_out_at) return false;
-        if (thread.last_intent === 'ready_to_buy' || thread.handoff_reason === 'hot_lead') return true;
-        const clicks = thread.link_clicks && typeof thread.link_clicks === 'object' ? Number(thread.link_clicks.clicks) : 0;
-        return Number.isFinite(clicks) && clicks > 0;
-    },
-
-    /** A person has to act: it is waiting for a reply, or handed over. These are the threads the 24 h window is counted down on. */
-    needsHuman(thread) {
-        return this.isWaiting(thread) || this.isNeedsYou(thread);
-    },
-
-    /**
-     * Milliseconds left of Meta's 24 h window, counted from the customer's LAST message (`last_inbound_message_at`, read from
-     * `messages`: the v39 `last_inbound_at` is stamped only by a sales turn, so it is old for a customer who wrote again after the
-     * bot was paused). 0 once it has closed; null when there is no such message.
-     */
-    windowLeftMs(thread, now = Date.now()) {
-        if (!thread) return null;
-        const at = Date.parse(thread.last_inbound_message_at || thread.last_inbound_at);
-        if (!Number.isFinite(at)) return null;
-        return Math.max(0, Math.min(this.WINDOW_MS, at + this.WINDOW_MS - now));
-    },
+    // The rules for "does this thread need a person" (waiting, handed over, hot, the 24 h window) live in dashboard/js/attention.js,
+    // shared with the Overview and the nav badge. This page only draws what they answer.
 
     /** "5 h 20 min", "40 min" or "under a minute". Latin digits, as every number on this screen. */
     windowTime(ms) {
@@ -598,8 +548,8 @@ const InboxPage = {
 
     /** The countdown for a thread that needs a person: its words, or '' for any other thread and for one with no message from the customer. */
     windowText(thread, now = Date.now()) {
-        if (!this.needsHuman(thread)) return '';
-        const ms = this.windowLeftMs(thread, now);
+        if (!Attention.needsHuman(thread)) return '';
+        const ms = Attention.windowLeftMs(thread, now);
         if (ms === null) return '';
         return ms <= 0 ? t('inbox.window.closed') : t('inbox.window.left', { time: this.windowTime(ms) });
     },
@@ -619,9 +569,9 @@ const InboxPage = {
     },
 
     matchesFilter(thread) {
-        if (this.filter === 'waiting') return this.isWaiting(thread);
-        if (this.filter === 'needs_you') return this.isNeedsYou(thread);
-        if (this.filter === 'hot') return this.isHot(thread);
+        if (this.filter === 'waiting') return Attention.isWaiting(thread);
+        if (this.filter === 'needs_you') return Attention.isHandoff(thread);
+        if (this.filter === 'hot') return Attention.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
         return true;
     },
@@ -784,7 +734,7 @@ const InboxPage = {
     reportWaiting() {
         if (typeof App === 'undefined' || typeof App.setInboxWaiting !== 'function') return;
         // Waiting for a reply, or handed over to a person: the two are what the owner opens the inbox for.
-        App.setInboxWaiting(this.threads.filter((x) => this.needsHuman(x)).length);
+        App.setInboxWaiting(this.threads.filter((x) => Attention.needsHuman(x)).length);
     },
 
     /** A thread from the list or from the search's answer — the open one may be either. */
@@ -857,7 +807,6 @@ const InboxPage = {
     },
 
     threadRow(x) {
-        const isInbound = x.last_message_direction === 'inbound';
         // I8: which network the thread is on, as the same IG / FB tag the
         // activity log uses. A thread from before v26 has no platform and
         // shows none, rather than a guess.
@@ -874,11 +823,11 @@ const InboxPage = {
                     ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
                     : html`<span class="badge badge-neutral">${t('inbox.aiPaused')}</span>`}
                 ${this.stageChip(x.stage)}
-                ${this.isHot(x) ? this.hotBadge() : ''}
-                ${!x.is_bot_active && isInbound
+                ${Attention.isHot(x) ? this.hotBadge() : ''}
+                ${Attention.isWaiting(x)
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}
-                ${this.isNeedsYou(x)
+                ${Attention.isHandoff(x)
                     ? html`<span class="badge badge-warning"><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.needsYou')}</span>`
                     : ''}
                 ${this.windowText(x)
@@ -896,7 +845,7 @@ const InboxPage = {
     renderCount() {
         const host = document.getElementById('inbox-count');
         if (!host) return;
-        const waiting = this.threads.filter((x) => this.isWaiting(x)).length;
+        const waiting = this.threads.filter((x) => Attention.isWaiting(x)).length;
         const shown = this.threads.length;
         const truncated = !this.searchTerm.trim() && Number(this.total) > shown;
         const markup = esc(html`<strong>${waiting === 0 ? t('inbox.needReply_zero') : t('inbox.needReply', { count: waiting })}</strong>${truncated ? html` · <span>${t('inbox.showing', { shown: UI.formatNumber(shown), total: UI.formatNumber(this.total) })}</span>` : ''}`);
@@ -980,9 +929,9 @@ const InboxPage = {
                 x.is_bot_active ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
-                this.isNeedsYou(x) ? '1' : '0',
+                Attention.isHandoff(x) ? '1' : '0',
                 x.stage || '',
-                this.isHot(x) ? '1' : '0',
+                Attention.isHot(x) ? '1' : '0',
                 // The text shown, so the row is repainted when the minute changes and not before.
                 this.windowText(x),
             ].join('\u001f'),
@@ -1389,12 +1338,12 @@ const InboxPage = {
         if (this.STAGES.includes(thread.stage)) {
             chips.push(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }));
         }
-        if (this.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
+        if (Attention.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
-        if (this.isNeedsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
+        if (Attention.isHandoff(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
         const countdown = this.windowText(thread);
         if (countdown) {
-            const closed = this.windowLeftMs(thread) === 0;
+            const closed = Attention.windowLeftMs(thread) === 0;
             chips.push(this.metaChip(closed ? `${countdown}: ${t('inbox.window.closedHint')}` : countdown, { icon: 'clock' }));
         }
         chips.push(...this.linkChips(thread));

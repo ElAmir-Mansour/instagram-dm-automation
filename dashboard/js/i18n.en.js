@@ -295,6 +295,10 @@
     'ui.pager.prev': 'Previous',
     'ui.pager.next': 'Next',
     'ui.pager.position': 'Page {page} of {total}',
+    // The router's "leave this page?" (App.confirmLeave): another page is about to replace one that holds unsaved work.
+    'common.leaveTitle': 'Discard changes?',
+    'common.leaveBody': 'You have unsaved changes on this page. If you leave, they will be lost.',
+    'common.leaveConfirm': 'Discard and leave',
     'ai.temperatureLabel': 'Temperature',
     'ai.draftRestored': 'Your unsaved edits from last time were restored.',
     'inbox.stale': 'The conversation list has stopped updating — it may be out of date.',

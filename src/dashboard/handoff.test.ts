@@ -22,6 +22,7 @@ class FakeFormData {
 
 interface Loaded {
     Inbox: Json;
+    Attention: Json;
     Settings: Json;
     UI: Json;
     t: (key: string, params?: Record<string, unknown>) => string;
@@ -74,11 +75,11 @@ function load(lang: 'ar' | 'en' = 'en'): Loaded {
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const f of [
-        'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js',
+        'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js',
         'dashboard/js/pages/inbox.js', 'dashboard/js/pages/settings.js',
     ]) vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     vm.runInContext(`I18N.lang = ${JSON.stringify(lang)};`, ctx);
-    const got = vm.runInContext('({ Inbox: InboxPage, Settings: SettingsPage, UI, t })', ctx);
+    const got = vm.runInContext('({ Inbox: InboxPage, Attention, Settings: SettingsPage, UI, t })', ctx);
     const toasts: string[] = [];
     got.UI.toast = (m: unknown) => { toasts.push(String(m)); };
     const host = (id: string): Json => {
@@ -86,7 +87,7 @@ function load(lang: 'ar' | 'en' = 'en'): Loaded {
         dom.set(id, el);
         return el;
     };
-    return { Inbox: got.Inbox, Settings: got.Settings, UI: got.UI, t: got.t, hash, waiting, api, calls, toasts, dom, host };
+    return { Inbox: got.Inbox, Attention: got.Attention, Settings: got.Settings, UI: got.UI, t: got.t, hash, waiting, api, calls, toasts, dom, host };
 }
 
 const HOUR = 3600 * 1000;
@@ -107,44 +108,45 @@ const handed = (over: Json = {}): Json => ({
 // ─── Needs you ──────────────────────────────────────────────────────────────────────────────
 
 describe('Inbox: which threads need you', () => {
-    const { Inbox } = load();
+    // The rules are dashboard/js/attention.js's (shared with the Overview and the nav badge); `isHandoff` is what this screen calls "Needs you".
+    const { Attention } = load();
 
     it('a conversation handed over to a person, with the bot paused and nobody having answered since', () => {
-        assert.equal(Inbox.isNeedsYou(handed()), true);
+        assert.equal(Attention.isHandoff(handed()), true);
     });
 
     it('ends when a person replied after the handoff, from the inbox or from the Instagram app, and not when the reply is older than it', () => {
-        assert.equal(Inbox.isNeedsYou(handed({ last_operator_at: at(30 * 60 * 1000) })), false, 'replied after');
-        assert.equal(Inbox.isNeedsYou(handed({ last_operator_at: at(2 * HOUR) })), false, 'in the same instant: answered');
-        assert.equal(Inbox.isNeedsYou(handed({ last_operator_at: at(5 * HOUR) })), true, 'an older reply is not an answer to this handoff');
+        assert.equal(Attention.isHandoff(handed({ last_operator_at: at(30 * 60 * 1000) })), false, 'replied after');
+        assert.equal(Attention.isHandoff(handed({ last_operator_at: at(2 * HOUR) })), false, 'in the same instant: answered');
+        assert.equal(Attention.isHandoff(handed({ last_operator_at: at(5 * HOUR) })), true, 'an older reply is not an answer to this handoff');
     });
 
     it('sales handoff: the bot is paused, and the thread is in Needs you', () => {
         // A refund, a complaint, "I want a person": `handoffDecision` pauses the bot (is_bot_active false) and stamps stage + handoff_at.
-        assert.equal(Inbox.isNeedsYou(handed({ is_bot_active: false })), true);
+        assert.equal(Attention.isHandoff(handed({ is_bot_active: false })), true);
     });
 
     it('engine failure: the bot is still ON, and the thread is in Needs you all the same', () => {
         // `handoffAfterFailure` stamps stage + handoff_at and leaves is_bot_active alone (an outage is not a request for a person), so the
         // customer's next message gets a normal reply. The owner still has to know that the last one went unanswered.
         const failed = handed({ is_bot_active: true, handoff_reason: 'unsure' });
-        assert.equal(Inbox.isNeedsYou(failed), true);
-        assert.equal(Inbox.needsHuman(failed), true, 'so it counts on the nav badge and gets the window countdown');
-        assert.equal(Inbox.isNeedsYou({ ...failed, last_operator_at: at(60000) }), false, 'and a reply from the owner after it ends it');
+        assert.equal(Attention.isHandoff(failed), true);
+        assert.equal(Attention.needsHuman(failed), true, 'so it counts on the nav badge and gets the window countdown');
+        assert.equal(Attention.isHandoff({ ...failed, last_operator_at: at(60000) }), false, 'and a reply from the owner after it ends it');
     });
 
     it('ends when the stage moves on: turning the AI back on, or the bot\'s own next turn, and is never true for a thread that was not handed over', () => {
         for (const stage of ['new', 'qualify', 'recommend', 'objection', 'link', 'follow_up', 'closed', undefined, null]) {
-            assert.equal(Inbox.isNeedsYou(handed({ stage })), false, String(stage));
-            assert.equal(Inbox.isNeedsYou(handed({ stage, is_bot_active: true })), false, `${String(stage)}, bot on`);
+            assert.equal(Attention.isHandoff(handed({ stage })), false, String(stage));
+            assert.equal(Attention.isHandoff(handed({ stage, is_bot_active: true })), false, `${String(stage)}, bot on`);
         }
-        assert.equal(Inbox.isNeedsYou(null), false);
-        assert.equal(Inbox.isNeedsYou({}), false, 'a database before v39 flags nothing');
+        assert.equal(Attention.isHandoff(null), false);
+        assert.equal(Attention.isHandoff({}), false, 'a database before v39 flags nothing');
     });
 
     it('is a handoff even when the stamp is missing or unreadable: the stage says so', () => {
-        assert.equal(Inbox.isNeedsYou(handed({ handoff_at: null })), true);
-        assert.equal(Inbox.isNeedsYou(handed({ handoff_at: 'not a date', last_operator_at: at(HOUR) })), true);
+        assert.equal(Attention.isHandoff(handed({ handoff_at: null })), true);
+        assert.equal(Attention.isHandoff(handed({ handoff_at: 'not a date', last_operator_at: at(HOUR) })), true);
     });
 
     it('is its own filter, seeded from the address, and the filter keeps only these', () => {
@@ -203,7 +205,7 @@ describe('Inbox: turning the AI back on ends the handoff', () => {
         assert.deepEqual(plain(s.calls[0]), { method: 'toggleConversationBot', args: ['a', true] });
         assert.equal(I.threads[0].is_bot_active, true);
         assert.equal(I.threads[0].stage, 'new');
-        assert.equal(I.isNeedsYou(I.threads[0]), false);
+        assert.equal(s.Attention.isHandoff(I.threads[0]), false);
         assert.equal(I.threads[1].stage, 'handoff', 'another thread is left alone');
     });
 
@@ -213,7 +215,7 @@ describe('Inbox: turning the AI back on ends the handoff', () => {
         await I.toggleBot('a', true);
         assert.equal(I.threads[0].is_bot_active, false, 'back as it was');
         assert.equal(I.threads[0].stage, 'handoff', 'and still waiting for you');
-        assert.equal(I.isNeedsYou(I.threads[0]), true);
+        assert.equal(s.Attention.isHandoff(I.threads[0]), true);
         s.api['toggleConversationBot'] = () => Promise.resolve({ id: 'b' });
         await I.toggleBot('b', true);
         assert.equal(I.threads[1].stage, 'recommend', 'only a handoff is moved on');
@@ -239,15 +241,15 @@ describe('Inbox: turning the AI back on ends the handoff', () => {
 
 describe('Inbox: the 24-hour window', () => {
     it('counts from the customer\'s LAST message, read from messages, and falls back to the v39 column', () => {
-        const { Inbox } = load();
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_message_at: at(HOUR) }), NOW), 23 * HOUR);
+        const { Attention } = load();
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_message_at: at(HOUR) }), NOW), 23 * HOUR);
         // The v39 stamp is old (only a sales turn writes it): the message the customer sent since is what counts.
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_at: at(20 * HOUR), last_inbound_message_at: at(HOUR) }), NOW), 23 * HOUR);
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_message_at: null, last_inbound_at: at(4 * HOUR) }), NOW), 20 * HOUR);
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_message_at: null }), NOW), null);
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_message_at: at(30 * HOUR) }), NOW), 0, 'closed');
-        assert.equal(Inbox.windowLeftMs(handed({ last_inbound_message_at: at(-5 * HOUR) }), NOW), 24 * HOUR, 'a clock a little behind never promises more than 24 h');
-        assert.equal(Inbox.windowLeftMs(null, NOW), null);
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_at: at(20 * HOUR), last_inbound_message_at: at(HOUR) }), NOW), 23 * HOUR);
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_message_at: null, last_inbound_at: at(4 * HOUR) }), NOW), 20 * HOUR);
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_message_at: null }), NOW), null);
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_message_at: at(30 * HOUR) }), NOW), 0, 'closed');
+        assert.equal(Attention.windowLeftMs(handed({ last_inbound_message_at: at(-5 * HOUR) }), NOW), 24 * HOUR, 'a clock a little behind never promises more than 24 h');
+        assert.equal(Attention.windowLeftMs(null, NOW), null);
     });
 
     it('is said in hours and minutes in English, Latin digits in Arabic, and "closed" once it has', () => {

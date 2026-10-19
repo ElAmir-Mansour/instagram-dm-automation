@@ -306,6 +306,7 @@ function load(): Loaded {
 
     for (const f of [
         'dashboard/js/components.js',
+        'dashboard/js/attention.js',
         'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
         'dashboard/js/charts.js',

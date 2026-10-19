@@ -328,6 +328,10 @@
     'ui.pager.prev': 'السابق',
     'ui.pager.next': 'التالي',
     'ui.pager.position': 'صفحة {page} من {total}',
+    // The router's "leave this page?" (App.confirmLeave): another page is about to replace one that holds unsaved work.
+    'common.leaveTitle': 'تجاهل التغييرات؟',
+    'common.leaveBody': 'لديك تغييرات غير محفوظة في هذه الصفحة. إذا غادرتها فستضيع.',
+    'common.leaveConfirm': 'تجاهل التغييرات والمغادرة',
     'ai.temperatureLabel': 'درجة الإبداع',
     'ai.draftRestored': 'تمت استعادة التعديلات غير المحفوظة من آخر زيارة.',
     'inbox.stale': 'توقف تحديث قائمة المحادثات — قد تكون هذه القائمة قديمة.',
