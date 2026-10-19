@@ -261,16 +261,6 @@ describe('POST /conversations/:id/messages for a thread whose tenant has no toke
         assert.deepEqual(metaCalls, []);
         assert.deepEqual(writesTo('messages'), [], 'no outbound message was recorded for something that was not sent');
     });
-
-    it('a WhatsApp thread is a 409 before anything else, even with a token: it is never sent through Instagram', async () => {
-        conversation = { id: CONVERSATION, creator_id: TENANT, instagram_user_id: 'EG.13491208655302741918', platform: 'whatsapp', page_access_token: 'enc:v1:whatever', facebook_page_id: null };
-        const res = await call('post', '/conversations/:id/messages', { params: { id: CONVERSATION }, body: { text: 'hello' } });
-        assert.equal(res.statusCode, 409);
-        assert.equal(res.body.code, 'WHATSAPP_SENDING_NOT_READY');
-        assert.deepEqual(metaCalls, []);
-        assert.deepEqual(writesTo('messages'), []);
-        assert.deepEqual(writesTo('conversations'), [], 'the bot is not paused for a reply that was not sent');
-    });
 });
 
 // ─── TikTok and YouTube ─────────────────────────────────────────────────────────────────

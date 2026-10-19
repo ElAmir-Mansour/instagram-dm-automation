@@ -11,7 +11,8 @@
  *   getMediaUrl            GET    /{media_id}                        the short-lived URL of an inbound file
  *   downloadMedia          GET    <that url>                         its bytes
  *
- * Nothing calls `sendMessage` yet: the sending path (`channels/send.ts`) is a later phase, and until then this file only reads.
+ * `sendMessage` is called from one place, `channels/send.ts` (`sendWhatsAppReply`), which owns the window, the meter and the shaping
+ * (`toWhatsAppMessage`); `markReadWithTyping` from the agent's turn (`webhook/whatsappAnswer.ts`).
  *
  * The token travels in the `Authorization` header and never in a URL, as for every other Graph call in this app. A Graph failure is
  * rewrapped by `metaFailure` into a `MetaApiError` that keeps `metaCode` / `metaSubcode`, so a caller can classify it (a dead token is
