@@ -91,7 +91,9 @@ describe('GET /conversations — the platform (I8)', () => {
 
     it('answers null for anything that is not one of the two', () => {
         for (const v of ['instagram', 'facebook']) assert.equal(conversationPlatformOf(v), v);
-        for (const v of [undefined, null, '', 'tiktok', 'Instagram', 1]) assert.equal(conversationPlatformOf(v), null);
+        // 'whatsapp' is in the type since v50 but nothing writes a WhatsApp thread yet and the dashboard cannot show it: it stays null until the
+        // phase that stores the first one widens this with the dashboard.
+        for (const v of [undefined, null, '', 'tiktok', 'whatsapp', 'Instagram', 1]) assert.equal(conversationPlatformOf(v), null);
     });
 });
 
