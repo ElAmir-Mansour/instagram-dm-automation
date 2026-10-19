@@ -357,6 +357,7 @@ const MonteurPage = {
         const prev = this.view;
         const view = this.normalizeView(raw);
         this.view = view;
+        if (view.timezone) UI.setZone(view.timezone);
         this.viewError = null;
         this.stale = false;
         this._lastRefresh = Date.now();
@@ -2830,63 +2831,30 @@ const MonteurPage = {
     },
 
     // ─── Time zones ──────────────────────────────────────────────────────────
-    validZone(zone) {
-        if (!zone || typeof zone !== 'string') return false;
-        try {
-            new Intl.DateTimeFormat('en-US', { timeZone: zone });
-            return true;
-        } catch {
-            return false;
-        }
-    },
+    // The helpers live in components.js (`UI.zone`, `UI.zoneTime`, `UI.zoneCity`, `UI.zoneInput`, …): one tenant zone for every screen.
+    // What stays here is this page's own reading of it, the view's `timezone`, and the page's own wording of a zoned time.
 
     deviceZone() {
-        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+        return UI.deviceZone();
     },
 
-    /** The tenant's zone (Studio → Settings → Schedule), else this browser's. */
+    /** The tenant's zone (Studio → Settings → Schedule, as this view carries it), else the one another screen read, else this browser's. */
     zone() {
-        const zone = this.view && this.view.timezone;
-        return this.validZone(zone) ? zone : this.deviceZone();
+        return UI.zone(this.view && this.view.timezone);
     },
 
     /** "Riyadh" / «الرياض»: the Studio's own city names. */
     zoneCity(zone) {
-        const city = String(zone || 'UTC').split('/').pop().replace(/_/g, ' ');
-        const key = `studio.city.${city.replace(/\s+/g, '')}`;
-        const named = t(key);
-        return named && named !== key ? named : city;
-    },
-
-    _fmtCache: new Map(),
-
-    zoneFormat(value, options) {
-        const d = value instanceof Date ? value : new Date(value);
-        if (value === null || value === undefined || value === '' || Number.isNaN(d.getTime())) return '';
-        const zone = this.zone();
-        const key = `${I18N.locale()}|${zone}|${JSON.stringify(options)}`;
-        let fmt = this._fmtCache.get(key);
-        if (fmt === undefined) {
-            try {
-                fmt = new Intl.DateTimeFormat(I18N.locale(), { ...options, timeZone: zone });
-            } catch {
-                fmt = null;
-            }
-            this._fmtCache.set(key, fmt);
-        }
-        if (fmt) {
-            try { return fmt.format(d); } catch { /* fall through */ }
-        }
-        return UI.formatDateTime(d);
+        return UI.zoneCity(zone);
     },
 
     /** "Sun, 28 Sep, 19:00" in the tenant's zone, 24-hour like every setting it came from. */
     zoneTime(value) {
-        return this.zoneFormat(value, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+        return UI.zoneTime(value, { zone: this.zone() });
     },
 
     zoneDay(value) {
-        return this.zoneFormat(value, { day: 'numeric', month: 'short' });
+        return UI.zoneFormat(value, { day: 'numeric', month: 'short', zone: this.zone() });
     },
 
     /** "Sun, 28 Sep, 19:00 (Riyadh)": a time with the zone it is in, for anything the settings drive. */
@@ -2895,46 +2863,14 @@ const MonteurPage = {
         return text ? t('monteur.zoned', { time: text, city: this.zoneCity(this.zone()) }) : '';
     },
 
-    /** Minutes `zone` is ahead of UTC at the instant `at` (ms). */
-    zoneOffsetMin(zone, at) {
-        const when = new Date(Math.floor(Number(at) / 60000) * 60000);
-        try {
-            const f = new Intl.DateTimeFormat('en-US', {
-                timeZone: zone, hourCycle: 'h23',
-                year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-            });
-            const p = {};
-            f.formatToParts(when).forEach((part) => { p[part.type] = part.value; });
-            const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute));
-            return Math.round((wall - when.getTime()) / 60000);
-        } catch {
-            return 0;
-        }
-    },
-
     /** An instant as `<input type="datetime-local">` shows it, in `zone`'s wall time. */
     toZoneInput(value, zone) {
-        const d = value instanceof Date ? value : new Date(value);
-        if (Number.isNaN(d.getTime())) return '';
-        const offset = this.zoneOffsetMin(zone, d.getTime());
-        return new Date(d.getTime() + offset * 60000).toISOString().slice(0, 16);
+        return UI.zoneInputValue(value, zone);
     },
 
-    /**
-     * `YYYY-MM-DDTHH:MM` read as wall time in `zone`, back to an ISO instant. The
-     * offset is looked up at the instant it produces, and corrected once, so a time
-     * either side of a daylight-saving change lands on the right hour.
-     */
+    /** `YYYY-MM-DDTHH:MM` read as wall time in `zone`, back to an ISO instant (null when it is not one). */
     fromZoneInput(value, zone) {
-        const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(value || ''));
-        if (!m) return null;
-        const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
-        if (!Number.isFinite(wall)) return null;
-        let utc = wall - this.zoneOffsetMin(zone, wall) * 60000;
-        const corrected = wall - this.zoneOffsetMin(zone, utc) * 60000;
-        if (corrected !== utc) utc = corrected;
-        const d = new Date(utc);
-        return Number.isNaN(d.getTime()) ? null : d.toISOString();
+        return UI.zoneInput(value, zone);
     },
 };
 

@@ -1047,6 +1047,11 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .status-pill.failed { background: var(--danger-soft); color: var(--danger-text); }
 .status-pill.pending, .status-pill.publishing { background: var(--warning-soft); color: var(--warning-text); }
 .status-pill.user_blocked_dms { background: var(--warning-soft); color: var(--warning-text); }
+/* UI.statusPill: a glyph (its SHAPE says what the colour says), then the word. The tone comes from a .badge-* class, so there is one
+   set of token pairs. In-progress states pulse the glyph, like .dot-blink, and stop under reduced motion. */
+.status-pill-glyph { line-height: 1; }
+.status-pill-glyph.is-busy { animation: blink 1.5s infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .status-pill-glyph.is-busy { animation: none; } }
 
 .health-pill {
     display: inline-flex; align-items: center; gap: var(--space-2);
@@ -1175,6 +1180,14 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .inline-error svg { color: var(--danger-text); }
 .inline-error strong { display: block; font-weight: var(--fw-semibold); }
 .inline-error-hint { display: block; margin-block-start: var(--space-1); font-size: var(--fs-100); color: var(--text-default); }
+
+/* UI.errorHtml: the sentence, what to do next, and the server's own words folded behind a native "Details". */
+.error-text { display: block; min-inline-size: 0; }
+.error-sentence { display: block; font-weight: var(--fw-semibold); }
+.error-next { display: block; margin-block-start: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
+.error-details { margin-block-start: var(--space-2); font-size: var(--fs-100); color: var(--text-default); }
+.error-details > summary { cursor: pointer; font-weight: var(--fw-semibold); min-block-size: var(--tap-target); align-content: center; }
+.error-details-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
 
 .loader { display: flex; align-items: center; justify-content: center; padding: var(--space-6); }
 .spinner {

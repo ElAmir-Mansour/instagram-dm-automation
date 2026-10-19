@@ -136,6 +136,7 @@ const ALLOWED: readonly Allowed[] = [
         'src/dashboard/campaign-seeds.test.ts',
         'src/dashboard/growth.test.ts',
         'src/dashboard/monteur.test.ts',
+        'src/dashboard/primitives-a.test.ts',
         'src/dashboard/screens.test.ts',
         'src/dashboard/wave2-settings.test.ts',
         'src/routes/aiSandbox.test.ts',

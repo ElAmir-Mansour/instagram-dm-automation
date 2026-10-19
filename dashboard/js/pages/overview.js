@@ -447,8 +447,8 @@ const OverviewPage = {
                 </section>
             `;
         }
-        // A left-to-right isolate (U+2066 ... U+2069, as `signed()` does): in an Arabic sentence a bare "46%" shows as "%46".
-        const shown = `\u2066${UI.formatPercent(percent)}\u2069`;
+        // `formatPercent` is already a left-to-right isolate, so "46%" stays "46%" inside an Arabic sentence (OV-30).
+        const shown = UI.formatPercent(percent);
         return html`
             <section class="profile-card surface" aria-labelledby="profile-card-title">
                 <div class="profile-card-head">

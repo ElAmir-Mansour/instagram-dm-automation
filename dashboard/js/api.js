@@ -48,6 +48,36 @@ const API = {
             : t('http.generic', { status });
     },
 
+    /**
+     * The server's refusal, whichever of the two shapes it came in (contracts/api.md, "Error envelope"):
+     *
+     *   today      { error: 'sentence', code?: 'CODE', params?: {…}, …extra fields }
+     *   envelope   { error: { code, params, message } }
+     *
+     * Returns `{ message, code, params, flat }`. `message` is the sentence the server wrote ('' when it wrote none, so the
+     * caller falls back to `describeHttpError`); `code` is '' and `params` null when it sent none. `flat` is the body as
+     * every reader written before the envelope expects it: `error` is the sentence and `code` sits at the top. For today's
+     * shape it is the body itself; for the envelope it is a copy with those two lifted out, so `err.body.error` never
+     * becomes an object that a toast prints as "[object Object]".
+     */
+    readError(body) {
+        const out = { message: '', code: '', params: null, flat: body };
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return out;
+        const nested = body.error && typeof body.error === 'object' && !Array.isArray(body.error) ? body.error : null;
+        const source = nested || body;
+        if (nested) {
+            out.message = typeof nested.message === 'string' ? nested.message : '';
+        } else {
+            out.message = typeof body.error === 'string' && body.error
+                ? body.error
+                : (typeof body.message === 'string' ? body.message : '');
+        }
+        out.code = typeof source.code === 'string' && source.code ? source.code : (nested && typeof body.code === 'string' ? body.code : '');
+        out.params = source.params && typeof source.params === 'object' && !Array.isArray(source.params) ? source.params : null;
+        if (nested) out.flat = { ...body, error: out.message, ...(out.code ? { code: out.code } : {}), ...(out.params ? { params: out.params } : {}) };
+        return out;
+    },
+
     async request(path, options = {}) {
         // `profileAsked` is ours, not fetch's: it marks the one retry made after the person answered a profile question.
         const { profileAsked, ...fetchOptions } = options;
@@ -92,17 +122,23 @@ const API = {
         }
 
         if (!res.ok) {
-            const message = (body && (body.error || body.message)) || this.describeHttpError(res.status, rawText);
+            const read = this.readError(body);
+            const message = read.message || this.describeHttpError(res.status, rawText);
             const err = new Error(message);
             err.status = res.status;
-            err.body = body;
+            err.body = read.flat;
             err.rawText = rawText;
+            // A stable identifier and its values, when the server sent them: `UI.errorText(err)` turns them into a sentence in the
+            // interface language. Absent when it did not, so `err.code === undefined` still means "an uncoded refusal".
+            if (read.code) err.code = read.code;
+            if (read.params) err.params = read.params;
             // An agent was switched on before it had what it writes from (P30). Ask for it, in a sheet, ONCE, and send the very same
             // request again if it was answered; when it cannot be answered here (the wizard's own fields, or a cancelled sheet), the
             // person is told in their own language and not in the server's.
-            if (res.status === 409 && body && body.code === 'PROFILE_INCOMPLETE') {
+            const flat = read.flat;
+            if (res.status === 409 && flat && flat.code === 'PROFILE_INCOMPLETE') {
                 if (!profileAsked && typeof ProfileAsk !== 'undefined') {
-                    const answered = await ProfileAsk.require(body.missing, { agent: body.agent });
+                    const answered = await ProfileAsk.require(flat.missing, { agent: flat.agent });
                     if (answered) return this.request(path, { ...options, profileAsked: true });
                 }
                 err.message = t('profileAsk.refused');
