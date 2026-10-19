@@ -63,6 +63,7 @@ import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
+import { whatsappRouter } from './whatsapp.js';
 import { metaPublicRouter, metaRouter } from './meta.js';
 import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
@@ -1541,6 +1542,8 @@ router.use(resolveTenant);
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
 router.use('/youtube', youtubeRouter);
+// WhatsApp (docs/specs/001-whatsapp-agent): the tenant's number, the agent's mode and the billing choice. Reads are any member's; every write is owner-only (the router carries the guards).
+router.use('/whatsapp', whatsappRouter);
 // Connecting a tenant's own Facebook Page and Instagram account: every mutating route is owner-only (it carries its own guards).
 router.use('/meta', metaRouter);
 
