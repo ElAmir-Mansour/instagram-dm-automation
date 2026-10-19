@@ -608,7 +608,10 @@ describe('the ice breakers card: the client, the registration and who loads it',
         const settings = readFileSync('dashboard/js/pages/settings.js', 'utf8');
         assert.match(settings, /App\.canAdminister\(\) \? API\.getIceBreakers\(\) : Promise\.resolve\(null\)/);
         assert.match(settings, /App\.canAdminister\(\) \? App\.loadPageModule\('ice_breakers'\) : Promise\.resolve\(null\)/);
-        assert.match(settings, /\$\{canAdmin \? this\.iceBreakersSection\(iceBreakers, iceBreakersError\) : ''\}/);
+        // Who sees the card is the card map's (UX US10): the tenant's owner only, in Messages & alerts.
+        assert.match(settings, /case 'iceb': return this\.iceBreakersSection\(ctx\.iceBreakers, ctx\.iceBreakersError\);/);
+        const card = Array.from(load().Settings.CARDS as Array<{ id: string; group: string; who: string }>).find((c) => c.id === 'iceb')!;
+        assert.deepEqual({ group: card.group, who: card.who }, { group: 'messages', who: 'owner' });
     });
 
     it('the card never calls Publish, Remove or Read except from a handler a person triggers: no timer, no load-time call', () => {

@@ -951,11 +951,14 @@ describe('the WhatsApp card: the client, the registration, Settings, and a tenan
         const settings = readFileSync('dashboard/js/pages/settings.js', 'utf8');
         assert.match(settings, /^\s+API\.getWhatsAppConnection\(\),$/m, 'not gated on the owner: a member reads');
         assert.match(settings, /^\s+App\.loadPageModule\('whatsapp_card'\),$/m);
-        const at = (needle: string): number => settings.indexOf(needle);
-        const youtube = at('${this.youtubeSection({');
-        const whatsapp = at('${this.whatsappSection(whatsapp, whatsappError)}');
-        const media = at("${App.isAdmin() ? this.mediaStorageSection(");
-        assert.ok(youtube > 0 && whatsapp > youtube && media > whatsapp, 'YouTube, then WhatsApp, then the admin cards');
+        assert.match(settings, /case 'whatsapp': return this\.whatsappSection\(ctx\.whatsapp, ctx\.whatsappError\);/);
+        // Where it is drawn is the card map (UX US10): the Connections tab, YouTube then WhatsApp, for everyone; the admin cards are other tabs.
+        const cards = Array.from(load().Settings.CARDS as Array<{ id: string; group: string; who: string }>);
+        const ids = cards.map((card) => card.id);
+        assert.ok(ids.indexOf('youtube') >= 0 && ids.indexOf('whatsapp') === ids.indexOf('youtube') + 1, 'YouTube, then WhatsApp');
+        const whatsapp = cards.find((card) => card.id === 'whatsapp')!;
+        assert.deepEqual({ group: whatsapp.group, who: whatsapp.who }, { group: 'connections', who: 'all' }, 'not gated on a role');
+        assert.ok(cards.filter((card) => card.group === 'platform').every((card) => card.who === 'admin'), 'the platform cards stay the admin\'s');
     });
 
     it('Settings draws the card, and when it could not be loaded says why with a Retry, even when the module never arrived', () => {

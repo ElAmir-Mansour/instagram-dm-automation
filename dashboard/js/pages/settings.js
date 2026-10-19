@@ -1,6 +1,26 @@
 /**
- * Settings — access token, webhook verify token, account info, TikTok, YouTube,
- * WhatsApp, media storage, public site, appearance.
+ * Settings: five tabs, one open at a time, so nothing here is a ten-screen scroll (UX US10; audit SE-02, SE-04, SE-05, ST-02).
+ *
+ *   Connections        a health summary first (one row per integration: one status, one detail, one action), then
+ *                      Instagram & Facebook, TikTok, YouTube and WhatsApp
+ *   Messages & alerts  Instagram ice breakers, handoff alerts
+ *   Appearance         language and theme
+ *   Advanced           (platform admin) the access token, the webhook verify token, the page ids
+ *   Platform           (platform admin) what every workspace shares: the provider apps, media storage, the public site, onboarding
+ *
+ * The tab is the address: `#/settings?s=<tab>` (`App.route` writes it, `App.hashParams` reads it), so it survives a reload, Back works and
+ * another screen can link to a tab, or to a card: `?s=meta` and `?s=<tab>&card=<id>` both open the card and put focus on it.
+ *
+ * Every card is drawn on every render. The tabs that are not open are `hidden`, not left out: a switch of tab changes nothing but which
+ * panel shows, so a half-typed field in one tab is still there in another, and a dot on its tab says so. Each card's own markup, handlers
+ * and save payloads are exactly what they were; the cards are only grouped, and wrapped in `[data-settings-card]` so the page can tell
+ * which one a field belongs to.
+ *
+ * ─── Saving no longer throws away the other cards' edits (SE-02) ────────────
+ * A save ends in `render()`, as it always did, and `render()` is now a REFRESH once the page is on screen: it keeps the page where it is
+ * (no skeleton, same scroll), and a card that holds unsaved edits and was not the one just acted on is not redrawn at all: its live
+ * element is carried into the new page, typed secrets and all, so nothing is copied out of a field and put back. `canLeave()` is true
+ * only while no card holds unsaved edits, which is what the router's leave guard and the shared `beforeunload` ask.
  *
  * Every credential shown here is a Latin string sitting inside Arabic prose,
  * which is exactly where bidi goes wrong: an unisolated token preview drags
@@ -35,17 +55,117 @@ const SettingsPage = {
         return html`${parts[0]}${UI.ltr(params[name])}${parts[1]}`;
     },
 
+    /** `ltrIn` for several values: each named value is isolated as Latin text, and the rest of the sentence flows in the page's direction. */
+    ltrMany(key, params, names) {
+        const probe = Object.assign({}, params);
+        names.forEach((name, i) => { probe[name] = `\u0000${i}\u0000`; });
+        const pieces = t(key, probe).split(/\u0000(\d+)\u0000/);
+        // pieces: text, index, text, index ..., text
+        return html`${pieces.map((piece, i) => (i % 2 === 1 ? UI.ltr(params[names[Number(piece)]]) : piece))}`;
+    },
+
+    // ─── The map: tabs and the cards in them ─────────────────────────────────
+
+    /** The tabs, in order. A tab is shown only to a viewer who has a card in it. `platform`: what it holds applies to every workspace. */
+    GROUPS: Object.freeze([
+        Object.freeze({ id: 'connections' }),
+        Object.freeze({ id: 'messages' }),
+        Object.freeze({ id: 'appearance' }),
+        Object.freeze({ id: 'advanced' }),
+        Object.freeze({ id: 'platform', platform: true }),
+    ]),
+
+    DEFAULT_GROUP: 'connections',
+
+    /**
+     * Every card, in the order it is drawn inside its tab.
+     *   id      the address (`?card=meta`, and `?s=meta`) and `data-settings-card`
+     *   who     'all' | 'owner' (the workspace owner: `App.canAdminister()`) | 'admin' (the platform admin: `App.isAdmin()`)
+     *   dom     the element a deep link scrolls to; the card's own `<section id>` when `inner`, else the wrapper this page draws
+     *   focus   the control a row's Connect / Reconnect puts focus on, when the card has one
+     *   platform  deployment-wide: it carries the «لكل المساحات» badge
+     *   details   the card is a collapsed `<details>`, opened when it is the target
+     */
+    CARDS: Object.freeze([
+        Object.freeze({ id: 'meta', group: 'connections', who: 'all', dom: 'settings-meta', inner: true, focus: 'meta-connect' }),
+        Object.freeze({ id: 'tiktok', group: 'connections', who: 'all', dom: 'settings-tiktok', focus: 'settings-tiktok-connect' }),
+        Object.freeze({ id: 'youtube', group: 'connections', who: 'all', dom: 'settings-youtube', focus: 'settings-youtube-connect' }),
+        Object.freeze({ id: 'whatsapp', group: 'connections', who: 'all', dom: 'wa-card', inner: true, focus: 'wa-waba' }),
+        Object.freeze({ id: 'iceb', group: 'messages', who: 'owner', dom: 'iceb-card', inner: true }),
+        Object.freeze({ id: 'alerts', group: 'messages', who: 'admin', dom: 'settings-notify', platform: true }),
+        Object.freeze({ id: 'appearance', group: 'appearance', who: 'all', dom: 'settings-appearance', focus: 'settings-lang' }),
+        Object.freeze({ id: 'token', group: 'advanced', who: 'admin', dom: 'settings-token' }),
+        Object.freeze({ id: 'webhook', group: 'advanced', who: 'admin', dom: 'settings-webhook' }),
+        Object.freeze({ id: 'account', group: 'advanced', who: 'admin', dom: 'settings-account' }),
+        Object.freeze({ id: 'meta-app', group: 'platform', who: 'admin', dom: 'settings-meta-app', platform: true, details: true }),
+        Object.freeze({ id: 'tiktok-app', group: 'platform', who: 'admin', dom: 'settings-tiktok-app', platform: true, details: true }),
+        Object.freeze({ id: 'youtube-app', group: 'platform', who: 'admin', dom: 'settings-youtube-app', platform: true, details: true }),
+        Object.freeze({ id: 'storage', group: 'platform', who: 'admin', dom: 'settings-media', platform: true }),
+        Object.freeze({ id: 'site', group: 'platform', who: 'admin', dom: 'settings-site', platform: true }),
+        Object.freeze({ id: 'onboarding', group: 'platform', who: 'admin', dom: 'settings-onboarding', platform: true }),
+    ]),
+
+    cardById(id) {
+        return this.CARDS.find((card) => card.id === id) || null;
+    },
+
+    /** May this viewer see the card? The same rules the cards always had: the owner's, the platform admin's, or everyone's. */
+    cardVisible(card) {
+        if (card.who === 'admin') return App.isAdmin();
+        if (card.who === 'owner') return App.canAdminister();
+        return true;
+    },
+
+    visibleCards(groupId) {
+        return this.CARDS.filter((card) => card.group === groupId && this.cardVisible(card));
+    },
+
+    /** The tabs this viewer has cards in. */
+    visibleGroups() {
+        return this.GROUPS.filter((group) => this.visibleCards(group.id).length > 0);
+    },
+
+    /**
+     * What the address asks for, as `{ group, card }`. `?s=` names a tab, or a card (`?s=meta`, the form the alerts link with); `?card=`
+     * names a card inside the tab. A name this viewer cannot see, or that does not exist, is the default tab: an address never leads nowhere.
+     */
+    resolveView(params) {
+        const p = params || {};
+        const groups = this.visibleGroups().map((group) => group.id);
+        const s = String(p.s || '');
+        const wanted = String(p.card || '');
+        const visibleCard = (id) => {
+            const card = id ? this.cardById(id) : null;
+            return card && this.cardVisible(card) ? card : null;
+        };
+        let group = groups.includes(s) ? s : '';
+        let card = visibleCard(wanted);
+        if (!group && !card) card = visibleCard(s);
+        if (card && !group) group = card.group;
+        if (card && card.group !== group) card = null;
+        if (!groups.includes(group)) group = groups.includes(this.DEFAULT_GROUP) ? this.DEFAULT_GROUP : (groups[0] || this.DEFAULT_GROUP);
+        return { group, card: card ? card.id : '' };
+    },
+
+    // ─── Page lifecycle ──────────────────────────────────────────────────────
+
     /**
      * Guards the write against landing after the operator has navigated away.
-     * This page awaits TWO requests in series, so it owns the container for
+     * This page awaits its requests, so it owns the container for
      * longer than any other — and `#page-container` is refilled, never
      * replaced, so a late write lands on whatever page is there now. Same
      * `_seq`/`live()` shape as OverviewPage.
      */
     _seq: 0,
 
+    /** The tab and card on screen: `{ group, card }`, or null before the first paint. */
+    _view: null,
+
     destroy() {
         this._seq++;
+        this._view = null;
+        this._acted = null;
+        this.unbindEdits();
         // The Page picker may still be open over the next screen; what it repaints on a change must not be this one.
         if (typeof MetaConnect !== 'undefined' && this._afterMeta && MetaConnect.afterChange === this._afterMeta) MetaConnect.afterChange = null;
     },
@@ -57,76 +177,42 @@ const SettingsPage = {
         `;
     },
 
-    async render() {
-        const container = document.getElementById('page-container');
-        if (!container) return;
-        const focus = UI.captureFocus(container);
-        const gate = Motion.beginLoad(container, () => this.skeleton());
-        const seq = ++this._seq;
-        const live = () => seq === this._seq && !!document.getElementById('page-container');
-
-        // The access token status is the page — if it fails there is nothing to show.
-        let tokenStatus;
-        try {
-            tokenStatus = await API.getTokenStatus();
-        } catch (err) {
-            if (!live()) return;
-            gate.done();
-            UI.renderError(container, { title: t('settings.errorTitle'), message: err.message }, () => this.render());
-            return;
-        }
-        if (!live()) return;
-
-        // The webhook verify token is loaded separately: a failure here used to
-        // render "Not set" for a token that IS set, inviting the creator to
-        // re-enter the one credential this project's docs say has already cost
-        // hours of debugging.
-        let webhookToken = null;
-        let webhookError = null;
-        try {
-            webhookToken = await API.getWebhookToken();
-        } catch (err) {
-            webhookError = err;
-        }
-
-        // TikTok, loaded the same way and for the same reason: its failure
-        // must not take the Meta settings down with it.
-        let tiktok = null;
-        let tiktokError = null;
-        let tiktokApp = null;
-        let tiktokAppError = null;
-        // Media storage too — platform admins only, and isolated like the rest.
-        let media = null;
-        let mediaError = null;
-        // The public site's contact channels: one set for the deployment, so
-        // platform admins only, and isolated for the same reason.
-        let site = null;
-        let siteError = null;
-        // Handoff alerts and echo takeover (DM plan S8): the deployment's too, so platform admins only, and isolated like the rest.
-        let notify = null;
-        let notifyError = null;
-        // YouTube, isolated the same way.
-        let youtube = null;
-        let youtubeError = null;
-        let youtubeApp = null;
-        let youtubeAppError = null;
-        let cleanup = null;
-        // The onboarding settings (invite lifetime, role, sessions, the message): the deployment's, so platform admins only.
-        let onboarding = null;
-        let onboardingError = null;
-        // Instagram & Facebook (P28), isolated the same way, with the module that draws the card (loaded on first use, and shared with the wizard).
-        let meta = null;
-        let metaError = null;
-        let metaApp = null;
-        let metaAppError = null;
-        // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses them
-        // anyway), and isolated like the rest. Reading them sends nothing to Instagram.
-        let iceBreakers = null;
-        let iceBreakersError = null;
-        // WhatsApp (T025): any member reads it (the owner writes), isolated like the rest, with the module that draws the card (loaded on first use).
-        let whatsapp = null;
-        let whatsappError = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule] = await Promise.allSettled([
+    /**
+     * Everything the page shows, asked for at once. Each answer is its own: one that failed is that card's error with a Retry, never a
+     * blank page and never the end of the others. (The access token's live check used to be asked FIRST and alone, and a failure of it
+     * replaced the whole screen: SE-09.)
+     */
+    async load() {
+        const ctx = {
+            now: Date.now(),
+            canAdmin: App.canAdminister(),
+            isAdmin: App.isAdmin(),
+            tokenStatus: null, tokenError: null,
+            // The webhook verify token is the platform admin's. A failure to load it used to render "Not set" for a token that IS set,
+            // inviting the creator to re-enter the one credential this project's docs say has already cost hours of debugging.
+            webhookToken: null, webhookError: null,
+            // The last webhook's age, for the Instagram & Facebook row. Optional: without it the row just does not say.
+            health: null,
+            // TikTok, YouTube, media storage, the public site, handoff alerts, onboarding and the provider apps: isolated like the rest.
+            // The platform's own (storage, site, alerts, onboarding, the apps) are platform admins only.
+            tiktok: null, tiktokError: null, tiktokApp: null, tiktokAppError: null,
+            media: null, mediaError: null, cleanup: null,
+            site: null, siteError: null,
+            notify: null, notifyError: null,
+            youtube: null, youtubeError: null, youtubeApp: null, youtubeAppError: null,
+            onboarding: null, onboardingError: null,
+            // Instagram & Facebook (P28), with the module that draws the card (loaded on first use, and shared with the wizard).
+            meta: null, metaError: null, metaApp: null, metaAppError: null,
+            // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses
+            // them anyway). Reading them sends nothing to Instagram.
+            iceBreakers: null, iceBreakersError: null,
+            // WhatsApp (T025): any member reads it (the owner writes), with the module that draws the card (loaded on first use).
+            whatsapp: null, whatsappError: null,
+        };
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule] = await Promise.allSettled([
+            API.getTokenStatus(),
+            ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
+            API.getTenantHealth(),
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -144,30 +230,656 @@ const SettingsPage = {
             API.getWhatsAppConnection(),
             App.loadPageModule('whatsapp_card'),
         ]);
-        if (wa.status === 'fulfilled') whatsapp = wa.value; else whatsappError = wa.reason;
+        if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
+        if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
+        if (th.status === 'fulfilled') ctx.health = th.value;
+        if (wa.status === 'fulfilled') ctx.whatsapp = wa.value; else ctx.whatsappError = wa.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
-        if (!whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) whatsappError = new Error(t('wa.moduleFailed'));
-        if (ib.status === 'fulfilled') iceBreakers = ib.value; else iceBreakersError = ib.reason;
+        if (!ctx.whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) ctx.whatsappError = new Error(t('wa.moduleFailed'));
+        if (ib.status === 'fulfilled') ctx.iceBreakers = ib.value; else ctx.iceBreakersError = ib.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
-        if (!iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) iceBreakersError = new Error(t('iceb.moduleFailed'));
-        if (mc.status === 'fulfilled') meta = mc.value; else metaError = mc.reason;
-        if (mcApp.status === 'fulfilled') metaApp = mcApp.value; else metaAppError = mcApp.reason;
+        if (!ctx.iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) ctx.iceBreakersError = new Error(t('iceb.moduleFailed'));
+        if (mc.status === 'fulfilled') ctx.meta = mc.value; else ctx.metaError = mc.reason;
+        if (mcApp.status === 'fulfilled') ctx.metaApp = mcApp.value; else ctx.metaAppError = mcApp.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
-        if (!metaError && !(mcModule.status === 'fulfilled' && mcModule.value)) metaError = new Error(t('meta.moduleFailed'));
+        if (!ctx.metaError && !(mcModule.status === 'fulfilled' && mcModule.value)) ctx.metaError = new Error(t('meta.moduleFailed'));
         // The clean-up block is extra: if it fails to load, the storage card shows without it.
-        if (cu.status === 'fulfilled') cleanup = cu.value;
-        if (yt.status === 'fulfilled') youtube = yt.value; else youtubeError = yt.reason;
-        if (ytApp.status === 'fulfilled') youtubeApp = ytApp.value; else youtubeAppError = ytApp.reason;
-        if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
-        if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
-        if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
-        if (st.status === 'fulfilled') site = st.value; else siteError = st.reason;
-        if (nt.status === 'fulfilled') notify = nt.value; else notifyError = nt.reason;
-        if (ob.status === 'fulfilled') onboarding = ob.value; else onboardingError = ob.reason;
+        if (cu.status === 'fulfilled') ctx.cleanup = cu.value;
+        if (yt.status === 'fulfilled') ctx.youtube = yt.value; else ctx.youtubeError = yt.reason;
+        if (ytApp.status === 'fulfilled') ctx.youtubeApp = ytApp.value; else ctx.youtubeAppError = ytApp.reason;
+        if (tt.status === 'fulfilled') ctx.tiktok = tt.value; else ctx.tiktokError = tt.reason;
+        if (ttApp.status === 'fulfilled') ctx.tiktokApp = ttApp.value; else ctx.tiktokAppError = ttApp.reason;
+        if (ms.status === 'fulfilled') ctx.media = ms.value; else ctx.mediaError = ms.reason;
+        if (st.status === 'fulfilled') ctx.site = st.value; else ctx.siteError = st.reason;
+        if (nt.status === 'fulfilled') ctx.notify = nt.value; else ctx.notifyError = nt.reason;
+        if (ob.status === 'fulfilled') ctx.onboarding = ob.value; else ctx.onboardingError = ob.reason;
+        return ctx;
+    },
 
+    /**
+     * Draw the page, or REFRESH it when it is already on screen (a save, a Retry, "Check again"). A refresh keeps what the person was
+     * doing: no skeleton, the same scroll, the tab (it is the address), and every card that holds unsaved edits and is not the one they just
+     * acted on, which is carried over as it is (see the header).
+     */
+    async render() {
+        const container = document.getElementById('page-container');
+        if (!container) return;
+        const painted = typeof container.querySelector === 'function' ? container.querySelector('[data-settings-root]') : null;
+        const scrollY = painted && typeof window.scrollY === 'number' ? window.scrollY : null;
+        const acted = this.takeActed();
+        const focus = UI.captureFocus(container);
+        const gate = painted ? { done() {} } : Motion.beginLoad(container, () => this.skeleton());
+        const seq = ++this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
+
+        const ctx = await this.load();
         if (!live()) return;
         gate.done();
 
+        const view = this.resolveView(App.hashParams());
+        this._view = view;
+
+        // The live elements of the cards to keep, taken BEFORE the page is replaced: the new markup holds an empty stand-in for each.
+        const keep = painted ? this.dirtyCards(container).filter((id) => id !== acted && this.cardById(id)) : [];
+        const elements = {};
+        keep.forEach((id) => { elements[id] = container.querySelector(`[data-settings-card="${id}"]`); });
+        const carried = keep.filter((id) => elements[id]);
+
+        container.innerHTML = esc(this.shell(ctx, view, carried));
+        UI.icons(container);
+        carried.forEach((id) => {
+            const stand = container.querySelector(`[data-settings-card="${id}"][data-adopt]`);
+            if (stand && typeof stand.replaceWith === 'function') stand.replaceWith(elements[id]);
+        });
+
+        this.bindEdits(container);
+        this.syncDirtyDots();
+        UI.restoreFocus(focus);
+        if (painted) {
+            if (scrollY !== null && typeof window.scrollTo === 'function') window.scrollTo({ top: scrollY, behavior: 'instant' });
+        } else {
+            Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
+            if (view.card) this.revealCard(view.card);
+            else this.scrollTabIntoView();
+        }
+        this.announceTikTokReturn();
+        this.announceYouTubeReturn();
+        this.announceMetaReturn().catch((err) => console.warn('Could not show the Meta return:', err));
+    },
+
+    /** The whole page: the tab bar, then every tab's panel (only the open one is not `hidden`). `carried`: cards whose live element is put back by `render`. */
+    shell(ctx, view, carried) {
+        const groups = this.visibleGroups();
+        return html`
+            <div data-settings-root>
+                <div class="settings-tabbar" id="settings-tabbar">${this.tabsMarkup(view.group)}</div>
+                ${groups.map((group) => html`
+                    <div class="settings-panel" data-group="${group.id}" ${group.id === view.group ? '' : html.raw('hidden')}>
+                        ${group.id === 'connections' ? this.connectionsLead(ctx) : ''}
+                        ${group.platform ? html`<p class="form-hint settings-lead">${t('settings.platform.lead')}</p>` : ''}
+                        ${this.visibleCards(group.id).map((card) => this.cardItem(card, carried.includes(card.id) ? null : this.renderCard(card.id, ctx)))}
+                    </div>
+                `)}
+            </div>
+        `;
+    },
+
+    /** One card inside its wrapper. `inner` null is the stand-in for a card carried over from the page before. */
+    cardItem(card, inner) {
+        if (inner === null) return html`<div class="settings-item" data-settings-card="${card.id}" data-adopt></div>`;
+        return html`
+            <div class="settings-item" data-settings-card="${card.id}"${card.inner ? '' : html` id="${card.dom}"`}>
+                ${card.platform ? html`<p class="settings-scope"><span class="badge badge-neutral">${t('settings.scope.platform')}</span></p>` : ''}
+                ${inner}
+            </div>
+        `;
+    },
+
+    renderCard(id, ctx) {
+        switch (id) {
+            case 'meta': return this.metaSection({ meta: ctx.meta, metaError: ctx.metaError, metaApp: null, metaAppError: null });
+            case 'tiktok': return this.tiktokSection({ tiktok: ctx.tiktok, tiktokError: ctx.tiktokError });
+            case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
+            case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
+            case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
+            case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
+            case 'appearance': return this.appearanceSection();
+            case 'token': return this.accessTokenSection(ctx);
+            case 'webhook': return this.webhookSection(ctx);
+            case 'account': return this.accountSection(ctx);
+            case 'meta-app': return this.metaAppSection(ctx);
+            case 'tiktok-app': return this.tiktokAppSection(ctx);
+            case 'youtube-app': return this.youtubeAppSection(ctx);
+            case 'storage': return this.mediaStorageSection(ctx.media, ctx.mediaError, ctx.cleanup);
+            case 'site': return this.siteSection(ctx.site, ctx.siteError);
+            case 'onboarding': return this.onboardingSection(ctx.onboarding, ctx.onboardingError);
+            default: return '';
+        }
+    },
+
+    // ─── The tab bar, and which tab is open ──────────────────────────────────
+
+    tabsMarkup(active) {
+        const items = this.visibleGroups().map((group) => ({
+            key: group.id,
+            href: App.route('settings', { s: group.id }),
+            // The dot is drawn hidden on every tab; `syncDirtyDots` shows it on a tab that holds unsaved edits. Its words are for a screen reader.
+            label: html`${t(`settings.group.${group.id}`)}${group.platform ? html` <span class="badge badge-neutral settings-tab-badge">${t('settings.scope.platform')}</span>` : ''}<span class="settings-tab-dot" data-settings-dot="${group.id}" role="img" aria-label="${t('settings.tab.unsaved')}" hidden></span>`,
+        }));
+        return UI.tabs(items, { mode: 'link', current: active, label: t('settings.nav.label') });
+    },
+
+    /**
+     * A change of address inside the page (a tab, or a deep link to a card): the panels and the tab marks follow it, and nothing is drawn
+     * again, so what was typed in any tab is still there. The router calls this instead of tearing the page down.
+     */
+    onHashChange() {
+        this.applyView();
+    },
+
+    applyView() {
+        const view = this.resolveView(App.hashParams());
+        const before = this._view;
+        this._view = view;
+        const container = document.getElementById('page-container');
+        if (!container || typeof container.querySelectorAll !== 'function') return view;
+        container.querySelectorAll('.settings-panel').forEach((panel) => { panel.hidden = panel.dataset.group !== view.group; });
+        const ids = this.visibleGroups().map((group) => group.id);
+        container.querySelectorAll('.settings-tabbar a.ui-tab').forEach((link, i) => {
+            if (ids[i] === view.group) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+        });
+        if (view.card) {
+            this.revealCard(view.card);
+        } else if ((!before || before.group !== view.group) && typeof window.scrollTo === 'function') {
+            window.scrollTo({ top: 0 });
+        }
+        this.scrollTabIntoView();
+        if (!before || before.group !== view.group) Motion.announce(t(`settings.group.${view.group}`));
+        return view;
+    },
+
+    /** On a phone the tabs are a row that scrolls sideways: keep the open one in it. */
+    scrollTabIntoView() {
+        const current = typeof document.querySelector === 'function' ? document.querySelector('.settings-tabbar a.ui-tab[aria-current="page"]') : null;
+        if (current && typeof current.scrollIntoView === 'function') current.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'auto' });
+    },
+
+    /**
+     * Open a card from wherever the person is: a row of the health summary, a Connect button on another tab, an address. In another tab,
+     * the address changes (so Back returns), and `applyView` does the rest; in this one, scroll to it and focus it.
+     */
+    openCard(id) {
+        const card = id ? this.cardById(id) : null;
+        if (!card || !this.cardVisible(card)) return;
+        const here = this._view && this._view.group === card.group;
+        if (!here) {
+            location.hash = App.route('settings', { s: card.group, card: card.id });
+            return;
+        }
+        this.revealCard(card.id);
+    },
+
+    /**
+     * Scroll to a card and put focus on its main control (its Connect button, say), else on its title. The scroll offset that keeps the card
+     * clear of the sticky header and tab bar is the card's `scroll-margin`. A collapsed card that is only a `<details>` is opened first.
+     */
+    revealCard(id) {
+        const spec = this.cardById(id);
+        const el = spec ? document.getElementById(spec.dom) : null;
+        if (!el) return;
+        if (spec.details && typeof el.querySelector === 'function') {
+            const fold = el.querySelector('details');
+            if (fold && !fold.open) fold.open = true;
+        }
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start', behavior: Motion.reduced() ? 'auto' : 'smooth' });
+        let target = spec.focus ? document.getElementById(spec.focus) : null;
+        if (!target && typeof el.querySelector === 'function') target = el.querySelector('h2, summary, button, a[href]');
+        if (target && typeof target.focus === 'function') {
+            // A title is not a control: give it a place in the focus order only for this, so a screen reader announces where it landed.
+            if (target.tagName === 'H2' && typeof target.setAttribute === 'function') target.setAttribute('tabindex', '-1');
+            target.focus({ preventScroll: true });
+        }
+    },
+
+    // ─── Unsaved edits (SE-02) ───────────────────────────────────────────────
+
+    /** Fields that never count as an edit: they hold no setting. */
+    UNTRACKED_TYPES: Object.freeze(['file', 'hidden', 'button', 'submit', 'reset', 'image']),
+
+    /**
+     * Does this field differ from what the page drew? A text field against its `value` attribute, a box against `checked`, a select against
+     * its default option. Pure: it reads the element and nothing else.
+     */
+    fieldIsDirty(el) {
+        if (!el) return false;
+        const type = String(el.type || '').toLowerCase();
+        if (this.UNTRACKED_TYPES.includes(type)) return false;
+        if (type === 'checkbox' || type === 'radio') return Boolean(el.checked) !== Boolean(el.defaultChecked);
+        if (el.options) {
+            const options = Array.from(el.options);
+            // A select with no option marked as the default shows its first one: that is the default.
+            const marked = options.findIndex((option) => option.defaultSelected);
+            return el.selectedIndex !== (marked === -1 ? 0 : marked);
+        }
+        return String(el.value === undefined || el.value === null ? '' : el.value) !== String(el.defaultValue === undefined || el.defaultValue === null ? '' : el.defaultValue);
+    },
+
+    /**
+     * The cards (by id) with unsaved edits in `root`: a changed field inside a `<form>`. A control that applies the moment it is touched (the
+     * language and theme, the clean-up switch) is not in a form, so it never counts.
+     */
+    dirtyCards(root) {
+        const host = root || document.getElementById('page-container');
+        if (!host || typeof host.querySelectorAll !== 'function') return [];
+        const out = [];
+        host.querySelectorAll('[data-settings-card]').forEach((card) => {
+            const id = card.dataset && card.dataset.settingsCard;
+            if (!id || typeof card.querySelectorAll !== 'function') return;
+            if (Array.from(card.querySelectorAll('form input, form select, form textarea')).some((field) => this.fieldIsDirty(field))) out.push(id);
+        });
+        return out;
+    },
+
+    /** The router's leave guard, and the shared `beforeunload` (a reload, a closed tab, the language switch): is any card holding edits? */
+    canLeave() {
+        return this.dirtyCards().length === 0;
+    },
+
+    /** Show the dot on each tab that holds unsaved edits, hide it on the rest. */
+    syncDirtyDots() {
+        if (typeof document.querySelectorAll !== 'function') return;
+        const groups = new Set(this.dirtyCards().map((id) => (this.cardById(id) || {}).group));
+        document.querySelectorAll('[data-settings-dot]').forEach((dot) => {
+            dot.hidden = !groups.has(dot.dataset.settingsDot);
+        });
+    },
+
+    /** The card a control sits in, or ''. */
+    cardOfElement(el) {
+        const wrap = el && typeof el.closest === 'function' ? el.closest('[data-settings-card]') : null;
+        return wrap && wrap.dataset ? wrap.dataset.settingsCard || '' : '';
+    },
+
+    /** How long, in ms, "the card they just acted on" stays that. */
+    ACTED_MS: 30000,
+    _acted: null,
+
+    /** A button or a form in a card was used: that card is the one being saved, so its own edits are not the ones to keep. */
+    noteActed(el) {
+        const id = this.cardOfElement(el);
+        this._acted = id ? { id, at: Date.now() } : null;
+    },
+
+    takeActed() {
+        const acted = this._acted;
+        this._acted = null;
+        return acted && Date.now() - acted.at < this.ACTED_MS ? acted.id : '';
+    },
+
+    _editHost: null,
+    _onEdit: null,
+    _onAct: null,
+    _onSubmit: null,
+
+    /** Listen on the page container, once: typing moves the dots, and a click or submit says which card is acting. */
+    bindEdits(container) {
+        this.unbindEdits();
+        if (!container || typeof container.addEventListener !== 'function') return;
+        this._editHost = container;
+        this._onEdit = () => this.syncDirtyDots();
+        this._onAct = (event) => {
+            const target = event && event.target;
+            const control = target && typeof target.closest === 'function' ? target.closest('[data-action], button[type="submit"]') : null;
+            if (!control) { this._acted = null; return; }
+            // Copying a value is not an act on the card.
+            if (String(control.getAttribute('data-action') || '').startsWith('app:')) return;
+            this.noteActed(control);
+        };
+        this._onSubmit = (event) => this.noteActed(event && event.target);
+        container.addEventListener('input', this._onEdit);
+        container.addEventListener('change', this._onEdit);
+        container.addEventListener('click', this._onAct, true);
+        container.addEventListener('submit', this._onSubmit, true);
+    },
+
+    unbindEdits() {
+        const host = this._editHost;
+        if (host && typeof host.removeEventListener === 'function') {
+            host.removeEventListener('input', this._onEdit);
+            host.removeEventListener('change', this._onEdit);
+            host.removeEventListener('click', this._onAct, true);
+            host.removeEventListener('submit', this._onSubmit, true);
+        }
+        this._editHost = null;
+        this._onEdit = null;
+        this._onAct = null;
+        this._onSubmit = null;
+    },
+
+    // ─── Connections health: one row per integration (SE-04, SE-08) ──────────
+
+    /**
+     * ONE rule for every connection that runs out (SE-08): amber at 14 days or fewer, red at 3 or fewer (or once it has passed). It was a
+     * different number on every card: 7, 14, 30 days, or never.
+     */
+    EXPIRY: Object.freeze({ amber: 14, red: 3 }),
+
+    /** Order of the rows: what is broken first, what is fine last. A check that could not run sits above "not set up": it is unanswered, not absent. */
+    SEVERITY: Object.freeze({ broken: 0, expiring: 1, unknown: 2, not_set_up: 3, fine: 4 }),
+
+    /** Rows in these states are what the headline counts. */
+    NEEDS_ATTENTION: Object.freeze(['broken', 'expiring', 'unknown']),
+
+    /** Media storage is "nearly full" from this share of its tier. */
+    STORAGE_NEAR_FULL: 0.9,
+
+    /** Whole days from `now` to `value`, rounded up, or null when `value` is empty or not a date. */
+    daysUntil(value, now) {
+        if (!value) return null;
+        const at = new Date(value);
+        if (Number.isNaN(at.getTime())) return null;
+        return Math.ceil((at.getTime() - now) / 86400000);
+    },
+
+    /** The state a number of days left means: `broken` (red) at 3 or fewer, `expiring` (amber) at 14 or fewer, else `fine`. No date is `fine`. */
+    expiryState(days) {
+        if (days === null || days === undefined) return 'fine';
+        if (days <= this.EXPIRY.red) return 'broken';
+        if (days <= this.EXPIRY.amber) return 'expiring';
+        return 'fine';
+    },
+
+    /** The nearest of several dates, as `{ days, at }`, or null when none is a date. */
+    soonest(values, now) {
+        let best = null;
+        values.forEach((value) => {
+            const days = this.daysUntil(value, now);
+            if (days !== null && (best === null || days < best.days)) best = { days, at: new Date(value) };
+        });
+        return best;
+    },
+
+    /** The one sentence for "this runs out": the same words on every row. */
+    within(days, at) {
+        return days <= 0 ? t('settings.health.expired') : t('settings.health.within', { count: days, date: UI.formatDay(at) });
+    },
+
+    /** Parts of a detail line, with a dot between the ones that are there; `fallback` when none is. */
+    joinDetail(parts, fallback) {
+        const list = parts.filter(Boolean);
+        if (list.length === 0) return fallback || '';
+        return html`${list.map((part, i) => html`${i > 0 ? ' · ' : ''}${part}`)}`;
+    },
+
+    /** How long ago the last webhook arrived, as words, or '' when it is not known. */
+    webhookAge(health) {
+        const at = health && (health.lastWebhookAt || health.last_webhook_at);
+        if (!at || Number.isNaN(new Date(at).getTime())) return '';
+        return UI.relativeAge(at).text;
+    },
+
+    bytesText(n) {
+        return typeof Admin !== 'undefined' && typeof Admin.bytes === 'function' ? Admin.bytes(n) : String(n);
+    },
+
+    /**
+     * A row. Only the workspace owner can connect or reconnect, so anyone else is given the card to read, not a button the server would
+     * refuse. `kind` is 'connect' | 'reconnect' | 'open'; every one only OPENS the card (and puts focus on its button): nothing here starts
+     * an authorisation or changes a setting by itself.
+     */
+    healthRow(ctx, id, name, state, detail, kind, extra) {
+        const action = (kind === 'connect' || kind === 'reconnect') && !ctx.canAdmin ? 'open' : kind;
+        return Object.assign({ id, name, state, detail, action, target: id, platform: false }, extra || {});
+    },
+
+    /**
+     * The rows, worst first: `{ id, name, state, detail, action, target, platform }`, state one of `broken | expiring | unknown | not_set_up
+     * | fine`. Derived from what the page already loaded. Three rules hold for every row:
+     *   - "not connected yet" is `not_set_up` (grey), never red (SE-01);
+     *   - a failed request is `unknown` (it could not be checked), never `broken`: a network error is not a verdict on the account;
+     *   - a date that runs out follows `expiryState`, the same for all.
+     * A provider the platform has not set up is not a row for a tenant (the wizard hides it the same way); the platform admin sees it, with
+     * the way to the app settings.
+     */
+    connectionRows(ctx) {
+        const now = typeof ctx.now === 'number' ? ctx.now : Date.now();
+        const rows = [this.metaRow(ctx, now), this.tiktokRow(ctx, now), this.youtubeRow(ctx, now), this.whatsappRow(ctx, now)];
+        if (ctx.isAdmin) rows.push(this.storageRow(ctx), this.alertsRow(ctx));
+        return rows.filter(Boolean)
+            .map((row, order) => ({ row, order }))
+            .sort((a, b) => this.SEVERITY[a.row.state] - this.SEVERITY[b.row.state] || a.order - b.order)
+            .map((entry) => entry.row);
+    },
+
+    metaRow(ctx, now) {
+        const name = t('meta.title');
+        const row = (state, detail, kind) => this.healthRow(ctx, 'meta', name, state, detail, kind);
+        const c = ctx.meta && ctx.meta.connection;
+        const connected = !!(c && c.connected);
+        const state = ctx.tokenError ? 'unknown' : this.tokenState(ctx.tokenStatus);
+        // Meta rejected the token, live; or Meta could not be asked and the stored status says it was rejected.
+        if (state === 'invalid' || (state === 'unknown' && !!c && c.tokenStatus === 'invalid')) return row('broken', t('settings.health.meta.invalid'), 'reconnect');
+        if (state === 'not_connected' && !connected) return row('not_set_up', t('settings.health.meta.notConnected'), 'connect');
+        if (state !== 'valid') return row('unknown', t('settings.health.meta.unknown'), 'open');
+        const status = ctx.tokenStatus;
+        const due = this.soonest([status.dataAccessExpiresAt, status.expiresAt, c && c.dataAccessExpiresAt, c && c.tokenExpiresAt], now);
+        const dueState = due ? this.expiryState(due.days) : (c && c.reconnectDue === true ? 'expiring' : 'fine');
+        if (dueState !== 'fine') return row(dueState, due ? this.within(due.days, due.at) : t('settings.health.reconnectSoon'), 'reconnect');
+        if (c && c.via === 'login' && c.webhookSubscribed === false) return row('expiring', t('settings.health.meta.webhookOff'), 'open');
+        const age = this.webhookAge(ctx.health);
+        return row('fine', this.joinDetail([
+            c && c.instagramUsername ? UI.ltr(`@${c.instagramUsername}`) : '',
+            age ? t('settings.health.lastWebhook', { age }) : '',
+        ], t('settings.health.meta.connected')), 'open');
+    },
+
+    /** TikTok and YouTube answer alike: an app the platform set up, a connection that is there, broken or not, and an end date. */
+    providerRow(ctx, now, spec) {
+        const row = (state, detail, kind, target) => this.healthRow(ctx, spec.id, spec.name, state, detail, kind, target ? { target } : null);
+        if (spec.error) return row('unknown', t('settings.health.unknown'), 'open');
+        const data = spec.data;
+        if (!data) return null;
+        if (!data.appConfigured) return ctx.isAdmin ? row('not_set_up', t('settings.health.platformNotSet'), 'open', spec.appCard) : null;
+        const c = data.connection;
+        const needsReconnect = !!(c && c.status === 'invalid');
+        if (needsReconnect) return row('broken', t('settings.health.invalid'), 'reconnect');
+        if (!(c && c.connected)) return row('not_set_up', t('settings.health.notConnected'), 'connect');
+        const due = this.soonest([c.refreshExpiresAt], now);
+        const dueState = due ? this.expiryState(due.days) : 'fine';
+        if (dueState !== 'fine') return row(dueState, this.within(due.days, due.at), 'reconnect');
+        if (spec.cannotPost(c)) return row('expiring', t('settings.health.cannotPost'), 'reconnect');
+        const who = spec.who(c) ? html`<bdi dir="auto">${spec.who(c)}</bdi>` : '';
+        return row('fine', this.joinDetail([who, due ? t('settings.health.reconnectBy', { date: UI.formatDay(due.at) }) : ''], t('settings.health.connected')), 'open');
+    },
+
+    tiktokRow(ctx, now) {
+        return this.providerRow(ctx, now, {
+            id: 'tiktok', name: t('settings.tiktok.title'), data: ctx.tiktok, error: ctx.tiktokError, appCard: 'tiktok-app',
+            who: (c) => c.displayName || '',
+            cannotPost: (c) => !c.canUpload && !c.canDirectPost,
+        });
+    },
+
+    youtubeRow(ctx, now) {
+        return this.providerRow(ctx, now, {
+            id: 'youtube', name: t('settings.youtube.title'), data: ctx.youtube, error: ctx.youtubeError, appCard: 'youtube-app',
+            who: (c) => c.channelTitle || '',
+            cannotPost: (c) => !c.canUpload,
+        });
+    },
+
+    whatsappRow(ctx, now) {
+        const row = (state, detail, kind) => this.healthRow(ctx, 'whatsapp', t('wa.title'), state, detail, kind);
+        if (ctx.whatsappError) return row('unknown', t('settings.health.unknown'), 'open');
+        const wa = ctx.whatsapp;
+        if (!wa) return null;
+        if (!wa.connected && wa.status === 'invalid') return row('broken', t('settings.health.invalid'), 'reconnect');
+        if (!wa.connected) return row('not_set_up', t('settings.health.notConnected'), 'connect');
+        const due = this.soonest([wa.token_expires_at], now);
+        const dueState = due ? this.expiryState(due.days) : 'fine';
+        if (dueState !== 'fine') return row(dueState, this.within(due.days, due.at), 'reconnect');
+        return row('fine', this.joinDetail([
+            wa.display_phone_number ? UI.ltr(wa.display_phone_number) : '',
+            wa.verified_name ? html`<bdi dir="auto">${wa.verified_name}</bdi>` : '',
+        ], t('settings.health.connected')), 'open');
+    },
+
+    storageRow(ctx) {
+        const row = (state, detail) => this.healthRow(ctx, 'storage', t('settings.media.title'), state, detail, 'open', { platform: true });
+        if (ctx.mediaError) return row('unknown', t('settings.health.unknown'));
+        const ms = ctx.media;
+        if (!ms) return null;
+        if (ms.backend !== 'supabase') return row('not_set_up', t('settings.health.media.database'));
+        const c = ms.connection;
+        if (!(c && c.ok)) return row('broken', t('settings.health.media.failed'));
+        if (c.bucketExists === false) return row('broken', t('settings.health.media.bucketMissing'));
+        const u = ms.usage;
+        if (u && Number(u.tierBytes) > 0 && u.storage) {
+            const used = this.bytesText(u.storage.bytes);
+            const total = this.bytesText(u.tierBytes);
+            const near = Number(u.storage.bytes) / Number(u.tierBytes) >= this.STORAGE_NEAR_FULL;
+            return row(near ? 'expiring' : 'fine', this.ltrMany(near ? 'settings.health.media.nearFull' : 'settings.health.media.used', { used, total }, ['used', 'total']));
+        }
+        return row('fine', t('settings.health.media.ok'));
+    },
+
+    alertsRow(ctx) {
+        const row = (state, detail) => this.healthRow(ctx, 'alerts', t('settings.notify.title'), state, detail, 'open', { platform: true });
+        if (ctx.notifyError) return row('unknown', t('settings.health.unknown'));
+        const nt = ctx.notify;
+        if (!nt) return null;
+        const tg = nt.telegram || {};
+        const em = nt.email || {};
+        const telegramReady = !!(tg.enabled && tg.botToken && tg.botToken.set && tg.chatId);
+        const emailReady = !!(em.ready && em.to);
+        const channels = [telegramReady ? t('settings.health.alerts.telegram') : '', emailReady ? t('settings.health.alerts.email') : ''].filter(Boolean);
+        if (channels.length > 0) return row('fine', t('settings.health.alerts.on', { channels: channels.join(' · ') }));
+        // A channel switched on that cannot send is worse than none: the owner believes they will be told.
+        if ((tg.enabled && !telegramReady) || (em.enabled && !emailReady)) return row('expiring', t('settings.health.alerts.incomplete'));
+        return row('not_set_up', t('settings.health.alerts.none'));
+    },
+
+    /** The summary and, under it, the missing-permissions warning this tab has always carried. */
+    connectionsLead(ctx) {
+        return html`${this.healthMarkup(this.connectionRows(ctx))}${this.scopesWarning(ctx)}`;
+    },
+
+    healthRowMarkup(row) {
+        const pill = UI.statusPill('connection', row.state, row.state === 'unknown' ? { label: t('settings.tokenUnknown') } : undefined);
+        const verb = t(`settings.health.${row.action}`);
+        return html`
+            <li class="settings-row" data-row="${row.id}" data-state="${row.state}">
+                <div class="settings-row-head">
+                    <strong class="settings-row-name">${row.name}</strong>
+                    ${row.platform ? html`<span class="badge badge-neutral settings-row-badge">${t('settings.scope.platform')}</span>` : ''}
+                    ${pill}
+                </div>
+                <p class="settings-row-detail" dir="auto">${row.detail}</p>
+                <div class="settings-row-action">
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', label: verb,
+                        ariaLabel: t('settings.health.actionFor', { action: verb, name: row.name }),
+                        action: 'settings:openCard', data: { card: row.target },
+                    })}
+                </div>
+            </li>
+        `;
+    },
+
+    /**
+     * The panel itself. Everything fine is one line («كل الاتصالات تعمل») with the rows behind «عرض التفاصيل»; anything that needs the owner
+     * shows the rows, worst first, under a headline that counts them. Nothing connected yet says that, with the rows (and their Connect).
+     */
+    healthMarkup(rows) {
+        const needs = rows.filter((row) => this.NEEDS_ATTENTION.includes(row.state));
+        const fine = rows.filter((row) => row.state === 'fine');
+        const list = html`<ul class="settings-rows">${rows.map((row) => this.healthRowMarkup(row))}</ul>`;
+        let body;
+        if (needs.length === 0 && fine.length > 0) {
+            body = html`
+                <details class="settings-health-fold">
+                    <summary class="settings-health-head is-fine">
+                        <span class="settings-health-glyph" aria-hidden="true">●</span>
+                        <strong>${t('settings.health.allFine')}</strong>
+                        <span class="settings-health-more">${t('settings.health.showDetails')}<i data-lucide="chevron-down" aria-hidden="true"></i></span>
+                    </summary>
+                    ${list}
+                </details>
+            `;
+        } else if (needs.length === 0) {
+            body = html`
+                <p class="settings-health-head"><span class="settings-health-glyph" aria-hidden="true">○</span> <strong>${t('settings.health.nothing')}</strong></p>
+                ${list}
+            `;
+        } else {
+            body = html`
+                <p class="settings-health-head is-attention" role="status">
+                    <span class="settings-health-glyph" aria-hidden="true">${needs.some((row) => row.state === 'broken') ? '✕' : '▲'}</span>
+                    <strong>${t('settings.health.needs', { count: needs.length })}</strong>
+                </p>
+                ${list}
+            `;
+        }
+        return html`
+            <section class="section settings-summary" id="settings-summary" aria-labelledby="settings-summary-title">
+                <div class="settings-summary-top">
+                    <h2 class="section-title" id="settings-summary-title">${t('settings.health.title')}</h2>
+                    ${UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-cw', label: t('settings.health.recheck'), action: 'settings:render', id: 'settings-recheck' })}
+                </div>
+                <div class="settings-card surface">${body}</div>
+            </section>
+        `;
+    },
+
+    /** The permissions Meta did not grant: a warning card, only while the token is valid and some are missing. */
+    scopesWarning(ctx) {
+        const status = ctx.tokenStatus;
+        const missingScopes = status && this.tokenState(status) === 'valid' && Array.isArray(status.scopes)
+            ? this.REQUIRED_SCOPES.filter((scope) => !status.scopes.includes(scope))
+            : [];
+        if (missingScopes.length === 0) return '';
+        return html`
+            <div class="warning-card" role="alert">
+                <div class="row row--start gap-4">
+                    <span class="stat-icon warning shrink-0"><i data-lucide="alert-triangle" aria-hidden="true"></i></span>
+                    <div>
+                        <h3 class="warning-card-title">${t('settings.missingScopesTitle')}</h3>
+                        <p class="mbe-3">${t('settings.missingScopesBody')}</p>
+                        <ul class="warning-card-list">
+                            ${missingScopes.map((s) => html`<li>${this.ltrIn('settings.scopeRequired', {
+                                name: s, desc: t(`settings.scope.${s}`),
+                            }, 'name')}${this.GROWTH_SCOPES.includes(s) ? html` <span class="badge badge-info">${t('settings.scopeForGrowth')}</span>` : ''}</li>`)}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    // ─── Advanced (platform admin): the access token, the webhook, the page ids ─────────────────────────
+
+    /** A card that could not load: its title, why, and Retry. The same shape every card has always had. */
+    cardError(id, title, message) {
+        return html`
+            <section class="section" id="${id}">
+                <h2 class="section-title">${title}</h2>
+                <div class="settings-card surface">
+                    <div class="inline-error" role="alert">
+                        <i data-lucide="alert-circle" aria-hidden="true"></i>
+                        <div><strong dir="auto">${message}</strong></div>
+                    </div>
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                </div>
+            </section>
+        `;
+    },
+
+    accessTokenSection(ctx) {
+        const { tokenStatus } = ctx;
+        if (ctx.tokenError || !tokenStatus) {
+            return this.cardError('settings-token-card', t('settings.accessToken'), t('settings.token.loadFailed', { message: (ctx.tokenError && ctx.tokenError.message) || '' }));
+        }
         // Four states, not two (SE-01, OV-08): what Meta said (`valid`, `invalid`), a tenant that never connected, and a check
         // that could not run. Everything but `invalid` used to be drawn as the red "Invalid / expired".
         const tokenState = this.tokenState(tokenStatus);
@@ -182,39 +894,12 @@ const SettingsPage = {
         // The token, extend and verify-token routes are owner-only on the server
         // (`canAdminister`); an operator who could see the forms only learned that
         // from a 403 after pasting a 200-character token.
-        const canAdmin = App.canAdminister();
+        const canAdmin = ctx.canAdmin;
         // Only a token Meta rejected has a reason of Meta's to show. The other two states say their own sentence: the server's
         // `message` for them is English, and was being printed inside the Arabic page (SE-01).
         const tokenReason = tokenState === 'invalid' ? (tokenStatus.error || tokenStatus.message || '') : '';
 
-        const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
-            ? this.REQUIRED_SCOPES.filter((scope) => !tokenStatus.scopes.includes(scope))
-            : [];
-        const webhookUrl = (webhookToken && webhookToken.webhookUrl) || `${location.origin}/webhook`;
-
-        // When the fetch failed we do not know whether the token is set in the
-        // environment, and the sentence that says so was being rendered with a
-        // bare "." interpolated where the answer should be. There is no copy
-        // for "unknown", so the sentence is simply not claimed.
-
-        container.innerHTML = esc(html`
-            ${missingScopes.length > 0 ? html`
-                <div class="warning-card" role="alert">
-                    <div class="row row--start gap-4">
-                        <span class="stat-icon warning shrink-0"><i data-lucide="alert-triangle" aria-hidden="true"></i></span>
-                        <div>
-                            <h3 class="warning-card-title">${t('settings.missingScopesTitle')}</h3>
-                            <p class="mbe-3">${t('settings.missingScopesBody')}</p>
-                            <ul class="warning-card-list">
-                                ${missingScopes.map((s) => html`<li>${this.ltrIn('settings.scopeRequired', {
-                                    name: s, desc: t(`settings.scope.${s}`),
-                                }, 'name')}${this.GROWTH_SCOPES.includes(s) ? html` <span class="badge badge-info">${t('settings.scopeForGrowth')}</span>` : ''}</li>`)}
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            ` : ''}
-
+        return html`
             <section class="section">
                 <h2 class="section-title">${t('settings.accessToken')}</h2>
                 <div class="settings-card surface">
@@ -296,15 +981,26 @@ const SettingsPage = {
                     ` : html`<p class="form-hint">${t('settings.ownerOnlyMeta')}</p>`}
                 </div>
             </section>
+        `;
+    },
 
+    webhookSection(ctx) {
+        const { webhookToken, webhookError } = ctx;
+        const canAdmin = ctx.canAdmin;
+        const webhookUrl = (webhookToken && webhookToken.webhookUrl) || `${location.origin}/webhook`;
+        // When the fetch failed we do not know whether the token is set in the
+        // environment, and the sentence that says so was being rendered with a
+        // bare "." interpolated where the answer should be. There is no copy
+        // for "unknown", so the sentence is simply not claimed.
+        return html`
             <section class="section">
                 <h2 class="section-title">${t('settings.webhookTitle')}</h2>
                 <div class="settings-card surface">
-                    ${webhookError ? html`
+                    ${webhookError || !webhookToken ? html`
                         <div class="inline-error" role="alert">
                             <i data-lucide="alert-circle" aria-hidden="true"></i>
                             <div>
-                                <strong dir="auto">${t('settings.webhookUnknown', { message: webhookError.message })}</strong>
+                                <strong dir="auto">${t('settings.webhookUnknown', { message: (webhookError && webhookError.message) || '' })}</strong>
                                 <span class="inline-error-hint">${t('settings.webhookUnknownHint')}</span>
                             </div>
                         </div>
@@ -372,10 +1068,13 @@ const SettingsPage = {
                     ` : html`<p class="form-hint">${t('settings.ownerOnlyMeta')}</p>`}
                 </div>
             </section>
+        `;
+    },
 
-            <!-- Right after the webhook: the page ids are what Meta's
-                 subscription screens ask about next. The webhook URL moved up
-                 into the webhook section, beside its copy button. -->
+    /** The page ids Meta's subscription screens ask about next. */
+    accountSection(ctx) {
+        const tokenStatus = ctx.tokenStatus || {};
+        return html`
             <section class="section">
                 <h2 class="section-title">${t('settings.accountInfo')}</h2>
                 <div class="settings-card surface stack gap-2">
@@ -388,26 +1087,11 @@ const SettingsPage = {
                     </p>
                 </div>
             </section>
+        `;
+    },
 
-            ${this.metaSection({ meta, metaError, metaApp, metaAppError })}
-
-            ${canAdmin ? this.iceBreakersSection(iceBreakers, iceBreakersError) : ''}
-
-            ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
-
-            ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
-
-            ${this.whatsappSection(whatsapp, whatsappError)}
-
-            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError, cleanup) : ''}
-
-            ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
-
-            ${App.isAdmin() ? this.notifySection(notify, notifyError) : ''}
-
-            ${App.isAdmin() ? this.onboardingSection(onboarding, onboardingError) : ''}
-
-
+    appearanceSection() {
+        return html`
             <section class="section">
                 <h2 class="section-title">${t('settings.appearance')}</h2>
                 <div class="settings-card surface">
@@ -436,14 +1120,56 @@ const SettingsPage = {
                     <p class="form-hint">${t('settings.appearanceHint')}</p>
                 </div>
             </section>
-        `);
+        `;
+    },
 
-        UI.icons(container);
-        UI.restoreFocus(focus);
-        Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
-        this.announceTikTokReturn();
-        this.announceYouTubeReturn();
-        this.announceMetaReturn().catch((err) => console.warn('Could not show the Meta return:', err));
+    // ─── The provider apps (platform admin): drawn in the Platform tab ───────────────────────────────────
+
+    /** A provider's app block as a card of its own. It is a `<details>` that opens when it is the target, so it names itself: no extra title. */
+    appCard(id, block) {
+        if (!block) return '';
+        return html`
+            <section class="section" id="${id}">
+                <div class="settings-card surface">${block}</div>
+            </section>
+        `;
+    },
+
+    metaAppSection(ctx) {
+        if (typeof MetaConnect === 'undefined') return '';
+        return this.appCard('settings-meta-app-card', MetaConnect.appBlock(ctx.metaApp, ctx.metaAppError));
+    },
+
+    tiktokAppSection(ctx) {
+        const c = ctx.tiktok && ctx.tiktok.connection;
+        return this.appCard('settings-tiktok-app-card', this.tiktokAppBlock(
+            ctx.tiktokApp, ctx.tiktokAppError, !!(ctx.tiktok && ctx.tiktok.appConfigured), !!(c && (c.connected || c.status === 'invalid')),
+        ));
+    },
+
+    youtubeAppSection(ctx) {
+        return this.appCard('settings-youtube-app-card', this.youtubeAppBlock(ctx.youtubeApp, ctx.youtubeAppError, !!(ctx.youtube && ctx.youtube.appConfigured)));
+    },
+
+    /** What a platform admin sees on a connection card whose provider app is not set up yet: the sentence, and the way to the app's own card. */
+    openAppNote(sentence, appCard) {
+        return html`
+            <p class="form-hint mbe-3">${sentence}</p>
+            ${UI.button({
+                variant: 'secondary', size: 'sm', icon: 'settings', label: t('settings.platform.openApp'),
+                action: 'settings:openCard', data: { card: appCard },
+            })}
+        `;
+    },
+
+    /** The "danger zone" row at the end of a connection's card: Disconnect, away from Reconnect, so a mis-tap on a phone costs nothing (SE-13). */
+    dangerZone(button) {
+        return html`
+            <div class="settings-danger">
+                <p class="form-label settings-danger-title"><i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('settings.dangerZone')}</p>
+                <div class="row row--wrap gap-2 mbs-3">${button}</div>
+            </div>
+        `;
     },
 
     // ─── Instagram ice breakers and persistent menu (DM plan S13) ─────────────
@@ -522,20 +1248,17 @@ const SettingsPage = {
         `;
     },
 
-    /** Scroll to the Connections card and put focus on its Connect button, which is where the owner connects. */
+    /** Open the Instagram & Facebook card, in whichever tab it is, and put focus on its Connect button, which is where the owner connects. */
     goConnect() {
-        const card = document.getElementById('settings-meta');
-        if (!card) return;
-        if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'start', behavior: Motion.reduced() ? 'auto' : 'smooth' });
-        const target = document.getElementById('meta-connect') || (typeof card.querySelector === 'function' ? card.querySelector('button, a[href]') : null);
-        if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+        this.openCard('meta');
     },
 
     // ─── Instagram & Facebook (P28) ──────────────────────────────────────────
 
     /**
      * The Connections card. The words, the Page picker and the actions are `MetaConnect`'s (`meta_connect.js`, shared with the wizard);
-     * this only hands it what it needs and says what to repaint when something changed.
+     * this only hands it what it needs and says what to repaint when something changed. The operator's own block (the switch and the
+     * configuration id) is not in it: a platform admin finds that in the Platform tab (`metaAppSection`).
      */
     metaSection({ meta, metaError, metaApp, metaAppError }) {
         if (typeof MetaConnect === 'undefined') return this.metaFallback(metaError || new Error(t('meta.moduleFailed')));
@@ -543,7 +1266,7 @@ const SettingsPage = {
         this._afterMeta = this._afterMeta || (() => SettingsPage.render());
         MetaConnect.afterChange = this._afterMeta;
         return MetaConnect.settingsSection({
-            meta, metaError, app: metaApp, appError: metaAppError, canAdminister: App.canAdminister(), isAdmin: App.isAdmin(),
+            meta, metaError, app: metaApp, appError: metaAppError, canAdminister: App.canAdminister(), isAdmin: false,
         });
     },
 
@@ -605,7 +1328,7 @@ const SettingsPage = {
         }
     },
 
-    youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError }) {
+    youtubeSection({ youtube, youtubeError }) {
         const isAdmin = App.isAdmin();
         const canAdminister = App.canAdminister();
         const c = youtube && youtube.connection;
@@ -616,6 +1339,7 @@ const SettingsPage = {
         const refreshExpires = c && c.refreshExpiresAt ? new Date(c.refreshExpiresAt) : null;
 
         let body;
+        let danger = '';
         if (youtubeError) {
             body = html`
                 <div class="inline-error" role="alert">
@@ -625,7 +1349,8 @@ const SettingsPage = {
                 ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
             `;
         } else if (!youtube.appConfigured) {
-            body = html`<p class="form-hint">${isAdmin ? t('settings.youtube.notConfiguredAdmin') : t('settings.youtube.notConfiguredMember')}</p>`;
+            body = isAdmin ? this.openAppNote(t('settings.youtube.notConfiguredAdmin'), 'youtube-app')
+                : html`<p class="form-hint">${t('settings.youtube.notConfiguredMember')}</p>`;
         } else if (connected || needsReconnect) {
             body = html`
                 <div class="row row--start gap-3 mbe-4">
@@ -655,13 +1380,14 @@ const SettingsPage = {
                             variant: needsReconnect ? 'primary' : 'secondary', size: 'sm', icon: 'refresh-cw',
                             label: t('settings.youtube.reconnect'), action: 'settings:connectYouTube', id: 'settings-youtube-connect',
                         })}
-                        ${UI.button({
-                            variant: 'danger', size: 'sm', icon: 'unlink',
-                            label: t('settings.youtube.disconnect'), action: 'settings:disconnectYouTube', id: 'settings-youtube-disconnect',
-                        })}
                     </div>
                 ` : html`<p class="form-hint">${t('settings.youtube.ownerOnly')}</p>`}
             `;
+            // Disconnect is the last thing in the card, apart from Reconnect (SE-13).
+            danger = canAdminister ? this.dangerZone(UI.button({
+                variant: 'danger', size: 'sm', icon: 'unlink',
+                label: t('settings.youtube.disconnect'), action: 'settings:disconnectYouTube', id: 'settings-youtube-disconnect',
+            })) : '';
         } else {
             body = html`
                 ${canAdminister ? UI.button({
@@ -678,7 +1404,7 @@ const SettingsPage = {
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${t('settings.youtube.intro')}</p>
                     ${body}
-                    ${isAdmin ? this.youtubeAppBlock(youtubeApp, youtubeAppError, !!(youtube && youtube.appConfigured)) : ''}
+                    ${danger}
                 </div>
             </section>
         `;
@@ -908,7 +1634,7 @@ const SettingsPage = {
         }
     },
 
-    tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError }) {
+    tiktokSection({ tiktok, tiktokError }) {
         const isAdmin = App.isAdmin();
         const canAdminister = App.canAdminister();
         const c = tiktok && tiktok.connection;
@@ -922,6 +1648,7 @@ const SettingsPage = {
         const needsDirectScope = !!(c && c.directPostEnabled && !c.canDirectPost);
 
         let body;
+        let danger = '';
         if (tiktokError) {
             body = html`
                 <div class="inline-error" role="alert">
@@ -933,9 +1660,8 @@ const SettingsPage = {
                 })}
             `;
         } else if (!tiktok.appConfigured) {
-            body = html`
-                <p class="form-hint">${isAdmin ? t('settings.tiktok.notConfiguredAdmin') : t('settings.tiktok.notConfiguredMember')}</p>
-            `;
+            body = isAdmin ? this.openAppNote(t('settings.tiktok.notConfiguredAdmin'), 'tiktok-app')
+                : html`<p class="form-hint">${t('settings.tiktok.notConfiguredMember')}</p>`;
         } else if (connected || needsReconnect) {
             body = html`
                 <div class="row row--start gap-3 mbe-4">
@@ -991,13 +1717,14 @@ const SettingsPage = {
                             variant: needsReconnect ? 'primary' : 'secondary', size: 'sm', icon: 'refresh-cw',
                             label: t('settings.tiktok.reconnect'), action: 'settings:connectTikTok', id: 'settings-tiktok-connect',
                         })}
-                        ${UI.button({
-                            variant: 'danger', size: 'sm', icon: 'unlink',
-                            label: t('settings.tiktok.disconnect'), action: 'settings:disconnectTikTok', id: 'settings-tiktok-disconnect',
-                        })}
                     </div>
                 ` : html`<p class="form-hint">${t('settings.tiktok.ownerOnly')}</p>`}
             `;
+            // Disconnect is the last thing in the card, apart from Reconnect (SE-13).
+            danger = canAdminister ? this.dangerZone(UI.button({
+                variant: 'danger', size: 'sm', icon: 'unlink',
+                label: t('settings.tiktok.disconnect'), action: 'settings:disconnectTikTok', id: 'settings-tiktok-disconnect',
+            })) : '';
         } else {
             body = html`
                 ${canAdminister ? UI.button({
@@ -1013,7 +1740,7 @@ const SettingsPage = {
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${this.tiktokIntro(c)} ${UI.helpLink('tiktok', t('help.link.tiktok'), { className: 'settings-tiktok-help' })}</p>
                     ${body}
-                    ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured), connected || needsReconnect) : ''}
+                    ${danger}
                 </div>
             </section>
         `;
@@ -2407,6 +3134,7 @@ const SettingsPage = {
 
 UI.registerActions('settings', {
     render: () => SettingsPage.render(),
+    openCard: (el) => SettingsPage.openCard(el && el.dataset ? el.dataset.card : ''),
     goConnect: () => SettingsPage.goConnect(),
     extendToken: (el) => SettingsPage.extendToken(el),
     handleTokenUpdate: (el, e) => SettingsPage.handleTokenUpdate(el, e),

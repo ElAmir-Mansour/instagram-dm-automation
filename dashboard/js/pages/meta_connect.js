@@ -214,15 +214,24 @@ const MetaConnect = {
             ${needs ? this.attentionNote(c) : ''}
             ${this.facts(c)}
             ${owner ? html`
-                <div class="row row--wrap gap-2">
-                    ${start ? this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' }) : ''}
-                    ${c.via === 'login' ? UI.button({
-                        variant: 'danger', size: 'sm', icon: 'unlink', label: t('meta.disconnect'),
-                        action: 'metaconnect:askDisconnect', id: 'meta-disconnect',
-                    }) : ''}
-                </div>
+                ${start ? html`
+                    <div class="row row--wrap gap-2">
+                        ${this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' })}
+                    </div>
+                ` : ''}
                 ${c.via === 'token' ? html`<p class="form-hint mbs-3">${t('meta.tokenNote')}</p>` : ''}
                 ${!start && needs ? html`<p class="form-hint mbs-3">${t('meta.reconnectOff')}</p>` : ''}
+                ${c.via === 'login' ? html`
+                    <div class="settings-danger">
+                        <p class="form-label settings-danger-title"><i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('settings.dangerZone')}</p>
+                        <div class="row row--wrap gap-2 mbs-3">
+                            ${UI.button({
+                                variant: 'danger', size: 'sm', icon: 'unlink', label: t('meta.disconnect'),
+                                action: 'metaconnect:askDisconnect', id: 'meta-disconnect',
+                            })}
+                        </div>
+                    </div>
+                ` : ''}
             ` : html`<p class="form-hint">${t('meta.ownerOnly')}</p>`}
         `;
     },

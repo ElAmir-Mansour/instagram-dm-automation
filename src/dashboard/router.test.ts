@@ -862,7 +862,8 @@ describe('router: a page\'s own stylesheet (T003)', () => {
 
     it('adds no <link> for a page that does not declare css: true, so it cannot 404', () => {
         const r = fresh();
-        for (const name of ['inbox', 'posts', 'settings']) void r.App.loadPageModule(name);
+        // Settings declares one now (UX US10: its tab bar and connections summary), so it is no longer the page that has none.
+        for (const name of ['inbox', 'posts', 'campaigns']) void r.App.loadPageModule(name);
         assert.equal(link(r).length, 0);
         assert.equal(scripts(r).length, 3);
     });

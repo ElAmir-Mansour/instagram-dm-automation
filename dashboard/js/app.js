@@ -94,7 +94,7 @@ const App = {
         // second view and is handled in place through `onHashChange`.
         growth: { src: 'growth', page: () => GrowthPage },
         activity: { src: 'activity', page: () => ActivityPage },
-        settings: { src: 'settings', page: () => SettingsPage },
+        settings: { src: 'settings', page: () => SettingsPage, css: true },
         // The Help Center owns sub-routes (`#/help/<slug>#<section>`) and
         // handles them itself through `onHashChange`, so opening an article
         // never tears the page down and rebuilds it.
