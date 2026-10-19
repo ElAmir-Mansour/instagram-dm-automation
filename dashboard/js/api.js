@@ -418,6 +418,16 @@ const API = {
     getYouTubeAppSettings: () => API.request('/youtube/app-settings'),
     saveYouTubeAppSettings: (data) => API.request('/youtube/app-settings', { method: 'POST', body: JSON.stringify(data) }),
 
+    // WhatsApp (T025) — per tenant; any member reads, the owner writes. Every write but the disconnect answers the connection view.
+    // `connectWhatsApp({ waba_id, phone_number_id, access_token })` is the one place the access token travels: in the BODY, once. It is never
+    // sent back, so nothing here can hand it to the page again.
+    getWhatsAppConnection: () => API.request('/whatsapp/connection'),
+    connectWhatsApp: (data) => API.request('/whatsapp/connect', { method: 'POST', body: JSON.stringify(data) }),
+    refreshWhatsApp: () => API.request('/whatsapp/refresh', { method: 'POST' }),
+    disconnectWhatsApp: () => API.request('/whatsapp/connection', { method: 'DELETE' }),
+    saveWhatsAppAgent: (data) => API.request('/whatsapp/agent', { method: 'PUT', body: JSON.stringify(data) }),
+    saveWhatsAppBilling: (data) => API.request('/whatsapp/billing', { method: 'PUT', body: JSON.stringify(data) }),
+
     // Instagram & Facebook (P27, P28) — the connection is per tenant; the switch and the configuration id are platform-admin only.
     // `startMetaConnect({ returnTo, reconnect, authType })` answers `{ url }`: Facebook's Login dialog, with the state cookie set.
     getMetaConnection: () => API.request('/meta/connection'),

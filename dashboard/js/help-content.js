@@ -38,6 +38,7 @@ const HelpContent = {
         { id: 'meta', title: { ar: 'إنستجرام وفيسبوك', en: 'Instagram & Facebook' } },
         { id: 'growth', title: { ar: 'النمو والتسويق', en: 'Growth & reach' } },
         { id: 'tiktok', title: { ar: 'تيك توك', en: 'TikTok' } },
+        { id: 'whatsapp', title: { ar: 'واتساب', en: 'WhatsApp' } },
         { id: 'studio', title: { ar: 'استوديو الكاروسيل', en: 'Carousel Studio' } },
         { id: 'more', title: { ar: 'الذكاء الاصطناعي والحلول', en: 'AI, fixes and questions' } },
     ],
@@ -187,7 +188,7 @@ const HelpContent = {
                 ar: 'وش يحتاج الربط، ووين تلقاه في الإعدادات، وكيف تتأكد أن رمز الوصول سليم.',
                 en: 'What the connection needs, where it lives in Settings, and how to tell the access token is healthy.',
             },
-            related: ['campaigns', 'troubleshooting', 'getting-started'],
+            related: ['campaigns', 'troubleshooting', 'getting-started', 'whatsapp'],
             sections: [
                 {
                     id: 'needs',
@@ -963,7 +964,7 @@ const HelpContent = {
                 ar: 'كيف تربط تيك توك، وليش المنشورات تنزل «أنا فقط» لين يعتمد تيك توك التطبيق، وكيف تخليها عامة.',
                 en: 'How to connect TikTok, why posts go up as “Only me” until TikTok approves the app, and how to make them public.',
             },
-            related: ['studio-schedule', 'scheduling', 'troubleshooting'],
+            related: ['studio-schedule', 'scheduling', 'troubleshooting', 'whatsapp'],
             sections: [
                 {
                     id: 'connect',
@@ -1112,6 +1113,248 @@ const HelpContent = {
                                 'The last slide of the TikTok version says the same.',
                             ] },
                             { warn: 'Make sure the link really is in your bio. TikTok doesn’t give every account a **Website** field on the profile: typically business accounts get it, or accounts past a follower count (often 1,000), and the rule varies by country. Open **Edit profile** in TikTok and check you have the field before you post.' },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 5b. WhatsApp ────────────────────────────────────────────────────
+        {
+            slug: 'whatsapp',
+            group: 'whatsapp',
+            icon: 'message-circle',
+            title: { ar: 'واتساب: تجهيز ميتا والربط والتكلفة', en: 'WhatsApp: Meta setup, connecting and costs' },
+            summary: {
+                ar: 'خطوات ميتا لمرة وحدة، وربط الرقم باللوحة، وتجربته على جوالك قبل ما يرد على أي عميل، وكم يكلّف بعد الألف ردّ المجانية.',
+                en: 'The one-time Meta steps, connecting the number here, testing it on your own phone before it answers a customer, and what it costs past the first 1,000 free replies.',
+            },
+            related: ['connect-meta', 'troubleshooting', 'faq'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'وش يسوّي مساعد واتساب؟', en: 'What the WhatsApp assistant does' },
+                    body: {
+                        ar: [
+                            'مساعد واتساب يرد على الرسائل اللي توصل لرقم نشاطك، بأسلوبك، وأنت مشغول أو نايم. وهذي حدوده:',
+                            { ul: [
+                                'يجاوب عن نشاطك بس: منتجاتك وأسعارك وعروضك اللي كتبتها أنت في **إعدادات الذكاء الاصطناعي**. وإذا سألوه عن شي بعيد، يرجّعهم بلطف لموضوعك.',
+                                'يقول من أول رد إنه مساعد آلي، وما يتخفّى في صورة إنسان.',
+                                'إذا العميل طلب يكلّم شخص، المساعد يوقف ويأكد له أن شخصاً بيرد عليه، وتكمل أنت من **صندوق الرسائل**.',
+                            ] },
+                            { note: 'كل رقم جديد يبدأ **متوقف**: ما يرد المساعد على أحد لين تشغّله أنت بنفسك. وتقدر تجرّبه على جوالك أول: شوف [[whatsapp#test]].' },
+                        ],
+                        en: [
+                            'The WhatsApp assistant answers the messages that reach your business number, in your voice, while you are busy or asleep. These are its limits:',
+                            { ul: [
+                                'It answers about your business only: the products, prices and offers you wrote in **AI Settings**. Asked about something unrelated, it steers politely back to your topic.',
+                                'It says it is an automated assistant from its first reply. It never passes as a person.',
+                                'When a customer asks for a person, the assistant stops, confirms that someone will reply, and you carry on from the **DM Inbox**.',
+                            ] },
+                            { note: 'Every new number starts **Off**: the assistant answers no one until you switch it on yourself. You can try it on your own phone first: see [[whatsapp#test]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'meta-setup',
+                    title: { ar: 'تجهيز ميتا (مرة وحدة)', en: 'Setting up Meta (once)' },
+                    body: {
+                        ar: [
+                            'هذي خطوات ميتا. تسويها مرة وحدة، وما تدفع فيها شي ولا تحتاج بطاقة:',
+                            { ol: [
+                                'افتح تطبيق ميتا (رقمه `847772258381375`) من developers.facebook.com، وأضف له حالة الاستخدام الخاصة بواتساب: Use cases ثم Add. وإذا ما ظهرت كخيار متوافق مع التطبيق، وقّف عندك وبلّغ مسؤول المنصة.',
+                                'من واتساب ← API Setup تنشئ لك ميتا رقماً تجريبياً مجانياً. أضف جوالك مستلماً، واكتب الرمز اللي يوصلك من واتساب لتأكيده.',
+                                'من واتساب ← Configuration ضع رابط الويبهوك (تحت القائمة) في خانة Callback URL. وفي خانة رمز التحقق الصق الرمز اللي في **الإعدادات** ← **رمز التحقق للويبهوك** في مساحة العمل الافتراضية، واضغط **Verify and save**. بعدها اشترك في الحقول السبعة المكتوبة تحت.',
+                                'من business.facebook.com افتح Business Settings ← Users ← **System users**، وأضف مستخدم نظام بدور مدير (Admin).',
+                                'اضغط **Assign assets** وأعطه التطبيق وحساب واتساب للأعمال بتحكم كامل (Full control).',
+                                'اضغط **Generate token**، واختر التطبيق، وفعّل الصلاحيات الثلاث المكتوبة تحت، وخلّ الانتهاء «Never».',
+                            ] },
+                            { code: 'https://msg-response-auto.vercel.app/webhook', caption: 'رابط الويبهوك' },
+                            { code: 'messages\naccount_update\naccount_alerts\nphone_number_quality_update\nphone_number_name_update\nbusiness_capability_update\nuser_preferences', caption: 'الحقول السبعة اللي تشترك فيها' },
+                            { code: 'whatsapp_business_messaging\nwhatsapp_business_management\nbusiness_management', caption: 'صلاحيات الرمز' },
+                            { warn: 'الرمز يظهر مرة وحدة بس، لما تضغط **Generate token**. انسخه في نفس اللحظة والصقه في اللوحة مباشرة (شوف [[whatsapp#connect]])، ولا تلصقه في أي محادثة أو بريد أو رسالة لأي أحد، حتى لو كان من فريقك.' },
+                        ],
+                        en: [
+                            'These are the Meta steps. You do them once, they cost nothing, and they need no payment card:',
+                            { ol: [
+                                'Open the Meta app (ID `847772258381375`) at developers.facebook.com and add the WhatsApp use case: Use cases, then Add. If WhatsApp is not offered as compatible with the app, stop there and tell the platform administrator.',
+                                'Under WhatsApp → API Setup, Meta creates a free test number for you. Add your own phone as a recipient and enter the code WhatsApp sends you to confirm it.',
+                                'Under WhatsApp → Configuration, put the webhook address (below the list) in Callback URL. For the verify token, paste the one saved under **Settings** → **Webhook verify token** in the Default workspace, and press **Verify and save**. Then subscribe to the seven fields listed below.',
+                                'At business.facebook.com open Business Settings → Users → **System users** and add a system user with the Admin role.',
+                                'Press **Assign assets** and give it the app and the WhatsApp account with full control.',
+                                'Press **Generate token**, pick the app, tick the three permissions listed below, and set the expiry to “Never”.',
+                            ] },
+                            { code: 'https://msg-response-auto.vercel.app/webhook', caption: 'The webhook address' },
+                            { code: 'messages\naccount_update\naccount_alerts\nphone_number_quality_update\nphone_number_name_update\nbusiness_capability_update\nuser_preferences', caption: 'The seven fields to subscribe to' },
+                            { code: 'whatsapp_business_messaging\nwhatsapp_business_management\nbusiness_management', caption: 'The token’s permissions' },
+                            { warn: 'The token is shown once, when you press **Generate token**. Copy it at that moment and paste it straight into the dashboard (see [[whatsapp#connect]]). Never paste it into a chat, an email or a message to anyone, not even your own team.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'connect',
+                    title: { ar: 'الربط من اللوحة', en: 'Connecting it here' },
+                    body: {
+                        ar: [
+                            'بعد ما تجهّز ميتا، افتح **الإعدادات** وانزل لقسم **واتساب** (بعد يوتيوب):',
+                            { ol: [
+                                'الصق **معرّف حساب واتساب للأعمال**: أرقام فقط، وتلقاه في ميتا ← واتساب ← API Setup.',
+                                'الصق **معرّف رقم الهاتف**: أرقام فقط أيضاً، وهو غير رقم الهاتف نفسه.',
+                                'الصق الرمز الدائم في **رمز الوصول**. الحقل مخفي، وينمسح من الصفحة لحظة ما تضغط الزر، وما يرجع يظهر لك ولا لأحد.',
+                                'اضغط **اربط الرقم**. اللوحة تفحص الرمز مع ميتا، وتشترك في أحداث الحساب، وتحفظ الرمز مشفّراً.',
+                            ] },
+                            { note: 'الزر يظهر لمالك الحساب فقط. بقية الأعضاء يشوفون الحالة بدون ما يغيّرون شي.' },
+                            'وبعد الربط تشوف في القسم:',
+                            { dl: [
+                                ['متصل', 'الربط شغّال. وإذا شفت **يحتاج إعادة ربط** فميتا رفضت الرمز المخزَّن: أصدر رمزاً جديداً والصقه في نموذج **أعد الربط**.'],
+                                ['رقم اختبار', 'رقم تجريبي من ميتا: يوصل للأرقام اللي أضفتها مستلمين بس، ولا يمكن تشغيل المساعد للجميع عليه.'],
+                                ['حالة الرقم', 'حالة الرقم عند ميتا، مثل متصل أو مقيَّد.'],
+                                ['الجودة', 'تقييم ميتا لجودة رسائلك: عالية أو متوسطة أو منخفضة.'],
+                                ['حد المراسلة', 'عدد جهات الاتصال اللي تقدر تبدأ معها محادثة خلال 24 ساعة. وما يقيّد ردّك على اللي يراسلك أولاً.'],
+                                ['الردود المجانية هذا الشهر', 'عدّاد من 1,000: كم ردّاً مجانياً استُخدم، مع التكلفة المقدّرة. وإذا ظهرت رسالة بدل الأرقام فالعدّاد غير متاح الحين، وهذا لا يعني أن الردود توقفت.'],
+                            ] },
+                            'وتحت بطاقة الرقم زران: **حدّث الحالة** يقرأ حالة الرقم من ميتا من جديد، و**افصل واتساب** يحذف الرمز المخزَّن ويرجّع المساعد إلى **متوقف**، ويسألك قبل ما ينفّذ.',
+                        ],
+                        en: [
+                            'Once Meta is ready, open **Settings** and scroll to the **WhatsApp** section (after YouTube):',
+                            { ol: [
+                                'Paste the **WhatsApp Business Account ID**: digits only, found in Meta under WhatsApp → API Setup.',
+                                'Paste the **Phone number ID**: digits only too, and not the phone number itself.',
+                                'Paste the permanent token into **Access token**. The field is hidden, it is emptied the moment you press the button, and it never comes back to you or to anyone.',
+                                'Press **Connect number**. The dashboard checks the token with Meta, subscribes to the account’s events, and stores the token encrypted.',
+                            ] },
+                            { note: 'The button is shown to the account owner only. Other members see the status and can’t change anything.' },
+                            'After connecting, the section shows:',
+                            { dl: [
+                                ['Connected', 'The connection works. If you see **Needs reconnecting**, Meta refused the stored token: issue a new one and paste it into the **Reconnect** form.'],
+                                ['Test number', 'A test number from Meta: it reaches only the numbers you added as recipients, and the assistant can’t be switched on for everyone on it.'],
+                                ['Number status', 'The number’s state at Meta, such as Connected or Restricted.'],
+                                ['Quality', 'Meta’s rating of the quality of your messages: High, Medium or Low.'],
+                                ['Messaging limit', 'How many contacts you can start a conversation with in 24 hours. It doesn’t restrict replying to people who write to you first.'],
+                                ['Free replies this month', 'A meter out of 1,000: how many free replies are used, with the estimated cost. If a message shows instead of numbers, the meter is unavailable right now, which doesn’t mean replies have stopped.'],
+                            ] },
+                            'Under the number’s card there are two buttons: **Refresh status** reads the number’s state from Meta again, and **Disconnect WhatsApp** deletes the stored token and puts the assistant back to **Off**, after asking you first.',
+                        ],
+                    },
+                },
+                {
+                    id: 'test',
+                    title: { ar: 'جرّبه على جوالك', en: 'Test it on your own phone' },
+                    body: {
+                        ar: [
+                            'قبل ما يرد المساعد على أي عميل، تأكد أن الرسائل توصل:',
+                            { ol: [
+                                'في قسم **المساعد على واتساب** اختر **مرسلو الاختبار فقط**.',
+                                'اكتب رقم جوالك في **مرسلو الاختبار**: بالأرقام الدولية مع رمز الدولة، بلا + ولا صفر في أوله (مثل `201001234567` أو `966501234567`)، ورقم في كل سطر.',
+                                'اضغط **احفظ**.',
+                                'من جوالك أرسل رسالة للرقم التجريبي.',
+                                'افتح **صندوق الرسائل**: لازم تلقى رسالتك هناك. لا تنتظر رداً الحين: هذه الخطوة تثبت بس أن الرسالة توصل.',
+                            ] },
+                            { tip: 'خيار **الجميع** معطّل لين تكتمل شروط الإطلاق: صفحات الخصوصية والفحوصات المطلوبة. وتقدر ترجع تطفي المساعد بأي وقت باختيار **متوقف**.' },
+                        ],
+                        en: [
+                            'Before the assistant answers any customer, make sure messages get through:',
+                            { ol: [
+                                'In **The assistant on WhatsApp**, choose **Test senders only**.',
+                                'Enter your own phone number in **Test senders**: in international digits with the country code, no + and no leading zero (like `201001234567` or `966501234567`), one number per line.',
+                                'Press **Save**.',
+                                'From your phone, send a message to the test number.',
+                                'Open the **DM Inbox**: your message should be there. Don’t expect a reply yet: this step only proves that the message gets in.',
+                            ] },
+                            { tip: '**Everyone** stays disabled until the go-live conditions are met: public privacy pages and the required checks. You can switch the assistant off again at any time by choosing **Off**.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'customers',
+                    title: { ar: 'لو الرقم لعميل عندك', en: 'When the number belongs to a customer' },
+                    body: {
+                        ar: [
+                            'إذا تدير واتساب لعميل عندك على اللوحة، قل له من البداية:',
+                            { ul: [
+                                'يجيب شريحة جديدة ما استُخدمت قبل على واتساب، وتقدر تستقبل رسالة نصية أو مكالمة واحدة للتحقق. رقمه المسجّل حالياً على واتساب ما يصلح.',
+                                'عملاؤه يشوفون الرقم نفسه مو اسم نشاطه، لين يوثّق النشاط عند ميتا.',
+                                'أي تكلفة بعد الألف ردّ المجانية في الشهر تُرسل له بفاتورة.',
+                            ] },
+                            { note: 'الخطوات نفسها: [[whatsapp#meta-setup]] ثم [[whatsapp#connect]]، لكن من مساحة عمل العميل.' },
+                        ],
+                        en: [
+                            'If you run WhatsApp for a customer on the dashboard, tell them from the start:',
+                            { ul: [
+                                'They bring a new SIM that has never been used on WhatsApp and can receive one SMS or call for verification. Their number already registered on WhatsApp won’t work.',
+                                'Their own customers see the number, not the business name, until the business is verified with Meta.',
+                                'Any cost past the 1,000 free replies a month is invoiced to them.',
+                            ] },
+                            { note: 'The steps are the same: [[whatsapp#meta-setup]] then [[whatsapp#connect]], but from the customer’s workspace.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'costs',
+                    title: { ar: 'التكلفة', en: 'What it costs' },
+                    body: {
+                        ar: [
+                            { ul: [
+                                'أول 1,000 ردّ في الشهر لكل رقم مجانية.',
+                                'بعدها يكلّف الردّ تقريباً 0.0036 دولار في مصر و0.0107 دولار في السعودية.',
+                                'المحادثات اللي تبدأ من إعلان «انقر للمراسلة على واتساب» ردودها مجانية لين 7 أيام.',
+                                'الإرسال المدفوع ممنوع إلا إذا فعّلت خيار **الرسائل المدفوعة** في بطاقة واتساب. هو مغلق افتراضياً، ولما تفعّله تطلب منك اللوحة تأكيداً. وما دام مغلقاً ما يرسل المساعد شي تحاسب عليه ميتا.',
+                            ] },
+                            { note: 'التكلفة المقدّرة في بطاقة الرقم تقدير. وفاتورة ميتا هي المرجع.' },
+                        ],
+                        en: [
+                            { ul: [
+                                'The first 1,000 replies a month for each number are free.',
+                                'After that a reply costs about $0.0036 in Egypt and $0.0107 in Saudi Arabia.',
+                                'Replies in chats that start from a Click-to-WhatsApp ad are free for up to 7 days.',
+                                'Paid sends are blocked unless you switch on **Paid messages** in the WhatsApp card. It is off by default, and the dashboard asks you to confirm when you turn it on. While it is off, the assistant sends nothing Meta would charge for.',
+                            ] },
+                            { note: 'The estimated cost in the number’s card is an estimate. Meta’s invoice is the reference.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'حلول المشاكل', en: 'Troubleshooting' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['**Verify and save** رمادي ولا أقدر أضغطه', 'خانة رمز التحقق فاضية. الصق فيها الرمز اللي في **الإعدادات** ← **رمز التحقق للويبهوك**، في مساحة العمل الافتراضية.'],
+                                ['يظهر «No permissions available» وأنا أصدر الرمز', 'ما عيّنت التطبيق لمستخدم النظام. افتح **System users**، واضغط **Assign assets** وأعطه التطبيق بتحكم كامل، وبعدها جرّب **Generate token** من جديد.'],
+                                ['التطبيق ما يظهر في قائمة الأصول', 'أضف التطبيق `847772258381375` إلى محفظة الأعمال (Business portfolio) من Business Settings، وارجع لـ **Assign assets**.'],
+                                ['ما يوصل شي وصندوق الرسائل فاضي', { ul: [
+                                    'ما اشتركت في الحقول السبعة في صفحة Configuration عند ميتا. راجع [[whatsapp#meta-setup]].',
+                                    'الرقم مو مربوط هنا: افتح **الإعدادات** ← **واتساب** وتأكد أن الحالة **متصل**.',
+                                    'الرقم مربوط في مساحة عمل ثانية: افصله هناك أول.',
+                                ] }],
+                                ['اللوحة ترفض الربط', ['اللوحة تكتب سبب الرفض بنفسها تحت الحقل المقصود، وتضيف كلام ميتا أسفله. هذي أشهر الرسائل:', { dl: [
+                                    ['«رفضت ميتا هذا الرمز»', 'الرمز منتهٍ أو ملغى أو صادر لتطبيق ثاني. أصدر رمزاً جديداً.'],
+                                    ['«الرمز صالح لكنه لا يحمل الصلاحيتين المطلوبتين»', 'أصدره من جديد وفعّل `whatsapp_business_messaging` و`whatsapp_business_management`.'],
+                                    ['«لا يستطيع هذا الرمز قراءة رقم الهاتف»', 'راجع **معرّف رقم الهاتف**، وتأكد أن مستخدم النظام يملك حساب واتساب هذا.'],
+                                    ['«لم تؤكد ميتا اشتراك التطبيق في أحداث حساب واتساب للأعمال هذا»', 'راجع **معرّف حساب واتساب للأعمال**.'],
+                                    ['«هذا الرقم مربوط بمساحة عمل أخرى»', 'افصله من هناك أول.'],
+                                    ['«تعذّر الوصول إلى ميتا، ولم يُحفظ شيء»', 'مشكلة مؤقتة عند ميتا. أعد المحاولة بعد شوي.'],
+                                ] }]],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['**Verify and save** is greyed out', 'The verify token box is empty. Paste into it the token from **Settings** → **Webhook verify token**, in the Default workspace.'],
+                                ['“No permissions available” shows while I generate the token', 'The app isn’t assigned to the system user. Open **System users**, press **Assign assets** and give it the app with full control, then try **Generate token** again.'],
+                                ['The app isn’t in the list of assets', 'Add the app `847772258381375` to the business portfolio in Business Settings, then go back to **Assign assets**.'],
+                                ['Nothing arrives and the inbox is empty', { ul: [
+                                    'The seven fields aren’t subscribed on the Configuration page at Meta. See [[whatsapp#meta-setup]].',
+                                    'The number isn’t connected here: open **Settings** → **WhatsApp** and check the status says **Connected**.',
+                                    'The number is connected in another workspace: disconnect it there first.',
+                                ] }],
+                                ['The dashboard refuses to connect', ['The dashboard writes the reason itself under the field it is about, and adds Meta’s own words beneath it. These are the common messages:', { dl: [
+                                    ['“Meta refused this token: it may be expired, revoked or issued to another app.”', 'Issue a new token.'],
+                                    ['“The token is valid but lacks the two permissions required.”', 'Issue it again with `whatsapp_business_messaging` and `whatsapp_business_management` ticked.'],
+                                    ['“This token cannot read the phone number.”', 'Check the **Phone number ID**, and that the system user owns this WhatsApp account.'],
+                                    ['“Meta did not confirm the app’s subscription to this WhatsApp Business Account’s events.”', 'Check the **WhatsApp Business Account ID**.'],
+                                    ['“This number is connected to another workspace.”', 'Disconnect it there first.'],
+                                    ['“Meta could not be reached, and nothing was saved.”', 'A temporary problem at Meta. Try again in a moment.'],
+                                ] }]],
+                            ] },
                         ],
                     },
                 },
