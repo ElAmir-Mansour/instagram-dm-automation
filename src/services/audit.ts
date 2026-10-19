@@ -175,6 +175,14 @@ export const AUDIT_ACTIONS = {
     dmConversationUnhandled: 'dm.conversation_unhandled',
     /** The A/B wording experiment of the DM sales turn was saved from AI settings (S14). `detail` holds whether it is running, the variants' ids and weights and the length of their texts, never the texts. */
     dmVariantsWrite: 'dm.variants_write',
+    /** A tenant's WhatsApp number was connected (v50). `detail` names the ids and the scopes granted, never the token. */
+    whatsappConnect: 'whatsapp.connect',
+    /** The owner disconnected WhatsApp: the app was unsubscribed from the account (when Meta answered), the token wiped and the agent set to off. */
+    whatsappDisconnect: 'whatsapp.disconnect',
+    /** The WhatsApp agent's mode or test senders were changed from Settings. `detail` holds the mode and the count of senders, never the numbers. */
+    whatsappAgentWrite: 'whatsapp.agent_write',
+    /** The owner's WhatsApp billing choices (allow billable replies, the free-tier alert) were changed. */
+    whatsappBillingWrite: 'whatsapp.billing_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

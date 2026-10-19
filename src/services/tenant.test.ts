@@ -7,10 +7,11 @@
  * user row are both injected, so what is under test is the decision and not `pg`.
  */
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
+import { setLogSink } from '../utils/log.js';
 import {
-    assertTenantAccess, checkSessionValidity, interactionsOwnedBy, interactionsOwnedByExpr,
+    assertTenantAccess, checkSessionValidity, getCreatorByWhatsAppNumber, interactionsOwnedBy, interactionsOwnedByExpr,
     INSUFFICIENT_ROLE_CODE, normalizeTenantRole, requireTenantRole, resolveTenant,
     resolveTenantAccess, tenantRoleAllows,
 } from './tenant.js';
@@ -502,5 +503,92 @@ describe('requireTenantRole', () => {
     it('carries the minimum it enforces, so the route table can be asserted', () => {
         assert.equal(requireTenantRole('owner').minimumRole, 'owner');
         assert.equal(requireTenantRole('operator').minimumRole, 'operator');
+    });
+});
+
+/**
+ * Which tenant a WhatsApp webhook belongs to. The connection lookup is the one `whatsappConnections.ts` pins (any row that is not `revoked`);
+ * what is asserted here is what the tenant resolver does with it: an `invalid` connection still resolves (the message is stored, review H10), a
+ * revoked or missing one does not, and an inactive creator is not routable. A stubbed pool answers by SQL and throws on anything unarranged.
+ */
+describe('getCreatorByWhatsAppNumber', () => {
+    const CREATOR = '11111111-1111-4111-8111-111111111111';
+    const PHONE = '106540352242922';
+    let statements: Array<{ sql: string; params: unknown[] }>;
+    let connection: Record<string, unknown> | null;
+    let creatorActive: boolean;
+    let lines: Array<{ level: string; line: string }>;
+    const originalQuery = pool.query;
+    let restoreSink: (() => void) | undefined;
+
+    beforeEach(() => {
+        statements = [];
+        lines = [];
+        connection = null;
+        creatorActive = true;
+        const previous = setLogSink((level, line) => { lines.push({ level, line }); });
+        restoreSink = () => setLogSink(previous);
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            const q = sql.replace(/\s+/g, ' ').trim();
+            statements.push({ sql: q, params });
+            if (q.includes('FROM platform_connections')) {
+                // The webhook lookup: the same filter a revoked row fails, applied here as the database would.
+                const rows = connection && connection.status !== 'revoked' && connection.external_account_id === params[0] ? [connection] : [];
+                return { rows, rowCount: rows.length };
+            }
+            if (q.startsWith('SELECT id FROM creators WHERE id = $1 AND is_active = true')) {
+                const rows = creatorActive && params[0] === CREATOR ? [{ id: CREATOR }] : [];
+                return { rows, rowCount: rows.length };
+            }
+            throw new Error(`no result arranged for SQL: ${q}`);
+        };
+    });
+    afterEach(() => {
+        (pool as unknown as { query: unknown }).query = originalQuery;
+        restoreSink?.();
+    });
+
+    const row = (over: Record<string, unknown> = {}) => ({
+        id: 'c-1', creator_id: CREATOR, external_account_id: PHONE, display_name: 'Test Number', status: 'active', last_error: null, scopes: [],
+        has_token: true, access_expires_at: null, last_refreshed_at: null, created_at: new Date('2026-10-18T08:00:00Z'), profile: {}, settings: {}, ...over,
+    });
+
+    it('resolves the owner of the number, with the state of its connection', async () => {
+        connection = row();
+        assert.deepEqual(await getCreatorByWhatsAppNumber(PHONE), { creator: { id: CREATOR }, connectionStatus: 'active' });
+        assert.deepEqual(statements[0]!.params, [PHONE]);
+    });
+
+    it('still resolves an invalid connection: Meta never redelivers, so the message must be stored (review H10)', async () => {
+        connection = row({ status: 'invalid', last_error: 'token expired' });
+        assert.deepEqual(await getCreatorByWhatsAppNumber(PHONE), { creator: { id: CREATOR }, connectionStatus: 'invalid' });
+    });
+
+    it('resolves nothing for a revoked connection, an unknown number, or no number at all', async () => {
+        connection = row({ status: 'revoked' });
+        assert.equal(await getCreatorByWhatsAppNumber(PHONE), null);
+        connection = row();
+        assert.equal(await getCreatorByWhatsAppNumber('999999999999999'), null);
+        const before = statements.length;
+        assert.equal(await getCreatorByWhatsAppNumber(null), null);
+        assert.equal(await getCreatorByWhatsAppNumber(undefined), null);
+        assert.equal(await getCreatorByWhatsAppNumber(''), null);
+        assert.equal(statements.length, before, 'no id, no query');
+    });
+
+    it('does not route to a tenant an operator switched off, and says so in the log', async () => {
+        connection = row();
+        creatorActive = false;
+        assert.equal(await getCreatorByWhatsAppNumber(PHONE), null);
+        const said = lines.find((l) => l.line.includes('wa.creator_inactive'));
+        assert.ok(said, 'a switched-off tenant is not the same fix as a missing connection');
+        assert.equal(said!.level, 'warn');
+    });
+
+    it('carries no Instagram token: the WhatsApp path has none to hand to a Graph call', async () => {
+        connection = row();
+        const tenant = await getCreatorByWhatsAppNumber(PHONE);
+        assert.deepEqual(Object.keys(tenant!.creator), ['id']);
+        assert.ok(!statements.some((s) => /page_access_token/.test(s.sql)));
     });
 });

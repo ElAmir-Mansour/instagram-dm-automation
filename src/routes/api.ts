@@ -68,6 +68,7 @@ import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
+import { whatsappRouter } from './whatsapp.js';
 import { metaPublicRouter, metaRouter } from './meta.js';
 import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
@@ -1556,6 +1557,8 @@ router.use(resolveTenant);
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
 router.use('/youtube', youtubeRouter);
+// WhatsApp (docs/specs/001-whatsapp-agent): the tenant's number, the agent's mode and the billing choice. Reads are any member's; every write is owner-only (the router carries the guards).
+router.use('/whatsapp', whatsappRouter);
 // Connecting a tenant's own Facebook Page and Instagram account: every mutating route is owner-only (it carries its own guards).
 router.use('/meta', metaRouter);
 
@@ -3686,6 +3689,13 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         }
 
         const conv = convRes.rows[0];
+
+        // A WhatsApp thread (v50) is stored, never answered, until WhatsApp sending exists (phase W4). Without this the
+        // reply below would go to Instagram's Send API addressed to a WhatsApp user id: a confusing failure at best.
+        if (conv.platform === 'whatsapp') {
+            sendError(res, 409, 'WHATSAPP_SENDING_NOT_READY', 'Replying on WhatsApp from the inbox is not available yet.');
+            return;
+        }
 
         // A thread outlives the connection that made it (v34: a tenant can be disconnected): nothing to send it with.
         if (!conv.page_access_token) {

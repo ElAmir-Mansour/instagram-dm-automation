@@ -1,6 +1,6 @@
 /**
- * Settings — access token, webhook verify token, account info, TikTok, media
- * storage, public site, appearance.
+ * Settings — access token, webhook verify token, account info, TikTok, YouTube,
+ * WhatsApp, media storage, public site, appearance.
  *
  * Every credential shown here is a Latin string sitting inside Arabic prose,
  * which is exactly where bidi goes wrong: an unisolated token preview drags
@@ -123,7 +123,10 @@ const SettingsPage = {
         // anyway), and isolated like the rest. Reading them sends nothing to Instagram.
         let iceBreakers = null;
         let iceBreakersError = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule] = await Promise.allSettled([
+        // WhatsApp (T025): any member reads it (the owner writes), isolated like the rest, with the module that draws the card (loaded on first use).
+        let whatsapp = null;
+        let whatsappError = null;
+        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -138,7 +141,12 @@ const SettingsPage = {
             App.isAdmin() ? API.getNotifySettings() : Promise.resolve(null),
             App.canAdminister() ? API.getIceBreakers() : Promise.resolve(null),
             App.canAdminister() ? App.loadPageModule('ice_breakers') : Promise.resolve(null),
+            API.getWhatsAppConnection(),
+            App.loadPageModule('whatsapp_card'),
         ]);
+        if (wa.status === 'fulfilled') whatsapp = wa.value; else whatsappError = wa.reason;
+        // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
+        if (!whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) whatsappError = new Error(t('wa.moduleFailed'));
         if (ib.status === 'fulfilled') iceBreakers = ib.value; else iceBreakersError = ib.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
         if (!iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) iceBreakersError = new Error(t('iceb.moduleFailed'));
@@ -388,6 +396,8 @@ const SettingsPage = {
             ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
 
             ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
+
+            ${this.whatsappSection(whatsapp, whatsappError)}
 
             ${App.isAdmin() ? this.mediaStorageSection(media, mediaError, cleanup) : ''}
 
@@ -672,6 +682,33 @@ const SettingsPage = {
                 </div>
             </section>
         `;
+    },
+
+    // ─── WhatsApp (T025) ─────────────────────────────────────────────────────
+
+    /**
+     * The card's words, form, editor and buttons are `WhatsAppCard`'s (`whatsapp_card.js`, loaded on first use); this hands it the server's
+     * answer, or says why there is none. Any member sees it (the owner's controls are hidden from the rest by the card itself).
+     */
+    whatsappSection(data, error) {
+        // The error card is drawn HERE, not by the module: a module that could not be fetched is the very case it is for.
+        if (error || !data || typeof WhatsAppCard === 'undefined') {
+            const known = error && typeof WhatsAppCard !== 'undefined' ? WhatsAppCard.describe(error).message : '';
+            const message = known || (error && error.message) || t('wa.moduleFailed');
+            return html`
+                <section class="section" id="wa-card">
+                    <h2 class="section-title">${t('wa.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('wa.loadFailed', { message })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        return WhatsAppCard.section(data);
     },
 
     /** The daily check's verdict on the published Shorts (src/services/youtubeVisibility.ts). */
