@@ -490,3 +490,12 @@ describe('Campaigns tab: Refresh results (T048)', () => {
         } finally { page.destroy(); }
     });
 });
+
+describe('the Campaigns tab title', () => {
+    it('has its own page title in both languages, never the raw key (app.js `title(page)` is t(`nav.${page}`))', async () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const h = await loadDashboard({ lang });
+            assert.notEqual(h.t('nav.ads_campaigns'), 'nav.ads_campaigns', lang);
+        }
+    });
+});
