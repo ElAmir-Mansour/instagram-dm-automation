@@ -139,3 +139,60 @@ SELECT column_name FROM information_schema.columns WHERE table_name = 'creators'
 ```
 
 Usage: `node scripts/exchange-token.mjs <SHORT_LIVED_USER_TOKEN>`
+
+
+---
+
+## Ads token (Marketing API)
+
+The Meta ads module (Boost, the Ads screen, the spending guard) does **not** use the Page token above. Each tenant has its own
+ads token, stored apart from `creators.page_access_token`. Step-by-step creation for owners and clients: `docs/ADS_GUIDE.md`
+("Connect your ad account") and the Help Center article `#/help/ads`.
+
+### Two kinds of ads token
+
+| | System-user token (the default) | Connect token (optional, owner) |
+|---|---|---|
+| Made in | Meta Business Settings → Users → System users → Generate new token | Facebook Login (Settings → Connect), when the ads scopes are on (`meta.ads_scopes_enabled`) |
+| Lifespan | **Never** expires (choose "Never" at generation) | ~60 days, a long-lived USER token |
+| `ads.settings.<tenant>.tokenSource` | `pasted` | `connect` |
+| Expiry known from | nothing to track | `debug_token` → `tokenExpiresAt` |
+| Alert | `token_dead` when it stops working | `token_expiring` **14 days** before the end, then `token_dead` |
+| Removed when | the owner removes it on the card | Meta is disconnected or the app is removed in Facebook |
+
+> **KEY RULE:** the cap guard dies with its token. A Connect token that lapses silently means nobody is pausing campaigns at the
+> cap. That is why the system-user token is the default and Connect is only a second source.
+
+### Scopes
+
+`ads_management`, `ads_read`, `business_management`, `pages_read_engagement`, `pages_manage_ads`. The ad account, the Page and the
+Instagram account must be **assigned** to the system user (ad account with "Manage campaigns"), or Meta answers with a permission
+error even though the scopes are ticked (`10/1341012` = the Page is not assigned). The dashboard's **Test connection** lists missing
+scopes and the assigned assets; `node scripts/ads-probe.mjs` prints the same from a terminal (`debug_token` needs `META_APP_ID` and
+`META_APP_SECRET` in the environment).
+
+### Where it is stored
+
+`app_settings`, key `ads.token.<tenant id>`, value `enc:v1:…` (AES-256-GCM via `src/config/crypto.ts`, same key as the Page token).
+The API never returns it, only whether it is set and its last four characters. The account id and limits sit in the JSON row
+`ads.settings.<tenant id>`.
+
+### How a dead token is detected
+
+- **Every Meta call** the ads module makes: error code `190` or `102` marks the tenant's `token.health = 'dead'`, stops that
+  tenant's queue and raises the `token_dead` alert (once a day). It cannot be switched off.
+- **The daily health check** (00:00 UTC cron) checks every enabled tenant: `debug_token` for a Connect token (validity and expiry),
+  a cheap `GET /me?fields=id` for a pasted one. This finds a revoked token even when nobody has touched ads that day.
+- **The hourly guard** (`/api/jobs/drain`) cannot read spend with a dead token, so after 2 hours without a successful check the
+  `guard_blind` alert fires and the Ads overview shows "spending is not being watched".
+
+A system user's token also dies when the system user is deleted, when its asset assignments are removed, or when the app's secret
+is reset.
+
+### Rotating it
+
+1. Meta Business Settings → System users → select the user → **Generate new token** (same app, **Never**, the five scopes). The old
+   token keeps working until you revoke it, so install the new one first.
+2. AutoReply → Settings → Connections → **Meta ads (Boost)** → paste into **System-user ads token** → **Save** → **Test connection**.
+3. Only then revoke the old token in Meta (system user → Revoke tokens), if you want it gone.
+4. Never paste a token in chat, email or an issue. `scripts/ads-probe.mjs` never prints it.

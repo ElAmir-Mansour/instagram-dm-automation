@@ -43,9 +43,9 @@ describe('daysLeftThisMonth', () => {
 });
 
 describe('remainingThisMonth: the most a campaign can still spend this month', () => {
-    it('a daily budget × the days left in its window this month', () => {
-        assert.equal(remainingThisMonth({ id: '1', daily_budget: '500' }, 'USD', 0, NOW), 50);
-        assert.equal(remainingThisMonth({ id: '1', daily_budget: '500', stop_time: '2026-10-25T10:00:00Z' }, 'USD', 0, NOW), 15);
+    it('a daily budget × the days left in its window this month, today at 1.75× (Meta may overspend a day by 75%)', () => {
+        assert.equal(remainingThisMonth({ id: '1', daily_budget: '500' }, 'USD', 0, NOW), 53.75);
+        assert.equal(remainingThisMonth({ id: '1', daily_budget: '500', stop_time: '2026-10-25T10:00:00Z' }, 'USD', 0, NOW), 18.75);
     });
 
     it("a lifetime budget's unspent part, and nothing once it has ended", () => {
@@ -64,7 +64,7 @@ describe('remainingThisMonth: the most a campaign can still spend this month', (
             { id: '3', status: 'ACTIVE', daily_budget: '200' },
             { id: '4', status: 'PAUSED', daily_budget: '9900' },
         ] } };
-        assert.equal(remainingThisMonth(c, 'USD', 0, NOW), 30, '(1 + 2) × 10 days');
+        assert.equal(remainingThisMonth(c, 'USD', 0, NOW), 32.25, '(1 + 2) × (1.75 + 9 days)');
     });
 });
 
@@ -147,8 +147,8 @@ describe('the account month', () => {
 });
 
 describe('oneDayRemaining and shouldPauseAll: the hourly guard', () => {
-    it('counts one day of a daily budget, even on the last day of the month', () => {
-        assert.equal(oneDayRemaining({ id: '1', daily_budget: '500' }, 'USD', 0, new Date('2026-10-31T23:30:00Z')), 5);
+    it('counts one day of a daily budget at 1.75×, even on the last day of the month', () => {
+        assert.equal(oneDayRemaining({ id: '1', daily_budget: '500' }, 'USD', 0, new Date('2026-10-31T23:30:00Z')), 8.75);
     });
 
     it("counts a lifetime budget's whole unspent part, and nothing for an ended window", () => {

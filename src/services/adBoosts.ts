@@ -4,33 +4,50 @@
  *
  * Config is per tenant and DB-first (`app_settings`, families `ads.settings.<tenant>` and `ads.token.<tenant>`), never env: the ad account
  * id, the max daily budget and the monthly spend cap are the owner's to change from Settings, and the system-user token is encrypted at rest.
+ * The settings code lives in src/services/ads/settings.ts (re-exported here for one phase).
  *
- * The money rule: a boost is created PAUSED, and the server checks `checkBoostBudget` both when it is created and when it is activated,
- * under a per-tenant advisory lock, so two requests at once cannot both fit under the cap. What counts against the cap this month
- * (`committedThisMonth`): every boost created or activated this UTC month that is creating, paused or active at its planned total (the
- * ad set's lifetime budget, which Meta does not exceed), and every completed or deleted one that ran at what it spent.
+ * The money rule is src/services/ads/money.ts, the same one every screen and the guard use. A boost is created PAUSED; creating it checks
+ * the daily max and Meta's minimum (`checkBoostBudget`) and that its total fits what is left this month (`moneyFor`, the figure the dialog
+ * showed). ACTIVATING is the step that spends, and the binding check: the month is read live from Meta first, outside any transaction, then
+ * a short locked transaction re-checks it with whatever else is about to run and records the activation as a running op, then Meta is
+ * called. No Graph call ever runs inside a database transaction.
  */
 import type { QueryResultRow } from 'pg';
 import { queryOne, queryRows } from '../db/query.js';
 import { log, describeError } from '../utils/log.js';
-import { getSetting, last4, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
+import { setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
 import { publishedPlatforms } from './publishedIds.js';
 import { getTenant } from './tenant.js';
-import { withTransaction, type Exec } from './studio/common.js';
+import { withTransaction } from './studio/common.js';
 import { MetaApiError } from './instagram.js';
 import { inspectToken } from './tokenHealth.js';
-import { checkWorstCase, readMonth } from './adsCap.js';
+import { AdsGraphError } from './ads/graph.js';
+import { checkAndStartSpend, checkDailyMax, finishSpendOp, lockMoney, mayHaveLanded, moneyFor, MoneyRefused, readMonth } from './ads/money.js';
+import { isConfigured, readAdsSettings, readHealth, type AdsSettings } from './ads/settings.js';
 import {
     activateBoostObjects, BOOST_OBJECTIVES, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
-    normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
-    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, fetchAccountState, currencyOffset, EU_COUNTRIES, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
+    normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
+    resolveFacebookStoryId, boostWindow, listAdAccounts, fetchAccountState, currencyOffset, EU_COUNTRIES, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
     type BudgetRefusal, type CreatedObjects, type Eligibility,
 } from './metaAds.js';
+
+export {
+    ADS_LIMIT_MAX, parseSettingsInput, parseStoredSettings, readAdsSettings, saveAdsSettings,
+    type AdsSettings, type ParsedSettingsInput, type SettingsInput,
+} from './ads/settings.js';
+export { describeAdsSettings, type AdsSettingsView } from './ads/health.js';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────────────────
 
 export type AdsErrorCode =
     | BudgetRefusal
+    | 'OVER_MONTHLY_CAP'
+    | 'OVER_CEILING'
+    | 'RATE_LIMITED'
+    | 'EDIT_LIMIT'
+    | 'TOKEN_INVALID'
+    | 'ADS_DISABLED'
+    | 'CEILING_REQUIRED'
     | 'ADS_NOT_CONFIGURED'
     | 'POST_NOT_PUBLISHED'
     | 'POST_NOT_FOUND'
@@ -44,171 +61,39 @@ export type AdsErrorCode =
     | 'CAMPAIGN_ACTIVE'
     | 'CAMPAIGN_NOT_FOUND';
 
-/** A refusal the route answers as `{ error, code, field? }` with `status`. */
+/** A refusal the route answers as `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }` with `status`. */
 export class AdsError extends Error {
-    constructor(readonly status: number, readonly code: AdsErrorCode, message: string, readonly field?: string, readonly metaCode?: number) {
+    constructor(
+        readonly status: number,
+        readonly code: AdsErrorCode,
+        message: string,
+        readonly field?: string,
+        readonly metaCode?: number,
+        readonly extra: { metaSubcode?: number; retryAt?: Date | null } = {},
+    ) {
         super(message);
         this.name = 'AdsError';
     }
 }
 
-export function metaRefusal(err: unknown): AdsError {
-    const metaCode = err instanceof MetaApiError ? err.metaCode : undefined;
-    return new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : 'Meta refused the request.', undefined, metaCode);
-}
-
-// ─── Settings ─────────────────────────────────────────────────────────────────────────────
-
-export interface AdsSettings {
-    adAccountId: string | null;
-    maxDailyBudget: number | null;
-    monthlyCap: number | null;
-    /**
-     * Where the ads token came from: `connect` (granted on Facebook Login, a long-lived USER token of about 60 days that a Reconnect
-     * renews, and removed when Meta is disconnected) or `pasted` (a system-user token the owner pasted, which never expires).
-     */
-    tokenSource: 'connect' | 'pasted' | null;
-    /** ISO time a `connect` token stops working, from Meta's `debug_token`. Null for one that does not expire, or unknown. */
-    tokenExpiresAt: string | null;
-}
-
-const EMPTY_SETTINGS: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null };
-
-/** The highest limit the card accepts, in major units: a typo of an extra zero or three should be refused, not spent. */
-export const ADS_LIMIT_MAX = 1_000_000;
-
-function positiveMoney(value: unknown): number | null {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= ADS_LIMIT_MAX ? roundMoney(value) : null;
-}
-
-/** The stored JSON, read defensively: anything unreadable is "not set", which refuses boosts rather than spending without a limit. */
-export function parseStoredSettings(raw: string | null): AdsSettings {
-    if (!raw) return { ...EMPTY_SETTINGS };
-    try {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        return {
-            adAccountId: normaliseAdAccountId(parsed['adAccountId']),
-            maxDailyBudget: positiveMoney(parsed['maxDailyBudget']),
-            monthlyCap: positiveMoney(parsed['monthlyCap']),
-            tokenSource: parsed['tokenSource'] === 'connect' || parsed['tokenSource'] === 'pasted' ? parsed['tokenSource'] : null,
-            tokenExpiresAt: typeof parsed['tokenExpiresAt'] === 'string' && !Number.isNaN(Date.parse(parsed['tokenExpiresAt'])) ? parsed['tokenExpiresAt'] : null,
-        };
-    } catch {
-        return { ...EMPTY_SETTINGS };
-    }
-}
-
-export interface SettingsInput {
-    settings: Partial<AdsSettings>;
-    /** Absent: leave the token. Null: remove it. A string: the new token. */
-    token?: string | null;
-}
-
-export type ParsedSettingsInput = { ok: true; value: SettingsInput } | { ok: false; error: string; field: string };
-
 /**
- * The card's body: any subset of `{ adAccountId, token, maxDailyBudget, monthlyCap }`. Absent leaves a value; '' clears the account id or
- * the token. Every field is checked before anything is written. The daily max may not exceed the monthly cap (it could never be used).
+ * Meta's failure as the answer the screen shows (contracts/dashboard-api.md "Codes"): a throttle is 429 RATE_LIMITED with the time to
+ * try again, an edit limit 429 EDIT_LIMIT, a dead token 409 TOKEN_INVALID (never 401, which the dashboard reads as "signed out"), the
+ * money rule 400 OVER_MONTHLY_CAP, and anything else 502 META_ERROR with Meta's code and subcode.
  */
-export function parseSettingsInput(body: unknown, current: AdsSettings): ParsedSettingsInput {
-    const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-    const out: SettingsInput = { settings: {} };
-
-    if (b['adAccountId'] !== undefined) {
-        if (b['adAccountId'] === '' || b['adAccountId'] === null) out.settings.adAccountId = null;
-        else {
-            const id = normaliseAdAccountId(b['adAccountId']);
-            if (!id) return { ok: false, error: 'The ad account id is the number in Ads Manager, e.g. act_1234567890.', field: 'adAccountId' };
-            out.settings.adAccountId = id;
-        }
+export function metaRefusal(err: unknown): AdsError {
+    if (err instanceof AdsError) return err;
+    if (err instanceof MoneyRefused) return new AdsError(400, 'OVER_MONTHLY_CAP', err.message);
+    const message = err instanceof Error ? err.message : 'Meta refused the request.';
+    if (err instanceof AdsGraphError) {
+        const extra = { metaSubcode: err.metaSubcode, retryAt: err.retryAt };
+        if (err.klass === 'throttle') return new AdsError(429, 'RATE_LIMITED', 'Meta\'s limit for this ad account is reached for now; try again at the time shown.', undefined, err.metaCode, extra);
+        if (err.klass === 'budget_limit' || err.klass === 'object_busy' || err.klass === 'spend_cap_limit') return new AdsError(429, 'EDIT_LIMIT', message, undefined, err.metaCode, extra);
+        if (err.klass === 'token_dead') return new AdsError(409, 'TOKEN_INVALID', 'Meta no longer accepts the ads token: generate a new one and paste it in Settings.', 'token', err.metaCode, extra);
+        return new AdsError(502, 'META_ERROR', message, undefined, err.metaCode, extra);
     }
-    if (b['token'] !== undefined) {
-        if (b['token'] === '' || b['token'] === null) out.token = null;
-        else if (typeof b['token'] !== 'string' || !/^[A-Za-z0-9_\-|.]{20,1000}$/.test(b['token'].trim())) {
-            return { ok: false, error: 'That does not look like a Meta access token.', field: 'token' };
-        } else out.token = b['token'].trim();
-    }
-    for (const field of ['maxDailyBudget', 'monthlyCap'] as const) {
-        if (b[field] === undefined) continue;
-        if (b[field] === null || b[field] === '') {
-            out.settings[field] = null;
-            continue;
-        }
-        const n = typeof b[field] === 'string' ? Number(b[field]) : b[field];
-        const value = positiveMoney(n);
-        if (value === null) return { ok: false, error: `Enter an amount above 0 and at most ${ADS_LIMIT_MAX}.`, field };
-        out.settings[field] = value;
-    }
-
-    const after = { ...current, ...out.settings };
-    if (after.maxDailyBudget !== null && after.monthlyCap !== null && after.maxDailyBudget > after.monthlyCap) {
-        return { ok: false, error: 'The max daily budget cannot be more than the monthly spend cap.', field: 'maxDailyBudget' };
-    }
-    if (Object.keys(out.settings).length === 0 && out.token === undefined) return { ok: false, error: 'Nothing to save.', field: 'adAccountId' };
-    return { ok: true, value: out };
-}
-
-export async function readAdsSettings(creatorId: string): Promise<{ settings: AdsSettings; token: string | null }> {
-    const [raw, token] = await Promise.all([
-        getSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId)),
-        getSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, creatorId)),
-    ]);
-    return { settings: parseStoredSettings(raw), token };
-}
-
-export async function saveAdsSettings(creatorId: string, input: SettingsInput, current: AdsSettings, updatedBy: string | null): Promise<void> {
-    // A token typed on the card is a pasted one; removing it forgets where the old one came from.
-    const tokenMeta: Partial<AdsSettings> = input.token === undefined ? {} : { tokenSource: input.token ? 'pasted' : null, tokenExpiresAt: null };
-    if (Object.keys(input.settings).length > 0 || input.token !== undefined) {
-        const next = { ...current, ...input.settings, ...tokenMeta };
-        await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId), JSON.stringify(next), updatedBy);
-    }
-    if (input.token !== undefined) {
-        await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, creatorId), input.token, updatedBy);
-    }
-}
-
-function isConfigured(settings: AdsSettings, token: string | null): boolean {
-    return Boolean(settings.adAccountId && token && settings.maxDailyBudget && settings.monthlyCap);
-}
-
-export interface AdsSettingsView {
-    configured: boolean;
-    adAccountId: string | null;
-    token: { set: boolean; last4: string | null };
-    tokenSource: AdsSettings['tokenSource'];
-    tokenExpiresAt: string | null;
-    maxDailyBudget: number | null;
-    monthlyCap: number | null;
-    committedThisMonth: number;
-    account: AdAccountInfo | null;
-    accountError: string | null;
-}
-
-/** What the Settings card shows. With an account id and a token it asks Meta about the account, which proves both. Never the token. */
-export async function describeAdsSettings(creatorId: string, now = new Date()): Promise<AdsSettingsView> {
-    const { settings, token } = await readAdsSettings(creatorId);
-    let account: AdAccountInfo | null = null;
-    let accountError: string | null = null;
-    if (settings.adAccountId && token) {
-        try {
-            account = await readAdAccount(settings.adAccountId, token);
-        } catch (err) {
-            accountError = err instanceof Error ? err.message : 'Meta did not answer.';
-        }
-    }
-    return {
-        configured: isConfigured(settings, token),
-        adAccountId: settings.adAccountId,
-        token: { set: Boolean(token), last4: token ? last4(token) : null },
-        tokenSource: token ? settings.tokenSource : null,
-        tokenExpiresAt: token ? settings.tokenExpiresAt : null,
-        maxDailyBudget: settings.maxDailyBudget,
-        monthlyCap: settings.monthlyCap,
-        committedThisMonth: await committedThisMonth(null, creatorId, null, now),
-        account,
-        accountError,
-    };
+    const metaCode = err instanceof MetaApiError ? err.metaCode : undefined;
+    return new AdsError(502, 'META_ERROR', message, undefined, metaCode, { metaSubcode: err instanceof MetaApiError ? err.metaSubcode : undefined });
 }
 
 // ─── One-click: the ads token from Connect ────────────────────────────────────────────────
@@ -252,15 +137,11 @@ export async function forgetConnectedAdsAccess(creatorId: string): Promise<boole
     return true;
 }
 
-/** The ad accounts the saved token reaches, for the Settings card's picker. */
+/** The ad accounts the saved token reached at the last "Test connection", for the Settings card's picker. Stored data: no Meta call. */
 export async function listAdAccountsFor(creatorId: string): Promise<AdAccountChoice[]> {
     const { token } = await readAdsSettings(creatorId);
     if (!token) throw new AdsError(409, 'ADS_NOT_CONFIGURED', 'Connect Meta with ads access (or paste a token) first.');
-    try {
-        return await listAdAccounts(token);
-    } catch (err) {
-        throw metaRefusal(err);
-    }
+    return (await readHealth(creatorId)).assets?.adAccounts ?? [];
 }
 
 export async function requireConfig(creatorId: string): Promise<{ settings: AdsSettings & { adAccountId: string; maxDailyBudget: number; monthlyCap: number }; token: string }> {
@@ -271,36 +152,10 @@ export async function requireConfig(creatorId: string): Promise<{ settings: AdsS
     return { settings: settings as AdsSettings & { adAccountId: string; maxDailyBudget: number; monthlyCap: number }, token: token! };
 }
 
-// ─── The cap ──────────────────────────────────────────────────────────────────────────────
+// ─── The lock ─────────────────────────────────────────────────────────────────────────────
 
-/** The first instant of `now`'s UTC calendar month. */
-export function monthStartUtc(now: Date): Date {
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-}
-
-const COMMITTED_SQL = `
-    SELECT COALESCE(SUM(CASE
-               WHEN status IN ('creating', 'paused', 'active') THEN planned_total
-               WHEN status IN ('completed', 'deleted') AND activated_at IS NOT NULL THEN COALESCE(spend, planned_total)
-               ELSE 0 END), 0)::text AS committed
-      FROM ad_boosts
-     WHERE creator_id = $1
-       AND COALESCE(activated_at, created_at) >= $2
-       AND ($3::uuid IS NULL OR id <> $3::uuid)`;
-
-/** What counts against this month's cap, `excludeId` aside (the boost being activated). See the top of the file. */
-export async function committedThisMonth(exec: Exec | null, creatorId: string, excludeId: string | null, now: Date): Promise<number> {
-    const params = [creatorId, monthStartUtc(now), excludeId];
-    const row = exec
-        ? (await exec.query<{ committed: string }>(COMMITTED_SQL, params)).rows[0]
-        : await queryOne<{ committed: string }>(COMMITTED_SQL, params);
-    return roundMoney(Number(row?.committed ?? 0));
-}
-
-/** One tenant's budget checks and the writes that follow them, one at a time. Held until the transaction ends. */
-export async function lockTenantBoosts(exec: Exec, creatorId: string): Promise<void> {
-    await exec.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ad_boosts:${creatorId}`]);
-}
+/** v1's name for the tenant's money lock (ads/money.ts `lockMoney`): one key for boosts, campaigns and the guard. */
+export const lockTenantBoosts = lockMoney;
 
 function budgetRefusal(check: Exclude<ReturnType<typeof checkBoostBudget>, { ok: true }>): AdsError {
     return new AdsError(400, check.code, check.message, check.field);
@@ -480,9 +335,11 @@ export interface CreateInput {
 }
 
 /**
- * Creates the boost PAUSED. Order: validate → Meta's account (currency, minimum) → eligibility → under the tenant's lock, the cap check and
- * the `creating` row (which counts against the cap from that moment) → the four objects, each id recorded as it exists → `paused`.
- * A failure after the row exists marks it `failed` and deletes whatever was created (best effort: every object is PAUSED and spends nothing).
+ * Creates the boost PAUSED. Order: validate → the daily max and the money rule (its total must fit what is left this month, the figure the
+ * dialog showed) → Meta's account (currency, minimum) → eligibility → the `creating` row (one live boost per post and platform, held by
+ * the database) → the four objects, each id recorded as it exists → `paused`. A paused boost spends nothing and reserves nothing: the
+ * binding money check is Activate's. A failure after the row exists marks it `failed` and deletes whatever was created (best effort: every
+ * object is PAUSED and spends nothing).
  */
 export async function createBoost(creatorId: string, input: CreateInput, userId: string | null, now = new Date()): Promise<BoostView> {
     const { settings, token } = await requireConfig(creatorId);
@@ -502,9 +359,13 @@ export async function createBoost(creatorId: string, input: CreateInput, userId:
     const problem = objectiveProblem(target.platform, objective, link);
     if (problem) throw new AdsError(400, 'INVALID', problem, objective === 'TRAFFIC' && target.platform === 'instagram' ? 'link' : 'objective');
 
-    // A first cheap check before calling Meta at all; the binding one is under the lock below.
-    const pre = checkBoostBudget({ dailyBudget: input.dailyBudget, days: input.days, limits: settings, committedThisMonth: await committedThisMonth(null, creatorId, null, now) });
+    // The daily max first (no Meta call), then the money rule as the screens see it. Activation checks it again, live and under the lock.
+    const pre = checkBoostBudget({ dailyBudget: input.dailyBudget, days: input.days, limits: settings });
     if (!pre.ok) throw budgetRefusal(pre);
+    const money = await moneyFor(creatorId, settings, token, { kind: 'lifetime', amount: pre.plannedTotal, days: input.days as number }, now);
+    if (money.reason === 'OVER_MONTHLY_CAP') {
+        throw new AdsError(400, 'OVER_MONTHLY_CAP', `This boost could spend ${pre.plannedTotal}, but only ${money.remaining} of your monthly cap of ${settings.monthlyCap} is left this month.`, 'dailyBudget');
+    }
 
     let account: AdAccountInfo;
     try {
@@ -526,14 +387,10 @@ export async function createBoost(creatorId: string, input: CreateInput, userId:
     }
 
     const days = input.days as number;
+    const check = checkBoostBudget({ dailyBudget: input.dailyBudget, days, limits: settings, minDailyBudget: account.minDailyBudget });
+    if (!check.ok) throw budgetRefusal(check);
     const row = await withTransaction(async (tx) => {
         await lockTenantBoosts(tx, creatorId);
-        const check = checkBoostBudget({
-            dailyBudget: input.dailyBudget, days, limits: settings,
-            committedThisMonth: await committedThisMonth(tx, creatorId, null, now),
-            minDailyBudget: account.minDailyBudget,
-        });
-        if (!check.ok) throw budgetRefusal(check);
         const res = await tx.query<AdBoostRow>(
             `INSERT INTO ad_boosts (creator_id, scheduled_post_id, platform, media_id, ad_account_id, objective, country, link, currency,
                                     daily_budget, days, planned_total, status, created_by, ends_at)
@@ -542,6 +399,10 @@ export async function createBoost(creatorId: string, input: CreateInput, userId:
                 check.dailyBudget, days, check.plannedTotal, userId, boostWindow(days, now).end]
         );
         return res.rows[0]!;
+    }).catch((err) => {
+        // migration v53's idx_ad_boosts_one_live: this post already has a live boost on this platform.
+        if ((err as { code?: string })?.code === '23505') throw new AdsError(409, 'BOOST_STATE', `This post already has a boost on ${target.platform === 'instagram' ? 'Instagram' : 'Facebook'}: pause or delete it first.`, 'platform');
+        throw err;
     });
 
     let created: CreatedObjects = {};
@@ -590,58 +451,61 @@ async function cleanUp(ids: CreatedObjects, token: string): Promise<void> {
 // ─── Activate, pause, delete ──────────────────────────────────────────────────────────────
 
 /**
- * THE step that spends. Only a `paused` boost with all its objects, and only when its planned total still fits this month's cap (the
- * month may have changed, or the limits been lowered, since it was created). `activated_at` is written under the lock before Meta is
- * called, so the boost counts against this month while the calls run; a failed activation leaves it `paused` and still counted, because
- * a timed-out call may have switched something on.
+ * THE step that spends. Only a `paused` boost with all its objects, and only when its total still fits this month (the month may have
+ * changed, the limits been lowered, or other campaigns started since it was created). In three steps, with no Meta call inside the
+ * transaction (ads/money.ts):
+ *   1. the account and the month are read from Meta live;
+ *   2. under the tenant's lock: the row is re-read, the daily max and the money rule (with what else is about to run) re-checked,
+ *      `activated_at` written, and the activation recorded as a running op, so a second activation racing this one counts it;
+ *   3. ad → ad set → campaign are switched on, the campaign last, and the op is marked done, failed, or `verify` when the call may have
+ *      landed (it then keeps counting against the cap for a day, because the boost may be spending).
  */
-export async function activateBoost(creatorId: string, id: string, now = new Date()): Promise<BoostView> {
+export async function activateBoost(creatorId: string, id: string, now = new Date(), actor: { userId: string | null } = { userId: null }): Promise<BoostView> {
     const { settings, token } = await requireConfig(creatorId);
     const before = await readBoost(creatorId, id);
     if (before.status !== 'paused' || !before.campaign_id || !before.adset_id || !before.ad_id) {
         throw new AdsError(409, 'BOOST_STATE', `Only a paused boost can be activated; this one is ${before.status}.`);
     }
+    const daily = checkDailyMax({ kind: 'lifetime', amount: Number(before.planned_total), days: before.days }, settings.maxDailyBudget);
+    if (!daily.ok) throw new AdsError(400, 'OVER_DAILY_MAX', daily.message);
     // Meta cannot take a payment method through the API, and an account without one runs nothing: say so before switching anything on.
     let account: AdAccountState;
+    let month;
     try {
         account = await fetchAccountState(settings.adAccountId, token);
+        if (account.hasPaymentMethod === false) {
+            throw new AdsError(409, 'PAYMENT_METHOD_MISSING', 'This ad account has no payment method, so nothing can run. Add one in Meta (Ads screen → Add payment in Meta), then activate.');
+        }
+        month = await readMonth(settings.adAccountId, token, account.currency, account.timezoneOffsetHours, before.campaign_id, now);
+    } catch (err) {
+        throw err instanceof AdsError || err instanceof AdsGraphError ? metaRefusal(err) : new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : String(err));
+    }
+
+    let opId: string;
+    try {
+        ({ opId } = await checkAndStartSpend({
+            creatorId, adAccountId: settings.adAccountId, objectKey: before.campaign_id, kind: 'status', month,
+            candidate: Number(before.planned_total), monthlyCap: settings.monthlyCap,
+            payload: { to: 'ACTIVE', boost_id: id, campaign_id: before.campaign_id }, actor: { userId: actor.userId, via: 'owner' },
+            inside: async (tx) => {
+                const fresh = (await tx.query<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, creatorId])).rows[0];
+                if (!fresh || fresh.status !== 'paused') throw new AdsError(409, 'BOOST_STATE', 'This boost changed meanwhile: reload and try again.');
+                await tx.query('UPDATE ad_boosts SET activated_at = $2, ends_at = $3, updated_at = NOW() WHERE id = $1', [id, now, boostWindow(fresh.days, now).end]);
+            },
+        }));
     } catch (err) {
         throw metaRefusal(err);
     }
-    if (account.hasPaymentMethod === false) {
-        throw new AdsError(409, 'PAYMENT_METHOD_MISSING', 'This ad account has no payment method, so nothing can run. Add one in Meta (Ads screen → Add payment in Meta), then activate.');
-    }
-
-    await withTransaction(async (tx) => {
-        await lockTenantBoosts(tx, creatorId);
-        const fresh = (await tx.query<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, creatorId])).rows[0];
-        if (!fresh || fresh.status !== 'paused') throw new AdsError(409, 'BOOST_STATE', 'This boost changed meanwhile: reload and try again.');
-        if (Math.round(Number(fresh.daily_budget) * 100) > Math.round(settings.maxDailyBudget * 100)) {
-            throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `Its daily budget ${Number(fresh.daily_budget)} is over your max daily budget of ${settings.maxDailyBudget}.`);
-        }
-        // THE cap (adsCap.ts): what Meta says the account spent this month, plus what every active campaign (made anywhere) could still
-        // spend, plus this boost's whole total (a lifetime budget may be spent early, so all of it is counted in this month).
-        let month;
-        try {
-            month = await readMonth(settings.adAccountId, token, account.currency, account.timezoneOffsetHours, fresh.campaign_id, now);
-        } catch (err) {
-            throw err instanceof AdsError ? err : new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : String(err));
-        }
-        const cap = checkWorstCase({ spentThisMonth: month.spentThisMonth, othersRemaining: month.othersRemaining, thisRemaining: Number(fresh.planned_total), monthlyCap: settings.monthlyCap });
-        if (!cap.ok) {
-            throw new AdsError(400, 'BUDGET_OVER_MONTHLY_CAP',
-                `Activating could bring this month to ${cap.worstCase}, over your monthly cap of ${settings.monthlyCap} (spent ${month.spentThisMonth}, other active campaigns could add ${month.othersRemaining}). Lower the budget, pause a campaign, or raise the cap.`);
-        }
-        await tx.query('UPDATE ad_boosts SET activated_at = $2, ends_at = $3, updated_at = NOW() WHERE id = $1', [id, now, boostWindow(fresh.days, now).end]);
-    });
 
     try {
         await activateBoostObjects({ campaignId: before.campaign_id, adsetId: before.adset_id, adId: before.ad_id }, before.days, token, now);
     } catch (err) {
+        await finishSpendOp(creatorId, opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
         await updateBoost(id, { error: `Activation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 1000) }).catch(() => undefined);
         log('warn', 'ads.boost_activate_failed', { creator_id: creatorId, boost_id: id, ...describeError(err) });
         throw metaRefusal(err);
     }
+    await finishSpendOp(creatorId, opId, 'done', { campaign_id: before.campaign_id });
     log('info', 'ads.boost_activated', { creator_id: creatorId, boost_id: id, planned_total: Number(before.planned_total) });
     return toView(await updateBoost(id, { status: 'active', error: null }));
 }

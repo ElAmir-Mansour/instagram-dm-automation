@@ -627,11 +627,35 @@ const API = {
 
     // ─── Boost: Meta ads for a published post (the tenant OWNER's; a 403 means "hide Boost", never an error) ───
     // Budgets are in MAJOR units of the ad account's currency. Everything is created PAUSED: only `activateBoost` spends money.
-    /** `{ configured, adAccountId, token: { set, last4 }, tokenSource: 'connect'|'pasted'|null, tokenExpiresAt, maxDailyBudget, monthlyCap, committedThisMonth, account, accountError }`. */
+    // Every /ads route answers 404 `ADS_DISABLED` while Ads is off for the tenant: callers treat it like a 403 (nothing is offered). Errors are
+    // `{ error, code, field?, retryAt? }` (`retryAt`: an ISO time, on RATE_LIMITED and EDIT_LIMIT). The reads are any member's, the writes the owner's.
+    /**
+     * The SettingsView: `{ enabled, configured, steps: [{ id: 'token'|'account'|'payment'|'limits', done, hint }], adAccountId,
+     * token: { set, last4, source, expiresAt, health }, account (the copy stored by the last check: { name, currency, status, hasPaymentMethod,
+     * isPrepay, amountSpent, minDailyBudget, syncedAt, ... }) | null, accountError, limits: { maxDailyBudget, monthlyCap },
+     * ceiling: { maxDailyBudget, monthlyCap } | null, alerts: { telegramChatId, email, lang, kinds, required }, spendCap: { amount, changesLeftToday },
+     * switches, helpUrl }`.
+     */
     getAdsSettings: () => API.request('/ads/settings'),
-    /** Any subset of `{ adAccountId, token, maxDailyBudget, monthlyCap }` ('' clears the id and the token). Answers the settings shape, probed. A 400 carries `field`. */
+    /**
+     * Any subset of `{ adAccountId, token, maxDailyBudget, monthlyCap }` ('' clears the id and the token). Answers the settings shape, plus
+     * `warnings: ['will_pause_all']` when the new cap is at or below this month's spend (the guard then pauses every active campaign at once).
+     * A 400 carries `field`: `INVALID`, or `OVER_CEILING` (the platform admin's limit for this tenant).
+     */
     saveAdsSettings: (data) => API.request('/ads/settings', { method: 'POST', body: JSON.stringify(data) }),
-    /** `{ accounts: [{ id, name, currency, status }] }` (status 1 = active): the ad accounts the saved token can reach. 409 `ADS_NOT_CONFIGURED` without a token. */
+    /** LIVE (one or two Meta calls): `{ ok, scopes, missingScopes, assets: { adAccounts, pages, igAccounts }, tier, servedVersion, settings }`. 409 `TOKEN_INVALID` (never 401) or `ADS_NOT_CONFIGURED`, 429 `RATE_LIMITED`. */
+    testAdsSettings: () => API.request('/ads/settings/test', { method: 'POST' }),
+    /** `{ telegramChatId?, email?, lang?, kinds?: { [kind]: boolean }, test? }` → `{ alerts, test?: { telegram, email } }`, each 'sent' | 'failed' | 'off'. A 400 carries `field`. */
+    saveAdsAlerts: (data) => API.request('/ads/settings/alerts', { method: 'POST', body: JSON.stringify(data) }),
+    /** Meta's own spending limit on the ad account: `{ amount: number|null (null clears), confirm: true }` → `{ op, spendCap: { amount, changesLeftToday }, verified }`. 429 `EDIT_LIMIT`. */
+    setAdsSpendCap: (data) => API.request('/ads/spend-cap', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * What the month's cap has left, from Meta's own numbers: `{ currency, fits, remaining, worstCase, spentThisMonth, monthlyCap, maxDailyBudget,
+     * reason: 'OVER_MONTHLY_CAP'|'OVER_DAILY_MAX'|'NOT_CONFIGURED'|'UNREADABLE'|null, monthBoundaryTz, excludesTax }`. `candidate` is
+     * `daily:<amount>:<days>` or `lifetime:<amount>:<days>`; without it `fits` only says whether anything can be added. Cached ~60 s on the server.
+     */
+    getAdsMoney: (candidate) => API.request(`/ads/money${candidate ? `?candidate=${encodeURIComponent(candidate)}` : ''}`),
+    /** `{ accounts: [{ id, name, currency, status }] }` (status 1 = active): the list STORED by the last Test connection, no Meta call. */
     getAdsAccounts: () => API.request('/ads/accounts'),
     /** `{ boosts }`, newest first. */
     getAdsBoosts: () => API.request('/ads/boosts'),
@@ -649,7 +673,11 @@ const API = {
     refreshBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
 
     // ─── Ads screen (#/ads): every campaign on the ad account, not only the boosts. The tenant OWNER's. ───
-    /** `{ configured, account, accountError, spend, limits, campaigns }`. */
+    /**
+     * Not configured: `{ configured: false, steps, money: null }` (200, not an error). Configured: `{ configured, account, accountError, spend, limits,
+     * campaigns, steps, money: { currency, spentToday, spentThisMonth, worstCaseThisMonth, monthlyCap, remaining, maxDailyBudget, monthBoundaryTz },
+     * tokenHealth: 'ok'|'expiring'|'dead'|'unknown', guard: { lastCheckedAt, blind } }`.
+     */
     getAdsOverview: () => API.request('/ads/overview'),
     /** Answers `{ campaign }`. ACTIVE starts spending money: `confirm` is sent as true only after the owner said yes to the question that names the budget. */
     setAdsCampaignStatus: (id, status, confirm) => API.request(`/ads/campaigns/${encodeURIComponent(id)}/status`, {

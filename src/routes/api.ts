@@ -99,7 +99,8 @@ import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
 import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
-import { enforceMonthlyCaps } from '../services/adsManager.js';
+import { runGuard } from '../services/ads/guard.js';
+import { runAdsHealth } from '../services/ads/health.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -398,11 +399,12 @@ router.get('/jobs/drain', async (req, res) => {
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
 
-    // The monthly ad spending cap, after switch-on (adsManager.ts): at most once an hour per tenant, every active campaign in the ad
-    // account is paused once the month reaches the owner's cap. Fail-soft and silent when no tenant has ads configured.
+    // The monthly ad spending cap, after switch-on (src/services/ads/guard.ts): at most once an hour per tenant (every 10 minutes while a
+    // check is failing), every active campaign in the ad account is paused once the month reaches the owner's cap. It stops at the drain's
+    // deadline, alerts when it pauses, and alerts when it has not managed a check for two hours. Fail-soft and silent with no ads tenant.
     try {
-        const caps = await enforceMonthlyCaps();
-        if (caps.paused > 0 || caps.failed > 0) log('info', 'ads.cap_sweep', { ...caps });
+        const caps = await runGuard({ deadline: sweepDeadline(startedAt) });
+        if (caps.paused > 0 || caps.failed > 0 || caps.blind > 0 || caps.stoppedAtDeadline) log('info', 'ads.cap_sweep', { ...caps });
     } catch (err) {
         log('error', 'ads.cap_sweep_failed', describeError(err));
     }
@@ -1075,6 +1077,15 @@ router.get('/cron/publish', async (req, res) => {
             if (boosts.synced > 0 || boosts.failed > 0 || boosts.skipped > 0) log('info', 'cron.ads_sync', { ...boosts });
         } catch (adsErr) {
             log('error', 'cron.ads_sync_failed', describeError(adsErr));
+        }
+
+        // Ads health (src/services/ads/health.ts): every enabled tenant's token, ad account status and funding, and the version Meta
+        // served; each problem is an alert, once a day. Then the ads retention sweep (alerts after a year, finished ops after 180 days).
+        try {
+            const health = await runAdsHealth();
+            if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });
+        } catch (healthErr) {
+            log('error', 'cron.ads_health_failed', describeError(healthErr));
         }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —

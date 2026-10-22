@@ -68,6 +68,7 @@ import { defaultProfile } from '../services/profile/defaults.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
+import { needsCeiling, parseCeiling, readCeiling, saveCeiling, setAdsEnabled } from '../services/ads/settings.js';
 import { seedApiBrain } from '../services/studio/settings.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
@@ -2116,6 +2117,63 @@ router.get('/audit', async (req, res) => {
         res.json({ limit, ...listing });
     } catch (err) {
         failWith(res, err, 'admin.audit_list_failed', 'Failed to fetch the audit log.');
+    }
+});
+
+
+// ─── Ads Manager: the per-tenant switch and the ceiling (src/services/ads/settings.ts) ──────────────────────────
+
+async function tenantExists(id: string): Promise<boolean> {
+    return (await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [id])).length > 0;
+}
+
+/**
+ * Switch the Ads Manager on or off for a tenant (`ads.enabled.<tenant>`). Off, every /api/ads route answers 404 ADS_DISABLED and the guard
+ * and the health check skip the tenant. A managed client cannot be switched on before it has a ceiling: no client may ever set limits
+ * with nothing above them. The platform owner's own tenant needs none.
+ */
+router.post('/ads/tenants/:id/enabled', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        const enabled = req.body?.enabled;
+        if (typeof enabled !== 'boolean') {
+            res.status(400).json({ error: 'enabled is true or false.', code: 'INVALID', field: 'enabled' });
+            return;
+        }
+        if (enabled && (await needsCeiling(id)) && !(await readCeiling(id))) {
+            res.status(409).json({ error: 'Set this tenant\'s ads ceiling (max daily budget and monthly cap) before switching ads on.', code: 'CEILING_REQUIRED' });
+            return;
+        }
+        await setAdsEnabled(id, enabled, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsEnabledChanged, 'creator', id, { enabled });
+        res.json({ enabled });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_enabled_failed', 'Failed to change the ads switch.');
+    }
+});
+
+/** A tenant's ceiling: the most its owner may set as the max daily budget and the monthly cap. */
+router.post('/ads/tenants/:id/ceiling', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        const ceiling = parseCeiling(req.body);
+        if (!ceiling) {
+            res.status(400).json({ error: 'Give a max daily budget and a monthly cap above 0 (the daily one not above the monthly one).', code: 'INVALID', field: 'maxDailyBudget' });
+            return;
+        }
+        await saveCeiling(id, ceiling, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsCeilingChanged, 'creator', id, { ...ceiling });
+        res.json({ ceiling });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_ceiling_failed', 'Failed to save the ads ceiling.');
     }
 });
 

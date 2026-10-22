@@ -5,12 +5,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isSecretSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
-import { monthStartUtc, nextStatus, parseSettingsInput, parseStoredSettings, type AdsSettings } from './adBoosts.js';
+import { nextStatus, parseSettingsInput, parseStoredSettings, type AdsSettings } from './adBoosts.js';
 
 const TENANT = '0b6f3c2e-1111-4222-8333-944445555666';
-const EMPTY: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null };
+const EMPTY: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null, businessId: null, defaultCountries: [], leadRetentionDays: 90 };
 const LIMITS = { adAccountId: '509787248064459', maxDailyBudget: 10, monthlyCap: 100 };
-const SET: AdsSettings = { ...LIMITS, tokenSource: null, tokenExpiresAt: null };
+const SET: AdsSettings = { ...LIMITS, tokenSource: null, tokenExpiresAt: null, businessId: null, defaultCountries: [], leadRetentionDays: 90 };
 
 describe('ads settings storage', () => {
     it('encrypts the ads token, and only the token', () => {
@@ -71,13 +71,6 @@ describe('parseSettingsInput', () => {
             assert.equal(!parsed.ok && parsed.field, field, JSON.stringify(body));
         }
         assert.equal(parseSettingsInput({}, SET).ok, false, 'nothing to save');
-    });
-});
-
-describe('the cap month', () => {
-    it('is the UTC calendar month', () => {
-        assert.equal(monthStartUtc(new Date('2026-10-22T10:00:00Z')).toISOString(), '2026-10-01T00:00:00.000Z');
-        assert.equal(monthStartUtc(new Date('2026-11-01T00:30:00+03:00')).toISOString(), '2026-10-01T00:00:00.000Z', '00:30 in Riyadh is still October in UTC');
     });
 });
 

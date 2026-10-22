@@ -166,6 +166,9 @@ const SettingsPage = {
         this._seq++;
         this._view = null;
         this._acted = null;
+        this._adsView = null;
+        this._adsTest = null;
+        this._adsWarnings = [];
         this._saving.clear();
         this.unbindEdits();
         // The Page picker may still be open over the next screen; what it repaints on a change must not be this one.
@@ -185,6 +188,8 @@ const SettingsPage = {
      * replaced the whole screen: SE-09.)
      */
     async load() {
+        // A connection test describes the page that was read before it; a fresh read makes it history.
+        this._adsTest = null;
         const ctx = {
             now: Date.now(),
             canAdmin: App.canAdminister(),
@@ -213,7 +218,7 @@ const SettingsPage = {
             // Boost (Meta ads): the tenant OWNER's, so nobody else is asked. A 403 or a 404 (not deployed here) hides the card: no error panel for a
             // thing this person was never offered.
             ads: null, adsError: null, adsHidden: false,
-            // The ad accounts the saved token can reach: null = not asked (no token), [] = none; `adsAccountsFailed` = asked and refused.
+            // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
         const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad] = await Promise.allSettled([
@@ -256,7 +261,7 @@ const SettingsPage = {
         if (ib.status === 'fulfilled') ctx.iceBreakers = ib.value; else ctx.iceBreakersError = ib.reason;
         if (!App.canAdminister()) ctx.adsHidden = true;
         else if (ad.status === 'fulfilled') ctx.ads = ad.value;
-        else if (ad.reason && (ad.reason.status === 403 || ad.reason.status === 404)) ctx.adsHidden = true;
+        else if (ad.reason && (ad.reason.status === 403 || ad.reason.status === 404)) ctx.adsHidden = true; // 404: ADS_DISABLED for this workspace
         else ctx.adsError = ad.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
         if (!ctx.iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) ctx.iceBreakersError = new Error(t('iceb.moduleFailed'));
@@ -2739,6 +2744,19 @@ const SettingsPage = {
 
     /** The field each input maps to, for marking the one a refusal names. */
     ADS_FIELDS: { adAccountId: 'ads-account', token: 'ads-token', maxDailyBudget: 'ads-max-daily', monthlyCap: 'ads-monthly-cap' },
+    ADS_ALERT_FIELDS: { telegramChatId: 'ads-alert-chat', email: 'ads-alert-email', lang: 'ads-alert-lang' },
+
+    /** The four steps the server counts (`settings.steps`), in its order. */
+    ADS_STEP_IDS: Object.freeze(['token', 'account', 'payment', 'limits']),
+
+    /**
+     * What this card last drew from, so a connection test or a spending-limit change can redraw its own regions with the server's new answer
+     * (`{ ads, list, connectable }`), what the last connection test said (`null` until one runs on this read), and the warnings the last save
+     * came back with (`will_pause_all`), which stay on the card until the next save or until the page is left.
+     */
+    _adsView: null,
+    _adsTest: null,
+    _adsWarnings: [],
 
     /** `12.5 USD` as one isolated run, so the currency code never reorders an Arabic sentence. */
     adsMoney(amount, currency) {
@@ -2747,26 +2765,84 @@ const SettingsPage = {
         return `⁦${UI.formatNumber(n)}${currency ? ` ${currency}` : ''}⁩`;
     },
 
-    /** The ad account as Meta reported it when the server probed it with the saved token: name, currency, status, minimum daily budget. */
+    /**
+     * The ad account as the server stored it at the last check (not a live read, and the block says when that was): name, currency, status,
+     * how it is paid for, what it has spent, Meta's minimum daily budget. Then the one live action, "Test connection", and what it found.
+     */
     adsAccountBlock(ads) {
-        if (ads.accountError) {
-            return html`<div class="mbe-4">${UI.errorStrip(t('boost.settings.accountError'), ads.accountError, 'ads-account-error-strip')}</div>`;
-        }
+        const token = ads.token || {};
         const account = ads.account;
-        if (!account) return '';
-        const currency = account.currency || '';
+        const currency = account && account.currency ? account.currency : '';
+        const none = t('boost.settings.accountMinUnknown');
+        const has = (v) => v !== null && v !== undefined;
+        let details = '';
+        if (ads.accountError) {
+            details = html`<div class="mbe-4">${UI.errorStrip(t('boost.settings.accountError'), ads.accountError, 'ads-account-error-strip')}</div>`;
+        } else if (account) {
+            const label = ['active', 'disabled', 'unsettled', 'pending_review', 'closed'].includes(account.statusLabel) ? account.statusLabel : 'other';
+            let payment = none;
+            if (account.hasPaymentMethod === true) payment = t('ads.payment.on');
+            else if (account.hasPaymentMethod === false) payment = t('ads.payment.off');
+            const billing = account.isPrepay === true ? t('settings.ads.account.prepaid') : (account.isPrepay === false ? t('settings.ads.account.postpaid') : none);
+            details = html`
+                <div class="settings-block mbe-4" id="ads-account-probe">
+                    <p class="form-label">${t('settings.ads.account.title')}</p>
+                    <p class="form-hint" id="ads-checked-at">${account.syncedAt ? t('settings.ads.account.checkedAt', { time: `⁦${UI.formatDateTime(account.syncedAt)}⁩` }) : t('settings.ads.account.neverChecked')}</p>
+                    <dl class="stack gap-2 mbs-4">
+                        <div><dt class="form-hint">${t('boost.settings.accountName')}</dt><dd dir="auto">${account.name || '—'}</dd></div>
+                        <div><dt class="form-hint">${t('boost.settings.accountCurrency')}</dt><dd>${UI.ltr(currency || '—')}</dd></div>
+                        <div><dt class="form-hint">${t('boost.settings.accountStatus')}</dt><dd dir="auto">${t(`ads.account.status.${label}`)}${account.disableReason ? html` <span class="form-hint" dir="auto">${account.disableReason}</span>` : ''}</dd></div>
+                        <div><dt class="form-hint">${t('ads.account.payment')}</dt><dd id="ads-payment-state">${payment}</dd></div>
+                        <div><dt class="form-hint">${t('settings.ads.account.billing')}</dt><dd>${billing}</dd></div>
+                        <div><dt class="form-hint">${t('settings.ads.account.amountSpent')}</dt><dd>${has(account.amountSpent) ? UI.ltr(this.adsMoney(account.amountSpent, currency)) : none}</dd></div>
+                        <div><dt class="form-hint">${t('boost.settings.accountMin')}</dt><dd>${has(account.minDailyBudget) ? UI.ltr(this.adsMoney(account.minDailyBudget, currency)) : none}</dd></div>
+                    </dl>
+                    <p class="form-hint mbs-3">${t('settings.ads.account.taxNote')}</p>
+                </div>
+            `;
+        }
         return html`
-            <div class="settings-block mbe-4" id="ads-account-probe">
-                <p class="form-label">
-                    <span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.accountOk')}</span>
-                </p>
-                <dl class="stack gap-2 mbs-4">
-                    <div><dt class="form-hint">${t('boost.settings.accountName')}</dt><dd dir="auto">${account.name || '—'}</dd></div>
-                    <div><dt class="form-hint">${t('boost.settings.accountCurrency')}</dt><dd>${UI.ltr(currency || '—')}</dd></div>
-                    <div><dt class="form-hint">${t('boost.settings.accountStatus')}</dt><dd dir="auto">${UI.ltr(account.status === null || account.status === undefined ? '—' : String(account.status))}</dd></div>
-                    <div><dt class="form-hint">${t('boost.settings.accountMin')}</dt><dd>${account.minDailyBudget === null || account.minDailyBudget === undefined ? t('boost.settings.accountMinUnknown') : UI.ltr(this.adsMoney(account.minDailyBudget, currency))}</dd></div>
-                </dl>
+            ${details}
+            <div class="mbe-4" id="ads-test">
+                <div class="form-actions">
+                    ${token.set ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'plug-zap', label: t('settings.ads.test.button'),
+                        action: 'settings:testAdsConnection', id: 'ads-test-btn',
+                    }) : ''}
+                    ${UI.helpLink('ads#account-health', t('help.link.adsAccountHealth'))}
+                </div>
+                <p class="form-hint mbs-3">${token.set ? t('settings.ads.test.hint') : t('settings.ads.test.needToken')}</p>
+                <div id="ads-test-result" role="status" aria-live="polite">${this.adsTestResult()}</div>
             </div>
+        `;
+    },
+
+    /**
+     * What the last "Test connection" found: that it worked, the permissions the token has and the ones it lacks (each a Latin name, so an
+     * isolated run), the access level and the Meta version it was answered on. Nothing before a test has run on this read.
+     */
+    adsTestResult() {
+        const r = this._adsTest;
+        if (!r) return '';
+        const scopes = Array.isArray(r.scopes) ? r.scopes : [];
+        const missing = Array.isArray(r.missingScopes) ? r.missingScopes : [];
+        return html`
+            <p class="mbs-3"><span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('settings.ads.test.ok')}</span></p>
+            <p class="form-hint mbs-3">${t('settings.ads.test.scopes', { count: scopes.length })}</p>
+            ${missing.length ? html`
+                <div class="mbs-3" id="ads-missing-scopes">
+                    <div class="inline-error" role="alert">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        <div>
+                            <strong dir="auto">${t('settings.ads.test.missing', { count: missing.length })}</strong>
+                            <ul>${missing.map((scope) => html`<li>${UI.ltr(scope)}</li>`)}</ul>
+                            <span class="inline-error-hint">${t('settings.ads.test.missingHint')}</span>
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
+            ${r.tier ? html`<p class="form-hint mbs-3">${this.ltrIn('settings.ads.test.tier', { tier: String(r.tier) }, 'tier')}</p>` : ''}
+            ${r.servedVersion ? html`<p class="form-hint mbs-3">${this.ltrIn('settings.ads.test.version', { version: String(r.servedVersion) }, 'version')}</p>` : ''}
         `;
     },
 
@@ -2845,9 +2921,9 @@ const SettingsPage = {
                 })}
             </div>
         `;
-        if (token.set && ads.tokenSource === 'connect') {
-            const days = this.adsDaysLeft(ads.tokenExpiresAt);
-            const date = ads.tokenExpiresAt ? UI.formatDay(ads.tokenExpiresAt) : '';
+        if (token.set && token.source === 'connect') {
+            const days = this.adsDaysLeft(token.expiresAt);
+            const date = token.expiresAt ? UI.formatDay(token.expiresAt) : '';
             const warn = days !== null && days <= 14;
             return html`
                 <div class="settings-block mbe-4" id="ads-connect-block">
@@ -2870,34 +2946,162 @@ const SettingsPage = {
     },
 
     /**
-     * What Boost needs, as three things that are each done or not, so a first-time owner sees which one is missing (the old line said
-     * "needs the ad account, the token and both limits" and left the guessing to them). Done is a check mark AND a word, never colour alone.
-     * When all three are done: the way to the Ads screen, and the one thing this card cannot do for them (the payment method, Meta's alone).
+     * What Boost needs, as the server's four steps (`settings.steps`: token, account, payment, limits) that are each done or not, so a
+     * first-time owner sees which one is missing and what to do about it (the step's own hint). Done is a check mark AND a word, never
+     * colour alone. When all are done: the way to the Ads screen. The payment method is Meta's alone to add, so its step says where.
      */
-    adsChecklist(ads) {
-        const token = ads.token || {};
-        const items = [
-            { id: 'access', done: Boolean(token.set) },
-            { id: 'account', done: Boolean(ads.adAccountId) && !ads.accountError && Boolean(ads.account) },
-            { id: 'limits', done: ads.maxDailyBudget !== null && ads.maxDailyBudget !== undefined && ads.monthlyCap !== null && ads.monthlyCap !== undefined },
-        ];
+    adsSteps(ads) {
+        const steps = (Array.isArray(ads.steps) ? ads.steps : []).filter((step) => step && this.ADS_STEP_IDS.includes(step.id));
         const ready = Boolean(ads.configured);
         return html`
             <div class="mbe-4" id="ads-readiness">
                 <ul class="ads-checklist" id="ads-checklist" aria-label="${t('boost.settings.check.label')}">
-                    ${items.map((item) => html`
-                        <li class="ads-check ${item.done ? html.raw('ads-check--done') : ''}" data-check="${item.id}">
-                            <i data-lucide="${item.done ? 'check-circle' : 'circle-dashed'}" aria-hidden="true"></i>
-                            <span>${t(`boost.settings.check.${item.id}`)}</span>
-                            <span class="sr-only">${item.done ? t('boost.settings.check.done') : t('boost.settings.check.todo')}</span>
+                    ${steps.map((step) => html`
+                        <li class="ads-check ads-step ${step.done ? html.raw('ads-check--done') : ''}" data-check="${step.id}">
+                            <i data-lucide="${step.done ? 'check-circle' : 'circle-dashed'}" aria-hidden="true"></i>
+                            <span class="ads-step-text">
+                                <span>${t(`ads.step.${step.id}`)}</span>
+                                ${!step.done && step.hintCode ? html`<span class="form-hint">${t(`ads.stepHint.${step.hintCode}`)}</span>` : ''}
+                            </span>
+                            <span class="sr-only">${step.done ? t('boost.settings.check.done') : t('boost.settings.check.todo')}</span>
                         </li>
                     `)}
                 </ul>
                 ${ready ? html`
                     <p class="mbs-3" id="ads-ready-note"><span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.ready')}</span></p>
-                    <p class="form-hint mbs-3">${t('boost.settings.paymentNote')}</p>
                     <div class="form-actions mbs-3">${UI._anchorButton({ href: '#/ads', label: t('boost.settings.openAds'), icon: 'megaphone', variant: 'secondary', size: 'sm' })}</div>
                 ` : html`<p class="form-hint mbs-3">${t('boost.settings.notReady')}</p>`}
+                <p class="mbs-3">${UI.helpLink('ads#connect', t('help.link.adsConnect'))}</p>
+            </div>
+        `;
+    },
+
+    /**
+     * The part of the card that a connection test redraws: the steps, the warning a save left, where the access comes from, the account as
+     * stored and the test's own answer. (`connectable` is whether Facebook Connect is on, which a test does not change.)
+     */
+    adsTop(ads, connectable) {
+        return html`
+            ${this.adsSteps(ads)}
+            ${this._adsWarnings.includes('will_pause_all') ? html`<div class="mbe-4">${UI.errorStrip(t('settings.ads.pauseAll.title'), t('settings.ads.pauseAll.body'), 'ads-pause-warning')}</div>` : ''}
+            ${this.adsConnectBlock(ads, connectable)}
+            ${this.adsAccountBlock(ads)}
+        `;
+    },
+
+    /** "Your limit cannot exceed ...": the platform administrator's ceiling for this workspace, or nothing when there is none. */
+    adsCeilingLine(ads, currency) {
+        const c = ads.ceiling;
+        if (!c) return '';
+        const has = (v) => v !== null && v !== undefined;
+        let text = '';
+        if (has(c.maxDailyBudget) && has(c.monthlyCap)) text = t('settings.ads.ceiling', { daily: this.adsMoney(c.maxDailyBudget, currency), monthly: this.adsMoney(c.monthlyCap, currency) });
+        else if (has(c.maxDailyBudget)) text = t('settings.ads.ceilingDaily', { daily: this.adsMoney(c.maxDailyBudget, currency) });
+        else if (has(c.monthlyCap)) text = t('settings.ads.ceilingMonthly', { monthly: this.adsMoney(c.monthlyCap, currency) });
+        return text ? html`<p class="form-hint mbe-3" id="ads-ceiling">${text}</p>` : '';
+    },
+
+    /**
+     * Meta's own spending limit on the ad account: a second net under ours. The current value, how many changes Meta still allows today, and
+     * one amount to set it to (or Remove). Both go through a question first: this changes the account at Meta, not only here.
+     */
+    adsSpendCapBlock(ads) {
+        const token = ads.token || {};
+        if (!token.set || !ads.adAccountId) return '';
+        const cap = ads.spendCap || {};
+        const currency = ads.account && ads.account.currency ? ads.account.currency : '';
+        const has = cap.amount !== null && cap.amount !== undefined;
+        const left = Number.isFinite(Number(cap.changesLeftToday)) ? Number(cap.changesLeftToday) : null;
+        return html`
+            <div class="settings-block mbe-4" id="ads-spendcap">
+                <p class="form-label">${t('settings.ads.spendCap.title')}</p>
+                <p class="form-hint">${t('settings.ads.spendCap.intro')}</p>
+                <p class="mbs-3" id="ads-spendcap-current"><strong>${has ? t('settings.ads.spendCap.current', { amount: this.adsMoney(cap.amount, currency) }) : t('settings.ads.spendCap.none')}</strong></p>
+                ${left === null ? '' : html`<p class="form-hint" id="ads-spendcap-left">${t('settings.ads.spendCap.left', { count: left })}</p>`}
+                <div id="ads-spendcap-error"></div>
+                <form id="ads-spendcap-form" class="mbs-3" data-submit="settings:setAdsSpendCap" novalidate>
+                    <div class="form-group">
+                        <label class="form-label" for="ads-spendcap-amount">${t('settings.ads.spendCap.amount')}${currency ? html` <span class="label-optional">${UI.ltr(currency)}</span>` : ''}</label>
+                        <input class="field field-mono" id="ads-spendcap-amount" name="amount" type="number" dir="ltr" inputmode="decimal"
+                               min="0" step="any" aria-describedby="ads-spendcap-hint">
+                        <p class="form-hint" id="ads-spendcap-hint">${t('settings.ads.spendCap.hint')}</p>
+                    </div>
+                    <div class="form-actions">
+                        ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'check', label: t('settings.ads.spendCap.set'), id: 'ads-spendcap-set' })}
+                        ${has ? UI.button({ variant: 'secondary', size: 'sm', icon: 'x', label: t('settings.ads.spendCap.clear'), action: 'settings:clearAdsSpendCap', id: 'ads-spendcap-clear' }) : ''}
+                        ${UI.helpLink('ads#limits', t('help.link.adsSpendCap'))}
+                    </div>
+                </form>
+            </div>
+        `;
+    },
+
+    /** The wording of an alert kind: the catalogue's, else the server's own identifier. */
+    adsAlertKindLabel(kind) {
+        const key = `settings.ads.alert.kind.${kind}`;
+        const said = t(key);
+        return said === key ? String(kind) : said;
+    },
+
+    /**
+     * Who is told when ads need attention: a Telegram chat, an email, the language, and which kinds. The kinds the server will not let go
+     * silent (`alerts.required`) are drawn checked and locked, with the word, not only the look. "Send test" saves what is typed, then sends.
+     */
+    adsAlertsBlock(ads) {
+        const alerts = ads.alerts || {};
+        const kinds = alerts.kinds && typeof alerts.kinds === 'object' ? alerts.kinds : {};
+        const required = Array.isArray(alerts.required) ? alerts.required : [];
+        const lang = alerts.lang === 'en' ? 'en' : 'ar';
+        return html`
+            <div class="settings-block mbe-4" id="ads-alerts">
+                <p class="form-label">${t('settings.ads.alerts.title')}</p>
+                <p class="form-hint">${t('settings.ads.alerts.intro')}</p>
+                <div id="ads-alerts-error"></div>
+                <form id="ads-alerts-form" class="mbs-3" data-submit="settings:saveAdsAlerts" novalidate>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="ads-alert-chat">${t('settings.ads.alerts.chat')}</label>
+                            <input class="field field-mono" id="ads-alert-chat" name="telegramChatId" type="text" dir="ltr" maxlength="40"
+                                   autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="123456789"
+                                   value="${alerts.telegramChatId || ''}" aria-describedby="ads-alert-chat-hint">
+                            <p class="form-hint" id="ads-alert-chat-hint">${t('settings.ads.alerts.chatHint')}</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="ads-alert-email">${t('settings.ads.alerts.email')}</label>
+                            <input class="field field-mono" id="ads-alert-email" name="email" type="email" dir="ltr" maxlength="254"
+                                   autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="name@example.com"
+                                   value="${alerts.email || ''}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ads-alert-lang">${t('settings.ads.alerts.lang')}</label>
+                        <select class="select" id="ads-alert-lang" name="lang">
+                            <option value="ar" lang="ar" ${lang === 'ar' ? html.raw('selected') : ''}>${t('tenants.lang.ar')}</option>
+                            <option value="en" lang="en" ${lang === 'en' ? html.raw('selected') : ''}>${t('tenants.lang.en')}</option>
+                        </select>
+                    </div>
+                    <fieldset class="form-group fieldset-plain">
+                        <legend class="form-label">${t('settings.ads.alerts.kinds')}</legend>
+                        <div class="ads-kinds">
+                            ${Object.keys(kinds).map((kind) => {
+                                const locked = required.includes(kind);
+                                const on = locked || kinds[kind] === true;
+                                return html`
+                                    <div class="check-row">
+                                        <input type="checkbox" id="ads-kind-${kind}" name="kind_${kind}" ${on ? html.raw('checked') : ''} ${locked ? html.raw('disabled') : ''}>
+                                        <span class="check-text"><label class="check-label" for="ads-kind-${kind}">${this.adsAlertKindLabel(kind)}${locked ? html` <span class="form-hint">${t('settings.ads.alerts.required')}</span>` : ''}</label></span>
+                                    </div>
+                                `;
+                            })}
+                        </div>
+                    </fieldset>
+                    <div class="form-actions">
+                        ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.ads.alerts.save'), id: 'ads-alerts-save' })}
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'send', label: t('settings.ads.alerts.test'), action: 'settings:testAdsAlerts', id: 'ads-alerts-test' })}
+                        ${UI.helpLink('ads#alerts', t('help.link.adsAlerts'))}
+                    </div>
+                </form>
+                <div id="ads-alerts-result" role="status" aria-live="polite"></div>
             </div>
         `;
     },
@@ -2906,28 +3110,22 @@ const SettingsPage = {
         if (error || !ads) {
             return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
         }
+        this._adsView = { ads, list, connectable };
         const currency = ads.account && ads.account.currency ? ads.account.currency : '';
         const token = ads.token || {};
+        const limits = ads.limits || {};
         const num = (v) => (v === null || v === undefined ? '' : String(v));
         const unit = currency ? html` <span class="label-optional">${UI.ltr(currency)}</span>` : '';
-        const committed = Number(ads.committedThisMonth) || 0;
-        const fromConnect = Boolean(token.set && ads.tokenSource === 'connect');
+        const fromConnect = Boolean(token.set && token.source === 'connect');
         return html`
             <section class="section" id="settings-ads-card">
                 <h2 class="section-title">${t('boost.settings.title')}</h2>
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${t('boost.settings.intro')}</p>
-                    ${this.adsChecklist(ads)}
-                    ${this.adsConnectBlock(ads, connectable)}
-                    ${this.adsAccountBlock(ads)}
-                    <p class="form-hint mbe-4" id="ads-committed">
-                        ${ads.monthlyCap === null || ads.monthlyCap === undefined
-                            ? t('boost.settings.committedNoCap', { spent: this.adsMoney(committed, currency) })
-                            : t('boost.settings.committed', { spent: this.adsMoney(committed, currency), cap: this.adsMoney(ads.monthlyCap, currency) })}
-                    </p>
+                    <div id="ads-top">${this.adsTop(ads, connectable)}</div>
                     <div id="ads-settings-error"></div>
                     <form id="ads-settings-form" data-submit="settings:saveAds" novalidate>
-                        ${token.set ? this.adsAccountField(ads, list) : ''}
+                        <div id="ads-account-region">${token.set ? this.adsAccountField(ads, list) : ''}</div>
                         ${fromConnect ? '' : html`
                             <details class="settings-block mbe-4" id="ads-advanced" ${token.set || !connectable ? html.raw('open') : ''}>
                                 <summary class="form-label tiktok-app-summary">
@@ -2948,18 +3146,19 @@ const SettingsPage = {
                                 </div>
                             </details>
                         `}
-                        <p class="form-hint mbe-3" id="ads-limits-why">${t('boost.settings.limitsWhy')}</p>
+                        <p class="form-hint mbe-3" id="ads-limits-why">${t('boost.settings.limitsWhy')} ${UI.helpLink('ads#limits', t('help.link.adsLimits'))}</p>
+                        ${this.adsCeilingLine(ads, currency)}
                         <div class="form-grid">
                             <div class="form-group">
                                 <label class="form-label" for="ads-max-daily">${t('boost.settings.maxDaily')}${unit}</label>
                                 <input class="field field-mono" id="ads-max-daily" name="maxDailyBudget" type="number" dir="ltr" inputmode="decimal"
-                                       min="0" step="any" value="${num(ads.maxDailyBudget)}" aria-describedby="ads-max-daily-hint">
+                                       min="0" step="any" value="${num(limits.maxDailyBudget)}" aria-describedby="ads-max-daily-hint">
                                 <p class="form-hint" id="ads-max-daily-hint">${t('boost.settings.maxDailyHint')}</p>
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="ads-monthly-cap">${t('boost.settings.monthlyCap')}${unit}</label>
                                 <input class="field field-mono" id="ads-monthly-cap" name="monthlyCap" type="number" dir="ltr" inputmode="decimal"
-                                       min="0" step="any" value="${num(ads.monthlyCap)}" aria-describedby="ads-monthly-cap-hint">
+                                       min="0" step="any" value="${num(limits.monthlyCap)}" aria-describedby="ads-monthly-cap-hint">
                                 <p class="form-hint" id="ads-monthly-cap-hint">${t('boost.settings.monthlyCapHint')}</p>
                             </div>
                         </div>
@@ -2974,10 +3173,80 @@ const SettingsPage = {
                             }) : ''}
                         </div>
                     </form>
+                    <div class="mbs-4" id="ads-spendcap-region">${this.adsSpendCapBlock(ads)}</div>
+                    ${this.adsAlertsBlock(ads)}
                     <p class="form-hint mbs-4">${t('boost.settings.safety')}</p>
                 </div>
             </section>
         `;
+    },
+
+    /**
+     * The sentence for a refusal. Meta-side limits say when to try again (`retryAt`, in the interface language); a dead token and a limit over
+     * the platform's ceiling say what to do. Anything else is the server's own sentence.
+     */
+    adsFailure(err) {
+        const code = err && err.code;
+        const body = (err && err.body) || {};
+        const at = body.retryAt ? UI.formatTime(body.retryAt) : '';
+        if (at && code === 'RATE_LIMITED') return t('ads.err.rateLimited', { time: `⁦${at}⁩` });
+        if (at && code === 'EDIT_LIMIT') return t('ads.err.editLimit', { time: `⁦${at}⁩` });
+        if (code === 'TOKEN_INVALID') return t('settings.ads.err.tokenInvalid');
+        if (code === 'OVER_CEILING') {
+            const view = this._adsView;
+            const ceiling = view && view.ads && view.ads.ceiling ? view.ads.ceiling : null;
+            const limit = ceiling && (body.field === 'maxDailyBudget' || body.field === 'monthlyCap') ? ceiling[body.field] : null;
+            if (limit !== null && limit !== undefined) {
+                const currency = view.ads.account && view.ads.account.currency ? view.ads.account.currency : '';
+                return t(`settings.ads.err.overCeiling.${body.field}`, { limit: this.adsMoney(limit, currency) });
+            }
+        }
+        return (err && err.message) || t('error.unexpected');
+    },
+
+    /**
+     * Redraw what a new SettingsView changes without redrawing the card, so what the owner has typed into the limits form is kept: the top
+     * (steps, account, test result), the account picker and the spending-limit row. `accounts` is the picker's new list, when there is one.
+     */
+    adsRepaint(settings, accounts) {
+        const view = this._adsView;
+        if (!view || !settings) return;
+        const picked = document.getElementById('ads-account');
+        const typed = picked && picked.options && picked.value ? picked.value : '';
+        const list = Array.isArray(accounts) ? { accounts, failed: false } : view.list;
+        this._adsView = { ads: settings, list, connectable: view.connectable };
+        const draw = (id, markup) => {
+            const host = document.getElementById(id);
+            if (!host) return;
+            host.innerHTML = esc(markup);
+            UI.icons(host);
+        };
+        draw('ads-top', this.adsTop(settings, view.connectable));
+        draw('ads-account-region', settings.token && settings.token.set ? this.adsAccountField(typed ? Object.assign({}, settings, { adAccountId: typed }) : settings, list) : '');
+        draw('ads-spendcap-region', this.adsSpendCapBlock(settings));
+        this.syncDirtyDots();
+    },
+
+    /** «اختبر الاتصال»: the one live check (one or two Meta calls). It redraws the steps, the account, the picker and the spending limit from the answer. */
+    async testAdsConnection(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        const host = document.getElementById('ads-test-result');
+        if (host) host.innerHTML = '';
+        try {
+            const result = await API.testAdsSettings();
+            this._adsTest = result && typeof result === 'object' ? result : null;
+            this.adsRepaint(result && result.settings, result && result.assets && result.assets.adAccounts);
+            Motion.announce(t('settings.ads.test.done'));
+        } catch (err) {
+            const now = document.getElementById('ads-test-result');
+            if (now) {
+                now.innerHTML = esc(UI.errorStrip(this.adsFailure(err), '', 'ads-test-strip'));
+                UI.icons(now);
+            }
+        } finally {
+            restore();
+        }
     },
 
     showAdsError(field, message) {
@@ -3020,15 +3289,19 @@ const SettingsPage = {
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
-            await API.saveAdsSettings(payload);
+            const answer = await API.saveAdsSettings(payload);
+            // A cap at or below this month's spend saved fine, and the guard ran at once: every active campaign is paused. Said on the card
+            // (until the next save) and as a toast, because "Saved" alone would hide the biggest thing that just happened.
+            this._adsWarnings = answer && Array.isArray(answer.warnings) ? answer.warnings : [];
             UI.toast(t('boost.settings.saved'), 'success');
+            if (this._adsWarnings.includes('will_pause_all')) UI.toast(t('settings.ads.pauseAll.toast'), 'warning');
             await this.render();
             UI.restoreFocus(focus);
         } catch (err) {
             restore();
             const field = err && err.body && err.body.field;
-            // The server's sentence is what the person reads; the field it names is the one that is marked.
-            this.showAdsError(field, (err && err.message) || t('error.unexpected'));
+            // The sentence says what to do; the field the server names is the one that is marked.
+            this.showAdsError(field, this.adsFailure(err));
         }
     },
 
@@ -3048,6 +3321,149 @@ const SettingsPage = {
         await API.saveAdsSettings({ token: '' });
         UI.toast(t('boost.settings.tokenCleared'), 'success');
         await this.render();
+    },
+
+    // ─── Meta's spending limit on the account (owner) ──────────────────────────────────────────────────
+
+    showAdsSpendCapError(message) {
+        const host = document.getElementById('ads-spendcap-error');
+        const input = document.getElementById('ads-spendcap-amount');
+        if (input) UI.clearInvalid(input.form || input);
+        if (!host) { UI.toast(message, 'error'); return; }
+        host.innerHTML = esc(UI.errorStrip(message, '', 'ads-spendcap-error-strip'));
+        UI.icons(host);
+        if (input) UI.markInvalid(input, 'ads-spendcap-error-strip');
+    },
+
+    /** The amount is typed, then asked about: this changes the ad account at Meta, so it is never one click. */
+    setAdsSpendCap(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        const host = document.getElementById('ads-spendcap-error');
+        if (host) host.innerHTML = '';
+        const input = document.getElementById('ads-spendcap-amount');
+        const raw = String(input ? input.value : '').trim();
+        const amount = raw === '' ? NaN : Number(raw);
+        if (!Number.isFinite(amount) || amount <= 0) { this.showAdsSpendCapError(t('settings.ads.spendCap.invalid')); return; }
+        const view = this._adsView;
+        const currency = view && view.ads.account && view.ads.account.currency ? view.ads.account.currency : '';
+        const left = view && view.ads.spendCap ? view.ads.spendCap.changesLeftToday : null;
+        Admin.confirm({
+            title: t('settings.ads.spendCap.setTitle'),
+            body: t('settings.ads.spendCap.setBody', { amount: this.adsMoney(amount, currency) }),
+            hint: Number.isFinite(Number(left)) ? t('settings.ads.spendCap.setHint', { count: Number(left) }) : t('settings.ads.spendCap.setHintNoCount'),
+            tone: 'primary',
+            confirmLabel: t('settings.ads.spendCap.set'),
+            confirmIcon: 'check',
+            onConfirm: () => SettingsPage.applyAdsSpendCap(amount),
+        });
+    },
+
+    clearAdsSpendCap(btn) {
+        if (!btn || btn.disabled) return;
+        const view = this._adsView;
+        const left = view && view.ads.spendCap ? view.ads.spendCap.changesLeftToday : null;
+        Admin.confirm({
+            title: t('settings.ads.spendCap.clearTitle'),
+            body: t('settings.ads.spendCap.clearBody'),
+            hint: Number.isFinite(Number(left)) ? t('settings.ads.spendCap.setHint', { count: Number(left) }) : t('settings.ads.spendCap.setHintNoCount'),
+            tone: 'primary',
+            confirmLabel: t('settings.ads.spendCap.clear'),
+            confirmIcon: 'x',
+            onConfirm: () => SettingsPage.applyAdsSpendCap(null),
+        });
+    },
+
+    /** The question was answered yes. A refusal is thrown, so the dialog stays open and says why (and when to try again, on EDIT_LIMIT). */
+    async applyAdsSpendCap(amount) {
+        let answer;
+        try {
+            answer = await API.setAdsSpendCap({ amount, confirm: true });
+        } catch (err) {
+            throw new Error(this.adsFailure(err));
+        }
+        const view = this._adsView;
+        if (view && answer && answer.spendCap) {
+            const next = Object.assign({}, view.ads, { spendCap: answer.spendCap });
+            this.adsRepaint(next, null);
+        }
+        UI.toast(amount === null ? t('settings.ads.spendCap.cleared') : t('settings.ads.spendCap.saved'), 'success');
+        // Meta took the change but a read-back did not show it: say so rather than let "saved" stand for something unconfirmed.
+        if (answer && answer.verified === false) UI.toast(t('settings.ads.spendCap.unverified'), 'warning');
+    },
+
+    // ─── Who is told when ads need attention (owner) ───────────────────────────────────────────────────
+
+    showAdsAlertsError(field, message) {
+        const host = document.getElementById('ads-alerts-error');
+        const form = document.getElementById('ads-alerts-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'ads-alerts-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.ADS_ALERT_FIELDS[field] ? document.getElementById(this.ADS_ALERT_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    /** What the alerts form says: a blank recipient clears it, the language, and each kind that can be switched (the locked ones are the server's). */
+    readAdsAlerts(form) {
+        const data = new FormData(form);
+        const read = (name) => (data.get(name) || '').toString().trim();
+        const view = this._adsView;
+        const alerts = (view && view.ads.alerts) || {};
+        const required = Array.isArray(alerts.required) ? alerts.required : [];
+        const kinds = {};
+        Object.keys(alerts.kinds || {}).forEach((kind) => {
+            if (!required.includes(kind)) kinds[kind] = data.get(`kind_${kind}`) !== null;
+        });
+        return { telegramChatId: read('telegramChatId') || null, email: read('email') || null, lang: read('lang') === 'en' ? 'en' : 'ar', kinds };
+    },
+
+    /** What the test message did, per channel, in words: sent, failed, or off (no recipient saved for it). */
+    adsAlertsTestResult(test) {
+        const row = (channel) => {
+            const outcome = test && ['sent', 'failed', 'off'].includes(test[channel]) ? test[channel] : 'off';
+            const icon = outcome === 'sent' ? 'check-circle' : (outcome === 'failed' ? 'alert-circle' : 'circle-dashed');
+            const tone = outcome === 'sent' ? 'health-fresh' : (outcome === 'failed' ? 'health-stale' : '');
+            return html`<li><span class="health-pill ${html.raw(tone)}" data-channel="${channel}" data-outcome="${outcome}"><i data-lucide="${icon}" aria-hidden="true"></i> ${t(`settings.ads.alerts.channel.${channel}`)}: ${t(`settings.ads.alerts.result.${outcome}`)}</span></li>`;
+        };
+        return html`<ul class="stack gap-2 mbs-3">${row('telegram')}${row('email')}</ul>`;
+    },
+
+    /** Save the recipients and kinds, and with `test` send a test message to what is now saved; the answer's `alerts` is what the card holds from here. */
+    async sendAdsAlerts(form, test, restore) {
+        const host = document.getElementById('ads-alerts-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+        const result = document.getElementById('ads-alerts-result');
+        if (result) result.innerHTML = '';
+        try {
+            const body = this.readAdsAlerts(form);
+            const answer = await API.saveAdsAlerts(test ? Object.assign({}, body, { test: true }) : body);
+            const view = this._adsView;
+            if (view && answer && answer.alerts) this._adsView = { ads: Object.assign({}, view.ads, { alerts: answer.alerts }), list: view.list, connectable: view.connectable };
+            UI.toast(t('settings.ads.alerts.saved'), 'success');
+            if (test && result) { result.innerHTML = esc(this.adsAlertsTestResult(answer && answer.test)); UI.icons(result); }
+        } catch (err) {
+            this.showAdsAlertsError(err && err.body && err.body.field, this.adsFailure(err));
+        } finally {
+            if (restore) restore();
+        }
+    },
+
+    saveAdsAlerts(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return undefined;
+        return this.sendAdsAlerts(form, false, restore);
+    },
+
+    testAdsAlerts(btn) {
+        const form = document.getElementById('ads-alerts-form');
+        const restore = form ? UI.actionBusy(btn) : null;
+        if (!restore) return undefined;
+        return this.sendAdsAlerts(form, true, restore);
     },
 
     // ─── Onboarding (platform admin): how invite links behave ─────────────────────────────────────────
@@ -3506,6 +3922,11 @@ UI.registerActions('settings', {
     saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
     saveAds: (el, e) => SettingsPage.saveAds(el, e),
     clearAdsToken: (el) => SettingsPage.clearAdsToken(el),
+    testAdsConnection: (el) => SettingsPage.testAdsConnection(el),
+    setAdsSpendCap: (el, e) => SettingsPage.setAdsSpendCap(el, e),
+    clearAdsSpendCap: (el) => SettingsPage.clearAdsSpendCap(el),
+    saveAdsAlerts: (el, e) => SettingsPage.saveAdsAlerts(el, e),
+    testAdsAlerts: (el) => SettingsPage.testAdsAlerts(el),
     testNotify: (el) => SettingsPage.testNotify(el),
     removeNotifyToken: (el) => SettingsPage.removeNotifyToken(el),
     testNotifyEmail: (el) => SettingsPage.testNotifyEmail(el),
