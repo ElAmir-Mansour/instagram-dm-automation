@@ -9,7 +9,7 @@ import { decryptBytes, personKey } from '../../config/crypto.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { AdsGraphError } from './graph.js';
 import {
-    buildFormParams, catchUpLeads, CONSENT_KEY, consentOf, countLeadsForErasure, createLeadForm, eraseLeads, fetchAndStoreLead,
+    buildFormParams, catchUpLeads, CONSENT_KEY, consentOf, createLeadForm, fetchAndStoreLead,
     leadPersonKeysForHandle, leadsCsv, personKeysOf, purgeExpiredLeads, restrictedCategory, setLeadsGraphForTests, validateForm,
     type LeadsGraph, type LeadView,
 } from './leads.js';
@@ -318,19 +318,6 @@ describe('erasure', () => {
         assert.ok(leadPersonKeysForHandle('01012345678').includes(personKey('201012345678')));
         assert.ok(leadPersonKeysForHandle('+201012345678').includes(personKey('201012345678')));
         assert.deepEqual(leadPersonKeysForHandle('ali_ahmed'), []);
-    });
-
-    it('counts and deletes whole rows by person key', async () => {
-        db.routes.push(
-            [/SELECT COUNT\(\*\)::int AS n FROM ads_leads WHERE person_keys && \$1/, () => ({ rows: [{ n: 2 }] })],
-            [/DELETE FROM ads_leads WHERE person_keys && \$1/, () => ({ rows: [], rowCount: 2 })],
-        );
-        const { pool } = await import('../../config/db.js');
-        const keys = [personKey('ali@example.com')];
-        assert.equal(await countLeadsForErasure(keys), 2);
-        assert.equal(await eraseLeads(pool as any, keys), 2);
-        assert.equal(await eraseLeads(pool as any, []), 0, 'no key, no statement');
-        assert.equal(db.ran(/DELETE FROM ads_leads/).length, 1);
     });
 
     it('personKeysOf and consentOf read the answers', () => {

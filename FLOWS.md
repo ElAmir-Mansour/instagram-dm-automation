@@ -2640,29 +2640,29 @@ routes in `src/routes/adsLeads.ts` (mounted in `adsRouter` after the ADS_DISABLE
 not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing contacts a lead.**
 
 1. **The lock.** `activeSignoff(creatorId, 'lead_ads')` (**`legalSignoff.ts:139`**). Locked: `POST /api/ads/lead-forms` →
-   403 `LOCKED_LEGAL` (**`leads.ts:365`** `createLeadForm`, before any write); a `goal: 'leads'` draft → 403 `LOCKED_LEGAL`, or a
-   country outside the sign-off's `countries` → 403 on `adsets.<i>.targeting.countries` (**`leads.ts:588`** `checkLeadSpec`,
+   403 `LOCKED_LEGAL` (**`leads.ts:363`** `createLeadForm`, before any write); a `goal: 'leads'` draft → 403 `LOCKED_LEGAL`, or a
+   country outside the sign-off's `countries` → 403 on `adsets.<i>.targeting.countries` (**`leads.ts:586`** `checkLeadSpec`,
    called by **`drafts.ts:321`** validate and **`:443`** create); `fetchAndStoreLead` answers `locked` without a Graph call.
 2. **The subscription.** Only a Page subscribed to `leadgen` is ever sent a lead. `subscribePage(…, extraFields)`
    (**`metaLogin.ts:571`**) POSTs `WEBHOOK_FIELDS` + `leadgenFieldsFor(creatorId)` (**`:553`**: `['leadgen']` while a lead_ads
    sign-off is active), and the connect path passes it too (**`:685`**), so a reconnect never drops it. The admin's sign-off routes
-   call `syncLeadgenSubscription` (**`leads.ts:633`**) after a lead_ads record and after any revoke (**`admin.ts:1307`**,
-   **`:1335`**); the catch-up re-syncs every 6 h. Prerequisite outside the code: the app-level Page webhook has the `leadgen` field.
-3. **A form.** `POST /api/ads/lead-forms` (owner; **`adsLeads.ts:82`**) → `validateForm` (**`leads.ts:144`**: `AR_AR` default,
+   call `syncLeadgenSubscription` (**`leads.ts:631`**) after a lead_ads record and after any revoke (**`admin.ts:1310`**,
+   **`:1338`**); the catch-up re-syncs every 6 h. Prerequisite outside the code: the app-level Page webhook has the `leadgen` field.
+3. **A form.** `POST /api/ads/lead-forms` (owner; **`adsLeads.ts:82`**) → `validateForm` (**`leads.ts:142`**: `AR_AR` default,
    an allow-list of question types, CUSTOM labels checked by `restrictedCategory`, https privacy and thank-you links, the optional
    `contact_consent` question) → a `pending` row keyed by the dialog's idempotency key → ONE `POST /{page_id}/leadgen_forms`
-   (`buildFormParams`, **`:238`**) → `active` + `meta_id`, or `failed` with Meta's sentence; no answer leaves it `pending` for the
+   (`buildFormParams`, **`:236`**) → `active` + `meta_id`, or `failed` with Meta's sentence; no answer leaves it `pending` for the
    catch-up to adopt by name. Audit `ads.lead_form_saved`.
 4. **A lead arrives.** Meta's Page webhook `changes[].field === 'leadgen'` → `planLead` (**`router.ts:126`**, branch at **`:186`**;
    the inline fallback at **`:301`**) → one `ads.lead` job, ids only, dedupe `lead:<leadgen_id>` → **`handlers.ts:80`** →
-   `fetchAndStoreLead` (**`leads.ts:481`**): tenant by Page id, the lock, `GET /{leadgen_id}?fields=id,created_time,ad_id,form_id,
+   `fetchAndStoreLead` (**`leads.ts:479`**): tenant by Page id, the lock, `GET /{leadgen_id}?fields=id,created_time,ad_id,form_id,
    field_data` with the Page token (a throttle → `throttled`, never retried; a refusal → `failed`; no answer → throws, the job
-   retries) → `storeLead` (**`:452`**): `answers_enc = encryptBytes(field_data)`, `person_keys` = HMAC of the normalised email and
+   retries) → `storeLead` (**`:450`**): `answers_enc = encryptBytes(field_data)`, `person_keys` = HMAC of the normalised email and
    phone, `consent_contact`, `retain_until = created_time + leadRetentionDays`, `ON CONFLICT (meta_lead_id) DO NOTHING`, and the
    form's `last_lead_seen_at` moves.
-5. **The catch-up and retention.** The drain (**`api.ts:436`**) calls `sweepLeads` (**`leads.ts:772`**): `purgeExpiredLeads`
-   (**`:611`**: per tenant, answers and keys NULLed, `purged_at` set, where `retain_until` passed or `created_time` is older than
-   today's setting; the row stays as a count) then `catchUpLeads` (**`:723`**: tenants with a sign-off, at most every 6 h by
+5. **The catch-up and retention.** The drain (**`api.ts:436`**) calls `sweepLeads` (**`leads.ts:770`**): `purgeExpiredLeads`
+   (**`:609`**: per tenant, answers and keys NULLed, `purged_at` set, where `retain_until` passed or `created_time` is older than
+   today's setting; the row stays as a count) then `catchUpLeads` (**`:721`**: tenants with a sign-off, at most every 6 h by
    `ads.leads_caught_up.<t>`; the Page's forms reconciled; per active form `/{form_id}/leads` with `filtering` `time_created
    GREATER_THAN` the newest seen − 10 min, ≤ 10 pages; a throttle ends that tenant's run).
 6. **Reading.** `GET /api/ads/lead-forms` (viewer; **`adsLeads.ts:65`**) answers the lock, the countries and the forms;
@@ -2670,7 +2670,7 @@ not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing
    (`ads.leads_exported`, count and filters only) before the file is sent (`leadsCsv`: BOM, every cell quoted, formulas defused).
 7. **Erasure.** `resolveErasureTarget` adds `leadPersonKeys` (**`erasure.ts:122`**, `leadPersonKeysForHandle`: an email, or a phone
    also completed with EG and SA dial codes); counts, preview and `executeErasure` include `ads_leads WHERE person_keys && $4`;
-   the rows are deleted whole inside the erasure's transaction (**`:598`**).
+   the rows are deleted whole inside the erasure's transaction (**`:599`**; the statement lives in erasure.ts, the one cross-tenant path, not in the ads module).
 
 ## 8. Meta login → a connected Page
 

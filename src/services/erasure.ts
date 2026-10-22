@@ -38,7 +38,7 @@ import { pool } from '../config/db.js';
 import { queryRows } from '../db/query.js';
 import { signWithSessionSecret } from '../middleware/auth.js';
 import { log } from '../utils/log.js';
-import { eraseLeads, leadPersonKeysForHandle } from './ads/leads.js';
+import { leadPersonKeysForHandle } from './ads/leads.js';
 
 /** Long enough to read the preview and decide; short enough that a leaked token is stale. */
 export const ERASURE_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -595,7 +595,8 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
         );
         // Lead-ad leads (A10) that gave this email or phone number: whole rows, answers and all. Leads hold no conversation or username, so
         // the keyed hash is the only way to them; an Instagram handle has no key and deletes no lead.
-        const deletedLeads = await eraseLeads(client, target.leadPersonKeys);
+        const deletedLeads = target.leadPersonKeys.length === 0 ? 0
+            : (await client.query('DELETE FROM ads_leads WHERE person_keys && $1::text[]', [target.leadPersonKeys])).rowCount ?? 0;
 
         handedOff = true;
         return {

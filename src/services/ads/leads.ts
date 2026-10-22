@@ -26,9 +26,7 @@
  *   Nothing here logs an answer, an email or a phone number, and nothing here is ever given to an AI. Nothing here contacts a lead either:
  *   the consent answer is stored and shown, and that is all.
  */
-import type { PoolClient } from 'pg';
 import { decryptBytes, encryptBytes, personKey } from '../../config/crypto.js';
-import { pool } from '../../config/db.js';
 import { queryCount, queryOne, queryRows } from '../../db/query.js';
 import type { LeadJobPayload } from '../../jobs/types.js';
 import { describeError, log } from '../../utils/log.js';
@@ -394,19 +392,19 @@ export async function createLeadForm(creatorId: string, input: unknown): Promise
         const answer = await graph.create(`${page.pageId}/leadgen_forms`, buildFormParams(form), page.token, 'ads.lead_form_create', creatorId);
         const metaId = answer?.id === undefined || answer?.id === null ? null : String(answer.id);
         if (!metaId) throw new Error('Meta answered without a form id.');
-        await queryCount(`UPDATE ads_lead_forms SET meta_id = $2, status = 'active', error = NULL, updated_at = NOW() WHERE id = $1`, [inserted.id, metaId]);
+        await queryCount(`UPDATE ads_lead_forms SET meta_id = $2, status = 'active', error = NULL, updated_at = NOW() WHERE id = $1 AND creator_id = $3`, [inserted.id, metaId, creatorId]);
     } catch (err) {
         if (metaAnswered(err) || isThrottle(err)) {
             const message = isThrottle(err) ? 'Meta is limiting requests right now; nothing was created. Try again in a few minutes.' : metaMessage(err);
-            await queryCount(`UPDATE ads_lead_forms SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1`, [inserted.id, message]);
+            await queryCount(`UPDATE ads_lead_forms SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1 AND creator_id = $3`, [inserted.id, message, creatorId]);
             log('warn', 'ads.lead_form_failed', { creator_id: creatorId, form_id: inserted.id, ...describeError(err) });
             return { ok: false, code: 'META_ERROR', error: message };
         }
         // No answer: Meta may or may not have the form. Left 'pending' for the catch-up to find by name; never POSTed again.
-        await queryCount(`UPDATE ads_lead_forms SET error = $2, updated_at = NOW() WHERE id = $1`, [inserted.id, 'Meta did not answer; checking the Page for this form.']);
+        await queryCount(`UPDATE ads_lead_forms SET error = $2, updated_at = NOW() WHERE id = $1 AND creator_id = $3`, [inserted.id, 'Meta did not answer; checking the Page for this form.', creatorId]);
         log('warn', 'ads.lead_form_unconfirmed', { creator_id: creatorId, form_id: inserted.id, ...describeError(err) });
     }
-    const row = await queryOne<FormRow>(`SELECT ${FORM_COLUMNS}, 0 AS lead_count FROM ads_lead_forms f WHERE f.id = $1`, [inserted.id]);
+    const row = await queryOne<FormRow>(`SELECT ${FORM_COLUMNS}, 0 AS lead_count FROM ads_lead_forms f WHERE f.id = $1 AND f.creator_id = $2`, [inserted.id, creatorId]);
     return { ok: true, form: toFormView(row!) };
 }
 
@@ -713,7 +711,7 @@ async function catchUpForm(creatorId: string, page: PageAccess, form: { id: stri
         after = res?.paging?.next ? (res?.paging?.cursors?.after ?? null) : null;
         if (!after) break;
     }
-    await queryCount('UPDATE ads_lead_forms SET caught_up_at = NOW() WHERE id = $1', [form.id]);
+    await queryCount('UPDATE ads_lead_forms SET caught_up_at = NOW() WHERE id = $1 AND creator_id = $2', [form.id, creatorId]);
 }
 
 /**
@@ -777,9 +775,9 @@ export async function sweepLeads(now = new Date(), deadline = Number.POSITIVE_IN
     return { purged, catchUp };
 }
 
-// ─── Erasure (src/services/erasure.ts) ──────────────────────────────────────────────────────────
-
-interface Queryable { query(sql: string, params?: unknown[]): Promise<{ rows: any[]; rowCount: number | null }> }
+// ─── Erasure (src/services/erasure.ts) ─────
+// Only the keys live here. The statements that count and delete a person's leads are in erasure.ts: erasure is the one deliberately
+// cross-tenant operation (one request removes the person from every workspace), and the ads module keeps every statement inside one tenant.─────────────────────────────────────────────────────
 
 /**
  * The erasure keys an erasure handle stands for: an email, or a phone number (as given, and completed with Egypt's and Saudi Arabia's dial
@@ -796,17 +794,4 @@ export function leadPersonKeysForHandle(handle: string): string[] {
         }
     }
     return [...keys];
-}
-
-export async function countLeadsForErasure(personKeys: readonly string[], exec: Queryable = pool): Promise<number> {
-    if (personKeys.length === 0) return 0;
-    const r = await exec.query('SELECT COUNT(*)::int AS n FROM ads_leads WHERE person_keys && $1::text[]', [personKeys]);
-    return r.rows[0]?.n ?? 0;
-}
-
-/** Delete the person's leads, the whole row: erasure is not retention, so no count-only record is kept. Inside the erasure's transaction. */
-export async function eraseLeads(exec: Queryable | PoolClient, personKeys: readonly string[]): Promise<number> {
-    if (personKeys.length === 0) return 0;
-    const r = await exec.query('DELETE FROM ads_leads WHERE person_keys && $1::text[]', [personKeys]);
-    return r.rowCount ?? 0;
 }
