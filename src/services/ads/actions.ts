@@ -17,6 +17,7 @@ import { AdsError, metaRefusal } from '../adBoosts.js';
 import { CAMPAIGN_FIELDS, checkAndStartSpend, checkDailyMax, isActive, lifetimeSpend, readMonth, remainingThisMonth, type RawCampaign } from './money.js';
 import { fromMinorUnits, getNode, graphTime, roundMoney, toMinorUnits } from './metaAds.js';
 import { childrenOf, getObject, type ObjectRow } from './mirror.js';
+import { AdsObjectNotFoundError, NotOwnObjectError, ownObject as checkOwnObject } from './ownership.js';
 import type { GraphParams } from './graph.js';
 import { copyParams } from './lifecycle.js';
 import { BUDGET_EDITS_PER_HOUR, editsLeftThisHour, enqueue, getOp, runOpInline, type AdsOpKind, type EnqueueInput, type OpActor, type OpPayload, type OpView } from './ops.js';
@@ -50,8 +51,16 @@ async function configured(creatorId: string): Promise<{ settings: ConfiguredSett
 export async function ownObject(creatorId: string, adAccountId: string | null, id: unknown): Promise<ObjectRow> {
     if (typeof id !== 'string' || !/^[0-9a-zA-Z-]{5,40}$/.test(id)) throw new AdsError(404, 'NOT_FOUND', 'No such object.');
     const row = await getObject(creatorId, id);
-    if (!row || !adAccountId || row.adAccountId !== adAccountId) throw new AdsError(404, 'NOT_FOUND', 'No such object in your ad account.');
-    return row;
+    if (row && adAccountId && row.adAccountId === adAccountId) return row;
+    // Not this tenant's object in its current account. The A11 check (ads/ownership.ts) says whose it is: another tenant's, or one from an
+    // account this tenant left, is NOT_OWN_OBJECT, logged and audited; an id nobody has is NOT_FOUND.
+    try {
+        await checkOwnObject(creatorId, adAccountId, id);
+    } catch (err) {
+        if (err instanceof NotOwnObjectError) throw new AdsError(403, 'NOT_OWN_OBJECT', err.message);
+        if (!(err instanceof AdsObjectNotFoundError)) throw err;
+    }
+    throw new AdsError(404, 'NOT_FOUND', 'No such object in your ad account.');
 }
 
 function idempotencyKey(ctx: ActionContext, what: string, now: Date): string {

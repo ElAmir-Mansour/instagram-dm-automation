@@ -1,0 +1,48 @@
+/*
+ * Client ads (platform admin): the rules only this page uses.
+ *
+ * Loaded by App.loadPageModule next to dashboard/js/pages/admin_ads.js, with the same ?v=, because the page's entry in App.pages declares
+ * `css: true`. Cards, pills, badges, switches, forms and buttons come from styles.css; what is here is the card's layout, the cap meter and
+ * the sign-off rows. Logical properties only, tokens only: the page is read right to left first.
+ */
+.aa-toolbar { justify-content: space-between; margin-block-end: var(--space-4); }
+.aa-list { display: grid; gap: var(--space-5); }
+.aa-card { padding: var(--space-5); display: grid; gap: var(--space-5); }
+
+.aa-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); flex-wrap: wrap; }
+.aa-title { display: grid; gap: var(--space-2); min-inline-size: 0; }
+.aa-name { margin: 0; font-size: var(--fs-400); overflow-wrap: anywhere; }
+.aa-switch { display: grid; gap: var(--space-2); max-inline-size: 360px; }
+.aa-switch p { margin: 0; }
+
+.aa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-5); }
+.aa-block { display: grid; gap: var(--space-3); align-content: start; min-inline-size: 0; }
+.aa-block p, .aa-section p { margin: 0; }
+.aa-h3 { margin: 0; font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.aa-section { display: grid; gap: var(--space-3); padding-block-start: var(--space-5); border-block-start: 1px solid var(--border-subtle); }
+.aa-section-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.aa-block .aa-section-head { justify-content: flex-start; }
+.aa-facts { display: grid; gap: var(--space-3); margin: 0; }
+
+/* The share of the monthly cap used: the native <progress>, so its value is read by assistive technology without a role of our own. */
+.aa-cap-figure { font-weight: var(--fw-semibold); }
+.aa-meter { inline-size: 100%; block-size: var(--space-2); border: 0; border-radius: var(--radius-pill); overflow: hidden; background: var(--surface-glass-hover); appearance: none; }
+.aa-meter::-webkit-progress-bar { background: var(--surface-glass-hover); }
+.aa-meter::-webkit-progress-value { border-radius: var(--radius-pill); background: var(--success-text); }
+.aa-meter::-moz-progress-bar { border-radius: var(--radius-pill); background: var(--success-text); }
+.aa-meter--warn::-webkit-progress-value { background: var(--warning-text); }
+.aa-meter--warn::-moz-progress-bar { background: var(--warning-text); }
+.aa-meter--stale::-webkit-progress-value { background: var(--danger-text); }
+.aa-meter--stale::-moz-progress-bar { background: var(--danger-text); }
+
+.aa-alerts, .aa-signoffs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.aa-alerts li { font-size: var(--fs-200); }
+.aa-signoff { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap;
+              padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.aa-signoff-body { display: grid; gap: var(--space-1); min-inline-size: 0; }
+.aa-form { display: grid; gap: var(--space-3); max-inline-size: 640px; }
+.aa-form .form-actions { margin-block-start: 0; }
+
+@media (max-width: 860px) {
+    .aa-card { padding: var(--space-4); }
+}

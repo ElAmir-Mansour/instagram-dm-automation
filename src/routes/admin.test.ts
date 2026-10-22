@@ -107,6 +107,7 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['POST', '/ai/test'],
     ['GET', '/ai/models/anthropic'],
     ['GET', '/ai/usage'],
+    ['GET', '/ads/tenants'],
 ];
 
 describe('the platform_admin gate', () => {

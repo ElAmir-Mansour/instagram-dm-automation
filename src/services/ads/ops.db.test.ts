@@ -14,6 +14,7 @@ import {
     reap, runOpInline, sendExec, type DoneRecord, type GraphDeps, type Op, type RunOpts,
 } from './ops.js';
 import { installFakeDb, type AdsFakeDb } from './testing/testDb.js';
+import { NotOwnObjectError } from './ownership.js';
 
 const T0 = new Date('2026-10-22T10:00:00Z');
 const at = (offsetMs: number) => new Date(T0.getTime() + offsetMs);
@@ -241,7 +242,7 @@ function answerFinishes() {
 }
 
 interface GraphCall { method: 'GET' | 'POST' | 'DELETE'; path: string; params?: Record<string, unknown>; token: string; opts: Record<string, any> }
-function graphStub(impl: { get?: (c: GraphCall) => unknown; post?: (c: GraphCall) => unknown; del?: (c: GraphCall) => unknown } = {}) {
+function graphStub(impl: { get?: (c: GraphCall) => unknown; post?: (c: GraphCall) => unknown; del?: (c: GraphCall) => unknown; checkTarget?: GraphDeps['checkTarget'] } = {}) {
     const calls: GraphCall[] = [];
     const run = async (c: GraphCall, f?: (c: GraphCall) => unknown) => {
         calls.push(c);
@@ -253,6 +254,8 @@ function graphStub(impl: { get?: (c: GraphCall) => unknown; post?: (c: GraphCall
         get: (path, params, token, opts) => run({ method: 'GET', path, params, token, opts }, impl.get),
         post: (path, params, token, opts) => run({ method: 'POST', path, params, token, opts }, impl.post),
         del: (path, token, opts) => run({ method: 'DELETE', path, token, opts }, impl.del),
+        // Isolation has its own tests (isolation.test.ts); here every target is the tenant's unless a test says otherwise.
+        checkTarget: impl.checkTarget ?? (async () => {}),
     };
     return { calls, graph };
 }
@@ -544,6 +547,15 @@ describe('execute: the Graph call is outside every transaction', () => {
         assert.equal(g.calls[0]!.token, TOKEN);
         assert.equal(g.calls[0]!.path, '555');
         assert.deepEqual(g.calls[0]!.params, { status: 'PAUSED' });
+    });
+
+    it("refuses another tenant's target before sending: failed NOT_OWN_OBJECT, Meta never called, no verify (A11)", async () => {
+        answerFinishes();
+        const g = graphStub({ checkTarget: async () => { throw new NotOwnObjectError(); } });
+        const out = await execute(op(), TOKEN, { graph: g.graph, now: () => T0 });
+        assert.equal(out.state, 'failed');
+        assert.equal((out.result as Record<string, unknown>)['code'], 'NOT_OWN_OBJECT');
+        assert.equal(g.calls.length, 0);
     });
 
     it('runs inside the tenant and ad account context and labels the call', async () => {

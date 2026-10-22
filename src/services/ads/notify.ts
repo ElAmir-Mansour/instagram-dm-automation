@@ -231,7 +231,7 @@ export async function notifyAds(alert: AdsAlert, target: AdsAlertTarget, opts: {
             out.admin_copy = results.includes('sent') ? 'sent' : results.includes('failed') ? 'failed' : 'off';
         }
 
-        await queryOne('UPDATE ads_alerts SET channels = $2::jsonb WHERE id = $1', [row.id, JSON.stringify(out)]);
+        await queryOne('UPDATE ads_alerts SET channels = $2::jsonb WHERE id = $1 AND creator_id = $3', [row.id, JSON.stringify(out), target.creatorId]);
         log(Object.values(out).includes('sent') ? 'info' : 'warn', 'ads.alert_sent', { ...logBase, ...out });
         return { outcome: 'sent', channels: out };
     } catch (err) {

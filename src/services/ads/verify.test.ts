@@ -152,6 +152,7 @@ function graph(script: { reads?: Array<unknown | (() => unknown)>; post?: () => 
         get: (path, params, _token, opts) => answer({ method: 'GET', path, params, opts }, () => { const r = reads.shift(); return typeof r === 'function' ? (r as () => unknown)() : r ?? { data: [] }; }),
         post: (path, params, _token, opts) => answer({ method: 'POST', path, params: params as any, opts }, script.post ?? (() => ({ id: '555' }))),
         del: (path, _token, opts) => answer({ method: 'DELETE', path, opts }, () => ({ success: true })),
+        checkTarget: async () => {},
     };
     return { calls, deps };
 }

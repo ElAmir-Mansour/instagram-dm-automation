@@ -134,6 +134,8 @@ const App = {
         operations: { src: 'operations', page: () => OperationsPage, adminOnly: true },
         tenants: { src: 'tenants', page: () => TenantsPage, adminOnly: true },
         tenant_detail: { src: 'tenant_detail', page: () => TenantDetailPage, adminOnly: true, navAs: 'tenants' },
+        // Ads for clients (A11): per workspace, whether ads are on, the ceiling, health, cap use, alerts, shared spend and legal sign-offs.
+        admin_ads: { src: 'admin_ads', page: () => AdminAdsPage, adminOnly: true, css: true },
         users: { src: 'users', page: () => UsersPage, adminOnly: true },
         jobs: { src: 'jobs', page: () => JobsPage, adminOnly: true },
         audit: { src: 'audit', page: () => AuditPage, adminOnly: true },
@@ -172,10 +174,13 @@ const App = {
         // assistant answers, and the paid-messages switch. Loaded by Settings on first use, for every member (the owner writes, the rest read), and reset
         // with the other modules when the tenant changes (`resetTenantState`).
         whatsapp_card: { src: 'whatsapp_card', page: () => WhatsAppCard, routable: false },
+        // The client's own block at the end of the Settings → Meta ads card (A11): the ceiling its account manager set and the switch that shares its ad spend. Loaded by Settings
+        // when the Ads card is shown, and it draws nothing when ads are off for the workspace.
+        ads_client_card: { src: 'ads_client_card', page: () => AdsClientCard, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.69',
+    ASSET_VERSION: '12.70',
 
     _modules: Object.create(null),
 

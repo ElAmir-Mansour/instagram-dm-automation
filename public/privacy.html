@@ -204,6 +204,11 @@
     · DELETED ON DISCONNECT: removing the ads token, choosing another ad account, or disconnecting Meta with a Connect ads token deletes
       the stored copy and the results (forgetStoredCopy, ads/mirror.ts). ad_boosts spend records stay, as the Boost text says.
 
+  META ADS, PHASE A11 (MANAGED CLIENTS) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R18, Story 9). Section 1 (#ads-ar / #ads-en):
+    · WHO SEES A CLIENT'S ADS: GET /api/admin/ads/tenants (src/services/ads/tenantsOverview.ts), platform admin only: health, cap use
+      as a percentage and the last 7 days of alerts for every tenant; amounts (spend, the monthly cap, the daily max) ONLY when the
+      tenant's owner set ads.share_spend.TENANT (src/routes/adsShareSpend.ts, audited). Never the token. Each client pays Meta itself.
+
   META ADS, PHASE A7 (AI PROPOSALS) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R13, FR-049, T144). Section 1 (#ads-ar / #ads-en):
     · WHAT THE MODEL IS GIVEN: buildInput(), src/services/ads/proposals/input.ts — aggregates only: object names, budgets, statuses,
       targeting summaries and 7-day totals from the stored copy (ports.ts mirrorPort), the tenant's offers (name, price, a summary of its
@@ -293,7 +298,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.69">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.70">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1467,6 +1472,12 @@
                         عندما يزيل صاحب الحساب رمز الإعلانات أو يختار حساباً إعلانياً آخر أو يفصل ميتا (القسم 4).
                     </li>
                     <li>
+                        <strong>من يرى إنفاقك الإعلاني:</strong> إذا كان نشاطك يُدار عبر المنصة، يرى مدير المنصة صحة إعلاناتك
+                        فقط: هل يعمل الرمز، وحالة الحساب الإعلاني، وهل فيه وسيلة دفع، وتنبيهات الأسبوع الأخير، والنسبة
+                        المستهلكة من سقفك الشهري. <strong>أما المبالغ فلا يراها إلا إذا فعّل صاحب الحساب</strong> خيار «شارك إنفاقي
+                        الإعلاني مع مدير حسابي» في الإعدادات، وتختفي عنه فور إطفائه. وتدفع لميتا من وسيلة الدفع في حسابك الإعلاني أنت.
+                    </li>
+                    <li>
                         <strong>مقترحات الإعلانات بالذكاء الاصطناعي:</strong> حين يطلب صاحب الحساب «اقترح حملة»، أو في
                         المراجعة اليومية للإعلانات الجارية، يُعطى نموذج الذكاء الاصطناعي <strong>أرقاماً مجمّعة فقط</strong>:
                         أسماء الحملات والمجموعات الإعلانية وميزانياتها وحالاتها وملخّص استهدافها ومجاميع آخر 7 أيام لكل منها،
@@ -2111,6 +2122,14 @@
                         time. <strong>These are totals only</strong>: Meta does not tell the app who saw or clicked
                         an ad. Results are deleted after 37 months, and the whole copy is deleted when the owner
                         removes the ads token, chooses another ad account or disconnects Meta (section 4).
+                    </li>
+                    <li>
+                        <strong>Who sees your ad spend:</strong> if your business is managed through the platform, the platform
+                        administrator sees only the health of your ads: whether the token works, the ad account's status, whether it
+                        has a payment method, the alerts of the last week, and the percentage of your monthly cap used.
+                        <strong>The amounts are shown to the administrator only if the account owner turns on</strong> "Share my ad
+                        spend with my account manager" in Settings, and they disappear as soon as it is turned off. You pay Meta from
+                        the payment method in your own ad account.
                     </li>
                     <li>
                         <strong>AI ad proposals:</strong> when the account owner asks to "Suggest a campaign", or in the daily

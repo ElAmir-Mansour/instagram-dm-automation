@@ -239,6 +239,11 @@ export const AUDIT_ACTIONS = {
     adsAudienceDeleted: 'ads.audience_deleted',
     /** The owner recorded that a person asked to be left out of customer-list audiences (A8). `detail` holds counts only; the contact is stored hashed, never here. */
     adsCustomerListOptOut: 'ads.customer_list_opt_out',
+    /** A request or a queued op named an ad object that is not this tenant's, or not in its current ad account (ads/ownership.ts). Refused
+     *  with NOT_OWN_OBJECT. `detail` holds why, the id asked for and whose it was. */
+    adsNotOwnObject: 'ads.not_own_object',
+    /** A client tenant's owner turned sharing of its ad spend with the platform admin on or off (`ads.share_spend.<tenant>`). */
+    adsShareSpendChanged: 'ads.share_spend_changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

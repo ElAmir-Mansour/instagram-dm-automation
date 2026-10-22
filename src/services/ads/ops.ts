@@ -29,6 +29,7 @@ import { fromMinorUnits } from './metaAds.js';
 import { UUID_PATTERN, withTransaction, type Exec } from '../studio/common.js';
 import { adsDelete, adsGet, adsPost, AdsGraphError, withAdsContext, type AdsCallOptions, type GraphParams } from './graph.js';
 import { mayHaveLanded } from './money.js';
+import { assertOpTarget, NotOwnObjectError } from './ownership.js';
 import { status as pacerStatus } from './pacer.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────────────────────
@@ -578,9 +579,20 @@ export interface GraphDeps {
     get(path: string, params: Record<string, string>, token: string, opts: AdsCallOptions): Promise<GraphResponse>;
     post(path: string, params: GraphParams, token: string, opts: AdsCallOptions): Promise<GraphResponse>;
     del(path: string, token: string, opts: AdsCallOptions): Promise<GraphResponse>;
+    /**
+     * Tenant isolation, run by `sendExec` before every send (A11, ads/ownership.ts): throws NotOwnObjectError for a path outside the op's
+     * tenant and account. Required, so no set of deps can leave it out by accident; a test stub that is not about isolation passes a no-op.
+     */
+    checkTarget(op: Pick<Op, 'creatorId' | 'adAccountId'>, path: string): Promise<void>;
 }
 
-const realGraph: GraphDeps = { get: adsGet, post: adsPost, del: adsDelete };
+/** The real check: the op's account must still be the tenant's current one, and the path's account or object must be its own. */
+async function checkTarget(op: Pick<Op, 'creatorId' | 'adAccountId'>, path: string): Promise<void> {
+    const current = (await readAdsSettings(op.creatorId)).settings.adAccountId;
+    await assertOpTarget(op.creatorId, current, { path }, op.adAccountId);
+}
+
+const realGraph: GraphDeps = { get: adsGet, post: adsPost, del: adsDelete, checkTarget };
 
 export interface RunOpts {
     graph?: GraphDeps;
@@ -626,7 +638,9 @@ export interface ExecCall {
  * EVERY send of an op to Meta (the write, the tag search, the read-back, a resend) goes through this one function, inside the tenant's and
  * the ad account's context so the pacer spends from the right budget. It is the single place to assert that the op may use this token.
  */
-export function sendExec(op: Op, call: ExecCall, deps: GraphDeps & { token: string }): Promise<GraphResponse> {
+export async function sendExec(op: Op, call: ExecCall, deps: GraphDeps & { token: string }): Promise<GraphResponse> {
+    // Tenant isolation (A11): before anything is sent.
+    await deps.checkTarget(op, call.path);
     return withAdsContext({ creatorId: op.creatorId, adAccountId: op.adAccountId }, () => {
         const opts: AdsCallOptions = { label: call.label, creates: call.creates, creatorId: op.creatorId, adAccountId: op.adAccountId };
         if (call.method === 'GET') return deps.get(call.path, (call.params ?? {}) as Record<string, string>, deps.token, opts);
@@ -780,7 +794,10 @@ export async function execute(op: Op, token: string, opts: RunOpts = {}): Promis
                 }, deps);
                 out = outcomeFor(op, { ok: true, data: res.data }, env.now());
             } catch (err) {
-                out = outcomeFor(op, { ok: false, error: err }, env.now());
+                // Refused before anything was sent (logged and audited there): it cannot have landed, so it fails without a verify.
+                out = err instanceof NotOwnObjectError
+                    ? { state: 'failed', notBefore: null, result: { code: err.code, message: err.message } }
+                    : outcomeFor(op, { ok: false, error: err }, env.now());
             }
         }
     } catch (err) {

@@ -329,6 +329,17 @@ const API = {
     retryAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
     cancelAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 
+    // Ads for clients (A11), the platform admin's. `getAdminAdsTenants()` answers `{ tenants: [...] }`, one row per workspace (Postgres only, no Meta call);
+    // `spend` is in a row only when that client shares it. Sign-offs use A8's `recordAdminLegalSignoff` / `revokeAdminLegalSignoff` above.
+    getAdminAdsTenants: () => API.request('/admin/ads/tenants'),
+    setAdminAdsEnabled: (id, enabled) => API.request(`/admin/ads/tenants/${encodeURIComponent(id)}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+    setAdminAdsCeiling: (id, maxDailyBudget, monthlyCap) => API.request(`/admin/ads/tenants/${encodeURIComponent(id)}/ceiling`, {
+        method: 'POST', body: JSON.stringify({ maxDailyBudget, monthlyCap }),
+    }),
+    // The client's side (any member reads, the owner writes): `{ shareSpend, ceiling: { maxDailyBudget, monthlyCap } | null, managed }`. 404 = ads are off for this workspace.
+    getAdsShareSpend: () => API.request('/ads/settings/share-spend'),
+    setAdsShareSpend: (on) => API.request('/ads/settings/share-spend', { method: 'POST', body: JSON.stringify({ on }) }),
+
     /**
      * Data-subject erasure, in two halves that cannot be collapsed into one.
      * The preview returns a short-lived `token`; the POST takes nothing but

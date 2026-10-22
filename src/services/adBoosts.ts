@@ -64,6 +64,7 @@ export type AdsErrorCode =
     | 'CAMPAIGN_ACTIVE'
     | 'CAMPAIGN_NOT_FOUND'
     | 'NOT_FOUND'
+    | 'NOT_OWN_OBJECT'
     | 'POLICY_BLOCKED'
     | 'POLICY_WARNINGS'
     | 'VIDEO_PROCESSING'
