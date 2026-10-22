@@ -1748,9 +1748,9 @@ const HelpContent = {
                                 'في **الرسائل** تظهر على المحادثة شارة «من إعلان: اسم الإعلان». والاسم هو اسم الإعلان كما تعرفه أوتوريبلاي، أو العنوان الذي أرسلته ميتا مع الضغطة إن لم يُزامَن الإعلان بعد.',
                                 'زر التصفية **من الإعلانات** يُبقي المحادثات التي بدأت من إعلان، ومعها المحادثات القديمة التي عاد أصحابها عبر إعلان جديد (تظهر عليها **عاد عبر إعلان**).',
                                 'يُحفظ لكل محادثة: معرّف الإعلان، ورمز التتبّع الذي تضعه أوتوريبلاي في إعلاناتها، وعنوان الإعلان وروابط صورته أو فيديوه كما أرسلتها ميتا. أول إعلان يبقى «مصدر» المحادثة ولا يتغيّر، وتُحفظ الضغطات اللاحقة (آخر عشر) دون أن تحلّ محله.',
-                                'إن ضغط الشخص سؤالًا جاهزًا في الإعلان (Ice breaker)، يجيب البوت عن السؤال الذي ضغطه كما لو كتبه بنفسه. وإن فتح المحادثة دون أن يكتب شيئًا، تُسجَّل الضغطة ولا يُرسل البوت شيئًا.',
+                                'إن ضغط الشخص سؤالًا جاهزًا في الإعلان (Ice breaker)، يجيب المساعد عن السؤال الذي ضغطه كما لو كتبه بنفسه. وإن فتح المحادثة دون أن يكتب شيئًا، تُسجَّل الضغطة ولا يُرسل المساعد شيئًا.',
                             ] },
-                            'وفي شاشة **الإعلانات** يظهر لكل إعلان ما لا تراه ميتا: عدد المحادثات التي بدأها، وكم مرة فتح أصحابها الروابط التي أرسلها البوت، وكم منها حُوِّل إلى شخص. فتعرف تكلفة المحادثة وتكلفة الضغطة على الرابط لكل إعلان، حتى لو تمّ البيع في موقع آخر.',
+                            'وفي شاشة **الإعلانات** يظهر لكل إعلان ما لا تراه ميتا: عدد المحادثات التي بدأها، وكم مرة فتح أصحابها الروابط التي أرسلها المساعد، وكم منها حُوِّل إلى شخص. فتعرف تكلفة المحادثة وتكلفة الضغطة على الرابط لكل إعلان، حتى لو تمّ البيع في موقع آخر.',
                             { tip: 'رسائل ماسنجر من شخص له محادثة سابقة معك لا تصل إلا إن كان حقل `messaging_referrals` مفعّلًا في اشتراك الصفحة. أعد الاتصال بفيسبوك مرة واحدة بعد هذا التحديث ليُضاف.' },
                         ],
                         en: [
@@ -1759,34 +1759,34 @@ const HelpContent = {
                                 'In the **Inbox** the conversation shows a “From ad: ad name” badge. The name is the ad\'s name as AutoReply knows it, or the title Meta sent with the tap when the ad has not been synced yet.',
                                 'The **From ads** filter keeps the conversations that began from an ad, and also older ones whose person came back through a new ad (they show **Came back from an ad**).',
                                 'For each conversation it stores: the ad id, the tracking code AutoReply puts on its own ads, and the ad\'s title and image or video links as Meta sent them. The first ad stays the conversation\'s “source” and never changes; later taps (the last ten) are kept beside it.',
-                                'If the person tapped a ready-made question on the ad (an ice breaker), the bot answers that question as if they had typed it. If they opened the chat without writing anything, the tap is recorded and the bot sends nothing.',
+                                'If the person tapped a ready-made question on the ad (an ice breaker), the assistant answers that question as if they had typed it. If they opened the chat without writing anything, the tap is recorded and the assistant sends nothing.',
                             ] },
-                            'On the **Ads** screen each ad shows what Meta cannot see: how many conversations it started, how often those people opened the links the bot sent, and how many were handed to a person. So you know the cost per conversation and per link click for every ad, even when the sale happens on another site.',
+                            'On the **Ads** screen each ad shows what Meta cannot see: how many conversations it started, how often those people opened the links the assistant sent, and how many were handed to a person. So you know the cost per conversation and per link click for every ad, even when the sale happens on another site.',
                             { tip: 'On Messenger, a person who already had a conversation with you is only reported when the Page subscription includes `messaging_referrals`. Reconnect Facebook once after this update so it is added.' },
                         ],
                     },
                 },
                 {
                     id: 'bot-and-ads',
-                    title: { ar: 'البوت والإعلان: أعطِ البوت سياق الإعلان', en: 'The bot and the ad: give the bot the ad\'s context' },
+                    title: { ar: 'المساعد والإعلان: أعطِ المساعد سياق الإعلان', en: 'The assistant and the ad: give the assistant the ad\'s context' },
                     body: {
                         ar: [
-                            'المفتاح **أعطِ البوت سياق الإعلان** في **الإعلانات** داخل الإعدادات مطفأ في البداية. وما دام مطفأً، لا يتغيّر شيء في ما يُرسَل إلى البوت: التعليمات نفسها حرفًا بحرف.',
-                            'وعند تشغيله، وفي المحادثات التي بدأت من إعلان فقط، يُضاف إلى معلومات المحادثة سطر أو ثلاثة: اسم الإعلان والعرض الذي يتناوله، ونصّ الإعلان (حتى 200 حرف)، والسؤال الذي ضغطه الشخص إن ضغط سؤالًا. فيبدأ البوت من حيث توقّف الإعلان بدل أن يسأل الشخص عمّا جاء من أجله.',
+                            'المفتاح **أعطِ المساعد سياق الإعلان** في **الإعلانات** داخل الإعدادات مطفأ في البداية. وما دام مطفأً، لا يتغيّر شيء في ما يُرسَل إلى المساعد: التعليمات نفسها حرفًا بحرف.',
+                            'وعند تشغيله، وفي المحادثات التي بدأت من إعلان فقط، يُضاف إلى معلومات المحادثة سطر أو ثلاثة: اسم الإعلان والعرض الذي يتناوله، ونصّ الإعلان (حتى 200 حرف)، والسؤال الذي ضغطه الشخص إن ضغط سؤالًا. فيبدأ المساعد من حيث توقّف الإعلان بدل أن يسأل الشخص عمّا جاء من أجله.',
                             { ul: [
-                                'يُعرف العرض إن أُنشئ الإعلان من أوتوريبلاي واختير له عرض. أما الإعلان المصنوع في مدير إعلانات ميتا فيعطي البوت اسمه وعنوانه فقط.',
+                                'يُعرف العرض إن أُنشئ الإعلان من أوتوريبلاي واختير له عرض. أما الإعلان المصنوع في مدير إعلانات ميتا فيعطي المساعد اسمه وعنوانه فقط.',
                                 'لا تُعطى للبوت روابط الصور ولا الفيديو، ولا معرّف الإعلان.',
                                 'يعمل هذا في وضع البيع (Sales mode) للبوت، على إنستغرام وماسنجر.',
                             ] },
                             { tip: 'للتجربة: شغّل المفتاح، ثم افتح معاينة الإعلان في مدير الإعلانات واضغط «إرسال رسالة» من حساب تجربة، واكتب سؤالًا عن السعر. ينبغي أن يذكر الرد الأول عرض الإعلان. ثم أطفئه إن لم يعجبك.' },
                         ],
                         en: [
-                            'The **Give the bot the ad\'s context** switch under **Ads** in Settings starts off. While it is off nothing changes in what the bot is sent: the same instructions, word for word.',
-                            'When it is on, and only in conversations that began from an ad, one to three lines are added to the conversation\'s facts: the ad\'s name and the offer it is about, the ad\'s text (up to 200 characters), and the question the person tapped, if they tapped one. So the bot picks up where the ad left off instead of asking what they came for.',
+                            'The **Give the assistant the ad\'s context** switch under **Ads** in Settings starts off. While it is off nothing changes in what the assistant is sent: the same instructions, word for word.',
+                            'When it is on, and only in conversations that began from an ad, one to three lines are added to the conversation\'s facts: the ad\'s name and the offer it is about, the ad\'s text (up to 200 characters), and the question the person tapped, if they tapped one. So the assistant picks up where the ad left off instead of asking what they came for.',
                             { ul: [
-                                'The offer is known when the ad was made in AutoReply with an offer chosen. An ad made in Meta\'s Ads Manager gives the bot its name and title only.',
-                                'The bot is never given the image or video links, nor the ad id.',
-                                'It works in the bot\'s Sales mode, on Instagram and Messenger.',
+                                'The offer is known when the ad was made in AutoReply with an offer chosen. An ad made in Meta\'s Ads Manager gives the assistant its name and title only.',
+                                'The assistant is never given the image or video links, nor the ad id.',
+                                'It works in the assistant\'s Sales mode, on Instagram and Messenger.',
                             ] },
                             { tip: 'To try it: turn the switch on, open the ad\'s preview in Ads Manager, press “Send message” from a test account and ask about the price. The first reply should mention the ad\'s offer. Turn it off again if you do not like it.' },
                         ],
@@ -1797,8 +1797,8 @@ const HelpContent = {
                     title: { ar: 'نافذة الرد: 24 ساعة، و7 أيام لمحادثات الإعلانات', en: 'The reply window: 24 hours, and 7 days for ad conversations' },
                     body: {
                         ar: [
-                            'تسمح ميتا للحساب بأن يكتب إلى الشخص خلال 24 ساعة من آخر رسالة منه. ويلتزم البوت بثلاث وعشرين ساعة احتياطًا، ومنها رسالة المتابعة التي تُرسل بعد الرابط.',
-                            'ومنذ 28 سبتمبر 2026 تعطي ميتا المحادثات التي بدأت من إعلان مراسلة على إنستغرام أو ماسنجر نافذة تصل إلى 7 أيام من الضغطة. ويطبّقها البوت (7 أيام إلا ساعة) فقط إن شغّلت «استعمل النافذة الأطول على إنستغرام» (أو «على ماسنجر») للمنصة.',
+                            'تسمح ميتا للحساب بأن يكتب إلى الشخص خلال 24 ساعة من آخر رسالة منه. ويلتزم المساعد بثلاث وعشرين ساعة احتياطًا، ومنها رسالة المتابعة التي تُرسل بعد الرابط.',
+                            'ومنذ 28 سبتمبر 2026 تعطي ميتا المحادثات التي بدأت من إعلان مراسلة على إنستغرام أو ماسنجر نافذة تصل إلى 7 أيام من الضغطة. ويطبّقها المساعد (7 أيام إلا ساعة) فقط إن شغّلت «استعمل النافذة الأطول على إنستغرام» (أو «على ماسنجر») للمنصة.',
                             { h: 'لماذا هو مفتاح مطفأ؟' },
                             'لأن ميتا ذكرت هذا لإنستغرام ولم يظهر بعد في صفحة ماسنجر، والرسالة التي تُرسل خارج النافذة تُرفض وقد تضرّ بالحساب. فجرّبه أولًا:',
                             { ol: [
@@ -1809,8 +1809,8 @@ const HelpContent = {
                             { warn: 'إن رفضت ميتا ردًّا في محادثة إعلانية لأنه خارج النافذة (الخطأ 10/2018278 أو 551)، يُطفئ التطبيق المفتاح لتلك المنصة تلقائيًّا ويصلك تنبيه «رفضت ميتا ردًّا خارج النافذة». لا تُعِد تشغيله قبل أن ينجح اختبار اليوم الثاني.' },
                         ],
                         en: [
-                            'Meta lets an account write to a person within 24 hours of their last message. The bot keeps to 23 hours to be safe, the follow-up nudge sent after a link included.',
-                            'Since 28 September 2026 Meta gives conversations that began from a message ad on Instagram or Messenger a window of up to 7 days from the tap. The bot uses it (7 days less an hour) only if you turn on “Use the longer window on Instagram” (or “on Messenger”) for that platform.',
+                            'Meta lets an account write to a person within 24 hours of their last message. The assistant keeps to 23 hours to be safe, the follow-up nudge sent after a link included.',
+                            'Since 28 September 2026 Meta gives conversations that began from a message ad on Instagram or Messenger a window of up to 7 days from the tap. The assistant uses it (7 days less an hour) only if you turn on “Use the longer window on Instagram” (or “on Messenger”) for that platform.',
                             { h: 'Why is it a switch, and off?' },
                             'Because Meta announced it for Instagram and it had not yet appeared on the Messenger page, and a message sent outside the window is refused and can hurt the account. So test it first:',
                             { ol: [
@@ -1827,25 +1827,25 @@ const HelpContent = {
                     title: { ar: 'ذكاء ميتا للأعمال يتولى المحادثة', en: 'Meta Business AI holds the conversation' },
                     body: {
                         ar: [
-                            'لدى ميتا مساعد خاص بها اسمه «ذكاء الأعمال» (Business AI) يستطيع أن يجيب في رسائل إنستغرام. وإذا كان يتولى محادثة، ترفض ميتا كل رسالة يرسلها البوت فيها (الخطأ 100 / 2534037)، فيبدو البوت صامتًا، وغالبًا في محادثات الإعلانات تحديدًا.',
-                            'حين يحدث هذا، لا يعيد التطبيق المحاولة (لن تنجح)، ويضع على المحادثة في **الرسائل** شارة **ذكاء ميتا للأعمال يتولى الرد**، ويرسل إليك تنبيهًا واحدًا. وتزول الشارة وحدها عند أول رسالة يقبلها ميتا من البوت.',
+                            'لدى ميتا مساعد خاص بها اسمه «ذكاء الأعمال» (Business AI) يستطيع أن يجيب في رسائل إنستغرام. وإذا كان يتولى محادثة، ترفض ميتا كل رسالة يرسلها المساعد فيها (الخطأ 100 / 2534037)، فيبدو المساعد صامتًا، وغالبًا في محادثات الإعلانات تحديدًا.',
+                            'حين يحدث هذا، لا يعيد التطبيق المحاولة (لن تنجح)، ويضع على المحادثة في **الرسائل** شارة **ذكاء ميتا للأعمال يتولى الرد**، ويرسل إليك تنبيهًا واحدًا. وتزول الشارة وحدها عند أول رسالة يقبلها ميتا من المساعد.',
                             { h: 'كيف تستعيد التحكم' },
                             { ol: [
                                 'افتح Meta Business Suite للحساب نفسه.',
                                 'ادخل إلى إعدادات «ذكاء الأعمال» (Business AI) في صندوق الوارد.',
                                 'فعّل «تولَّ المحادثات من ذكاء الأعمال» (Take control of conversations with your Business AI)، أو أطفئ ذكاء الأعمال كليًّا إن كنت تريد أن يجيب بوت أوتوريبلاي وحده.',
-                                'أرسل رسالة تجربة إلى الحساب، وتأكّد أن البوت أجاب وأن الشارة زالت.',
+                                'أرسل رسالة تجربة إلى الحساب، وتأكّد أن المساعد أجاب وأن الشارة زالت.',
                             ] },
                         ],
                         en: [
-                            'Meta has its own assistant, “Business AI”, which can answer Instagram messages. When it holds a conversation, Meta refuses every message the bot sends in it (error 100 / 2534037), so the bot looks silent, very often in ad conversations.',
-                            'When this happens the app does not retry (it would not work), marks the conversation in the **Inbox** with **Meta Business AI is answering**, and sends you one alert. The mark clears by itself at the first message Meta accepts from the bot.',
+                            'Meta has its own assistant, “Business AI”, which can answer Instagram messages. When it holds a conversation, Meta refuses every message the assistant sends in it (error 100 / 2534037), so the assistant looks silent, very often in ad conversations.',
+                            'When this happens the app does not retry (it would not work), marks the conversation in the **Inbox** with **Meta Business AI is answering**, and sends you one alert. The mark clears by itself at the first message Meta accepts from the assistant.',
                             { h: 'How to take control back' },
                             { ol: [
                                 'Open Meta Business Suite for the same account.',
                                 'Go to the “Business AI” settings in the inbox.',
-                                'Turn on “Take control of conversations with your Business AI”, or turn Business AI off altogether if you want the AutoReply bot to be the only one answering.',
-                                'Send a test message to the account and check that the bot answers and the mark is gone.',
+                                'Turn on “Take control of conversations with your Business AI”, or turn Business AI off altogether if you want the AutoReply assistant to be the only one answering.',
+                                'Send a test message to the account and check that the assistant answers and the mark is gone.',
                             ] },
                         ],
                     },

@@ -75,7 +75,7 @@ function headline(a: AdsAlert, lang: Lang): string {
         case 'version_mismatch': return ar ? 'ميتا تجيب بإصدار مختلف من واجهة الإعلانات' : 'Meta is answering on a different Marketing API version';
         case 'ad_rejected': return ar ? 'رفضت ميتا إعلانًا' : 'Meta rejected an ad';
         case 'ad_issues': return ar ? 'إعلان فيه مشكلات عند ميتا' : 'An ad has issues at Meta';
-        case 'business_ai': return ar ? 'ذكاء ميتا للأعمال يتولى محادثة، فلا يستطيع البوت الرد' : 'Meta Business AI holds a conversation, so the bot cannot reply';
+        case 'business_ai': return ar ? 'ذكاء ميتا للأعمال يتولى محادثة، فلا يستطيع المساعد الرد' : 'Meta Business AI holds a conversation, so the assistant cannot reply';
         case 'window_error': return ar ? 'رفضت ميتا ردًّا خارج نافذة المراسلة، فأُطفئت النافذة الأطول' : 'Meta refused a reply outside the messaging window; the longer window was switched off';
     }
 }
@@ -132,13 +132,13 @@ function detail(a: AdsAlert, lang: Lang): string[] {
             ];
         case 'business_ai':
             return [
-                ar ? 'رفضت ميتا رسائل البوت في محادثة على إنستغرام (الخطأ 100 / 2534037): ذكاء ميتا للأعمال يتولاها.' : 'Meta refused the bot\'s messages in an Instagram conversation (error 100 / 2534037): Meta Business AI holds it.',
+                ar ? 'رفضت ميتا رسائل المساعد في محادثة على إنستغرام (الخطأ 100 / 2534037): ذكاء ميتا للأعمال يتولاها.' : 'Meta refused the assistant\'s messages in an Instagram conversation (error 100 / 2534037): Meta Business AI holds it.',
                 ar ? 'المطلوب: في Meta Business Suite ← ذكاء الأعمال، فعّل «تولَّ المحادثات من ذكاء الأعمال» أو أطفئ ذكاء الأعمال. المحادثة معلَّمة في صندوق الوارد.' : 'What to do: in Meta Business Suite → Business AI, turn on "Take control of conversations with your Business AI", or turn Business AI off. The conversation is marked in the Inbox.',
             ];
         case 'window_error':
             return [
                 ar ? `رفضت ميتا ردًّا في محادثة بدأت من إعلان على ${a.platform === 'instagram' ? 'إنستغرام' : 'ماسنجر'} لأنه خارج نافذة المراسلة.` : `Meta refused a reply in an ad-started ${a.platform === 'instagram' ? 'Instagram' : 'Messenger'} conversation for being outside the messaging window.`,
-                ar ? 'أُطفئ مفتاح «نافذة الرد الأطول» لهذه المنصة تلقائيًا، فعاد البوت إلى نافذة الأربع والعشرين ساعة. لا تُعِد تشغيله قبل اختبار اليوم الثاني.' : 'The "longer reply window" switch for this platform was turned off by itself; the bot is back on the 24-hour window. Do not turn it on again before the day-2 test passes.',
+                ar ? 'أُطفئ مفتاح «نافذة الرد الأطول» لهذه المنصة تلقائيًا، فعاد المساعد إلى نافذة الأربع والعشرين ساعة. لا تُعِد تشغيله قبل اختبار اليوم الثاني.' : 'The "longer reply window" switch for this platform was turned off by itself; the assistant is back on the 24-hour window. Do not turn it on again before the day-2 test passes.',
             ];
     }
 }
