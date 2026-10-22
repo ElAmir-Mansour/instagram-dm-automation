@@ -1224,3 +1224,37 @@ describe('migration v53: ads core (stored copy, results and breakdowns, ops queu
         assert.doesNotMatch(sql, /\bDROP\b|\bTRUNCATE\b|\bDELETE FROM\b|CONCURRENTLY/i);
     });
 });
+
+describe('migration v54: ads attribution (conversations.ad_touches, no_reply_reason, the entry ad index)', () => {
+    const FILE = 'migration_v54_ads_attribution.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v52 (v53 belongs to the ads core and may sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+    });
+
+    it('adds ad_touches (JSONB NOT NULL, a constant default) and no_reply_reason (nullable TEXT) to conversations, and nothing else', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]*);/g)].map((m) => [m[1], m[2], m[3]!.trim()]);
+        assert.deepEqual(added, [
+            ['conversations', 'ad_touches', "JSONB NOT NULL DEFAULT '[]'::jsonb"],
+            ['conversations', 'no_reply_reason', 'TEXT'],
+        ]);
+        assert.doesNotMatch(sql, /DEFAULT\s+(now|random|gen_random|uuid|clock|\()/i, 'a volatile default would rewrite the table');
+    });
+
+    it('builds one partial expression index on the rows that carry an ad id, idempotently, and changes no row', () => {
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_conversations_entry_ad ON conversations \(creator_id, \(entry_source->>'ad_id'\)\) WHERE entry_source \? 'ad_id';/);
+        assert.doesNotMatch(sql, /CONCURRENTLY/, 'the runner applies each file inside a transaction, where it is refused');
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b/i, 'it changes no row and removes nothing');
+        assert.doesNotMatch(sql, /CREATE TABLE/i);
+    });
+});
