@@ -87,7 +87,7 @@ describe('Rules tab: the list (T164)', () => {
     });
 
     it('the history lists outcomes, values, what was done and why not', async () => {
-        const { h, page, screen } = await open();
+        const { page, screen } = await open();
         await page.history('r1');
         await settle();
         const words = text(screen());

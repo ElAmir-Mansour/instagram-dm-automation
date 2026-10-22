@@ -157,7 +157,7 @@ const CROSS_TENANT_OK = new Set(['ownership.ts', 'tenantsOverview.ts']);
  *   - retention sweeps (health.ts): delete rows older than a fixed age for every tenant at once; they read nothing out;
  *   - mirror.ts listObjects: builds its WHERE from an array that starts as `['creator_id = $1']`, which the scan cannot see through.
  */
-const RETENTION_SWEEP = /^["'`]DELETE FROM ads_[a-z_]+ WHERE (created_at|day) < /;
+const RETENTION_SWEEP = /^["'`]DELETE FROM ads_[a-z_]+ WHERE (created_at|day|ran_at) < /;
 const DYNAMIC_WHERE_OK = new Set(['src/services/ads/mirror.ts']);
 
 function exempt(file: string, sql: string, text: string): boolean {

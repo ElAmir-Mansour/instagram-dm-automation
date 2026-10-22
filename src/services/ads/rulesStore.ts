@@ -129,7 +129,7 @@ const SELECT_RULE = `
     SELECT r.*, lr.ran_at AS last_ran_at, lr.outcome AS last_outcome
       FROM ads_rules r
       LEFT JOIN LATERAL (
-        SELECT ran_at, outcome FROM ads_rule_runs WHERE rule_id = r.id ORDER BY ran_at DESC LIMIT 1
+        SELECT ran_at, outcome FROM ads_rule_runs WHERE rule_id = r.id AND creator_id = r.creator_id ORDER BY ran_at DESC LIMIT 1
       ) lr ON true`;
 
 const scopeJson = (s: RuleScope): string => JSON.stringify({ level: s.level, object_ids: s.objectIds });
