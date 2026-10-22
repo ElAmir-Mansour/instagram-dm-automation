@@ -56,19 +56,33 @@ const OVERVIEW: Json = {
     limits: { maxDailyBudget: 10, monthlyCap: 100, worstCaseThisMonth: 55 },
     money: { currency: 'USD', spentToday: 3, spentThisMonth: 40, worstCaseThisMonth: 55, monthlyCap: 100, remaining: 45, maxDailyBudget: 10, monthBoundaryTz: 'Europe/London' },
     tokenHealth: 'ok', guard: { lastCheckedAt: '2026-10-22T09:00:00.000Z', blind: false },
-    campaigns: [], helpUrl: '#/help/ads',
+    helpUrl: '#/help/ads',
+    syncedAt: '2026-10-22T09:30:00.000Z', provisionalFrom: '2026-10-20',
+    counts: { campaigns: 5, active: 2, attention: 2 },
+    attention: [
+        { kind: 'rejected', objectId: 'ad-1', title: 'Spring sale ad', detail: 'The image has too much text.', at: '2026-10-22T08:00:00.000Z', helpSection: 'statuses' },
+        { kind: 'op_failed', objectId: null, title: 'Old campaign', detail: 'Meta refused the change.', at: '2026-10-22T07:00:00.000Z', helpSection: 'queued-changes' },
+    ],
+    queued: [
+        { id: 'op-1', kind: 'budget', state: 'pending', objectKey: 'c-1', objectName: 'Summer campaign', notBefore: '2099-01-01T14:05:00.000Z', attempts: 0, result: null, createdAt: '2026-10-22T09:00:00.000Z', finishedAt: null, actorVia: 'dashboard' },
+        { id: 'op-2', kind: 'status', state: 'running', objectKey: 'c-2', objectName: null, notBefore: '2099-01-01T14:05:00.000Z', attempts: 1, result: null, createdAt: '2026-10-22T09:01:00.000Z', finishedAt: null, actorVia: 'dashboard' },
+    ],
 };
 
 function stubApi(stubs: Json) {
     return new Proxy(stubs, { get: (target, prop) => (prop in target ? target[prop as string] : () => Promise.reject(new Error(`API.${String(prop)} is not stubbed`))) });
 }
 
-async function renderAds(lang: 'ar' | 'en', overview: Json | Error) {
+async function renderAds(lang: 'ar' | 'en', overview: Json | Error, calls: string[] = []) {
     const h = loadDashboard({
         lang,
         files: ['dashboard/js/pages/ads.js'],
         globals: {
-            API: stubApi({ token: 't', getAdsOverview: async () => { if (overview instanceof Error) throw overview; return overview; } }),
+            API: stubApi({
+                token: 't',
+                getAdsOverview: async () => { if (overview instanceof Error) throw overview; return overview; },
+                getAdsMoney: async () => { calls.push('getAdsMoney'); return {}; },
+            }),
             App: { canAdminister: () => true },
         },
     });
@@ -165,6 +179,92 @@ describe('Ads screen: money from the server, the tax note, and the two banners (
         assert.match(html, /id="ads-token-dead-banner"/);
         assert.ok(text(html).includes(t('ads.tokenDead.title')));
         assert.match(html, /href="#\/settings\?s=ads"/);
+    });
+});
+
+describe('Ads Overview: the stored copy as health, money, what needs attention and what is queued (T055)', () => {
+    for (const lang of ['ar', 'en'] as const) {
+        it(`draws the health strip, the money with its last update, attention with help links, and queued changes with when (${lang})`, async () => {
+            const calls: string[] = [];
+            const { html, t } = await renderAds(lang, OVERVIEW, calls);
+            const said = text(html);
+
+            // Health strip: account status, payment, token health, the guard's last check.
+            assert.match(html, /id="ads-health"/);
+            assert.match(html, /data-ads-account-status="active"/);
+            assert.ok(said.includes(t('ads.account.status.active')));
+            assert.ok(said.includes(t('ads.payment.on')), 'payment');
+            assert.match(html, /data-ads-token="ok"/);
+            assert.ok(said.includes(t('ads.health.token.ok')));
+            assert.ok(said.includes(t('ads.health.guard.ok')));
+            assert.ok(said.includes(t('ads.health.guard.last', { time: '' }).trim()), 'the guard\'s last check is stamped');
+
+            // Money from overview.money, with when it was read and that the newest days are provisional.
+            assert.ok(said.includes('45'), 'remaining of the cap');
+            assert.ok(said.includes('55'), 'worst case');
+            assert.match(html, /id="ads-synced"/);
+            assert.ok(said.includes(t('ads.camp.updated', { time: '' }).replace(/\s*$/, '').trim()), 'last updated');
+            assert.match(html, /id="ads-provisional"/);
+            assert.ok(said.includes(t('ads.tax.note')));
+            assert.ok(said.includes('Europe/London'), 'the month boundary zone');
+
+            // Attention: kind, title, detail and the help link of each item; an object item leads to the Campaigns tab.
+            const items: string[] = html.match(/<li class="ads-attn-item[\s\S]*?<\/li>/g) || [];
+            assert.equal(items.length, 2);
+            assert.match(items[0] ?? '', /data-attn-kind="rejected"/);
+            assert.ok(text(items[0] ?? '').includes('Spring sale ad'));
+            assert.ok(text(items[0] ?? '').includes('The image has too much text.'));
+            assert.match(items[0] ?? '', /href="#\/help\/ads#statuses"/);
+            assert.match(items[0] ?? '', /href="#\/ads_campaigns"/);
+            assert.match(items[1] ?? '', /data-attn-kind="op_failed"/);
+            assert.match(items[1] ?? '', /href="#\/help\/ads#queued-changes"/);
+            assert.equal((items[1] ?? '').includes('href="#/ads_campaigns"'), false, 'no object to open');
+            assert.equal(html.includes('ads-attn-empty'), false);
+
+            // Queued changes: kind, state, the object, and when it should go out (not for the one already being sent).
+            const queued: string[] = html.match(/<li class="ads-queue-item[\s\S]*?<\/li>/g) || [];
+            assert.equal(queued.length, 2);
+            assert.match(queued[0] ?? '', /data-op-state="pending"/);
+            assert.ok(text(queued[0] ?? '').includes(t('ads.queue.kind.budget')));
+            assert.ok(text(queued[0] ?? '').includes(t('ads.queue.state.pending')));
+            assert.ok(text(queued[0] ?? '').includes('Summer campaign'));
+            assert.equal((queued[0] ?? '').includes('ads-queue-due'), true, 'expected at');
+            assert.ok(text(queued[1] ?? '').includes(t('ads.queue.state.running')));
+            assert.equal((queued[1] ?? '').includes('ads-queue-due'), false, 'a change already being sent has no expected time');
+            assert.match(html, /id="ads-queued"[\s\S]*href="#\/help\/ads#queued-changes"/);
+
+            // Counts lead to the Campaigns tab; no campaign table, no live money call.
+            assert.match(html, /id="ads-counts"[^>]*data-campaigns="5"[^>]*data-active="2"/);
+            assert.match(html, /id="ads-campaigns-link"[\s\S]*href="#\/ads_campaigns"/);
+            assert.equal(html.includes('ads-table'), false);
+            assert.equal(/data-action="ads:(activate|pause|remove|editBudget)"/.test(html), false);
+            assert.deepEqual(calls, [], 'GET /ads/money reads Meta live: not on load');
+            assert.equal(/\bads\.[a-zA-Z.]+/.test(said), false, 'no raw key');
+        });
+    }
+
+    it('nothing to attend to and nothing queued say so, instead of drawing empty lists', async () => {
+        const { html, t } = await renderAds('en', { ...OVERVIEW, attention: [], queued: [], counts: { campaigns: 0, active: 0, attention: 0 } });
+        assert.match(html, /id="ads-attn-empty"/);
+        assert.ok(text(html).includes(t('ads.attn.none')));
+        assert.match(html, /id="ads-queued-empty"/);
+        assert.ok(text(html).includes(t('ads.queued.none')));
+        assert.equal(html.includes('ads-attn-list'), false);
+    });
+
+    it('a stored copy that was never read says so; a null figure is a dash, never a zero', async () => {
+        const money = { ...(OVERVIEW.money as Json), spentToday: null, spentThisMonth: null, worstCaseThisMonth: null, remaining: null };
+        const { html, t } = await renderAds('en', { ...OVERVIEW, money, syncedAt: null, provisionalFrom: null });
+        assert.ok(text(html).includes(t('ads.money.neverSynced')));
+        assert.equal(html.includes('id="ads-provisional"'), false);
+        assert.match(html, /id="ads-stat-today"[\s\S]*?<p class="stat-value">\s*—\s*<\/p>/);
+    });
+
+    it('a dead token and a blind guard show in the health strip as well as in the banners', async () => {
+        const { html, t } = await renderAds('en', { ...OVERVIEW, tokenHealth: 'dead', guard: { lastCheckedAt: null, blind: true } });
+        assert.match(html, /data-ads-token="dead"/);
+        assert.ok(text(html).includes(t('ads.health.token.dead')));
+        assert.ok(text(html).includes(t('ads.health.guard.blind')));
     });
 });
 

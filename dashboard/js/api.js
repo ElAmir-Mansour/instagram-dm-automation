@@ -688,6 +688,35 @@ const API = {
     /** Answers `{ ok: true }`; the server refuses a campaign that is ACTIVE. */
     deleteAdsCampaign: (id) => API.request(`/ads/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+    // ─── Ads → Campaigns (#/ads_campaigns): the stored copy of the ad account, and the queue every change goes through ───
+    /** `{ level?, status?, parentId? }` (a list is joined with commas) → `{ items: ObjectView[], syncedAt }`. Read from Postgres: no call to Meta. */
+    getAdsObjects: (params) => {
+        const query = new URLSearchParams();
+        Object.keys(params || {}).forEach((key) => {
+            const value = params[key];
+            if (value === undefined || value === null || value === '') return;
+            query.set(key, Array.isArray(value) ? value.join(',') : String(value));
+        });
+        const search = query.toString();
+        return API.request(`/ads/objects${search ? `?${search}` : ''}`);
+    },
+    /** `{ object, children, results: { daily, totals } }`: one object and what is inside it (a campaign's ad sets, an ad set's ads). */
+    getAdsObject: (id) => API.request(`/ads/objects/${encodeURIComponent(id)}`),
+    /** `{ status: 'ACTIVE' | 'PAUSED', confirm? }` → `{ op }`. ACTIVE starts spending money: `confirm: true` only after the owner said yes. */
+    setAdsObjectStatus: (id, body) => API.request(`/ads/objects/${encodeURIComponent(id)}/status`, { method: 'POST', body: JSON.stringify(body || {}) }),
+    /** `{ kind: 'daily' | 'lifetime', amount, endTime?, confirm? }` → `{ op }`. A raise on a running object needs `confirm: true`; EDIT_LIMIT and RATE_LIMITED carry `retryAt`. */
+    setAdsObjectBudget: (id, body) => API.request(`/ads/objects/${encodeURIComponent(id)}/budget`, { method: 'POST', body: JSON.stringify(body || {}) }),
+    /** → `{ op }`. */
+    archiveAdsObject: (id) => API.request(`/ads/objects/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
+    /** `{ confirm: true }` → `{ op }`. The server refuses an object that is ACTIVE (409). */
+    deleteAdsObject: (id, body) => API.request(`/ads/objects/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify(body || {}) }),
+    /** `{ op }`: `{ id, kind, state, objectKey, notBefore, attempts, result, createdAt, finishedAt, actorVia }`. */
+    getAdsOp: (id) => API.request(`/ads/ops/${encodeURIComponent(id)}`),
+    /** `{ ops }` in the given states (`['pending', 'running', 'verify']`). */
+    getAdsOps: (states) => API.request(`/ads/ops${Array.isArray(states) && states.length ? `?state=${states.map(encodeURIComponent).join(',')}` : ''}`),
+    /** Asks for a results refresh from Meta (the owner's). 429 `RATE_LIMITED` with `retryAt` when one ran in the last 15 minutes. */
+    requestAdsSync: () => API.request('/ads/sync', { method: 'POST' }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

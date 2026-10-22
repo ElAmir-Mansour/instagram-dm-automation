@@ -8,7 +8,7 @@
  */
 import { queryOne } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
-import { fromMinorUnits, num, roundMoney } from '../metaAds.js';
+import { fromMinorUnits, num, roundMoney } from './metaAds.js';
 import { adsGet, adsPost, AdsGraphError, type GraphParams } from './graph.js';
 import { finishSpendOp, mayHaveLanded } from './money.js';
 import { localDay } from './notify.js';

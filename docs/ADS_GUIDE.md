@@ -152,6 +152,39 @@ No payment method blocks Activate (the app cannot add one). A prepay account spe
 
 ---
 
+## Campaigns and queued changes
+
+**What the screens read.** The Ads screen has two tabs, **Overview** and **Campaigns**. Both read the app's **stored copy** of the ad
+account (`ads_objects`, `ads_insights_daily`), never Meta live, so viewing costs none of Meta's 60 points per 5 minutes:
+
+| What | Refreshed | From |
+|---|---|---|
+| Campaigns, ad sets, ads, statuses, review notes, budgets | every hour (drain) | `syncStructure`, `src/services/ads/sync.ts` |
+| Today's results | every 4 hours, or **Refresh results** (once per 15 min) | `syncInsights(…, 'today')` |
+| The last 28 days, with country and placement breakdowns | daily cron | `syncDailyAds` |
+| Account status, payment method, token health | daily cron, and **Test connection** | `runAdsHealth`, `health.ts` |
+
+The last 3 days of results are **provisional** (Meta revises them). Results are kept 37 months. Removing the token, choosing another ad
+account or disconnecting Meta deletes the stored copy.
+
+**Every change is queued.** Pause, resume, budget, end date, archive and delete each become one `ads_ops` row, sent in order per object
+within Meta's limits: **4 budget changes per ad set per hour**, **30 s between edits of one object**, **10 spending-limit changes a
+day**. A press tries to send at once; otherwise the change waits and the screen shows **expected at**. States: queued (`pending`),
+sending (`running`), checking (`verify`: Meta did not answer, so the app reads back before anything is resent), done, failed.
+
+- **Resume and budget raises** still need **confirm** and pass the money rule; the check happens before the change is queued, and a
+  queued change counts as about to run for the next check.
+- **Archive** is how a campaign ends (results stay). **Delete** is a separate, confirmed action and is refused while running. The
+  Boost **Delete** button and v1's campaign delete now archive.
+- **A create is never sent twice:** each create's name carries `AR·<op id>`; after a timeout the app searches for it, adopts it if
+  found, and resends at most once after two misses 60 s apart.
+
+**Where to look.** `GET /api/ads/ops?state=pending,running,verify` lists waiting changes; `GET /api/ads/ops/<id>` one. Logs:
+`ads.ops_drain`, `ads.sync_sweep`, `cron.ads_daily_sync`, `ads.op_inline_failed`. Audit: `ads.op_enqueued`, `ads.op_applied`,
+`ads.op_failed`. Flow, hop by hop: `FLOWS.md` §11.2. Help Center: `#/help/ads#campaigns`, `#queued-changes`, `#statuses`.
+
+---
+
 ## Troubleshooting
 
 - **No Connect button:** Connect is optional and off unless the platform enables it. Paste a system-user token.

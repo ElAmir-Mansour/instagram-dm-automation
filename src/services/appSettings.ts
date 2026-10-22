@@ -292,6 +292,8 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *   adsHealth       the stored copy of the last ad account and token check (src/services/ads/health.ts). Not a secret: no token in it.
  *   adsBotContext, adsExtendedWindow, adsShareSpend   switches of later phases (A3, A11), read with their defaults (off). Not secrets.
  *   (All ads families are documented in src/services/ads/settings.ts.)
+ *   adsSync         the Ads Manager sync's bookkeeping per tenant, as JSON: when the structure, today's results and the 28 days last ran, a
+ *                   manual refresh waiting, an insights report to resume (`src/services/ads/sync.ts`). Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -307,6 +309,7 @@ export const TENANT_SETTING_PREFIXES = {
     adsBotContext: 'ads.bot_context.',
     adsExtendedWindow: 'ads.extended_window.',
     adsShareSpend: 'ads.share_spend.',
+    adsSync: 'ads.sync.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */

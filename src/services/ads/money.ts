@@ -32,7 +32,7 @@ import { AdsGraphError } from './graph.js';
 import {
     currencyOffset, fetchAccountState, fromMinorUnits, getNode, num, readInsights, roundMoney, toMinorUnits, type AdAccountState,
     type BoostInsights, type BoostObjective,
-} from '../metaAds.js';
+} from './metaAds.js';
 
 export { currencyOffset, fromMinorUnits, toMinorUnits, roundMoney };
 
@@ -451,6 +451,11 @@ export interface SpendAttempt extends Omit<SpendOpInput, 'payload'> {
     payload: Record<string, unknown>;
     /** The caller's own writes, inside the same locked transaction (a boost row's FOR UPDATE and its `activated_at`). Throw to refuse. */
     inside?: (tx: Exec) => Promise<void>;
+    /**
+     * Records the spend instead of `startSpendOp` (A2: the paced queue). Gets the payload with `worst_case_delta` added and returns the id
+     * of the op that carries it, enqueued `pending` inside this locked transaction: pending counts as about to run for everyone after us.
+     */
+    record?: (tx: Exec, payload: Record<string, unknown>) => Promise<string>;
 }
 
 /**
@@ -465,10 +470,10 @@ export async function checkAndStartSpend(a: SpendAttempt): Promise<{ opId: strin
         const check = checkCandidate({ spentThisMonth: a.month.spentThisMonth, othersRemaining: a.month.othersRemaining, aboutToRun: about, candidate: a.candidate, monthlyCap: a.monthlyCap });
         if (!check.fits) throw new MoneyRefused(check, a.monthlyCap, a.month, about);
         if (a.inside) await a.inside(tx);
-        const opId = await startSpendOp(tx, {
-            creatorId: a.creatorId, adAccountId: a.adAccountId, objectKey: a.objectKey, kind: a.kind, actor: a.actor,
-            payload: { ...a.payload, worst_case_delta: roundMoney(Math.max(0, a.candidate)) },
-        });
+        const payload = { ...a.payload, worst_case_delta: roundMoney(Math.max(0, a.candidate)) };
+        const opId = a.record
+            ? await a.record(tx, payload)
+            : await startSpendOp(tx, { creatorId: a.creatorId, adAccountId: a.adAccountId, objectKey: a.objectKey, kind: a.kind, actor: a.actor, payload });
         return { opId, check };
     });
 }

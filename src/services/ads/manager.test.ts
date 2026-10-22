@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { campaignBudget, campaignInsights, checkWorstCase, daysLeftThisMonth, oneDayRemaining, remainingThisMonth, shouldPauseAll, type RawCampaign } from './adsCap.js';
+import { campaignBudget, campaignInsights, checkWorstCase, daysLeftThisMonth, oneDayRemaining, remainingThisMonth, shouldPauseAll, type RawCampaign } from './money.js';
 import { accountStatusLabel, billingUrl, readAccountState } from './metaAds.js';
 
 const NOW = new Date('2026-10-22T10:00:00Z');

@@ -106,7 +106,11 @@ const App = {
         growth: { src: 'growth', page: () => GrowthPage },
         // Next to Growth: the content's numbers and the money spent promoting it. The workspace OWNER's (the page itself says so to anyone else, and the
         // nav item is hidden for them: `data-owner-only`).
-        ads: { src: 'ads', page: () => AdsPage },
+        ads: { src: 'ads', page: () => AdsPage, css: true },
+        // Ads' second tab (#/ads_campaigns): the campaign → ad set → ad tree. No sidebar entry of its own: the Ads item is current while it is open
+        // (`navAs`). The Ads area shares ONE stylesheet, `css/pages/ads.css`, declared by the `ads` entry above; this module asks the shell for it
+        // (`loadPageCss('ads', ...)`) before it paints, so it has no `css` of its own (that would look for an `ads_campaigns.css`).
+        ads_campaigns: { src: 'ads_campaigns', page: () => AdsCampaignsPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -161,7 +165,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.56',
+    ASSET_VERSION: '12.57',
 
     _modules: Object.create(null),
 

@@ -22,19 +22,22 @@ import { withTransaction } from './studio/common.js';
 import { MetaApiError } from './instagram.js';
 import { inspectToken } from './tokenHealth.js';
 import { AdsGraphError } from './ads/graph.js';
-import { checkAndStartSpend, checkDailyMax, finishSpendOp, lockMoney, mayHaveLanded, moneyFor, MoneyRefused, readMonth } from './ads/money.js';
+import { checkAndStartSpend, checkDailyMax, lockMoney, moneyFor, MoneyRefused, readMonth } from './ads/money.js';
 import { isConfigured, readAdsSettings, readHealth, type AdsSettings } from './ads/settings.js';
 import {
-    activateBoostObjects, BOOST_OBJECTIVES, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
-    normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
+    BOOST_OBJECTIVES, buildAdSetActivationParams, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
+    normaliseCountry, normaliseLink, objectiveProblem, readAdAccount, readAdState,
     resolveFacebookStoryId, boostWindow, listAdAccounts, fetchAccountState, currencyOffset, EU_COUNTRIES, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
     type BudgetRefusal, type CreatedObjects, type Eligibility,
-} from './metaAds.js';
+} from './ads/metaAds.js';
 
 export {
     ADS_LIMIT_MAX, parseSettingsInput, parseStoredSettings, readAdsSettings, saveAdsSettings,
     type AdsSettings, type ParsedSettingsInput, type SettingsInput,
 } from './ads/settings.js';
+import { forgetStoredCopy } from './ads/mirror.js';
+import { objectKeyFor, refusalOf, runRecorded, writeNow } from './ads/actions.js';
+import { enqueue } from './ads/ops.js';
 export { describeAdsSettings, type AdsSettingsView } from './ads/health.js';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────────────────
@@ -59,7 +62,8 @@ export type AdsErrorCode =
     | 'PAYMENT_METHOD_MISSING'
     | 'BUDGET_NOT_EDITABLE'
     | 'CAMPAIGN_ACTIVE'
-    | 'CAMPAIGN_NOT_FOUND';
+    | 'CAMPAIGN_NOT_FOUND'
+    | 'NOT_FOUND';
 
 /** A refusal the route answers as `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }` with `status`. */
 export class AdsError extends Error {
@@ -133,6 +137,7 @@ export async function forgetConnectedAdsAccess(creatorId: string): Promise<boole
     if (!token || settings.tokenSource !== 'connect') return false;
     await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, creatorId), null, null);
     await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId), JSON.stringify({ ...settings, tokenSource: null, tokenExpiresAt: null }), null);
+    await forgetStoredCopy(creatorId);
     log('info', 'ads.connect_forgotten', { creator_id: creatorId });
     return true;
 }
@@ -481,50 +486,65 @@ export async function activateBoost(creatorId: string, id: string, now = new Dat
         throw err instanceof AdsError || err instanceof AdsGraphError ? metaRefusal(err) : new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : String(err));
     }
 
-    let opId: string;
+    // The three switches are ops (ads/ops.ts), recorded inside the locked transaction so the campaign's op counts as about to run at once:
+    // ad → ad set (its window starts now) → campaign LAST, each waiting for the one before (`depends_on`).
+    const actorOp = { userId: actor.userId, via: 'owner' as const };
+    const [adKey, adsetKey, campaignKey] = await Promise.all([objectKeyFor(creatorId, before.ad_id), objectKeyFor(creatorId, before.adset_id), objectKeyFor(creatorId, before.campaign_id)]);
+    const press = `boost:${id}:activate:${now.toISOString()}`;
+    const opIds: string[] = [];
     try {
-        ({ opId } = await checkAndStartSpend({
-            creatorId, adAccountId: settings.adAccountId, objectKey: before.campaign_id, kind: 'status', month,
+        await checkAndStartSpend({
+            creatorId, adAccountId: settings.adAccountId, objectKey: campaignKey, kind: 'status', month,
             candidate: Number(before.planned_total), monthlyCap: settings.monthlyCap,
-            payload: { to: 'ACTIVE', boost_id: id, campaign_id: before.campaign_id }, actor: { userId: actor.userId, via: 'owner' },
+            payload: { to: 'ACTIVE', boost_id: id, campaign_id: before.campaign_id }, actor: actorOp,
             inside: async (tx) => {
                 const fresh = (await tx.query<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, creatorId])).rows[0];
                 if (!fresh || fresh.status !== 'paused') throw new AdsError(409, 'BOOST_STATE', 'This boost changed meanwhile: reload and try again.');
                 await tx.query('UPDATE ad_boosts SET activated_at = $2, ends_at = $3, updated_at = NOW() WHERE id = $1', [id, now, boostWindow(fresh.days, now).end]);
             },
-        }));
+            record: async (tx, payload) => {
+                const ad = await enqueue({ creatorId, adAccountId: settings.adAccountId, objectKey: adKey, kind: 'status', actor: actorOp, idempotencyKey: `${press}:ad`,
+                    payload: { exec: { method: 'POST', path: before.ad_id!, params: { status: 'ACTIVE' } }, boost_id: id } }, tx);
+                const adset = await enqueue({ creatorId, adAccountId: settings.adAccountId, objectKey: adsetKey, kind: 'status', actor: actorOp, idempotencyKey: `${press}:adset`, dependsOn: ad.id,
+                    payload: { exec: { method: 'POST', path: before.adset_id!, params: buildAdSetActivationParams(before.days, now) as Record<string, string> }, boost_id: id } }, tx);
+                const campaign = await enqueue({ creatorId, adAccountId: settings.adAccountId, objectKey: campaignKey, kind: 'status', actor: actorOp, idempotencyKey: `${press}:campaign`, dependsOn: adset.id,
+                    payload: { ...payload, exec: { method: 'POST', path: before.campaign_id!, params: { status: 'ACTIVE' } } } }, tx);
+                opIds.push(ad.id, adset.id, campaign.id);
+                return campaign.id;
+            },
+        });
     } catch (err) {
         throw metaRefusal(err);
     }
 
-    try {
-        await activateBoostObjects({ campaignId: before.campaign_id, adsetId: before.adset_id, adId: before.ad_id }, before.days, token, now);
-    } catch (err) {
-        await finishSpendOp(creatorId, opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
-        await updateBoost(id, { error: `Activation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 1000) }).catch(() => undefined);
-        log('warn', 'ads.boost_activate_failed', { creator_id: creatorId, boost_id: id, ...describeError(err) });
-        throw metaRefusal(err);
+    const ran = await runRecorded(creatorId, opIds);
+    const failed = ran.find((op) => op.state === 'failed');
+    if (failed) {
+        const refusal = refusalOf(failed)!;
+        await updateBoost(id, { error: `Activation failed: ${refusal.message}`.slice(0, 1000) }).catch(() => undefined);
+        log('warn', 'ads.boost_activate_failed', { creator_id: creatorId, boost_id: id, op_id: failed.id, code: refusal.code });
+        throw refusal;
     }
-    await finishSpendOp(creatorId, opId, 'done', { campaign_id: before.campaign_id });
+    if (ran.length < 3 || ran[2]!.state !== 'done') {
+        // Waiting in the queue (Meta's limits): the drain sends the rest in order; the daily boost sync moves the row to active.
+        log('info', 'ads.boost_activation_queued', { creator_id: creatorId, boost_id: id });
+        return toView(await readBoost(creatorId, id));
+    }
     log('info', 'ads.boost_activated', { creator_id: creatorId, boost_id: id, planned_total: Number(before.planned_total) });
     return toView(await updateBoost(id, { status: 'active', error: null }));
 }
 
 export async function pauseBoost(creatorId: string, id: string): Promise<BoostView> {
-    const { token } = await requireConfig(creatorId);
+    const { settings } = await requireConfig(creatorId);
     const row = await readBoost(creatorId, id);
     // A `paused` row that was activated may be running: its activation's last call can time out after landing. Pausing it is always safe.
     const mayRun = row.status === 'active' || (row.status === 'paused' && row.activated_at !== null);
     if (!mayRun || !row.campaign_id) throw new AdsError(409, 'BOOST_STATE', `Only an active boost can be paused; this one is ${row.status}.`);
-    try {
-        await pauseBoostCampaign(row.campaign_id, token);
-    } catch (err) {
-        throw metaRefusal(err);
-    }
-    return toView(await updateBoost(id, { status: 'paused' }));
+    const op = await writeNow(creatorId, settings.adAccountId, { kind: 'status', metaId: row.campaign_id, params: { status: 'PAUSED' } });
+    return toView(op.state === 'done' ? await updateBoost(id, { status: 'paused' }) : row);
 }
 
-/** Deletes the campaign at Meta (its ad set and ad go with it) and the creative. Not while it is active: pause it first. */
+/** Ends the boost: its campaign is archived through the queue (Meta keeps its results). Not while it is active: pause it first. */
 export async function deleteBoost(creatorId: string, id: string): Promise<BoostView> {
     const { token } = await requireConfig(creatorId);
     const row = await readBoost(creatorId, id);
@@ -535,13 +555,12 @@ export async function deleteBoost(creatorId: string, id: string): Promise<BoostV
     if (row.ad_id && row.activated_at) {
         await syncRow(row, token, new Date()).catch((err) => log('warn', 'ads.sync_before_delete_failed', { boost_id: id, ...describeError(err) }));
     }
-    try {
-        if (row.campaign_id) await deleteAdObject(row.campaign_id, token);
-        if (row.creative_id) await deleteAdObject(row.creative_id, token);
-    } catch (err) {
-        throw metaRefusal(err);
-    }
-    return toView(await updateBoost(id, { status: 'deleted' }));
+    // "Delete" ends the boost by ARCHIVING its campaign (tasks T052): it stops, Meta keeps its results, and a delete at Meta stays a
+    // separate, confirmed action on the Campaigns tab. The row is `deleted` here once the archive is sent.
+    if (!row.campaign_id) return toView(await updateBoost(id, { status: 'deleted' }));
+    const { settings } = await requireConfig(creatorId);
+    const op = await writeNow(creatorId, settings.adAccountId, { kind: 'archive', metaId: row.campaign_id, params: { status: 'ARCHIVED' } });
+    return toView(op.state === 'done' ? await updateBoost(id, { status: 'deleted' }) : row);
 }
 
 // ─── Insights ─────────────────────────────────────────────────────────────────────────────

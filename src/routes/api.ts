@@ -101,6 +101,8 @@ import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
 import { runAdsHealth } from '../services/ads/health.js';
+import { drainAdsOps } from '../services/ads/ops.js';
+import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -407,6 +409,19 @@ router.get('/jobs/drain', async (req, res) => {
         if (caps.paused > 0 || caps.failed > 0 || caps.blind > 0 || caps.stoppedAtDeadline) log('info', 'ads.cap_sweep', { ...caps });
     } catch (err) {
         log('error', 'ads.cap_sweep_failed', describeError(err));
+    }
+
+    // The ads write queue, then the stored copy (src/services/ads/ops.ts, sync.ts): queued changes are sent in order within Meta's limits
+    // (a button press tries inline first; this is the backstop and what runs a change that had to wait), then each enabled tenant's
+    // campaigns are read once an hour and today's results every 4 hours. After the guard, so the guard is never starved of points. Both
+    // stop at the drain's deadline and never throw.
+    try {
+        const ops = await drainAdsOps(sweepDeadline(startedAt));
+        if (ops.ran > 0 || ops.reaped > 0) log('info', 'ads.ops_drain', { ...ops });
+        const sync = await syncAllAds(sweepDeadline(startedAt));
+        if (sync.structure > 0 || sync.today > 0 || sync.failed > 0) log('info', 'ads.sync_sweep', { ...sync });
+    } catch (err) {
+        log('error', 'ads.ops_sync_sweep_failed', describeError(err));
     }
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
@@ -1086,6 +1101,15 @@ router.get('/cron/publish', async (req, res) => {
             if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });
         } catch (healthErr) {
             log('error', 'cron.ads_health_failed', describeError(healthErr));
+        }
+
+        // The ads results of the trailing 28 days, with the country and placement breakdowns (src/services/ads/sync.ts): Meta revises
+        // results for up to 28 days, so the window is rewritten daily. Large ranges run as Meta's async report and resume next time.
+        try {
+            const daily = await syncDailyAds(Date.now() + 60_000);
+            if (daily.daily > 0 || daily.failed > 0) log('info', 'cron.ads_daily_sync', { ...daily });
+        } catch (dailyErr) {
+            log('error', 'cron.ads_daily_sync_failed', describeError(dailyErr));
         }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
