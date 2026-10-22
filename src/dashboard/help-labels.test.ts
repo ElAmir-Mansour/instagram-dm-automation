@@ -142,7 +142,7 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'Employee': 'a role in Meta’s dashboard',
         'Ad accounts': 'a control in Meta’s dashboard',
         'Account Quality': 'a page in Meta’s dashboard',
-        'Start': 'a control in Telegram',
+        // 'Start' (Telegram's button) is also the builder's start-date label since A5 (adsCreate.budget.start): an interface string now.
     },
 };
 

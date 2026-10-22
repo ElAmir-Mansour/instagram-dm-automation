@@ -741,6 +741,18 @@ const API = {
     /** Creates the draft PAUSED (spends nothing) -> 201 `{ campaignId, ops }`. Refusals carry a `code`: `POLICY_BLOCKED` (`err.body.findings`), `OVER_MONTHLY_CAP`, `OVER_DAILY_MAX`, `BELOW_META_MINIMUM`, `INVALID` (`err.body.field`), `UNSUPPORTED`, `META_ERROR`, `RATE_LIMITED`. `confirmPolicyWarnings` is true only after the owner ticked "I have read the warnings". */
     createAdsDraft: (spec, confirmPolicyWarnings) => API.request('/ads/drafts', { method: 'POST', body: JSON.stringify({ spec, confirmPolicyWarnings: !!confirmPolicyWarnings }) }),
 
+    // ─── The full builder (A5, #/ads_create) ───
+    /** `{ filename, mime, size }` → 201 `{ mediaId, url, upload: { method: 'PUT', url, headers }, expiresAt }`: the browser PUTs the file to `upload.url` itself (never through this app: Vercel takes 4.5 MB). 400 names `field` (mime | size). */
+    signAdsUpload: (data) => API.request('/ads/uploads/sign', { method: 'POST', body: JSON.stringify(data) }),
+    /** `{ mediaId, kind: 'image'|'video', coverMediaId? }` → `{ media: { mediaId, kind, imageHash?, videoId?, videoStatus?, coverUrl? } }`: the upload handed to Meta. A video needs its cover. */
+    prepareAdsMedia: (data) => API.request('/ads/creatives/from-media', { method: 'POST', body: JSON.stringify(data) }),
+    /** `type`: adinterest | adgeolocation (cities) | adlocale → `{ items: [{ id, name, type, sizeLower?, sizeUpper?, countryCode?, region? }] }`. Cached a day on the server. */
+    searchAdsTargeting: (type, q) => API.request(`/ads/targeting/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}`),
+    /** `{ currency, byGoal: { messages, engagement, reach, traffic }, syncedAt }`: Meta's minimum daily budget, in major units. */
+    getAdsMinimumBudgets: () => API.request('/ads/minimum-budgets'),
+    /** `{ deep? }` → `{ op }`: a PAUSED copy of a campaign, ad set or ad, named as a copy. */
+    duplicateAdsObject: (id, body) => API.request(`/ads/objects/${encodeURIComponent(id)}/duplicate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

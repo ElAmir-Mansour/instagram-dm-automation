@@ -3252,8 +3252,8 @@ Every ad the app makes is one `CampaignSpec` (contracts/dashboard-api.md), mappe
 builder's quick mode and Boost's "Send messages" preset end in the same two server functions, so they cannot drift apart.
 
 **A. Quick mode** (`dashboard/js/pages/ads_builder.js`, `AdsBuilder.openQuick`). The Scheduler's **Boost** (`posts.js` `boostOpen`,
-**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); only a module that cannot load opens the
-older form. The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
+**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); a module that cannot load says so (the older
+Boost form was removed in A5). The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
 four ice breakers; the post's caption is shown read-only because it IS the ad text. What is left of the month comes from `GET /money`,
 asked once when the dialog opens.
 
@@ -3311,6 +3311,57 @@ people's clicks on links the bot sent in conversations the ad started (`conversa
 - A boosted post carries NO greeting or ice breakers (`POST_GREETING_PLACEMENT = 'omit'`): live check 2026-10-22, Meta refuses
   `page_welcome_message` in the call to action's value and documents no other place on a post creative. The chat opens with Meta's
   greeting; quick mode hides the fields (`GREETING_ON_POST: false`). Uploaded-media ads (A5) carry them under `link_data`/`video_data`.
+
+### 11.4 — The full builder: upload → Meta → spec → ops (A5)
+
+The Ads screen's **Create** tab (`dashboard/js/pages/ads_create.js`, `AdsCreatePage`) is the same `CampaignSpec` as quick mode (§11.3),
+every part of it, in eight steps: goal, destination, creative, text, audience, placements, budget and schedule, review. Review and Create
+are §11.3 C and D unchanged; what A5 adds is below.
+
+**A. An upload never passes through the app.** `POST /api/ads/uploads/sign` (**`routes/ads.ts:533`**, owner) → `signAdUpload`
+(**`ads/adUploads.ts:74`**): type and size first (JPG/PNG ≤ 30 MB, MP4/MOV ≤ 50 MB), then a Supabase signed upload URL (the Monteur's
+mechanism), then a PUBLIC metadata-only `media_uploads` row. The browser PUTs the file to Storage itself (XHR, progress bar), so Vercel's
+4.5 MB request limit never applies. CSP: `connect-src https://*.supabase.co` (`vercel.json`, `routes/api.ts` `securityHeaders`).
+
+**B. Handed to Meta.** `POST /api/ads/creatives/from-media` (**`routes/ads.ts:543`**, owner) → `prepareMedia` (**`ads/adMedia.ts:69`**):
+the upload must be the tenant's and of the kind claimed; an image's bytes go to `act_<id>/adimages` (base64 → `image_hash`); a video goes
+to `act_<id>/advideos` with `file_url = <public base>/api/uploads/<id>` (Meta pulls it; its bytes are never read here) and needs a cover
+image, whose public address becomes the video's `image_url` (frame 0 is black). The answer is stored in `ads.media.<tenant>` (newest
+200). Not an `ads_ops` row: neither call answers an object the queue could verify by its name tag; both still go through `ads/graph.ts`
+(paced, a throttle never retried).
+
+**C. Resolved at Review and Create.** `readFacts` calls `resolveSpecMedia` (**`ads/adMedia.ts:114`**): every media id of the spec (main,
+9:16, covers) must have a stored Meta answer; a video not yet `ready` is read once (`GET /<video id>?fields=status`, 1 point) and stored
+when it changes. Not handed to Meta, still processing or failed → a problem in Review, a 400/409 (`VIDEO_PROCESSING`) at Create; nothing
+is created.
+
+**D. The mapping additions** (`spec.ts`, pure): per-goal optimisation choices (`OPTIMIZATION_CHOICES`); only the offered positions
+(`PLACEMENT_OPTIONS`; Explore, video feeds and Messenger Stories refused `UNSUPPORTED`); day parting `adset_schedule` + `pacing_type:
+['day_parting']`, in whole hours, viewer's time zone, only with a lifetime budget (`validateSchedule`, **`spec.ts:374`**); a special
+category forbids interests too, and `political` is refused; the 9:16 version (**`spec.ts:766`**): link-click ads only, same kind as the
+main asset, `asset_feed_spec` from `placementAssetFeed` (**`ads/creatives.ts:79`**: labelled assets, `optimization_type: PLACEMENT`, a feed
+rule and a vertical rule — Stories only while `REELS_CUSTOMISATION_LIVE_CHECKED` is false) with the story spec reduced to the Page and the
+Instagram account, the opt-outs kept.
+
+**E. What Review adds.** After Meta's `validate_only` (§11.3 C 6): `reachEstimate` (**`ads/targetingSearch.ts:90`**, `act/reachestimate`
+on the first ad set's targeting, never throws) and, only when Meta accepted the draft, `generatePreviews` (**`ads/creatives.ts:238`**) for
+the two placements `previewPlacements` picks (**`drafts.ts:339`**). A preview Meta will not give is `html: null` and the dashboard draws
+its approximate mock; an iframe is shown only from `www.facebook.com` (CSP `frame-src`). About 2 more points per Review.
+
+**F. Targeting search.** `GET /api/ads/targeting/search?type=adinterest|adgeolocation|adlocale&q=` (**`routes/ads.ts:554`**, operator):
+`GET /search` (cities only for places), cached 24 h per query in the instance; a miss is 1 point through the pacer.
+`GET /api/ads/minimum-budgets` (**`routes/ads.ts:565`**) is drafts' one floor for every goal.
+
+**G. Duplicate.** `POST /api/ads/objects/:id/duplicate` (**`routes/adsObjects.ts:178`**, owner) → `requestDuplicate`
+(**`ads/actions.ts:313`**): one `update` op on `<meta id>/copies` with `status_option: PAUSED`, `deep_copy` (never for an ad) and
+` · copy AR·<key>` added to every name. The sync brings the copy into the stored copy. Nothing spends until it is switched on.
+
+**H. Where it can silently do nothing**
+- The system user has no Page / Instagram asset: Meta refuses the creative at Review (`meta.ok: false`) and previews come back empty
+  (the mock is drawn). Nothing is created.
+- A video Meta never finishes processing stays "still processing" in Review; the owner uploads it again.
+- The Storage project on a custom domain: the browser's PUT is blocked by the CSP and the upload says it failed.
+- `ads.media.<tenant>` keeps 200 uploads; an older one is refused at Review ("upload it again").
 
 ## 12. Ads → conversation → results (Meta Ads Manager, A3)
 

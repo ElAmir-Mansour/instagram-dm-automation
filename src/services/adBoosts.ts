@@ -66,6 +66,8 @@ export type AdsErrorCode =
     | 'NOT_FOUND'
     | 'POLICY_BLOCKED'
     | 'POLICY_WARNINGS'
+    | 'VIDEO_PROCESSING'
+    | 'STORAGE_ERROR'
     | 'UNSUPPORTED';
 
 /** A refusal the route answers as `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }` with `status`. */

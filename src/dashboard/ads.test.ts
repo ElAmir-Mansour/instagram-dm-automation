@@ -466,77 +466,10 @@ describe('Settings: Test connection, the spending limit and the alerts act on th
     });
 });
 
-describe('Boost: the cap comes from /ads/money, and the dialog refuses what does not fit (T035)', () => {
-    async function dialog(money: Json | Error, check: Json | Error) {
-        const calls = { money: [] as string[], created: 0 };
-        const answer = (value: Json | Error) => { if (value instanceof Error) throw value; return value; };
-        const h = loadDashboard({
-            lang: 'en',
-            files: ['dashboard/js/pages/posts.js'],
-            globals: {
-                API: stubApi({
-                    token: 't',
-                    getAdsMoney: async (candidate?: string) => { calls.money.push(candidate ?? ''); return answer(candidate ? check : money); },
-                    createBoost: async () => { calls.created++; return { boost: null }; },
-                    getAdsSettings: async () => ({ configured: true, maxDailyBudget: 50 }),
-                    getAdsEligibility: async () => ({ eligible: true }),
-                }),
-                App: { canAdminister: () => true },
-            },
-        });
-        h.UI.showModal = () => {};
-        h.UI.toast = () => {};
-        const page: Json = h.run('PostsPage');
-        page.ads.settings = { configured: true, maxDailyBudget: 50, monthlyCap: 100, account: { currency: 'USD' } };
-        page._boost = { postId: 7, seq: 1, currency: 'USD', done: false, eligSeq: 0, money: undefined };
-        const field = (value: string) => ({ value });
-        const form = h.el('boost-form', { elements: { platform: field('instagram'), dailyBudget: field('10'), days: field('3'), objective: field('ENGAGEMENT'), country: field('SA'), link: field('') } } as Json);
-        h.el('boost-platform', { options: [{ value: 'instagram' }] } as Json);
-        const summary = h.el('boost-summary');
-        const error = h.el('boost-error');
-        return { h, page, form, summary, error, calls };
-    }
-
-    it('"fits" is worked out live from the server\'s remaining: no request per keystroke', async () => {
-        const { h, page, summary, calls } = await dialog({ monthlyCap: 100, remaining: 20, maxDailyBudget: 50, fits: true }, {});
-        await page.boostLoadMoney(1);
-        const said = text(summary.innerHTML);
-        assert.ok(said.includes(h.t('boost.dialog.overRemaining')), '10 a day for 3 days is 30, over the 20 left');
-        assert.ok(said.includes(h.t('ads.tax.note')));
-        page.boostRecalc();
-        page.boostRecalc();
-        assert.deepEqual(calls.money, [''], 'asked once, without a candidate');
-    });
-
-    it('an answer that could not be read says the cap is unknown, and the dialog still works', async () => {
-        const { h, page, summary } = await dialog(new Error('offline'), {});
-        await page.boostLoadMoney(1);
-        assert.ok(text(summary.innerHTML).includes(h.t('boost.dialog.remainingUnknown')));
-    });
-
-    it('Create asks /ads/money with this boost as a lifetime candidate and stops when it does not fit', async () => {
-        const { h, page, form, error, calls } = await dialog({}, { fits: false, reason: 'OVER_MONTHLY_CAP', remaining: 20, monthlyCap: 100 });
-        await page.boostSubmit(form, { preventDefault() {} });
-        assert.deepEqual(calls.money, ['lifetime:30:3']);
-        assert.equal(calls.created, 0, 'the boost is not created');
-        assert.ok(text(error.innerHTML).includes(h.t('boost.err.overMonthlyCap', { remaining: '\u{2066}20 USD\u{2069}', cap: '\u{2066}100 USD\u{2069}' })));
-    });
-
-    it('when it fits, the boost is created', async () => {
-        const { page, form, calls } = await dialog({}, { fits: true, reason: null, remaining: 70, monthlyCap: 100 });
-        await page.boostSubmit(form, { preventDefault() {} });
-        assert.deepEqual(calls.money, ['lifetime:30:3']);
-        assert.equal(calls.created, 1);
-    });
-
-    it('a failed read of the candidate does not block: the server weighs the cap again', async () => {
-        const { page, form, calls } = await dialog({}, new Error('offline'));
-        await page.boostSubmit(form, { preventDefault() {} });
-        assert.equal(calls.created, 1);
-    });
-
+describe('Boost: refusals from the boosts that exist (T035)', () => {
     it('RATE_LIMITED says when to try again; any other refusal is the server\'s own sentence', async () => {
-        const { h, page } = await dialog({}, {});
+        const h = loadDashboard({ lang: 'en', files: ['dashboard/js/pages/posts.js'], globals: { API: stubApi({ token: 't' }), App: { canAdminister: () => true } } });
+        const page: Json = h.run('PostsPage');
         const limited: Json = Object.assign(new Error('slow down'), { status: 429, code: 'RATE_LIMITED', body: { retryAt: '2026-10-23T08:30:00.000Z' } });
         assert.ok(page.boostFailure(limited).includes(h.UI.formatTime('2026-10-23T08:30:00.000Z')));
         assert.equal(page.boostFailure(new Error('plain')), 'plain');

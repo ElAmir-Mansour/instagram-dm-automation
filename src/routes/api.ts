@@ -150,7 +150,10 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
         // Post previews are served straight off Meta's CDN, whose hostnames rotate.
         "img-src 'self' data: blob: https:",
         "media-src 'self' data: blob: https:",
-        "connect-src 'self'",
+        // The ad builder (A5) uploads a video straight to Supabase Storage through a signed URL (Vercel's 4.5 MB body limit), and shows
+        // Meta's own ad previews, which are iframes on www.facebook.com. Nothing else is framed or fetched cross-origin.
+        "connect-src 'self' https://*.supabase.co",
+        "frame-src https://www.facebook.com",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",

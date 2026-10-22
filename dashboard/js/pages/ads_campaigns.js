@@ -22,16 +22,18 @@
  * Anyone who can open the screen can read it. The change buttons need `App.canOperate()` (a viewer gets none), and "Refresh results"
  * needs the owner (`App.canAdminister()`): the same silence the rest of the app keeps. A null number is "—", never 0.
  *
- * `AdsTabs` (the Overview | Campaigns | Results bar) lives here and is shared with `ads.js` and `ads_results.js`, which load this module for it.
+ * `AdsTabs` (the Overview | Campaigns | Results | Create bar) lives here and is shared with `ads.js`, `ads_results.js` and `ads_create.js`, which load this module for it.
  */
 const AdsTabs = {
     TABS: Object.freeze([
         Object.freeze({ key: 'overview', href: '#/ads', icon: 'layout-dashboard', label: 'ads.tabs.overview' }),
         Object.freeze({ key: 'campaigns', href: '#/ads_campaigns', icon: 'megaphone', label: 'ads.tabs.campaigns' }),
         Object.freeze({ key: 'results', href: '#/ads_results', icon: 'bar-chart-3', label: 'ads.tabs.results' }),
+        // A5: the full builder. Owners only on the server; the tab is shown to whoever sees the Ads area, and Create explains a refusal.
+        Object.freeze({ key: 'create', href: '#/ads_create', icon: 'plus', label: 'ads.tabs.create' }),
     ]),
 
-    /** The tab bar, with `active` ('overview' | 'campaigns' | 'results') marked as the current page. Plain links: a tab is a place, so it has an address. */
+    /** The tab bar, with `active` ('overview' | 'campaigns' | 'results' | 'create') marked as the current page. Plain links: a tab is a place, so it has an address. */
     markup(active) {
         const tab = (item) => html`
             <a class="btn btn-sm btn-ghost" href="${item.href}" ${item.key === active ? html.raw('aria-current="page"') : ''}>
@@ -573,6 +575,9 @@ const AdsCampaignsPage = {
         if (o.budget && o.budget.editable) {
             buttons.push(UI.button({ variant: 'secondary', size: 'sm', icon: 'pencil', label: t('ads.camp.act.editBudget'), action: 'adscamp:editBudget', data: { id }, focusKey: `ads-edit-${id}`, ariaLabel: label('ads.camp.act.editBudget') }));
         }
+        if (o.level !== 'creative') {
+            buttons.push(UI.button({ variant: 'ghost', size: 'sm', icon: 'copy', label: t('ads.camp.act.duplicate'), action: 'adscamp:duplicate', data: { id }, focusKey: `ads-duplicate-${id}`, ariaLabel: label('ads.camp.act.duplicate') }));
+        }
         buttons.push(UI.button({ variant: 'ghost', size: 'sm', icon: 'archive', label: t('ads.camp.act.archive'), action: 'adscamp:archive', data: { id }, focusKey: `ads-archive-${id}`, ariaLabel: label('ads.camp.act.archive') }));
         // A running object is never deleted in one step: it is paused first, and then deleting is its own question.
         if (!running) {
@@ -780,6 +785,30 @@ const AdsCampaignsPage = {
     resumeConfirmed(id) {
         return this.asked(async () => {
             const answer = await API.setAdsObjectStatus(id, { status: 'ACTIVE', confirm: true });
+            this.applyWrite(id, answer);
+        });
+    },
+
+    // ─── Duplicate (A5) ──────────────────────────────────────────────────────
+
+    /** A copy is created PAUSED and re-enters Meta's review and learning: said before, never a surprise. */
+    duplicate(id) {
+        const o = this.find(id);
+        if (!o) return;
+        UI.confirm({
+            title: t('ads.camp.duplicate.title'),
+            body: t('ads.camp.duplicate.body', { name: this.isolate(o.name || o.id) }),
+            hint: t('ads.camp.duplicate.hint'),
+            tone: 'primary',
+            confirmLabel: t('ads.camp.act.duplicate'),
+            confirmIcon: 'copy',
+            onConfirm: () => AdsCampaignsPage.duplicateConfirmed(String(o.id)),
+        });
+    },
+
+    duplicateConfirmed(id) {
+        return this.asked(async () => {
+            const answer = await API.duplicateAdsObject(id, { deep: true });
             this.applyWrite(id, answer);
         });
     },
@@ -1017,6 +1046,7 @@ UI.registerActions('adscamp', {
     editBudget: (el) => AdsCampaignsPage.editBudget(el.dataset.id),
     budgetSubmit: (el, e) => AdsCampaignsPage.budgetSubmit(el, e),
     archive: (el) => AdsCampaignsPage.archive(el.dataset.id),
+    duplicate: (el) => AdsCampaignsPage.duplicate(el.dataset.id),
     remove: (el) => AdsCampaignsPage.remove(el.dataset.id),
     sync: (el) => AdsCampaignsPage.sync(el),
 });

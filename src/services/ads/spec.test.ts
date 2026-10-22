@@ -6,10 +6,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-    adParams, adsetParams, boostToSpec, CREATIVE_OPT_OUTS, FB_POST_MESSENGER_OK, POST_CREATIVE_OPT_OUTS, mapSpec, messageDestinationType, POST_GREETING_PLACEMENT,
-    SpecError, validateSpec,
+    adParams, adsetParams, boostToSpec, CREATIVE_OPT_OUTS, FB_POST_MESSENGER_OK, mapSpec, messageDestinationType, OPTIMIZATION_CHOICES,
+    PLACEMENT_OPTIONS, POST_CREATIVE_OPT_OUTS, POST_GREETING_PLACEMENT, SpecError, validateSpec,
     type AdGoal, type CampaignSpec, type MessageDestination, type SpecContext,
 } from './spec.js';
+import { VERTICAL_IG_POSITIONS } from './creatives.js';
 import { buildAdSetParams, buildCampaignParams, buildCreativeParams, type BoostSpec } from '../metaAds.js';
 
 const NOW = new Date('2026-10-22T10:00:00.000Z');
@@ -192,9 +193,9 @@ describe('messages: the greeting and ice breakers', () => {
 });
 
 describe('what is always explicit', () => {
-    it('special_ad_categories is always present, with the four mappings', () => {
+    it('special_ad_categories is always present, with the mappings (political is refused from A5: see below)', () => {
         const table: Array<[Spec['specialCategory'], string[]]> = [
-            ['none', []], ['employment', ['EMPLOYMENT']], ['financial', ['FINANCIAL_PRODUCTS_SERVICES']], ['housing', ['HOUSING']], ['political', ['ISSUES_ELECTIONS_POLITICS']],
+            ['none', []], ['employment', ['EMPLOYMENT']], ['financial', ['FINANCIAL_PRODUCTS_SERVICES']], ['housing', ['HOUSING']],
         ];
         for (const [cat, value] of table) {
             // A special category narrows targeting (18–65+, no gender, no exclusions) — the default spec already complies.
@@ -599,5 +600,170 @@ describe('validateSpec: garbage', () => {
         const ok = validateSpec(messageSpec({ adsets: [{ name: 'SA', targeting: { countries: [' sa '], ageMin: 18, advantageAudience: true }, placements: 'automatic' }] }));
         assert.equal(ok.ok, true);
         assert.deepEqual(ok.ok && ok.spec.adsets[0]!.targeting.countries, ['SA'], 'countries come back normalised');
+    });
+});
+
+// ─── A5: the full builder (T102) ─────────────────────────────────────────────────────────
+
+describe('A5: the full builder', () => {
+    /** The spec's own Story 4 test: a traffic campaign to a tracked course link, EG and SA, 22–45, Arabic speakers, Reels and Stories only,
+     * an uploaded video with a 9:16 version, a 5-day total budget. */
+    const story4 = (over: Partial<Spec> = {}, adOver: Partial<Spec['ads'][0]> = {}): Spec => ({
+        name: 'Go course', goal: 'traffic', specialCategory: 'none',
+        budget: { home: 'adset', kind: 'lifetime', amount: 25, start: '2026-10-22T10:00:00.000Z', end: '2026-10-27T10:00:00.000Z' },
+        adsets: [{
+            name: 'EG+SA', placements: { instagram: ['reels', 'story'], facebook: ['story'] },
+            targeting: { countries: ['EG', 'SA'], ageMin: 22, ageMax: 45, locales: [28], advantageAudience: false },
+        }],
+        ads: [{
+            adsetIndex: 0, name: 'Video', copy: { primaryText: 'تعلّم Go', headline: 'ابدأ', cta: 'LEARN_MORE' }, link: { trackedOfferId: 'offer1' },
+            creative: { source: 'media', mediaId: 'vid1', verticalMediaId: 'vid9' }, ...adOver,
+        }],
+        ...over,
+    });
+    const media = { ...ctx().media, vid9: { kind: 'video' as const, videoId: '999', coverUrl: 'https://cdn.example.com/v.jpg' }, img9: { kind: 'image' as const, imageHash: 'h9' } };
+
+    it("maps Story 4's campaign exactly, every object PAUSED", () => {
+        const p = mapSpec(story4(), ctx({ media }));
+        assert.equal(p.campaign['objective'], 'OUTCOME_TRAFFIC');
+        assert.equal(p.campaign['status'], 'PAUSED');
+        const t = p.adsets[0]!['targeting'] as Record<string, unknown>;
+        assert.deepEqual(t['geo_locations'], { countries: ['EG', 'SA'] });
+        assert.equal(t['age_min'], 22);
+        assert.equal(t['age_max'], 45);
+        assert.deepEqual(t['locales'], [28]);
+        assert.deepEqual(t['targeting_automation'], { advantage_audience: 0 });
+        assert.deepEqual(t['publisher_platforms'], ['facebook', 'instagram']);
+        assert.deepEqual(t['instagram_positions'], ['reels', 'story']);
+        assert.deepEqual(t['facebook_positions'], ['story']);
+        assert.equal(p.adsets[0]!['lifetime_budget'], 2500);
+        assert.equal(p.adsets[0]!['status'], 'PAUSED');
+        assert.equal(p.ads[0]!.params['status'], 'PAUSED');
+    });
+
+    it('targeting: cities with a radius replace the countries, genders, interests by id, include and exclude audiences', () => {
+        const spec = story4();
+        spec.adsets[0]!.targeting = {
+            countries: ['EG'], cities: [{ key: '1522445', radiusKm: 25 }], ageMin: 20, genders: [1], interests: [{ id: '6003', name: 'Programming' }],
+            includeAudiences: ['a1'], excludeAudiences: ['a2'], advantageAudience: false,
+        };
+        const t = mapSpec(spec, ctx({ media })).adsets[0]!['targeting'] as Record<string, unknown>;
+        assert.deepEqual(t['geo_locations'], { cities: [{ key: '1522445', radius: 25, distance_unit: 'kilometer' }] });
+        assert.deepEqual(t['genders'], [1]);
+        assert.deepEqual(t['flexible_spec'], [{ interests: [{ id: '6003', name: 'Programming' }] }]);
+        assert.deepEqual(t['custom_audiences'], [{ id: 'a1' }]);
+        assert.deepEqual(t['excluded_custom_audiences'], [{ id: 'a2' }]);
+    });
+
+    it('Advantage audience on: age_min 18–25 and no age_max; refused otherwise with a message', () => {
+        const on = (ageMin: number, ageMax?: number): Spec => {
+            const s = story4();
+            s.adsets[0]!.targeting = { countries: ['EG'], ageMin, ...(ageMax !== undefined ? { ageMax } : {}), advantageAudience: true };
+            return s;
+        };
+        const t = mapSpec(on(25), ctx({ media })).adsets[0]!['targeting'] as Record<string, unknown>;
+        assert.deepEqual(t['targeting_automation'], { advantage_audience: 1 });
+        assert.equal('age_max' in t, false);
+        assert.deepEqual(problemsOf(on(30)), [{ field: 'adsets.0.targeting.ageMin', code: 'INVALID' }]);
+        assert.deepEqual(problemsOf(on(22, 45)), [{ field: 'adsets.0.targeting.ageMax', code: 'INVALID' }]);
+        const r = validateSpec(on(30));
+        assert.ok(!r.ok && /18 to 25/.test(r.problems[0]!.message));
+    });
+
+    it('placements: automatic sends no publisher_platforms; manual never accepts Explore, video feeds or Messenger Stories', () => {
+        const auto = story4();
+        auto.adsets[0]!.placements = 'automatic';
+        const t = mapSpec(auto, ctx({ media })).adsets[0]!['targeting'] as Record<string, unknown>;
+        assert.equal('publisher_platforms' in t, false);
+        assert.ok(!(PLACEMENT_OPTIONS.instagram as readonly string[]).includes('explore'));
+        assert.ok(!(PLACEMENT_OPTIONS.instagram as readonly string[]).includes('explore_home'));
+        for (const [platform, pos] of [['instagram', 'explore'], ['instagram', 'explore_home'], ['facebook', 'video_feeds']] as const) {
+            const s = story4();
+            s.adsets[0]!.placements = { [platform]: [pos] };
+            assert.deepEqual(problemsOf(s), [{ field: `adsets.0.placements.${platform}`, code: 'UNSUPPORTED' }], pos);
+        }
+        const unknown = story4();
+        unknown.adsets[0]!.placements = { instagram: ['banner'] };
+        assert.deepEqual(problemsOf(unknown), [{ field: 'adsets.0.placements.instagram', code: 'INVALID' }]);
+    });
+
+    it('budget: campaign or ad set, is_adset_budget_sharing_enabled explicit, and a lifetime budget needs end_time', () => {
+        const onAdset = mapSpec(story4(), ctx({ media }));
+        assert.equal(onAdset.campaign['is_adset_budget_sharing_enabled'], false);
+        assert.equal(onAdset.adsets[0]!['end_time'], '2026-10-27T10:00:00+0000');
+        const onCampaign = mapSpec(story4({ budget: { home: 'campaign', kind: 'daily', amount: 5, start: '2026-10-22T10:00:00.000Z' } }), ctx({ media }));
+        assert.equal(onCampaign.campaign['daily_budget'], 500);
+        assert.equal(onCampaign.campaign['bid_strategy'], 'LOWEST_COST_WITHOUT_CAP');
+        assert.equal('is_adset_budget_sharing_enabled' in onCampaign.campaign, false);
+        assert.equal('daily_budget' in onCampaign.adsets[0]!, false);
+        assert.deepEqual(problemsOf(story4({ budget: { home: 'adset', kind: 'lifetime', amount: 25, start: '2026-10-22T10:00:00.000Z' } })), [{ field: 'budget.end', code: 'INVALID' }]);
+    });
+
+    it('schedule: adset_schedule in minutes with day parting, only with a lifetime budget', () => {
+        const s = story4();
+        s.adsets[0]!.schedule = [{ days: [5, 4], startHour: 18, endHour: 23 }];
+        const a = mapSpec(s, ctx({ media })).adsets[0]!;
+        assert.deepEqual(a['pacing_type'], ['day_parting']);
+        assert.deepEqual(a['adset_schedule'], [{ start_minute: 1080, end_minute: 1380, days: [4, 5], timezone_type: 'USER' }]);
+        assert.equal('adset_schedule' in mapSpec(story4(), ctx({ media })).adsets[0]!, false);
+        const daily = story4({ budget: { home: 'adset', kind: 'daily', amount: 5, start: '2026-10-22T10:00:00.000Z', end: '2026-10-27T10:00:00.000Z' } });
+        daily.adsets[0]!.schedule = [{ days: [1], startHour: 9, endHour: 12 }];
+        assert.deepEqual(problemsOf(daily), [{ field: 'adsets.0.schedule', code: 'UNSUPPORTED' }]);
+        const badHours = story4();
+        badHours.adsets[0]!.schedule = [{ days: [1], startHour: 12, endHour: 12 }];
+        assert.deepEqual(problemsOf(badHours), [{ field: 'adsets.0.schedule.0.endHour', code: 'INVALID' }]);
+    });
+
+    it('special categories: the map, the narrow targeting (no interests either), and political refused', () => {
+        for (const [category, meta] of [['employment', 'EMPLOYMENT'], ['financial', 'FINANCIAL_PRODUCTS_SERVICES'], ['housing', 'HOUSING']] as const) {
+            const s = story4({ specialCategory: category });
+            s.adsets[0]!.targeting = { countries: ['EG'], ageMin: 18, advantageAudience: false };
+            assert.deepEqual(mapSpec(s, ctx({ media })).campaign['special_ad_categories'], [meta]);
+        }
+        const withInterest = story4({ specialCategory: 'employment' });
+        withInterest.adsets[0]!.targeting = { countries: ['EG'], ageMin: 18, interests: [{ id: '1' }], advantageAudience: false };
+        assert.deepEqual(problemsOf(withInterest), [{ field: 'adsets.0.targeting.interests', code: 'INVALID' }]);
+        const political = story4({ specialCategory: 'political' });
+        political.adsets[0]!.targeting = { countries: ['EG'], ageMin: 18, advantageAudience: false };
+        assert.deepEqual(problemsOf(political), [{ field: 'specialCategory', code: 'UNSUPPORTED' }]);
+    });
+
+    it('optimization: the goal\'s alternatives are accepted, anything else is refused', () => {
+        const s = story4();
+        s.adsets[0]!.optimization = 'LANDING_PAGE_VIEWS';
+        assert.equal(mapSpec(s, ctx({ media })).adsets[0]!['optimization_goal'], 'LANDING_PAGE_VIEWS');
+        assert.deepEqual(OPTIMIZATION_CHOICES.traffic, ['LINK_CLICKS', 'LANDING_PAGE_VIEWS']);
+        s.adsets[0]!.optimization = 'CONVERSATIONS';
+        assert.deepEqual(problemsOf(s), [{ field: 'adsets.0.optimization', code: 'UNSUPPORTED' }]);
+    });
+
+    it('the 9:16 version: asset_feed_spec with PLACEMENT and two rules, the story spec just the Page, opt-outs kept', () => {
+        const c = mapSpec(story4(), ctx({ media })).creatives[0]!;
+        assert.deepEqual(c['object_story_spec'], { page_id: '100200300', instagram_user_id: '17841400000000000' });
+        const afs = c['asset_feed_spec'] as Record<string, any>;
+        assert.equal(afs['optimization_type'], 'PLACEMENT');
+        assert.ok(afs['asset_customization_rules'].length >= 2);
+        assert.deepEqual(afs['videos'].map((v: any) => [v.video_id, v.thumbnail_url]), [['555', 'https://cdn.example.com/c.jpg'], ['999', 'https://cdn.example.com/v.jpg']]);
+        assert.deepEqual(afs['asset_customization_rules'][1].customization_spec.instagram_positions, [...VERTICAL_IG_POSITIONS]);
+        assert.deepEqual(afs['link_urls'], [{ website_url: 'https://autoreply.example.com/r/abc123' }]);
+        assert.ok(c['degrees_of_freedom_spec']);
+    });
+
+    it('the 9:16 version is refused on an existing post, on a message ad, and for a different kind of media', () => {
+        const post = story4({}, { creative: { source: 'post', postId: 'ig1', platform: 'instagram' } });
+        assert.ok(!('asset_feed_spec' in mapSpec(post, ctx({ media })).creatives[0]!));
+        const msg = { ...messageSpec(), ads: [{ ...messageSpec().ads[0]!, creative: { source: 'media' as const, mediaId: 'img1', verticalMediaId: 'img9' } }] };
+        assert.deepEqual(problemsOf(msg), [{ field: 'ads.0.creative.verticalMediaId', code: 'UNSUPPORTED' }]);
+        assert.throws(() => mapSpec(story4({}, { creative: { source: 'media', mediaId: 'vid1', verticalMediaId: 'img9' } }), ctx({ media })),
+            (e: unknown) => e instanceof SpecError && e.field === 'ads.0.creative.verticalMediaId');
+    });
+
+    it('a video without a cover is refused, the main one and the 9:16 one', () => {
+        const noCover = { ...media, vid1: { kind: 'video' as const, videoId: '555' } };
+        assert.throws(() => mapSpec(story4({}, { creative: { source: 'media', mediaId: 'vid1' } }), ctx({ media: noCover })),
+            (e: unknown) => e instanceof SpecError && e.field === 'ads.0.creative.coverMediaId');
+        const noVerticalCover = { ...media, vid9: { kind: 'video' as const, videoId: '999' } };
+        // Without its own cover the 9:16 video borrows the main one's; with neither it is refused.
+        assert.doesNotThrow(() => mapSpec(story4(), ctx({ media: noVerticalCover })));
     });
 });

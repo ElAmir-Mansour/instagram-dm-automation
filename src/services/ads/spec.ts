@@ -31,6 +31,7 @@
  * `buildCampaignParams` / `buildAdSetParams` / `buildCreativeParams` in metaAds.ts.
  */
 import { EU_COUNTRIES, graphTime, normaliseCountry, normaliseLink, toMinorUnits, type GraphParams } from '../metaAds.js';
+import { CreativeError, placementAssetFeed } from './creatives.js';
 
 // ─── The spec ─────────────────────────────────────────────────────────────────────────────
 
@@ -61,14 +62,16 @@ export interface CampaignSpec {
             advantageAudience: boolean;
         };
         placements: 'automatic' | { facebook?: string[]; instagram?: string[] };
-        /** Reserved: A4 supports only each goal's own optimization goal, so a different value is refused rather than ignored. */
+        /** One of the goal's `OPTIMIZATION_CHOICES`; absent means the goal's default. */
         optimization?: string;
+        /** Day parting (A5): blocks of whole hours in the viewer's time zone. Only with a lifetime budget (Meta's rule). */
+        schedule?: Array<{ days: number[]; startHour: number; endHour: number }>;
     }>;
     ads: Array<{
         adsetIndex: number;
         name: string;
         creative: { source: 'post'; postId: string; platform: 'instagram' | 'facebook' }
-            | { source: 'media'; mediaId: string; verticalMediaId?: string; coverMediaId?: string };
+            | { source: 'media'; mediaId: string; verticalMediaId?: string; coverMediaId?: string; verticalCoverMediaId?: string };
         /** For a post creative only `cta` (traffic) matters: the post carries its own caption. */
         copy: { primaryText: string; headline?: string; cta?: string };
         link?: { trackedOfferId: string } | { url: string };
@@ -186,6 +189,28 @@ const OPTIMIZATION_GOAL: Record<AdGoal, string> = {
     traffic: 'LINK_CLICKS',
 };
 
+/**
+ * What each goal may optimise for (A5), the default first. Only choices that work with `billing_event: IMPRESSIONS` and need no pixel:
+ * landing page views are counted by Meta's browser, not a pixel.
+ */
+export const OPTIMIZATION_CHOICES: Record<AdGoal, readonly string[]> = {
+    messages: ['CONVERSATIONS'],
+    engagement: ['POST_ENGAGEMENT', 'THRUPLAY'],
+    reach: ['REACH', 'IMPRESSIONS'],
+    traffic: ['LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
+};
+
+/**
+ * The positions the builder offers (A5), per platform. Never offered and refused if sent: Instagram Explore (`explore`, `explore_home`,
+ * removed in v26), Facebook video feeds (`video_feeds`, removed in v24) and Messenger Stories (stripped from 2026-10-27); Meta errors on
+ * the first two and silently drops the third, so a choice that looks taken would not be.
+ */
+export const PLACEMENT_OPTIONS = {
+    facebook: ['feed', 'story', 'facebook_reels', 'marketplace', 'search'],
+    instagram: ['stream', 'story', 'reels', 'profile_feed', 'ig_search'],
+} as const;
+const REMOVED_POSITIONS = new Set(['explore', 'explore_home', 'video_feeds', 'messenger_stories']);
+
 /** The one canonical order: the order of the destination in a multi value, and of the CTAs in the feed. */
 const DESTINATION_ORDER: readonly MessageDestination[] = ['instagram', 'messenger', 'whatsapp'];
 
@@ -249,6 +274,9 @@ export function validateSpec(input: unknown): { ok: true; spec: CampaignSpec } |
     const category = spec['specialCategory'];
     const categoryOk = typeof category === 'string' && Object.prototype.hasOwnProperty.call(SPECIAL_CATEGORY, category);
     if (!categoryOk) bad('specialCategory', 'The special ad category must be none, employment, financial, housing or political.');
+    else if (category === 'political') {
+        bad('specialCategory', 'Ads about social issues, elections or politics need Meta\'s authorisation and a "paid for by" disclaimer, which the app does not collect.', 'UNSUPPORTED');
+    }
     const special = categoryOk && category !== 'none';
 
     // destinations (messages only)
@@ -294,10 +322,11 @@ export function validateSpec(input: unknown): { ok: true; spec: CampaignSpec } |
             const at = `adsets.${i}`;
             if (!isRec(raw)) { bad(at, 'The ad set must be an object.'); return; }
             if (!isText(raw['name']) || raw['name'].length > LIMITS.name) bad(`${at}.name`, 'The ad set needs a name.');
-            if (raw['optimization'] !== undefined && goal && raw['optimization'] !== OPTIMIZATION_GOAL[goal]) {
-                bad(`${at}.optimization`, `This goal optimises for ${OPTIMIZATION_GOAL[goal]} only.`, 'UNSUPPORTED');
+            if (raw['optimization'] !== undefined && goal && !OPTIMIZATION_CHOICES[goal].includes(raw['optimization'] as string)) {
+                bad(`${at}.optimization`, `This goal optimises for ${OPTIMIZATION_CHOICES[goal].join(' or ')}.`, 'UNSUPPORTED');
             }
             validatePlacements(raw['placements'], `${at}.placements`, bad);
+            if (raw['schedule'] !== undefined) validateSchedule(raw['schedule'], `${at}.schedule`, isRec(budget) ? budget['kind'] : null, bad);
             const t = raw['targeting'];
             if (!isRec(t)) { bad(`${at}.targeting`, 'The targeting is missing.'); return; }
             validateTargeting(t, `${at}.targeting`, special, bad);
@@ -341,9 +370,33 @@ function validatePlacements(raw: unknown, at: string, bad: Bad): void {
         const list = raw[platform];
         if (list === undefined) continue;
         if (!Array.isArray(list) || !list.every(p => typeof p === 'string' && /^[a-z_]{2,40}$/.test(p))) { bad(`${at}.${platform}`, 'Positions are lower-case names.'); return; }
+        const removed = list.find(p => REMOVED_POSITIONS.has(p));
+        if (removed) { bad(`${at}.${platform}`, `Meta no longer offers the ${removed} placement.`, 'UNSUPPORTED'); return; }
+        const offered: readonly string[] = PLACEMENT_OPTIONS[platform as 'facebook' | 'instagram'];
+        const unknown = list.find(p => !offered.includes(p));
+        if (unknown) { bad(`${at}.${platform}`, `${unknown} is not a ${platform} placement the builder offers.`); return; }
         if (list.length > 0) any = true;
     }
     if (!any) bad(at, 'Choose at least one placement, or use automatic.');
+}
+
+/** Day parting: whole hours, end after start, days 0 (Sunday) to 6, and only with a lifetime budget (Meta: "only use ad scheduling with lifetime budgets"). */
+function validateSchedule(raw: unknown, at: string, budgetKind: unknown, bad: Bad): void {
+    if (!Array.isArray(raw)) { bad(at, 'The schedule is a list of blocks.'); return; }
+    if (raw.length === 0) return;
+    if (budgetKind !== 'lifetime') { bad(at, 'A schedule needs a lifetime (total) budget.', 'UNSUPPORTED'); return; }
+    if (raw.length > 28) { bad(at, 'At most 28 blocks.'); return; }
+    raw.forEach((b, i) => {
+        if (!isRec(b)) { bad(`${at}.${i}`, 'A block has days and hours.'); return; }
+        const days = b['days'];
+        if (!Array.isArray(days) || days.length === 0 || !days.every(d => isInt(d) && d >= 0 && d <= 6) || new Set(days).size !== days.length) {
+            bad(`${at}.${i}.days`, 'Days are 0 (Sunday) to 6, each once.');
+        }
+        const start = b['startHour'];
+        const end = b['endHour'];
+        if (!isInt(start) || start < 0 || start > 23) bad(`${at}.${i}.startHour`, 'The start is a whole hour, 0 to 23.');
+        else if (!isInt(end) || end <= start || end > 24) bad(`${at}.${i}.endHour`, 'The end is a whole hour after the start, up to 24.');
+    });
 }
 
 function validateTargeting(t: Rec, at: string, special: boolean, bad: Bad): void {
@@ -389,6 +442,7 @@ function validateTargeting(t: Rec, at: string, special: boolean, bad: Bad): void
         if (ageMaxOk && ageMax !== undefined && ageMax !== 65) bad(`${at}.ageMax`, 'A special ad category targets every age up to 65+.');
         if (Array.isArray(t['genders']) && t['genders'].length > 0) bad(`${at}.genders`, 'A special ad category cannot target by gender.');
         if (Array.isArray(t['excludeAudiences']) && t['excludeAudiences'].length > 0) bad(`${at}.excludeAudiences`, 'A special ad category cannot exclude audiences.');
+        if (Array.isArray(t['interests']) && t['interests'].length > 0) bad(`${at}.interests`, 'A special ad category cannot target by interest.');
     }
 
     const genders = t['genders'];
@@ -417,7 +471,10 @@ function validateCreative(ad: Rec, at: string, goal: AdGoal | null, bad: Bad): v
         }
     } else if (c['source'] === 'media') {
         if (!isText(c['mediaId'])) { bad(`${at}.creative.mediaId`, 'Choose an image or a video.'); return; }
-        for (const key of ['verticalMediaId', 'coverMediaId']) if (c[key] !== undefined && !isText(c[key])) bad(`${at}.creative.${key}`, 'A media id is text.');
+        for (const key of ['verticalMediaId', 'coverMediaId', 'verticalCoverMediaId']) if (c[key] !== undefined && !isText(c[key])) bad(`${at}.creative.${key}`, 'A media id is text.');
+        // The 9:16 version is placement customisation (asset_feed_spec), mapped for link-click ads. A message ad's asset feed already
+        // carries its destinations, and the two are not combined until a live check shows Meta accepts it.
+        if (c['verticalMediaId'] !== undefined && goal === 'messages') bad(`${at}.creative.verticalMediaId`, 'A 9:16 version is for link-click ads for now.', 'UNSUPPORTED');
         // An uploaded ad is built as link_data / video_data, which has a place for a message CTA or a link: engagement and reach have neither.
         if (goal === 'engagement' || goal === 'reach') bad(`${at}.creative`, 'An uploaded image or video can be used for messages or link clicks. Engagement and reach use an existing post.', 'UNSUPPORTED');
     } else bad(`${at}.creative.source`, 'The creative is a post or uploaded media.');
@@ -504,12 +561,17 @@ export function mapSpec(input: CampaignSpec, ctx: SpecContext, campaignId?: stri
             name: opName(adset.name),
             status: 'PAUSED',
             billing_event: 'IMPRESSIONS',
-            optimization_goal: OPTIMIZATION_GOAL[goal],
+            optimization_goal: adset.optimization ?? OPTIMIZATION_GOAL[goal],
             start_time: start,
             targeting: buildTargeting(adset, platformOfAdset(spec, ctx, i)),
         };
         if (campaignId) params['campaign_id'] = campaignId;
         if (end) params['end_time'] = end;
+        if (adset.schedule && adset.schedule.length > 0) {
+            // Day parting (A5). Meta wants minutes from midnight, in the viewer's time zone (`USER`).
+            params['pacing_type'] = ['day_parting'];
+            params['adset_schedule'] = adset.schedule.map(b => ({ start_minute: b.startHour * 60, end_minute: b.endHour * 60, days: [...b.days].sort(), timezone_type: 'USER' }));
+        }
         if (!cboHome) {
             params[budgetKey] = budgetValue;
             params['bid_strategy'] = 'LOWEST_COST_WITHOUT_CAP';
@@ -715,7 +777,32 @@ function buildCreative(
         }
         creative['object_story_spec'] = story;
         if (goal === 'messages' && multi) creative['asset_feed_spec'] = messagingFeed(destinations);
-        // `verticalMediaId` (a 9:16 version for Stories and Reels) is A5's placement customisation: not mapped here.
+        if (ad.creative.verticalMediaId) {
+            // The 9:16 version (A5, research R11): the feeds get the main asset and Stories the vertical one, through placement
+            // customisation. The asset feed then carries the text, link and button, and the story spec is just the Page and the account.
+            const vertical = ctx.media?.[ad.creative.verticalMediaId];
+            if (!vertical) throw new SpecError('INVALID', `${at}.creative.verticalMediaId`, 'That 9:16 version was not found.');
+            if (vertical.kind !== media.kind) throw new SpecError('INVALID', `${at}.creative.verticalMediaId`, 'The 9:16 version must be the same kind (image or video) as the main one.');
+            const verticalCover = vertical.coverUrl ?? (ad.creative.verticalCoverMediaId ? ctx.media?.[ad.creative.verticalCoverMediaId]?.coverUrl : undefined)
+                ?? (story['video_data'] as GraphParams | undefined)?.['image_url'] as string | undefined;
+            const feedData = (story['link_data'] ?? story['video_data']) as GraphParams;
+            try {
+                creative['asset_feed_spec'] = placementAssetFeed({
+                kind: media.kind,
+                feed: { imageHash: media.imageHash, videoId: media.videoId, coverUrl: feedData['image_url'] as string | undefined },
+                vertical: { imageHash: vertical.imageHash, videoId: vertical.videoId, coverUrl: verticalCover },
+                copy: { primaryText: ad.copy.primaryText, headline: ad.copy.headline, cta: ad.copy.cta ?? 'LEARN_MORE' },
+                link: link!,
+                source: 'upload',
+            });
+            } catch (err) {
+                if (err instanceof CreativeError) throw new SpecError('INVALID', `${at}.creative.${err.field === 'coverMediaId' ? 'verticalCoverMediaId' : 'verticalMediaId'}`, err.message);
+                throw err;
+            }
+            const bare: GraphParams = { page_id: ctx.pageId };
+            if (ctx.igUserId) bare['instagram_user_id'] = ctx.igUserId;
+            creative['object_story_spec'] = bare;
+        }
     }
 
     if (goal === 'messages' || goal === 'traffic') {
