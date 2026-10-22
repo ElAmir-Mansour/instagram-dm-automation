@@ -245,7 +245,31 @@ export async function minimumDailyBudget(f: Pick<DraftFacts, 'adAccountId' | 'to
 
 // ─── Meta's own check ──────────────────────────────────────────────────────────────────────
 
-export interface MetaCheck { ok: boolean; error?: string; metaCode?: number | null; object?: string; minimumBudget: number | null }
+export interface MetaCheck {
+    ok: boolean;
+    error?: string;
+    metaCode?: number | null;
+    metaSubcode?: number | null;
+    object?: string;
+    minimumBudget: number | null;
+}
+
+/**
+ * Meta's own explanation of a refusal, for the Review: the short `message` plus `error_user_title` / `error_user_msg` when Meta sent them
+ * (a bare "Invalid parameter" says nothing without them; live check 2026-10-22). Text Meta wrote for the advertiser: never a token.
+ */
+export function metaRefusalText(err: unknown): { text: string; code: number | null; subcode: number | null } {
+    const e = (err && typeof err === 'object' ? (err as { cause?: any }).cause?.response?.data?.error : null) ?? null;
+    const base = err instanceof Error ? err.message : 'Meta refused it.';
+    const title = typeof e?.error_user_title === 'string' ? e.error_user_title.trim() : '';
+    const msg = typeof e?.error_user_msg === 'string' ? e.error_user_msg.trim() : '';
+    const extra = [title, msg].filter(Boolean).join(': ');
+    return {
+        text: (extra ? `${base} — ${extra}` : base).slice(0, 700),
+        code: typeof e?.code === 'number' ? e.code : err instanceof AdsGraphError ? err.metaCode ?? null : null,
+        subcode: typeof e?.error_subcode === 'number' ? e.error_subcode : null,
+    };
+}
 
 /**
  * `execution_options=['validate_only']` on the campaign and on every creative: Meta checks them and creates nothing (3 points each). An ad
@@ -263,8 +287,9 @@ async function metaValidate(f: DraftFacts, p: SpecPayloads): Promise<Omit<MetaCh
             await adsPost(`act_${f.adAccountId}/${c.edge}`, { ...c.params, execution_options: ['validate_only'] }, f.token, { label: `ads.validate.${c.edge}` });
         } catch (err) {
             if (err instanceof AdsGraphError && (err.klass === 'throttle' || err.klass === 'token_dead')) throw err;
-            const message = err instanceof Error ? err.message : 'Meta refused it.';
-            return { ok: false, error: message.slice(0, 500), metaCode: err instanceof AdsGraphError ? err.metaCode ?? null : null, object: c.object };
+            const r = metaRefusalText(err);
+            log('warn', 'ads.validate_refused', { ad_account_id: f.adAccountId, object: c.object, edge: c.edge, meta_code: r.code, meta_subcode: r.subcode, error: r.text });
+            return { ok: false, error: r.text, metaCode: r.code, metaSubcode: r.subcode, object: c.object };
         }
     }
     return { ok: true };
