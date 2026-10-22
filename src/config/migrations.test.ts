@@ -1351,3 +1351,39 @@ describe('migration v57: ads lead forms and leads (encrypted answers, retention,
         assert.doesNotMatch(sql, /\b(answers|email|phone|full_name) (TEXT|JSONB)/);
     });
 });
+
+// ─── v58: ads split tests ──────────────────────────────────────────────────────────────────────
+
+describe('migration v58: ads split tests (ads_studies)', () => {
+    const FILE = 'migration_v58_ads_studies.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v52 (v53-v57 are the earlier ads phases and sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('creates ads_studies only, idempotently, keyed by the tenant with a cascade, and turns row level security on', () => {
+        assert.deepEqual([...sql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]), ['ads_studies']);
+        assert.doesNotMatch(sql, /CREATE TABLE (?!IF NOT EXISTS)/);
+        assert.match(sql, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/);
+        assert.match(sql, /ALTER TABLE ads_studies ENABLE ROW LEVEL SECURITY;/);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+    });
+
+    it('allows exactly the two test types and the six states studies.ts uses', () => {
+        assert.match(sql, /type TEXT NOT NULL CHECK \(type IN \('creative', 'audience'\)\)/);
+        assert.match(sql, /CHECK \(state IN \('creating', 'ready', 'running', 'ended', 'stopped', 'failed'\)\)/);
+    });
+
+    it('changes no existing row and removes nothing', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b|\bALTER TABLE (?!ads_studies)/i);
+    });
+});

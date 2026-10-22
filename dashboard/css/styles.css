@@ -5852,3 +5852,8 @@ ul.log-cards { list-style: none; }
 .ads-step-text .form-hint { margin: 0; }
 .ads-step .help-link { margin-inline-start: auto; }
 .ads-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-2) var(--space-4); }
+.ads-test-summary { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--fs-200); }
+.ads-test-summary p { margin: 0; }
+@media (max-width: 480px) {
+    .ads-test-actions .btn { flex: 1 1 auto; }
+}

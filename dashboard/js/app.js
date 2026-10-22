@@ -123,6 +123,8 @@ const App = {
         ads_rules: { src: 'ads_rules', page: () => AdsRulesPage, navAs: 'ads' },
         // Ads' leads (#/ads_leads, A10): instant forms and the leads they collect, locked until the platform admin records a legal sign-off.
         ads_leads: { src: 'ads_leads', page: () => AdsLeadsPage, navAs: 'ads' },
+        // Ads' split tests (#/ads_tests, A12): two versions of an ad or two audiences; Meta names the winner, a proposal keeps it.
+        ads_tests: { src: 'ads_tests', page: () => AdsTestsPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -184,7 +186,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.72',
+    ASSET_VERSION: '12.73',
 
     _modules: Object.create(null),
 

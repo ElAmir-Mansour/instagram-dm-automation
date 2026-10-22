@@ -804,6 +804,15 @@ const API = {
         const qs = new URLSearchParams(query || {}).toString();
         return API.request(`/ads/leads${qs ? `?${qs}` : ''}`);
     },
+    // ─── Split tests (the Ads screen's Tests tab): Meta A/B tests of two ads or two audiences. The tenant OWNER's. ───
+    /** `{ studies: StudyView[], businessId: string|null }`. */
+    getAdsStudies: () => API.request('/ads/studies'),
+    /** `{ type, name?, cells, dailyBudget, start, end, confirm: true }` → 201 `{ study, ops }`. Creates the test with every arm PAUSED: nothing is spent. */
+    createAdsStudy: (data) => API.request('/ads/studies', { method: 'POST', body: JSON.stringify(data) }),
+    /** THIS STARTS SPENDING MONEY: the caller has asked first, which is why `confirm: true` is sent here and nowhere else. Answers `{ study, ops }`. */
+    startAdsStudy: (id) => API.request(`/ads/studies/${encodeURIComponent(id)}/start`, { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+    /** Pauses the arms. Answers `{ study, ops }`. */
+    stopAdsStudy: (id) => API.request(`/ads/studies/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
 
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */

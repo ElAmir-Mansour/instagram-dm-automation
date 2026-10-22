@@ -68,6 +68,8 @@ import { adsResultsRouter } from './adsResults.js';
 import { adsProposalsRouter } from './adsProposals.js';
 import { adsShareSpendRouter } from './adsShareSpend.js';
 import { adsRulesRouter } from './adsRules.js';
+import { studiesRouter } from './adsStudies.js';
+import { studyPorts } from '../services/ads/studiesPorts.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -606,3 +608,6 @@ adsRouter.use(adsShareSpendRouter);
 // ─── Rules (A9): the owner's standing conditions; protective actions run alone, raises and resumes become proposals ───────────────
 
 adsRouter.use(adsRulesRouter);
+// ─── Split tests (A12): two versions of an ad, or two audiences; Meta names the winner, a proposal keeps it ────────────────────────
+
+adsRouter.use(studiesRouter(() => studyPorts));

@@ -3,7 +3,7 @@
  * run `node scripts/build-icons.mjs` after adding an icon, and CI's `check:icon-subset` fails
  * if this file is stale.
  *
- * The 137 icons the dashboard uses, and a lucide.createIcons() that renders them exactly as
+ * The 138 icons the dashboard uses, and a lucide.createIcons() that renders them exactly as
  * lucide@0.577.0 does (same svg attributes, same classes, data-lucide kept for the CSS). A name
  * that is not here loads the full pinned UMD once, from the same URL and SRI hash index.html
  * used, and draws the rest with it — so a miss costs a download and a console warning, never
@@ -135,6 +135,7 @@
         "skip-forward": [["path",{"d":"M21 4v16"}],["path",{"d":"M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z"}]],
         "sliders-horizontal": [["path",{"d":"M10 5H3"}],["path",{"d":"M12 19H3"}],["path",{"d":"M14 3v4"}],["path",{"d":"M16 17v4"}],["path",{"d":"M21 12h-9"}],["path",{"d":"M21 19h-5"}],["path",{"d":"M21 5h-7"}],["path",{"d":"M8 10v4"}],["path",{"d":"M8 12H3"}]],
         "sparkles": [["path",{"d":"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"}],["path",{"d":"M20 2v4"}],["path",{"d":"M22 4h-4"}],["circle",{"cx":"4","cy":"20","r":"2"}]],
+        "split": [["path",{"d":"M16 3h5v5"}],["path",{"d":"M8 3H3v5"}],["path",{"d":"M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"}],["path",{"d":"m15 9 6-6"}]],
         "target": [["circle",{"cx":"12","cy":"12","r":"10"}],["circle",{"cx":"12","cy":"12","r":"6"}],["circle",{"cx":"12","cy":"12","r":"2"}]],
         "terminal": [["path",{"d":"M12 19h8"}],["path",{"d":"m4 17 6-6-6-6"}]],
         "timer": [["line",{"x1":"10","x2":"14","y1":"2","y2":"2"}],["line",{"x1":"12","x2":"15","y1":"14","y2":"11"}],["circle",{"cx":"12","cy":"14","r":"8"}]],

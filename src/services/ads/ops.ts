@@ -58,7 +58,7 @@ export interface OpExecSpec {
     method: 'POST' | 'DELETE';
     path: string;
     params?: GraphParams;
-    edge?: 'campaigns' | 'adsets' | 'ads' | 'adcreatives' | 'customaudiences';
+    edge?: 'campaigns' | 'adsets' | 'ads' | 'adcreatives' | 'customaudiences' | 'ad_studies';
     level?: 'campaign' | 'adset' | 'ad' | 'creative';
 }
 
@@ -835,12 +835,18 @@ function matchesIntent(params: Record<string, unknown>, data: Record<string, unk
  */
 async function readBack(op: Op, exec: OpExecSpec, path: string, deps: GraphDeps & { token: string }): Promise<string | boolean | null> {
     if (isCreateOp(op)) {
+        // A business's `ad_studies` edge takes no `filtering`: its newest studies are read and matched by the tag here.
+        const studies = exec.edge === 'ad_studies';
         const res = await sendExec(op, {
             method: 'GET', path, label: 'ads.op_verify',
-            params: { filtering: JSON.stringify([{ field: 'name', operator: 'CONTAIN', value: tagOf(op.id) }]), fields: 'id' },
+            params: studies
+                ? { fields: 'id,name', limit: '100' }
+                : { filtering: JSON.stringify([{ field: 'name', operator: 'CONTAIN', value: tagOf(op.id) }]), fields: 'id' },
         }, deps);
         const list = res.data?.data;
-        const hit = Array.isArray(list) ? list.find((o: any) => o && typeof o.id === 'string') : null;
+        const hit = Array.isArray(list)
+            ? list.find((o: any) => o && typeof o.id === 'string' && (!studies || (typeof o.name === 'string' && o.name.includes(tagOf(op.id)))))
+            : null;
         return hit?.id ?? null;
     }
     const params = exec.params ?? {};
