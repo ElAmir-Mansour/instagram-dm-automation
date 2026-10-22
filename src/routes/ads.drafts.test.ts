@@ -157,13 +157,19 @@ describe('/api/ads policy, drafts/validate and drafts (A4)', () => {
 
         it('a refusal from Meta is its message, shown in Review', async () => {
             metaRefuses = (url) => (url.endsWith('/adcreatives')
-                ? Object.assign(new Error('Invalid parameter'), { isAxiosError: true, response: { status: 400, data: { error: { message: 'Invalid parameter', code: 100, error_subcode: 1 } }, headers: {} } })
+                ? Object.assign(new Error('Invalid parameter'), { isAxiosError: true, response: { status: 400, data: { error: {
+                    message: 'Invalid parameter', code: 100, error_subcode: 2446885,
+                    error_user_title: 'Instagram account not available', error_user_msg: 'Assign the Instagram account to this business.',
+                } }, headers: {} } })
                 : null);
             const res = await call('POST', '/drafts/validate', { role: 'operator', body: { spec: spec() } });
             assert.equal(res.statusCode, 200, JSON.stringify(res.body));
             assert.equal(res.body.meta.ok, false);
             assert.equal(res.body.meta.object, 'ads.0.creative');
             assert.match(res.body.meta.error, /Invalid parameter/);
+            assert.match(res.body.meta.error, /Instagram account not available: Assign the Instagram account to this business\./, 'Meta\'s own explanation is shown');
+            assert.equal(res.body.meta.metaCode, 100);
+            assert.equal(res.body.meta.metaSubcode, 2446885);
         });
 
         it('says when the destination\'s assistant is off, or sells only to testers', async () => {
