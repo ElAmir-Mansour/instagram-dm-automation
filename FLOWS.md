@@ -535,7 +535,7 @@ through even if nothing answerable is visible, because the handler is the thing 
 dropping a real customer message is far worse than one wasted job.
 
 Dedupe key is `dm:<mid>` from `message.mid` or `postback.mid`
-(**`src/webhook/router.ts:41-44`**); `tenantKey` is `entry.id` as before. A standalone ad referral has no `mid`, so
+(**`src/webhook/router.ts:49`**); `tenantKey` is `entry.id` as before. A standalone ad referral has no `mid`, so
 `dmDedupeKey` makes it `dmref:<sender>:<ad id or ref>:<timestamp>`: who, which ad and when is what makes it one event,
 and a redelivery is refused at enqueue like a message's.
 
@@ -627,7 +627,8 @@ place that says nothing about the cause.
 
 Only an event with an `adSource` does any of this; every other DM costs nothing extra here. **Meta only sends the referral if the Page is subscribed to
 `messaging_referrals`** (`WEBHOOK_FIELDS` in **`src/services/metaLogin.ts`**, beside `feed`, `messages` and `messaging_postbacks`; a Page connected before A3
-is subscribed again by the next reconnect or by the operator's check in `scripts/diagnose.mjs`). Instagram needs nothing more: its ad referral rides on `messages`.
+is subscribed again only by the next Facebook reconnect, which re-posts `subscribed_apps`; the App Dashboard's Page webhook needs the field too, and
+`scripts/diagnose.mjs` warns when the app-level `page` subscription lacks it). Instagram needs nothing more: its ad referral rides on `messages`.
 
 1. **Recorded** by `recordAdTouch` (**`src/services/ads/attribution.ts`**), in one statement that takes the conversation's row lock. The FIRST touch
    (no entry source yet, and no inbound message before this event's own) becomes `conversations.entry_source`
@@ -726,7 +727,7 @@ turn concluded; released and re-raised when the send quota stopped it; the catch
 4. **Model.** `mark_seen` and `typing_on` go out while the model thinks (best effort: a failure is `dm.sender_action_failed` and nothing more).
    The layer is asked for purpose `dm` with the static prompt as the cached system text and the conversation's facts in front of the last user
    turn. **Ad context (A3, `ads.bot_context`, off by default):** for a conversation that began from an ad, and only when the tenant's owner switched it
-   on, the facts block gets one line, `AD CONTEXT: The person came from the ad "<name>" about <offer>. The ad said: "<text, at most 200 characters>". They
+   on, the facts block gets up to three lines, `AD CONTEXT: The person came from the ad "<name>" about <offer>. The ad said: "<text, at most 200 characters>". They
    tapped: "<ice breaker>".` (`adFactsFor`, **`attribution.ts`**: the ad's name from the stored copy, else the title Meta sent; the offer from the ad's
    `app_meta.offer_id`; never the media links). **With the switch off the prompt is byte for byte what it was**, pinned by the golden tests in
    `prompt.test.ts`. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
@@ -3290,7 +3291,7 @@ The stored conversation holds only what Meta sent (`ad_id`, `ref`, the title and
 2. **Then by `ad_id`** against `ads_objects.meta_id` at level `ad` (`joinAd`). An ad made in Meta's own Ads Manager joins after the next sync; until then the
    conversation keeps the raw `ad_id`, and the chip shows the title Meta sent. A database without the ads core (v53) answers null, never an error.
 3. **The Inbox** (`adNamesFor`): the "from ad" chip on a `ctm` or `ctwa` conversation, an Ads filter on the list, and the Business AI notice from `no_reply_reason`.
-   The conversation's `ad_touches` are shown as "tapped another ad".
+   A conversation with only later `ad_touches` shows "Came back from an ad" and is kept by the Ads filter too.
 
 ### 12.4 — Results per ad
 
