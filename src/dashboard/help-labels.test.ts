@@ -78,6 +78,19 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'System users': 'a control in Meta’s dashboard',
         'Assign assets': 'a control in Meta’s dashboard',
         'Generate token': 'a control in Meta’s dashboard',
+        // The Ads article (ads#connect): Meta Business Settings, in Arabic, and Telegram's own button.
+        'إعدادات الأعمال': 'a control in Meta’s dashboard',
+        'إضافة': 'a control in Meta’s dashboard',
+        'مستخدمو النظام': 'a control in Meta’s dashboard',
+        'إسناد الأصول': 'a control in Meta’s dashboard',
+        'إنشاء رمز جديد': 'a control in Meta’s dashboard',
+        'انتهاء صلاحية الرمز': 'a control in Meta’s dashboard',
+        'إدارة الحملات': 'a permission level in Meta’s dashboard',
+        'مسؤول': 'a role in Meta’s dashboard',
+        'موظف': 'a role in Meta’s dashboard',
+        'الحسابات الإعلانية': 'a control in Meta’s dashboard',
+        'جودة الحساب': 'a page in Meta’s dashboard',
+        'Start': 'a control in Telegram',
     },
     en: {
         'An AI agent for DMs': 'feature name leading a list item',
@@ -120,6 +133,16 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'System users': 'a control in Meta’s dashboard',
         'Assign assets': 'a control in Meta’s dashboard',
         'Generate token': 'a control in Meta’s dashboard',
+        // The Ads article (ads#connect): Meta Business Settings, and Telegram's own button.
+        'Business Settings': 'a control in Meta’s dashboard',
+        'Generate new token': 'a control in Meta’s dashboard',
+        'Token expiration': 'a control in Meta’s dashboard',
+        'Manage campaigns': 'a permission level in Meta’s dashboard',
+        'Admin': 'a role in Meta’s dashboard',
+        'Employee': 'a role in Meta’s dashboard',
+        'Ad accounts': 'a control in Meta’s dashboard',
+        'Account Quality': 'a page in Meta’s dashboard',
+        'Start': 'a control in Telegram',
     },
 };
 

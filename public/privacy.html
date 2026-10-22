@@ -163,6 +163,29 @@
     · audit_log `ads.*` rows: post id, platform, budget, days, total, currency,
       status, campaign id; settings_write names WHICH fields changed. Never the
       token (src/routes/ads.ts audit()).
+
+  META ADS, PHASE A1 (SAFETY FOUNDATION) — ADDED 2026-10-22 (spec 002-meta-ads-manager,
+  R7-R9, T040). The ads lines in sections 1 (#ads-ar / #ads-en) and 4 add three claims:
+    · ALERTS: when the guard or the daily check finds a problem the app sends a
+      short alert (adsNotify.ts → ads_alerts). It holds the KIND of problem, the
+      ad account (name/id), and amounts such as this month's spend and the cap.
+      Never customer data (nobody who commented or messaged) and never card or
+      billing numbers. It goes to the Telegram chat id and/or the email address
+      the owner set (app_settings `ads.alerts.<tenant>`, Settings → Alert
+      recipients), and a copy to the platform operator while `ads.copy_admin`
+      is on (default on). One per kind and object per day. The ads_alerts rows
+      are deleted after one year (a retention sweep the A1 server PR must
+      ship; this page promises it); cap_paused, guard_blind and
+      token_dead cannot be switched off by the owner;
+    · THE GUARD PAUSES ANY ACTIVE CAMPAIGN in the connected ad account, also
+      those made in Meta Ads Manager or another tool, when this month's worst
+      case would pass the monthly cap (enforceMonthlyCaps(), hourly inside
+      /api/jobs/drain, and at once when the cap is saved at or below the spend);
+    · THE DAILY HEALTH CHECK (00:00 UTC cron) reads the ad account's status,
+      disable reason, funding status (present or not), spend cap, amount spent
+      and balance, with the token's validity. It reads no card number: of
+      funding_source_details only the type and whether one is present are kept.
+  If any of the three changes, change both languages here and the stamp.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -1370,6 +1393,28 @@
                         <strong>الدفع بين صاحب الحساب وميتا:</strong> تُخصم تكلفة الإعلانات من وسيلة الدفع في
                         حسابه الإعلاني لدى ميتا، ولا ترى الأداة بيانات البطاقة أو الفوترة ولا تخزّنها.
                     </li>
+                    <li>
+                        <strong>الحارس يوقف أي حملة نشطة في الحساب الإعلاني المربوط:</strong> إذا كان الإنفاق
+                        هذا الشهر، مضافاً إليه أقصى ما يمكن أن تنفقه الميزانيات الجارية، سيتجاوز سقف الإنفاق
+                        الشهري الذي وضعه صاحب الحساب، توقف الأداة الحملات النشطة. ويشمل ذلك <strong>الحملات التي
+                        أُنشئت في مدير إعلانات ميتا أو في أدوات أخرى</strong>، لا الحملات التي أنشأتها الأداة فقط.
+                        وتتحقق الأداة من ذلك كل ساعة، وفور حفظ سقف يساوي إنفاق الشهر أو يقل عنه.
+                    </li>
+                    <li>
+                        <strong>فحص يومي لحالة الحساب الإعلاني:</strong> تقرأ الأداة من ميتا حالة الحساب
+                        الإعلاني وسبب تعطيله إن وُجد، وهل لديه وسيلة دفع (نعم أو لا فقط)، وحدّ الإنفاق
+                        لدى ميتا، والمبلغ المُنفَق، وصلاحية الرمز. <strong>ولا تقرأ أرقام البطاقات</strong>، ولا تحفظ
+                        منها شيئاً.
+                    </li>
+                    <li>
+                        <strong>تنبيهات الإعلانات:</strong> إذا وُجدت مشكلة (إيقاف الإنفاق عند السقف، أو فشل
+                        الدفع، أو تعطيل الحساب، أو توقف الرمز عن العمل، أو عجز الأداة عن مراقبة الإنفاق)
+                        أرسلت الأداة تنبيهاً قصيراً. <strong>يحوي التنبيه نوع المشكلة والحساب الإعلاني ومبالغ مثل
+                        الإنفاق والسقف، ولا يحوي أبداً بيانات عملاء ولا بيانات بطاقات.</strong> ويُرسَل إلى محادثة
+                        تيليجرام و/أو عنوان البريد الإلكتروني اللذين حدّدهما صاحب الحساب في الإعدادات، مع نسخة
+                        إلى مشغّل المنصّة. وتمرّ الرسالة عبر خدمة تيليجرام أو خدمة البريد التي تُرسَل بها. ويُحفَظ
+                        سجلّ التنبيهات سنة واحدة (القسم 4).
+                    </li>
                 </ul>
 
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
@@ -1446,6 +1491,10 @@
                         الذي جاء مع ربط ميتا يُحذف عندما يفصل صاحب الحساب ميتا أو يزيل التطبيق من فيسبوك، أمّا
                         الرمز الملصوق فيبقى حتى يزيله من الإعدادات. ويحتفظ سجلّ التدقيق بقيد لكل ترويج أُنشئ أو فُعّل
                         أو أُوقف أو حُذف، فيه المنشور والميزانية والمدة والحالة ومعرّف الحملة، ولا يحوي الرمز أبداً.
+                    </li>
+                    <li>
+                        <strong>تنبيهات الإعلانات</strong> — نوع كل تنبيه وحسابه الإعلاني ومبالغه ووقته، وما إذا
+                        وصل: تُحذف بعد سنة واحدة.
                     </li>
                 </ul>
 
@@ -1919,6 +1968,30 @@
                         payment method on the owner's Meta ad account. The app never sees or stores card or
                         billing details.
                     </li>
+                    <li>
+                        <strong>The spending guard pauses any active campaign in the connected ad
+                        account:</strong> if this month's spend, plus the most the running budgets could still
+                        spend, would pass the monthly spending cap the owner set, the app pauses the active
+                        campaigns. That includes <strong>campaigns made in Meta Ads Manager or in other
+                        tools</strong>, not only the ones the app created. The app checks this every hour, and
+                        at once when a cap at or below this month's spend is saved.
+                    </li>
+                    <li>
+                        <strong>A daily check of the ad account's health:</strong> the app reads from Meta the
+                        ad account's status and the reason it was disabled, if any, whether it has a payment
+                        method (yes or no only), Meta's own spending limit, the amount spent, and whether the
+                        token still works. <strong>It does not read card numbers</strong> and keeps none.
+                    </li>
+                    <li>
+                        <strong>Ads alerts:</strong> when something is wrong (spending paused at the cap, a
+                        failed payment, a disabled account, a token that stopped working, or the app being
+                        unable to watch spending) the app sends a short alert. <strong>An alert contains the
+                        kind of problem, the ad account and amounts such as the spend and the cap. It never
+                        contains customer data or card data.</strong> It is sent to the Telegram chat and/or
+                        the email address the owner set in Settings, with a copy to the platform operator. The
+                        message passes through Telegram's or the email service's systems to get there. Alert
+                        records are kept for one year (section 4).
+                    </li>
                 </ul>
 
                 <h2 id="purposes-en">2. Why we use it</h2>
@@ -2004,6 +2077,10 @@
                         pasted token stays until the owner removes it in Settings. The audit log keeps an
                         entry for each boost created, activated, paused or deleted, with the post, budget,
                         days, status and campaign ID, and never the token.
+                    </li>
+                    <li>
+                        <strong>Ads alerts</strong> — the kind of each alert, its ad account, its amounts and
+                        time, and whether it was delivered: deleted after one year.
                     </li>
                 </ul>
 
