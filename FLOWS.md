@@ -3044,7 +3044,7 @@ test when asked for what they should not be asked for, and each step is tested w
 The Ads Manager (`src/services/ads/`, README there) runs on Meta's **Limited** access tier: about 60 points per 5 minutes per ad
 account, and a 300 s block past that. Every Marketing API call goes through one client with its own pinned version, and **one money
 rule** decides everything that can start or raise spend. This section walks that rule from a click to Meta, and the hourly guard that
-holds the cap after switch-on. (The stored copy and the paced queue of phase A2 will get §11.2.)
+holds the cap after switch-on; §11.2 walks the stored copy every screen reads and the paced queue every write goes through.
 
 ### 11.1 — Money rule and guard
 
@@ -3086,15 +3086,19 @@ exclude tax.
    pending and running spend ops, `verify` ones for a day, and `done` ones that finished after the month was read minus 2 minutes), re-runs
    the rule, re-reads the boost `FOR UPDATE`, writes `activated_at`, and inserts the activation as a **`running` `ads_ops` row** carrying
    `worst_case_delta`. Refused → **400 `OVER_MONTHLY_CAP`** with the numbers.
-3. Meta is called **after** the commit (**`adBoosts.ts:501`**: ad → ad set → campaign, the campaign last), then `finishSpendOp`:
-   `done`, `failed`, or **`verify`** when the call may have landed (a timeout, a 5xx) — a `verify` op keeps counting for a day.
+3. Since A2 the activation is **three ops** recorded inside that same transaction (`record`, **`money.ts:475`**, the boost's at
+   **`adBoosts.ts:505`**): ad → ad set (its window starts now) → campaign LAST, each `depends_on` the one before, the campaign's carrying
+   `worst_case_delta`. A pending op counts as about to run. After the commit `runRecorded` (**`adBoosts.ts:520`**) runs them inline, in
+   order (§11.2 B); one left waiting is sent by the drain, a failed one is the refusal (`refusalOf`), and a create's or write's timeout is
+   `verify` (§11.2 C), which keeps counting for a day.
 
 > **Why this order.** v1 read Meta *inside* the locked transaction (up to 40 s of Graph retries holding a pooled connection and the
 > lock). Reading first and recording the activation as a running op keeps the transaction to milliseconds and still lets a second
 > activation racing this one see it (`ads/money.db.test.ts`).
 
 Resume (`setCampaignStatus`) and a budget raise on a running campaign (`setCampaignBudget`, the candidate is the *extra* worst case) in
-`adsManager.ts` follow the same three steps.
+`ads/manager.ts` (v1's routes), and the Campaigns tab's `requestStatus` / `requestBudget` (**`ads/actions.ts:143`**, **`:207`**), follow
+the same three steps.
 
 **D. The guard: `runGuard`, **`ads/guard.ts:66`**, from every `/api/jobs/drain` (`routes/api.ts:406`, with the drain's deadline)**
 
@@ -3121,6 +3125,74 @@ Resume (`setCampaignStatus`) and a budget raise on a running campaign (`setCampa
   `ads.health.<t>` (the stored copy the screens read) and turned into alerts; then the retention sweep (`ads_alerts` after a year,
   finished `ads_ops` after 180 days).
 
+
+### 11.2 — Sync and ops: the stored copy and the paced queue
+
+**A. Screens read the stored copy (research R2)**
+
+1. `GET /api/ads/overview` → `readOverview` (**`ads/overview.ts:92`**): Postgres only. The account is the last health check's snapshot
+   (`ads.health.<t>`), spend today and this month come from `ads_insights_daily` in the **ad account's** days (`spendFromMirror`), the
+   money rule runs over the stored ACTIVE campaigns (`rawFromMirror`), plus "needs attention" (rejected, issues, billing, ops failed in
+   the last day) and the queued ops. **No Graph call**, so a page view costs no points (v1 cost about 4 per view).
+2. `GET /api/ads/objects` and `/objects/:id` (**`routes/adsObjects.ts`**, mounted by `mountObjectRoutes` at **`routes/ads.ts:395`**,
+   after the `ADS_DISABLED` gate): `ads_objects` rows of the tenant's **current** ad account, each with 28 days of results
+   (`resultsFor`: ad rows summed; **reach never summed across days**), the ad set's budget edits left this hour, and its open ops. Every
+   `:id` goes through ONE resolver, `objectOf` (**`adsObjects.ts:96`**) → `ownObject` (**`ads/actions.ts:48`**): another tenant's row, or
+   a row of an account the tenant switched away from, is 404 `NOT_FOUND`.
+
+**B. Every write is an op (research R3)**
+
+1. A button → `requestStatus` / `requestBudget` / `requestArchive` / `requestDelete` (**`ads/actions.ts`**). Pause, archive, a cut and an
+   end date are enqueued as they are; switching on and raising run the money rule (§11.1 C) and are enqueued **inside** the locked
+   transaction. Delete is its own confirmed op and is refused on an ACTIVE object; v1's Delete (Boost and the old campaign route) now
+   **archives**. Every op has an idempotency key (`<tenant>:<what>:<requestId or 10 s bucket>`): a double press returns the same op.
+2. `enqueue` (**`ads/ops.ts:394`**): `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`, audit `ads.op_enqueued`. The route answers
+   **202 `{ op }`** at once and hands `runOpInline` to `waitUntil` (**`ops.ts:938`**); v1's adapters (`writeNow`, **`actions.ts:317`**)
+   wait for it instead, so their answers keep their v1 shape.
+3. `claimNext` (**`ops.ts:496`**), ONE short transaction: the oldest due `pending` op of the account whose dependency is `done` and with
+   nothing `running`/`verify` on the same `object_key`, `FOR UPDATE SKIP LOCKED`. Meta's per-object limits come from the op history
+   (`limitWaitUntil`, **`ops.ts:190`**): 4 `budget` ops per ad set per rolling hour, 30 s after the last `done` on the object, 10
+   `spend_cap` per account per day in the account's zone. A limit pushes `not_before`; the op is not started.
+4. `execute` (**`ops.ts:729`**) calls Meta **outside any transaction**, every call through ONE function, `sendExec` (**`ops.ts:625`**),
+   inside the tenant's Graph context (pacer, §11.1 A.2). A create's name gets `AR·<op id>`. The outcome (`outcomeFor`, **`ops.ts:253`**)
+   is recorded in a second short transaction, audit `ads.op_applied` / `ads.op_failed`:
+   - done → the stored row is updated at once (status, budget, a create's `meta_id`);
+   - **throttle** → back to `pending` with `not_before` = Meta's reset (the pacer already blocked the account): **never retried in a loop**;
+   - 613/1487632 (4 budget edits this hour) → +1 h; 613/4841018 (busy) → +30 s; 17/1885172 (10 spend-cap changes) → `failed` `EDIT_LIMIT`;
+   - 190/102 → `failed` `TOKEN_INVALID`; the drain stops the account for this run, and A1's dead token (`isQueueStopped`,
+     **`ops.ts:605`**) keeps the tenant's queue stopped until a new token is saved;
+   - a timeout or 5xx on a create → **`verify`**.
+
+**C. Never create twice (research R6)**
+
+`verify` (**`ops.ts:816`**, `nextVerifyStep` **`:304`**): a create in `verify` searches its parent edge for the `AR·<op id>` tag. Found →
+`done`, its id adopted. Not found → checked again 60 s later; not found twice → `pending`, **resent exactly once** with the same tag; not
+found again → `failed`. A non-create write in `verify` reads the object back and compares. An op written by A1's synchronous path (no
+`exec`) is never sent: it fails after a day. `reap` (**`ops.ts:850`**): `running` for over 5 minutes → `verify` (creates) or `pending`.
+
+**D. The drain and the cron**
+
+1. `/api/jobs/drain` (**`routes/api.ts:419`**), after the guard so the guard is never starved of points: `drainAdsOps(deadline)`
+   (**`ops.ts:884`**: reap, then every account with something due, skipping one Meta has blocked), then `syncAllAds(deadline)`
+   (**`ads/sync.ts:761`**, **`api.ts:421`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:538`**: one paged
+   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:165`**; `upsertObjects` **`mirror.ts:218`**
+   keeps `origin` and `app_meta`, so a Boost's rows stay `boost` and new ones carrying a boost id in their name are linked to it), and
+   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:665`**; `upsertInsights` **`mirror.ts:357`**).
+   Each sync is skipped when the pacer cannot spend, and stops at a throttle.
+2. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:315`**); a read cut
+   short (a page not read, a nested edge with a next page) marks nothing.
+3. The daily cron (**`api.ts:1109`**): `syncDailyAds` (**`sync.ts:783`**), the trailing **28 days** at `level=ad` (an async report
+   when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
+   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:423`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
+   older than **37 months** (**`ads/health.ts:175`**).
+4. `POST /api/ads/sync` (Refresh results): once per 15 minutes (`requestTodaySync`, **`sync.ts:724`**, else 429 `RATE_LIMITED` +
+   `retryAt`), run under `waitUntil`; the drain is the backstop.
+
+**E. Disconnecting deletes the stored copy**
+
+Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/settings.ts:188`**) or disconnecting Meta with a Connect token
+(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:823`**): `ads_objects`, `ads_insights_daily` and
+`ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
 
 ## Where each flow can silently do nothing
 

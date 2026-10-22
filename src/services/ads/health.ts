@@ -10,14 +10,14 @@
  * What it saw is written to `ads.health.<tenant>`, the stored copy every ads screen reads instead of calling Meta: never a token, never
  * the card's display string. Alerts go through notify.ts, once a day each.
  *
- * Also here: the daily retention sweep (`ads_alerts` after a year, finished `ads_ops` after 180 days), and the Settings card's view.
+ * Also here: the daily retention sweep (`ads_alerts` after a year, finished `ads_ops` after 180 days, results after 37 months), and the Settings card's view.
  */
 import { describeError, log } from '../../utils/log.js';
 import { queryCount, queryRows } from '../../db/query.js';
 import { getSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from '../appSettings.js';
 import { inspectToken } from '../tokenHealth.js';
 import { metaErrorCode, metaErrorSubcode } from '../http.js';
-import { normaliseAdAccountId, readAccountState } from '../metaAds.js';
+import { normaliseAdAccountId, readAccountState } from './metaAds.js';
 import { adsApiVersion, adsGet, AdsGraphError, withAdsContext } from './graph.js';
 import { readUsage } from './metaUsage.js';
 import { notifyAds, type AdsAlert } from './notify.js';
@@ -171,6 +171,9 @@ export async function runAdsHealth(opts: { now?: Date; deadline?: number } = {})
     try {
         out.swept += await queryCount("DELETE FROM ads_alerts WHERE created_at < NOW() - INTERVAL '1 year'");
         out.swept += await queryCount("DELETE FROM ads_ops WHERE created_at < NOW() - INTERVAL '180 days' AND state IN ('done', 'failed', 'cancelled')");
+        // Results are kept 37 months, Meta's own horizon for aggregate results (privacy.html says so); the breakdowns go with them.
+        out.swept += await queryCount("DELETE FROM ads_insights_daily WHERE day < CURRENT_DATE - INTERVAL '37 months'");
+        out.swept += await queryCount("DELETE FROM ads_insights_breakdown WHERE day < CURRENT_DATE - INTERVAL '37 months'");
     } catch (err) {
         log('warn', 'ads.retention_failed', describeError(err));
     }

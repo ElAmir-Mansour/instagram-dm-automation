@@ -1619,6 +1619,125 @@ const HelpContent = {
                         ],
                     },
                 },
+                // ── A2: the stored copy, the queue and the statuses ──
+                {
+                    id: 'campaigns',
+                    title: { ar: 'تبويب الحملات', en: 'The Campaigns tab' },
+                    body: {
+                        ar: [
+                            'يعرض تبويب **الحملات** كل ما في حسابك الإعلاني: الحملات، وتحت كل حملة مجموعاتها الإعلانية، وتحت كل مجموعة إعلاناتها. ويشمل ذلك ما أنشأته من هنا بزر **ترويج**، وما أنشأته في مدير إعلانات ميتا نفسه.',
+                            { ul: [
+                                'الأرقام والحالات نسخة محفوظة لدينا، لا قراءة مباشرة من ميتا في كل مرة. تُحدَّث البنية كل ساعة، ونتائج اليوم كل أربع ساعات، ونتائج آخر 28 يوماً مرة في اليوم. ويظهر وقت آخر تحديث أعلى الصفحة.',
+                                'زر **تحديث النتائج** يطلب قراءة نتائج اليوم الآن، مرة كل 15 دقيقة على الأكثر.',
+                                'نتائج آخر ثلاثة أيام مبدئية: قد تعدّلها ميتا قليلاً حتى تستقر.',
+                                'كل مبلغ يُعرض دون الضريبة؛ فواتير ميتا هي السجل المحاسبي.',
+                            ] },
+                            'في كل صف تجد الحالة بكلمات واضحة، وأسباب المراجعة إن رُفض الإعلان، والميزانية مع عدد التغييرات المتبقية لها في هذه الساعة، ثم الأزرار:',
+                            { dl: [
+                                ['**إيقاف مؤقت**', 'يوقف الصرف. لا يحتاج تأكيداً.'],
+                                ['**استئناف**', 'يعيد الصرف، لذلك يطلب تأكيداً ويتحقق من حدّك الشهري قبل الإرسال.'],
+                                ['**تعديل الميزانية**', 'رفع ميزانية حملة تعمل يطلب تأكيداً. ولكل مجموعة إعلانية أربعة تغييرات في الساعة.'],
+                                ['**أرشفة**', 'الطريقة المعتادة لإنهاء حملة: تتوقف وتبقى نتائجها محفوظة.'],
+                                ['**حذف**', 'إجراء منفصل بتأكيد مستقل، ولا يُتاح والحملة تعمل.'],
+                            ] },
+                            { note: 'التغيير لا يظهر في ميتا في اللحظة نفسها دائماً؛ انظر [[ads#queued-changes|التغييرات في الانتظار]].' },
+                        ],
+                        en: [
+                            'The **Campaigns** tab shows everything in your ad account: campaigns, their ad sets under each, and the ads under each ad set. That includes what you made here with **Boost** and what you made in Meta Ads Manager itself.',
+                            { ul: [
+                                'Numbers and statuses are a stored copy, not a live read from Meta on every view. The structure refreshes every hour, today\'s results every four hours, and the last 28 days once a day. The time of the last update is at the top of the page.',
+                                '**Refresh results** asks for today\'s results now, at most once every 15 minutes.',
+                                'Results for the last three days are provisional: Meta may still revise them slightly.',
+                                'Every amount is shown excluding tax; Meta\'s invoices are the accounting record.',
+                            ] },
+                            'Each row shows the status in plain words, the review reasons if an ad was rejected, the budget with how many changes it has left this hour, then the buttons:',
+                            { dl: [
+                                ['**Pause**', 'Stops spending. No confirmation needed.'],
+                                ['**Resume**', 'Starts spending again, so it asks you to confirm and checks your monthly cap before it is sent.'],
+                                ['**Edit budget**', 'Raising the budget of a running campaign asks you to confirm. Each ad set allows four budget changes an hour.'],
+                                ['**Archive**', 'The normal way to end a campaign: it stops and its results stay.'],
+                                ['**Delete**', 'A separate action with its own confirmation, not offered while the campaign is running.'],
+                            ] },
+                            { note: 'A change does not always reach Meta the same second; see [[ads#queued-changes|Queued changes]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'queued-changes',
+                    title: { ar: 'التغييرات في الانتظار', en: 'Queued changes' },
+                    body: {
+                        ar: [
+                            'كل تغيير ترسله إلى ميتا (إيقاف، استئناف، ميزانية، أرشفة، حذف) يدخل قائمة انتظار ويُرسل بالترتيب. إن كان ممكناً يُرسل فوراً، وإلا تراه في شريط «تغييرات في الانتظار» مع «الوقت المتوقع».',
+                            'لماذا الانتظار؟ لأن ميتا تحدّ عدد الطلبات المسموح بها لكل حساب إعلاني في المستوى المحدود (Limited)، وتوقف الحساب خمس دقائق إن تجاوزها. ولذلك ننظّم الطلبات حتى لا يتوقف شيء، بما فيه حارس الحد الشهري.',
+                            { dl: [
+                                ['أربعة تغييرات للميزانية في الساعة', 'لكل مجموعة إعلانية. التغيير الخامس ينتظر حتى تمر ساعة على أقدمها.'],
+                                ['30 ثانية بين تغييرين', 'على الحملة أو المجموعة أو الإعلان نفسه.'],
+                                ['عشرة تغييرات لحد الإنفاق في اليوم', 'لحد إنفاق الحساب في ميتا، بتوقيت الحساب الإعلاني.'],
+                            ] },
+                            { ul: [
+                                '**في الانتظار**: لم يُرسل بعد، وسيُرسل في الوقت المتوقع أو بعده بقليل.',
+                                '**قيد الإرسال**: يُرسل الآن.',
+                                '**قيد التحقق**: لم تصل إجابة ميتا، فنقرأ الحساب لنتأكد هل تم التغيير. لا نعيد إرسال إنشاء أبداً دون هذا التحقق، حتى لا تتكرر حملة.',
+                                '**تم** أو **فشل**: مع سبب الفشل بكلمات واضحة.',
+                            ] },
+                            { tip: 'لا تكرر الضغط على الزر: الطلب نفسه محفوظ مرة واحدة، والضغط مرة ثانية لا يرسله مرتين.' },
+                        ],
+                        en: [
+                            'Every change you send to Meta (pause, resume, budget, archive, delete) goes into a queue and is sent in order. When it can go now, it goes now; otherwise you see it in the “Queued changes” strip with an **expected at** time.',
+                            'Why a queue? On the Limited access tier Meta caps the requests each ad account may make, and blocks the account for five minutes when the cap is passed. The queue paces requests so nothing stops, including the monthly-cap guard.',
+                            { dl: [
+                                ['Four budget changes an hour', 'Per ad set. The fifth waits until the oldest is an hour old.'],
+                                ['30 seconds between two changes', 'On the same campaign, ad set or ad.'],
+                                ['Ten spending-limit changes a day', 'For the account spending limit at Meta, in the ad account\'s time zone.'],
+                            ] },
+                            { ul: [
+                                '**Queued**: not sent yet; it goes at the expected time or shortly after.',
+                                '**Sending**: being sent now.',
+                                '**Checking**: Meta\'s answer did not arrive, so we read the account to see whether the change landed. A create is never sent again without this check, so a campaign is never made twice.',
+                                '**Done** or **Failed**: with the reason in plain words.',
+                            ] },
+                            { tip: 'No need to press the button again: the same request is stored once, and a second press does not send it twice.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'statuses',
+                    title: { ar: 'معاني الحالات', en: 'What the statuses mean' },
+                    body: {
+                        ar: [
+                            'الحالة المعروضة هي حالة التشغيل كما تراها ميتا، وهي التي تحدد هل يُصرف المال الآن:',
+                            { dl: [
+                                ['يعمل', 'يُعرض ويصرف من ميزانيته.'],
+                                ['متوقف مؤقتاً', 'أوقفته أنت أو أوقفه الحارس. لا يصرف.'],
+                                ['الحملة متوقفة / المجموعة متوقفة', 'العنصر نفسه سليم، لكن الحملة أو المجموعة التي فوقه متوقفة.'],
+                                ['قيد المراجعة', 'ميتا تراجع الإعلان قبل عرضه، وقد يستغرق ذلك حتى 24 ساعة.'],
+                                ['مرفوض', 'لم يجتز مراجعة ميتا. السبب يظهر تحت الإعلان؛ عدّل الإعلان ثم أعد المحاولة.'],
+                                ['موافق عليه مسبقاً', 'اجتاز المراجعة وسيعمل عند بدء جدوله.'],
+                                ['به مشكلات', 'يعمل جزئياً أو لا يعمل بسبب مشكلة تذكرها ميتا تحته.'],
+                                ['قيد المعالجة', 'ميتا تطبّق تغييراً للتو.'],
+                                ['بانتظار بيانات الدفع', 'لا توجد وسيلة دفع صالحة في الحساب الإعلاني؛ انظر [[ads#account-health]].'],
+                                ['مؤرشف', 'انتهى ولا يصرف، ونتائجه محفوظة.'],
+                                ['محذوف', 'حُذف من ميتا، أو لم يعد يظهر في الحساب في مزامنتين متتاليتين.'],
+                            ] },
+                        ],
+                        en: [
+                            'The status shown is the delivery status as Meta sees it, the one that decides whether money is being spent now:',
+                            { dl: [
+                                ['Active', 'Delivering and spending from its budget.'],
+                                ['Paused', 'Paused by you or by the guard. Not spending.'],
+                                ['Campaign paused / Ad set paused', 'This item is fine, but the campaign or ad set above it is paused.'],
+                                ['In review', 'Meta is reviewing the ad before it runs; this can take up to 24 hours.'],
+                                ['Rejected', 'It did not pass Meta\'s review. The reason is shown under the ad; edit the ad and try again.'],
+                                ['Pre-approved', 'It passed review and will run when its schedule starts.'],
+                                ['With issues', 'Running partly or not at all because of a problem Meta names under it.'],
+                                ['Processing', 'Meta is applying a change right now.'],
+                                ['Waiting for billing info', 'The ad account has no working payment method; see [[ads#account-health]].'],
+                                ['Archived', 'Ended and not spending; its results are kept.'],
+                                ['Deleted', 'Deleted at Meta, or no longer found in the account in two syncs in a row.'],
+                            ] },
+                        ],
+                    },
+                },
                 {
                     id: 'troubleshooting',
                     title: { ar: 'حلول مشكلات الإعلانات', en: 'Ads troubleshooting' },

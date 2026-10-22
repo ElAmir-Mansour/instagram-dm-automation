@@ -22,7 +22,8 @@ import { getSetting, last4, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXE
 import { getPlatformOwnerId } from '../tenant.js';
 import { isEmailAddress } from '../notifyEmail.js';
 import { CHAT_ID_PATTERN } from '../notify.js';
-import { normaliseAdAccountId, normaliseCountry, roundMoney } from '../metaAds.js';
+import { normaliseAdAccountId, normaliseCountry, roundMoney } from './metaAds.js';
+import { forgetStoredCopy } from './mirror.js';
 
 // ─── ads.settings ───────────────────────────────────────────────────────────────────────────
 
@@ -182,6 +183,9 @@ export async function saveAdsSettings(creatorId: string, input: SettingsInput, c
         // A new token deserves a new verdict: the stored one was about the old token.
         await writeHealth(creatorId, { ...(await readHealth(creatorId)), token: { health: 'unknown', checkedAt: null, scopes: [], missingScopes: [] } });
     }
+    // Disconnected: the token removed, or a different ad account chosen. The stored copy of the old account goes (mirror.ts).
+    const switched = input.settings.adAccountId !== undefined && current.adAccountId !== null && input.settings.adAccountId !== current.adAccountId;
+    if (input.token === null || switched) await forgetStoredCopy(creatorId);
 }
 
 export function isConfigured(settings: AdsSettings, token: string | null): boolean {

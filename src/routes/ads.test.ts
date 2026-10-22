@@ -206,8 +206,8 @@ describe('/api/ads', () => {
             configure();
             throttle = true;
             const res = await call('GET', '/overview');
-            assert.equal(res.statusCode, 200, 'the overview shows the account error instead of failing');
-            assert.equal(metaGets.length, 1, 'one call, no retry');
+            assert.equal(res.statusCode, 200, 'the overview answers from the stored copy');
+            assert.equal(metaGets.length, 0, 'the overview never calls Meta (A2: stored copy only)');
             const resume = await call('POST', '/campaigns/123456/status', { body: { status: 'ACTIVE', confirm: true } });
             assert.equal(resume.statusCode, 429);
             assert.equal(resume.body.code, 'RATE_LIMITED');

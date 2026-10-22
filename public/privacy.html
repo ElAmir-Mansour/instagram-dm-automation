@@ -186,6 +186,16 @@
       and balance, with the token's validity. It reads no card number: of
       funding_source_details only the type and whether one is present are kept.
   If any of the three changes, change both languages here and the stamp.
+
+  META ADS, PHASE A2 (STORED COPY) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R2, R4, T059). Sections 1 and 4 add:
+    · STORED COPY: the connected ad account's campaign structure (campaigns, ad sets, ads, creatives: names, statuses, budgets, dates,
+      a display summary of targeting such as countries and ages, Meta's review notes) in ads_objects, and daily results per ad (spend,
+      impressions, reach, clicks, link clicks, conversations started, leads, video views) plus daily totals by country and by placement
+      (ads_insights_daily, ads_insights_breakdown): src/services/ads/sync.ts, mirror.ts. Aggregates only: no person-level data exists in
+      what Meta returns; targeting keeps no audience members;
+    · RETENTION: results are deleted after 37 months (runAdsHealth, ads/health.ts); queued changes (ads_ops) after 180 days;
+    · DELETED ON DISCONNECT: removing the ads token, choosing another ad account, or disconnecting Meta with a Connect ads token deletes
+      the stored copy and the results (forgetStoredCopy, ads/mirror.ts). ad_boosts spend records stay, as the Boost text says.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -253,7 +263,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.56">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.57">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1407,6 +1417,15 @@
                         منها شيئاً.
                     </li>
                     <li>
+                        <strong>نسخة محفوظة من الحساب الإعلاني:</strong> تحفظ الأداة نسخة من حملات الحساب الإعلاني
+                        المربوط ومجموعاتها وإعلاناتها (الأسماء والحالات والميزانيات والتواريخ، وملخّص الاستهداف مثل
+                        الدول والأعمار، وملاحظات مراجعة ميتا)، ونتائجها اليومية لكل إعلان (الإنفاق ومرات الظهور والوصول
+                        والنقرات وبدء المحادثات والعملاء المحتملين ومشاهدات الفيديو)، ومجاميعها اليومية حسب الدولة وحسب
+                        موضع الظهور، لتعرضها الشاشات دون سؤال ميتا في كل مرة. <strong>هي أرقام مجمّعة فقط</strong>: لا
+                        تخبر ميتا الأداة بمن رأى الإعلان أو نقر عليه. وتُحذف النتائج بعد 37 شهراً، وتُحذف النسخة كلها
+                        عندما يزيل صاحب الحساب رمز الإعلانات أو يختار حساباً إعلانياً آخر أو يفصل ميتا (القسم 4).
+                    </li>
+                    <li>
                         <strong>تنبيهات الإعلانات:</strong> إذا وُجدت مشكلة (إيقاف الإنفاق عند السقف، أو فشل
                         الدفع، أو تعطيل الحساب، أو توقف الرمز عن العمل، أو عجز الأداة عن مراقبة الإنفاق)
                         أرسلت الأداة تنبيهاً قصيراً. <strong>يحوي التنبيه نوع المشكلة والحساب الإعلاني ومبالغ مثل
@@ -1495,6 +1514,12 @@
                     <li>
                         <strong>تنبيهات الإعلانات</strong> — نوع كل تنبيه وحسابه الإعلاني ومبالغه ووقته، وما إذا
                         وصل: تُحذف بعد سنة واحدة.
+                    </li>
+                    <li>
+                        <strong>نسخة الحساب الإعلاني ونتائجه</strong> — تُحدَّث كل ساعة، وتُحذف النتائج اليومية بعد 37
+                        شهراً، وسجلّ التغييرات المرسلة إلى ميتا بعد 180 يوماً. وتُحذف النسخة والنتائج كلها عند إزالة
+                        رمز الإعلانات أو اختيار حساب إعلاني آخر أو فصل ميتا؛ أمّا سجلّات الإنفاق على الترويج فتبقى كما
+                        سبق.
                     </li>
                 </ul>
 
@@ -1983,6 +2008,16 @@
                         token still works. <strong>It does not read card numbers</strong> and keeps none.
                     </li>
                     <li>
+                        <strong>A stored copy of the ad account:</strong> the app keeps a copy of the connected ad
+                        account's campaigns, ad sets and ads (names, statuses, budgets, dates, a summary of the
+                        targeting such as countries and ages, and Meta's review notes), their daily results per ad
+                        (spend, impressions, reach, clicks, conversations started, leads and video views), and daily
+                        totals by country and by placement, so the screens can show them without asking Meta every
+                        time. <strong>These are totals only</strong>: Meta does not tell the app who saw or clicked
+                        an ad. Results are deleted after 37 months, and the whole copy is deleted when the owner
+                        removes the ads token, chooses another ad account or disconnects Meta (section 4).
+                    </li>
+                    <li>
                         <strong>Ads alerts:</strong> when something is wrong (spending paused at the cap, a
                         failed payment, a disabled account, a token that stopped working, or the app being
                         unable to watch spending) the app sends a short alert. <strong>An alert contains the
@@ -2081,6 +2116,12 @@
                     <li>
                         <strong>Ads alerts</strong> — the kind of each alert, its ad account, its amounts and
                         time, and whether it was delivered: deleted after one year.
+                    </li>
+                    <li>
+                        <strong>The stored copy of the ad account and its results</strong> — refreshed every hour;
+                        daily results are deleted after 37 months, and the record of changes sent to Meta after 180
+                        days. The copy and the results are deleted when the ads token is removed, another ad
+                        account is chosen, or Meta is disconnected; boost spend records stay, as above.
                     </li>
                 </ul>
 

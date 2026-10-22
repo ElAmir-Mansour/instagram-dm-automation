@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { metaHttp } from './http.js';
+import { metaHttp } from '../http.js';
 import {
     activateBoostObjects, buildAdParams, buildAdSetActivationParams, buildAdSetParams, buildCampaignParams, buildCreativeParams,
     checkBoostBudget, createPausedBoost, currencyOffset, pickAdAccount, graphTime, normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem,

@@ -20,7 +20,7 @@ import { describeError, log } from '../../utils/log.js';
 import { queryRows, queryOne } from '../../db/query.js';
 import { getSetting, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
-import { fetchAccountState, updateObject, roundMoney } from '../metaAds.js';
+import { fetchAccountState, updateObject, roundMoney } from './metaAds.js';
 import { AdsGraphError, withAdsContext } from './graph.js';
 import { isActive, lifetimeSpend, oneDayRemaining, readCampaigns, readSpend, shouldPauseAll, type RawCampaign } from './money.js';
 import { notifyAds } from './notify.js';

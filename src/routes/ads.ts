@@ -27,7 +27,8 @@ import {
     activateBoost, AdsError, createBoost, deleteBoost, eligibilityFor, listAdAccountsFor, listBoosts, metaRefusal, pauseBoost, refreshBoost,
     type BoostView,
 } from '../services/adBoosts.js';
-import { deleteCampaign, readOverview, setCampaignBudget, setCampaignStatus } from '../services/adsManager.js';
+import { deleteCampaign, setCampaignBudget, setCampaignStatus } from '../services/ads/manager.js';
+import { readOverview } from '../services/ads/overview.js';
 import { AdsGraphError, withAdsContext } from '../services/ads/graph.js';
 import { runGuard } from '../services/ads/guard.js';
 import { describeAdsSettings, testConnection } from '../services/ads/health.js';
@@ -38,8 +39,9 @@ import {
     saveAdsSettings, saveAlerts, writeHealth,
 } from '../services/ads/settings.js';
 import { setSpendCap, SpendCapRefused, spendCapChangesLeft } from '../services/ads/spendCap.js';
-import { fetchAccountState } from '../services/metaAds.js';
+import { fetchAccountState } from '../services/ads/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { mountObjectRoutes } from './adsObjects.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -387,3 +389,7 @@ adsRouter.delete('/campaigns/:id', canAdminister, async (req, res) => {
         await fail(req, res, err, 'delete_campaign');
     }
 });
+
+// ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
+
+mountObjectRoutes(adsRouter, fail);
