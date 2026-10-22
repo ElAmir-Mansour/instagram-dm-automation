@@ -176,6 +176,15 @@ describe('/api/ads objects, ops and sync', () => {
             assert.ok('syncedAt' in res.body);
         });
 
+        it('syncedAt is when the account was last READ, so an account with no campaigns is up to date, not "never updated"', async () => {
+            kit.configure();
+            kit.settings.set(`ads.sync.${TENANT}`, JSON.stringify({ structureAt: '2026-10-22T16:10:40.020Z', todayAt: '2026-10-22T16:10:40.387Z' }));
+            const res = await call('GET', '/objects?level=campaign');
+            assert.equal(res.statusCode, 200);
+            assert.deepEqual(res.body.items, []);
+            assert.equal(res.body.syncedAt, '2026-10-22T16:10:40.020Z');
+        });
+
         it('an ad set row carries the budget edits it has left this hour', async () => {
             kit.configure();
             kit.rows.push(objectRow(), adsetRow());
