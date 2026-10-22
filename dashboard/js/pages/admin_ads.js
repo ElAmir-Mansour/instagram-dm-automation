@@ -7,8 +7,8 @@
  *   - `spend` is simply absent when the client has not shared it, and so is every monthly cap with it (cap × percentage would give the
  *     spend away). This page draws spend only when the key is there and says so in a muted line otherwise: it never shows a zero.
  *   - `capUsePct` is a percentage or null; null is "unknown", never 0.
- *   - `signoffs` is null until the Audiences phase ships its table; a 404 from the sign-off routes means the same. Either way the
- *     card says "arrives with the Audiences phase" and shows no form.
+ *   - `signoffs` is null only while A8's `ads_legal_signoffs` table (v56) is missing; a 404 from the sign-off routes means the same.
+ *     Either way the card says so and shows no form. The writes are A8's routes (`API.recordAdminLegalSignoff` / `revokeAdminLegalSignoff`).
  *
  * Writes: the switch (a refusal 409 `CEILING_REQUIRED` is told next to the ceiling fields, in the interface language), the ceiling,
  * and the sign-offs (revoking asks first). Every spend figure carries "excluding tax; Meta's invoices are the accounting record".
@@ -464,7 +464,7 @@ const AdminAdsPage = {
         if (this._busy.has(`so:${id}`)) return;
         this._busy.add(`so:${id}`);
         try {
-            await API.addAdminAdsSignoff(id, { scope, countries, note: read('note') });
+            await API.recordAdminLegalSignoff(id, { scope, countries, note: read('note') });
         } catch (err) {
             this._busy.delete(`so:${id}`);
             if (err && err.status === 404) { this.markSignoffsPending(id); return; }
@@ -498,7 +498,7 @@ const AdminAdsPage = {
     /** Runs inside the confirmation: a failure is thrown, and the dialog shows it next to the button (and keeps it open for a retry). */
     async revoke(id, sid) {
         try {
-            await API.revokeAdminAdsSignoff(id, sid);
+            await API.revokeAdminLegalSignoff(id, sid);
         } catch (err) {
             if (err && err.status === 404) { this.markSignoffsPending(id); return; }
             throw new Error(this.failureText(err, 'adsAdmin.signoffs.revokeFailed'));

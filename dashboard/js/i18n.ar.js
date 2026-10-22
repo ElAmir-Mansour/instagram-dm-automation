@@ -1888,7 +1888,7 @@
     'adsAdmin.ceiling.invalid': 'أدخل أقصى ميزانية يومية وسقفاً شهرياً، كلاهما أكبر من صفر.',
     'adsAdmin.signoffs.title': 'الموافقات القانونية',
     'adsAdmin.signoffs.hint': 'إقرار مكتوب بأن نوعاً من الإعلانات يجوز تشغيله في دول محددة. تسجّله أنت، ويمكنك سحبه.',
-    'adsAdmin.signoffs.pending': 'تصل الموافقات القانونية مع مرحلة الجماهير.',
+    'adsAdmin.signoffs.pending': 'تعذّرت قراءة الموافقات القانونية: لم يُطبَّق تحديث قاعدة البيانات v56 بعد.',
     'adsAdmin.signoffs.none': 'لا موافقات مسجّلة.',
     'adsAdmin.signoffs.scope.lead_ads': 'إعلانات العملاء المحتملين',
     'adsAdmin.signoffs.scope.customer_lists': 'قوائم العملاء',

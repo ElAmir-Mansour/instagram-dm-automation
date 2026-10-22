@@ -1739,7 +1739,7 @@
     'adsAdmin.ceiling.invalid': 'Enter a daily maximum and a monthly cap, both above zero.',
     'adsAdmin.signoffs.title': 'Legal sign-offs',
     'adsAdmin.signoffs.hint': 'A written approval that a kind of ad may run in given countries. You record it, and you can revoke it.',
-    'adsAdmin.signoffs.pending': 'Sign-offs arrive with the Audiences phase.',
+    'adsAdmin.signoffs.pending': 'Sign-offs cannot be read yet: database migration v56 has not been applied.',
     'adsAdmin.signoffs.none': 'No sign-offs recorded.',
     'adsAdmin.signoffs.scope.lead_ads': 'Lead ads',
     'adsAdmin.signoffs.scope.customer_lists': 'Customer lists',

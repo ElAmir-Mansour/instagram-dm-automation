@@ -109,6 +109,21 @@ describe('Client ads page (A11): what each row shows', () => {
 });
 
 describe('Client ads page (A11): the writes', () => {
+    it("records a sign-off through A8's route: scope, the countries upper-cased, the note", async () => {
+        const withSignoffs = rows().map((r: Json) => ({ ...r, signoffs: [] }));
+        const { page, called, screen } = await openAdmin({
+            getAdminAdsTenants: async () => ({ tenants: withSignoffs }),
+            recordAdminLegalSignoff: async () => ({ signoff: { id: 's-9' } }),
+        });
+        assert.match(cardOf(screen(), SHARES), /adminAds:addSignoff/);
+        const values: Record<string, string> = { scope: 'customer_lists', countries: 'sa, eg', note: 'Lawyer approved' };
+        const form: Json = { dataset: { id: SHARES }, querySelector: (sel: string) => ({ value: values[/name="([^"]+)"/.exec(sel)![1]!] }) };
+        await page.addSignoff(form, { preventDefault() {} });
+        await settle();
+        // Through JSON: the page's arrays come from the sandbox's realm, so a strict deep-equal would compare prototypes.
+        assert.deepEqual(JSON.parse(JSON.stringify(called('recordAdminLegalSignoff').map(([, a]) => a))), [[SHARES, { scope: 'customer_lists', countries: ['SA', 'EG'], note: 'Lawyer approved' }]]);
+    });
+
     it('the switch posts the tenant and the new state', async () => {
         const { page, called, h } = await openAdmin();
         const input = new FakeEl('', 'input') as Json;
