@@ -58,7 +58,7 @@ function load(lang: 'ar' | 'en' = 'en'): Rig {
         token: 'tok',
         getAdsSettings: record('settings', async () => SETTINGS),
         getAdsMinimumBudgets: record('minimum', async () => ({ currency: 'USD', byGoal: { messages: 1, engagement: 1, reach: 1, traffic: 1 } })),
-        getProfile: record('profile', async () => ({ profile: { offers: [{ id: 'o1', name: 'Go course', url: 'https://udemy.com/go' }] } })),
+        getProfile: record('profile', async () => ({ profile: { offers: [{ id: 'o1', name: 'Go class', url: 'https://learn.example.com/go' }] } })),
         getScheduledPosts: record('posts', async () => POSTS),
         getAdsMoney: record('money', async () => ({ currency: 'USD', fits: true, remaining: 400, monthlyCap: 500, maxDailyBudget: 50 })),
         checkAdsPolicy: record('policy', async () => ({ blocked: false, findings: [] })),

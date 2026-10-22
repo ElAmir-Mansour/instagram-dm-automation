@@ -2061,7 +2061,7 @@ const HelpContent = {
                             'يرشدك المُنشئ في ثماني خطوات، وهي نفسها أيًّا كان الهدف. لا يعرض في كل خطوة إلا الخيارات التي تقبلها ميتا لهذا الهدف، ومع كل خيار جملة تشرحه.',
                             { ol: [
                                 '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. إعلانات العملاء المحتملين تأتي لاحقًا.',
-                                '**الوجهة:** أين تصل الرسائل (إنستجرام أو ماسنجر أو واتساب)، أو الرابط الذي تُفتح عليه الزيارات. رابط الدورة يكون رابطًا متتبَّعًا افتراضيًا حتى تُحسب النقرات.',
+                                '**الوجهة:** أين تصل الرسائل (إنستجرام أو ماسنجر أو واتساب)، أو الرابط الذي تُفتح عليه الزيارات. رابط العرض يكون رابطًا متتبَّعًا افتراضيًا حتى تُحسب النقرات.',
                                 '**التصميم:** منشور منشور من قبل، أو صورة أو فيديو ترفعه من جهازك، ومعه نسخة عمودية 9:16 إن شئت.',
                                 '**النص:** النص الأساسي والعنوان وزر الدعوة إلى الإجراء.',
                                 '**الجمهور:** الدول والمدن والعمر والجنس واللغات والاهتمامات.',
@@ -2076,7 +2076,7 @@ const HelpContent = {
                             'The builder takes you through eight steps, the same whatever the goal. Each step offers only the choices Meta accepts for that goal, each with a one-line explanation.',
                             { ol: [
                                 '**Goal:** messages, reach, engagement or traffic to a link. Lead ads come later.',
-                                '**Destination:** where messages arrive (Instagram, Messenger or WhatsApp), or the link the traffic opens. A course link is a tracked link by default, so its clicks are counted.',
+                                '**Destination:** where messages arrive (Instagram, Messenger or WhatsApp), or the link the traffic opens. An offer link is a tracked link by default, so its clicks are counted.',
                                 '**Creative:** a post you already published, or an image or video uploaded from your computer, with an optional 9:16 version.',
                                 '**Text:** the primary text, the headline and the call-to-action button.',
                                 '**Audience:** countries and cities, age, gender, languages and interests.',
