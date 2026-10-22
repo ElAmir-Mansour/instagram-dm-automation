@@ -3252,8 +3252,8 @@ Every ad the app makes is one `CampaignSpec` (contracts/dashboard-api.md), mappe
 builder's quick mode and Boost's "Send messages" preset end in the same two server functions, so they cannot drift apart.
 
 **A. Quick mode** (`dashboard/js/pages/ads_builder.js`, `AdsBuilder.openQuick`). The Scheduler's **Boost** (`posts.js` `boostOpen`,
-**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); only a module that cannot load opens the
-older form. The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
+**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); a module that cannot load says so (the older
+Boost form was removed in A5). The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
 four ice breakers; the post's caption is shown read-only because it IS the ad text. What is left of the month comes from `GET /money`,
 asked once when the dialog opens.
 
