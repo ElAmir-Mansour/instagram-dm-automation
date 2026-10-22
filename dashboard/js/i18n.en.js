@@ -4958,6 +4958,8 @@
     'ads.account.status': 'Status',
     'ads.account.payment': 'Payment',
     'ads.account.error': 'The ad account could not be read.',
+    'ads.account.unchecked': 'The ad account has not been checked yet.',
+    'ads.account.uncheckedHint': 'Open Settings and press Test connection in the Meta ads card, or wait for the nightly check. Campaigns appear once the first sync runs (within the hour).',
     'ads.account.openManager': 'Open in Ads Manager',
     'ads.account.status.active': 'Active',
     'ads.account.status.disabled': 'Disabled',

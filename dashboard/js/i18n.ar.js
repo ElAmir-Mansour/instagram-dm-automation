@@ -5226,6 +5226,8 @@
     'ads.account.status': 'الحالة',
     'ads.account.payment': 'الدفع',
     'ads.account.error': 'تعذّرت قراءة الحساب الإعلاني.',
+    'ads.account.unchecked': 'لم يُفحص الحساب الإعلاني بعد.',
+    'ads.account.uncheckedHint': 'افتح الإعدادات واضغط «اختبر الاتصال» في بطاقة إعلانات ميتا، أو انتظر الفحص الليلي. وتظهر الحملات بعد أول مزامنة (خلال ساعة).',
     'ads.account.openManager': 'افتح في مدير الإعلانات',
     'ads.account.status.active': 'نشط',
     'ads.account.status.disabled': 'معطّل',

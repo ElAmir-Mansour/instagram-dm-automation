@@ -260,6 +260,21 @@ describe('Ads Overview: the stored copy as health, money, what needs attention a
         assert.match(html, /id="ads-stat-today"[\s\S]*?<p class="stat-value">\s*—\s*<\/p>/);
     });
 
+    it('an account never checked is a step to take, not "could not be read", and the stored copy still shows', async () => {
+        const { html, t } = await renderAds('en', { ...OVERVIEW, account: null, accountError: null, money: null });
+        assert.ok(html.includes('id="ads-account-unchecked"'));
+        assert.equal(html.includes('id="ads-account-problem"'), false);
+        assert.ok(text(html).includes(t('ads.account.unchecked')));
+        assert.ok(html.includes('#/help/ads#account-health'));
+        assert.ok(text(html).includes('Spring sale ad'), 'attention from the stored copy is still drawn');
+    });
+
+    it('a check that failed is still the account problem card', async () => {
+        const { html } = await renderAds('en', { ...OVERVIEW, account: null, accountError: 'Invalid OAuth access token.' });
+        assert.ok(html.includes('id="ads-account-problem"'));
+        assert.equal(html.includes('id="ads-account-unchecked"'), false);
+    });
+
     it('a dead token and a blind guard show in the health strip as well as in the banners', async () => {
         const { html, t } = await renderAds('en', { ...OVERVIEW, tokenHealth: 'dead', guard: { lastCheckedAt: null, blind: true } });
         assert.match(html, /data-ads-token="dead"/);
