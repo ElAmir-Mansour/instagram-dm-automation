@@ -184,7 +184,7 @@ describe('quick mode, opened from Posts → Boost', () => {
         assert.doesNotMatch(String(r.el('adsb-ice').innerHTML), /data-action="adsb:iceAdd"[^>]*disabled/, 'room again');
     });
 
-    it('the Boost button hands the post to the builder; the old form is only the fallback for a module that will not load', async () => {
+    it('the Boost button hands the post to the builder; a module that will not load is said, there is no old form any more', async () => {
         // The builder is there: Boost opens it, preselected, and never the old form.
         const r = load();
         r.posts.posts = [post()];
@@ -195,17 +195,16 @@ describe('quick mode, opened from Posts → Boost', () => {
         assert.equal(r.B.state.post.id, 'p1');
         assert.deepEqual(plain(r.B.state.platforms), ['instagram', 'facebook']);
 
-        // The module is not loaded and cannot be: the dialog that existed before still opens.
+        // The module is not loaded and cannot be: the old form is gone (A5), so Boost says it failed rather than doing nothing.
         const f = load('en', []);
         f.posts.posts = [post()];
         f.posts.ads.settings = SETTINGS;
         f.h.ctx.App.loadPageModule = async () => null;
-        // The old form reads its fields through `form.elements`, which the harness's fake DOM does not have: only its opening is pinned here.
-        f.posts.boostRecalc = () => {};
-        f.posts.boostEligibility = () => {};
-        f.posts.boostLoadMoney = () => {};
+        const toasts: string[] = [];
+        f.h.UI.toast = (message: string) => { toasts.push(message); };
         await f.posts.boostOpen('p1');
-        assert.match(f.modal(), /id="boost-form"/);
+        assert.doesNotMatch(String(f.modal() ?? ''), /id="boost-form"/);
+        assert.deepEqual(toasts, [f.h.t('error.unexpected')]);
     });
 
     it('loads the module on demand through the page registry, like ice_breakers', async () => {
