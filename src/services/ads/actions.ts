@@ -1,7 +1,7 @@
 /**
  * The owner's actions on stored objects (tasks T052, T054): pause, resume, budget, end date, archive and delete, each one an `ads_ops` row
- * (ops.ts) instead of a direct Graph call. The Campaigns tab's routes (src/routes/adsObjects.ts) and v1's adapters (adsManager.ts,
- * adBoosts.ts) both come through here, so the rules are in one place:
+ * (ops.ts) instead of a direct Graph call. The Campaigns tab's routes (src/routes/adsObjects.ts) and Boost (adBoosts.ts)
+ * both come through here, so the rules are in one place:
  *
  *   - anything that can start or raise spend needs `confirm`, a payment method (when Meta said there is none), the daily max, and the money
  *     rule: the month is read live OUTSIDE any transaction, then `checkAndStartSpend` re-checks under the tenant's lock and ENQUEUES the op
@@ -9,7 +9,7 @@
  *   - every op carries an idempotency key, so a double press or a replayed request returns the op it already made;
  *   - delete is a separate, confirmed op and never runs on an ACTIVE object; "end it" is archive.
  *
- * `runNow` (the v1 adapters) waits for the inline attempt and reports what happened; the new routes answer with the op at once and let the
+ * Boost (`writeNow`) waits for the inline attempt and reports what happened; the new routes answer with the op at once and let the
  * screen poll `GET /api/ads/ops/:id`.
  */
 import type { Exec } from '../studio/common.js';
@@ -31,7 +31,7 @@ export interface ActionContext {
     actor: OpActor;
     /** A key the client sent with the press (`requestId`), so a retried request maps to the same op. Else a 10 s bucket. */
     requestId?: string | null;
-    /** true: wait for the inline attempt (v1 adapters). false: hand it to `waitUntil` and answer with the queued op. */
+    /** true: wait for the inline attempt (Boost). false: hand it to `waitUntil` and answer with the queued op. */
     wait?: boolean;
     now?: Date;
 }
@@ -68,7 +68,7 @@ function idempotencyKey(ctx: ActionContext, what: string, now: Date): string {
     return `${ctx.creatorId}:${what}:${press}`;
 }
 
-/** Run the op inline: awaited for the v1 adapters, handed to `waitUntil` otherwise. Returns the op as it now stands. */
+/** Run the op inline: awaited for Boost, handed to `waitUntil` otherwise. Returns the op as it now stands. */
 async function kick(ctx: ActionContext, op: OpView): Promise<OpView> {
     if (op.state !== 'pending') return op;
     if (ctx.wait) {
@@ -79,7 +79,7 @@ async function kick(ctx: ActionContext, op: OpView): Promise<OpView> {
     return op;
 }
 
-/** An op that ended `failed` as the error the screen shows (v1 adapters only; the queue view shows it on the badge). */
+/** An op that ended `failed` as the error the screen shows (Boost only; the queue view shows it on the badge). */
 export function refusalOf(op: OpView): AdsError | null {
     if (op.state !== 'failed') return null;
     const r = (op.result ?? {}) as { code?: unknown; message?: unknown; retryAt?: unknown; subcode?: unknown };
@@ -332,7 +332,7 @@ export async function requestDuplicate(ctx: ActionContext, row: ObjectRow, deep:
     });
 }
 
-// ─── v1 adapters (Boost and the old campaign routes): the same ops, waited for ────────────────────────────────────────────────────
+// ─── Boost: the same ops, waited for ────────────────────────────────────────────────────────────────────────────────
 
 /** The queue key for a Meta id: the stored row's uuid when the sync has it, else the Meta id itself (still one key per object). */
 export async function objectKeyFor(creatorId: string, metaId: string): Promise<string> {

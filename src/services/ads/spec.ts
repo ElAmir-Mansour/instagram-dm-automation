@@ -30,7 +30,7 @@
  * v1 Boost is a preset of this: `boostToSpec` turns a boost's inputs into a spec, and the tests compare what it produces with
  * `buildCampaignParams` / `buildAdSetParams` / `buildCreativeParams` in metaAds.ts.
  */
-import { EU_COUNTRIES, graphTime, normaliseCountry, normaliseLink, toMinorUnits, type GraphParams } from '../metaAds.js';
+import { EU_COUNTRIES, graphTime, normaliseCountry, normaliseLink, toMinorUnits, type GraphParams } from './metaAds.js';
 import { CreativeError, placementAssetFeed } from './creatives.js';
 
 // ─── The spec ─────────────────────────────────────────────────────────────────────────────

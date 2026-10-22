@@ -2545,7 +2545,7 @@ on his Mac; every other tenant's go to the AI providers layer on its own key.** 
 1. **Request.** `POST /api/ads/proposals` (operator+) → `requestProposal` (**`service.ts:120`**): the owner's words (≤ 1000) or a
    published post (`loadPost`). A tenant the Mac is not for is checked first with `resolveRoute(ads_draft)`: no provider is
    **409 `AI_NOT_CONFIGURED`** and no row. Then a `drafting` row (`insertProposal`, **`store.ts:61`**, `model.via` = `mac`|`api`)
-   and `queueAdvance` (**`advance.ts:17`**): an `ads.draft` app job (**`jobs/handlers.ts:73`**) drained inline under `waitUntil`.
+   and `queueAdvance` (**`advance.ts:17`**): an `ads.draft` app job (**`jobs/handlers.ts:74`**) drained inline under `waitUntil`.
 2. **Advance** (`advanceProposal`, **`service.ts:161`**, idempotent; never moves a row that is not `drafting`). The input is
    `buildInput` (**`input.ts:55`**): **aggregates only** (FR-049) — the stored copy's names, budgets, statuses, targeting summaries
    and 7-day totals (`mirrorPort`, **`ports.ts:74`**), the offers' title/price/summary with emails and phone numbers stripped, the
@@ -2560,23 +2560,23 @@ on his Mac; every other tenant's go to the AI providers layer on its own key.** 
      with the worker's error.
    - **Any other tenant**: `generate({ purpose: ads_draft | ads_review })` on its own route; `no_provider` → `failed`
      (`AI_NOT_CONFIGURED`), a non-retryable refusal → `failed`, anything else throws and the job runner retries.
-3. **Checks** (`runChecks`, **`checks.ts:230`**, contract order): schema → evidence (a review item quoting a number not in the
+3. **Checks** (`runChecks`, **`checks.ts:235`**, contract order): schema → evidence (a review item quoting a number not in the
    input, or an object not in the account, is **dropped**) → policy (A4 `checkPolicy`; a `block` asks again once) → money (A1
    `moneyFor`; over the daily max or the month's remaining → **reduced** with a note; below Meta's minimum → `failed`). Then
    spec.ts `validateSpec` (the builder's own rules; asked again once). A regeneration is attempt 2 with the failed checks as
    feedback (a second `ads_think` job on the Mac). Pass → `open` with payload, rationale, evidence, effect, checks, model; a review
    with 2–3 items inserts the others as `open` rows; a review with none deletes its `drafting` row.
-4. **Approve** (`POST /:id/approve`, owner, `confirm: true`; `approveProposal`, **`service.ts:270`**): refused 409 `NOT_WIRED`
-   without the ports; an `open` row past `expires_at` becomes `expired`. `recheckForApproval` (**`checks.ts:347`**) runs policy and
+4. **Approve** (`POST /:id/approve`, owner, `confirm: true`; `approveProposal`, **`service.ts:273`**): refused 409 `NOT_WIRED`
+   without the ports; an `open` row past `expires_at` becomes `expired`. `recheckForApproval` (**`checks.ts:352`**) runs policy and
    money again and **adjusts nothing** (a budget that no longer fits is 409 `OVER_MONTHLY_CAP`); a new campaign also gets Meta's
    `validate_only` (`validateDraft`). Then `open → approved`, `applyPort` (**`ports.ts:142`**): a new campaign through A4's
    `createDraft` (every object PAUSED), a change through A2's `requestStatus` / `requestBudget`; every op is tagged
    `ads_ops.proposal_id` and actor `via: 'proposal'`, new objects `origin: 'proposal'` → `applying` with the op ids in `checks.ops`.
-   `settleApplying` (**`service.ts:328`**, on every list read) moves it to `applied` when all ops are done, `failed` when one failed.
+   `settleApplying` (**`service.ts:331`**, on every list read) moves it to `applied` when all ops are done, `failed` when one failed.
    Audit `ads.proposal_decided`.
 5. **Reject** (`POST /:id/reject`, owner): `open → rejected` with the reason. Nothing is enqueued.
-6. **Daily cron** (**`routes/api.ts:1115`**): `expireProposals` (**`store.ts:144`**: `open` past 7 days → `expired`; `drafting`
-   older than 24 h → `failed`, "the Mac did not answer") then `runDailyReview` (**`service.ts:367`**): for each `ads.enabled`
+6. **Daily cron** (**`routes/api.ts:1138`**): `expireProposals` (**`store.ts:144`**: `open` past 7 days → `expired`; `drafting`
+   older than 24 h → `failed`, "the Mac did not answer") then `runDailyReview` (**`service.ts:370`**): for each `ads.enabled`
    tenant with ≥ 3 days of results and an active object, one review a day (≤ 3 proposals), skipped quietly without an AI for it;
    when it opens, one `proposal_ready` alert (A1 `notifyAds`).
 
@@ -2600,7 +2600,7 @@ routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DIS
    still building, and have `size_lower ≥ 100` (409 `SEED_TOO_SMALL`). Params `subtype: LOOKALIKE`, `origin_audience_id`,
    `lookalike_spec {ratio 0.01–0.20, country}`.
 3. **Size and status.** `syncStructure` → `syncAudiences` (**`sync.ts:568`**), only when the tenant has a live audience:
-   `adoptCreatedMetaIds` (**`audiences.ts:596`**: `meta_id` from the done `audience_create` op's `result.id`), then
+   `adoptCreatedMetaIds` (**`audiences.ts:604`**: `meta_id` from the done `audience_create` op's `result.id`), then
    `GET act_<id>/customaudiences` (≤ 2 pages, 1 point each) → `applyAudienceReads` (**`:612`**) → `classifyAudienceRead`
    (**`:420`**): `operation_status 471` → `flagged` (unusable; Meta reviews only in its own UI), `delivery_status 300` or an upper
    bound < 1,000 → `too_small`, 414/441 → still `creating`, else `ready`. Fail-soft: a failed read never fails the sync.
@@ -2613,7 +2613,7 @@ routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DIS
 5. **Customer lists.** `POST /api/ads/audiences/customer-list` (owner; **`adsAudiences.ts:258`**):
    1. **The lock first:** no non-revoked `customer_lists` row in `ads_legal_signoffs` → 403 `LOCKED_LEGAL` **before the text is
       read**. Only the platform admin writes that table (`POST/DELETE /api/admin/ads/tenants/:id/legal-signoff`,
-      **`admin.ts:1284`**; tenant detail → "Ads: legal sign-off"). Egypt PDPL 151/2020 (deadline 2026-11-01) and Saudi PDPL.
+      **`admin.ts:1288`**; tenant detail → "Ads: legal sign-off"). Egypt PDPL 151/2020 (deadline 2026-11-01) and Saudi PDPL.
    2. The JSON body carries `{ name, columns | 'auto', defaultCountry?, text }` (≤ 3 MB; the browser reads a file with
       FileReader). `parseCustomerText` (**`hashing.ts:259`**) → `prepareCustomerList` (**`:331`**): normalise (email trim +
       lowercase; phone digits with the country code, no leading zero, `defaultCountry` for national numbers; names lowercase with
@@ -2660,7 +2660,7 @@ not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing
    retries) → `storeLead` (**`:450`**): `answers_enc = encryptBytes(field_data)`, `person_keys` = HMAC of the normalised email and
    phone, `consent_contact`, `retain_until = created_time + leadRetentionDays`, `ON CONFLICT (meta_lead_id) DO NOTHING`, and the
    form's `last_lead_seen_at` moves.
-5. **The catch-up and retention.** The drain (**`api.ts:436`**) calls `sweepLeads` (**`leads.ts:770`**): `purgeExpiredLeads`
+5. **The catch-up and retention.** The drain (**`api.ts:453`**) calls `sweepLeads` (**`leads.ts:770`**): `purgeExpiredLeads`
    (**`:609`**: per tenant, answers and keys NULLed, `purged_at` set, where `retain_until` passed or `created_time` is older than
    today's setting; the row stays as a count) then `catchUpLeads` (**`:721`**: tenants with a sign-off, at most every 6 h by
    `ads.leads_caught_up.<t>`; the Page's forms reconciled; per active form `/{form_id}/leads` with `filtering` `time_created
@@ -2700,7 +2700,7 @@ action, confirmed and money-checked.**
    the arms, then their ad set, then the campaign LAST — each with A2's own payment check, daily max and money rule under its lock.
    One refusal stops there; what was switched on before it sits under a paused parent and spends nothing. → `running`.
 4. **Stop.** `POST /:id/stop` (owner): `requestStatus(PAUSED)` on the arms (and a creative test's ad set) → `stopped`. No confirm.
-5. **Results** (the drain, **`routes/api.ts:433`**, after `syncAllAds`): `pollStudies` (**`:707`**) over `open()` (the (tenant,
+5. **Results** (the drain, **`routes/api.ts:445`**, after `syncAllAds`): `pollStudies` (**`:707`**) over `open()` (the (tenant,
    study) pairs still `creating`/`ready`/`running`, then each read inside its tenant): creates reconciled; a `ready` test past its end
    → `stopped` ("never started"); a `running` one every 6 h, and once more 12 h after its end → `checkStudyResult` (**`:679`**):
    `GET <study>/objectives?fields=id,name,is_primary` → `GET <objective>?fields=results` (2 points) → `parseObjectiveResults`
@@ -3281,12 +3281,12 @@ holds the cap after switch-on; §11.2 walks the stored copy every screen reads a
 
 **A. Every ads request**
 
-1. `/api/ads/*` is mounted below `resolveTenant` (`routes/api.ts:1611`). The router's first middleware, **`routes/ads.ts:54`**, answers
+1. `/api/ads/*` is mounted below `resolveTenant` (`routes/api.ts:1663`). The router's first middleware, **`routes/ads.ts:83`**, answers
    **404 `ADS_DISABLED`** unless `ads.enabled.<tenant>` is `'true'` (the platform admin's switch, `routes/admin.ts`
    `POST /ads/tenants/:id/enabled`; migration v53 set it for every tenant that already had ads settings). It then runs the rest of the
    request inside `withAdsContext({ creatorId, adAccountId })` (**`ads/graph.ts`** `withAdsContext`), so every Graph call it makes is
    paced against that account.
-2. Each Graph call — `adsGet` / `adsPost` / `adsDelete`, and v1's `metaAds.ts` helpers, which delegate to them — goes through
+2. Each Graph call — `adsGet` / `adsPost` / `adsDelete` — goes through
    **`ads/graph.ts:155`** `call`:
    - the version is `ads.api_version` (`adsApiVersion`, default `v26.0`, never below `v25.0`), **not** `META_API_VERSION`;
    - `reserve` (**`ads/pacer.ts:131`**) takes 1 point for a read, 3 for a write, from 45 of the 60 per 300 s; refused →
@@ -3305,21 +3305,21 @@ holds the cap after switch-on; §11.2 walks the stored copy every screen reads a
 `worstCase = spentThisMonth + Σ remainingThisMonth(ACTIVE campaigns) + aboutToRun + candidate ≤ monthlyCap` (`checkCandidate`,
 **`money.ts:215`**). The month is the **ad account's** calendar month; a daily budget counts today at **1.75×** and each later day once
 (`remainingThisMonth`, **`money.ts:156`**); a lifetime budget counts its whole unspent part. `remaining` = cap − the worst case without
-a candidate, the one figure every screen shows (`GET /api/ads/money`, `moneyFor`, **`money.ts:526`**, cached 60 s per tenant). Figures
+a candidate, the one figure every screen shows (`GET /api/ads/money`, `moneyFor`, **`money.ts:531`**, cached 60 s per tenant). Figures
 exclude tax.
 
-**C. Activating a boost (the step that spends): `activateBoost`, **`adBoosts.ts:463`****
+**C. Activating a boost (the step that spends): `activateBoost`, **`adBoosts.ts:470`****
 
 1. The daily max (`checkDailyMax`: a lifetime budget as `total / days`), the payment method, then the month **read live, outside any
-   transaction** — `readMonth`, **`adBoosts.ts:479`** (spend this month + every campaign).
-2. `checkAndStartSpend` (**`money.ts:461`**, called at **`adBoosts.ts:486`**): ONE short transaction that takes
+   transaction** — `readMonth`, **`adBoosts.ts:486`** (spend this month + every campaign).
+2. `checkAndStartSpend` (**`money.ts:466`**, called at **`adBoosts.ts:498`**): ONE short transaction that takes
    `pg_advisory_xact_lock(hashtextextended('ads:<tenant>', 0))` (`lockMoney`), sums what is about to run (`aboutToRun`, **`money.ts:397`**:
    pending and running spend ops, `verify` ones for a day, and `done` ones that finished after the month was read minus 2 minutes), re-runs
    the rule, re-reads the boost `FOR UPDATE`, writes `activated_at`, and inserts the activation as a **`running` `ads_ops` row** carrying
    `worst_case_delta`. Refused → **400 `OVER_MONTHLY_CAP`** with the numbers.
 3. Since A2 the activation is **three ops** recorded inside that same transaction (`record`, **`money.ts:475`**, the boost's at
-   **`adBoosts.ts:505`**): ad → ad set (its window starts now) → campaign LAST, each `depends_on` the one before, the campaign's carrying
-   `worst_case_delta`. A pending op counts as about to run. After the commit `runRecorded` (**`adBoosts.ts:520`**) runs them inline, in
+   **`adBoosts.ts:507`**): ad → ad set (its window starts now) → campaign LAST, each `depends_on` the one before, the campaign's carrying
+   `worst_case_delta`. A pending op counts as about to run. After the commit `runRecorded` (**`adBoosts.ts:522`**) runs them inline, in
    order (§11.2 B); one left waiting is sent by the drain, a failed one is the refusal (`refusalOf`), and a create's or write's timeout is
    `verify` (§11.2 C), which keeps counting for a day.
 
@@ -3327,11 +3327,10 @@ exclude tax.
 > lock). Reading first and recording the activation as a running op keeps the transaction to milliseconds and still lets a second
 > activation racing this one see it (`ads/money.db.test.ts`).
 
-Resume (`setCampaignStatus`) and a budget raise on a running campaign (`setCampaignBudget`, the candidate is the *extra* worst case) in
-`ads/manager.ts` (v1's routes), and the Campaigns tab's `requestStatus` / `requestBudget` (**`ads/actions.ts:143`**, **`:207`**), follow
-the same three steps.
+A resume and a budget raise on a running campaign (the candidate is the *extra* worst case), from the Campaigns tab's `requestStatus` /
+`requestBudget` (**`ads/actions.ts:154`**, **`:218`**), follow the same three steps.
 
-**D. The guard: `runGuard`, **`ads/guard.ts:66`**, from every `/api/jobs/drain` (`routes/api.ts:406`, with the drain's deadline)**
+**D. The guard: `runGuard`, **`ads/guard.ts:66`**, from every `/api/jobs/drain` (`routes/api.ts:418`, with the drain's deadline)**
 
 1. For each tenant with `ads.enabled.<t>` (**`guard.ts:80`** `guardTenant`): skip if the last **successful** check (`ads.cap_checked`)
    was under an hour ago, or the last attempt (`ads.cap_attempt`) failed under 10 minutes ago. No token, account or cap → skip.
@@ -3342,16 +3341,16 @@ the same three steps.
 3. Only then **`ads.cap_checked`** = now (**`guard.ts:114`**). A failure leaves it, so the next drain 10 minutes on tries again; a
    `token_dead` marks `ads.health` and alerts; two hours without a success raises **`guard_blind`** (**`guard.ts:126`**), and the Ads
    screen shows "Spending is not being watched" (`guardState` in `health.ts`).
-4. Saving a cap at or below the month's spend (`POST /api/ads/settings`, **`routes/ads.ts:154`**) runs the guard for that tenant at once
+4. Saving a cap at or below the month's spend (`POST /api/ads/settings`, **`routes/ads.ts:158`**) runs the guard for that tenant at once
    (`force`) and answers `warnings: ['will_pause_all']`.
 
 **E. Alerts and the daily health check**
 
-- `notifyAds` (**`ads/notify.ts:162`**) inserts the `ads_alerts` row first — unique `(tenant, kind, object, day)` in the account's time zone,
+- `notifyAds` (**`ads/notify.ts:256`**) inserts the `ads_alerts` row first — unique `(tenant, kind, object, day)` in the account's time zone,
   so a second alert that day is not sent — then sends in the tenant's language to its own Telegram chat / email (`ads.alerts.<t>`, the
   deployment's bot and Resend key), a bilingual copy to the admin unless `ads.copy_admin` is `'false'`, and records each channel's
   outcome on the row. Never throws. `cap_paused`, `guard_blind`, `token_dead` cannot be switched off.
-- `runAdsHealth` (**`ads/health.ts:155`**, from the daily cron, `routes/api.ts:1085`): per tenant `checkTenantHealth` (**`health.ts:113`**) —
+- `runAdsHealth` (**`ads/health.ts:157`**, from the daily cron, `routes/api.ts:1129`): per tenant `checkTenantHealth` (**`health.ts:115`**) —
   token (`debug_token` for a Connect token, `GET /me` for a pasted one), account status and funding, served version — written to
   `ads.health.<t>` (the stored copy the screens read) and turned into alerts; then the retention sweep (`ads_alerts` after a year,
   finished `ads_ops` after 180 days).
@@ -3365,64 +3364,64 @@ the same three steps.
    (`ads.health.<t>`), spend today and this month come from `ads_insights_daily` in the **ad account's** days (`spendFromMirror`), the
    money rule runs over the stored ACTIVE campaigns (`rawFromMirror`), plus "needs attention" (rejected, issues, billing, ops failed in
    the last day) and the queued ops. **No Graph call**, so a page view costs no points (v1 cost about 4 per view).
-2. `GET /api/ads/objects` and `/objects/:id` (**`routes/adsObjects.ts`**, mounted by `mountObjectRoutes` at **`routes/ads.ts:395`**,
+2. `GET /api/ads/objects` and `/objects/:id` (**`routes/adsObjects.ts`**, mounted by `mountObjectRoutes` at **`routes/ads.ts:547`**,
    after the `ADS_DISABLED` gate): `ads_objects` rows of the tenant's **current** ad account, each with 28 days of results
    (`resultsFor`: ad rows summed; **reach never summed across days**), the ad set's budget edits left this hour, and its open ops. Every
-   `:id` goes through ONE resolver, `objectOf` (**`adsObjects.ts:96`**) → `ownObject` (**`ads/actions.ts:48`**): another tenant's row, or
+   `:id` goes through ONE resolver, `objectOf` (**`adsObjects.ts:104`**) → `ownObject` (**`ads/actions.ts:51`**): another tenant's row, or
    a row of an account the tenant switched away from, is 404 `NOT_FOUND`.
 
 **B. Every write is an op (research R3)**
 
 1. A button → `requestStatus` / `requestBudget` / `requestArchive` / `requestDelete` (**`ads/actions.ts`**). Pause, archive, a cut and an
    end date are enqueued as they are; switching on and raising run the money rule (§11.1 C) and are enqueued **inside** the locked
-   transaction. Delete is its own confirmed op and is refused on an ACTIVE object; v1's Delete (Boost and the old campaign route) now
+   transaction. Delete is its own confirmed op and is refused on an ACTIVE object; Boost's Delete now
    **archives**. Every op has an idempotency key (`<tenant>:<what>:<requestId or 10 s bucket>`): a double press returns the same op.
-2. `enqueue` (**`ads/ops.ts:394`**): `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`, audit `ads.op_enqueued`. The route answers
-   **202 `{ op }`** at once and hands `runOpInline` to `waitUntil` (**`ops.ts:938`**); v1's adapters (`writeNow`, **`actions.ts:317`**)
-   wait for it instead, so their answers keep their v1 shape.
-3. `claimNext` (**`ops.ts:496`**), ONE short transaction: the oldest due `pending` op of the account whose dependency is `done` and with
+2. `enqueue` (**`ads/ops.ts:399`**): `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`, audit `ads.op_enqueued`. The route answers
+   **202 `{ op }`** at once and hands `runOpInline` to `waitUntil` (**`ops.ts:1023`**); Boost (`writeNow`, **`actions.ts:346`**)
+   waits for it instead, so its answers keep their v1 shape.
+3. `claimNext` (**`ops.ts:501`**), ONE short transaction: the oldest due `pending` op of the account whose dependency is `done` and with
    nothing `running`/`verify` on the same `object_key`, `FOR UPDATE SKIP LOCKED`. Meta's per-object limits come from the op history
-   (`limitWaitUntil`, **`ops.ts:190`**): 4 `budget` ops per ad set per rolling hour, 30 s after the last `done` on the object, 10
+   (`limitWaitUntil`, **`ops.ts:195`**): 4 `budget` ops per ad set per rolling hour, 30 s after the last `done` on the object, 10
    `spend_cap` per account per day in the account's zone. A limit pushes `not_before`; the op is not started.
-4. `execute` (**`ops.ts:729`**) calls Meta **outside any transaction**, every call through ONE function, `sendExec` (**`ops.ts:625`**),
-   inside the tenant's Graph context (pacer, §11.1 A.2). A create's name gets `AR·<op id>`. The outcome (`outcomeFor`, **`ops.ts:253`**)
+4. `execute` (**`ops.ts:778`**) calls Meta **outside any transaction**, every call through ONE function, `sendExec` (**`ops.ts:641`**),
+   inside the tenant's Graph context (pacer, §11.1 A.2). A create's name gets `AR·<op id>`. The outcome (`outcomeFor`, **`ops.ts:258`**)
    is recorded in a second short transaction, audit `ads.op_applied` / `ads.op_failed`:
    - done → the stored row is updated at once (status, budget, a create's `meta_id`);
    - **throttle** → back to `pending` with `not_before` = Meta's reset (the pacer already blocked the account): **never retried in a loop**;
    - 613/1487632 (4 budget edits this hour) → +1 h; 613/4841018 (busy) → +30 s; 17/1885172 (10 spend-cap changes) → `failed` `EDIT_LIMIT`;
    - 190/102 → `failed` `TOKEN_INVALID`; the drain stops the account for this run, and A1's dead token (`isQueueStopped`,
-     **`ops.ts:605`**) keeps the tenant's queue stopped until a new token is saved;
+     **`ops.ts:621`**) keeps the tenant's queue stopped until a new token is saved;
    - a timeout or 5xx on a create → **`verify`**.
 
 **C. Never create twice (research R6)**
 
-`verify` (**`ops.ts:816`**, `nextVerifyStep` **`:304`**): a create in `verify` searches its parent edge for the `AR·<op id>` tag. Found →
+`verify` (**`ops.ts:875`**, `nextVerifyStep` **`:309`**): a create in `verify` searches its parent edge for the `AR·<op id>` tag. Found →
 `done`, its id adopted. Not found → checked again 60 s later; not found twice → `pending`, **resent exactly once** with the same tag; not
 found again → `failed`. A non-create write in `verify` reads the object back and compares. An op written by A1's synchronous path (no
-`exec`) is never sent: it fails after a day. `reap` (**`ops.ts:850`**): `running` for over 5 minutes → `verify` (creates) or `pending`.
+`exec`) is never sent: it fails after a day. `reap` (**`ops.ts:909`**): `running` for over 5 minutes → `verify` (creates) or `pending`.
 
 **D. The drain and the cron**
 
-1. `/api/jobs/drain` (**`routes/api.ts:419`**), after the guard so the guard is never starved of points: `drainAdsOps(deadline)`
-   (**`ops.ts:884`**: reap, then every account with something due, skipping one Meta has blocked), then `syncAllAds(deadline)`
-   (**`ads/sync.ts:761`**, **`api.ts:421`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:538`**: one paged
-   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:165`**; `upsertObjects` **`mirror.ts:218`**
+1. `/api/jobs/drain` (**`routes/api.ts:439`**), after the guard so the guard is never starved of points: `drainAdsOps(deadline)`
+   (**`ops.ts:943`**: reap, then every account with something due, skipping one Meta has blocked), then `syncAllAds(deadline)`
+   (**`ads/sync.ts:779`**, **`api.ts:441`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:539`**: one paged
+   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:166`**; `upsertObjects` **`mirror.ts:232`**
    keeps `origin` and `app_meta`, so a Boost's rows stay `boost` and new ones carrying a boost id in their name are linked to it), and
-   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:665`**; `upsertInsights` **`mirror.ts:357`**).
+   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:683`**; `upsertInsights` **`mirror.ts:371`**).
    Each sync is skipped when the pacer cannot spend, and stops at a throttle.
-2. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:315`**); a read cut
+2. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:329`**); a read cut
    short (a page not read, a nested edge with a next page) marks nothing.
-3. The daily cron (**`api.ts:1109`**): `syncDailyAds` (**`sync.ts:783`**), the trailing **28 days** at `level=ad` (an async report
+3. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:801`**), the trailing **28 days** at `level=ad` (an async report
    when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
-   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:423`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
-   older than **37 months** (**`ads/health.ts:175`**).
-4. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:724`**, else 429 `RATE_LIMITED` +
+   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:437`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
+   older than **37 months** (**`ads/health.ts:178`**).
+4. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:742`**, else 429 `RATE_LIMITED` +
    `retryAt`), run under `waitUntil`; the drain is the backstop.
 
 **E. Disconnecting deletes the stored copy**
 
 Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/settings.ts:188`**) or disconnecting Meta with a Connect token
-(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:823`**): `ads_objects`, `ads_insights_daily` and
+(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:875`**): `ads_objects`, `ads_insights_daily` and
 `ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
 
 ### 11.3 — Create: spec → ops → Meta (A4: message ads and the policy check)
@@ -3431,32 +3430,32 @@ Every ad the app makes is one `CampaignSpec` (contracts/dashboard-api.md), mappe
 builder's quick mode and Boost's "Send messages" preset end in the same two server functions, so they cannot drift apart.
 
 **A. Quick mode** (`dashboard/js/pages/ads_builder.js`, `AdsBuilder.openQuick`). The Scheduler's **Boost** (`posts.js` `boostOpen`,
-**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); a module that cannot load says so (the older
+**`posts.js:3826`**) loads the module on demand (page registry `ads_builder`, `routable: false`); a module that cannot load says so (the older
 Boost form was removed in A5). The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
 four ice breakers; the post's caption is shown read-only because it IS the ad text. What is left of the month comes from `GET /money`,
 asked once when the dialog opens.
 
-**B. The policy check while typing.** `POST /api/ads/policy` (**`routes/ads.ts:448`**, operator) → `checkPolicy` (**`ads/policy.ts:550`**):
+**B. The policy check while typing.** `POST /api/ads/policy` (**`routes/ads.ts:427`**, operator) → `checkPolicy` (**`ads/policy.ts:550`**):
 pure, no Meta call, nothing stored, asked 400 ms after the typing stops. The text is folded first (tatweel, alef forms, diacritics,
 Arabic-Indic digits, zero-width characters), matched by versioned rules (`POLICY_VERSION`), and every finding's `[start, end)` is mapped
 back onto the ORIGINAL text, so the dialog wraps exactly those characters in `<mark>`.
 
-**C. Review: `POST /api/ads/drafts/validate`** (**`routes/ads.ts:462`**, operator) → `validateDraft` (**`ads/drafts.ts:269`**). Creates
+**C. Review: `POST /api/ads/drafts/validate`** (**`routes/ads.ts:441`**, operator) → `validateDraft` (**`ads/drafts.ts:317`**). Creates
 nothing. In order:
 1. `validateSpec` (`spec.ts`): shape and limits (greeting ≤ 300, ≤ 4 ice breakers, title ≤ 80, answer ≤ 300), special-category rules,
    `leads` and a Facebook post for a message ad refused `UNSUPPORTED` (`FB_POST_MESSENGER_OK = false` until the live check, T094).
 2. The facts (`readFacts`): the stored account (currency), the Page and IG ids, the post's caption **from `scheduled_posts`**, never the
    browser's, the WhatsApp number, the DM assistant and the WhatsApp agent modes.
 3. `checkPolicy` over the caption, the greeting and the ice breakers.
-4. `mapSpec` (**`spec.ts:447`**) with a placeholder link, so a mapping that cannot be made (no WhatsApp number, no IG account) is a problem.
+4. `mapSpec` (**`spec.ts:535`**) with a placeholder link, so a mapping that cannot be made (no WhatsApp number, no IG account) is a problem.
 5. The money rule: `moneyFor` with the candidate `lifetime:<total>:<days>` (the same rule as `GET /money`, §11.1), and Meta's minimum
    (`GET act_<id>/minimum_budgets`, cached a day per account, else the account's `min_daily_budget`).
 6. Only when nothing above blocks: `execution_options=['validate_only']` on the **campaign and every creative** (`metaValidate`,
-   **`drafts.ts:239`**, 3 points each). The creative is where a message ad's mapping is proved (CTA, greeting, opt-outs). A throttle answers
+   **`drafts.ts:282`**, 3 points each). The creative is where a message ad's mapping is proved (CTA, greeting, opt-outs). A throttle answers
    429 `RATE_LIMITED`; any other refusal is Meta's message in `meta.error`.
 7. The bots: per destination `on | off | test | sales_test | not_connected` (`botStates`). A warning, never a block.
 
-**D. Create: `POST /api/ads/drafts`** (**`routes/ads.ts:485`**, owner) → `createDraft` (**`drafts.ts:354`**). The server trusts nothing
+**D. Create: `POST /api/ads/drafts`** (**`routes/ads.ts:464`**, owner) → `createDraft` (**`drafts.ts:437`**). The server trusts nothing
 from Review:
 1. `validateSpec`, the facts, `checkPolicy` again. A block → **422 `POLICY_BLOCKED`** with `findings`; a warning without
    `confirmPolicyWarnings: true` → **409 `POLICY_WARNINGS`** with `findings`. This is the gate before any create op.
@@ -3467,13 +3466,13 @@ from Review:
    a tracked link per (ad, offer) when the ad links to an offer (`mintAdLink`, **`links.ts:176`**, in the same transaction: its foreign key
    names the new ad row); then the chain of create ops, each `depends_on` the one before: campaign → ad set(s) → creative → ad (→ the
    next creative → ad). An op names the ids it needs from earlier ops as `{op:<op id>}` in its params; `execute` fills them from those
-   ops' results (`resolveParams`, **`ops.ts:673`**) and fails the op without calling Meta when one is missing.
+   ops' results (`resolveParams`, **`ops.ts:687`**) and fails the op without calling Meta when one is missing.
 4. After the commit the chain runs inline under `waitUntil`, one op after another (`runOpInline`); the drain finishes the rest (§11.2 B).
    Each create's name gets `AR·<op id>` when it is sent, and a timeout is settled by `verify` (§11.2 C). Answer: **201 `{ campaignId,
    ops }`**. The dialog says the ad is PAUSED and links to the Ads screen, where Activate is a confirmed status op.
 
 **E. Boost "Send messages" is a preset.** `POST /api/ads/boosts` with `objective: 'MESSAGES'` (or `goal: 'messages'`) → `boostMessages`
-(**`routes/ads.ts:491`**) → `boostToSpec` (**`spec.ts:724`**: a lifetime budget of daily × days on the ad set, one country, age 18+,
+(**`routes/ads.ts:470`**) → `boostToSpec` (**`spec.ts:848`**: a lifetime budget of daily × days on the ad set, one country, age 18+,
 Advantage+ audience) → step D with origin `boost`. The v1 objectives (engagement, reach, link clicks) keep v1's synchronous path and
 `ad_boosts`.
 
@@ -3497,12 +3496,12 @@ The Ads screen's **Create** tab (`dashboard/js/pages/ads_create.js`, `AdsCreateP
 every part of it, in eight steps: goal, destination, creative, text, audience, placements, budget and schedule, review. Review and Create
 are §11.3 C and D unchanged; what A5 adds is below.
 
-**A. An upload never passes through the app.** `POST /api/ads/uploads/sign` (**`routes/ads.ts:533`**, owner) → `signAdUpload`
+**A. An upload never passes through the app.** `POST /api/ads/uploads/sign` (**`routes/ads.ts:499`**, owner) → `signAdUpload`
 (**`ads/adUploads.ts:74`**): type and size first (JPG/PNG ≤ 30 MB, MP4/MOV ≤ 50 MB), then a Supabase signed upload URL (the Monteur's
 mechanism), then a PUBLIC metadata-only `media_uploads` row. The browser PUTs the file to Storage itself (XHR, progress bar), so Vercel's
 4.5 MB request limit never applies. CSP: `connect-src https://*.supabase.co` (`vercel.json`, `routes/api.ts` `securityHeaders`).
 
-**B. Handed to Meta.** `POST /api/ads/creatives/from-media` (**`routes/ads.ts:543`**, owner) → `prepareMedia` (**`ads/adMedia.ts:69`**):
+**B. Handed to Meta.** `POST /api/ads/creatives/from-media` (**`routes/ads.ts:509`**, owner) → `prepareMedia` (**`ads/adMedia.ts:69`**):
 the upload must be the tenant's and of the kind claimed; an image's bytes go to `act_<id>/adimages` (base64 → `image_hash`); a video goes
 to `act_<id>/advideos` with `file_url = <public base>/api/uploads/<id>` (Meta pulls it; its bytes are never read here) and needs a cover
 image, whose public address becomes the video's `image_url` (frame 0 is black). The answer is stored in `ads.media.<tenant>` (newest
@@ -3516,23 +3515,23 @@ is created.
 
 **D. The mapping additions** (`spec.ts`, pure): per-goal optimisation choices (`OPTIMIZATION_CHOICES`); only the offered positions
 (`PLACEMENT_OPTIONS`; Explore, video feeds and Messenger Stories refused `UNSUPPORTED`); day parting `adset_schedule` + `pacing_type:
-['day_parting']`, in whole hours, viewer's time zone, only with a lifetime budget (`validateSchedule`, **`spec.ts:374`**); a special
-category forbids interests too, and `political` is refused; the 9:16 version (**`spec.ts:766`**): link-click ads only, same kind as the
+['day_parting']`, in whole hours, viewer's time zone, only with a lifetime budget (`validateSchedule`, **`spec.ts:400`**); a special
+category forbids interests too, and `political` is refused; the 9:16 version (**`spec.ts:801`**): link-click ads only, same kind as the
 main asset, `asset_feed_spec` from `placementAssetFeed` (**`ads/creatives.ts:79`**: labelled assets, `optimization_type: PLACEMENT`, a feed
 rule and a vertical rule — Stories only while `REELS_CUSTOMISATION_LIVE_CHECKED` is false) with the story spec reduced to the Page and the
 Instagram account, the opt-outs kept (`CREATIVE_OPT_OUTS`: the four keys Meta allows, live-checked).
 
 **E. What Review adds.** After Meta's `validate_only` (§11.3 C 6): `reachEstimate` (**`ads/targetingSearch.ts:90`**, `act/reachestimate`
 on the first ad set's targeting, never throws) and, only when Meta accepted the draft, `generatePreviews` (**`ads/creatives.ts:238`**) for
-the two placements `previewPlacements` picks (**`drafts.ts:339`**). A preview Meta will not give is `html: null` and the dashboard draws
+the two placements `previewPlacements` picks (**`drafts.ts:375`**). A preview Meta will not give is `html: null` and the dashboard draws
 its approximate mock; an iframe is shown only from `www.facebook.com` (CSP `frame-src`). About 2 more points per Review.
 
-**F. Targeting search.** `GET /api/ads/targeting/search?type=adinterest|adgeolocation|adlocale&q=` (**`routes/ads.ts:554`**, operator):
+**F. Targeting search.** `GET /api/ads/targeting/search?type=adinterest|adgeolocation|adlocale&q=` (**`routes/ads.ts:520`**, operator):
 `GET /search` (cities only for places), cached 24 h per query in the instance; a miss is 1 point through the pacer.
-`GET /api/ads/minimum-budgets` (**`routes/ads.ts:565`**) is drafts' one floor for every goal.
+`GET /api/ads/minimum-budgets` (**`routes/ads.ts:531`**) is drafts' one floor for every goal.
 
 **G. Duplicate.** `POST /api/ads/objects/:id/duplicate` (**`routes/adsObjects.ts:178`**, owner) → `requestDuplicate`
-(**`ads/actions.ts:313`**): one `update` op on `<meta id>/copies` with `status_option: PAUSED`, `deep_copy` (never for an ad) and
+(**`ads/actions.ts:322`**): one `update` op on `<meta id>/copies` with `status_option: PAUSED`, `deep_copy` (never for an ad) and
 ` · copy AR·<key>` added to every name. The sync brings the copy into the stored copy. Nothing spends until it is switched on.
 
 **H. Where it can silently do nothing**
@@ -3577,7 +3576,7 @@ Meta's rules cannot ask for approval, cannot see our monthly cap or alerts, and 
    and ad sets), rejected (notify only); windows today / 3d / 7d, each including today in the account's zone; a rule protects OR raises,
    never both) → `createRule` sets `approved_by` = the saver, `approved_at` = now, audited `ads.rule_saved`. A PATCH that changes the rule
    validates the whole rule after the change and re-approves it.
-2. **Due.** The drain (**`routes/api.ts:429`**, after the guard, before the ops queue) calls `evaluateDueRules`
+2. **Due.** The drain (**`routes/api.ts:432`**, after the guard, before the ops queue) calls `evaluateDueRules`
    (**`rulesWiring.ts:184`**): `dueRules` (**`rulesStore.ts:210`**) = enabled, approved, no run in the last 55 minutes; grouped by tenant
    until the drain's deadline.
 3. **The account** (`account`, **`rulesWiring.ts:46`**): ads on, configured, token not dead, a stored account snapshot (currency, UTC

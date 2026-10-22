@@ -14,7 +14,6 @@
  *   GET    /overview               the Ads screen; `{ configured: false, steps }` for a tenant that is not set up yet
  *   GET    /boosts, /eligibility   Boost (v1 shapes)
  *   POST   /boosts                 create PAUSED;  POST /boosts/:id/activate { confirm: true } spends;  /pause, /refresh;  DELETE /boosts/:id
- *   POST   /campaigns/:id/status   { status, confirm };  POST /campaigns/:id/budget { amount, endTime?, confirm? };  DELETE /campaigns/:id
  *   POST   /policy                 { fields: { name: text } } → { version, blocked, findings }: the policy check alone, no Meta call (A4)
  *   POST   /drafts/validate        { spec } → { policy, money, meta, problems, warnings, bots }: creates nothing (A4)
  *   POST   /drafts                 { spec, confirmPolicyWarnings? } → 201 { campaignId, ops }: everything PAUSED (A4)
@@ -38,7 +37,6 @@ import {
     activateBoost, AdsError, createBoost, deleteBoost, eligibilityFor, listAdAccountsFor, listBoosts, metaRefusal, pauseBoost, refreshBoost,
     type BoostView,
 } from '../services/adBoosts.js';
-import { deleteCampaign, setCampaignBudget, setCampaignStatus } from '../services/ads/manager.js';
 import { readOverview } from '../services/ads/overview.js';
 import { AdsGraphError, withAdsContext } from '../services/ads/graph.js';
 import { runGuard } from '../services/ads/guard.js';
@@ -409,45 +407,6 @@ adsRouter.get('/overview', canView, async (req, res) => {
         res.json(await readOverview(getTenantId(req)));
     } catch (err) {
         await fail(req, res, err, 'read_ads_overview');
-    }
-});
-
-adsRouter.post('/campaigns/:id/status', canAdminister, async (req, res) => {
-    const status = body(req)['status'];
-    // Switching on spends money: the screen's confirmation sends this, a bare POST does not spend.
-    if (status === 'ACTIVE' && body(req)['confirm'] !== true) {
-        res.status(400).json({ error: 'Switching a campaign on spends money: confirm it.', code: 'INVALID', field: 'confirm' });
-        return;
-    }
-    try {
-        const campaign = await setCampaignStatus(getTenantId(req), req.params['id'], status, new Date(), actorOf(req));
-        await audit(req, AUDIT_ACTIONS.adsCampaignStatus, null, { campaign_id: campaign.id, status, boost_id: campaign.boostId });
-        res.json({ campaign });
-    } catch (err) {
-        await fail(req, res, err, 'set_campaign_status');
-    }
-});
-
-adsRouter.post('/campaigns/:id/budget', canAdminister, async (req, res) => {
-    try {
-        const b = body(req) as { amount?: unknown; endTime?: unknown; confirm?: unknown };
-        const campaign = await setCampaignBudget(getTenantId(req), req.params['id'], b, new Date(), actorOf(req));
-        await audit(req, AUDIT_ACTIONS.adsCampaignBudget, null, {
-            campaign_id: campaign.id, kind: campaign.budget.kind, amount: campaign.budget.amount, end_time: campaign.endTime, boost_id: campaign.boostId,
-        });
-        res.json({ campaign });
-    } catch (err) {
-        await fail(req, res, err, 'set_campaign_budget');
-    }
-});
-
-adsRouter.delete('/campaigns/:id', canAdminister, async (req, res) => {
-    try {
-        const out = await deleteCampaign(getTenantId(req), req.params['id']);
-        await audit(req, AUDIT_ACTIONS.adsCampaignDelete, null, { campaign_id: String(req.params['id']) });
-        res.json(out);
-    } catch (err) {
-        await fail(req, res, err, 'delete_campaign');
     }
 });
 

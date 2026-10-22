@@ -4,7 +4,7 @@
  *
  * Config is per tenant and DB-first (`app_settings`, families `ads.settings.<tenant>` and `ads.token.<tenant>`), never env: the ad account
  * id, the max daily budget and the monthly spend cap are the owner's to change from Settings, and the system-user token is encrypted at rest.
- * The settings code lives in src/services/ads/settings.ts (re-exported here for one phase).
+ * The settings code lives in src/services/ads/settings.ts.
  *
  * The money rule is src/services/ads/money.ts, the same one every screen and the guard use. A boost is created PAUSED; creating it checks
  * the daily max and Meta's minimum (`checkBoostBudget`) and that its total fits what is left this month (`moneyFor`, the figure the dialog
@@ -31,14 +31,9 @@ import {
     type BudgetRefusal, type CreatedObjects, type Eligibility,
 } from './ads/metaAds.js';
 
-export {
-    ADS_LIMIT_MAX, parseSettingsInput, parseStoredSettings, readAdsSettings, saveAdsSettings,
-    type AdsSettings, type ParsedSettingsInput, type SettingsInput,
-} from './ads/settings.js';
 import { forgetStoredCopy } from './ads/mirror.js';
 import { objectKeyFor, refusalOf, runRecorded, writeNow } from './ads/actions.js';
 import { enqueue } from './ads/ops.js';
-export { describeAdsSettings, type AdsSettingsView } from './ads/health.js';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────────────────
 

@@ -394,6 +394,7 @@ const AdsCampaignsPage = {
         return html`
             ${UI.helpLink('ads#campaigns', t('ads.help.campaigns'))}
             ${UI.helpLink('ads#statuses', t('ads.help.statuses'))}
+            ${UI.helpLink('ads#duplicate-archive', t('ads.help.duplicateArchive'))}
             ${this.anyQueued() ? UI.helpLink('ads#queued-changes', t('ads.help.queued')) : ''}
         `;
     },

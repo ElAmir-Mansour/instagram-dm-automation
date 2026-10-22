@@ -5328,6 +5328,7 @@
     'ads.help.campaigns': 'About the campaign list',
     'ads.help.statuses': 'What each status means',
     'ads.help.queued': 'About queued changes',
+    'ads.help.duplicateArchive': 'Duplicate, archive or delete',
     'help.link.adsConnect': 'Connecting your ad account',
     'help.link.adsAccountHealth': 'What the account state means',
     'help.link.adsLimits': 'How the limits work',

@@ -1,8 +1,9 @@
 # `src/services/ads/` — the Ads Manager's domain
 
 The home of everything that talks to the Meta Marketing API for ads. The design and the phases live in the local spec folder
-`002-meta-ads-manager` (`plan.md`; `docs/` is not public). v1's `metaAds.ts` and `adsManager.ts` moved here in A2 (`metaAds.ts`,
-`manager.ts`; the old paths re-export for one phase); `adsCap.ts` re-exports `money.ts`; `adBoosts.ts` (Boost) stays one level up.
+`002-meta-ads-manager` (`plan.md`; `docs/` is not public). v1's `metaAds.ts` moved here in A2; v1's `adsCap.ts` became `money.ts`;
+v1's `adsManager.ts` and its `/campaigns/:id` routes were removed after A12 (the Campaigns tab uses `/objects`, `adsObjects.ts`);
+`adBoosts.ts` (Boost) stays one level up.
 
 ## The rules every file here keeps
 
@@ -33,7 +34,7 @@ The home of everything that talks to the Meta Marketing API for ads. The design 
 | `settings.ts` | The `ads.*` settings families, ceilings, alert recipients, the setup steps |
 | `spendCap.ts` | Meta's account spending limit: set, read back, 10 a day |
 | `ops.ts` | The paced write queue: enqueue, claim, execute, verify, reap, `drainAdsOps`, `runOpInline` |
-| `actions.ts` | The owner's actions as ops (status, budget, archive, delete) and v1's adapters (`writeNow`); `ownObject` resolves every `:id` |
+| `actions.ts` | The owner's actions as ops (status, budget, archive, delete) and Boost's waited writes (`writeNow`); `ownObject` resolves every `:id` |
 | `sync.ts` | The structure sync (hourly), today's results (4 h), the 28 days and breakdowns (daily); `requestTodaySync` |
 | `mirror.ts` | The stored copy: upserts, deletion marking, the reads and `ObjectView`, `forgetStoredCopy` |
 | `overview.ts` | `GET /overview` from the stored copy: health, money, needs attention, queued changes |
@@ -44,7 +45,7 @@ The home of everything that talks to the Meta Marketing API for ads. The design 
 | `rules.ts` | The rules pass for one tenant: order, fresh numbers or `blind`, act, propose, alert, record a run |
 | `rulesWiring.ts` | The pass wired to the stored copy, the queue, A7's proposals and the alerts; `evaluateDueRules` (the drain's share) |
 | `rulesStore.ts` | `ads_rules` and `ads_rule_runs`: save = approve, due rules, run rows, the cooldown read |
-| `metaAds.ts`, `manager.ts` | v1's Graph helpers and campaign controls (moved here in A2) |
+| `metaAds.ts` | v1's Graph helpers (moved here in A2) |
 | `testDb.ts`, `testing/` | Tests only: fake pools (the advisory lock really waits; the queue's markers; objects and settings) |
 
 Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1), the sync and the queue (§11.2), creating an ad (§11.3) and the rules (§11.6) hop by hop; Help → Ads is the user-facing article.

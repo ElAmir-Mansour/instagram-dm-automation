@@ -5608,6 +5608,7 @@
     'ads.help.campaigns': 'عن قائمة الحملات',
     'ads.help.statuses': 'ماذا تعني الحالات',
     'ads.help.queued': 'عن التغييرات في قائمة الانتظار',
+    'ads.help.duplicateArchive': 'النسخ والأرشفة والحذف',
     'help.link.adsConnect': 'ربط حسابك الإعلاني',
     'help.link.adsAccountHealth': 'ماذا تعني حالة الحساب',
     'help.link.adsLimits': 'كيف تعمل الحدود',

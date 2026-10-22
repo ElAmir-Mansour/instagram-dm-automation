@@ -5,7 +5,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isSecretSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
-import { nextStatus, parseSettingsInput, parseStoredSettings, type AdsSettings } from './adBoosts.js';
+import { nextStatus } from './adBoosts.js';
+import { parseSettingsInput, parseStoredSettings, type AdsSettings } from './ads/settings.js';
 
 const TENANT = '0b6f3c2e-1111-4222-8333-944445555666';
 const EMPTY: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null, businessId: null, defaultCountries: [], leadRetentionDays: 90 };
