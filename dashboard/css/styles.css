@@ -3481,6 +3481,18 @@ html[lang='en'] .page-toolbar-count {
     .chart-line-x > span.is-minor { visibility: hidden; }
 }
 
+/* Compared magnitudes (Charts.compareBars): a label, a thin bar that grows from the reading edge, and the value in text ink. One hue;
+   the bar's track is the grid colour. On a phone the label takes its own line so a long ad name never squeezes the bar. */
+.chart-bars { display: flex; flex-direction: column; gap: var(--space-2); padding-block: var(--space-2); }
+.chart-bars-row { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+.chart-bars-label { color: var(--text-default); font-size: var(--fs-200); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-bars-svg { display: block; inline-size: 100%; block-size: 8px; }
+.chart-bars-value { color: var(--text-strong); font-variant-numeric: tabular-nums; font-size: var(--fs-200); white-space: nowrap; }
+@media (max-width: 560px) {
+    .chart-bars-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .chart-bars-label { grid-column: 1 / -1; }
+}
+
 /* ─── Shared patterns (UX audit VS15) ───────────────────────────────────────
    Declarations several components repeated byte for byte, now stated once.
    CSS-only: each component keeps its class and its own rule for everything
@@ -4612,6 +4624,9 @@ mark.help-hit {
 /* ─── Trend ─────────────────────────────────────────────────────────────── */
 .growth-trend-head { flex-wrap: wrap; }
 .growth-trend-summary { margin: 0 0 var(--space-2); }
+/* The ads' own card (A6), under the organic summary: a separate chart, never a second axis on the organic one. */
+.growth-paid { margin-block-start: var(--space-4); }
+.growth-paid .form-hint { margin: var(--space-2) 0 0; }
 
 /* ─── Sections with a heading, a line and an action ─────────────────────── */
 .growth-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-4); }

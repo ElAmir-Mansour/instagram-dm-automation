@@ -3375,6 +3375,30 @@ first touch counts: a conversation belongs to the ad that started it. A failure 
 The two switches ship dark. `docs/specs/002-meta-ads-manager/contracts/webhook-inbound.md` and `research.md` §R10 are the contract; the Help Center article `ads`
 (sections `message-ads-inbox`, `bot-and-ads`, `reply-window`, `business-ai`) is what the owner reads.
 
+### 12.6 — Results history: the day-by-day joins (A6)
+
+What the Results tab (`#/ads_results`), Growth's paid card and the Results screen's ad rows read. **Postgres only**: no hop below calls Meta.
+
+1. **Stored by the sync (§11.2).** The daily job re-reads the trailing 28 days at `level=ad`, `time_increment=1`, in the **ad account's** time zone, into
+   `ads_insights_daily`, and the same days split by `country` and by `publisher_platform,platform_position` into `ads_insights_breakdown` (key `EG`,
+   `instagram:reels`). Rows of the last 3 days are `provisional`. Campaign and account rows hold only their own reach and spend.
+2. **`GET /api/ads/results`** (**`routes/adsResults.ts`**, mounted inside `adsRouter` after the `ADS_DISABLED` gate; any member) → `getAdsResults`
+   (**`ads/results.ts`**): reads `ads_objects` (names, parents, goals) and the `ad` rows for the window; a campaign, ad set or account figure is the
+   **sum of its ads**, walked up `ads_objects.parent_id`. Reach is never summed: it comes only from a row at the asked level. Each ad's `results` is the
+   metric its ad set was bought for (`resultKindOf`: conversations, link clicks, leads or follows), so a mixed campaign adds one of each. Money stays per
+   currency (`totals.byCurrency`); `currency` is null when there are two.
+3. **The app's own joins**, per day in the account's zone (`clicked_at AT TIME ZONE <tz>`; the zone is the stored account check's), people's clicks only
+   (`link_clicks.is_prefetch = false`), the same definitions as A4's `trackedClicksFor` and A3's `resultsByAd` but cut by day:
+   - **direct**: `tracked_links.ads_object_id` = the ad's `ads_objects.id` → `link_clicks`;
+   - **via chat**: `conversations.entry_source->>'ad_id'` = the ad's Meta id → `tracked_links.conversation_id` → `link_clicks` (a link that already
+     points at an ad is not counted again);
+   - **hand-offs**: the same conversations with `handoff_at` in the window.
+   A breakdown answer splits Meta's numbers only: a click has no country or placement, so the joins stay per ad.
+4. **Screens.** The Results tab draws spend, results and the three costs per day (provisional days shaded), compares by ad / country / placement, and
+   lists every ad. Growth's `GET /api/growth/overview` gains `paid` (**`growth/paid.ts`**, an account-level read of the same answer, one currency). The
+   Results screen (`#/analytics`) adds one row per running or spending ad, labelled "Ad", under the DM campaigns; a failure there hides the rows silently.
+   Every spend figure says it excludes tax. **No sales-based figure exists anywhere** (`src/dashboard/no-roas.test.ts`): sales happen on another website (for the owner, Udemy).
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an

@@ -1381,6 +1381,56 @@ const GrowthPage = {
                     </section>
                 </div>
             ` : trend}
+            ${this.paidMarkup()}
+        `;
+    },
+
+    /**
+     * What the ads did over the same window (A6): its own card, never a second axis on the organic chart, because spend and reach are
+     * different measures. From `overview.paid` (the ads stored copy, one currency); nothing at all when there is no ads data, so a
+     * workspace without ads sees no empty card. Spend excludes tax; there is no sales-based figure (sales happen on another website, which
+     * neither Meta nor the app can see).
+     */
+    paidMarkup() {
+        const p = this.overview && this.overview.paid;
+        const daily = p && Array.isArray(p.daily) ? p.daily.filter((d) => d && /^\d{4}-\d{2}-\d{2}$/.test(d.day)) : [];
+        if (!p || !daily.length || !p.currency) return '';
+        const cur = String(p.currency);
+        const money = (v) => `⁦${UI.formatNumber(Math.round(Number(v) * 100) / 100)} ${cur}⁩`;
+        const sum = (key) => {
+            const known = daily.filter((d) => d[key] !== null && d[key] !== undefined);
+            return known.length ? known.reduce((s, d) => s + (Number(d[key]) || 0), 0) : null;
+        };
+        const count = (v) => (v === null ? '—' : UI.formatNumber(v));
+        // One point per day from the first to the last stored day: a day without a row is a gap, not a zero.
+        const byDay = new Map(daily.map((d) => [d.day, d]));
+        const series = [];
+        const last = daily[daily.length - 1].day;
+        for (let day = daily[0].day; day <= last && series.length <= 400; day = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10)) {
+            const d = byDay.get(day);
+            series.push({ day, value: d ? Number(d.spend) || 0 : null, provisional: !!(d && d.provisional) });
+        }
+        const label = t('growth.paid.chartLabel', { currency: cur });
+        const others = Array.isArray(p.otherCurrencies) ? p.otherCurrencies.filter(Boolean) : [];
+        return html`
+            <section class="chart-card surface growth-paid" id="growth-paid" aria-labelledby="growth-paid-title">
+                <div class="chart-card-header growth-trend-head">
+                    <h2 class="chart-card-title" id="growth-paid-title">${t('growth.paid.title')}</h2>
+                    <a class="btn btn-sm btn-ghost" href="#/ads_results" id="growth-paid-link"><i data-lucide="bar-chart-3" aria-hidden="true"></i> ${t('growth.paid.open')}</a>
+                </div>
+                <p class="text-meta growth-trend-summary" id="growth-paid-summary">${t('growth.paid.summary', {
+                    spend: money(sum('spend') || 0), results: count(sum('results')), conversations: count(sum('conversations')), follows: count(sum('follows')),
+                })}</p>
+                ${Charts.lineChart(series, {
+                    label, token: '--chart-accent', format: (v) => `⁦${UI.formatNumber(v)}⁩`,
+                    dayHeader: t('common.day'), valueHeader: t('growth.paid.spend'),
+                    provisionalLabel: t('growth.paid.provisionalShort'),
+                    emptyMessage: t('growth.paid.empty'),
+                })}
+                <p class="form-hint" id="growth-paid-tax">${t('ads.tax.note')}</p>
+                ${p.provisionalFrom ? html`<p class="form-hint" id="growth-paid-provisional">${t('growth.paid.provisional', { day: `⁦${Charts.dayLabel(p.provisionalFrom)}⁩` })}</p>` : ''}
+                ${others.length ? html`<p class="form-hint" id="growth-paid-currencies">${t('growth.paid.otherCurrencies', { currencies: others.join('، ') })}</p>` : ''}
+            </section>
         `;
     },
 

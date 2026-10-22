@@ -366,7 +366,7 @@ describe('nothing old is left behind in the pages', () => {
 
     it('the charts take their series colour from --chart-accent, not the (near-black, in light) --accent', () => {
         const charts = read('dashboard/js/charts.js');
-        assert.equal((charts.match(/opts\.token \|\| '--chart-accent'/g) ?? []).length, 2, 'the sparkline and the line chart');
+        assert.equal((charts.match(/opts\.token \|\| '--chart-accent'/g) ?? []).length, 3, 'the sparkline, the line chart and the compared bars');
         assert.equal(/opts\.token \|\| '--accent'/.test(charts), false);
         const growth = read('dashboard/js/pages/growth.js');
         assert.ok(growth.includes("token: '--chart-accent'"), 'the audience split and the trend line');
