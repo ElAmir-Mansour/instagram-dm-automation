@@ -235,6 +235,10 @@ export const AUDIT_ACTIONS = {
     adsAlertsWrite: 'ads.alerts_write',
     /** The owner turned an A3 switch on or off (`ads.bot_context`, `ads.extended_window`). `detail` holds the switches changed and their new values. */
     adsSwitchesWrite: 'ads.switches_write',
+    /** A Custom Audience was deleted at Meta from the Audiences screen (A8). */
+    adsAudienceDeleted: 'ads.audience_deleted',
+    /** The owner recorded that a person asked to be left out of customer-list audiences (A8). `detail` holds counts only; the contact is stored hashed, never here. */
+    adsCustomerListOptOut: 'ads.customer_list_opt_out',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

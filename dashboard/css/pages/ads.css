@@ -202,3 +202,31 @@
 @media (max-width: 480px) {
     .adsprop-actions .btn { flex: 1 1 100%; }
 }
+
+/* ─── Audiences (A8, ads_audiences.js) ─── */
+.adsaud-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: var(--space-4); margin-block: var(--space-4); }
+.adsaud-card, .adsaud-lists { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsaud-lists { margin-block: var(--space-4); }
+.adsaud-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsaud-head .section-title { margin: 0; flex: 1 1 14rem; display: flex; align-items: center; gap: var(--space-2); }
+.adsaud-name { margin: 0; font-size: var(--fs-300, 1.05rem); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; flex: 1 1 10rem; }
+.adsaud-kind { font-size: var(--fs-100); color: var(--text-muted); }
+.adsaud-size { margin: 0; color: var(--text-default); font-variant-numeric: tabular-nums; }
+.adsaud-why { margin: 0; }
+.adsaud-wait { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.adsaud-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: auto; }
+.adsaud-terms { display: flex; gap: var(--space-3); padding: var(--space-4); margin-block: var(--space-4); align-items: flex-start; }
+.adsaud-terms p { margin-block: var(--space-1) var(--space-3); }
+.adsaud-needed { margin: 0; padding-inline-start: var(--space-5, 1.25rem); }
+.adsaud-counts { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5, 1.25rem); font-variant-numeric: tabular-nums; }
+.adsaud-kinds { display: grid; gap: var(--space-2); }
+.adsaud-kind-btn { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); padding: var(--space-3); text-align: start; cursor: pointer; font: inherit; color: inherit; }
+.adsaud-kind-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.adsaud-videos { display: grid; gap: var(--space-2); max-height: 18rem; overflow-y: auto; }
+.adsaud-video { display: flex; align-items: center; gap: var(--space-2); }
+.adsaud-video img { border-radius: var(--radius-sm, 4px); object-fit: cover; flex: none; }
+.adsaud-video span[dir] { flex: 1 1 auto; overflow-wrap: anywhere; }
+.adsaud-lists textarea { font-family: var(--font-mono, monospace); }
+@media (max-width: 480px) {
+    .adsaud-actions .btn { flex: 1 1 100%; }
+}

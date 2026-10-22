@@ -26,6 +26,7 @@ import {
     type AccountSnapshot, type AdsHealth, type AdsSettings, type TokenHealth,
 } from './settings.js';
 import { spendCapChangesLeft } from './spendCap.js';
+import { tosFromAccount } from './audiences.js';
 
 export const EXPIRY_WARNING_DAYS = 14;
 /** What a system-user token needs for everything the Ads Manager does (Help → Ads → Connect lists the same). */
@@ -59,6 +60,7 @@ function snapshotOf(adAccountId: string, data: unknown, paymentReadable: boolean
         statusLabel: s.statusLabel, disableReason: s.disableReason, hasPaymentMethod: s.hasPaymentMethod, isPrepay: s.isPrepay,
         spendCap: s.spendCap, amountSpent: s.amountSpent, minDailyBudget: s.minDailyBudget, billingUrl: s.billingUrl,
         adsManagerUrl: s.adsManagerUrl, syncedAt: now.toISOString(),
+        tosAccepted: tosFromAccount((data as { tos_accepted?: unknown } | null)?.tos_accepted),
     };
 }
 

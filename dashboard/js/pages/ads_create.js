@@ -88,7 +88,7 @@ const AdsCreatePage = {
             primaryText: '', headline: '', cta: 'LEARN_MORE',
             greeting: '', ice: [],
             countries: (p.countries && p.countries.length ? p.countries : ['EG', 'SA']).join(', '),
-            cities: [], ageMin: '18', ageMax: '', gender: 'all', locales: [], interests: [], advantage: true,
+            cities: [], ageMin: '18', ageMax: '', gender: 'all', locales: [], interests: [], advantage: true, includeAudiences: [], excludeAudiences: [],
             special: 'none',
             placementMode: 'automatic', placements: { instagram: [], facebook: [] },
             home: 'adset', kind: 'lifetime', amount: p.amount ? String(p.amount) : '', start: this.localInput(now), end: this.localInput(end),
@@ -129,6 +129,8 @@ const AdsCreatePage = {
             st.ageMax = Number.isFinite(tg.ageMax) ? String(tg.ageMax) : '';
             st.gender = Array.isArray(tg.genders) && tg.genders.length === 1 ? (tg.genders[0] === 1 ? 'men' : 'women') : 'all';
             st.advantage = tg.advantageAudience !== false;
+            if (Array.isArray(tg.includeAudiences)) st.includeAudiences = tg.includeAudiences.map(String);
+            if (Array.isArray(tg.excludeAudiences)) st.excludeAudiences = tg.excludeAudiences.map(String);
         }
         if (set && set.placements === 'automatic') st.placementMode = 'automatic';
         if (ad) {
@@ -246,6 +248,7 @@ const AdsCreatePage = {
         container.innerHTML = esc(this.markup());
         UI.icons(container);
         if (focus && UI.restoreFocus) UI.restoreFocus(focus);
+        this.mountAudiencePickers();
     },
 
     /** One region, redrawn in place (a step's panel, the policy, the money line). */
@@ -332,6 +335,20 @@ const AdsCreatePage = {
         const nav = this.host('adsc-nav');
         if (nav) { nav.innerHTML = esc(this.navMarkup(st)); UI.icons(nav); }
         this.write('adsc-stepper', this.stepperMarkup(st));
+        this.mountAudiencePickers();
+    },
+
+    /** The include / exclude pickers of the audience step (A8, `AdsAudiencePicker` in ads_audiences.js, loaded on first use). */
+    async mountAudiencePickers() {
+        const st = this.state;
+        if (!st || this.STEPS[st.step] !== 'audience' || !this.host('adsc-aud-include')) return;
+        if (typeof AdsAudiencePicker === 'undefined' && typeof App !== 'undefined' && typeof App.loadPageModule === 'function') {
+            try { await App.loadPageModule('ads_audiences'); } catch { return; }
+        }
+        if (typeof AdsAudiencePicker === 'undefined' || this.state !== st) return;
+        AdsAudiencePicker.mount(this.host('adsc-aud-include'), { mode: 'include', value: st.includeAudiences, onChange: (ids) => { st.includeAudiences = ids; } });
+        const exclude = this.host('adsc-aud-exclude');
+        if (exclude) AdsAudiencePicker.mount(exclude, { mode: 'exclude', value: st.excludeAudiences, onChange: (ids) => { st.excludeAudiences = ids; } });
     },
 
     // ─── Small markup helpers ─────────────────────────────────────────────────────────────
@@ -776,6 +793,8 @@ const AdsCreatePage = {
             ${special ? html`<p class="form-hint">${t('adsCreate.aud.noInterestsSpecial')}</p>` : html`
                 ${this.searchMarkup(st, 'adinterest', 'interests', t('adsCreate.aud.interests'), t('adsCreate.aud.interests.hint'))}
                 <div class="adsc-chips">${chips(st.interests, 'interests')}</div>`}
+            <div id="adsc-aud-include" class="adsc-audiences"></div>
+            ${special ? '' : html`<div id="adsc-aud-exclude" class="adsc-audiences"></div>`}
             <div class="form-group">
                 <label class="form-label" for="adsc-special">${t('adsCreate.aud.special')}</label>
                 <select class="form-input" id="adsc-special" data-change="adsc:field" data-field="special" aria-describedby="adsc-special-hint">
@@ -1181,6 +1200,9 @@ const AdsCreatePage = {
         if (st.cities.length) targeting.cities = st.cities.map((c) => ({ key: String(c.id), radiusKm: Number(c.radiusKm) }));
         if (st.locales.length) targeting.locales = st.locales.map((l) => Number(l.id)).filter(Number.isFinite);
         if (!special && st.interests.length) targeting.interests = st.interests.map((i) => ({ id: String(i.id), name: i.name }));
+        // Saved audiences (A8): our ids; the server checks each is usable and sends Meta its id. A special category cannot exclude.
+        if (st.includeAudiences.length) targeting.includeAudiences = st.includeAudiences.slice();
+        if (!special && st.excludeAudiences.length) targeting.excludeAudiences = st.excludeAudiences.slice();
         const adset = {
             name: targeting.countries.join('+') || 'Ad set',
             targeting,

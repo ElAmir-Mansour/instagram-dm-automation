@@ -28,6 +28,7 @@ import {
 } from './mirror.js';
 import { canSpend, POINTS, retryAtFor, status as pacerStatus, type PacerStatus } from './pacer.js';
 import { readAdsSettings } from './settings.js';
+import { adoptCreatedMetaIds, applyAudienceReads, AUDIENCE_READ_FIELDS, hasLiveAudiences } from './audiences.js';
 
 // ─── Numbers and days ───────────────────────────────────────────────────────────────────────
 
@@ -555,8 +556,25 @@ export async function syncStructure(creatorId: string, opts: SyncOptions = {}, d
         deleted = await markMissing(creatorId, ctx.adAccountId, seen, ['campaign', 'adset', 'ad']);
     }
     if (everyPage) await patchSyncState(creatorId, { structureAt: syncedAt.toISOString() });
+    if (!read.stopped) await syncAudiences(ctx);
     log('info', 'ads.sync_structure', { creator_id: creatorId, objects: parsed.length, pages: read.pages.length, complete: everyPage, deleted });
     return { ran: true, complete: everyPage, ...(read.stopped ? { skipped: read.stopped } : {}), ...(read.retryAt ? { retryAt: read.retryAt } : {}), stored: parsed.length, deleted };
+}
+
+/**
+ * The tenant's audiences (A8): Meta's size and status of each one the app made, read only when the tenant has any (most have none) and at
+ * most 2 pages. The create ops' ids are adopted first. Fail-soft: a failed read leaves the stored copy as it was and never fails the sync.
+ */
+async function syncAudiences(ctx: Ctx): Promise<void> {
+    try {
+        if (!(await hasLiveAudiences(ctx.creatorId))) return;
+        await adoptCreatedMetaIds(ctx.creatorId);
+        const read = await readPages(ctx, `act_${ctx.adAccountId}/customaudiences`, { fields: AUDIENCE_READ_FIELDS, limit: '100' }, 'ads sync audiences', 2);
+        const updated = await applyAudienceReads(ctx.creatorId, rowsOf(read.pages));
+        log('info', 'ads.sync_audiences', { creator_id: ctx.creatorId, pages: read.pages.length, updated });
+    } catch (err) {
+        log('warn', 'ads.sync_audiences_failed', { creator_id: ctx.creatorId, ...describeError(err) });
+    }
 }
 
 // ─── The results sync ───────────────────────────────────────────────────────────────────────

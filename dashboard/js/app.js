@@ -117,6 +117,8 @@ const App = {
         ads_create: { src: 'ads_create', page: () => AdsCreatePage, navAs: 'ads' },
         // Ads' AI proposals (#/ads_proposals, A7): Claude drafts a campaign or a change, the owner approves, edits in the builder or rejects.
         ads_proposals: { src: 'ads_proposals', page: () => AdsProposalsPage, navAs: 'ads' },
+        // Ads' audiences (#/ads_audiences, A8): engagement, video and lookalike audiences, and customer lists behind the legal lock.
+        ads_audiences: { src: 'ads_audiences', page: () => AdsAudiencesPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -173,7 +175,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.68',
+    ASSET_VERSION: '12.69',
 
     _modules: Object.create(null),
 

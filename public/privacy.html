@@ -214,6 +214,18 @@
       ads_review), so the provider list in #ai-providers-ar / #ai-providers-en applies;
     · STORED: ads_proposals (v55): the owner's words, the drafted spec or change, rationale, evidence (the account's own numbers),
       checks, and who decided; cascades with the tenant.
+  META ADS, PHASE A8 (AUDIENCES) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R15, FR-050..053, T159). Section 1 (#audiences-ar /
+  #audiences-en), the intro, section 5's first line and section 6 change:
+    · ENGAGEMENT AUDIENCES: rule JSON on the tenant's own Instagram account / Page / videos (src/services/ads/audiences.ts
+      buildCreateParams) → POST act_<id>/customaudiences through ads_ops. No contact data leaves the app; Meta resolves the people.
+      ads_audiences (v56) keeps name, kind, the rule's settings, status and Meta's size range;
+    · CUSTOMER LISTS: locked per tenant until ads_legal_signoffs has a non-revoked customer_lists row (routes/adsAudiences.ts);
+      parsed, normalised and SHA-256-hashed in the request (ads/hashing.ts), opted-out people dropped (conversations.opted_out_at with
+      wa_phone, the newest contact_consents marketing row 'withdrawn', and contact_consents platform 'customer_list_optout' hashes),
+      rows outside the sign-off's countries dropped; hashes ride in audience_users ops with scrub:true (ops.ts empties exec.params when
+      the op ends); the audience row keeps only {columns, rows_sent, matched_estimate}. The raw text is never stored or logged;
+    · OPT-OUT: the owner records a request (POST /api/ads/audiences/opt-outs) → only sha256(normalised phone or email) in
+      contact_consents, plus DELETE <audience>/users ops on the tenant's customer lists at Meta.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -281,7 +293,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.68">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.69">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1146,8 +1158,10 @@
                     وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي تنشر عليه الفيديوهات وكاروسيلات
                     الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. وإن
                     ربط قناة على يوتيوب، فهي ترفع إليها مقاطعه القصيرة بوصفها
-                    <bdi lang="en" dir="ltr">Shorts</bdi>، ولا تفعل هناك شيئاً غير ذلك. لا
-                    تقوم الأداة بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
+                    <bdi lang="en" dir="ltr">Shorts</bdi>، ولا تفعل هناك شيئاً غير ذلك. ولا
+                    تبيع الأداة البيانات. وإن استعمل صاحب الحساب ميزة الإعلانات، فقد تُعرض إعلاناته على من تفاعلوا
+                    مع حسابه أو راسلوه عبر جماهير تبنيها ميتا (<a href="#audiences-ar">الجماهير</a> أدناه، ومعها كيف
+                    تطلب ألا تُستهدف).
                 </p>
                 <p>
                     هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
@@ -1410,8 +1424,8 @@
                     </li>
                     <li>
                         <strong>أرقام مجمّعة فقط:</strong> لا تُخبر ميتا الأداة بمن رأى الإعلان أو نقر عليه، ولا تطلب
-                        الأداة ذلك. والاستهداف بلد وعمر 18 فأكثر وأتمتة الجمهور الخاصة بميتا، بلا جماهير مخصّصة
-                        ولا بكسل ولا قوائم أشخاص.
+                        الأداة ذلك. واستهداف الترويج بلد وعمر 18 فأكثر وأتمتة الجمهور الخاصة بميتا، وقد يضمّ صاحب الحساب
+                        إليه جماهيره المحفوظة أو يستبعدها (<a href="#audiences-ar">الجماهير</a>). ولا تستعمل الأداة بكسل.
                     </li>
                     <li>
                         <strong>لا شيء عمّن يعلّق أو يراسل:</strong> لا يُرسَل إلى ميتا لأغراض الإعلان أي شيء عمّن
@@ -1472,6 +1486,31 @@
                         تيليجرام و/أو عنوان البريد الإلكتروني اللذين حدّدهما صاحب الحساب في الإعدادات، مع نسخة
                         إلى مشغّل المنصّة. وتمرّ الرسالة عبر خدمة تيليجرام أو خدمة البريد التي تُرسَل بها. ويُحفَظ
                         سجلّ التنبيهات سنة واحدة (القسم 4).
+                    </li>
+                    <li id="audiences-ar">
+                        <strong>الجماهير من التفاعل:</strong> يستطيع صاحب الحساب أن يطلب من ميتا بناء «جمهور» من الأشخاص
+                        الذين تفاعلوا مع حسابه على إنستجرام أو صفحته على فيسبوك، أو راسلوهما، أو شاهدوا مقاطع منشورة له،
+                        خلال مدة يختارها، أو جمهوراً «مشابهاً» لهم في دولة يختارها، ليعرض عليهم إعلاناته أو يستبعدهم منها.
+                        <strong>لا تُرسل الأداة لذلك أي بيانات عن أحد</strong>: ترسل إلى ميتا القاعدة فقط (الحساب، ونوع التفاعل،
+                        والمدة)، وميتا هي التي تعرف من تفاعل. وتحفظ الأداة اسم الجمهور ونوعه وإعداداته وحالته وحجمه التقريبي كما
+                        تقدّره ميتا. وأسماء الجماهير محايدة دائماً، ولا تُبنى أبداً من محتوى محادثاتك أو من التصنيفات التي يضعها الردّ الآلي لها.
+                    </li>
+                    <li>
+                        <strong>قوائم العملاء:</strong> تبقى مقفلة لكل نشاط حتى يسجّل مدير المنصة اعتماداً قانونياً لدوله.
+                        وبعد فتحها، يستطيع صاحب الحساب أن يرفع قائمة بريد إلكتروني أو أرقام هواتف لعملائه بعد أن يؤكّد
+                        موافقتهم. <strong>تُموَّه كل قيمة داخل الأداة</strong> (تُوحَّد ثم تُحوَّل بدالة
+                        <bdi lang="en" dir="ltr">SHA-256</bdi>) قبل أن يُرسل أي شيء إلى ميتا، ولا تُرسل إلا القيم المموّهة.
+                        <strong>ولا تُحفظ القائمة</strong>: يُقرأ النص ثم يُترك، ولا يبقى إلا عدد الصفوف المرسلة، وتُمسح القيم المموّهة
+                        من قائمة الانتظار حين ينتهي الرفع. ويُستبعد تلقائياً كل من أوقف رسائل واتساب أو سحب فيها موافقته على
+                        التسويق، وكل من سُجّل طلبه ألا يُستهدف. وتطابق ميتا القيم المموّهة مع حساباتها ثم تحذفها.
+                    </li>
+                    <li>
+                        <strong>كيف تطلب ألا تُستهدف:</strong> إن كتبت «توقف» في محادثة واتساب مع النشاط أو سحبت موافقتك على
+                        التسويق فيها، يُستبعد رقمك من كل رفع لاحق. ولكي تُحذف أيضاً من القوائم المرفوعة سابقاً، أو إن كان طلبك
+                        عن بريد إلكتروني أو من إنستجرام أو ماسنجر، فاطلب ذلك من صاحب النشاط أو راسلنا (القسم 9): يُسجَّل رقمك أو
+                        بريدك <strong>مموّهاً فقط</strong>، ويُحذف من قوائم العملاء المرفوعة لدى ميتا، ويُستبعد من أي رفع لاحق.
+                        وتستطيع أيضاً من ميتا نفسها: «لماذا أرى هذا الإعلان؟» ثم إخفاء إعلانات المعلن، أو من «تفضيلات الإعلانات»
+                        في حسابك.
                     </li>
                 </ul>
 
@@ -1563,7 +1602,7 @@
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
-                <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية. نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
+                <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية، إلا قوائم العملاء المموّهة التي يرفعها صاحب نشاط فُتحت له إلى حسابه الإعلاني لدى ميتا (<a href="#audiences-ar">القسم 1</a>). نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
                 <ul>
                     <li>
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
@@ -1661,6 +1700,10 @@
                     ويستطيع صاحب الحساب أن يوقف ترويجاً أو يحذفه في أي وقت من صفحة المنشورات، وأن يزيل رمز
                     الإعلانات من الإعدادات أو بفصل ميتا. وتبقى الإعلانات وسجلّاتها لدى ميتا خاضعة لسياستها.
                 </p>
+                <p>
+                    ولكي لا تُعرض عليك إعلانات نشاطٍ عبر قائمة عملاء أو جمهور، انظر
+                    <a href="#audiences-ar">كيف تطلب ألا تُستهدف</a> في القسم 1.
+                </p>
 
                 <h2 id="security-ar">7. كيف تُحفَظ البيانات</h2>
                 <ul>
@@ -1746,7 +1789,9 @@
                     the owner schedules to that account, or sends them to its drafts, and does
                     nothing else there. If the owner connects a YouTube channel, it uploads the
                     owner's own short videos to that channel as Shorts, and does nothing else there.
-                    It runs no advertising or marketing targeting, and it does not sell data.
+                    It does not sell data. If the owner uses its ads features, the owner's ads may be shown
+                    to people who engaged with or messaged the owner's account, through audiences Meta builds
+                    (<a href="#audiences-en">Audiences</a> below, with how to ask not to be targeted).
                 </p>
                 <p>
                     This page describes what happens to <em>your</em> data — as someone who
@@ -2020,8 +2065,9 @@
                     </li>
                     <li>
                         <strong>Totals only:</strong> Meta does not tell the app who saw or clicked an ad,
-                        and the app does not ask. Targeting is a country, age 18 and over, and Meta's own
-                        audience automation: no custom audiences, no pixel, no lists of people.
+                        and the app does not ask. A boost targets a country, age 18 and over, and Meta's own
+                        audience automation; the owner may add or leave out saved audiences
+                        (<a href="#audiences-en">Audiences</a>). The app uses no pixel.
                     </li>
                     <li>
                         <strong>Nothing about people who comment or message:</strong> nothing about anyone
@@ -2088,6 +2134,38 @@
                         the email address the owner set in Settings, with a copy to the platform operator. The
                         message passes through Telegram's or the email service's systems to get there. Alert
                         records are kept for one year (section 4).
+                    </li>
+                    <li id="audiences-en">
+                        <strong>Audiences from engagement:</strong> the account owner can ask Meta to build an
+                        “audience” of the people who engaged with the owner's Instagram account or Facebook Page,
+                        messaged them, or watched the owner's published videos, over a period the owner chooses, or a
+                        “lookalike” of them in a chosen country, to show them ads or leave them out.
+                        <strong>The app sends no data about anyone for this</strong>: it sends Meta only the rule (the
+                        account, the kind of engagement, the period), and Meta knows who engaged. The app keeps the
+                        audience's name, kind, settings, status and Meta's approximate size. Audience names are always
+                        neutral, and audiences are never built from what you wrote in a conversation or from how the
+                        automated replies labelled it.
+                    </li>
+                    <li>
+                        <strong>Customer lists:</strong> locked for each business until the platform admin records a
+                        legal sign-off for its countries. Once unlocked, the owner can upload a list of customers'
+                        emails or phone numbers after confirming they consented. <strong>Every value is scrambled inside
+                        the app</strong> (normalised, then hashed with <bdi lang="en" dir="ltr">SHA-256</bdi>) before
+                        anything is sent to Meta, and only scrambled values are sent. <strong>The list is not
+                        kept</strong>: the text is read and dropped, only the number of rows sent stays, and the
+                        scrambled values are cleared from the queue when the upload ends. Anyone who stopped WhatsApp
+                        messages or withdrew marketing consent there, and anyone recorded as asking not to be
+                        targeted, is left out automatically.
+                        Meta matches the scrambled values against its accounts and then deletes them.
+                    </li>
+                    <li>
+                        <strong>How to ask not to be targeted:</strong> if you reply STOP in a WhatsApp chat with the
+                        business, or withdraw marketing consent there, your number is left out of every later upload.
+                        To also be removed from lists uploaded before, or if your request is about an email or comes
+                        from Instagram or Messenger, ask the business or write to us (section 9): your number or email
+                        is then recorded <strong>scrambled only</strong>, removed from the customer lists already at
+                        Meta, and left out of every later upload. You can also do it at Meta: “Why am I seeing this
+                        ad?”, then hide ads from that advertiser, or your Ad preferences.
                     </li>
                 </ul>
 
@@ -2188,7 +2266,7 @@
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
-                <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing. We rely on these service providers purely to run the tool:</p>
+                <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing, except the scrambled customer lists that a business with customer lists unlocked uploads to its own Meta ad account (<a href="#audiences-en">section 1</a>). We rely on these service providers purely to run the tool:</p>
                 <ul>
                     <li>
                         <strong>Meta</strong> (Instagram and Facebook) — comments and messages
@@ -2292,6 +2370,10 @@
                     An account owner can pause or delete a boost at any time from the Posts screen, and
                     remove the ads token in Settings or by disconnecting Meta. The ads and their records
                     at Meta remain subject to Meta's own policy.
+                </p>
+                <p>
+                    To stop being shown a business's ads through a customer list or an audience, see
+                    <a href="#audiences-en">how to ask not to be targeted</a> in section 1.
                 </p>
 
                 <h2 id="security-en">7. How the data is protected</h2>

@@ -211,6 +211,11 @@ const API = {
     // not deployed yet) — callers hide the UI rather than surfacing an error.
     getAdminTenants: () => API.request('/admin/tenants'),
     createAdminTenant: (data) => API.request('/admin/tenants', { method: 'POST', body: JSON.stringify(data) }),
+    /** Ads A8: a tenant's legal sign-offs (revoked ones too) → `{ signoffs }`. */
+    getAdminLegalSignoffs: (tenantId) => API.request(`/admin/ads/tenants/${encodeURIComponent(tenantId)}/legal-signoff`),
+    /** `{ scope: 'customer_lists' | 'lead_ads', countries: ['EG', ...], note }` → `{ signoff }`. */
+    recordAdminLegalSignoff: (tenantId, body) => API.request(`/admin/ads/tenants/${encodeURIComponent(tenantId)}/legal-signoff`, { method: 'POST', body: JSON.stringify(body) }),
+    revokeAdminLegalSignoff: (tenantId, id) => API.request(`/admin/ads/tenants/${encodeURIComponent(tenantId)}/legal-signoff/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     updateAdminTenant: (id, data) => API.request(`/admin/tenants/${encodeURIComponent(id)}`, {
         method: 'PATCH', body: JSON.stringify(data),
     }),
@@ -762,6 +767,15 @@ const API = {
     /** `{ confirm: true }` is sent only after the owner said yes. → `{ proposal, ops }`. Refusals: POLICY_BLOCKED (`findings`), OVER_MONTHLY_CAP, OVER_DAILY_MAX, BELOW_META_MINIMUM, META_ERROR, NOT_WIRED. */
     approveAdsProposal: (id, edits) => API.request(`/ads/proposals/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify(edits ? { confirm: true, edits } : { confirm: true }) }),
     rejectAdsProposal: (id, reason) => API.request(`/ads/proposals/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+    /** A8 → `{ audiences, tosAccepted, tosUrl, customerList, retentionMaxDays }`. */
+    getAdsAudiences: () => API.request('/ads/audiences'),
+    getAdsAudienceSources: () => API.request('/ads/audiences/sources'),
+    /** `{ kind, name, spec }` → 202 `{ audience, op }`. Refusals: INVALID (`field`, `reason`), TERMS_NOT_ACCEPTED (`tosUrl`), SEED_TOO_SMALL, AUDIENCE_NOT_USABLE. */
+    createAdsAudience: (body) => API.request('/ads/audiences', { method: 'POST', body: JSON.stringify(body || {}) }),
+    /** The list text goes in the body of this one request and nowhere else. LOCKED_LEGAL without a recorded sign-off. */
+    uploadAdsCustomerList: (body) => API.request('/ads/audiences/customer-list', { method: 'POST', body: JSON.stringify(body || {}) }),
+    deleteAdsAudience: (id) => API.request(`/ads/audiences/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) }),
+    recordAdsAudienceOptOut: (contact) => API.request('/ads/audiences/opt-outs', { method: 'POST', body: JSON.stringify({ contact }) }),
 
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */

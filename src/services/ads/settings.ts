@@ -352,6 +352,8 @@ export interface AccountSnapshot {
     billingUrl: string;
     adsManagerUrl: string;
     syncedAt: string;
+    /** Meta's Custom Audience Terms for this account (A8): accepted, not, or not said. Absent on snapshots stored before A8. */
+    tosAccepted?: { custom: boolean | null; lookalike: boolean | null };
 }
 
 export interface AdsHealth {

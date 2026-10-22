@@ -150,11 +150,16 @@ const TenantDetailPage = {
             ${this.renderMembers(row)}
             ${this.renderConnection(row)}
             ${this.renderProfile(row)}
+            <section class="section" id="tenant-legal" aria-labelledby="tenant-legal-title">
+                <h2 class="section-title" id="tenant-legal-title">${t('tenantLegal.title')}</h2>
+                <div class="surface pad-5" id="tenant-legal-body">${Motion.busy()}</div>
+            </section>
         `);
 
         UI.icons(container);
         Admin.applyMeters(container);
         this.mountInvites(name);
+        this.mountLegal();
         // Nothing said the page's own data had landed — see CLAUDE.md's WCAG
         // 4.1.3 note on the other admin list pages. No natural count here
         // (this is one tenant, not a list), so this mirrors settings.js's
@@ -169,6 +174,100 @@ const TenantDetailPage = {
         const card = await App.loadPageModule('invite_card');
         if (!card || !host.isConnected) return;
         card.mountList(host, { tenantId: this.tenantId, tenantName: name });
+    },
+
+    // ─── Legal sign-off (Ads A8): unlocks customer-list audiences (and lead ads, A10) for this tenant ───
+
+    LEGAL_SCOPES: Object.freeze(['customer_lists', 'lead_ads']),
+    legal: [],
+
+    /** The sign-offs, newest first, revoked ones included: the record of who allowed what, and until when. */
+    async mountLegal() {
+        const host = document.getElementById('tenant-legal-body');
+        if (!host) return;
+        try {
+            const answer = await API.getAdminLegalSignoffs(this.tenantId);
+            this.legal = answer && Array.isArray(answer.signoffs) ? answer.signoffs : [];
+        } catch (err) {
+            host.innerHTML = esc(html`<p class="form-error">${(err && err.message) || t('error.unexpected')}</p>`);
+            return;
+        }
+        this.paintLegal();
+    },
+
+    paintLegal() {
+        const host = document.getElementById('tenant-legal-body');
+        if (!host) return;
+        const row = (s) => html`
+            <div class="row row--between row--wrap gap-2" role="listitem" id="tenant-legal-${s.id}">
+                <div>
+                    <strong>${t(`tenantLegal.scope.${s.scope}`)}</strong> · <span dir="ltr">${(s.countries || []).join(', ')}</span>
+                    ${s.revokedAt ? html`<span class="chip">${t('tenantLegal.revoked')}</span>` : html`<span class="chip chip-accent">${t('tenantLegal.active')}</span>`}
+                    <p class="form-hint" dir="auto">${s.note || ''} · ${this.dayOrDash(s.recordedAt)}${s.revokedAt ? html` → ${this.dayOrDash(s.revokedAt)}` : ''}</p>
+                </div>
+                ${s.revokedAt ? '' : html`<button type="button" class="btn btn-danger btn-sm" data-action="tenantDetail:revokeLegal" data-id="${s.id}">
+                    <i data-lucide="x" aria-hidden="true"></i> ${t('tenantLegal.revoke')}</button>`}
+            </div>
+        `;
+        host.innerHTML = esc(html`
+            <p class="form-hint">${t('tenantLegal.explain')}</p>
+            ${this.legal.length ? html`<div class="stack gap-3 mbe-4" id="tenant-legal-list" role="list">${this.legal.map(row)}</div>` : html`<p class="mbe-4" id="tenant-legal-none">${t('tenantLegal.none')}</p>`}
+            <form id="tenant-legal-form" data-submit="tenantDetail:recordLegal" novalidate>
+                <div class="form-group">
+                    <label class="form-label" for="tenant-legal-scope">${t('tenantLegal.scope')}</label>
+                    <select class="form-input" id="tenant-legal-scope" name="scope">
+                        ${this.LEGAL_SCOPES.map((sc) => html`<option value="${sc}">${t(`tenantLegal.scope.${sc}`)}</option>`)}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="tenant-legal-countries">${t('tenantLegal.countries')}</label>
+                    <input class="form-input" id="tenant-legal-countries" name="countries" dir="ltr" value="EG, SA" autocomplete="off">
+                    <p class="form-hint">${t('tenantLegal.countries.hint')}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="tenant-legal-note">${t('tenantLegal.note')}</label>
+                    <textarea class="form-input" id="tenant-legal-note" name="note" rows="2" maxlength="500" dir="auto" required></textarea>
+                    <p class="form-hint">${t('tenantLegal.note.hint')}</p>
+                </div>
+                <div id="tenant-legal-error"></div>
+                <button type="submit" class="btn btn-primary btn-sm"><i data-lucide="check" aria-hidden="true"></i> ${t('tenantLegal.record')}</button>
+            </form>
+        `);
+        UI.icons(host);
+    },
+
+    async recordLegal(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        const val = (id) => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+        const body = {
+            scope: val('tenant-legal-scope'),
+            countries: val('tenant-legal-countries').split(/[\s,،]+/).filter(Boolean).map((c) => c.toUpperCase()),
+            note: val('tenant-legal-note'),
+        };
+        const error = document.getElementById('tenant-legal-error');
+        try {
+            await API.recordAdminLegalSignoff(this.tenantId, body);
+            UI.toast(t('tenantLegal.recorded'), 'success');
+            await this.mountLegal();
+        } catch (err) {
+            if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${(err && err.message) || t('error.unexpected')}</p>`);
+        }
+    },
+
+    revokeLegal(id) {
+        const s = this.legal.find((x) => String(x.id) === String(id));
+        if (!s) return;
+        UI.confirm({
+            title: t('tenantLegal.revoke.title'),
+            body: t('tenantLegal.revoke.body', { scope: t(`tenantLegal.scope.${s.scope}`) }),
+            confirmLabel: t('tenantLegal.revoke'),
+            confirmIcon: 'x',
+            tone: 'danger',
+            onConfirm: async () => {
+                await API.revokeAdminLegalSignoff(TenantDetailPage.tenantId, String(id));
+                await TenantDetailPage.mountLegal();
+            },
+        });
     },
 
     /** A reset link for one member: nothing changes until they use it, so it is made at once and shown in the card. */
@@ -624,4 +723,6 @@ UI.registerActions('tenantDetail', {
     recheckToken: (el) => Admin.report(TenantDetailPage.recheckToken(el)),
     switchInto: () => Admin.report(TenantDetailPage.switchInto()),
     resetLink: (el) => Admin.report(TenantDetailPage.resetLink(el)),
+    recordLegal: (el, e) => Admin.report(TenantDetailPage.recordLegal(el, e)),
+    revokeLegal: (el) => TenantDetailPage.revokeLegal(el.dataset.id),
 });
