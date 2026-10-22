@@ -154,7 +154,7 @@ No payment method blocks Activate (the app cannot add one). A prepay account spe
 
 ## Campaigns and queued changes
 
-**What the screens read.** The Ads screen has two tabs, **Overview** and **Campaigns**. Both read the app's **stored copy** of the ad
+**What the screens read.** The Ads screen has three tabs, **Overview**, **Campaigns** and **Results** (below). All read the app's **stored copy** of the ad
 account (`ads_objects`, `ads_insights_daily`), never Meta live, so viewing costs none of Meta's 60 points per 5 minutes:
 
 | What | Refreshed | From |
@@ -212,8 +212,9 @@ Scheduler (Posts) screen's **Boost** button → goal **Send messages** (the "qui
 3. **Countries** (default from settings, `SA` when empty), **daily budget** and **days** (1 to 30). The total (daily × days) is
    sent as a **lifetime budget** on the ad set with an end time, so Meta never spends more than the total. The money rule checks
    the total against the monthly cap, and `amount / days` against the max daily budget.
-4. **Greeting** (≤ 300 characters) and up to **4 ice breakers**: title ≤ 80, optional automatic answer ≤ 300. Example copy
-   (فصحى, passes the policy check):
+4. **Greeting and ice breakers: not on a boosted post.** Meta refuses them there (see the caveats below); the fields are hidden and
+   the chat opens with Meta's greeting. For an ad from uploaded media (A5): greeting ≤ 300 characters, up to **4 ice breakers** (title ≤ 80,
+   optional automatic answer ≤ 300). Example copy (فصحى, passes the policy check):
 
    | Field | Text |
    |---|---|
@@ -265,11 +266,11 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
 
 ### Live-check caveats (not yet proven against Meta; do not promise these to a client)
 
-- **Greeting on a post creative is unverified.** Meta documents `page_welcome_message` only for creatives built from media
-  (`link_data` / `video_data`), not for a post (`object_story_id`, `source_instagram_media_id`). The code puts it in
-  `call_to_action.value.page_welcome_message` and `validate_only` should tell. The constant is `POST_GREETING_PLACEMENT`
-  (`'cta_value'` or `'omit'`) in `src/services/ads/spec.ts`; when it is `'omit'`, Review shows the warning
-  `NO_GREETING_ON_POST` and the chat opens with Meta's default greeting. Check on the first real create (T094/R11).
+- **No greeting on a boosted post (live-checked 2026-10-22).** `validate_only` on the owner's account answered "(#100) Invalid keys
+  "page_welcome_message" were found in param "call_to_action[value]"", and Meta documents no other place for a greeting on a creative
+  built from a post. So `POST_GREETING_PLACEMENT = 'omit'` (`spec.ts`) and quick mode hides the greeting and ice breakers
+  (`GREETING_ON_POST: false`): the chat opens with Meta's greeting, and the Instagram ice breakers from Settings still show on a new chat.
+  Ads from uploaded media (A5) carry the greeting under `link_data` / `video_data`.
 - **A Facebook post for a Messenger ad is refused** (`UNSUPPORTED`, field `ads.<i>.creative`) while
   `FB_POST_MESSENGER_OK = false`. Meta's pages disagree (`object_story_id` "not supported" for Messenger creatives on one page,
   supported on another). Flip the constant only after a `validate_only` call that succeeds, and record the result in
@@ -292,6 +293,40 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
 | `RATE_LIMITED` (`retryAt`) | the pacer is waiting; nothing was lost |
 | Ads Manager shows a campaign but no ad | an op later in the chain failed or is waiting; the failed op shows Meta's reason, the ops after it fail `DEPENDENCY_FAILED`. Nothing spends |
 | Creative fails: the Page or IG account is not assigned | the system user has no Page / IG asset (A1's probe, 2026-10-22): assign them in Business Settings → System users → Assign assets |
+
+---
+
+## Reading your results
+
+**Where.** Ads → **Results** (`#/ads_results`). Pick a period (7, 28 or 90 days) and what to show: the whole ad account, one campaign
+or one ad. Like the other tabs it reads the stored copy only (`GET /api/ads/results`), so it opens at once and costs no Meta points.
+
+| On screen | What it is |
+|---|---|
+| **Spend** | What Meta spent each day, in the ad account's currency, **excluding tax** (Meta's invoices are the accounting record) |
+| **Results** | What each ad was bought for (its ad set's optimisation goal): conversations, link clicks, leads or follows. A campaign with mixed goals adds each ad's own |
+| **Cost per result / conversation / tracked click** | Spend ÷ the count; "—" when the count is 0 |
+| **Tracked clicks** | The app's own count, not Meta's: **direct** = people's clicks on the ad's `/r/` link (`tracked_links.ads_object_id`); **via chat** = clicks on links the assistant sent in conversations the ad started (`entry_source.ad_id`). Link previews and bots are left out |
+| **Handed to a person** | Conversations the ad started that were handed over (`handoff_at`) |
+| **Compare by** | Ad, country (`EG`, `SA`…) or placement (`instagram:reels`…), from the stored breakdown rows. The countries add up to the total. Tracked clicks have no country, so they appear by ad only |
+
+- **Days** are the ad account's days (its time zone), the same as Ads Manager; the app's own clicks are cut on the same midnights.
+- **Provisional days.** Meta revises results for up to 28 days; the daily job re-reads the trailing 28. The last 3 days are shaded on
+  every chart and marked "provisional"; compare settled days with Ads Manager.
+- **Currencies** are never added together: one totals strip per currency, charts in the account's currency only.
+- **No sales-based figure.** Sales happen on another website (for the owner, Udemy), which neither Meta nor the app can see, so there is no "return" figure of
+  any kind (a lint test, `src/dashboard/no-roas.test.ts`, keeps it out of every string). The closest signals are tracked clicks on the
+  offer link and conversations handed to a person.
+- **Refresh.** The owner's **Refresh results** queues a today-refresh (at most once per 15 minutes, `POST /api/ads/sync`); the screen
+  says when it is expected or when to try again. **Last updated** is always shown.
+- **Elsewhere.** Growth shows a **Paid (ads)** card (daily spend, results, conversations, follows from ads; `overview.paid`), and the
+  Results screen lists running or spending ads under the DM campaigns, each labelled **Ad**.
+
+**Checking it against Meta.** Pick 7 settled days (older than 3 days) for the whole account: the spend total must equal Ads Manager's
+for the same dates in the account's time zone, and the Egypt + Saudi comparison must add up to it. Flow, hop by hop: `FLOWS.md` §12.6.
+Help Center: `#/help/ads#results`, `#provisional-numbers`, `#cost-per-conversation`.
+
+---
 
 ## Troubleshooting
 

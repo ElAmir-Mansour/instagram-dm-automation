@@ -62,6 +62,7 @@ import { searchTargeting, type TargetingType } from '../services/ads/targetingSe
 import { getPublicBaseUrl } from '../services/appSettings.js';
 import { checkPolicy } from '../services/ads/policy.js';
 import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
+import { adsResultsRouter } from './adsResults.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -578,3 +579,7 @@ adsRouter.get('/minimum-budgets', canView, async (req, res) => {
 // ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
 
 mountObjectRoutes(adsRouter, fail);
+
+// ─── The Results tab (A6): per-day results from the stored copy, never Meta ────────────────────────────────────────────────────────
+
+adsRouter.use(adsResultsRouter);

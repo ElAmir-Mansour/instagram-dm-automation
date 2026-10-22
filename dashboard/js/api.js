@@ -718,6 +718,20 @@ const API = {
     getAdsOps: (states) => API.request(`/ads/ops${Array.isArray(states) && states.length ? `?state=${states.map(encodeURIComponent).join(',')}` : ''}`),
     /** Asks for a results refresh from Meta (the owner's). 429 `RATE_LIMITED` with `retryAt` when one ran in the last 15 minutes. */
     requestAdsSync: () => API.request('/ads/sync', { method: 'POST' }),
+    /**
+     * Ads → Results (#/ads_results, A6): `{ level?, ids?, from?, to?, breakdown? }` (ids an array or a comma list) → per-day results from the stored
+     * copy, never Meta: `{ currency, currencies, rows, appDaily, perObject, totals: { byCurrency }, appJoins, objects, syncedAt, provisionalFrom }`.
+     */
+    getAdsResults: (params) => {
+        const query = new URLSearchParams();
+        Object.keys(params || {}).forEach((key) => {
+            const value = params[key];
+            if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) return;
+            query.set(key, Array.isArray(value) ? value.join(',') : String(value));
+        });
+        const search = query.toString();
+        return API.request(`/ads/results${search ? `?${search}` : ''}`);
+    },
 
     // ─── Ad builder (A4): the policy check, Meta's validation and the draft. A `CampaignSpec` is in MAJOR units of the account's currency. ───
     /** `{ fields: { caption?, greeting?, 'iceBreakers.0.title'?, ... } }` -> `{ version, blocked, findings }`. No Meta call: safe to ask as the owner types (the page waits 400 ms). */

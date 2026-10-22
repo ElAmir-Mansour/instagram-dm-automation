@@ -80,3 +80,9 @@ growth_settings (
 - **SEO tools:** the keyword list with Suggest, hashtag sets, and competitors with Business Discovery cards.
 - In the composer and the Studio schedule panel: alt text per slide, collaborators, and a trial-reel toggle, each with a "Learn more".
 - Help Center articles: "Growth & insights" and "Instagram & TikTok SEO".
+- **Paid series (Ads A6).** `GET /api/growth/overview` gains `paid: { currency, daily: [{ day, spend, results, follows, conversations,
+  linkClicks, provisional }], syncedAt, provisionalFrom, otherCurrencies, excludesTax: true } | null` (`src/services/growth/paid.ts`): an
+  account-level read of the ads stored copy (`getAdsResults`, never Meta) over the same window. One currency, the ad account's; rows in
+  any other are left out and named. `null` without ads rows, so no empty card. The page draws it as its own **Paid (ads)** card under
+  the organic summary, never on the organic chart's axis; spend excludes tax, the last 3 days are provisional, and there is no
+  sales-based figure (sales happen on another website; for the owner, Udemy).

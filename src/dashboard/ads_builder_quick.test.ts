@@ -92,6 +92,9 @@ function load(lang: 'ar' | 'en' = 'en', files: string[] = ['dashboard/js/pages/a
     const B = files.length ? h.run('typeof AdsBuilder === "undefined" ? null : AdsBuilder') : null;
     const P = h.run('PostsPage');
     if (B) B.POLICY_DEBOUNCE_MS = 15;
+    // Most suites below pin the greeting and ice breakers, which an uploaded-media ad (A5) has. A boosted post has none (Meta refuses it):
+    // the shipped default is pinned on its own at the end of this file.
+    if (B) B.GREETING_ON_POST = true;
     let n = 0;
     return {
         h, B, posts: P, calls, answers, created, toasts,
@@ -810,5 +813,29 @@ describe('the summary reads the month from GET /ads/money, not from the settings
         await r.posts.boostOpen('p1');
         await settle();
         assert.match(text(r.el('adsb-summary').innerHTML), /could not be read now/);
+    });
+});
+
+// ─── A boosted post carries no greeting (Meta refuses it: live check 2026-10-22) ───────────────
+
+describe('quick mode as shipped: no greeting or ice breakers on a boosted post', () => {
+    it('the fields are hidden and the dialog says why; the spec and the policy check carry neither', async () => {
+        const r = load();
+        r.B.GREETING_ON_POST = false;
+        const shipped = readFileSync('dashboard/js/pages/ads_builder.js', 'utf8');
+        assert.match(shipped, /GREETING_ON_POST: false,/, 'the shipped default');
+        r.posts.posts = [post()];
+        r.posts.ads.settings = SETTINGS;
+        await r.posts.boostOpen('p1');
+        await settle();
+        assert.match(r.modal(), /id="adsb-greeting-block" class="hidden"|class="hidden" id="adsb-greeting-block"/);
+        assert.ok(text(r.modal()).includes("the chat opens with Meta's greeting"), text(r.modal()));
+        const asked = r.calls.filter((c) => c.method === 'policy').pop();
+        assert.deepEqual(Object.keys(asked!.args[0]), ['caption']);
+        r.act('review');
+        await settle();
+        const spec = r.calls.find((c) => c.method === 'validate')!.args[0];
+        assert.equal(spec.goal, 'messages');
+        assert.equal('message' in spec.ads[0], false);
     });
 });

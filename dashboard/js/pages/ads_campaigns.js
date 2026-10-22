@@ -22,17 +22,18 @@
  * Anyone who can open the screen can read it. The change buttons need `App.canOperate()` (a viewer gets none), and "Refresh results"
  * needs the owner (`App.canAdminister()`): the same silence the rest of the app keeps. A null number is "—", never 0.
  *
- * `AdsTabs` (the Overview | Campaigns bar) lives here and is shared with `ads.js`, which loads this module for it.
+ * `AdsTabs` (the Overview | Campaigns | Results | Create bar) lives here and is shared with `ads.js`, `ads_results.js` and `ads_create.js`, which load this module for it.
  */
 const AdsTabs = {
     TABS: Object.freeze([
         Object.freeze({ key: 'overview', href: '#/ads', icon: 'layout-dashboard', label: 'ads.tabs.overview' }),
         Object.freeze({ key: 'campaigns', href: '#/ads_campaigns', icon: 'megaphone', label: 'ads.tabs.campaigns' }),
+        Object.freeze({ key: 'results', href: '#/ads_results', icon: 'bar-chart-3', label: 'ads.tabs.results' }),
         // A5: the full builder. Owners only on the server; the tab is shown to whoever sees the Ads area, and Create explains a refusal.
         Object.freeze({ key: 'create', href: '#/ads_create', icon: 'plus', label: 'ads.tabs.create' }),
     ]),
 
-    /** The tab bar, with `active` ('overview' | 'campaigns' | 'create') marked as the current page. Plain links: a tab is a place, so it has an address. */
+    /** The tab bar, with `active` ('overview' | 'campaigns' | 'results' | 'create') marked as the current page. Plain links: a tab is a place, so it has an address. */
     markup(active) {
         const tab = (item) => html`
             <a class="btn btn-sm btn-ghost" href="${item.href}" ${item.key === active ? html.raw('aria-current="page"') : ''}>
