@@ -107,6 +107,14 @@ function trafficToReview(r: Rig): void {
 }
 
 describe('Ads → Create: the steps and the tab', () => {
+    for (const lang of ['en', 'ar'] as const) {
+        it(`the shell's title and subtitle for the page are real strings, not keys (${lang})`, async () => {
+            const r = await ready(lang);
+            assert.notEqual(r.h.t('nav.ads_create'), 'nav.ads_create');
+            assert.notEqual(r.h.t('page.ads_create.subtitle'), 'page.ads_create.subtitle');
+        });
+    }
+
     it('has the eight steps in order, and the Create tab beside Overview and Campaigns', async () => {
         const r = await ready();
         assert.deepEqual(plain(r.P.STEPS), ['goal', 'destination', 'creative', 'copy', 'audience', 'placements', 'budget', 'review']);

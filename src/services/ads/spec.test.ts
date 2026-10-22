@@ -256,15 +256,22 @@ describe('what is always explicit', () => {
         }
     });
 
-    it('a media creative opts out of every rewriting feature and in to adapt_to_placement', () => {
-        assert.ok(CREATIVE_OPT_OUTS.length > 15);
-        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('standard_enhancements'), 'dead since v22');
-        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('adapt_to_placement'));
+    it('a media creative (and its 9:16 version) sends only the keys Meta allows, all OPT_OUT, nothing opted in (live check A5)', () => {
+        const allowed = new Set(['ig_video_native_subtitle', 'image_animation', 'product_browsing', 'product_metadata_automation', 'profile_card', 'standard_enhancements_catalog', 'text_overlay_translation']);
         const base = messageSpec();
-        const creative = mapSpec({ ...base, ads: [{ ...base.ads[0]!, creative: { source: 'media', mediaId: 'img1' }, copy: { primaryText: 'Learn Go' } }] }, ctx()).creatives[0]!;
-        const features = (creative['degrees_of_freedom_spec'] as { creative_features_spec: Record<string, { enroll_status: string }> }).creative_features_spec;
-        for (const key of CREATIVE_OPT_OUTS) assert.deepEqual(features[key], { enroll_status: 'OPT_OUT' }, key);
-        assert.deepEqual(features['adapt_to_placement'], { enroll_status: 'OPT_IN' });
+        const image = mapSpec({ ...base, ads: [{ ...base.ads[0]!, creative: { source: 'media', mediaId: 'img1' }, copy: { primaryText: 'Learn Go' } }] }, ctx()).creatives[0]!;
+        const traffic: Spec = { ...base, goal: 'traffic', destinations: undefined, ads: [{ adsetIndex: 0, name: 'V', copy: { primaryText: 'x', cta: 'LEARN_MORE' }, link: { trackedOfferId: 'offer1' },
+            creative: { source: 'media', mediaId: 'vid1', verticalMediaId: 'vid1' } }] };
+        const vertical = mapSpec(traffic, ctx()).creatives[0]!;
+        for (const creative of [image, vertical]) {
+            const features = (creative['degrees_of_freedom_spec'] as { creative_features_spec: Record<string, { enroll_status: string }> }).creative_features_spec;
+            assert.deepEqual(Object.keys(features).sort(), [...CREATIVE_OPT_OUTS].sort());
+            for (const key of Object.keys(features)) {
+                assert.ok(allowed.has(key), `${key} is one Meta allows`);
+                assert.deepEqual(features[key], { enroll_status: 'OPT_OUT' });
+            }
+            assert.equal(features['adapt_to_placement'], undefined, 'Meta refuses adapt_to_placement in creative_features_spec');
+        }
     });
 
     it('every name carries the op tag; messages and traffic creatives carry url_tags ref=ar_<refShort>', () => {
