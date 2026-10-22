@@ -199,6 +199,12 @@ export const AUDIT_ACTIONS = {
     adsBoostPause: 'ads.boost_pause',
     /** A boost's campaign was deleted at Meta. */
     adsBoostDelete: 'ads.boost_delete',
+    /** A campaign in the ad account was paused or switched on from the Ads screen. `detail` holds the campaign id and the new status. */
+    adsCampaignStatus: 'ads.campaign_status',
+    /** A campaign's budget or end date was changed from the Ads screen. `detail` holds the campaign id, the amount and the end. */
+    adsCampaignBudget: 'ads.campaign_budget',
+    /** A campaign was deleted at Meta from the Ads screen. */
+    adsCampaignDelete: 'ads.campaign_delete',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

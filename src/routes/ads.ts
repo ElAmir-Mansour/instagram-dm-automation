@@ -13,6 +13,11 @@
  *   POST   /boosts/:id/pause       → { boost }
  *   POST   /boosts/:id/refresh     → { boost } (spend and insights read again)
  *   DELETE /boosts/:id             → { boost }
+ *   GET    /overview               the Ads screen: account (status, payment method, billing link), spend today / this month, the limits
+ *                                  and this month's worst case, and every campaign in the ad account (src/services/adsManager.ts)
+ *   POST   /campaigns/:id/status   { status: 'ACTIVE' | 'PAUSED', confirm } → { campaign }. ACTIVE spends: confirm, payment method, cap
+ *   POST   /campaigns/:id/budget   { amount, endTime? } → { campaign }
+ *   DELETE /campaigns/:id          → { ok }. Not while it is active
  *
  * **Tenant owner only, reads included** (`requireTenantRole('owner')`): this is the business's ad account and money. A refusal is
  * `{ error, code, field? }` (codes in adBoosts.ts `AdsErrorCode`); Meta's own refusals are 502 `META_ERROR` with `metaCode`. The token is
@@ -25,6 +30,7 @@ import {
     activateBoost, AdsError, createBoost, deleteBoost, describeAdsSettings, eligibilityFor, listAdAccountsFor, listBoosts, parseSettingsInput, pauseBoost,
     readAdsSettings, refreshBoost, saveAdsSettings, type BoostView,
 } from '../services/adBoosts.js';
+import { deleteCampaign, readOverview, setCampaignBudget, setCampaignStatus } from '../services/adsManager.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -166,5 +172,54 @@ adsRouter.delete('/boosts/:id', canAdminister, async (req, res) => {
         res.json({ boost });
     } catch (err) {
         fail(res, err, 'delete_boost');
+    }
+});
+
+// ─── The Ads screen ───────────────────────────────────────────────────────────────────────
+
+adsRouter.get('/overview', canAdminister, async (req, res) => {
+    try {
+        res.json(await readOverview(getTenantId(req)));
+    } catch (err) {
+        fail(res, err, 'read_ads_overview');
+    }
+});
+
+adsRouter.post('/campaigns/:id/status', canAdminister, async (req, res) => {
+    const status = req.body?.status;
+    // Switching on spends money: the screen's confirmation sends this, a bare POST does not spend.
+    if (status === 'ACTIVE' && req.body?.confirm !== true) {
+        res.status(400).json({ error: 'Switching a campaign on spends money: confirm it.', code: 'INVALID', field: 'confirm' });
+        return;
+    }
+    try {
+        const campaign = await setCampaignStatus(getTenantId(req), req.params['id'], status);
+        await audit(req, AUDIT_ACTIONS.adsCampaignStatus, null, { campaign_id: campaign.id, status, boost_id: campaign.boostId });
+        res.json({ campaign });
+    } catch (err) {
+        fail(res, err, 'set_campaign_status');
+    }
+});
+
+adsRouter.post('/campaigns/:id/budget', canAdminister, async (req, res) => {
+    try {
+        const body = (req.body ?? {}) as { amount?: unknown; endTime?: unknown };
+        const campaign = await setCampaignBudget(getTenantId(req), req.params['id'], body);
+        await audit(req, AUDIT_ACTIONS.adsCampaignBudget, null, {
+            campaign_id: campaign.id, kind: campaign.budget.kind, amount: campaign.budget.amount, end_time: campaign.endTime, boost_id: campaign.boostId,
+        });
+        res.json({ campaign });
+    } catch (err) {
+        fail(res, err, 'set_campaign_budget');
+    }
+});
+
+adsRouter.delete('/campaigns/:id', canAdminister, async (req, res) => {
+    try {
+        const out = await deleteCampaign(getTenantId(req), req.params['id']);
+        await audit(req, AUDIT_ACTIONS.adsCampaignDelete, null, { campaign_id: String(req.params['id']) });
+        res.json(out);
+    } catch (err) {
+        fail(res, err, 'delete_campaign');
     }
 });

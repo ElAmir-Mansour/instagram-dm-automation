@@ -22,7 +22,7 @@ import { inspectToken } from './tokenHealth.js';
 import {
     activateBoostObjects, BOOST_OBJECTIVES, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
     normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
-    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
+    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, fetchAccountState, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
     type BudgetRefusal, type CreatedObjects, type Eligibility,
 } from './metaAds.js';
 
@@ -37,7 +37,11 @@ export type AdsErrorCode =
     | 'BOOST_NOT_FOUND'
     | 'BOOST_STATE'
     | 'META_NOT_CONNECTED'
-    | 'META_ERROR';
+    | 'META_ERROR'
+    | 'PAYMENT_METHOD_MISSING'
+    | 'BUDGET_NOT_EDITABLE'
+    | 'CAMPAIGN_ACTIVE'
+    | 'CAMPAIGN_NOT_FOUND';
 
 /** A refusal the route answers as `{ error, code, field? }` with `status`. */
 export class AdsError extends Error {
@@ -47,7 +51,7 @@ export class AdsError extends Error {
     }
 }
 
-function metaRefusal(err: unknown): AdsError {
+export function metaRefusal(err: unknown): AdsError {
     const metaCode = err instanceof MetaApiError ? err.metaCode : undefined;
     return new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : 'Meta refused the request.', undefined, metaCode);
 }
@@ -258,7 +262,7 @@ export async function listAdAccountsFor(creatorId: string): Promise<AdAccountCho
     }
 }
 
-async function requireConfig(creatorId: string): Promise<{ settings: AdsSettings & { adAccountId: string; maxDailyBudget: number; monthlyCap: number }; token: string }> {
+export async function requireConfig(creatorId: string): Promise<{ settings: AdsSettings & { adAccountId: string; maxDailyBudget: number; monthlyCap: number }; token: string }> {
     const { settings, token } = await readAdsSettings(creatorId);
     if (!isConfigured(settings, token)) {
         throw new AdsError(409, 'ADS_NOT_CONFIGURED', 'Set the ad account, the ads token, the max daily budget and the monthly cap in Settings first.');
@@ -293,7 +297,7 @@ export async function committedThisMonth(exec: Exec | null, creatorId: string, e
 }
 
 /** One tenant's budget checks and the writes that follow them, one at a time. Held until the transaction ends. */
-async function lockTenantBoosts(exec: Exec, creatorId: string): Promise<void> {
+export async function lockTenantBoosts(exec: Exec, creatorId: string): Promise<void> {
     await exec.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ad_boosts:${creatorId}`]);
 }
 
@@ -305,7 +309,7 @@ function budgetRefusal(check: Exclude<ReturnType<typeof checkBoostBudget>, { ok:
 
 export type BoostStatus = 'creating' | 'paused' | 'active' | 'completed' | 'failed' | 'deleted';
 
-interface AdBoostRow extends QueryResultRow {
+export interface AdBoostRow extends QueryResultRow {
     id: string;
     creator_id: string;
     scheduled_post_id: string | null;
@@ -388,14 +392,14 @@ export async function listBoosts(creatorId: string): Promise<BoostView[]> {
     return rows.map(toView);
 }
 
-async function readBoost(creatorId: string, id: string): Promise<AdBoostRow> {
+export async function readBoost(creatorId: string, id: string): Promise<AdBoostRow> {
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new AdsError(404, 'BOOST_NOT_FOUND', 'No such boost.');
     const row = await queryOne<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1 AND creator_id = $2', [id, creatorId]);
     if (!row) throw new AdsError(404, 'BOOST_NOT_FOUND', 'No such boost.');
     return row;
 }
 
-async function updateBoost(id: string, fields: Record<string, unknown>): Promise<AdBoostRow> {
+export async function updateBoost(id: string, fields: Record<string, unknown>): Promise<AdBoostRow> {
     const keys = Object.keys(fields);
     const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
     const row = await queryOne<AdBoostRow>(
@@ -588,6 +592,16 @@ export async function activateBoost(creatorId: string, id: string, now = new Dat
     const before = await readBoost(creatorId, id);
     if (before.status !== 'paused' || !before.campaign_id || !before.adset_id || !before.ad_id) {
         throw new AdsError(409, 'BOOST_STATE', `Only a paused boost can be activated; this one is ${before.status}.`);
+    }
+    // Meta cannot take a payment method through the API, and an account without one runs nothing: say so before switching anything on.
+    let account: AdAccountState;
+    try {
+        account = await fetchAccountState(settings.adAccountId, token);
+    } catch (err) {
+        throw metaRefusal(err);
+    }
+    if (account.hasPaymentMethod === false) {
+        throw new AdsError(409, 'PAYMENT_METHOD_MISSING', 'This ad account has no payment method, so nothing can run. Add one in Meta (Ads screen → Add payment in Meta), then activate.');
     }
 
     await withTransaction(async (tx) => {

@@ -1446,7 +1446,7 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.equal(at('data-page="activity"'), -1, 'no sidebar item of its own');
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.52');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.52']);
+        assert.equal(version, '12.53');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.53']);
     });
 });
