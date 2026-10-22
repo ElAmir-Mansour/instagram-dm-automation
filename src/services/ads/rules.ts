@@ -18,9 +18,9 @@
  */
 import { describeError, log } from '../../utils/log.js';
 import {
-    BLIND_AFTER_MS, isBlind, isOk, outcomeOf, planRule, RULE_COOLDOWN_MS, STALE_AFTER_MS, windowDays,
+    isBlind, isOk, outcomeOf, planRule, RULE_COOLDOWN_MS, STALE_AFTER_MS, windowDays,
     type BlindReason, type MatchedEntry, type PlannedStep, type RuleLevel, type RuleObject, type RuleSpec, type RuleWindow,
-    type RunOutcome, type WindowTotals,
+    type RuleActedAlert, type RuleBlindAlert, type RunOutcome, type WindowTotals,
 } from './rulesEval.js';
 import type { RunRecord, StoredRule } from './rulesStore.js';
 
@@ -39,14 +39,15 @@ export interface RulesDeps {
     now(): Date;
     account(creatorId: string): Promise<AccountForRules>;
     objects(creatorId: string, level: RuleLevel, ids: string[] | 'all'): Promise<StoredObject[]>;
-    /** The oldest `synced_at` among today's rows for these objects; `null` when any has no row for today. */
-    todaySyncedAt(creatorId: string, level: RuleLevel, metaIds: string[], today: string): Promise<Date | null>;
-    refreshToday(creatorId: string, level: RuleLevel, metaIds: string[]): Promise<RefreshResult>;
+    /** When today's results were last read from Meta for the tenant (sync.ts `todayAt`); null = never. */
+    todaySyncedAt(creatorId: string): Promise<Date | null>;
+    /** Read today's results again now, within the pacer's budget (sync.ts `syncInsights(…, 'today')`). */
+    refreshToday(creatorId: string): Promise<RefreshResult>;
     totals(creatorId: string, level: RuleLevel, metaIds: string[], from: string, to: string): Promise<Map<string, WindowTotals>>;
     editsLeftThisHour(creatorId: string, adsetMetaIds: string[]): Promise<Map<string, number>>;
     enqueue(creatorId: string, rule: StoredRule, step: Extract<PlannedStep, { kind: 'op' }>, object: StoredObject, hourKey: string): Promise<{ id: string }>;
     propose(creatorId: string, rule: StoredRule, entries: MatchedEntry[], currency: string): Promise<{ id: string }>;
-    alert(creatorId: string, kind: 'rule_acted' | 'rule_blind', objectKey: string, detail: Record<string, unknown>): Promise<void>;
+    alert(creatorId: string, alert: RuleActedAlert | RuleBlindAlert, objectKey: string): Promise<void>;
 }
 
 /** The persistence the evaluator writes through (rulesStore.ts in production, a fake in tests). */
@@ -88,18 +89,18 @@ export async function evaluateTenantRules(creatorId: string, rules: StoredRule[]
 
     const taken = new Set<string>();
     const editsLeft = new Map<string, number>();
-    const refreshed = new Map<string, 'fresh' | BlindReason>();
+    let fresh: 'fresh' | BlindReason | null = null;
 
     for (const rule of ordered) {
         result.rules++;
         let run: RunRecord;
         try {
             run = account.ok
-                ? await evaluateRule(creatorId, rule, account, deps, store, { now, taken, editsLeft, refreshed })
+                ? await evaluateRule(creatorId, rule, account, deps, store, { now, taken, editsLeft, fresh: async () => (fresh ??= await freshness(creatorId, deps, now)) })
                 : { outcome: 'blind', matched: { reason: account.reason }, ops: [], proposalId: null, at: now };
         } catch (err) {
             log('error', 'ads.rule_eval_failed', { creatorId, ruleId: rule.id, ...describeError(err) });
-            run = { outcome: 'blind', matched: { reason: 'error', detail: describeError(err).message }, ops: [], proposalId: null, at: now };
+            run = { outcome: 'blind', matched: { reason: 'error', detail: (err instanceof Error ? err.message : String(err)).slice(0, 300) }, ops: [], proposalId: null, at: now };
         }
 
         const ok = isOk(run.outcome);
@@ -114,21 +115,29 @@ export async function evaluateTenantRules(creatorId: string, rules: StoredRule[]
 
         if (!ok && isBlind(rule, now)) {
             const reason = Array.isArray(run.matched) ? 'no_data' : run.matched.reason;
-            await deps.alert(creatorId, 'rule_blind', `rule:${rule.id}`, {
-                ruleId: rule.id, name: rule.name, reason, since: (rule.lastOkAt ?? rule.approvedAt ?? rule.createdAt).toISOString(),
-                hours: Math.floor((now.getTime() - (rule.lastOkAt ?? rule.approvedAt ?? rule.createdAt).getTime()) / 3_600_000),
-            }).catch((err) => log('error', 'ads.rule_blind_alert_failed', { creatorId, ruleId: rule.id, ...describeError(err) }));
+            const since = rule.lastOkAt ?? rule.approvedAt ?? rule.createdAt;
+            await deps.alert(creatorId, {
+                kind: 'rule_blind', ruleId: rule.id, ruleName: rule.name, reason, hours: Math.floor((now.getTime() - since.getTime()) / 3_600_000),
+            }, `rule:${rule.id}`).catch((err) => log('error', 'ads.rule_blind_alert_failed', { creatorId, ruleId: rule.id, ...describeError(err) }));
         }
     }
     return result;
+}
+
+/** Today's rows fresh enough to judge on, or read again; else why not. */
+async function freshness(creatorId: string, deps: RulesDeps, now: Date): Promise<'fresh' | BlindReason> {
+    const at = await deps.todaySyncedAt(creatorId);
+    if (at && now.getTime() - at.getTime() <= STALE_AFTER_MS) return 'fresh';
+    const r = await deps.refreshToday(creatorId);
+    return r === 'ok' ? 'fresh' : r === 'throttled' ? 'throttled' : 'stale';
 }
 
 interface PassState {
     now: Date;
     taken: Set<string>;
     editsLeft: Map<string, number>;
-    /** Per set of objects, whether today's rows were found fresh (or refreshed) this pass, or why not: one refresh per set per pass. */
-    refreshed: Map<string, 'fresh' | BlindReason>;
+    /** Whether today's rows are fresh (read again if they were not), or why not: asked once per tenant per pass. */
+    fresh(): Promise<'fresh' | BlindReason>;
 }
 
 async function evaluateRule(
@@ -143,19 +152,7 @@ async function evaluateRule(
 
     if (windows.length > 0 && metaIds.length > 0) {
         // Every window includes today, so today's rows must be fresh before any judgement on numbers.
-        const today = windowDays('today', now, account.offsetHours).to;
-        const key = `${level}:${[...metaIds].sort().join(',')}`;
-        let state = pass.refreshed.get(key);
-        if (state === undefined) {
-            const syncedAt = await deps.todaySyncedAt(creatorId, level, metaIds, today);
-            const stale = syncedAt === null || now.getTime() - syncedAt.getTime() > STALE_AFTER_MS;
-            if (!stale) state = 'fresh';
-            else {
-                const r = await deps.refreshToday(creatorId, level, metaIds);
-                state = r === 'ok' ? 'fresh' : r === 'throttled' ? 'throttled' : 'stale';
-            }
-            pass.refreshed.set(key, state);
-        }
+        const state = await pass.fresh();
         if (state !== 'fresh') return { outcome: 'blind', matched: { reason: state }, ops: [], proposalId: null, at: now };
 
         for (const w of windows) {
@@ -181,42 +178,28 @@ async function evaluateRule(
     });
 
     const ops: string[] = [];
-    let notified = 0;
     const toPropose: MatchedEntry[] = [];
     const byId = new Map(stored.map((o) => [o.id, o]));
 
     for (const entry of plan.matched) {
         const object = byId.get(entry.objectId)!;
-        let changed = false;
-        for (const step of entry.steps) {
+        for (const step of [...entry.steps]) {
             if (step.kind === 'op') {
                 try {
-                    const op = await deps.enqueue(creatorId, rule, step, object, hourKey(now));
-                    ops.push(op.id);
-                    changed = true;
+                    ops.push((await deps.enqueue(creatorId, rule, step, object, hourKey(now))).id);
                 } catch (err) {
                     // EDIT_LIMIT, RATE_LIMITED and the like: recorded on the entry, tried again at the next evaluation.
                     entry.skipped.push('edit_limit');
                     entry.steps = entry.steps.filter((s) => s !== step);
                     log('warn', 'ads.rule_enqueue_failed', { creatorId, ruleId: rule.id, objectId: entry.objectId, ...describeError(err) });
                 }
-            } else if (step.kind === 'propose') {
-                if (!toPropose.includes(entry)) toPropose.push(entry);
-            }
-        }
-        if (changed || entry.steps.some((s) => s.kind === 'notify')) {
-            try {
-                await deps.alert(creatorId, 'rule_acted', `rule:${rule.id}:${entry.objectId}`, {
-                    ruleId: rule.id, name: rule.name, objectId: entry.objectId, objectName: entry.name, values: entry.values,
-                    steps: entry.steps.filter((s) => s.kind !== 'propose'),
-                });
-                notified++;
-            } catch (err) {
-                log('error', 'ads.rule_acted_alert_failed', { creatorId, ruleId: rule.id, ...describeError(err) });
+            } else if (step.kind === 'propose' && !toPropose.includes(entry)) {
+                toPropose.push(entry);
             }
         }
     }
 
+    // Raises and resumes: ONE proposal for the whole run, waiting for the owner (owner decision 2026-10-22).
     let proposalId: string | null = null;
     if (toPropose.length > 0) {
         try {
@@ -227,8 +210,22 @@ async function evaluateRule(
         }
     }
 
+    // One `rule_acted` alert per object that something happened to (changed, proposed or "tell me"); ads_alerts dedupes it per day.
+    let notified = 0;
+    for (const entry of plan.matched) {
+        if (entry.steps.length === 0) continue;
+        try {
+            await deps.alert(creatorId, {
+                kind: 'rule_acted', ruleId: rule.id, ruleName: rule.name, objectName: entry.name, steps: entry.steps, values: entry.values,
+                currency: account.currency, proposalId,
+            }, `rule:${rule.id}:${entry.objectId}`);
+            if (entry.steps.some((s) => s.kind === 'notify')) notified++;
+        } catch (err) {
+            log('error', 'ads.rule_acted_alert_failed', { creatorId, ruleId: rule.id, ...describeError(err) });
+        }
+    }
+
     const outcome = outcomeOf(plan, { ops: ops.length, notified, proposed: proposalId !== null });
     return { outcome, matched: plan.matched, ops, proposalId, at: now };
 }
 
-export { BLIND_AFTER_MS };

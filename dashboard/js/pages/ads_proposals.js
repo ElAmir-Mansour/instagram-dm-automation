@@ -319,7 +319,8 @@ const AdsProposalsPage = {
         const c = p.change;
         const ch = c.change || {};
         let what = '';
-        if (typeof ch.percent === 'number') what = c.kind === 'pause' ? t('ads.proposals.change.pause.what') : t('ads.proposals.change.percent', { percent: `⁦${ch.percent > 0 ? '+' : ''}${ch.percent}%⁩` });
+        if (c.kind === 'resume') what = t('ads.proposals.change.resume.what');
+        else if (typeof ch.percent === 'number') what = c.kind === 'pause' ? t('ads.proposals.change.pause.what') : t('ads.proposals.change.percent', { percent: `⁦${ch.percent > 0 ? '+' : ''}${ch.percent}%⁩` });
         else if (ch.from && ch.to) what = t('ads.proposals.change.shift', { amount: this.money(ch.amount, p.effect && p.effect.currency) });
         return html`<p class="adsprop-change" id="adsprop-change-${String(p.id)}"><strong>${t(`ads.proposals.change.${c.kind}`)}</strong> ${what}</p>`;
     },

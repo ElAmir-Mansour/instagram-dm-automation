@@ -248,9 +248,3 @@ export async function recentlyActed(creatorId: string, ruleId: string, since: Da
     );
     return new Set(rows.map((r) => r.object_id));
 }
-
-/** Retention (data-model.md): run rows are kept 90 days. */
-export async function purgeOldRuns(): Promise<number> {
-    const rows = await queryRows<{ id: string }>(`DELETE FROM ads_rule_runs WHERE ran_at < now() - interval '90 days' RETURNING id`);
-    return rows.length;
-}

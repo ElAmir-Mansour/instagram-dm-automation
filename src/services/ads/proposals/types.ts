@@ -76,7 +76,8 @@ export interface DraftOutput {
     expected: { metric: 'conversations' | 'link_clicks' | 'reach' | 'leads'; range: [number, number] | null };
 }
 
-export type ReviewKind = 'pause' | 'lower_budget' | 'raise_budget' | 'shift_budget' | 'new_ad_from_post' | 'audience';
+/** `resume` is never drafted by the model (not in REVIEW_KINDS): only a rule proposes it (A9, `rule_raise`), because resuming raises spend. */
+export type ReviewKind = 'pause' | 'lower_budget' | 'raise_budget' | 'shift_budget' | 'new_ad_from_post' | 'audience' | 'resume';
 
 export type ReviewChange = { percent: number } | { from: string; to: string; amount: number } | { spec: CampaignSpec };
 

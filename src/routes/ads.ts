@@ -66,6 +66,7 @@ import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
 import { adsResultsRouter } from './adsResults.js';
 import { adsProposalsRouter } from './adsProposals.js';
 import { adsShareSpendRouter } from './adsShareSpend.js';
+import { adsRulesRouter } from './adsRules.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -597,3 +598,7 @@ adsRouter.use(adsProposalsRouter);
 // ─── Managed clients (A11): the client's share-spend switch and its ceiling (any member reads, the owner writes) ───────────────────
 
 adsRouter.use(adsShareSpendRouter);
+
+// ─── Rules (A9): the owner's standing conditions; protective actions run alone, raises and resumes become proposals ───────────────
+
+adsRouter.use(adsRulesRouter);

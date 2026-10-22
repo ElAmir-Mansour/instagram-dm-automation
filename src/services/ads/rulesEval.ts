@@ -141,6 +141,10 @@ export function parseRuleSpec(body: unknown): ParseResult {
     if (conditions.some((c) => c.metric === 'budget_pace') && scope.level === 'ad') {
         return { ok: false, error: 'Ads have no budget of their own: pace is for campaigns and ad sets.', field: 'conditions' };
     }
+    // Reach is not additive (mirror.ts): a frequency exists only for one day, on a level that has its own reach row (ads and campaigns).
+    if (conditions.some((c) => c.metric === 'frequency' && (c.window !== 'today' || scope.level === 'adset'))) {
+        return { ok: false, error: 'Frequency is read for today, on campaigns or ads.', field: 'conditions' };
+    }
 
     return { ok: true, spec: { name, scope, conditions, minData, actions } };
 }
@@ -183,8 +187,8 @@ export const RULE_TEMPLATES: readonly RuleTemplate[] = [
         id: 'frequency_lower',
         needsValue: false,
         spec: {
-            scope: { level: 'adset', objectIds: 'all' },
-            conditions: [{ metric: 'frequency', op: '>', value: 3, window: '7d' }],
+            scope: { level: 'campaign', objectIds: 'all' },
+            conditions: [{ metric: 'frequency', op: '>', value: 3, window: 'today' }],
             minData: { impressions: 1000 },
             actions: [{ type: 'lower_budget', percent: 20 }, { type: 'notify' }],
         },
@@ -227,7 +231,8 @@ export function dayElapsed(now: Date, offsetHours: number): number {
 export interface WindowTotals {
     spend: number;
     impressions: number;
-    reach: number;
+    /** Only for a single day on the object's own row (reach is not additive); null otherwise. */
+    reach: number | null;
     linkClicks: number;
     conversations: number;
     results: number;
@@ -267,7 +272,7 @@ export function metricValue(metric: RuleMetric, window: RuleWindow, o: RuleObjec
         case 'cost_per_result': return t.results > 0 ? t.spend / t.results : t.spend > 0 ? Infinity : null;
         case 'cost_per_conversation': return t.conversations > 0 ? t.spend / t.conversations : t.spend > 0 ? Infinity : null;
         case 'ctr': return per(t.linkClicks, t.impressions, 100);
-        case 'frequency': return per(t.impressions, t.reach);
+        case 'frequency': return t.reach === null ? null : per(t.impressions, t.reach);
         case 'cpm': return per(t.spend, t.impressions, 1000);
         case 'budget_pace': {
             // Today's spend as a share of today's budget, against the share of the day gone. 1 = on pace; 2 = twice as fast.
@@ -478,3 +483,26 @@ export function isBlind(rule: { lastOkAt: Date | null; approvedAt: Date | null; 
 
 /** Today's rows older than this are read again from Meta before a rule uses them (R14). */
 export const STALE_AFTER_MS = 2 * 3_600_000;
+
+// ─── Alerts (notify.ts renders them) ──────────────────────────────────────────────────────────
+
+/** A rule changed, proposed or "told me" about one object. Once a day per rule and object (ads_alerts' dedupe). */
+export interface RuleActedAlert {
+    kind: 'rule_acted';
+    ruleId: string;
+    ruleName: string;
+    objectName: string;
+    steps: PlannedStep[];
+    values: Record<string, number | null>;
+    currency: string;
+    proposalId: string | null;
+}
+
+/** A rule has not managed a real evaluation for 24 hours. */
+export interface RuleBlindAlert {
+    kind: 'rule_blind';
+    ruleId: string;
+    ruleName: string;
+    reason: BlindReason | 'no_data';
+    hours: number;
+}
