@@ -3308,8 +3308,9 @@ people's clicks on links the bot sent in conversations the ad started (`conversa
 - The bot warning is ignored and Activate works anyway: people message and nobody answers (or nobody is sold to, in sales test mode).
 - The chain stops part way (a dead token, a Meta refusal on the ad set): the campaign exists at Meta, PAUSED, with nothing under it.
   The failed op says why in `ads_ops.result`; the later ops fail `DEPENDENCY_FAILED`. Nothing spends.
-- `POST_GREETING_PLACEMENT = 'cta_value'` is unverified for a creative built from a post: Review's `validate_only` on the creative is
-  the check; if Meta refuses it there, nothing is created.
+- A boosted post carries NO greeting or ice breakers (`POST_GREETING_PLACEMENT = 'omit'`): live check 2026-10-22, Meta refuses
+  `page_welcome_message` in the call to action's value and documents no other place on a post creative. The chat opens with Meta's
+  greeting; quick mode hides the fields (`GREETING_ON_POST: false`). Uploaded-media ads (A5) carry them under `link_data`/`video_data`.
 
 ## 12. Ads → conversation → results (Meta Ads Manager, A3)
 

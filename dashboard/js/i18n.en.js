@@ -5378,6 +5378,7 @@
     'adsBuilder.greeting': 'Greeting',
     'adsBuilder.greeting.default': 'Hi! How can we help?',
     'adsBuilder.greeting.hint': 'Shown when someone opens the chat. Up to {max} characters.',
+    'adsBuilder.greeting.notOnPost': 'Meta does not let a boosted post carry its own greeting, so the chat opens with Meta\'s greeting. The ice breakers you set for Instagram in Settings still show when someone opens a new chat.',
     'adsBuilder.iceBreakers': 'Ice breakers',
     'adsBuilder.ice.hint': 'Questions people can tap to start the chat. Up to {max}, all optional.',
     'adsBuilder.ice.title': 'Question {n}',

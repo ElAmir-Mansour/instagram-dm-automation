@@ -19,8 +19,8 @@
  *   - every name ends with the op tag `AR·<op id>`, so an object orphaned by a failed create can be found in Ads Manager.
  *
  * Not every mapping has been proved against Meta; each unproved one is marked `LIVE-CHECK` and is one constant to flip:
- *   - POST_GREETING_PLACEMENT   where the greeting (`page_welcome_message`) goes on a creative built from an existing POST. Meta documents
- *                               a place for it only under `link_data` / `video_data`, which a post creative does not have.
+ *   - POST_GREETING_PLACEMENT   where the greeting (`page_welcome_message`) goes on a creative built from an existing POST: 'omit' since
+ *                               the 2026-10-22 live check (Meta refuses it in the call to action's value; it documents no other place).
  *   - FB_POST_MESSENGER_OK      whether an `object_story_id` creative can carry a Messenger CTA (the Messenger page says no, the
  *                               Instagram page says yes). Until a live check says yes, a Facebook post is refused for message ads.
  *   - CREATIVE_OPT_OUTS         the `creative_features_spec` keys. An "unknown key" error from Meta (validate_only tells) means: remove
@@ -128,11 +128,13 @@ export interface SpecPayloads {
 // ─── Constants ────────────────────────────────────────────────────────────────────────────
 
 /**
- * LIVE-CHECK (T094 / R11). Meta documents `page_welcome_message` only under `link_data` / `video_data`. A creative built from an existing
- * post has neither, so 'cta_value' tries it inside the call to action's `value` (unverified). If validate_only refuses it, change this to
- * 'omit': the ad then runs with Meta's default greeting and the mapping adds the warning NO_GREETING_ON_POST.
+ * Where the greeting (`page_welcome_message`) goes on a creative built from an existing POST. Meta documents it only under `link_data` /
+ * `video_data`, which a post creative does not have. LIVE-CHECKED 2026-10-22 (validate_only on the owner's ad account, v26): inside the
+ * call to action's `value` Meta answers "(#100) Invalid keys "page_welcome_message" were found in param "call_to_action[value]"". So it
+ * is omitted: a boosted post opens the chat with Meta's default greeting, and the mapping warns NO_GREETING_ON_POST when one was given.
+ * A creative built from uploaded media (A5) keeps the documented greeting and ice breakers.
  */
-export const POST_GREETING_PLACEMENT = 'cta_value' as const;
+export const POST_GREETING_PLACEMENT: 'cta_value' | 'omit' = 'omit';
 
 /**
  * LIVE-CHECK (T094). The Messenger CTM page says creatives made with `object_story_id` are not supported; the Instagram and boost pages
@@ -660,8 +662,8 @@ function buildCreative(
             creative['object_story_id'] = post.mediaId;
         }
         if (goal === 'messages') {
-            // LIVE-CHECK (T094/R11): see POST_GREETING_PLACEMENT.
-            const placement: 'cta_value' | 'omit' = POST_GREETING_PLACEMENT as 'cta_value' | 'omit';
+            // See POST_GREETING_PLACEMENT: Meta refuses a greeting on a post creative.
+            const placement = POST_GREETING_PLACEMENT;
             const inCta = placement === 'cta_value' ? welcome : undefined;
             if (welcome && placement === 'omit') {
                 warnings.push({ code: 'NO_GREETING_ON_POST', field: `${at}.message`, message: 'A boosted post cannot carry its own greeting; Meta will show its default greeting.' });

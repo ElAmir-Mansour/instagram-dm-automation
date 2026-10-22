@@ -136,11 +136,19 @@ describe('messages: the greeting and ice breakers', () => {
         },
     };
 
-    it('builds page_welcome_message in the documented shape (title and optional response only)', () => {
-        const creative = mapSpec(messageSpec({ destinations: ['instagram'] }), ctx()).creatives[0]!;
-        const cta = creative['call_to_action'] as { value: Record<string, unknown> };
-        assert.equal(POST_GREETING_PLACEMENT, 'cta_value');
-        assert.deepEqual(cta.value['page_welcome_message'], WELCOME);
+    it('a post creative carries NO greeting (Meta refuses it there: live check 2026-10-22) and says so', () => {
+        assert.equal(POST_GREETING_PLACEMENT, 'omit');
+        const p = mapSpec(messageSpec({ destinations: ['instagram'] }), ctx());
+        const creative = p.creatives[0]!;
+        assert.equal(JSON.stringify(creative).includes('page_welcome_message'), false);
+        assert.deepEqual((creative['call_to_action'] as { value: Record<string, unknown> }).value, { app_destination: 'INSTAGRAM_DIRECT', link: 'https://www.instagram.com' });
+        assert.deepEqual(p.warnings.map((w) => [w.code, w.field]), [['NO_GREETING_ON_POST', 'ads.0.message']]);
+    });
+
+    it('a post creative without a greeting has no warning', () => {
+        const s = messageSpec({ destinations: ['instagram'] });
+        delete (s.ads[0] as { message?: unknown }).message;
+        assert.deepEqual(mapSpec(s, ctx()).warnings, []);
     });
 
     it('a media creative carries it under link_data (image) or video_data (video)', () => {
@@ -522,7 +530,8 @@ describe('boostToSpec: the v1 Boost as a preset', () => {
         assert.equal(p.adsets[0]!['optimization_goal'], 'CONVERSATIONS');
         const feed = p.creatives[0]!['asset_feed_spec'] as { call_to_actions: unknown[] };
         assert.equal(feed.call_to_actions.length, 2);
-        assert.ok(JSON.stringify(p.creatives[0]).includes('"Price?"'));
+        assert.equal(JSON.stringify(p.creatives[0]).includes('"Price?"'), false, 'a post creative carries no greeting (Meta refuses it)');
+        assert.equal(p.warnings[0]?.code, 'NO_GREETING_ON_POST');
         assert.deepEqual(p.campaign['special_ad_categories'], []);
     });
 

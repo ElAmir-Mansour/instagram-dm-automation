@@ -212,8 +212,9 @@ Scheduler (Posts) screen's **Boost** button → goal **Send messages** (the "qui
 3. **Countries** (default from settings, `SA` when empty), **daily budget** and **days** (1 to 30). The total (daily × days) is
    sent as a **lifetime budget** on the ad set with an end time, so Meta never spends more than the total. The money rule checks
    the total against the monthly cap, and `amount / days` against the max daily budget.
-4. **Greeting** (≤ 300 characters) and up to **4 ice breakers**: title ≤ 80, optional automatic answer ≤ 300. Example copy
-   (فصحى, passes the policy check):
+4. **Greeting and ice breakers: not on a boosted post.** Meta refuses them there (see the caveats below); the fields are hidden and
+   the chat opens with Meta's greeting. For an ad from uploaded media (A5): greeting ≤ 300 characters, up to **4 ice breakers** (title ≤ 80,
+   optional automatic answer ≤ 300). Example copy (فصحى, passes the policy check):
 
    | Field | Text |
    |---|---|
@@ -265,11 +266,11 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
 
 ### Live-check caveats (not yet proven against Meta; do not promise these to a client)
 
-- **Greeting on a post creative is unverified.** Meta documents `page_welcome_message` only for creatives built from media
-  (`link_data` / `video_data`), not for a post (`object_story_id`, `source_instagram_media_id`). The code puts it in
-  `call_to_action.value.page_welcome_message` and `validate_only` should tell. The constant is `POST_GREETING_PLACEMENT`
-  (`'cta_value'` or `'omit'`) in `src/services/ads/spec.ts`; when it is `'omit'`, Review shows the warning
-  `NO_GREETING_ON_POST` and the chat opens with Meta's default greeting. Check on the first real create (T094/R11).
+- **No greeting on a boosted post (live-checked 2026-10-22).** `validate_only` on the owner's account answered "(#100) Invalid keys
+  "page_welcome_message" were found in param "call_to_action[value]"", and Meta documents no other place for a greeting on a creative
+  built from a post. So `POST_GREETING_PLACEMENT = 'omit'` (`spec.ts`) and quick mode hides the greeting and ice breakers
+  (`GREETING_ON_POST: false`): the chat opens with Meta's greeting, and the Instagram ice breakers from Settings still show on a new chat.
+  Ads from uploaded media (A5) carry the greeting under `link_data` / `video_data`.
 - **A Facebook post for a Messenger ad is refused** (`UNSUPPORTED`, field `ads.<i>.creative`) while
   `FB_POST_MESSENGER_OK = false`. Meta's pages disagree (`object_story_id` "not supported" for Messenger creatives on one page,
   supported on another). Flip the constant only after a `validate_only` call that succeeds, and record the result in
