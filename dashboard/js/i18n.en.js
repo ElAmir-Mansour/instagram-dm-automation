@@ -5182,6 +5182,7 @@
     'help.link.adsSpendCap': 'About the account spending limit',
     'help.link.adsAlerts': 'About alerts',
     'inbox.filter.ads': 'From ads',
+    'inbox.noAds': 'No conversation has come from an ad yet.',
     'inbox.ad.from': 'From ad: {name}',
     'inbox.ad.fromUnnamed': 'From an ad',
     'inbox.ad.returned': 'Came back from an ad',

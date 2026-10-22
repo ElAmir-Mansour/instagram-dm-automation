@@ -235,7 +235,7 @@ describe('Inbox sales view: Hot', () => {
 
     it('is its own filter, between Needs you and AI paused, and keeps only these threads', () => {
         const I = load().Inbox;
-        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused']);
+        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']);
         I.threads = [
             { id: 'a', link_clicks: click(2), stage: 'link' }, { id: 'b', stage: 'link', link_clicks: click(0) }, { id: 'c', last_intent: 'ready_to_buy' },
             { id: 'd', stage: 'closed', link_clicks: click(5) }, { id: 'e', is_bot_active: false },
@@ -244,6 +244,28 @@ describe('Inbox sales view: Hot', () => {
         assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'c']);
         I.filter = 'all';
         assert.equal(I.visibleThreads().length, 5, 'All still shows everything');
+    });
+
+    it('A3: the Ads filter keeps threads that began from an ad or came back through one; the row says which ad, and Business AI', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const s = load(lang);
+            const I = s.Inbox;
+            I.threads = [
+                { id: 'a', ad: { kind: 'ctm', platform: 'instagram', adId: '1', name: 'Autumn' }, adTouches: 0 },
+                { id: 'b', ad: null, adTouches: 2 },
+                { id: 'c', ad: { kind: 'ctwa', platform: 'whatsapp', adId: '2', name: null }, adTouches: 0 },
+                { id: 'd', ad: null, adTouches: 0, noReplyReason: 'business_ai_owns_thread' },
+            ];
+            I.filter = 'ads';
+            assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'b', 'c']);
+            assert.ok(String(I.threadRow(I.threads[0])).includes(s.t('inbox.ad.from', { name: 'Autumn' })));
+            assert.ok(String(I.threadRow(I.threads[2])).includes(s.t('inbox.ad.fromUnnamed')));
+            assert.ok(!String(I.threadRow(I.threads[1])).includes('data-from-ad'));
+            assert.ok(String(I.threadRow(I.threads[3])).includes(s.t('inbox.ad.businessAi')));
+            assert.ok(String(I.metaMarkup(I.threads[3])).includes('#/help/ads#business-ai'));
+            assert.ok(String(I.emptyMarkup('ads')).includes(s.t('inbox.noAds')));
+            for (const key of ['inbox.filter.ads', 'inbox.noAds', 'inbox.ad.from', 'inbox.ad.businessAi']) assert.notEqual(s.t(key), key);
+        }
     });
 
     it('is seeded from the address like the other filters, and the address is data', () => {

@@ -5458,6 +5458,7 @@
     'help.link.adsSpendCap': 'عن حدّ إنفاق الحساب',
     'help.link.adsAlerts': 'عن التنبيهات',
     'inbox.filter.ads': 'من الإعلانات',
+    'inbox.noAds': 'لم تأتِ أي محادثة من إعلان بعد.',
     'inbox.ad.from': 'من إعلان: {name}',
     'inbox.ad.fromUnnamed': 'من إعلان',
     'inbox.ad.returned': 'عاد عبر إعلان',

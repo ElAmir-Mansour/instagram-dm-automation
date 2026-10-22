@@ -1004,6 +1004,7 @@ const InboxPage = {
         if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
         if (kind === 'hot') return html`<div class="empty-threads" data-empty="hot"><p>${t('inbox.noHot')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
+        if (kind === 'ads') return html`<div class="empty-threads" data-empty="ads"><p>${t('inbox.noAds')}</p>${UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help'))}</div>`;
         return html`
             <div class="empty-threads" data-empty="none">
                 <p>${t('inbox.noThreads')}</p>

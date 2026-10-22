@@ -285,6 +285,20 @@ describe('Ads Overview: the stored copy as health, money, what needs attention a
 
 describe('Settings: the Meta ads card (T034)', () => {
     for (const lang of ['ar', 'en'] as const) {
+        it(`draws the two A3 switches, as stored, each with its help link (${lang})`, async () => {
+            const { html, t } = await renderSettings(lang, { ...SETTINGS, switches: { botContext: true, extendedWindow: { instagram: false, messenger: true } } });
+            const said = text(html);
+            assert.match(html, /data-submit="settings:saveAdsSwitches"/);
+            assert.match(html, /id="ads-switch-bot" name="botContext" checked/);
+            assert.doesNotMatch(html, /id="ads-switch-window-ig" name="windowInstagram" checked/);
+            assert.match(html, /id="ads-switch-window-fb" name="windowMessenger" checked/);
+            assert.match(html, /href="#\/help\/ads#bot-and-ads"/);
+            assert.match(html, /href="#\/help\/ads#reply-window"/);
+            assert.ok(said.includes(t('settings.ads.switches.title')));
+            const off = await renderSettings(lang, { ...SETTINGS, switches: undefined });
+            assert.doesNotMatch(off.html, /name="botContext" checked/);
+        });
+
         it(`draws the four steps, the alert recipients and the account spending limit (${lang})`, async () => {
             const { html, t } = await renderSettings(lang, SETTINGS);
             const said = text(html);
