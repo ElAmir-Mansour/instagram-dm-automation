@@ -97,6 +97,8 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { adsRouter } from './ads.js';
+import { syncAllBoosts } from '../services/adBoosts.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -1057,6 +1059,14 @@ router.get('/cron/publish', async (req, res) => {
             log('error', 'cron.meta_token_recheck_failed', describeError(recheckErr));
         }
 
+        // Boost spend and status (v52): one insights read per paused/active boost, once a day. Fail-soft, like the sweeps around it.
+        try {
+            const boosts = await syncAllBoosts();
+            if (boosts.synced > 0 || boosts.failed > 0 || boosts.skipped > 0) log('info', 'cron.ads_sync', { ...boosts });
+        } catch (adsErr) {
+            log('error', 'cron.ads_sync_failed', describeError(adsErr));
+        }
+
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
         // or a missing permission must not turn a publish sweep that already ran into a 500.
@@ -1587,6 +1597,8 @@ router.use('/profile', profileRouter);
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
 router.use('/dm/ice-breakers', iceBreakersRouter);
+// Boost a published post with Meta ads (docs/META_ADS_RESEARCH.md option 2). Owner only, every route; activation is the one that spends.
+router.use('/ads', adsRouter);
 
 // The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
 router.use('/onboarding', onboardingRouter);

@@ -51,6 +51,14 @@ const PostsPage = {
      * the server refuses a TikTok post without a connection regardless.
      */
     tiktok: null,
+    /**
+     * Boost (Meta ads), the tenant OWNER's. `settings` is GET /ads/settings when it says `configured`, else null: with null there is no Boost button
+     * anywhere on this screen (a 403, a deployment without the route, and a half-set-up account all look the same here, silently). `boosts` is
+     * GET /ads/boosts. `checked`: settings are asked once per visit (`destroy()` forgets it), the list on every render.
+     */
+    ads: { settings: null, boosts: [], checked: false },
+    _boost: null,
+    _boostSeq: 0,
 
     /**
      * Direct Post composer state, per open modal. `tiktokCreator` is the live
@@ -137,6 +145,9 @@ const PostsPage = {
     destroy() {
         this._seq++;
         this.stopQueuePoll();
+        this._boostSeq++;
+        this._boost = null;
+        this.ads.checked = false;
     },
 
     /** Is this `render()` still the one on screen? */
@@ -152,6 +163,9 @@ const PostsPage = {
         this.liveError = null;
         this.publishError = null;
         this.tiktok = null;
+        this.ads = { settings: null, boosts: [], checked: false };
+        this._boost = null;
+        this._boostSeq++;
         this.queueView = 'active';
         // The zone is the tenant's: the next tenant's is read again by `render()`, and until it is, times are in the browser's.
         UI.setZone('');
@@ -222,6 +236,8 @@ const PostsPage = {
             API.getLivePosts(),
             API.getTikTokConnection(),
             API.getStudioSettings(),
+            // Never rejects: no Boost is the answer to every failure.
+            this.loadAds(),
         ]);
         if (!alive()) return;
         gate.done();
@@ -1080,9 +1096,12 @@ const PostsPage = {
                     </p>
                 ` : ''}
 
+                ${isPublished ? this.renderBoostBlock(post) : ''}
+
                 <div class="card-actions">
                     ${parked ? html`
                         <!-- Put away: Unarchive is the way back. No Publish now and no Edit while it is archived. -->
+                        ${isPublished ? this.boostButton(post) : ''}
                         ${UI.button({
                             variant: 'secondary', size: 'sm', icon: 'rotate-ccw', label: t('posts.unarchive'),
                             action: 'posts:unarchivePost', data: { id: post.id },
@@ -1118,6 +1137,7 @@ const PostsPage = {
                             focusKey: `post-delete-${post.id}`,
                         })}
                     ` : html`
+                        ${isPublished ? this.boostButton(post) : ''}
                         ${UI.button({
                             variant: 'secondary', size: 'sm', full: true,
                             icon: 'trash-2', label: t('posts.deleteLog'),
@@ -3512,6 +3532,502 @@ const PostsPage = {
         `;
     },
 
+    // ─── Boost: Meta ads for a published post (the owner's; created PAUSED, only Activate spends) ──────────
+
+    /** Statuses in which a boost still holds the post's slot on its platform: a second one is not offered beside it. */
+    BOOST_LIVE: Object.freeze(['creating', 'paused', 'active']),
+    BOOST_OBJECTIVES: Object.freeze(['ENGAGEMENT', 'AWARENESS', 'TRAFFIC']),
+    /** The countries the owner is most likely to target; any other ISO-2 code can be typed. */
+    BOOST_COUNTRIES: Object.freeze(['SA', 'AE', 'KW', 'QA', 'BH', 'OM', 'EG', 'JO', 'IQ', 'MA', 'US', 'GB']),
+    BOOST_FIELDS: Object.freeze({
+        platform: 'boost-platform', dailyBudget: 'boost-daily', days: 'boost-days', objective: 'boost-objective', country: 'boost-country', link: 'boost-link',
+    }),
+
+    /**
+     * Whether Boost is on offer, and the boosts that exist. Settings are asked once per visit; a failure of any kind (403 for a member who is
+     * not the owner, 404 where the route is not deployed, a network error) is "no Boost": silently, with no toast and no panel.
+     */
+    async loadAds() {
+        const state = this.ads;
+        if (typeof API.getAdsSettings !== 'function') return;
+        if (!state.checked) {
+            try {
+                const settings = await API.getAdsSettings();
+                state.settings = settings && settings.configured ? settings : null;
+            } catch (err) {
+                state.settings = null;
+            }
+            state.checked = true;
+        }
+        if (!state.settings) { state.boosts = []; return; }
+        try {
+            const answer = await API.getAdsBoosts();
+            state.boosts = Array.isArray(answer && answer.boosts) ? answer.boosts : [];
+        } catch (err) {
+            // The list on screen stays as it was; Refresh on a boost says why when it matters.
+        }
+    },
+
+    /** The platforms this published row has an id on: `FB:<id> | IG:<id>`, the same reading the server makes of it. */
+    boostPlatformsOf(post) {
+        const raw = String((post && post.published_post_id) || '');
+        const out = [];
+        if (/(?:^|\s)IG:[^\s|]+/.test(raw)) out.push('instagram');
+        if (/(?:^|\s)FB:[^\s|]+/.test(raw)) out.push('facebook');
+        return out;
+    },
+
+    /** The row's boosts that are not deleted, newest first (the server's order). */
+    boostsForPost(post) {
+        const list = this.ads && Array.isArray(this.ads.boosts) ? this.ads.boosts : [];
+        return list.filter((b) => b && String(b.postId) === String(post.id) && b.status !== 'deleted');
+    },
+
+    /** The platforms of this row a new boost could still go to: it has an id there and no boost already holds the slot. */
+    boostFreePlatforms(post) {
+        if (!this.ads || !this.ads.settings || !post || post.status !== 'PUBLISHED') return [];
+        const taken = new Set(this.boostsForPost(post).filter((b) => this.BOOST_LIVE.includes(b.status)).map((b) => b.platform));
+        return this.boostPlatformsOf(post).filter((p) => !taken.has(p));
+    },
+
+    boostButton(post) {
+        if (!this.boostFreePlatforms(post).length) return '';
+        return UI.button({
+            variant: 'primary', size: 'sm', icon: 'trending-up', label: t('boost.button'),
+            action: 'posts:boostOpen', data: { id: post.id }, focusKey: `post-boost-${post.id}`,
+        });
+    },
+
+    /** `12.5 USD` as one isolated run: a currency code never reorders an Arabic sentence. */
+    boostMoney(amount, currency) {
+        const n = Number(amount);
+        if (amount === null || amount === undefined || !Number.isFinite(n)) return '—';
+        return `⁦${UI.formatNumber(n)}${currency ? ` ${currency}` : ''}⁩`;
+    },
+
+    boostStatusChip(status) {
+        const tone = { creating: 'badge-info', paused: 'badge-neutral', active: 'badge-success', completed: 'badge-info', failed: 'badge-danger' };
+        const key = `boost.status.${status}`;
+        const said = t(key);
+        return html`<span class="badge ${html.raw(tone[status] || 'badge-neutral')}" data-boost-status="${status}">${said === key ? String(status) : said}</span>`;
+    },
+
+    boostObjectiveLabel(objective) {
+        const key = `boost.objective.${objective}`;
+        const said = t(key);
+        return said === key ? String(objective || '') : said;
+    },
+
+    /** The boosts on a published card: a chip, what was planned, what was spent and reached, and what can be done next. */
+    renderBoostBlock(post) {
+        const list = this.boostsForPost(post);
+        if (!list.length) return '';
+        return html`<div class="boost-list">${list.map((b) => this.renderBoostBox(b))}</div>`;
+    },
+
+    renderBoostBox(b) {
+        const money = (n) => this.boostMoney(n, b.currency);
+        const badge = this.platformBadge(b.platform);
+        const insights = b.insights && typeof b.insights === 'object' ? b.insights : null;
+        const metrics = insights
+            ? [['reach', insights.reach], ['impressions', insights.impressions], ['clicks', insights.clicks], ['results', insights.results]]
+                .filter(([, v]) => v !== null && v !== undefined)
+                .map(([name, v]) => html`<span>${t(`boost.insight.${name}`)} <strong>${UI.ltr(UI.formatNumber(v))}</strong></span>`)
+            : [];
+        if (insights && insights.cpm !== null && insights.cpm !== undefined) {
+            metrics.push(html`<span>${t('boost.insight.cpm')} <strong>${UI.ltr(money(insights.cpm))}</strong></span>`);
+        }
+        const id = b.id;
+        const canRefresh = b.status === 'paused' || b.status === 'active' || b.status === 'completed' || b.status === 'creating';
+        return html`
+            <div class="boost-box" data-boost-id="${id}">
+                <div class="boost-box-head">
+                    <span class="badge ${html.raw(badge.cls)}"><i data-lucide="${badge.icon}" aria-hidden="true"></i> ${badge.label}</span>
+                    ${this.boostStatusChip(b.status)}
+                    <span class="form-hint">${this.boostObjectiveLabel(b.objective)}</span>
+                </div>
+                <p class="post-card-meta">
+                    <i data-lucide="info" aria-hidden="true"></i>
+                    <span>${t('boost.plan', { daily: money(b.dailyBudget), days: UI.formatNumber(b.days), total: money(b.plannedTotal) })}</span>
+                </p>
+                ${b.spend !== null && b.spend !== undefined && (b.status === 'active' || b.status === 'completed' || b.status === 'paused') ? html`
+                    <p class="post-card-meta">
+                        <i data-lucide="bar-chart-3" aria-hidden="true"></i>
+                        <span>${t('boost.spent', { spend: money(b.spend), total: money(b.plannedTotal) })}</span>
+                    </p>
+                ` : ''}
+                ${b.status === 'active' && b.endsAt ? html`
+                    <p class="post-card-meta"><i data-lucide="clock" aria-hidden="true"></i><span>${t('boost.endsAt', { when: this.whenText(b.endsAt) })}</span></p>
+                ` : ''}
+                ${metrics.length ? html`<p class="post-card-meta boost-metrics">${metrics}</p>` : ''}
+                ${b.status === 'paused' ? html`<p class="form-hint">${t('boost.pausedNote')}</p>` : ''}
+                ${b.error ? html`<p class="post-card-error" dir="auto"><strong>${t('posts.errorLabel')}</strong> ${b.error}</p>` : ''}
+                <div class="boost-actions">
+                    ${b.status === 'paused' ? UI.button({
+                        variant: 'primary', size: 'sm', icon: 'play', label: t('boost.activate'),
+                        action: 'posts:boostActivate', data: { boost: id }, focusKey: `boost-activate-${id}`,
+                    }) : ''}
+                    ${b.status === 'active' ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'pause', label: t('boost.pause'),
+                        action: 'posts:boostPause', data: { boost: id }, focusKey: `boost-pause-${id}`,
+                    }) : ''}
+                    ${canRefresh ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'refresh-cw', label: t('boost.refresh'),
+                        action: 'posts:boostRefresh', data: { boost: id }, focusKey: `boost-refresh-${id}`,
+                    }) : ''}
+                    ${b.status === 'paused' || b.status === 'failed' || b.status === 'completed' ? UI.button({
+                        variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
+                        action: 'posts:boostDelete', data: { boost: id }, focusKey: `boost-delete-${id}`,
+                    }) : ''}
+                </div>
+            </div>
+        `;
+    },
+
+    findBoost(id) {
+        return (this.ads.boosts || []).find((b) => String(b.id) === String(id)) || null;
+    },
+
+    /** Put the server's answer for one boost in the list and repaint the queue (when it is the tab showing). */
+    applyBoost(boost) {
+        if (!boost || boost.id === undefined || boost.id === null) return;
+        const list = this.ads.boosts || [];
+        const index = list.findIndex((b) => String(b.id) === String(boost.id));
+        if (index === -1) list.unshift(boost); else list[index] = boost;
+        this.ads.boosts = list;
+        if (this.activeTab === 'scheduled') this.repaintQueue();
+    },
+
+    /** The failure of an action on a boost, in the server's own sentence. */
+    boostFailure(err) {
+        return (err && err.message) || t('error.unexpected');
+    },
+
+    /** Activate STARTS SPENDING MONEY: never without the question, which says how much, for how long, and from which account. */
+    boostActivate(id) {
+        const b = this.findBoost(id);
+        if (!b || b.status !== 'paused') return;
+        const money = (n) => this.boostMoney(n, b.currency);
+        UI.confirm({
+            title: t('boost.activate.title'),
+            body: t('boost.activate.body', { total: money(b.plannedTotal), days: UI.formatNumber(b.days) }),
+            hint: t('boost.activate.hint', { daily: money(b.dailyBudget) }),
+            confirmLabel: t('boost.activate.confirm'),
+            confirmIcon: 'play',
+            onConfirm: () => PostsPage.boostActivateConfirmed(id),
+        });
+    },
+
+    /** The question was answered yes. A refusal is thrown, so the dialog stays open and says why. */
+    async boostActivateConfirmed(id) {
+        const answer = await API.activateBoost(id);
+        this.applyBoost(answer && answer.boost);
+        UI.toast(t('boost.activated'), 'success');
+        this.refreshAdsSettings();
+    },
+
+    async boostPause(el) {
+        const id = el && el.dataset ? el.dataset.boost : '';
+        const restore = UI.actionBusy(el);
+        if (!restore) return;
+        let answer = null;
+        try {
+            answer = await API.pauseBoost(id);
+        } catch (err) {
+            UI.toast(this.boostFailure(err), 'error');
+        } finally {
+            restore();
+        }
+        if (answer && answer.boost) {
+            this.applyBoost(answer.boost);
+            UI.toast(t('boost.paused'), 'success');
+        }
+    },
+
+    async boostRefresh(el) {
+        const id = el && el.dataset ? el.dataset.boost : '';
+        const restore = UI.actionBusy(el);
+        if (!restore) return;
+        let answer = null;
+        try {
+            answer = await API.refreshBoost(id);
+        } catch (err) {
+            UI.toast(this.boostFailure(err), 'error');
+        } finally {
+            restore();
+        }
+        if (answer && answer.boost) {
+            this.applyBoost(answer.boost);
+            Motion.announce(t('boost.refreshed'));
+        }
+    },
+
+    boostDelete(id) {
+        const b = this.findBoost(id);
+        if (!b) return;
+        Admin.confirm({
+            title: t('boost.delete.title'),
+            body: t('boost.delete.body'),
+            hint: t('boost.delete.hint'),
+            confirmLabel: t('common.delete'),
+            onConfirm: () => PostsPage.boostDeleteConfirmed(id),
+        });
+    },
+
+    async boostDeleteConfirmed(id) {
+        const answer = await API.deleteBoost(id);
+        this.applyBoost(answer && answer.boost ? answer.boost : { ...(this.findBoost(id) || { id }), status: 'deleted' });
+        UI.toast(t('boost.deleted'), 'success');
+    },
+
+    /** The monthly figure moves with every boost: ask again, quietly. A failure leaves the last answer. */
+    async refreshAdsSettings() {
+        if (!this.ads.settings || typeof API.getAdsSettings !== 'function') return;
+        try {
+            const settings = await API.getAdsSettings();
+            if (settings && settings.configured) this.ads.settings = settings;
+        } catch (err) { /* keep what was known */ }
+    },
+
+    // ─── The Boost dialog ────────────────────────────────────────────────────
+
+    boostOpen(id) {
+        const post = this.posts.find((p) => String(p.id) === String(id));
+        const settings = this.ads.settings;
+        if (!post || !settings) return;
+        const platforms = this.boostFreePlatforms(post);
+        if (!platforms.length) return;
+        const currency = settings.account && settings.account.currency ? settings.account.currency : '';
+        const max = Number(settings.maxDailyBudget);
+        const min = settings.account && Number(settings.account.minDailyBudget) > 0 ? Number(settings.account.minDailyBudget) : 0;
+        // A sensible first figure: 5 (or Meta's minimum, if higher), and never above the owner's own ceiling.
+        const start = Number.isFinite(max) && max > 0 ? Math.min(max, Math.max(5, min)) : Math.max(5, min);
+        this._boost = { postId: post.id, seq: ++this._boostSeq, currency, done: false, eligSeq: 0 };
+        const first = platforms.includes('instagram') ? 'instagram' : platforms[0];
+
+        UI.showModal(html`
+            ${this.modalHeader(t('boost.dialog.title'))}
+            <div id="boost-error"></div>
+            <form id="boost-form" class="post-composer" data-submit="posts:boostSubmit" novalidate>
+                <p class="form-hint">${t('boost.dialog.intro')}</p>
+                <div class="form-group">
+                    <label class="form-label" for="boost-platform">${t('posts.platform')}</label>
+                    <select class="select" id="boost-platform" name="platform" data-change="posts:boostChange" ${platforms.length === 1 ? html.raw('disabled') : ''}>
+                        ${platforms.map((p) => html`<option value="${p}" ${p === first ? html.raw('selected') : ''}>${this.platformLabel(p)}</option>`)}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="boost-daily">${t('boost.dialog.daily')} ${currency ? html`<span class="label-optional">${UI.ltr(currency)}</span>` : ''}</label>
+                    <input class="field field-mono" id="boost-daily" name="dailyBudget" type="number" dir="ltr" inputmode="decimal"
+                           min="0" step="any" value="${start}" data-input="posts:boostChange" aria-describedby="boost-daily-hint" required>
+                    <p class="form-hint" id="boost-daily-hint">${min > 0
+                        ? t('boost.dialog.dailyHintMin', { max: this.boostMoney(max, currency), min: this.boostMoney(min, currency) })
+                        : t('boost.dialog.dailyHint', { max: this.boostMoney(max, currency) })}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="boost-days">${t('boost.dialog.days')}</label>
+                    <input class="field field-mono" id="boost-days" name="days" type="number" dir="ltr" inputmode="numeric"
+                           min="1" max="30" step="1" value="3" data-input="posts:boostChange" aria-describedby="boost-days-hint" required>
+                    <p class="form-hint" id="boost-days-hint">${t('boost.dialog.daysHint')}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="boost-objective">${t('boost.dialog.objective')}</label>
+                    <select class="select" id="boost-objective" name="objective" data-change="posts:boostChange">
+                        ${this.BOOST_OBJECTIVES.map((o) => html`<option value="${o}" ${o === 'ENGAGEMENT' ? html.raw('selected') : ''}>${this.boostObjectiveLabel(o)}</option>`)}
+                    </select>
+                </div>
+                <div class="form-group hidden" id="boost-link-group">
+                    <label class="form-label" for="boost-link">${t('boost.dialog.link')}</label>
+                    <input class="field field-mono" id="boost-link" name="link" type="url" dir="ltr" inputmode="url" autocomplete="off"
+                           spellcheck="false" autocapitalize="off" placeholder="https://" aria-describedby="boost-link-hint">
+                    <p class="form-hint" id="boost-link-hint">${t('boost.dialog.linkHint')}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="boost-country">${t('boost.dialog.country')}</label>
+                    <input class="field field-mono" id="boost-country" name="country" type="text" dir="ltr" maxlength="2" list="boost-countries"
+                           autocomplete="off" spellcheck="false" autocapitalize="characters" value="SA" aria-describedby="boost-country-hint" required>
+                    <datalist id="boost-countries">${this.BOOST_COUNTRIES.map((c) => html`<option value="${c}"></option>`)}</datalist>
+                    <p class="form-hint" id="boost-country-hint">${t('boost.dialog.countryHint')}</p>
+                </div>
+                <div class="boost-summary surface" id="boost-summary" role="status" aria-live="polite"></div>
+                <div id="boost-eligibility" role="status" aria-live="polite"></div>
+                <p class="form-hint">${t('boost.dialog.safety')}</p>
+                <div class="modal-actions">
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'trending-up', label: t('boost.dialog.submit'), id: 'boost-submit-btn' })}
+                </div>
+            </form>
+        `);
+
+        this.boostRecalc();
+        this.boostEligibility();
+        // The month's committed figure may have moved since the page loaded.
+        const seq = this._boost.seq;
+        this.refreshAdsSettings().then(() => { if (this._boost && this._boost.seq === seq) this.boostRecalc(); });
+    },
+
+    /** What the form says right now, as numbers. */
+    boostRead() {
+        const form = document.getElementById('boost-form');
+        if (!form) return null;
+        const get = (name) => (form.elements[name] ? String(form.elements[name].value || '').trim() : '');
+        return {
+            platform: get('platform'),
+            dailyBudget: get('dailyBudget') === '' ? NaN : Number(get('dailyBudget')),
+            days: get('days') === '' ? NaN : Number(get('days')),
+            objective: get('objective'),
+            country: get('country').toUpperCase(),
+            link: get('link'),
+        };
+    },
+
+    /** The live total (daily x days), what is left of the month's cap, and the link field only for a TRAFFIC objective. */
+    boostRecalc() {
+        let v = this.boostRead();
+        const summary = document.getElementById('boost-summary');
+        if (!v || !summary) return;
+        // Link clicks (TRAFFIC) is Instagram-only: the option is off while Facebook is chosen, and a choice made before the switch falls back to Engagement.
+        const objective = document.getElementById('boost-objective');
+        if (objective) {
+            const trafficOption = Array.from(objective.options).find((o) => o.value === 'TRAFFIC');
+            if (trafficOption) trafficOption.disabled = v.platform === 'facebook';
+            if (v.platform === 'facebook' && objective.value === 'TRAFFIC') { objective.value = 'ENGAGEMENT'; v = this.boostRead(); }
+        }
+        const group = document.getElementById('boost-link-group');
+        if (group) group.classList.toggle('hidden', v.objective !== 'TRAFFIC');
+        const settings = this.ads.settings || {};
+        const currency = (this._boost && this._boost.currency) || '';
+        const money = (n) => this.boostMoney(n, currency);
+        const lines = [];
+        const total = Number.isFinite(v.dailyBudget) && Number.isFinite(v.days) && v.dailyBudget > 0 && v.days > 0 ? v.dailyBudget * v.days : null;
+        lines.push(html`<p><strong>${total === null ? t('boost.dialog.totalUnknown') : t('boost.dialog.total', { daily: money(v.dailyBudget), days: UI.formatNumber(v.days), total: money(total) })}</strong></p>`);
+        let over = false;
+        if (settings.monthlyCap !== null && settings.monthlyCap !== undefined) {
+            const remaining = Math.max(0, Number(settings.monthlyCap) - (Number(settings.committedThisMonth) || 0));
+            over = total !== null && total > remaining;
+            lines.push(html`<p class="${over ? html.raw('text-warning') : html.raw('form-hint')}">${t('boost.dialog.remaining', { remaining: money(remaining), cap: money(settings.monthlyCap) })}${over ? html` ${t('boost.dialog.overRemaining')}` : ''}</p>`);
+        }
+        summary.innerHTML = esc(html`${lines}`);
+    },
+
+    /** Ask Meta whether this post can be boosted on the chosen platform. A "no" warns and still lets the owner try; "no answer" says so. */
+    async boostEligibility() {
+        const host = document.getElementById('boost-eligibility');
+        const v = this.boostRead();
+        const state = this._boost;
+        if (!host || !v || !state || typeof API.getAdsEligibility !== 'function') return;
+        state.eligSeq = (state.eligSeq || 0) + 1;
+        const token = state.eligSeq;
+        host.innerHTML = esc(html`<p class="form-hint"><span class="spinner spinner-sm" aria-hidden="true"></span> ${t('boost.dialog.eligChecking')}</p>`);
+        let answer = null;
+        try {
+            answer = await API.getAdsEligibility(state.postId, v.platform);
+        } catch (err) {
+            answer = { eligible: null, reason: null };
+        }
+        if (this._boost !== state || state.eligSeq !== token || !document.getElementById('boost-eligibility')) return;
+        let markup;
+        if (answer && answer.eligible === false) {
+            markup = html`
+                <div class="post-card-meta post-card-meta--note">
+                    <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                    <span class="text-warning" dir="auto">${t('boost.dialog.notEligible', { reason: (answer.reason || t('boost.dialog.notEligibleNoReason')) })}</span>
+                </div>`;
+        } else if (answer && answer.eligible === true) {
+            markup = html`
+                <p class="post-card-meta"><i data-lucide="check-circle" aria-hidden="true"></i><span class="text-success">${t('boost.dialog.eligible')}</span></p>`;
+        } else {
+            markup = html`<p class="form-hint">${t('boost.dialog.eligUnknown')}</p>`;
+        }
+        host.innerHTML = esc(markup);
+        UI.icons(host);
+    },
+
+    boostOnChange(el) {
+        this.boostRecalc();
+        if (el && el.id === 'boost-platform') this.boostEligibility();
+    },
+
+    showBoostError(message, field) {
+        const host = document.getElementById('boost-error');
+        const form = document.getElementById('boost-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'boost-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.BOOST_FIELDS[field] ? document.getElementById(this.BOOST_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    /** The first reason the form cannot be sent, as `{ message, field }`, or null. The server checks all of it again. */
+    boostProblem(v) {
+        const settings = this.ads.settings || {};
+        const currency = (this._boost && this._boost.currency) || '';
+        const available = Array.from((document.getElementById('boost-platform') || { options: [] }).options).map((o) => o.value);
+        if (!available.includes(v.platform)) return { message: t('boost.err.platform'), field: 'platform' };
+        if (!Number.isFinite(v.dailyBudget) || v.dailyBudget <= 0) return { message: t('boost.err.daily'), field: 'dailyBudget' };
+        if (Number.isFinite(Number(settings.maxDailyBudget)) && v.dailyBudget > Number(settings.maxDailyBudget)) {
+            return { message: t('boost.err.overMax', { max: this.boostMoney(settings.maxDailyBudget, currency) }), field: 'dailyBudget' };
+        }
+        if (!Number.isInteger(v.days) || v.days < 1 || v.days > 30) return { message: t('boost.err.days'), field: 'days' };
+        if (!this.BOOST_OBJECTIVES.includes(v.objective)) return { message: t('boost.err.objective'), field: 'objective' };
+        if (v.objective === 'TRAFFIC' && v.platform === 'facebook') return { message: t('boost.err.trafficInstagram'), field: 'objective' };
+        if (!/^[A-Z]{2}$/.test(v.country)) return { message: t('boost.err.country'), field: 'country' };
+        if (v.objective === 'TRAFFIC' && !/^https:\/\/[^\s/$.?#][^\s]*$/i.test(v.link)) return { message: t('boost.err.link'), field: 'link' };
+        return null;
+    },
+
+    async boostSubmit(form, event) {
+        event.preventDefault();
+        const state = this._boost;
+        const v = this.boostRead();
+        if (!state || !v || state.done) return;
+        const host = document.getElementById('boost-error');
+        if (host) host.innerHTML = '';
+        const problem = this.boostProblem(v);
+        if (problem) { this.showBoostError(problem.message, problem.field); return; }
+
+        const payload = {
+            postId: state.postId, platform: v.platform, dailyBudget: v.dailyBudget, days: v.days,
+            objective: v.objective, country: v.country,
+        };
+        if (v.objective === 'TRAFFIC') payload.link = v.link;
+
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            const answer = await API.createBoost(payload);
+            if (this._boost !== state) return;
+            state.done = true;
+            const boost = answer && answer.boost ? answer.boost : null;
+            if (boost) this.applyBoost(boost);
+            this.refreshAdsSettings();
+            this.boostCreated(boost);
+        } catch (err) {
+            restore();
+            const code = err && err.code;
+            const budget = code === 'BUDGET_OVER_DAILY_MAX' || code === 'BUDGET_UNDER_MINIMUM' || code === 'BUDGET_OVER_MONTHLY_CAP';
+            const field = (err && err.body && err.body.field) || (budget ? 'dailyBudget' : '');
+            this.showBoostError(this.boostFailure(err), field);
+        }
+    },
+
+    /** The dialog after a boost is created: it exists, it is PAUSED, and nothing is spent until Activate. */
+    boostCreated(boost) {
+        const money = (n) => this.boostMoney(n, (boost && boost.currency) || (this._boost && this._boost.currency) || '');
+        UI.showModal(html`
+            ${this.modalHeader(t('boost.created.title'))}
+            <p class="modal-body-text" dir="auto">${t('boost.created.body')}</p>
+            ${boost && boost.plannedTotal !== undefined ? html`<p class="form-hint">${t('boost.created.hint', { total: money(boost.plannedTotal), days: UI.formatNumber(boost.days) })}</p>` : ''}
+            <div class="modal-actions">
+                ${UI.button({ variant: 'primary', label: t('common.close'), action: 'ui:closeModal' })}
+            </div>
+        `);
+        UI.toast(t('boost.created.toast'), 'success');
+    },
+
     showCreateModal() {
         // datetime-local shows and submits LOCAL wall time. toISOString() is UTC,
         // so the old prefill was off by the whole UTC offset (UTC+3: two hours in
@@ -4408,6 +4924,13 @@ UI.registerActions('posts', {
     deletePost: (el) => PostsPage.deletePost(el.dataset.id),
     archivePost: (el) => PostsPage.archivePost(el.dataset.id),
     unarchivePost: (el) => PostsPage.unarchivePost(el.dataset.id),
+    boostOpen: (el) => PostsPage.boostOpen(el.dataset.id),
+    boostChange: (el) => PostsPage.boostOnChange(el),
+    boostSubmit: (el, e) => PostsPage.boostSubmit(el, e),
+    boostActivate: (el) => PostsPage.boostActivate(el.dataset.boost),
+    boostPause: (el) => PostsPage.boostPause(el),
+    boostRefresh: (el) => PostsPage.boostRefresh(el),
+    boostDelete: (el) => PostsPage.boostDelete(el.dataset.boost),
     setQueueView: (el) => PostsPage.setQueueView(el.dataset.key),
     dismissPublishError: () => { PostsPage.publishError = null; PostsPage.renderLayout(); },
     handlePlatformChange: () => PostsPage.applyPlatformMatrix(),

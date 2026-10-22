@@ -91,6 +91,7 @@ const SettingsPage = {
         Object.freeze({ id: 'tiktok', group: 'connections', who: 'all', dom: 'settings-tiktok', focus: 'settings-tiktok-connect' }),
         Object.freeze({ id: 'youtube', group: 'connections', who: 'all', dom: 'settings-youtube', focus: 'settings-youtube-connect' }),
         Object.freeze({ id: 'whatsapp', group: 'connections', who: 'all', dom: 'wa-card', inner: true, focus: 'wa-waba' }),
+        Object.freeze({ id: 'ads', group: 'connections', who: 'owner', dom: 'settings-ads' }),
         Object.freeze({ id: 'iceb', group: 'messages', who: 'owner', dom: 'iceb-card', inner: true }),
         Object.freeze({ id: 'alerts', group: 'messages', who: 'admin', dom: 'settings-notify', platform: true }),
         Object.freeze({ id: 'appearance', group: 'appearance', who: 'all', dom: 'settings-appearance', focus: 'settings-lang' }),
@@ -209,8 +210,11 @@ const SettingsPage = {
             iceBreakers: null, iceBreakersError: null,
             // WhatsApp (T025): any member reads it (the owner writes), with the module that draws the card (loaded on first use).
             whatsapp: null, whatsappError: null,
+            // Boost (Meta ads): the tenant OWNER's, so nobody else is asked. A 403 or a 404 (not deployed here) hides the card: no error panel for a
+            // thing this person was never offered.
+            ads: null, adsError: null, adsHidden: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule] = await Promise.allSettled([
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
@@ -230,6 +234,7 @@ const SettingsPage = {
             App.canAdminister() ? App.loadPageModule('ice_breakers') : Promise.resolve(null),
             API.getWhatsAppConnection(),
             App.loadPageModule('whatsapp_card'),
+            App.canAdminister() ? API.getAdsSettings() : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -238,6 +243,10 @@ const SettingsPage = {
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
         if (!ctx.whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) ctx.whatsappError = new Error(t('wa.moduleFailed'));
         if (ib.status === 'fulfilled') ctx.iceBreakers = ib.value; else ctx.iceBreakersError = ib.reason;
+        if (!App.canAdminister()) ctx.adsHidden = true;
+        else if (ad.status === 'fulfilled') ctx.ads = ad.value;
+        else if (ad.reason && (ad.reason.status === 403 || ad.reason.status === 404)) ctx.adsHidden = true;
+        else ctx.adsError = ad.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
         if (!ctx.iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) ctx.iceBreakersError = new Error(t('iceb.moduleFailed'));
         if (mc.status === 'fulfilled') ctx.meta = mc.value; else ctx.metaError = mc.reason;
@@ -349,6 +358,7 @@ const SettingsPage = {
             case 'tiktok': return this.tiktokSection({ tiktok: ctx.tiktok, tiktokError: ctx.tiktokError });
             case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
+            case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError);
             case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
             case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
             case 'appearance': return this.appearanceSection();
@@ -2714,6 +2724,184 @@ const SettingsPage = {
         await this.render();
     },
 
+    // ─── Boost: Meta ads (the tenant's owner) ─────────────────────────────────────────────────────────────
+
+    /** The field each input maps to, for marking the one a refusal names. */
+    ADS_FIELDS: { adAccountId: 'ads-account', token: 'ads-token', maxDailyBudget: 'ads-max-daily', monthlyCap: 'ads-monthly-cap' },
+
+    /** `12.5 USD` as one isolated run, so the currency code never reorders an Arabic sentence. */
+    adsMoney(amount, currency) {
+        const n = Number(amount);
+        if (amount === null || amount === undefined || !Number.isFinite(n)) return '—';
+        return `⁦${UI.formatNumber(n)}${currency ? ` ${currency}` : ''}⁩`;
+    },
+
+    /** The ad account as Meta reported it when the server probed it with the saved token: name, currency, status, minimum daily budget. */
+    adsAccountBlock(ads) {
+        if (ads.accountError) {
+            return html`<div class="mbe-4">${UI.errorStrip(t('boost.settings.accountError'), ads.accountError, 'ads-account-error-strip')}</div>`;
+        }
+        const account = ads.account;
+        if (!account) return '';
+        const currency = account.currency || '';
+        return html`
+            <div class="settings-block mbe-4" id="ads-account-probe">
+                <p class="form-label">
+                    <span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.accountOk')}</span>
+                </p>
+                <dl class="stack gap-2 mbs-4">
+                    <div><dt class="form-hint">${t('boost.settings.accountName')}</dt><dd dir="auto">${account.name || '—'}</dd></div>
+                    <div><dt class="form-hint">${t('boost.settings.accountCurrency')}</dt><dd>${UI.ltr(currency || '—')}</dd></div>
+                    <div><dt class="form-hint">${t('boost.settings.accountStatus')}</dt><dd dir="auto">${UI.ltr(account.status === null || account.status === undefined ? '—' : String(account.status))}</dd></div>
+                    <div><dt class="form-hint">${t('boost.settings.accountMin')}</dt><dd>${account.minDailyBudget === null || account.minDailyBudget === undefined ? t('boost.settings.accountMinUnknown') : UI.ltr(this.adsMoney(account.minDailyBudget, currency))}</dd></div>
+                </dl>
+            </div>
+        `;
+    },
+
+    adsSection(ads, error) {
+        if (error || !ads) {
+            return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
+        }
+        const currency = ads.account && ads.account.currency ? ads.account.currency : '';
+        const token = ads.token || {};
+        const num = (v) => (v === null || v === undefined ? '' : String(v));
+        const unit = currency ? html` <span class="label-optional">${UI.ltr(currency)}</span>` : '';
+        const committed = Number(ads.committedThisMonth) || 0;
+        return html`
+            <section class="section" id="settings-ads-card">
+                <h2 class="section-title">${t('boost.settings.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('boost.settings.intro')}</p>
+                    <p class="mbe-4">
+                        ${ads.configured
+                            ? html`<span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.ready')}</span>`
+                            : html`<span class="badge badge-neutral">${t('boost.settings.notReady')}</span>`}
+                    </p>
+                    ${this.adsAccountBlock(ads)}
+                    <p class="form-hint mbe-4" id="ads-committed">
+                        ${ads.monthlyCap === null || ads.monthlyCap === undefined
+                            ? t('boost.settings.committedNoCap', { spent: this.adsMoney(committed, currency) })
+                            : t('boost.settings.committed', { spent: this.adsMoney(committed, currency), cap: this.adsMoney(ads.monthlyCap, currency) })}
+                    </p>
+                    <div id="ads-settings-error"></div>
+                    <form id="ads-settings-form" data-submit="settings:saveAds" novalidate>
+                        <div class="form-group">
+                            <label class="form-label" for="ads-account">${t('boost.settings.accountId')}</label>
+                            <input class="field field-mono" id="ads-account" name="adAccountId" type="text" dir="ltr" maxlength="40"
+                                   autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="act_1234567890"
+                                   value="${ads.adAccountId || ''}" aria-describedby="ads-account-hint">
+                            <p class="form-hint" id="ads-account-hint">${t('boost.settings.accountIdHint')}</p>
+                        </div>
+                        <div class="form-group">
+                            <!-- Never prefilled: the token is never sent back. Blank means "keep what is saved". -->
+                            <label class="form-label" for="ads-token">${t('boost.settings.token')}</label>
+                            <input class="field field-mono" id="ads-token" name="token" type="password" dir="ltr" maxlength="512"
+                                   autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="EAA…"
+                                   aria-describedby="ads-token-hint">
+                            <p class="form-hint" id="ads-token-hint">${token.set
+                                ? (token.last4 ? this.ltrIn('boost.settings.tokenSaved', { mask: `••••${token.last4}` }, 'mask') : t('boost.settings.tokenSavedShort'))
+                                : t('boost.settings.tokenNone')}</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="ads-max-daily">${t('boost.settings.maxDaily')}${unit}</label>
+                            <input class="field field-mono" id="ads-max-daily" name="maxDailyBudget" type="number" dir="ltr" inputmode="decimal"
+                                   min="0" step="any" value="${num(ads.maxDailyBudget)}" aria-describedby="ads-max-daily-hint">
+                            <p class="form-hint" id="ads-max-daily-hint">${t('boost.settings.maxDailyHint')}</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="ads-monthly-cap">${t('boost.settings.monthlyCap')}${unit}</label>
+                            <input class="field field-mono" id="ads-monthly-cap" name="monthlyCap" type="number" dir="ltr" inputmode="decimal"
+                                   min="0" step="any" value="${num(ads.monthlyCap)}" aria-describedby="ads-monthly-cap-hint">
+                            <p class="form-hint" id="ads-monthly-cap-hint">${t('boost.settings.monthlyCapHint')}</p>
+                        </div>
+                        <div class="form-actions">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                                label: t('boost.settings.save'), id: 'ads-settings-submit',
+                            })}
+                            ${token.set ? UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'trash-2',
+                                label: t('boost.settings.clearToken'), action: 'settings:clearAdsToken', id: 'ads-clear-token',
+                            }) : ''}
+                        </div>
+                    </form>
+                    <p class="form-hint mbs-4">${t('boost.settings.safety')}</p>
+                </div>
+            </section>
+        `;
+    },
+
+    showAdsError(field, message) {
+        const host = document.getElementById('ads-settings-error');
+        const form = document.getElementById('ads-settings-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'ads-settings-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.ADS_FIELDS[field] ? document.getElementById(this.ADS_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    async saveAds(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const read = (name) => (data.get(name) || '').toString().trim();
+        const host = document.getElementById('ads-settings-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+
+        // The id is always sent (an emptied field clears it); a blank token is "keep it", since it is never sent back; a blank limit is left alone.
+        const payload = { adAccountId: read('adAccountId') };
+        const token = read('token');
+        if (token) payload.token = token;
+        for (const name of ['maxDailyBudget', 'monthlyCap']) {
+            const raw = read(name);
+            if (raw === '') continue;
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n <= 0) {
+                this.showAdsError(name, t(`boost.settings.invalid.${name}`));
+                return;
+            }
+            payload[name] = n;
+        }
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveAdsSettings(payload);
+            UI.toast(t('boost.settings.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            const field = err && err.body && err.body.field;
+            // The server's sentence is what the person reads; the field it names is the one that is marked.
+            this.showAdsError(field, (err && err.message) || t('error.unexpected'));
+        }
+    },
+
+    clearAdsToken(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('boost.settings.clearTitle'),
+            body: t('boost.settings.clearBody'),
+            hint: t('boost.settings.clearHint'),
+            confirmLabel: t('boost.settings.clearToken'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.clearAdsTokenConfirmed(),
+        });
+    },
+
+    async clearAdsTokenConfirmed() {
+        await API.saveAdsSettings({ token: '' });
+        UI.toast(t('boost.settings.tokenCleared'), 'success');
+        await this.render();
+    },
+
     // ─── Onboarding (platform admin): how invite links behave ─────────────────────────────────────────
 
     /** The field each input maps to, for marking the one a refusal names. */
@@ -3168,6 +3356,8 @@ UI.registerActions('settings', {
     previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
     saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
     saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
+    saveAds: (el, e) => SettingsPage.saveAds(el, e),
+    clearAdsToken: (el) => SettingsPage.clearAdsToken(el),
     testNotify: (el) => SettingsPage.testNotify(el),
     removeNotifyToken: (el) => SettingsPage.removeNotifyToken(el),
     testNotifyEmail: (el) => SettingsPage.testNotifyEmail(el),

@@ -260,11 +260,20 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   deactivated), so a row is never orphaned.
  *   dmVariants      the owner's A/B wording experiment for the DM sales turn: up to three variants of how to open and how to offer the link, their
  *                   weights, and whether it is running (DM plan S14, `src/services/dmSales/variantStore.ts`). Not a secret.
+ *   adsSettings     the owner's Meta ads limits for Boost: the ad account id, the max daily budget and the monthly spend cap, as JSON
+ *                   (`src/services/adBoosts.ts`). Not a secret. The server refuses any boost over these.
+ *   adsToken        the system-user token with `ads_management` / `ads_read` that Boost calls the Marketing API with. A SECRET: encrypted at
+ *                   rest like the Page token, and never in an answer (`{ set, last4 }` is all the card is told).
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
     dmVariants: 'dm.variants.',
+    adsSettings: 'ads.settings.',
+    adsToken: 'ads.token.',
 } as const;
+
+/** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */
+const SECRET_TENANT_PREFIXES: readonly string[] = [TENANT_SETTING_PREFIXES.adsToken];
 
 export type TenantSettingKey = `${(typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES]}${string}`;
 
@@ -292,7 +301,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
 ]);
 
 export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {
-    return SECRET_KEYS.has(key as AppSettingKey);
+    return SECRET_KEYS.has(key as AppSettingKey) || SECRET_TENANT_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /** The decrypted value, or null when unset. */
