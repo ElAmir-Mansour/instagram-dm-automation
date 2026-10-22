@@ -1964,6 +1964,144 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'builder',
+                    title: { ar: 'إنشاء حملة كاملة خطوة بخطوة', en: 'Build any campaign, step by step' },
+                    body: {
+                        ar: [
+                            'يرشدك المُنشئ في ثماني خطوات، وهي نفسها أيًّا كان الهدف. لا يعرض في كل خطوة إلا الخيارات التي تقبلها ميتا لهذا الهدف، ومع كل خيار جملة تشرحه.',
+                            { ol: [
+                                '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. إعلانات العملاء المحتملين تأتي لاحقًا.',
+                                '**الوجهة:** أين تصل الرسائل (إنستجرام أو ماسنجر أو واتساب)، أو الرابط الذي تُفتح عليه الزيارات. رابط الدورة يكون رابطًا متتبَّعًا افتراضيًا حتى تُحسب النقرات.',
+                                '**التصميم:** منشور منشور من قبل، أو صورة أو فيديو ترفعه من جهازك، ومعه نسخة عمودية 9:16 إن شئت.',
+                                '**النص:** النص الأساسي والعنوان وزر الدعوة إلى الإجراء.',
+                                '**الجمهور:** الدول والمدن والعمر والجنس واللغات والاهتمامات.',
+                                '**المواضع:** تلقائية (موصى بها) أو تختارها بنفسك.',
+                                '**الميزانية والجدول:** يومية أو إجمالية، والبداية والنهاية.',
+                                '**المراجعة:** معاينة لكل موضع، ونتيجة فحص السياسات، والوصول المتوقع، ومطابقة المبلغ لحدودك.',
+                            ] },
+                            { note: 'كل ما يُنشئه المُنشئ يُنشأ متوقفًا مؤقتًا. لا يُصرف شيء حتى تشغّله أنت من شاشة الإعلانات، وتؤكد المبلغ.' },
+                            'إذا حظر فحص السياسات عبارةً، تظهر العبارة مظلَّلة مع صياغة بديلة مقترحة، ولا يُقبل الإرسال حتى تعدّلها. أما التنبيهات فتحتاج إلى تأكيد منك فقط.',
+                        ],
+                        en: [
+                            'The builder takes you through eight steps, the same whatever the goal. Each step offers only the choices Meta accepts for that goal, each with a one-line explanation.',
+                            { ol: [
+                                '**Goal:** messages, reach, engagement or traffic to a link. Lead ads come later.',
+                                '**Destination:** where messages arrive (Instagram, Messenger or WhatsApp), or the link the traffic opens. A course link is a tracked link by default, so its clicks are counted.',
+                                '**Creative:** a post you already published, or an image or video uploaded from your computer, with an optional 9:16 version.',
+                                '**Text:** the primary text, the headline and the call-to-action button.',
+                                '**Audience:** countries and cities, age, gender, languages and interests.',
+                                '**Placements:** automatic (recommended) or chosen by you.',
+                                '**Budget and schedule:** daily or total, the start and the end.',
+                                '**Review:** a preview per placement, the policy check, the estimated reach and the money check against your limits.',
+                            ] },
+                            { note: 'Everything the builder creates is created paused. Nothing is spent until you switch it on from the Ads screen and confirm the amount.' },
+                            'When the policy check blocks a phrase, the phrase is highlighted with a suggested rewrite, and the ad cannot be sent until you change it. A warning only needs your tick.',
+                        ],
+                    },
+                },
+                {
+                    id: 'targeting',
+                    title: { ar: 'الجمهور: الدول والمدن والعمر والاهتمامات', en: 'Audience: countries, cities, age and interests' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['الدول', 'دولة واحدة أو أكثر، مثل مصر والسعودية معًا. دول الاتحاد الأوروبي غير متاحة الآن، لأن ميتا تطلب لها بيانات إضافية عن الممول والمستفيد.'],
+                                ['المدن', 'ابحث عن المدينة باسمها، ثم اختر نصف قطر بين 10 و80 كيلومترًا حولها.'],
+                                ['العمر', 'من 18 إلى 65.'],
+                                ['الجنس', 'الكل، أو الرجال، أو النساء.'],
+                                ['اللغات', 'تقصد بها ميتا من يستخدمون لغة غير لغة البلد الشائعة. في مصر والسعودية العربية هي اللغة الشائعة، فلا تحتاج إلى اختيارها عادةً.'],
+                                ['الاهتمامات', 'ابحث بكلمة من حرفين فأكثر؛ يظهر بجانب كل اهتمام حجم جمهوره التقريبي.'],
+                            ] },
+                            'جمهور Advantage من ميتا. عند تشغيله تعامل ميتا الاهتمامات والجنس والحد الأعلى للعمر على أنها اقتراحات تبدأ منها، لا حدود صارمة. أما الموقع والحد الأدنى للعمر واللغة والاستبعادات فتبقى ثابتة.',
+                            { warn: 'لهذا يقبل المُنشئ مع جمهور Advantage حدًّا أدنى للعمر بين 18 و25 فقط، ويُخفي الحد الأعلى: ميتا تثبّته على 65 ولا تقبل غيره. إن أردت عمرًا محددًا بدقة، فأطفئ جمهور Advantage.' },
+                            'الفئة الخاصة. إذا كان إعلانك عن وظائف أو خدمات مالية أو سكن، فاختر الفئة. عندها تقيّد ميتا الاستهداف: لا اختيار للجنس، والعمر من 18 إلى 65، ولا اهتمامات، ونصف قطر المدن 25 كيلومترًا على الأقل. إعلانات القضايا السياسية غير مدعومة.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Countries', 'One or more, such as Egypt and Saudi Arabia together. EU countries are not available yet: Meta asks for extra details about who pays and who benefits.'],
+                                ['Cities', 'Search a city by name, then choose a radius of 10 to 80 km around it.'],
+                                ['Age', '18 to 65.'],
+                                ['Gender', 'All, men or women.'],
+                                ['Languages', 'Meta means people who use a language other than the country\'s common one. In Egypt and Saudi Arabia Arabic is the common language, so you rarely need it.'],
+                                ['Interests', 'Search with two or more letters; each interest shows its approximate audience size.'],
+                            ] },
+                            'Meta\'s Advantage audience. When it is on, Meta treats interests, gender and the maximum age as a starting point, not hard limits. Location, the minimum age, language and exclusions stay fixed.',
+                            { warn: 'That is why, with Advantage audience on, the builder accepts a minimum age between 18 and 25 only and hides the maximum: Meta fixes it at 65 and accepts nothing else. For an exact age range, switch Advantage audience off.' },
+                            'Special category. If your ad is about jobs, financial services or housing, choose the category. Meta then restricts targeting: no gender choice, ages 18 to 65, no interests, and a city radius of at least 25 km. Political and social-issue ads are not supported.',
+                        ],
+                    },
+                },
+                {
+                    id: 'creatives',
+                    title: { ar: 'التصاميم: المقاسات والنسخة العمودية والغلاف', en: 'Creatives: sizes, the 9:16 version and the cover' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['الصور', 'JPG أو PNG، حتى 30 ميجابايت.'],
+                                ['الفيديو', 'MP4 أو MOV، حتى 50 ميجابايت. يُرفع الملف مباشرة إلى التخزين، ثم تسحبه ميتا من رابطه بنفسها.'],
+                                ['الغلاف', 'مطلوب لكل فيديو. بدونه تعرض ميتا أول إطار من الفيديو، وغالبًا ما يكون أسود.'],
+                            ] },
+                            'النسخة العمودية 9:16. يمكنك أن ترفع نسخة ثانية بمقاس 9:16، فتُعرض في القصص بدل النسخة المربعة. هذه النسخة متاحة للتصاميم المرفوعة فقط، لأن ميتا لا تسمح بها للمنشورات الموجودة.',
+                            { note: 'لم تؤكد ميتا بعدُ أن النسخة العمودية تُخصَّص لمواضع الريلز عبر الواجهة البرمجية، لذلك تُستخدم الآن في القصص فقط. الريلز تعرض النسخة الأساسية مع تكييف ميتا للمقاس.' },
+                            'لماذا أُطفئت تحسينات ميتا الآلية للتصاميم؟ تستطيع ميتا أن تعيد كتابة النص، وتترجمه، وتولّد صورًا أو خلفيات، وتضيف موسيقى. يرسل التطبيق رفضًا صريحًا لكل ذلك، لثلاثة أسباب: نصّك العربي مكتوب بالفصحى ولا نريد أن يُعاد صوغه، ولا نقبل صورًا مولَّدة قد تُظهر أشخاصًا لم تخترهم، ولكي يبقى الإعلان بأسلوبك. الشيء الوحيد المسموح به هو تكييف المقاس مع الموضع.',
+                            'في المراجعة ترى معاينة لكل موضع. إذا لم تسمح ميتا بالمعاينة لرمز حسابك، يرسم المُنشئ **معاينة تقريبية**: الصورة مقصوصة على إطار الموضع، واسم الصفحة، والنص مقطوعًا عند 125 حرفًا كما تقطعه ميتا في الموجز.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Images', 'JPG or PNG, up to 30 MB.'],
+                                ['Video', 'MP4 or MOV, up to 50 MB. The file goes straight to storage, and Meta then fetches it from its link itself.'],
+                                ['Cover', 'Required for every video. Without one, Meta shows the video\'s first frame, which is often black.'],
+                            ] },
+                            'The 9:16 version. You can upload a second, 9:16 version, shown in Stories instead of the square one. It is offered for uploaded creatives only: Meta does not allow it on existing posts.',
+                            { note: 'Meta has not yet confirmed that the vertical version can be assigned to Reels through the API, so for now it is used in Stories only. Reels show the main version, which Meta adapts to the frame.' },
+                            'Why Meta\'s automatic creative enhancements are off. Meta can rewrite your text, translate it, generate images or backgrounds and add music. The app sends an explicit opt-out for all of it, for three reasons: your Arabic copy is written in Modern Standard Arabic and should not be reworded, we do not accept generated images that could show people you did not choose, and the ad should stay in your voice. The only thing allowed is adapting the size to the placement.',
+                            'The review step shows a preview per placement. When Meta does not allow previews for your account\'s token, the builder draws an approximate preview: the image cropped to the placement\'s frame, the Page name, and the text cut at 125 characters, as Meta cuts it in Feed.',
+                        ],
+                    },
+                },
+                {
+                    id: 'budgets-and-schedule',
+                    title: { ar: 'الميزانية والجدول الزمني', en: 'Budget and schedule' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['يومية', 'مبلغ لكل يوم. قد تصرف ميتا في يوم ما حتى 75% فوقه، لكنها لا تتجاوز سبعة أضعافه في الأسبوع.'],
+                                ['إجمالية', 'مبلغ للمدة كلها، ويلزمها تاريخ نهاية.'],
+                                ['على الحملة', 'ميزانية واحدة تتوزع على مجموعات الإعلانات حيث النتائج أفضل.'],
+                                ['على كل مجموعة', 'لكل مجموعة إعلانات ميزانيتها الخاصة.'],
+                            ] },
+                            'المبلغ بعملة حسابك الإعلاني. لا يقبل المُنشئ مبلغًا أقل من الحد الأدنى الذي تحدده ميتا لحسابك ولهذا الهدف، ولا مبلغًا يتجاوز حدك اليومي أو ما تبقّى من حدك الشهري. كل الأرقام دون الضريبة؛ فواتير ميتا هي السجل المحاسبي.',
+                            'الجدول الزمني. يمكنك أن تحدد أيامًا وساعات يُعرض فيها الإعلان، مثل المساء فقط. تشترط ميتا لذلك ميزانية إجمالية، وتحسب الساعات بتوقيت المشاهد.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Daily', 'An amount per day. Meta may spend up to 75% over it on a given day, but never more than seven times it in a week.'],
+                                ['Total', 'An amount for the whole run; it needs an end date.'],
+                                ['On the campaign', 'One budget that Meta spreads across the ad sets where results are better.'],
+                                ['Per ad set', 'Each ad set has its own budget.'],
+                            ] },
+                            'Amounts are in your ad account\'s currency. The builder refuses an amount below Meta\'s minimum for your account and goal, above your daily limit, or above what is left of your monthly limit. Every figure is excluding tax; Meta\'s invoices are the accounting record.',
+                            'Schedule. You can choose days and hours when the ad runs, such as evenings only. Meta requires a total budget for this and uses the viewer\'s time zone.',
+                        ],
+                    },
+                },
+                {
+                    id: 'duplicate-archive',
+                    title: { ar: 'النسخ والأرشفة والحذف', en: 'Duplicate, archive and delete' },
+                    body: {
+                        ar: [
+                            'النسخ يُنشئ نسخة من الحملة أو مجموعة الإعلانات أو الإعلان، متوقفة مؤقتًا، ويُضاف إلى اسمها وسم يدل على أنها نسخة. تدخل النسخة مراجعة ميتا من جديد، وتبدأ مرحلة التعلّم من الصفر.',
+                            'الأرشفة هي طريقة الإزالة المعتادة: تتوقف الحملة وتختفي من القائمة، ويبقى تاريخها ونتائجها.',
+                            { warn: 'الحذف نهائي ولا يمكن التراجع عنه، لذلك يطلب تأكيدًا منفصلًا، ولا يُعرض لحملة تعمل الآن. أوقفها أولًا.' },
+                        ],
+                        en: [
+                            'Duplicate creates a copy of the campaign, ad set or ad, paused, with a tag added to its name that marks it as a copy. The copy goes through Meta\'s review again and starts learning from zero.',
+                            'Archive is the usual way to remove something: it stops and leaves the list, and its history and results are kept.',
+                            { warn: 'Delete is permanent and cannot be undone, so it asks for a separate confirmation, and it is not offered for a campaign that is running. Pause it first.' },
+                        ],
+                    },
+                },
+                {
                     id: 'troubleshooting',
                     title: { ar: 'حلول مشكلات الإعلانات', en: 'Ads troubleshooting' },
                     body: {
