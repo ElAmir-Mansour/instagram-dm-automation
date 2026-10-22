@@ -7,7 +7,7 @@ level up and are folded in here during phase A2.
 ## The rules every file here keeps
 
 1. **Stored copy first.** Screens read Postgres, not Meta. A1 stores the account and token check (`ads.health.<tenant>`); A2 adds the
-   stored copy of every campaign, ad set and ad (`ads_objects`, `ads_insights_daily`). A GET that must call Meta says so in its comment.
+   stored copy of every campaign, ad set and ad (`ads_objects`, `ads_insights_daily`, `ads_insights_breakdown`). A GET that must call Meta says so in its comment.
 2. **Every write goes through `ads_ops`.** A1 records each activation, resume, budget raise and spending-limit change there (the money
    rule counts a running one as "about to run"); A2 turns it into the paced queue that sends them.
 3. **One pinned version.** `graph.ts` calls Meta on `ads.api_version` (default `v26.0`, never below `v25.0`), never on the publisher's

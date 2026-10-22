@@ -204,8 +204,8 @@ async function month(adAccountId: string, token: string, account: AdAccountState
 }
 
 /** After Meta answered an op's call: done, or failed / verify (a call that may have landed keeps counting). */
-async function settle(opId: string, err: unknown): Promise<void> {
-    await finishSpendOp(opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
+async function settle(creatorId: string, opId: string, err: unknown): Promise<void> {
+    await finishSpendOp(creatorId, opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
 }
 
 /** The boost row follows Meta's status only while it is a live boost: a completed or failed one keeps its history. */
@@ -267,10 +267,10 @@ export async function setCampaignStatus(creatorId: string, rawId: unknown, statu
     try {
         await updateObject(id, { status: 'ACTIVE' }, token, 'resume campaign');
     } catch (err) {
-        await settle(opId, err);
+        await settle(creatorId, opId, err);
         throw metaRefusal(err);
     }
-    await finishSpendOp(opId, 'done', { campaign_id: id });
+    await finishSpendOp(creatorId, opId, 'done', { campaign_id: id });
     await followBoost(boost, 'active');
     log('info', 'ads.campaign_resumed', { creator_id: creatorId, campaign_id: id });
     return viewOf(creatorId, id, token, account.currency);
@@ -361,10 +361,10 @@ export async function setCampaignBudget(creatorId: string, rawId: unknown, body:
         await updateObject(budget.holderId!, { [field]: minorValue }, token, 'budget');
         if (end) await updateObject(budget.adsetId!, { end_time: graphTime(end) }, token, 'end date');
     } catch (err) {
-        if (opId) await settle(opId, err);
+        if (opId) await settle(creatorId, opId, err);
         throw metaRefusal(err);
     }
-    if (opId) await finishSpendOp(opId, 'done', { campaign_id: id });
+    if (opId) await finishSpendOp(creatorId, opId, 'done', { campaign_id: id });
     if (boost) {
         const total = budget.kind === 'lifetime' ? value : roundMoney(value * boost.days);
         await updateBoost(boost.id, {

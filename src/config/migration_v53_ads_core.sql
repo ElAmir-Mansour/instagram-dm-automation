@@ -4,6 +4,8 @@ SET LOCAL lock_timeout = '5s'; -- fail in 5 s rather than queue the publish swee
 --   ads_objects         the stored copy of every campaign, ad set, ad and creative in the tenant's ad account, also those made in Meta
 --                       Ads Manager (`origin = 'meta'`). Filled by the structure sync (phase A2); this file backfills Boost's objects
 --   ads_insights_daily  results per object per day, the day in the AD ACCOUNT's time zone. Money in major units of `currency`
+--   ads_insights_breakdown  the same per country or per placement (phase A6 reads it, A2's daily sync writes it): a breakdown key
+--                       cannot fit the daily table's primary key
 --   ads_ops             the paced write queue: every write to Meta is one row with its outcome (A2 runs it; A1 records spend-cap writes
 --                       and activations here, and the money rule counts a running activation as "about to run")
 --   ads_pacer           one row per ad account: Meta's usage headers, the local point estimate and the time Meta blocked us until
@@ -86,6 +88,31 @@ CREATE TABLE IF NOT EXISTS ads_insights_daily (
 );
 
 ALTER TABLE ads_insights_daily ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS ads_insights_breakdown (
+    creator_id             UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+    level                  TEXT NOT NULL CHECK (level IN ('account', 'campaign', 'adset', 'ad')),
+    meta_id                TEXT NOT NULL,
+    -- The ad account's calendar day.
+    day                    DATE NOT NULL,
+    breakdown              TEXT NOT NULL CHECK (breakdown IN ('country', 'placement')),
+    -- country: the ISO code ('EG'); placement: '<publisher_platform>:<platform_position>' ('instagram:reels').
+    key                    TEXT NOT NULL,
+    currency               TEXT NOT NULL,
+    -- Excludes tax.
+    spend                  NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    impressions            BIGINT NOT NULL DEFAULT 0,
+    clicks                 BIGINT NOT NULL DEFAULT 0,
+    link_clicks            BIGINT NOT NULL DEFAULT 0,
+    conversations_started  INTEGER NOT NULL DEFAULT 0,
+    leads                  INTEGER NOT NULL DEFAULT 0,
+    follows                INTEGER,
+    provisional            BOOLEAN NOT NULL DEFAULT TRUE,
+    synced_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (creator_id, level, meta_id, day, breakdown, key)
+);
+
+ALTER TABLE ads_insights_breakdown ENABLE ROW LEVEL SECURITY;
 
 -- ── The paced write queue ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -208,6 +235,7 @@ ON CONFLICT (creator_id, level, meta_id) WHERE meta_id IS NOT NULL DO NOTHING;
 
 COMMENT ON TABLE ads_objects IS 'The stored copy of the ad account''s campaigns, ad sets, ads and creatives (Ads Manager). See migration_v53.';
 COMMENT ON TABLE ads_insights_daily IS 'Ads results per object per day, the day in the ad account''s time zone. See migration_v53.';
+COMMENT ON TABLE ads_insights_breakdown IS 'Ads results per object per day per country or placement, the day in the ad account''s time zone. See migration_v53.';
 COMMENT ON TABLE ads_ops IS 'The paced write queue to the Marketing API: one row per write and its outcome. See migration_v53.';
 COMMENT ON TABLE ads_pacer IS 'Per ad account: Meta''s usage headers, the local point estimate and any block. See migration_v53.';
 COMMENT ON TABLE ads_alerts IS 'Ads alerts sent, once per (tenant, kind, object, day). See migration_v53.';

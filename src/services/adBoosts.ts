@@ -500,12 +500,12 @@ export async function activateBoost(creatorId: string, id: string, now = new Dat
     try {
         await activateBoostObjects({ campaignId: before.campaign_id, adsetId: before.adset_id, adId: before.ad_id }, before.days, token, now);
     } catch (err) {
-        await finishSpendOp(opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
+        await finishSpendOp(creatorId, opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as MetaApiError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
         await updateBoost(id, { error: `Activation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 1000) }).catch(() => undefined);
         log('warn', 'ads.boost_activate_failed', { creator_id: creatorId, boost_id: id, ...describeError(err) });
         throw metaRefusal(err);
     }
-    await finishSpendOp(opId, 'done', { campaign_id: before.campaign_id });
+    await finishSpendOp(creatorId, opId, 'done', { campaign_id: before.campaign_id });
     log('info', 'ads.boost_activated', { creator_id: creatorId, boost_id: id, planned_total: Number(before.planned_total) });
     return toView(await updateBoost(id, { status: 'active', error: null }));
 }

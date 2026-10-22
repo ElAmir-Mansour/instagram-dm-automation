@@ -87,9 +87,9 @@ export function installAdsFakeDb(): AdsFakeDb {
             (pending ?? db.ops).push(row);
             return { rows: [{ id: row.id }], rowCount: 1 };
         }
-        const finish = flat.match(/^UPDATE ads_ops SET state = \$2, result = \$3::jsonb, finished_at = NOW\(\) WHERE id = \$1/);
+        const finish = flat.match(/^UPDATE ads_ops SET state = \$2, result = \$3::jsonb, finished_at = NOW\(\) WHERE id = \$1 AND creator_id = \$4/);
         if (finish) {
-            const row = db.ops.find((o) => o.id === params[0]);
+            const row = db.ops.find((o) => o.id === params[0] && o.creator_id === params[3]);
             if (row) { row.state = params[1]; row.result = params[2] === null ? null : JSON.parse(params[2]); row.finished_at = new Date(); }
             return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 };
         }

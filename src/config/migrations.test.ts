@@ -1144,11 +1144,11 @@ describe('migration v51: private media (media_uploads.is_private)', () => {
 
 // ─── v53: the Ads Manager's core tables ────────────────────────────────────────────────────────
 
-describe('migration v53: ads core (stored copy, results, ops queue, pacer, alerts)', () => {
+describe('migration v53: ads core (stored copy, results and breakdowns, ops queue, pacer, alerts)', () => {
     const FILE = 'migration_v53_ads_core.sql';
     const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
     const sql = withoutComments(raw).replace(/\s+/g, ' ');
-    const TABLES = ['ads_objects', 'ads_insights_daily', 'ads_ops', 'ads_pacer', 'ads_alerts'];
+    const TABLES = ['ads_objects', 'ads_insights_daily', 'ads_insights_breakdown', 'ads_ops', 'ads_pacer', 'ads_alerts'];
 
     it('is registered right after v52, and a database without it reports it as pending', () => {
         const i = EXPECTED_MIGRATIONS.indexOf(FILE);
@@ -1162,7 +1162,7 @@ describe('migration v53: ads core (stored copy, results, ops queue, pacer, alert
         assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
     });
 
-    it('creates exactly the five ads tables, each keyed by the tenant with ON DELETE CASCADE, and enables RLS on every one in this file', () => {
+    it('creates exactly the six ads tables, each keyed by the tenant with ON DELETE CASCADE, and enables RLS on every one in this file', () => {
         assert.deepEqual(createdTables(raw).sort(), [...TABLES].sort());
         const enabled = rlsEnabledTables(raw);
         for (const t of TABLES) {
@@ -1187,6 +1187,8 @@ describe('migration v53: ads core (stored copy, results, ops queue, pacer, alert
     it('has the unique keys the design relies on: one stored row per Meta object, one result row per day, one alert per kind and object a day', () => {
         assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_objects_meta ON ads_objects \(creator_id, level, meta_id\) WHERE meta_id IS NOT NULL/);
         assert.match(sql, /PRIMARY KEY \(creator_id, level, meta_id, day\)/);
+        assert.match(sql, /PRIMARY KEY \(creator_id, level, meta_id, day, breakdown, key\)/);
+        assert.match(sql, /breakdown TEXT NOT NULL CHECK \(breakdown IN \('country', 'placement'\)\)/);
         assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_alerts_once_a_day ON ads_alerts \(creator_id, kind, object_key, day\)/);
         assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_ads_ops_claim ON ads_ops \(ad_account_id, state, not_before\)/);
         assert.match(sql, /ad_account_id TEXT PRIMARY KEY/);

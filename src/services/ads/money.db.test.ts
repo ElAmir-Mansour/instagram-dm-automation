@@ -49,23 +49,32 @@ describe('checkAndStartSpend under the tenant lock', () => {
     it('still counts the first after it finished, when it finished after the second\'s month was read', async () => {
         const picture = month({ readAt: new Date() });
         const first = await attempt('campaign-a', 30);
-        await finishSpendOp(first.opId, 'done');
+        await finishSpendOp(TENANT, first.opId, 'done');
         await assert.rejects(attempt('campaign-b', 30, picture), MoneyRefused);
     });
 
     it('does not count an activation twice once a later month picture already includes it', async () => {
         const first = await attempt('campaign-a', 30);
-        await finishSpendOp(first.opId, 'done');
+        await finishSpendOp(TENANT, first.opId, 'done');
         db.ops[0]!.finished_at = new Date(Date.now() - 10 * 60_000);
         // The new picture was read after it was visible at Meta: its spend is in othersRemaining now.
         await attempt('campaign-b', 20, month({ othersRemaining: 30 }));
     });
 
+    it('finishes an op only for its own tenant', async () => {
+        const first = await attempt('campaign-a', 30);
+        await finishSpendOp(OTHER, first.opId, 'failed');
+        assert.equal(db.ops[0]!.state, 'running', 'another tenant cannot finish it');
+        assert.ok(db.ran(/^UPDATE ads_ops .* WHERE id = \$1 AND creator_id = \$4/).length === 1);
+        await finishSpendOp(TENANT, first.opId, 'failed');
+        assert.equal(db.ops[0]!.state, 'failed');
+    });
+
     it('keeps counting a call that may have landed (verify), and stops counting one that failed', async () => {
         const first = await attempt('campaign-a', 30);
-        await finishSpendOp(first.opId, 'verify');
+        await finishSpendOp(TENANT, first.opId, 'verify');
         await assert.rejects(attempt('campaign-b', 30), MoneyRefused);
-        await finishSpendOp(first.opId, 'failed');
+        await finishSpendOp(TENANT, first.opId, 'failed');
         await attempt('campaign-b', 30);
     });
 

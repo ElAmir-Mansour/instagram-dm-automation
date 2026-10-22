@@ -70,7 +70,7 @@ export async function setSpendCap(input: {
         const params: GraphParams = input.amount === null ? { spend_cap_action: 'delete' } : { spend_cap: String(roundMoney(input.amount)) };
         await adsPost(`act_${input.adAccountId}`, params, input.token, { label: 'spend cap' });
     } catch (err) {
-        await finishSpendOp(opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as AdsGraphError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
+        await finishSpendOp(input.creatorId, opId, mayHaveLanded(err) ? 'verify' : 'failed', { code: (err as AdsGraphError)?.metaCode ?? null, message: err instanceof Error ? err.message.slice(0, 300) : null });
         if (err instanceof AdsGraphError && err.klass === 'spend_cap_limit') {
             throw new SpendCapRefused('EDIT_LIMIT', 'Meta allows 10 changes to the spending limit a day; try again tomorrow.', nextLocalMidnight(now, input.offsetHours));
         }
@@ -95,6 +95,6 @@ export async function setSpendCap(input: {
         else amount = asMinor;
     }
     log(verified ? 'info' : 'warn', 'ads.spend_cap_units', { creator_id: input.creatorId, asked: input.amount, read_back: read, units, verified });
-    await finishSpendOp(opId, 'done', { read_back: read, units, verified });
+    await finishSpendOp(input.creatorId, opId, 'done', { read_back: read, units, verified });
     return { op: { id: opId, state: 'done', kind: 'spend_cap' }, amount: input.amount === null ? null : amount, verified, units };
 }

@@ -425,9 +425,9 @@ export async function startSpendOp(exec: Exec, op: SpendOpInput): Promise<string
  * After Meta answered (outside the transaction). `verify` is a call that may have landed (a timeout, a dropped connection): it keeps
  * counting as about to run for a day, because the campaign may be spending.
  */
-export async function finishSpendOp(id: string, state: 'done' | 'failed' | 'verify', result: Record<string, unknown> | null = null): Promise<void> {
+export async function finishSpendOp(creatorId: string, id: string, state: 'done' | 'failed' | 'verify', result: Record<string, unknown> | null = null): Promise<void> {
     try {
-        await queryOne(`UPDATE ads_ops SET state = $2, result = $3::jsonb, finished_at = NOW() WHERE id = $1 RETURNING id`, [id, state, result === null ? null : JSON.stringify(result)]);
+        await queryOne(`UPDATE ads_ops SET state = $2, result = $3::jsonb, finished_at = NOW() WHERE id = $1 AND creator_id = $4 RETURNING id`, [id, state, result === null ? null : JSON.stringify(result), creatorId]);
     } catch (err) {
         // The op stays `running`, which keeps counting it: the safe side. Logged so it can be found.
         log('error', 'ads.op_finish_failed', { op_id: id, state, ...describeError(err) });
