@@ -753,6 +753,16 @@ const API = {
     /** `{ deep? }` → `{ op }`: a PAUSED copy of a campaign, ad set or ad, named as a copy. */
     duplicateAdsObject: (id, body) => API.request(`/ads/objects/${encodeURIComponent(id)}/duplicate`, { method: 'POST', body: JSON.stringify(body || {}) }),
 
+    // ─── AI proposals (A7): Claude drafts, a person approves. Nothing is created or changed before approve; a new campaign is created PAUSED. ───
+    /** `{ request }` (the owner's words) or `{ postId, platform }` → 202 `{ proposal }` (state `drafting`). 409 `AI_NOT_CONFIGURED` when no AI is set up for the tenant. */
+    requestAdsProposal: (body) => API.request('/ads/proposals', { method: 'POST', body: JSON.stringify(body || {}) }),
+    /** `states` (an array) → `{ proposals: ProposalView[] }`, newest first. */
+    getAdsProposals: (states) => API.request(`/ads/proposals${Array.isArray(states) && states.length ? `?state=${states.map(encodeURIComponent).join(',')}` : ''}`),
+    getAdsProposal: (id) => API.request(`/ads/proposals/${encodeURIComponent(id)}`),
+    /** `{ confirm: true }` is sent only after the owner said yes. → `{ proposal, ops }`. Refusals: POLICY_BLOCKED (`findings`), OVER_MONTHLY_CAP, OVER_DAILY_MAX, BELOW_META_MINIMUM, META_ERROR, NOT_WIRED. */
+    approveAdsProposal: (id, edits) => API.request(`/ads/proposals/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify(edits ? { confirm: true, edits } : { confirm: true }) }),
+    rejectAdsProposal: (id, reason) => API.request(`/ads/proposals/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

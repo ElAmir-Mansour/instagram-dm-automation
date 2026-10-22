@@ -87,7 +87,7 @@ describe('the default pick: the first provider that has a key', () => {
     it('gives each purpose its own default effort', async () => {
         saveKey('anthropic');
         for (const purpose of AI_PURPOSES) assert.equal((await pick(purpose)).effort, PURPOSE_DEFAULT_EFFORT[purpose], purpose);
-        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low', 'low']);
+        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low', 'low', 'medium', 'medium']);
     });
 
     it('answers the `dm` purpose at low effort on the default model, until a route is saved for it', async () => {

@@ -7,7 +7,7 @@
 import type { ProviderId } from '../llm/registry.js';
 import type { Effort } from '../llm/types.js';
 
-export const AI_PURPOSES = ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp'] as const;
+export const AI_PURPOSES = ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review'] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 
 export const isAiPurpose = (value: unknown): value is AiPurpose => typeof value === 'string' && (AI_PURPOSES as readonly string[]).includes(value);
@@ -42,6 +42,11 @@ export const PURPOSE_DEFAULT_EFFORT: Readonly<Record<AiPurpose, Effort>> = {
     dm: 'low',
     // The same, for a WhatsApp chat.
     dm_whatsapp: 'low',
+    // Ads A7: a campaign drafted from the owner's words or a post, and the daily review of running ads. A tenant's OWN key; the owner's
+    // drafts never come here (they are Studio `ads_think` jobs on his Mac, ads/proposals/service.ts), and these are deliberately NOT in
+    // MAC_BRAIN_PURPOSES, which means "refuse on the layer": a tenant on the Mac never asks the layer for them in the first place.
+    ads_draft: 'medium',
+    ads_review: 'medium',
 };
 
 /** The effort of a `key_test` call: it asks for one word of JSON, so it asks for no thinking. */

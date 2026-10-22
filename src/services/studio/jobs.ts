@@ -24,6 +24,7 @@ import { describeError, log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { queueAdvance } from '../ads/proposals/advance.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
@@ -63,7 +64,7 @@ export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
 /** Every job kind, for a claim that asks for some of them only. */
 export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
     'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
-    'monteur_think', 'render_infographic',
+    'monteur_think', 'render_infographic', 'ads_think',
 ];
 
 export type StudioJobView = Pick<
@@ -229,6 +230,7 @@ export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, so
  *   0  pick_folder         someone is looking at the Mac, waiting for the folder dialog
  *   1  render_carousel     someone is waiting at the editor
  *   1  monteur_think       Claude on the Mac: a minute, and the Monteur's next step waits for it
+ *   1  ads_think           Claude on the Mac drafting an ad proposal: the owner is looking at a "drafting" card
  *   2  monteur_render      a reel for the review queue, often right after an edit
  *   3  scan_library, monteur_scan   quick folder listings that queue the real work
  *   4  index_lesson, monteur_transcribe   minutes each: the backlog that must not hold the rest
@@ -247,7 +249,7 @@ export const CLAIM_SQL = `
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'monteur_render' THEN 2
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1 WHEN 'monteur_render' THEN 2
                             WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
                   created_at, id
          LIMIT 1
@@ -325,7 +327,8 @@ export async function claimJob(
  * on "indexing" forever. Runs before each claim, in its own transaction.
  */
 export async function failExhaustedClaims(creatorId: string): Promise<number> {
-    return withTransaction(async (client) => {
+    const exhaustedProposals: string[] = [];
+    const failed = await withTransaction(async (client) => {
         const { rows } = await client.query<LockedJob>(
             `UPDATE studio_jobs
                 SET status = 'failed', error = $4, progress = NULL, updated_at = NOW()
@@ -338,6 +341,8 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
         for (const job of rows) {
             log('warn', 'studio.job_exhausted', { job_id: job.id, kind: job.kind });
             await applyFailure(client, job, EXHAUSTED_ERROR);
+            const proposalId = job.kind === 'ads_think' ? payloadId(job, 'proposalId') : null;
+            if (proposalId) exhaustedProposals.push(proposalId);
         }
         // Folder dialogs nobody is waiting for any more are failed, never handed out.
         const { rowCount } = await client.query(
@@ -349,6 +354,8 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
         if (rowCount) log('info', 'monteur.folder_pick_expired', { jobs: rowCount });
         return rows.length;
     });
+    for (const id of exhaustedProposals) queueAdvance(creatorId, id, 'mac_failed');
+    return failed;
 }
 
 // ─── Progress ───────────────────────────────────────────────────────────────────────────
@@ -383,7 +390,8 @@ export type CompleteOutcome = 'applied' | 'dropped' | 'already_done';
  * worker reports the failure, and if it never does the claim goes stale like any other.
  */
 export async function completeJob(creatorId: string, jobId: string, result: unknown): Promise<CompleteOutcome> {
-    return withTransaction(async (client) => {
+    let proposalId: string | null = null;
+    const done = await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'done') return 'already_done';
         if (job.status !== 'claimed') {
@@ -415,6 +423,10 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
         } else if (job.kind === 'monteur_think') {
             // Only stored: the sweep reads it by its request id on its next drain (think.ts).
             stored = parseMonteurThinkResult(result);
+        } else if (job.kind === 'ads_think') {
+            // Only stored, like a think: the proposal reads it on its next advance (ads/proposals/service.ts), queued below once this commits.
+            stored = parseMonteurThinkResult(result);
+            proposalId = payloadId(job, 'proposalId');
         } else if (job.kind === 'render_infographic') {
             const applied = await applyInfographicRender(client, job, result);
             stored = applied.stored;
@@ -432,6 +444,9 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
         log('info', 'studio.job_completed', { job_id: job.id, kind: job.kind, outcome });
         return outcome;
     });
+    // After the commit, never inside it: the advance reads the stored result, and may read Meta for the money rule.
+    if (proposalId) queueAdvance(creatorId, proposalId, 'mac_done');
+    return done;
 }
 
 async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<LockedJob> {
@@ -445,7 +460,7 @@ async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<Lo
     return rows[0];
 }
 
-function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId' | 'infographicId'): string | null {
+function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId' | 'infographicId' | 'proposalId'): string | null {
     const value = isPlainObject(job.payload) ? (job.payload as Record<string, unknown>)[key] : undefined;
     return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
 }
@@ -986,9 +1001,11 @@ async function applyMonteurRender(
 
 /** The worker gave up. Terminal: the operator re-presses the button once the cause is fixed. */
 export async function failJob(creatorId: string, jobId: string, error: string): Promise<void> {
+    let proposalId: string | null = null;
     await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'failed') return;
+        if (job.kind === 'ads_think') proposalId = payloadId(job, 'proposalId');
         if (job.status !== 'claimed') {
             throw new StudioError(409, `This job is ${job.status}; only a claimed job can fail.`);
         }
@@ -999,6 +1016,8 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
         await applyFailure(client, job, error);
         log('warn', 'studio.job_failed', { job_id: job.id, kind: job.kind });
     });
+    // The proposal is failed (or asked again) by its own advance, after this commits.
+    if (proposalId) queueAdvance(creatorId, proposalId, 'mac_failed');
 }
 
 /**

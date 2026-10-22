@@ -3586,10 +3586,27 @@ const PostsPage = {
 
     boostButton(post) {
         if (!this.boostFreePlatforms(post).length) return '';
-        return UI.button({
+        const boost = UI.button({
             variant: 'primary', size: 'sm', icon: 'trending-up', label: t('boost.button'),
             action: 'posts:boostOpen', data: { id: post.id }, focusKey: `post-boost-${post.id}`,
         });
+        // A7: Claude drafts a whole campaign from this post; it waits in Ads → Proposals for the owner's approval.
+        const suggest = UI.button({
+            variant: 'ghost', size: 'sm', icon: 'sparkles', label: t('ads.proposals.suggest'),
+            action: 'posts:adsSuggest', data: { id: post.id }, focusKey: `post-suggest-${post.id}`,
+        });
+        return html`${boost}${suggest}`;
+    },
+
+    /** "Suggest a campaign" on a published post: a drafting proposal, then Ads → Proposals. */
+    async adsSuggest(id) {
+        const post = (this.posts || []).find((p) => String(p.id) === String(id));
+        const platform = post ? this.boostFreePlatforms(post)[0] || this.boostPlatformsOf(post)[0] : undefined;
+        try {
+            if (typeof AdsProposalsPage === 'undefined' && typeof App !== 'undefined' && typeof App.loadPageModule === 'function') await App.loadPageModule('ads_proposals');
+        } catch { /* said below */ }
+        if (typeof AdsProposalsPage === 'undefined') { UI.toast(t('error.unexpected'), 'error'); return; }
+        await AdsProposalsPage.suggestFromPost(String(id), platform);
     },
 
     /** `12.5 USD` as one isolated run: a currency code never reorders an Arabic sentence. */
@@ -4724,6 +4741,7 @@ UI.registerActions('posts', {
     archivePost: (el) => PostsPage.archivePost(el.dataset.id),
     unarchivePost: (el) => PostsPage.unarchivePost(el.dataset.id),
     boostOpen: (el) => PostsPage.boostOpen(el.dataset.id),
+    adsSuggest: (el) => PostsPage.adsSuggest(el.dataset.id),
     boostActivate: (el) => PostsPage.boostActivate(el.dataset.boost),
     boostPause: (el) => PostsPage.boostPause(el),
     boostRefresh: (el) => PostsPage.boostRefresh(el),

@@ -69,12 +69,12 @@ const AdsCreatePage = {
 
     // ─── The state ────────────────────────────────────────────────────────────────────────
 
-    /** A fresh builder. `preset` (from quick mode or the AI later) fills any part of it. */
+    /** A fresh builder. `preset` (from quick mode, or `{ spec }` from an AI proposal's "Edit in builder") fills any part of it. */
     fresh(preset) {
         const p = preset || {};
         const now = new Date(Date.now() + 15 * 60_000);
         const end = new Date(now.getTime() + 5 * 86_400_000);
-        return {
+        const st = {
             step: 0,
             name: p.name || '',
             goal: p.goal && this.GOALS.includes(p.goal) && !this.LOCKED_GOALS.includes(p.goal) ? p.goal : 'traffic',
@@ -98,6 +98,56 @@ const AdsCreatePage = {
             search: { type: null, q: '', items: [], seq: 0, timer: null },
             errors: Object.create(null),
         };
+        if (p.spec && typeof p.spec === 'object') this.applySpec(st, p.spec);
+        if (p.proposalId) st.proposalId = String(p.proposalId);
+        return st;
+    },
+
+    /**
+     * A whole `CampaignSpec` (an AI proposal, A7) laid over a fresh builder: the first ad set's audience and the first ad's creative and copy,
+     * which is all a proposal drafts. Anything it does not name keeps the builder's default; the owner reviews every step before Create.
+     */
+    applySpec(st, spec) {
+        const set = Array.isArray(spec.adsets) && spec.adsets[0] ? spec.adsets[0] : null;
+        const ad = Array.isArray(spec.ads) && spec.ads[0] ? spec.ads[0] : null;
+        if (typeof spec.name === 'string') st.name = spec.name;
+        if (spec.goal && this.GOALS.includes(spec.goal) && !this.LOCKED_GOALS.includes(spec.goal)) st.goal = spec.goal;
+        if (Array.isArray(spec.destinations) && spec.destinations.length) st.destinations = spec.destinations.filter((d) => this.DESTINATIONS.includes(d));
+        if (['none', 'employment', 'financial', 'housing', 'political'].includes(spec.specialCategory)) st.special = spec.specialCategory;
+        const b = spec.budget || {};
+        if (b.home === 'campaign' || b.home === 'adset') st.home = b.home;
+        if (b.kind === 'daily' || b.kind === 'lifetime') st.kind = b.kind;
+        if (typeof b.amount === 'number' && b.amount > 0) st.amount = String(b.amount);
+        const startAt = Date.parse(b.start);
+        if (Number.isFinite(startAt) && startAt > Date.now()) st.start = this.localInput(new Date(startAt));
+        const endAt = Date.parse(b.end);
+        if (Number.isFinite(endAt)) st.end = this.localInput(new Date(endAt));
+        if (set && set.targeting) {
+            const tg = set.targeting;
+            if (Array.isArray(tg.countries) && tg.countries.length) st.countries = tg.countries.join(', ');
+            if (Number.isFinite(tg.ageMin)) st.ageMin = String(tg.ageMin);
+            st.ageMax = Number.isFinite(tg.ageMax) ? String(tg.ageMax) : '';
+            st.gender = Array.isArray(tg.genders) && tg.genders.length === 1 ? (tg.genders[0] === 1 ? 'men' : 'women') : 'all';
+            st.advantage = tg.advantageAudience !== false;
+        }
+        if (set && set.placements === 'automatic') st.placementMode = 'automatic';
+        if (ad) {
+            if (ad.creative && ad.creative.source === 'post') {
+                st.source = 'post';
+                st.postId = String(ad.creative.postId || '');
+                st.platform = ad.creative.platform === 'facebook' ? 'facebook' : 'instagram';
+            }
+            const copy = ad.copy || {};
+            if (typeof copy.primaryText === 'string') st.primaryText = copy.primaryText;
+            if (typeof copy.headline === 'string') st.headline = copy.headline;
+            if (typeof copy.cta === 'string' && copy.cta) st.cta = copy.cta;
+            if (ad.message) {
+                st.greeting = typeof ad.message.greeting === 'string' ? ad.message.greeting : '';
+                st.ice = (Array.isArray(ad.message.iceBreakers) ? ad.message.iceBreakers : []).slice(0, this.ICE_MAX || 4).map((x) => ({ title: String((x && x.title) || '') }));
+            }
+            if (ad.link && ad.link.trackedOfferId) st.link = { mode: 'offer', offerId: String(ad.link.trackedOfferId), url: '' };
+            else if (ad.link && ad.link.url) st.link = { mode: 'url', offerId: '', url: String(ad.link.url) };
+        }
     },
 
     /** `YYYY-MM-DDTHH:MM` in local time, for a datetime-local input. */
@@ -174,14 +224,14 @@ const AdsCreatePage = {
         this.dispose();
         this.state = this.fresh(this.preset || null);
         this.preset = null;
-        if (this.offers.length) this.state.link.offerId = String(this.offers[0].id); else this.state.link.mode = 'url';
+        if (this.offers.length) { if (!this.state.link.offerId) this.state.link.offerId = String(this.offers[0].id); } else this.state.link.mode = 'url';
         this.view = 'ready';
         this.paint();
         this.loadMoney();
         return true;
     },
 
-    /** Opened with a preset (quick mode's "more options", a proposal later). */
+    /** Opened with a preset (quick mode's "more options", or `{ spec, proposalId }` from an AI proposal's "Edit in builder"). */
     openWith(preset) {
         this.preset = preset || null;
         if (typeof location !== 'undefined') location.hash = '#/ads_create';

@@ -102,6 +102,8 @@ import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
 import { runAdsHealth } from '../services/ads/health.js';
+import { expireProposals } from '../services/ads/proposals/store.js';
+import { runDailyReview } from '../services/ads/proposals/service.js';
 import { drainAdsOps } from '../services/ads/ops.js';
 import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
@@ -1105,6 +1107,17 @@ router.get('/cron/publish', async (req, res) => {
             if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });
         } catch (healthErr) {
             log('error', 'cron.ads_health_failed', describeError(healthErr));
+        }
+
+        // AI proposals (src/services/ads/proposals/): open ones past 7 days expire, drafts the Mac never answered (24 h) fail, then the
+        // daily review drafts at most 3 changes per tenant with ads on and 3+ days of results. Nothing is applied without approval.
+        try {
+            const swept = await expireProposals();
+            if (swept.expired > 0 || swept.staleDrafts > 0) log('info', 'cron.ads_proposals_expired', { ...swept });
+            const review = await runDailyReview();
+            if (review.queued > 0) log('info', 'cron.ads_daily_review', { ...review });
+        } catch (proposalErr) {
+            log('error', 'cron.ads_proposals_failed', describeError(proposalErr));
         }
 
         // The ads results of the trailing 28 days, with the country and placement breakdowns (src/services/ads/sync.ts): Meta revises

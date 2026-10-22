@@ -2217,6 +2217,88 @@ const HelpContent = {
                         ],
                     },
                 },
+                {
+                    id: 'ai-proposals',
+                    title: { ar: 'دع Claude يكتب حملتك: المقترحات', en: 'Let Claude draft: proposals' },
+                    body: {
+                        ar: [
+                            'في تبويب **المقترحات** في شاشة الإعلانات يكتب Claude حملات كاملة وتغييرات على إعلاناتك الجارية، ثم ينتظر قرارك. لا يُنشأ شيء ولا يتغيّر شيء ولا يُنفَق شيء قبل أن توافق.',
+                            { ol: [
+                                'اضغط **اقترح حملة** (في المقترحات أو في النظرة العامة) واكتب بجملة ما تريد الإعلان عنه، أو اضغط الزر نفسه على منشور منشور في **المنشورات** ليبني Claude الحملة على ذلك المنشور.',
+                                'تظهر بطاقة **قيد الكتابة**. مسودات حسابك أنت يكتبها Claude على جهازك، وقد تستغرق بضع دقائق؛ يمكنك مغادرة الصفحة، وتتحدّث البطاقة وحدها.',
+                                'حين تجهز تعرض البطاقة: الهدف، والميزانية، والدول والأعمار، ونص الإعلان، وسبب الاقتراح، وما افترضه Claude، وما يضيفه إلى أسوأ حالات الإنفاق هذا الشهر.',
+                                'اختر: **وافق** فتُنشأ الحملة متوقفة مؤقتاً ولا تنفق حتى تشغّلها من **الحملات**؛ أو **عدّل في المنشئ** لتغيّر أي شيء قبل الإنشاء؛ أو **ارفض** فلا يُنشأ شيء.',
+                            ] },
+                            'قبل أن تراها تمرّ كل مسودة بالفحوص نفسها التي يمرّ بها ما تكتبه بيدك:',
+                            { ul: [
+                                'فحص السياسة: إن خالف النص قاعدة تمنعها ميتا طُلب من Claude أن يعيد الكتابة مرة واحدة، فإن بقيت المخالفة لم يُعرض المقترح.',
+                                'قاعدة المال: إن زادت الميزانية على حدّك اليومي أو على ما تبقّى من سقفك الشهري خُفِّضت لتتسع، مع ملاحظة تقول ذلك. وإن كان ما يتسع أقل من الحد الأدنى الذي تشترطه ميتا فشل المقترح.',
+                                '**الأرقام**: لا يُعرض رقم في «الأرقام التي بُني عليها» إلا إن كان من نتائج حسابك أنت. والتقدير المتوقَّع يأتي من تاريخ حسابك فقط، ولا يخترع Claude متوسطاً للسوق.',
+                            ] },
+                            'وعند الموافقة يُعاد فحص السياسة وقاعدة المال مرة أخرى، ثم تفحص ميتا الحملة دون إنشائها. فإن رفض أيٌّ منها لم يتغيّر شيء، وظهر السبب في نافذة الموافقة.',
+                            { h: 'المراجعة اليومية' },
+                            'مرة في اليوم يراجع Claude إعلاناتك الجارية التي لها 3 أيام من النتائج على الأقل، وقد يقترح حتى ثلاثة تغييرات: إيقاف مؤقت، أو خفض ميزانية أو رفعها، أو نقل ميزانية من مجموعة إعلانية أضعف إلى أقوى، أو إعلان جديد من منشور. ويصلك تنبيه «اقترح Claude تغييرات» إن كان مفعَّلاً في الإعدادات ← تنبيهات الإعلانات.',
+                            { tip: 'تنتهي صلاحية المقترح بعد 7 أيام إن لم تقرر فيه، لأن الأرقام التي بُني عليها تتغيّر. اطلب مقترحاً جديداً متى شئت.' },
+                        ],
+                        en: [
+                            'In the **Proposals** tab of the Ads screen, Claude drafts whole campaigns and changes to your running ads, then waits for you. Nothing is created, changed or spent until you approve.',
+                            { ol: [
+                                'Press **Suggest a campaign** (on Proposals or the Overview) and say in a sentence what you want to advertise, or press the same button on a published post in **Posts** to build the campaign on that post.',
+                                'A **Drafting** card appears. Drafts for your own account are written by Claude on your Mac and can take a few minutes; you can leave the page, and the card updates by itself.',
+                                'When it is ready the card shows the goal, the budget, the countries and ages, the ad text, why Claude proposes it, what it assumed, and what it adds to this month\'s worst case.',
+                                'Choose: **Approve** and the campaign is created paused, spending nothing until you switch it on in **Campaigns**; **Edit in builder** to change anything before it is created; or **Reject** and nothing is created.',
+                            ] },
+                            'Before you see it, every draft goes through the same checks as what you write yourself:',
+                            { ul: [
+                                'The policy check: if the text breaks a rule Meta enforces, Claude is asked to rewrite it once; if it still does, the proposal is not shown.',
+                                'The money rule: a budget over your max daily budget or what is left of your monthly cap is reduced to fit, with a note saying so. If what fits is below Meta\'s minimum, the proposal fails.',
+                                'The numbers: a number under "The numbers behind it" is shown only if it comes from your own account\'s results. The expected range comes only from your account\'s history; Claude never invents a market average.',
+                            ] },
+                            'On **Approve** the policy check and the money rule run again, then Meta checks the campaign without creating it. If any of them refuses, nothing changes and the reason is shown in the approve dialog.',
+                            { h: 'The daily review' },
+                            'Once a day Claude reviews your running ads that have at least 3 days of results and may propose up to three changes: pause, lower or raise a budget, move budget from a weaker ad set to a stronger one, or a new ad from a post. You get the "Claude proposed changes" alert if it is on in Settings → Ads alerts.',
+                            { tip: 'A proposal expires after **7 days** if you do not decide, because the numbers behind it move. Ask for a new one any time.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'what-ai-sees',
+                    title: { ar: 'ما الذي يراه الذكاء الاصطناعي، ومن يكتب', en: 'What the AI sees, and who writes' },
+                    body: {
+                        ar: [
+                            'يُعطى Claude مجاميع فقط، لا بيانات أشخاص:',
+                            { ul: [
+                                'أسماء حملاتك ومجموعاتك الإعلانية وميزانياتها وحالاتها وملخص استهدافها، ومجاميع آخر 7 أيام لكل منها: الإنفاق، والنتائج، وتكلفة النتيجة، والمحادثات، ونسبة النقر.',
+                                'عروضك كما كتبتها في ملفك: الاسم والسعر وملخص قصير، بعد حذف أي بريد أو رقم هاتف منه.',
+                                'حدودك (الحد اليومي والسقف الشهري وما تبقّى منه) والحد الأدنى الذي تشترطه ميتا، وأوصاف قواعد السياسة.',
+                                'كلماتك أنت في «اقترح حملة»، وعند البدء من منشور: نص المنشور وأرقامه العامة (المشاهدات والوصول والحفظ).',
+                            ] },
+                            'لا يرى أبداً: رسائل عملائك، ولا أسماءهم، ولا أرقام هواتفهم أو بريدهم، ولا إجابات نماذج العملاء المحتملين، ولا قوائم التواصل.',
+                            { h: 'من يكتب' },
+                            { ul: [
+                                'حساب صاحب المنصة: يكتب Claude المسودات على جهازه (Claude Code على اشتراكه الشخصي)، لا عبر مفتاح API.',
+                                'كل نشاط آخر: تُكتب المسودات عبر مزوّد الذكاء الاصطناعي المضبوط له في العمليات ← مزوّدو الذكاء الاصطناعي (الغرضان «مسودات الإعلانات» و«المراجعة اليومية للإعلانات»). وإن لم يُضبط مزوّد ظهرت رسالة بذلك ولم يُكتب شيء.',
+                            ] },
+                            { tip: 'سياسة الخصوصية تذكر ذلك أيضاً، مع قائمة المزوّدين.' },
+                        ],
+                        en: [
+                            'Claude is given aggregates only, never data about people:',
+                            { ul: [
+                                'Your campaigns\' and ad sets\' names, budgets, statuses and targeting summary, and each one\'s last-7-day totals: spend, results, cost per result, conversations and click-through rate.',
+                                'Your offers as written in your profile: name, price and a short summary, with any email address or phone number taken out.',
+                                'Your limits (max daily budget, monthly cap and what is left of it), Meta\'s minimum budget, and the policy rules\' descriptions.',
+                                'Your own words in "Suggest a campaign" and, when you start from a post, the post\'s caption and its public counts (views, reach, saves).',
+                            ] },
+                            'It never sees your customers\' messages, names, phone numbers or emails, lead-form answers, or contact lists.',
+                            { h: 'Who writes' },
+                            { ul: [
+                                'The platform owner\'s account: Claude writes the drafts on the owner\'s Mac (Claude Code on his own plan), not through an API key.',
+                                'Every other business: drafts are written by the AI provider set up for it in Operations → AI providers (the purposes "Ad drafts" and "Daily ads review"). With none set up, a message says so and nothing is written.',
+                            ] },
+                            { tip: 'The privacy policy says this too, with the list of providers.' },
+                        ],
+                    },
+                },
             ],
         },
         // ─── 6. Carousel Studio overview ─────────────────────────────────────

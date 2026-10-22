@@ -1258,3 +1258,47 @@ describe('migration v54: ads attribution (conversations.ad_touches, no_reply_rea
         assert.doesNotMatch(sql, /CREATE TABLE/i);
     });
 });
+
+// ─── v55: AI proposals ──────────────────────────────────────────────────────────────────────────
+
+describe('migration v55: ads proposals (ads_proposals, studio_jobs ads_think)', () => {
+    const FILE = 'migration_v55_ads_proposals.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v54, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v54_ads_attribution.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+    });
+
+    it('closes the vocabularies of kind, source and state, keys the table by the tenant and turns row level security on', () => {
+        assert.match(sql, /CREATE TABLE IF NOT EXISTS ads_proposals \(/);
+        assert.match(sql, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/);
+        assert.match(sql, /kind IN \('new_campaign', 'change', 'rule_raise', 'test_winner'\)/);
+        assert.match(sql, /source IN \('request', 'post', 'daily_review', 'rule', 'study'\)/);
+        assert.match(sql, /state IN \('drafting', 'open', 'approved', 'applying', 'applied', 'failed', 'rejected', 'expired'\)/);
+        assert.match(sql, /expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\) \+ INTERVAL '7 days'/);
+        assert.match(sql, /ALTER TABLE ads_proposals ENABLE ROW LEVEL SECURITY;/);
+    });
+
+    it('widens studio_jobs_kind_check with ads_think and keeps every kind v31 allowed', () => {
+        const m = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(m, 'the constraint is re-added');
+        const kinds = [...m[1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]);
+        const v31 = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(withoutComments(readFileSync(path.join(CONFIG_DIR, 'migration_v31_infographics.sql'), 'utf8')).replace(/\s+/g, ' '));
+        const before = [...v31![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]);
+        assert.deepEqual(kinds, [...before, 'ads_think']);
+    });
+
+    it('allows exactly the kinds the queue knows (the latest widening is the one that counts)', async () => {
+        const { STUDIO_JOB_KINDS } = await import('../services/studio/jobs.js');
+        const m = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(sql);
+        assert.deepEqual([...m![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]).sort(), [...STUDIO_JOB_KINDS].sort());
+    });
+});

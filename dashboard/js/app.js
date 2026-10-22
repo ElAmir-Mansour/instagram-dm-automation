@@ -115,6 +115,8 @@ const App = {
         ads_results: { src: 'ads_results', page: () => AdsResultsPage, navAs: 'ads' },
         // Ads' fourth tab (#/ads_create): the full ad builder (A5). Quick mode stays Posts' Boost dialog. Same stylesheet rule as Campaigns.
         ads_create: { src: 'ads_create', page: () => AdsCreatePage, navAs: 'ads' },
+        // Ads' AI proposals (#/ads_proposals, A7): Claude drafts a campaign or a change, the owner approves, edits in the builder or rejects.
+        ads_proposals: { src: 'ads_proposals', page: () => AdsProposalsPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -171,7 +173,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.66',
+    ASSET_VERSION: '12.67',
 
     _modules: Object.create(null),
 
