@@ -234,9 +234,14 @@ const AdsPage = {
         const refresh = UI.button({
             variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('ads.refresh'), action: 'ads:refresh', focusKey: 'ads-refresh',
         });
+        // "Suggest a campaign" (A7): Claude drafts one from the owner's words; it waits in Proposals for approval.
+        const canSuggest = typeof App === 'undefined' || typeof App.canOperate !== 'function' || App.canOperate();
+        const suggest = ready && canSuggest
+            ? UI.button({ variant: 'primary', size: 'sm', icon: 'sparkles', label: t('ads.proposals.suggest'), action: 'ads:suggest', focusKey: 'ads-suggest' })
+            : '';
         const header = UI.pageHeader({
             title: t('ads.head.title'),
-            actions: ready ? refresh : '',
+            actions: ready ? html`${suggest}${refresh}` : '',
         });
         if (this.view === 'forbidden') {
             return html`<div id="ads-page" class="ads-page">${header}${UI.emptyState({ icon: 'lock', title: t('ads.owner.title'), body: t('ads.owner.body') })}</div>`;
@@ -661,4 +666,11 @@ const AdsPage = {
 
 UI.registerActions('ads', {
     refresh: (el) => AdsPage.refresh(el),
+    suggest: async () => {
+        try {
+            if (typeof AdsProposalsPage === 'undefined' && typeof App !== 'undefined' && typeof App.loadPageModule === 'function') await App.loadPageModule('ads_proposals');
+        } catch { /* said below */ }
+        if (typeof AdsProposalsPage === 'undefined') { UI.toast(t('error.unexpected'), 'error'); return; }
+        AdsProposalsPage.suggest();
+    },
 });
