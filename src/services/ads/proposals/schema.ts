@@ -178,7 +178,7 @@ export function parseModelJson(raw: unknown): unknown {
     const text = raw.replace(/^﻿/, '').trim();
     const attempts = [text];
     const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-    if (fence) attempts.push(fence[1].trim());
+    if (fence) attempts.push((fence[1] ?? '').trim());
     const first = text.indexOf('{');
     const last = text.lastIndexOf('}');
     if (first >= 0 && last > first) attempts.push(text.slice(first, last + 1));
@@ -324,8 +324,10 @@ function checkAd(c: Check, path: string, v: unknown, adsetCount: number): void {
         if (c.object(message, v.message)) {
             c.string(at(message, 'greeting'), v.message.greeting, { max: MAX_GREETING });
             const breakers = at(message, 'iceBreakers');
-            if (c.array(breakers, v.message.iceBreakers, { max: MAX_ICE_BREAKERS })) {
-                v.message.iceBreakers.forEach((b, i) => {
+            // Too many is one error; each title is still checked, so the one regeneration fixes both.
+            c.array(breakers, v.message.iceBreakers, { max: MAX_ICE_BREAKERS });
+            if (Array.isArray(v.message.iceBreakers)) {
+                (v.message.iceBreakers as unknown[]).forEach((b, i) => {
                     const p = idx(breakers, i);
                     if (!c.object(p, b)) return;
                     c.string(at(p, 'title'), b.title, { max: MAX_ICE_BREAKER_TITLE });

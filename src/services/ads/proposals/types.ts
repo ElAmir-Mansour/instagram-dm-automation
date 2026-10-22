@@ -15,46 +15,11 @@
  * Nothing here calls Meta while drafting (contract step 5: Meta's `validate_only` runs on approval only).
  */
 
-// ─── Campaign spec (contracts/dashboard-api.md "CampaignSpec"; the builder owns the mapping to Meta) ──────────────────────
+// ─── Campaign spec: A4's `spec.ts` is the one shape and the one mapping to Meta ──────────────────────────────────────────
 
-export type CampaignGoal = 'messages' | 'reach' | 'engagement' | 'traffic' | 'leads';
+import type { CampaignSpec } from '../spec.js';
+export type { CampaignSpec };
 export type BudgetKind = 'daily' | 'lifetime';
-
-export interface CampaignSpec {
-    name: string;
-    goal: CampaignGoal;
-    destinations?: ('instagram' | 'messenger' | 'whatsapp')[];
-    specialCategory: 'none' | 'employment' | 'financial' | 'housing' | 'political';
-    /** `start` and `end` are ISO times; `amount` is in the ad account's currency, major units. */
-    budget: { home: 'campaign' | 'adset'; kind: BudgetKind; amount: number; start: string; end?: string };
-    adsets: {
-        name: string;
-        targeting: {
-            countries: string[];
-            cities?: { key: string; radiusKm: number }[];
-            ageMin: number;
-            ageMax?: number;
-            genders?: number[];
-            locales?: number[];
-            interests?: { id: string; name: string }[];
-            includeAudiences?: string[];
-            excludeAudiences?: string[];
-            advantageAudience: boolean;
-        };
-        placements: 'automatic' | { facebook?: string[]; instagram?: string[] };
-        optimization?: string;
-        schedule?: unknown;
-    }[];
-    ads: {
-        adsetIndex: number;
-        name: string;
-        creative: { source: 'post'; postId: string; platform: string } | { source: 'media'; mediaId: string; verticalMediaId?: string; coverMediaId?: string };
-        copy: { primaryText: string; headline?: string; cta: string };
-        link?: { trackedOfferId: string } | { url: string };
-        message?: { greeting: string; iceBreakers: { title: string; response?: string }[] };
-        offerId?: string;
-    }[];
-}
 
 // ─── The model's input (contracts/ai-proposal.schema.md "Input") ──────────────────────────────────────────────────────────
 

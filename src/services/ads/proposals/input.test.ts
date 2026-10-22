@@ -23,7 +23,7 @@ const SECRETS = [
 const PROFILE: CreatorProfile = {
     ...defaultProfile({ lang: 'ar', rules: [] }),
     identity: { display_name: { ar: 'متجر نور', en: 'Nour' }, brand_name: 'Nour', kind: 'shop', role: 'online shop', niche: 'candles', country: 'EG', timezone: 'Africa/Cairo' },
-    language: { primary: 'ar', register: 'fusha', digits: 'latin', surfaces: {} },
+    language: { primary: 'ar', register: 'msa', digits: 'latin', surfaces: {} },
     audience: { description: 'Women who like candles', level: null, pains: [], goals: [], countries: ['EG', 'SA'], languages: ['ar'] },
     offers: [
         offer({
@@ -78,7 +78,7 @@ describe('buildInput', () => {
         assert.deepEqual(input.account.audiences, [{ id: 'au1', kind: 'custom', name: 'Buyers', size: 1200 }]);
         assert.equal(input.daysOfData, 21);
         assert.deepEqual(input.offers.map((o) => [o.id, o.title, o.price, o.url_is_tracked]), [['candle', 'شمعة لافندر', '99 SAR', true], ['box', 'علبة هدية', null, false]]);
-        assert.match(input.offers[0].summary, /تدوم ٤٠ ساعة/);
+        assert.match(input.offers[0]!.summary, /تدوم ٤٠ ساعة/);
     });
 
     it('falls back to nulls and empties when no port is wired', async () => {
@@ -117,9 +117,9 @@ describe('buildInput', () => {
             offers: [offer({ id: 'x', name: 'X', bullets: ['a'.repeat(500)], facts: ['mail me at owner@example.com or 0551234567 or +20 100 123 4567'] })],
         };
         const input = await buildInput('t1', { task: 'draft_campaign' }, NO_PORTS, { loadProfile: async () => ({ profile }) });
-        assert.ok(input.offers[0].summary.length <= 300);
+        assert.ok(input.offers[0]!.summary.length <= 300);
         const long = await buildInput('t1', { task: 'draft_campaign' }, NO_PORTS, { loadProfile: async () => ({ profile: { ...profile, offers: [offer({ id: 'y', name: 'Y', facts: ['mail owner@example.com or 0551234567 or +20 100 123 4567'] })] } }) });
-        assert.ok(!/owner@example|0551234567|100 123/.test(long.offers[0].summary), long.offers[0].summary);
+        assert.ok(!/owner@example|0551234567|100 123/.test(long.offers[0]!.summary), long.offers[0]!.summary);
     });
 
     it('caps the owner\'s words', async () => {

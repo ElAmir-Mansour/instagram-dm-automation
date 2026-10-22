@@ -152,12 +152,12 @@ describe('schema', () => {
         assert.deepEqual(parseModelJson({ a: 1 }), { a: 1 });
         const bad = validateDraft('not json at all');
         assert.equal(bad.ok, false);
-        if (!bad.ok) assert.match(bad.errors[0], /JSON/);
+        if (!bad.ok) assert.match(bad.errors[0]!, /JSON/);
     });
 
     it('names the path of every problem', () => {
         const spec = specOf();
-        spec.ads[0].message = { greeting: 'x'.repeat(MAX_GREETING + 1), iceBreakers: Array.from({ length: 5 }, (_, i) => ({ title: i === 0 ? 'y'.repeat(81) : `t${i}` })) };
+        spec.ads[0]!.message = { greeting: 'x'.repeat(MAX_GREETING + 1), iceBreakers: Array.from({ length: 5 }, (_, i) => ({ title: i === 0 ? 'y'.repeat(81) : `t${i}` })) };
         spec.budget.amount = 0;
         const result = validateDraft(draftOf({ spec, rationale: 'z'.repeat(601), expected: { metric: 'bogus' as never, range: [9, 3] } }));
         assert.equal(result.ok, false);
@@ -187,8 +187,8 @@ describe('schema', () => {
         const review = validateReview({ items: [itemOf({ change: { amount: 3 } as never }), itemOf({ kind: 'nope' as never })] });
         assert.equal(review.ok, false);
         if (!review.ok) {
-            assert.ok(review.errors.some((e) => e.startsWith('items[0].change:')), JSON.stringify(review.errors));
-            assert.ok(review.errors.some((e) => e.startsWith('items[1].kind: must be one of')));
+            assert.ok(review.errors.some((e) => e.startsWith('items[0]!.change:')), JSON.stringify(review.errors));
+            assert.ok(review.errors.some((e) => e.startsWith('items[1]!.kind: must be one of')));
         }
     });
 
@@ -198,13 +198,13 @@ describe('schema', () => {
         if (!four.ok) assert.ok(four.errors.includes('items: at most 3 items'));
         const long = validateReview({ items: [itemOf({ rationale: 'r'.repeat(401) })] });
         assert.equal(long.ok, false);
-        if (!long.ok) assert.ok(long.errors.includes('items[0].rationale: at most 400 characters'));
+        if (!long.ok) assert.ok(long.errors.includes('items[0]!.rationale: at most 400 characters'));
     });
 
     it('requires evidence numbers to be numbers', () => {
         const result = validateReview({ items: [itemOf({ evidence: { window: '7d', numbers: { spend: 'a lot' as never } } })] });
         assert.equal(result.ok, false);
-        if (!result.ok) assert.ok(result.errors.includes('items[0].evidence.numbers.spend: must be a finite number'));
+        if (!result.ok) assert.ok(result.errors.includes('items[0]!.evidence.numbers.spend: must be a finite number'));
     });
 });
 
@@ -226,7 +226,7 @@ describe('inputNumbers and textFieldsOf', () => {
             'name', 'ads[0].copy.primaryText', 'ads[0].copy.headline', 'ads[0].message.greeting',
             'ads[0].message.iceBreakers[0].title', 'ads[0].message.iceBreakers[1].title', 'ads[0].message.iceBreakers[1].response',
         ]);
-        assert.equal(fields[1].text, 'تعلّم الذكاء الاصطناعي من الصفر');
+        assert.equal(fields[1]!.text, 'تعلّم الذكاء الاصطناعي من الصفر');
     });
 });
 
@@ -274,8 +274,8 @@ describe('runChecks: schema', () => {
     it('takes a JSON string answer', async () => {
         const items = okItems(await run({ raw: '```json\n' + JSON.stringify(draftOf()) + '\n```' }));
         assert.equal(items.length, 1);
-        assert.equal(items[0].kind, 'new_campaign');
-        assert.equal(items[0].payload.task, 'draft_campaign');
+        assert.equal(items[0]!.kind, 'new_campaign');
+        assert.equal(items[0]!.payload.task, 'draft_campaign');
     });
 });
 
@@ -288,18 +288,18 @@ describe('runChecks: evidence', () => {
     it('keeps an item whose numbers are all in the input', async () => {
         const items = okItems(await review([itemOf()]));
         assert.equal(items.length, 1);
-        assert.equal(items[0].kind, 'change');
-        assert.deepEqual(items[0].evidence, itemOf().evidence);
-        assert.equal(items[0].rationale, itemOf().rationale);
+        assert.equal(items[0]!.kind, 'change');
+        assert.deepEqual(items[0]!.evidence, itemOf().evidence);
+        assert.equal(items[0]!.rationale, itemOf().rationale);
     });
 
     it('drops an item with a number the input does not hold, and says why', async () => {
         const invented = itemOf({ targets: ['a1'], evidence: { window: '7d', numbers: { spend: 70, results: 777 } } });
         const items = okItems(await review([invented, itemOf()]));
         assert.equal(items.length, 1);
-        assert.deepEqual(items[0].payload.task === 'review' ? items[0].payload.item.targets : null, ['a2']);
-        assert.deepEqual(items[0].checks.dropped?.map((d) => d.index), [0]);
-        assert.match(items[0].checks.dropped?.[0].reason ?? '', /777/);
+        assert.deepEqual(items[0]!.payload.task === 'review' ? items[0]!.payload.item.targets : null, ['a2']);
+        assert.deepEqual(items[0]!.checks.dropped?.map((d) => d.index), [0]);
+        assert.match(items[0]!.checks.dropped?.[0]?.reason ?? '', /777/);
     });
 
     it('drops an item aimed at an object the account does not have', async () => {
@@ -333,13 +333,13 @@ describe('runChecks: policy', () => {
     it('fails on attempt 2 when it still blocks', async () => {
         const outcome = await run({ raw: draftOf(), attempt: 2, ports: portsOf({ policy: policyStub(() => [block]) }) });
         assert.equal(outcome.kind, 'failed');
-        if (outcome.kind === 'failed') assert.equal(outcome.checks.policy[0].ruleId, 'guarantee');
+        if (outcome.kind === 'failed') assert.equal(outcome.checks.policy[0]!.ruleId, 'guarantee');
     });
 
     it('keeps warnings on the stored checks', async () => {
         const items = okItems(await run({ raw: draftOf(), ports: portsOf({ policy: policyStub(() => [warn]) }) }));
-        assert.deepEqual(items[0].checks.policy, [warn]);
-        assert.ok(!items[0].checks.unavailable?.includes('policy'));
+        assert.deepEqual(items[0]!.checks.policy, [warn]);
+        assert.ok(!items[0]!.checks.unavailable?.includes('policy'));
     });
 
     it('checks the copy of a review item that carries a spec', async () => {
@@ -359,42 +359,51 @@ describe('runChecks: money', () => {
 
     it('passes a budget that fits and records its worst case', async () => {
         const items = okItems(await run({ raw: draftOf(), ports: portsOf({ money: moneyStub() }) }));
-        assert.deepEqual(items[0].checks.money, { ok: true, reason: null, note: null });
-        assert.deepEqual(items[0].effect, { worstCaseDelta: 140, newWorstCase: 1000 - 640 + 140, currency: 'SAR' });
+        assert.deepEqual(items[0]!.checks.money, { ok: true, reason: null, note: null });
+        assert.deepEqual(items[0]!.effect, { worstCaseDelta: 140, newWorstCase: 1000 - 640 + 140, currency: 'SAR' });
     });
 
     it('reduces a daily budget above the daily maximum, with a note in the tenant language', async () => {
         const items = okItems(await run({ raw: draftOf({ spec: specOf({ budget: { home: 'campaign', kind: 'daily', amount: 60, start: '2026-11-01T00:00:00Z', end: '2026-11-08T00:00:00Z' } }) }), ports: portsOf({ money: moneyStub() }) }));
-        const payload = items[0].payload;
+        const payload = items[0]!.payload;
         assert.equal(payload.task === 'draft_campaign' ? payload.spec.budget.amount : null, 50);
-        assert.equal(items[0].checks.money.ok, true);
-        assert.match(items[0].checks.money.note ?? '', /50/);
-        assert.match(items[0].checks.money.note ?? '', /[؀-ۿ]/, 'Arabic for an Arabic tenant');
-        assert.equal(items[0].effect.worstCaseDelta, 350);
+        assert.equal(items[0]!.checks.money.ok, true);
+        assert.match(items[0]!.checks.money.note ?? '', /50/);
+        assert.match(items[0]!.checks.money.note ?? '', /[؀-ۿ]/, 'Arabic for an Arabic tenant');
+        assert.equal(items[0]!.effect.worstCaseDelta, 350);
     });
 
     it('reduces a budget that would pass the month, to fit what is left', async () => {
         const calls: (MoneyCandidate | null)[] = [];
         const items = okItems(await run({ raw: draftOf({ spec: daily(40) }), ports: portsOf({ money: moneyStub({ calls }) }) }));
-        const payload = items[0].payload;
+        const payload = items[0]!.payload;
         assert.equal(payload.task === 'draft_campaign' ? payload.spec.budget.amount : null, 21.33);
-        assert.equal(items[0].checks.money.ok, true);
-        assert.ok(items[0].checks.money.note);
+        assert.equal(items[0]!.checks.money.ok, true);
+        assert.ok(items[0]!.checks.money.note);
         assert.equal(calls[0]?.days, 30, 'no end date: thirty days');
-        assert.equal(items[0].effect.worstCaseDelta, 639.9);
+        assert.equal(items[0]!.effect.worstCaseDelta, 639.9);
     });
 
     it('says the note in English for an English tenant', async () => {
         const input = inputOf({ tenant: { lang: 'en', currency: 'USD', timezone: 'UTC', countries: ['GB'] } });
         const items = okItems(await run({ raw: draftOf({ spec: daily(40) }), input, ports: portsOf({ money: moneyStub() }) }));
-        assert.match(items[0].checks.money.note ?? '', /reduced/i);
+        assert.match(items[0]!.checks.money.note ?? '', /reduced/i);
     });
 
     it('turns a lifetime budget into the amount that fits', async () => {
         const spec = specOf({ budget: { home: 'campaign', kind: 'lifetime', amount: 900, start: '2026-11-01T00:00:00Z', end: '2026-11-11T00:00:00Z' } });
-        const items = okItems(await run({ raw: draftOf({ spec }), ports: portsOf({ money: moneyStub() }) }));
-        const payload = items[0].payload;
+        // A daily max of 100 lets 64 a day through: only the month's cap trims it.
+        const input = inputOf({ limits: { maxDailyBudget: 100, monthlyCap: 1000, remainingThisMonth: 640, metaMinimumDaily: { messages: 3.75 } } });
+        const items = okItems(await run({ raw: draftOf({ spec }), input, ports: portsOf({ money: moneyStub({ maxDaily: 100 }) }) }));
+        const payload = items[0]!.payload;
         assert.equal(payload.task === 'draft_campaign' ? payload.spec.budget.amount : null, 640);
+    });
+
+    it('holds a lifetime budget to the daily max spread over its days', async () => {
+        const spec = specOf({ budget: { home: 'campaign', kind: 'lifetime', amount: 900, start: '2026-11-01T00:00:00Z', end: '2026-11-11T00:00:00Z' } });
+        const items = okItems(await run({ raw: draftOf({ spec }), ports: portsOf({ money: moneyStub() }) }));
+        const payload = items[0]!.payload;
+        assert.equal(payload.task === 'draft_campaign' ? payload.spec.budget.amount : null, 500, '50 a day for 10 days');
     });
 
     it('fails when what fits is below Meta\'s minimum for the goal', async () => {
@@ -415,9 +424,9 @@ describe('runChecks: money', () => {
 
     it('lists money and policy as unavailable when their ports are not wired', async () => {
         const items = okItems(await run({ raw: draftOf() }));
-        assert.deepEqual(items[0].checks.unavailable?.slice().sort(), ['money', 'policy']);
-        assert.deepEqual(items[0].effect, { worstCaseDelta: null, newWorstCase: null, currency: null });
-        assert.deepEqual(items[0].checks.policy, []);
+        assert.deepEqual(items[0]!.checks.unavailable?.slice().sort(), ['money', 'policy']);
+        assert.deepEqual(items[0]!.effect, { worstCaseDelta: null, newWorstCase: null, currency: null });
+        assert.deepEqual(items[0]!.checks.policy, []);
     });
 
     describe('review items', () => {
@@ -429,7 +438,7 @@ describe('runChecks: money', () => {
             const items = okItems(await review([itemOf(), itemOf({ kind: 'lower_budget', targets: ['a1'], change: { percent: -50 }, evidence: { window: '7d', numbers: { spend: 70 } } })], moneyStub({ calls })));
             assert.equal(items.length, 2);
             assert.ok(items.every((i) => (i.effect.worstCaseDelta ?? 0) <= 0));
-            assert.equal(items[1].effect.worstCaseDelta, -150);
+            assert.equal(items[1]!.effect.worstCaseDelta, -150);
             assert.deepEqual(calls, [], 'a change that cannot raise the spend asks nobody');
         });
 
@@ -438,10 +447,10 @@ describe('runChecks: money', () => {
             const raise = itemOf({ kind: 'raise_budget', targets: ['a1'], change: { percent: 100 }, evidence: { window: '7d', numbers: { results: 9 } } });
             const items = okItems(await review([raise], moneyStub({ calls, remaining: 150 })));
             assert.equal(items.length, 1);
-            const payload = items[0].payload;
+            const payload = items[0]!.payload;
             const percent = payload.task === 'review' && 'percent' in payload.item.change ? payload.item.change.percent : null;
             assert.equal(percent, 50, 'a 100% raise of 10/day is 300 over 30 days; 150 is left, so 50%');
-            assert.ok(items[0].checks.money.note);
+            assert.ok(items[0]!.checks.money.note);
             assert.ok(calls.length >= 1 && calls[0]?.kind === 'daily');
         });
 
