@@ -3714,6 +3714,9 @@ const PostsPage = {
 
     /** The failure of an action on a boost, in the server's own sentence. */
     boostFailure(err) {
+        // A refusal that says when to try again (`RATE_LIMITED`: Meta is limiting calls) says the time, in the interface language.
+        const at = err && err.code === 'RATE_LIMITED' && err.body && err.body.retryAt ? UI.formatTime(err.body.retryAt) : '';
+        if (at) return t('ads.err.rateLimited', { time: `⁦${at}⁩` });
         return (err && err.message) || t('error.unexpected');
     },
 
@@ -3794,7 +3797,7 @@ const PostsPage = {
         UI.toast(t('boost.deleted'), 'success');
     },
 
-    /** The monthly figure moves with every boost: ask again, quietly. A failure leaves the last answer. */
+    /** The limits and the account move when they are edited or checked: ask again, quietly. A failure leaves the last answer. */
     async refreshAdsSettings() {
         if (!this.ads.settings || typeof API.getAdsSettings !== 'function') return;
         try {
@@ -3816,7 +3819,8 @@ const PostsPage = {
         const min = settings.account && Number(settings.account.minDailyBudget) > 0 ? Number(settings.account.minDailyBudget) : 0;
         // A sensible first figure: 5 (or Meta's minimum, if higher), and never above the owner's own ceiling.
         const start = Number.isFinite(max) && max > 0 ? Math.min(max, Math.max(5, min)) : Math.max(5, min);
-        this._boost = { postId: post.id, seq: ++this._boostSeq, currency, done: false, eligSeq: 0 };
+        // `money`: undefined while GET /ads/money is on its way, null when it could not be read, else its answer (what is left of the cap).
+        this._boost = { postId: post.id, seq: ++this._boostSeq, currency, done: false, eligSeq: 0, money: undefined };
         const first = platforms.includes('instagram') ? 'instagram' : platforms[0];
 
         UI.showModal(html`
@@ -3876,9 +3880,42 @@ const PostsPage = {
 
         this.boostRecalc();
         this.boostEligibility();
-        // The month's committed figure may have moved since the page loaded.
+        // What is left of the month's cap comes from the server's own figures (Meta's spend), asked once now and once more at Create.
+        this.boostLoadMoney(this._boost.seq);
+        // The limits may have been edited since the page loaded.
         const seq = this._boost.seq;
         this.refreshAdsSettings().then(() => { if (this._boost && this._boost.seq === seq) this.boostRecalc(); });
+    },
+
+    /**
+     * The month's figures from `GET /ads/money`: what is left of the cap (`remaining`) and the limits. Asked when the dialog opens and not on
+     * a keystroke (the server caches it for a minute); "fits" is then worked out live in `boostRecalc`. A failure is "unknown": the dialog
+     * says so, and the server checks the cap again when the boost is created.
+     */
+    async boostLoadMoney(seq) {
+        let answer = null;
+        try {
+            answer = await API.getAdsMoney();
+        } catch (err) { /* unknown */ }
+        if (!this._boost || this._boost.seq !== seq) return;
+        this._boost.money = answer && typeof answer === 'object' ? answer : null;
+        this.boostRecalc();
+    },
+
+    /** A boost has a lifetime budget, `daily x days`: the candidate the server weighs against the month's cap. */
+    boostCandidate(total, days) {
+        return `lifetime:${Math.round(total * 100) / 100}:${days}`;
+    },
+
+    /** The refusal for an answer of `GET /ads/money` whose `fits` is false, as `{ message, field }`. */
+    boostMoneyRefusal(answer, currency) {
+        const money = (n) => this.boostMoney(n, currency);
+        if (answer.reason === 'OVER_DAILY_MAX') return { message: t('boost.err.overMax', { max: money(answer.maxDailyBudget) }), field: 'dailyBudget' };
+        if (answer.reason === 'OVER_MONTHLY_CAP') {
+            return { message: t('boost.err.overMonthlyCap', { remaining: money(Math.max(0, Number(answer.remaining) || 0)), cap: money(answer.monthlyCap) }), field: 'dailyBudget' };
+        }
+        if (answer.reason === 'NOT_CONFIGURED') return { message: t('boost.err.notConfigured'), field: '' };
+        return { message: t('boost.err.unreadable'), field: '' };
     },
 
     /** What the form says right now, as numbers. */
@@ -3916,12 +3953,21 @@ const PostsPage = {
         const lines = [];
         const total = Number.isFinite(v.dailyBudget) && Number.isFinite(v.days) && v.dailyBudget > 0 && v.days > 0 ? v.dailyBudget * v.days : null;
         lines.push(html`<p><strong>${total === null ? t('boost.dialog.totalUnknown') : t('boost.dialog.total', { daily: money(v.dailyBudget), days: this.boostDays(v.days), total: money(total) })}</strong></p>`);
-        let over = false;
-        if (settings.monthlyCap !== null && settings.monthlyCap !== undefined) {
-            const remaining = Math.max(0, Number(settings.monthlyCap) - (Number(settings.committedThisMonth) || 0));
-            over = total !== null && total > remaining;
-            lines.push(html`<p class="${over ? html.raw('text-warning') : html.raw('form-hint')}">${t('boost.dialog.remaining', { remaining: money(remaining), cap: money(settings.monthlyCap) })}${over ? html` ${t('boost.dialog.overRemaining')}` : ''}</p>`);
+        // "Fits" is worked out here, live, from the server's `remaining` and the daily maximum: no request per keystroke.
+        const answer = this._boost ? this._boost.money : undefined;
+        const hasCap = answer && answer.monthlyCap !== null && answer.monthlyCap !== undefined && answer.remaining !== null && answer.remaining !== undefined;
+        if (hasCap) {
+            const remaining = Math.max(0, Number(answer.remaining));
+            const over = total !== null && total > remaining;
+            lines.push(html`<p class="${over ? html.raw('text-warning') : html.raw('form-hint')}">${t('boost.dialog.remaining', { remaining: money(remaining), cap: money(answer.monthlyCap) })}${over ? html` ${t('boost.dialog.overRemaining')}` : ''}</p>`);
+        } else if (answer === null || (answer && answer.reason === 'UNREADABLE')) {
+            lines.push(html`<p class="form-hint">${t('boost.dialog.remainingUnknown')}</p>`);
         }
+        const dailyMax = answer && answer.maxDailyBudget !== null && answer.maxDailyBudget !== undefined ? answer.maxDailyBudget : settings.maxDailyBudget;
+        if (Number.isFinite(v.dailyBudget) && Number.isFinite(Number(dailyMax)) && v.dailyBudget > Number(dailyMax)) {
+            lines.push(html`<p class="text-warning">${t('boost.err.overMax', { max: money(dailyMax) })}</p>`);
+        }
+        if (hasCap) lines.push(html`<p class="form-hint">${t('ads.tax.note')}</p>`);
         summary.innerHTML = esc(html`${lines}`);
     },
 
@@ -4021,6 +4067,19 @@ const PostsPage = {
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
+            // Asked once more with THIS boost as the candidate, so the answer is about the month as it is now. A refusal here is final in the UI;
+            // a failed read is not (the server weighs the cap again when it creates the boost).
+            let check = null;
+            try {
+                check = await API.getAdsMoney(this.boostCandidate(v.dailyBudget * v.days, v.days));
+            } catch (err) { /* the server checks again */ }
+            if (this._boost !== state) return;
+            if (check && check.fits === false) {
+                restore();
+                const refusal = this.boostMoneyRefusal(check, state.currency);
+                this.showBoostError(refusal.message, refusal.field);
+                return;
+            }
             const answer = await API.createBoost(payload);
             if (this._boost !== state) return;
             state.done = true;
@@ -4031,7 +4090,7 @@ const PostsPage = {
         } catch (err) {
             restore();
             const code = err && err.code;
-            const budget = code === 'BUDGET_OVER_DAILY_MAX' || code === 'BUDGET_UNDER_MINIMUM' || code === 'BUDGET_OVER_MONTHLY_CAP';
+            const budget = code === 'OVER_DAILY_MAX' || code === 'BELOW_META_MINIMUM' || code === 'OVER_MONTHLY_CAP';
             const field = (err && err.body && err.body.field) || (budget ? 'dailyBudget' : '');
             this.showBoostError(this.boostFailure(err), field);
         }

@@ -3,7 +3,8 @@
  * has been spent, the limits the owner set in Settings, and the four things that can be done to a campaign: Activate, Pause, Edit budget, Delete.
  *
  * ─── First run ──────────────────────────────────────────────────────────────
- * Not configured: three steps and one way in (Settings). Configured but the ad account has NO payment method (Meta's API cannot add one):
+ * Not configured (`GET /ads/overview` answers 200 `{ configured: false, steps }`, never an error): the server's four steps (token, account,
+ * payment, limits), each done or not with its own hint and a help link, and one way in (Settings). Configured but the ad account has NO payment method (Meta's API cannot add one):
  * a calm card at the top with numbered steps, the one primary button (Meta's billing page, a new tab) and "Check again"; everything else
  * stays usable, and Activate, instead of being disabled, explains. Configured but the account cannot be read: one card that says so, with
  * Retry, rather than empty numbers and a "no campaigns" that would be a lie.
@@ -13,17 +14,24 @@
  * the account, the end date when there is one, and that the account's payment method is charged. Only the answer "yes" sends
  * `confirm: true`. A RAISE on a running campaign (a higher amount, or a later end) asks too, over the form, with the arithmetic; lowering
  * it does not. Pause is one click (it stops spending), Delete asks first, and an ACTIVE campaign offers no Delete at all.
- * Every limit is the server's (`BUDGET_OVER_DAILY_MAX`, `BUDGET_OVER_MONTHLY_CAP`, `PAYMENT_METHOD_MISSING`, ...): this page shows
- * the numbers beside the field so a refusal is no surprise, and shows the server's own sentence when one comes.
+ * Every limit is the server's (`OVER_DAILY_MAX`, `OVER_MONTHLY_CAP`, `BELOW_META_MINIMUM`, `PAYMENT_METHOD_MISSING`, ...): this page shows
+ * the numbers beside the field so a refusal is no surprise, and shows the server's own sentence when one comes (`RATE_LIMITED` and
+ * `EDIT_LIMIT` say when to try again). Every money figure is the server's `overview.money`, from Meta's own numbers, and the screen says
+ * once that they exclude tax: Meta's invoices are the accounting record.
+ *
+ * ─── Two things that must never be silent ───────────────────────────────────
+ * `guard.blind` (the hourly spend check has not succeeded for two hours: nothing is watching the cap) and `tokenHealth: 'dead'` (Meta no
+ * longer accepts the token) are banners at the top of the screen, above everything, each with the way out.
  *
  * ─── Silent where it should be ──────────────────────────────────────────────
  * A member who is not the owner, or a 403 from the API, gets a calm "owners only" panel and no error toast, the same silence the Settings
- * card and Posts keep (`App.canAdminister()`). A null number is "—", never 0: a zero would say nothing was spent.
+ * card and Posts keep (`App.canAdminister()`); a 404 (`ADS_DISABLED`: Ads is off for this workspace) gets an equally calm "not available"
+ * panel. A null number is "—", never 0: a zero would say nothing was spent.
  */
 const AdsPage = {
     /** The server's GET /ads/overview answer; null until the first one. */
     data: null,
-    /** 'loading' | 'ready' | 'forbidden' | 'failed' */
+    /** 'loading' | 'ready' | 'forbidden' | 'disabled' | 'failed' */
     view: 'loading',
     /** Bumped on every read and on destroy(), so a slow answer cannot land on another screen. */
     _seq: 0,
@@ -87,8 +95,9 @@ const AdsPage = {
         } catch (err) {
             gate.done();
             if (seq !== this._seq) return false;
-            if (err && err.status === 403) {
-                this.view = 'forbidden';
+            if (err && (err.status === 403 || err.status === 404)) {
+                // 404 is ADS_DISABLED (Ads is off for this workspace): nothing is offered, and nothing is an error.
+                this.view = err.status === 404 ? 'disabled' : 'forbidden';
                 this.paint(container);
             } else if (this.data) {
                 // A refresh that failed leaves what is on screen, and says why.
@@ -156,8 +165,15 @@ const AdsPage = {
         el.focus();
     },
 
-    /** The server's own sentence, or the generic one. */
+    /**
+     * The server's own sentence, or the generic one. A refusal that says when to try again (`RATE_LIMITED`: Meta is limiting calls,
+     * `EDIT_LIMIT`: its daily change allowance is used) says the time, in the interface language.
+     */
     failure(err) {
+        const code = err && err.code;
+        const at = err && err.body && err.body.retryAt ? UI.formatTime(err.body.retryAt) : '';
+        if (at && code === 'RATE_LIMITED') return t('ads.err.rateLimited', { time: `⁦${at}⁩` });
+        if (at && code === 'EDIT_LIMIT') return t('ads.err.editLimit', { time: `⁦${at}⁩` });
         return (err && err.message) || t('error.unexpected');
     },
 
@@ -173,7 +189,24 @@ const AdsPage = {
         return this.data && this.data.account ? this.data.account : null;
     },
 
+    /**
+     * The money figures, from `overview.money` (Meta's own numbers, summed by the server): spent today and this month, the worst case of the
+     * month, the cap and what is left of it. The v1 fields stand in for an answer that has no `money`, with no `remaining`.
+     */
+    figures() {
+        const d = this.data || {};
+        if (d.money) return d.money;
+        const spend = d.spend || {};
+        const limits = d.limits || {};
+        return {
+            spentToday: spend.today, spentThisMonth: spend.thisMonth, worstCaseThisMonth: limits.worstCaseThisMonth,
+            monthlyCap: limits.monthlyCap, remaining: null, maxDailyBudget: limits.maxDailyBudget,
+        };
+    },
+
     currency() {
+        const m = this.data && this.data.money;
+        if (m && m.currency) return m.currency;
         const a = this.account();
         return a && a.currency ? a.currency : '';
     },
@@ -232,11 +265,10 @@ const AdsPage = {
         return Math.max(1, Math.ceil((at - Date.now()) / 86400000));
     },
 
-    /** How much of this month's cap is still free, or null when there is no cap. */
+    /** How much of this month's cap is still free (the server's `remaining`), or null when there is no cap or it could not be worked out. */
     capLeft() {
-        const limits = (this.data && this.data.limits) || {};
-        if (limits.monthlyCap === null || limits.monthlyCap === undefined) return null;
-        return Math.max(0, Number(limits.monthlyCap) - (Number(limits.committedThisMonth) || 0));
+        const left = this.figures().remaining;
+        return left === null || left === undefined || !Number.isFinite(Number(left)) ? null : Math.max(0, Number(left));
     },
 
     /** `Name` of the ad account for a sentence: its name, else its id, isolated. */
@@ -268,12 +300,16 @@ const AdsPage = {
         if (this.view === 'forbidden') {
             return html`<div id="ads-page" class="ads-page">${header}${UI.emptyState({ icon: 'lock', title: t('ads.owner.title'), body: t('ads.owner.body') })}</div>`;
         }
+        if (this.view === 'disabled') {
+            return html`<div id="ads-page" class="ads-page">${header}${UI.emptyState({ icon: 'lock', title: t('ads.disabled.title'), body: t('ads.disabled.body') })}</div>`;
+        }
         const data = this.data || {};
         if (!data.configured) return html`<div id="ads-page" class="ads-page">${header}${this.firstRun()}</div>`;
-        if (!data.account) return html`<div id="ads-page" class="ads-page">${header}${this.accountProblem()}</div>`;
+        if (!data.account) return html`<div id="ads-page" class="ads-page">${header}${this.banners()}${this.accountProblem()}</div>`;
         return html`
             <div id="ads-page" class="ads-page">
                 ${header}
+                ${this.banners()}
                 ${this.paymentCard()}
                 ${this.accountStrip()}
                 ${this.spendCards()}
@@ -289,22 +325,76 @@ const AdsPage = {
         `;
     },
 
-    /** Not set up yet: what the three steps are, one way in, and the two things that are calm to know before starting. */
+    /** The server's four steps, in its order. A step the answer does not carry is not drawn. */
+    STEP_IDS: Object.freeze(['token', 'account', 'payment', 'limits']),
+
+    /**
+     * What is needed before ads can run, as a list where each step is done or not (a check mark AND a word, never colour alone) with the
+     * server's hint under the ones that are not, and a help link that names its step. Every step leads to the one article about connecting.
+     */
+    stepsList(steps) {
+        const rows = (Array.isArray(steps) ? steps : []).filter((s) => s && this.STEP_IDS.includes(s.id));
+        return html`
+            <ol class="ads-checklist ads-steps-list" id="ads-steps" aria-label="${t('ads.steps.label')}">
+                ${rows.map((step) => html`
+                    <li class="ads-check ads-step ${step.done ? html.raw('ads-check--done') : ''}" data-step="${step.id}" data-done="${step.done ? 'true' : 'false'}">
+                        <i data-lucide="${step.done ? 'check-circle' : 'circle-dashed'}" aria-hidden="true"></i>
+                        <span class="ads-step-text">
+                            <span>${t(`ads.step.${step.id}`)}</span>
+                            ${!step.done && step.hint ? html`<span class="form-hint" dir="auto">${step.hint}</span>` : ''}
+                        </span>
+                        <span class="sr-only">${step.done ? t('ads.step.done') : t('ads.step.todo')}</span>
+                        ${UI.helpLink('ads#connect', t('ads.step.helpFor', { step: t(`ads.step.${step.id}`) }), { iconOnly: true })}
+                    </li>
+                `)}
+            </ol>
+        `;
+    },
+
+    /** Not set up yet: the four steps with what is still to do, and one way in. Not an error: the server answers 200 for this. */
     firstRun() {
         return UI.card({
             id: 'ads-first-run',
             title: t('ads.notConfigured.title'),
             body: html`
                 <p dir="auto">${t('ads.notConfigured.body')}</p>
-                <ol class="ads-steps">
-                    <li>${t('ads.notConfigured.step1')}</li>
-                    <li>${t('ads.notConfigured.step2')}</li>
-                    <li>${t('ads.notConfigured.step3')}</li>
-                </ol>
+                ${this.stepsList(this.data && this.data.steps)}
                 <p class="form-hint">${t('ads.notConfigured.note')}</p>
                 <div class="ads-actions">${UI._anchorButton({ href: '#/settings?s=ads', label: t('ads.notConfigured.cta'), icon: 'settings', variant: 'primary' })}</div>
             `,
         });
+    },
+
+    /**
+     * The two things that must never be silent. `guard.blind`: the hourly spend check has not succeeded for two hours, so nothing is watching
+     * the cap. `tokenHealth: 'dead'`: Meta no longer accepts the token, so spend cannot be read or limited. Each is a banner above everything.
+     */
+    banners() {
+        const d = this.data || {};
+        const out = [];
+        if (d.guard && d.guard.blind) {
+            out.push(UI.card({
+                id: 'ads-blind-banner',
+                tone: 'danger',
+                title: t('ads.blind.title'),
+                body: html`
+                    <p dir="auto">${t('ads.blind.body')}</p>
+                    <div class="ads-actions">${UI.helpLink('ads#troubleshooting', t('ads.blind.help'))}</div>
+                `,
+            }));
+        }
+        if (d.tokenHealth === 'dead') {
+            out.push(UI.card({
+                id: 'ads-token-dead-banner',
+                tone: 'danger',
+                title: t('ads.tokenDead.title'),
+                body: html`
+                    <p dir="auto">${t('ads.tokenDead.body')}</p>
+                    <div class="ads-actions">${UI._anchorButton({ href: '#/settings?s=ads', label: t('ads.notConfigured.cta'), icon: 'settings', variant: 'primary' })}</div>
+                `,
+            }));
+        }
+        return out;
     },
 
     /** Configured, but Meta would not describe the account (a token that lapsed, an account that was removed): say so instead of showing empty numbers. */
@@ -413,42 +503,43 @@ const AdsPage = {
 
     /**
      * Three figures, not five: what was spent today, what was spent this month against the cap (the meter lives here, where the two are
-     * compared), and the most the month could reach if nothing is paused. The two limits the owner set are one line below (`limitsRow`).
+     * compared, with what is left of it), and the most the month could reach if nothing is paused. The two limits the owner set are one line
+     * below (`limitsRow`). One note says the figures exclude tax: Meta's invoices are the accounting record, not this screen.
      */
     spendCards() {
-        const d = this.data;
-        const spend = d.spend || {};
-        const limits = d.limits || {};
-        const hasCap = limits.monthlyCap !== null && limits.monthlyCap !== undefined;
-        const month = spend.thisMonth;
+        const m = this.figures();
+        const hasCap = m.monthlyCap !== null && m.monthlyCap !== undefined;
+        const month = m.spentThisMonth;
+        const left = this.capLeft();
 
         let monthSub;
         if (hasCap) {
             const used = Number.isFinite(Number(month)) && month !== null ? Number(month) : null;
             monthSub = html`
                 ${used === null ? html`<p class="stat-sub">${t('ads.cap.unknown')}</p>` : html`
-                    <progress class="studio-meter ads-meter" max="${Number(limits.monthlyCap)}" value="${Math.min(used, Number(limits.monthlyCap))}"
-                        aria-label="${t('ads.cap.used', { spent: this.money(used), cap: this.money(limits.monthlyCap) })}"></progress>
-                    <p class="stat-sub">${t('ads.cap.used', { spent: this.money(used), cap: this.money(limits.monthlyCap) })}</p>`}
-                <p class="stat-sub">${t('ads.cap.committed', { amount: this.money(limits.committedThisMonth) })}</p>
+                    <progress class="studio-meter ads-meter" max="${Number(m.monthlyCap)}" value="${Math.min(used, Number(m.monthlyCap))}"
+                        aria-label="${t('ads.cap.used', { spent: this.money(used), cap: this.money(m.monthlyCap) })}"></progress>
+                    <p class="stat-sub">${t('ads.cap.used', { spent: this.money(used), cap: this.money(m.monthlyCap) })}</p>`}
+                ${left === null ? '' : html`<p class="stat-sub" id="ads-cap-left">${t('ads.cap.remaining', { remaining: this.money(left) })}</p>`}
             `;
         } else {
             monthSub = html`<p class="stat-sub">${t('ads.cap.none')}</p>`;
         }
 
-        const worst = limits.worstCaseThisMonth;
-        const overCap = hasCap && worst !== null && worst !== undefined && Number(worst) > Number(limits.monthlyCap);
+        const worst = m.worstCaseThisMonth;
+        const overCap = hasCap && worst !== null && worst !== undefined && Number(worst) > Number(m.monthlyCap);
         const worstSub = html`
             <p class="stat-sub">${t('ads.worst.hint')}</p>
-            ${overCap ? html`<p class="stat-sub text-warning"><i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('ads.worst.overCap', { cap: this.money(limits.monthlyCap) })}</p>` : ''}
+            ${overCap ? html`<p class="stat-sub text-warning"><i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('ads.worst.overCap', { cap: this.money(m.monthlyCap) })}</p>` : ''}
         `;
 
         return html`
             <div class="stats-grid ads-stats" id="ads-stats">
-                ${this.statCard({ id: 'ads-stat-today', label: t('ads.spend.today'), icon: 'clock', value: this.money(spend.today) })}
+                ${this.statCard({ id: 'ads-stat-today', label: t('ads.spend.today'), icon: 'clock', value: this.money(m.spentToday) })}
                 ${this.statCard({ id: 'ads-stat-month', label: t('ads.spend.month'), icon: 'calendar-days', value: this.money(month), sub: monthSub })}
                 ${this.statCard({ id: 'ads-stat-worst', label: t('ads.worst.label'), icon: 'trending-up', value: this.money(worst), sub: worstSub, warn: overCap })}
             </div>
+            <p class="form-hint ads-tax-note" id="ads-tax-note">${t('ads.tax.note')}</p>
         `;
     },
 
@@ -857,7 +948,7 @@ const AdsPage = {
         } catch (err) {
             restore();
             const code = err && err.code;
-            const budget = code === 'BUDGET_OVER_DAILY_MAX' || code === 'BUDGET_OVER_MONTHLY_CAP';
+            const budget = code === 'OVER_DAILY_MAX' || code === 'OVER_MONTHLY_CAP' || code === 'BELOW_META_MINIMUM';
             const field = (err && err.body && err.body.field) || (budget ? 'amount' : '');
             this.showEditError(this.failure(err), field);
         }
