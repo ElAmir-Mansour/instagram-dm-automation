@@ -104,7 +104,7 @@ const CAMPAIGN_SPEC_JSON: J = obj({
                     obj({ source: { type: 'string', enum: ['media'] }, mediaId: str(), verticalMediaId: { type: 'string' }, coverMediaId: { type: 'string' } }, ['source', 'mediaId']),
                 ],
             },
-            copy: obj({ primaryText: str(), headline: { type: 'string' }, cta: str() }, ['primaryText', 'cta']),
+            copy: obj({ primaryText: str(), headline: { type: 'string' }, cta: str() }, ['primaryText']),
             link: { anyOf: [obj({ trackedOfferId: str() }, ['trackedOfferId']), obj({ url: str() }, ['url'])] },
             message: obj({
                 greeting: str({ maxLength: MAX_GREETING }),
@@ -307,7 +307,7 @@ function checkAd(c: Check, path: string, v: unknown, adsetCount: number): void {
     if (c.object(copy, v.copy)) {
         c.string(at(copy, 'primaryText'), v.copy.primaryText);
         c.string(at(copy, 'headline'), v.copy.headline, { optional: true, empty: true });
-        c.string(at(copy, 'cta'), v.copy.cta);
+        c.string(at(copy, 'cta'), v.copy.cta, { optional: true }); // spec.ts: only a traffic ad uses it
     }
 
     if (v.link !== undefined && v.link !== null) {

@@ -33,7 +33,7 @@ import { publishedPlatforms } from '../../publishedIds.js';
 import { validateSpec } from '../spec.js';
 import { queueAdvance } from './advance.js';
 import { recheckForApproval, runChecks } from './checks.js';
-import { buildInput } from './input.js';
+import { buildInput, type InputDeps } from './input.js';
 import { getProposalPorts } from './ports.js';
 import { buildPrompt } from './prompt.js';
 import { schemaFor } from './schema.js';
@@ -100,13 +100,19 @@ async function recentPosts(creatorId: string): Promise<NonNullable<ProposalInput
     return rows.filter((r) => platformsOf(r).length > 0).map((r) => ({ id: r.id, platform: platformsOf(r)[0]!, caption: r.caption ?? '', kind: (r.post_type ?? 'post').toLowerCase() }));
 }
 
+/** Tests: how the input reads the tenant's profile (the real store by default). */
+let inputDeps: InputDeps | undefined;
+export function setProposalInputDeps(next: InputDeps | undefined): void {
+    inputDeps = next;
+}
+
 async function inputFor(row: ProposalRow): Promise<ProposalInput> {
     const task = taskOf(row);
     const post = row.post_ref ? await loadPost(row.creator_id, row.post_ref.postId, row.post_ref.platform).catch(() => null) : null;
     return buildInput(row.creator_id, {
         task, request: row.request_text, post,
         recentPosts: task === 'draft_campaign' && !post ? await recentPosts(row.creator_id) : undefined,
-    }, getProposalPorts());
+    }, getProposalPorts(), inputDeps);
 }
 
 // ─── Request ────────────────────────────────────────────────────────────────────────────────────────────────────────────
