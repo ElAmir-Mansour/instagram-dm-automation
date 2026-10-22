@@ -48,6 +48,10 @@ export interface OpActor {
  * The Graph call an op makes. `path` is `<metaId>` or `act_<id>/<edge>`; `{dep}` in it is replaced, when the op runs, by the `result.id`
  * of the op it depends on (an audience's users are added to the audience another op created). `edge` marks a create: its name gets the
  * `AR·<op id>` tag and it is verified by that tag if it times out.
+ *
+ * A string value in `params` (at any depth) that is exactly `{op:<op id>}` is replaced, when the op runs, by the `result.id` of THAT op of
+ * the same tenant (A4's drafts: an ad needs the id of its ad set and of its creative, made by two different earlier ops). The op it names
+ * must be done; the caller orders the chain with `dependsOn` so it is. A placeholder that cannot be filled fails the op, like `{dep}`.
  */
 export interface OpExecSpec {
     method: 'POST' | 'DELETE';
@@ -647,6 +651,37 @@ async function resolvePath(op: Op, path: string): Promise<string | null> {
     return typeof id === 'string' && id ? path.split('{dep}').join(id) : null;
 }
 
+const OP_PLACEHOLDER = /^\{op:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\}$/i;
+
+/** Every op id named by an `{op:<id>}` placeholder in `value`, at any depth. Pure. */
+export function placeholderOps(value: unknown, into: Set<string> = new Set()): Set<string> {
+    if (typeof value === 'string') { const m = OP_PLACEHOLDER.exec(value); if (m) into.add(m[1]!.toLowerCase()); }
+    else if (Array.isArray(value)) value.forEach((v) => placeholderOps(v, into));
+    else if (value && typeof value === 'object') Object.values(value).forEach((v) => placeholderOps(v, into));
+    return into;
+}
+
+/** `value` with each `{op:<id>}` replaced from `ids`. Pure; an id missing from `ids` stays a placeholder (the caller checks first). */
+export function fillPlaceholders<T>(value: T, ids: Map<string, string>): T {
+    if (typeof value === 'string') { const m = OP_PLACEHOLDER.exec(value); return (m && ids.has(m[1]!.toLowerCase()) ? ids.get(m[1]!.toLowerCase()) : value) as T; }
+    if (Array.isArray(value)) return value.map((v) => fillPlaceholders(v, ids)) as T;
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillPlaceholders(v, ids)])) as T;
+    return value;
+}
+
+/** The op's params with every `{op:<id>}` filled from those ops' ids. Null when one cannot be: that op is not done or made no id. */
+async function resolveParams(op: Op, params: GraphParams): Promise<GraphParams | null> {
+    const wanted = placeholderOps(params);
+    if (wanted.size === 0) return params;
+    const rows = await queryRows<{ id: string; result: Record<string, unknown> | null }>(
+        `SELECT id, result FROM ads_ops WHERE creator_id = $1 AND id = ANY($2::uuid[]) AND state = 'done'`, [op.creatorId, [...wanted]],
+    );
+    const ids = new Map<string, string>();
+    for (const r of rows) { const id = r.result?.['id']; if (typeof id === 'string' && id) ids.set(String(r.id).toLowerCase(), id); }
+    for (const w of wanted) if (!ids.has(w)) return null;
+    return fillPlaceholders(params, ids);
+}
+
 const NO_DEP_ID: OpOutcome = { state: 'failed', notBefore: null, result: { reason: 'dependency_without_id', message: 'The op this one depends on left no id to use.' } };
 
 // ─── Recording ──────────────────────────────────────────────────────────────────────────────
@@ -732,15 +767,16 @@ export async function execute(op: Op, token: string, opts: RunOpts = {}): Promis
     let out: OpOutcome;
     try {
         const path = exec ? await resolvePath(op, exec.path) : null;
+        const params = exec && exec.method !== 'DELETE' ? await resolveParams(op, exec.params ?? {}) : {};
         if (!exec) out = { state: 'failed', notBefore: null, result: { code: 'NO_EXEC', message: 'This op has no call to make.' } };
-        else if (path === null) out = NO_DEP_ID;
+        else if (path === null || params === null) out = NO_DEP_ID;
         else {
             const create = isCreateOp(op);
             const deps = { ...env.graph, token };
             try {
                 const res = await sendExec(op, {
                     method: exec.method, path, label: `ads.op.${op.kind}`, creates: create || undefined,
-                    params: exec.method === 'DELETE' ? undefined : create ? taggedParams(op, exec.params ?? {}) : exec.params ?? {},
+                    params: exec.method === 'DELETE' ? undefined : create ? taggedParams(op, params) : params,
                 }, deps);
                 out = outcomeFor(op, { ok: true, data: res.data }, env.now());
             } catch (err) {

@@ -132,8 +132,11 @@ const ALLOWED: readonly Allowed[] = [
     )),
 
     // ── Tests ──
+    { file: 'src/services/ads/policy.ts', markers: ['كورس'], reason: 'the ads policy check (A4): «كورس معتمد» is one of the certificate patterns it flags in ANY advertiser\'s copy; it is detected, never said' },
     ...tests(
         'src/dashboard/campaign-seeds.test.ts',
+        'src/services/ads/policy.test.ts',
+        'src/services/ads/spec.test.ts',
         'src/dashboard/growth.test.ts',
         'src/dashboard/monteur.test.ts',
         'src/dashboard/primitives-a.test.ts',

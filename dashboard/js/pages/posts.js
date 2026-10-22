@@ -3808,12 +3808,33 @@ const PostsPage = {
 
     // ─── The Boost dialog ────────────────────────────────────────────────────
 
-    boostOpen(id) {
+    /**
+     * Boost opens the ad builder's quick mode (`ads_builder.js`, loaded on first use) with the post chosen. Only when that module cannot
+     * be loaded does the older form below open, so Boost never ends in nothing.
+     */
+    async boostOpen(id) {
         const post = this.posts.find((p) => String(p.id) === String(id));
         const settings = this.ads.settings;
         if (!post || !settings) return;
         const platforms = this.boostFreePlatforms(post);
         if (!platforms.length) return;
+        let builder = typeof AdsBuilder !== 'undefined' ? AdsBuilder : null;
+        if (!builder && typeof App !== 'undefined' && typeof App.loadPageModule === 'function') {
+            try { builder = await App.loadPageModule('ads_builder'); } catch (err) { builder = null; }
+        }
+        if (builder && typeof builder.openQuick === 'function') {
+            builder.openQuick({
+                post, platforms, settings,
+                // The monthly figure moves with a new draft: ask again, quietly.
+                onCreated: () => { this.refreshAdsSettings(); },
+            });
+            return;
+        }
+        this.boostOpenForm(post, settings, platforms);
+    },
+
+    /** The older Boost form: the fallback for a quick mode that could not be loaded. */
+    boostOpenForm(post, settings, platforms) {
         const currency = settings.account && settings.account.currency ? settings.account.currency : '';
         const max = Number(settings.maxDailyBudget);
         const min = settings.account && Number(settings.account.minDailyBudget) > 0 ? Number(settings.account.minDailyBudget) : 0;

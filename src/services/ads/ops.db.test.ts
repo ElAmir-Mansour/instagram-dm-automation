@@ -10,7 +10,7 @@ import { setLogSink } from '../../utils/log.js';
 import { setWaitUntil } from '../../utils/waitUntil.js';
 import { AdsGraphError } from './graph.js';
 import {
-    claimNext, drainAdsOps, editsLeftThisHour, enqueue, enqueueAndTryInline, execute, getOp, limitWaitUntil, listOps, nextMidnightIn, outcomeFor,
+    claimNext, drainAdsOps, editsLeftThisHour, enqueue, enqueueAndTryInline, execute, fillPlaceholders, getOp, limitWaitUntil, listOps, nextMidnightIn, outcomeFor, placeholderOps,
     reap, runOpInline, sendExec, type DoneRecord, type GraphDeps, type Op, type RunOpts,
 } from './ops.js';
 import { installFakeDb, type AdsFakeDb } from './testing/testDb.js';
@@ -486,6 +486,44 @@ describe('claimNext', () => {
         candidates([row({ id: 'op-x' })]);
         assert.equal((await claimNext('act_111', T0, { creatorId: 'creator-1', onlyId: 'op-x' }))?.id, 'op-x');
         assert.equal(stmts(/FROM ads_ops p LEFT JOIN ads_ops d/)[0]!.params[2], 'op-x');
+    });
+});
+
+describe('execute: {op:<id>} placeholders in params (A4 drafts: an ad names its ad set and its creative)', () => {
+    const ADSET_OP = '11111111-1111-4111-8111-111111111111';
+    const CREATIVE_OP = '22222222-2222-4222-8222-222222222222';
+    const adOp = () => op({
+        id: 'op-ad', kind: 'create', objectKey: 'k',
+        payload: { exec: { method: 'POST', path: 'act_111/ads', edge: 'ads', params: { name: 'Ad', adset_id: `{op:${ADSET_OP}}`, creative: { creative_id: `{op:${CREATIVE_OP}}` }, status: 'PAUSED' } } },
+    });
+
+    it('placeholderOps finds every op named at any depth; fillPlaceholders replaces only exact placeholders', () => {
+        assert.deepEqual([...placeholderOps({ a: `{op:${ADSET_OP}}`, b: [{ c: `{op:${CREATIVE_OP}}` }], d: `x {op:${ADSET_OP}}` })].sort(), [ADSET_OP, CREATIVE_OP]);
+        const filled = fillPlaceholders({ a: `{op:${ADSET_OP}}`, d: `x {op:${ADSET_OP}}`, n: 3 }, new Map([[ADSET_OP, '900']]));
+        assert.deepEqual(filled, { a: '900', d: `x {op:${ADSET_OP}}`, n: 3 });
+    });
+
+    it('fills each from that op\'s result id, read for this tenant and only when done', async () => {
+        answerFinishes();
+        db.on(/^SELECT id, result FROM ads_ops WHERE creator_id = \$1 AND id = ANY/, (params) => {
+            assert.equal(params[0], 'creator-1');
+            return { rows: [{ id: ADSET_OP, result: { id: '9001' } }, { id: CREATIVE_OP, result: { id: '9002' } }] };
+        });
+        const g = graphStub({ post: () => ({ id: '9003' }) });
+        const out = await execute(adOp(), TOKEN, { graph: g.graph, now: () => T0 });
+        assert.equal(out.state, 'done');
+        assert.equal(g.calls[0]!.params?.['adset_id'], '9001');
+        assert.deepEqual(g.calls[0]!.params?.['creative'], { creative_id: '9002' });
+        assert.match(stmts(/^SELECT id, result FROM ads_ops/)[0]!.sql, /state = 'done'/);
+    });
+
+    it('fails without calling Meta when one of them made no id', async () => {
+        answerFinishes();
+        db.on(/^SELECT id, result FROM ads_ops WHERE creator_id = \$1 AND id = ANY/, () => ({ rows: [{ id: ADSET_OP, result: { id: '9001' } }] }));
+        const g = graphStub();
+        const out = await execute(adOp(), TOKEN, { graph: g.graph, now: () => T0 });
+        assert.equal(out.state, 'failed');
+        assert.equal(g.calls.length, 0);
     });
 });
 

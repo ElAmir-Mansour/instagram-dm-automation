@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-    isKeywordMatchMode, keywordMatches, normalizeArabic, normalizeMatchMode,
+    isKeywordMatchMode, keywordMatches, normalizeArabic, normalizeArabicWithMap, normalizeMatchMode,
 } from './arabic.js';
 
 describe('normalizeArabic', () => {
@@ -178,5 +178,67 @@ describe('isKeywordMatchMode', () => {
         for (const bad of [undefined, null, '', 'WORD', 'Word', 'exact', 'substring ', 0, true]) {
             assert.equal(isKeywordMatchMode(bad), false, `input ${JSON.stringify(bad)}`);
         }
+    });
+});
+
+describe('normalizeArabicWithMap', () => {
+    const SAMPLES = [
+        '', ' ', '   \n\t ', 'abc', 'ABC DEF', 'اكـــسب 500$ يوميـاً', 'إحصل على وظيفة', 'أحصل  على\u00A0وظيفة  ',
+        '  بِدُونِ مَجْهُود ', 'برمجة وعلى وأوبال وآية', 'تـ ـم', 'a ـ b', 'a\u064Bb', '\u064Bابت', 'ابت\u064B ', 'İstanbul İ',
+        'ΟΔΟΣ ΣΟΦΟΣ', 'x\u{1D7D8}y \u{10400}A', 'مرحبا\u200Bبكم', 'line1\nline2\r\n\r\nline3',
+    ];
+
+    it('returns exactly the text normalizeArabic returns, for hand-picked inputs', () => {
+        for (const s of SAMPLES) {
+            assert.equal(normalizeArabicWithMap(s).text, normalizeArabic(s), JSON.stringify(s));
+        }
+    });
+
+    it('returns exactly the text normalizeArabic returns, for random Arabic/Latin/whitespace soup', () => {
+        // A small deterministic generator (no Math.random: a failure must reproduce).
+        let seed = 20261022;
+        const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+        const alphabet = [
+            'ا', 'أ', 'إ', 'آ', 'ب', 'ت', 'ة', 'ه', 'ى', 'ي', 'ك', 'م', 'ـ', '\u064E', '\u064F', '\u0651', '\u0670',
+            ' ', ' ', '\n', '\t', '\u00A0', 'a', 'B', 'Z', '5', '٥', '$', '%', 'Σ', 'İ', '\u{1F600}', '\u200B',
+        ];
+        for (let n = 0; n < 2000; n++) {
+            let s = '';
+            const len = Math.floor(next() * 14);
+            for (let i = 0; i < len; i++) s += alphabet[Math.floor(next() * alphabet.length)];
+            assert.equal(normalizeArabicWithMap(s).text, normalizeArabic(s), JSON.stringify(s));
+        }
+    });
+
+    it('has one map entry per output character plus a sentinel equal to the original length', () => {
+        for (const s of SAMPLES) {
+            const { text, map } = normalizeArabicWithMap(s);
+            assert.equal(map.length, text.length + 1, JSON.stringify(s));
+            assert.equal(map[map.length - 1], s.length, JSON.stringify(s));
+            for (let i = 1; i < map.length; i++) assert.ok(map[i]! >= map[i - 1]!, 'the map never goes backwards');
+        }
+    });
+
+    it('maps each output character to the character it came from', () => {
+        const s = 'اكـــسب  ٥٠٠$ يوميـاً';
+        const { text, map } = normalizeArabicWithMap(s);
+        assert.equal(text, 'اكسب ٥٠٠$ يوميا');
+        assert.equal(s[map[0]!], 'ا');
+        assert.equal(s[map[2]!], 'س', 'the tatweels are skipped');
+        assert.equal(s[map[4]!], ' ', 'a whitespace run maps to its first character');
+        assert.equal(map[5], s.indexOf('٥'), 'the next word starts after the whole run');
+        assert.equal(s[map[text.indexOf('ا', 10)]!], 'ا', 'the alef before the trailing tanween');
+    });
+
+    it('trims, mapping the first kept character to its original position', () => {
+        const { text, map } = normalizeArabicWithMap('  \u064B كور\u064Bس  ');
+        assert.equal(text, 'كورس');
+        assert.deepEqual(map, [4, 5, 6, 8, 11]);
+    });
+
+    it('folds a folded character in place (أ -> ا keeps its index) and maps an empty result', () => {
+        assert.deepEqual(normalizeArabicWithMap('أب').map, [0, 1, 2]);
+        assert.deepEqual(normalizeArabicWithMap('\u0640\u0640'), { text: '', map: [2] });
+        assert.deepEqual(normalizeArabicWithMap(''), { text: '', map: [0] });
     });
 });

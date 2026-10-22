@@ -158,6 +158,8 @@ const App = {
         // The Instagram ice breakers and persistent menu editor (DM plan S13) on Settings: the owner's questions, Save, and the one Publish button. Loaded by Settings on
         // first use (for the tenant's owner only). It holds no state of its own across renders: Settings hands it the server's answer every time it draws the card.
         ice_breakers: { src: 'ice_breakers', page: () => IceBreakersCard, routable: false },
+        // The ad builder's quick mode (A4): the dialog Posts' Boost button opens, with the post chosen. Loaded by Posts on first use; if it cannot be, Posts opens the older Boost form.
+        ads_builder: { src: 'ads_builder', page: () => AdsBuilder, routable: false },
         // The WhatsApp card on Settings (T025): connect a number (the access token is read once and never kept), its health and free-replies meter, who the
         // assistant answers, and the paid-messages switch. Loaded by Settings on first use, for every member (the owner writes, the rest read), and reset
         // with the other modules when the tenant changes (`resetTenantState`).
@@ -165,7 +167,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.60',
+    ASSET_VERSION: '12.61',
 
     _modules: Object.create(null),
 

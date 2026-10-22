@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { installFakeDb, type FakeDb } from './monteur/testDb.js';
 import {
     classifyClick, CREATE_LINK_SQL, createTrackedLink, generateLinkCode, InvalidTargetUrlError, isLinkCode, LINK_CLICK_UA_CLASSES, LINK_CODE_LENGTH,
-    LINK_CODE_PATTERN, recordClick, RECORD_CLICK_SQL, resolve, RESOLVE_LINK_SQL, toWireUrl, type RandomSource,
+    LINK_CODE_PATTERN, MINT_AD_LINK_SQL, mintAdLink, recordClick, RECORD_CLICK_SQL, resolve, RESOLVE_LINK_SQL, toWireUrl, type RandomSource,
 } from './links.js';
 
 const REFERRAL = 'https://shop.example/p/handbook?ref=AB12CD34EF56GH78';
@@ -369,5 +369,65 @@ describe('createTrackedLink, resolve, recordClick', () => {
     it('lets a failed insert reach the caller: the route logs it and redirects anyway', async () => {
         db.routes.unshift([exact(RECORD_CLICK_SQL), () => { throw new Error('connection terminated'); }]);
         await assert.rejects(recordClick('abcdefghij', { uaClass: 'ios', isPrefetch: false }), /connection terminated/);
+    });
+});
+
+// ─── Links made for ads (research R25) ───────────────────────────────────────────────────────
+
+describe('mintAdLink: one tracked link per (ad, offer)', () => {
+    const AD = '44444444-4444-4444-8444-444444444444';
+    const OTHER_AD = '55555555-5555-4555-8555-555555555555';
+    let db: FakeDb;
+    let links: Array<{ code: string; creator_id: string; offer_id: string; target_url: string; ads_object_id: string | null; conversation_id: null }>;
+
+    beforeEach(() => {
+        links = [];
+        db = installFakeDb();
+        db.routes.push([exact(MINT_AD_LINK_SQL), ([creator, offer, adsObject, code, target], sql) => {
+            // The reuse applies only when the statement looks the pair up by all three columns, so dropping one of them from the SQL
+            // gives a second code here.
+            const looksUp = sql.includes('WHERE creator_id = $1 AND offer_id = $2 AND ads_object_id = $3');
+            const existing = looksUp ? links.find((l) => l.creator_id === creator && l.offer_id === offer && l.ads_object_id === adsObject) : undefined;
+            if (existing) return { rows: [{ code: existing.code }] };
+            if (!sql.includes('ads_object_id)')) throw new Error('the insert does not record the ad');
+            links.push({ code, creator_id: creator, offer_id: offer, target_url: target, ads_object_id: adsObject, conversation_id: null });
+            return { rows: [{ code }] };
+        }]);
+    });
+    afterEach(() => db.restore());
+
+    it('records the ad and no conversation, and stores the target byte for byte', async () => {
+        const code = await mintAdLink({ creatorId: CREATOR, offerId: 'handbook', adsObjectId: AD, targetUrl: REFERRAL });
+        assert.ok(isLinkCode(code));
+        assert.deepEqual(links, [{ code, creator_id: CREATOR, offer_id: 'handbook', target_url: REFERRAL, ads_object_id: AD, conversation_id: null }]);
+        assert.doesNotMatch(flat(MINT_AD_LINK_SQL), /conversation_id/, 'an ad link belongs to no conversation');
+    });
+
+    it('gives the same code for the same (ad, offer), and a new one for another ad or another offer', async () => {
+        const a = await mintAdLink({ creatorId: CREATOR, offerId: 'handbook', adsObjectId: AD, targetUrl: REFERRAL });
+        const again = await mintAdLink({ creatorId: CREATOR, offerId: 'handbook', adsObjectId: AD, targetUrl: REFERRAL });
+        const otherAd = await mintAdLink({ creatorId: CREATOR, offerId: 'handbook', adsObjectId: OTHER_AD, targetUrl: REFERRAL });
+        const otherOffer = await mintAdLink({ creatorId: CREATOR, offerId: 'book', adsObjectId: AD, targetUrl: REFERRAL });
+        assert.equal(again, a);
+        assert.notEqual(otherAd, a);
+        assert.notEqual(otherOffer, a);
+        assert.equal(links.length, 3);
+    });
+
+    it('refuses an address a link may not point to, and missing ids, without a query', async () => {
+        await assert.rejects(mintAdLink({ creatorId: CREATOR, offerId: 'o', adsObjectId: AD, targetUrl: 'javascript:alert(1)' }), InvalidTargetUrlError);
+        await assert.rejects(mintAdLink({ creatorId: CREATOR, offerId: '', adsObjectId: AD, targetUrl: REFERRAL }), TypeError);
+        await assert.rejects(mintAdLink({ creatorId: CREATOR, offerId: 'o', adsObjectId: '', targetUrl: REFERRAL }), TypeError);
+        assert.equal(db.statements.length, 0);
+    });
+
+    it('tries a fresh code when the random one is taken', async () => {
+        let first = true;
+        db.routes.unshift([exact(MINT_AD_LINK_SQL), () => {
+            if (first) { first = false; throw Object.assign(new Error('duplicate key'), { code: '23505' }); }
+            return { rows: [{ code: 'ABCDEFGHIJ' }] };
+        }]);
+        assert.equal(await mintAdLink({ creatorId: CREATOR, offerId: 'o', adsObjectId: AD, targetUrl: REFERRAL }), 'ABCDEFGHIJ');
+        assert.equal(db.statements.length, 2);
     });
 });
