@@ -280,7 +280,66 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
 - **Real delivery** (review, conversations labelled with the ad, cost per conversation next day) is checked only with the
   owner's OK, one day at the minimum budget (quickstart §A4 step 4).
 
-### Troubleshooting a create
+### Build any campaign
+
+The **Create** tab of the Ads screen (`#/ads_create`, `dashboard/js/pages/ads_create.js`) is the full builder. Boost on the Scheduler
+is its quick mode; both end in the same `CampaignSpec` and the same server functions (`drafts.ts`). Everything is created **PAUSED**.
+
+### The eight steps
+
+| Step | What you choose | Rules the builder keeps |
+|---|---|---|
+| 1. Goal | Messages, Visits to a link, Engagement, Reach (Leads is shown locked until A10) | Only what the goal allows is offered later |
+| 2. Destination | Messages: Instagram / Messenger / WhatsApp. Link: one of your offers (tracked) or another https address | A free address is warned: its clicks are not counted |
+| 3. Creative | A published post, or an image / video from your computer, with an optional 9:16 version (link ads) | Engagement and Reach use a post; a Facebook post is refused for message and link ads; a video needs a cover |
+| 4. Text | Main text (the feed shows 125 characters, then "more"), headline, button; a message ad's greeting and quick questions | The policy check runs 400 ms after you stop typing |
+| 5. Audience | Countries, cities with a 17–80 km radius, age, gender, languages, interests, Advantage audience, special category | Advantage audience: minimum age 18–25, no maximum (Meta fixes 65). A special category: everyone 18–65, no gender, no interests, radius ≥ 25 km; political is refused |
+| 6. Placements | Automatic (recommended) or chosen | Instagram Explore, Facebook video feeds and Messenger Stories are never offered (Meta removed them) |
+| 7. Budget and schedule | On the ad set or the campaign; total (needs an end) or daily; start and end; days and hours | A schedule needs a total budget; the money rule and Meta's minimum are shown beside the amount |
+| 8. Review | Meta's `validate_only`, the money, the reach estimate, a preview per placement | Create sends exactly what was reviewed; any change asks for a new review |
+
+### Uploads (why a 50 MB video works on Vercel)
+
+1. The browser asks `POST /api/ads/uploads/sign` (owner) for a signed Supabase Storage URL, and PUTs the file there itself, with a
+   progress bar. The app never receives the bytes, so Vercel's 4.5 MB body limit does not apply. Limits: JPG/PNG ≤ 30 MB, MP4/MOV ≤
+   50 MB (Supabase's free per-file limit).
+2. `POST /api/ads/creatives/from-media` hands it to Meta: an image's bytes to `adimages` (→ a hash); a video by its public address
+   `<public base>/api/uploads/<id>` to `advideos` with `file_url` — Meta pulls the file. What Meta answered is kept in
+   `ads.media.<tenant>`. A video waits for its cover (frame 0 is black).
+3. At Review and Create the server checks a video is `ready` at Meta (1 point while it processes); "still processing" is a problem
+   in Review, never a half-made ad.
+
+The dashboard's CSP allows `connect-src https://*.supabase.co` (the PUT) and `frame-src https://www.facebook.com` (Meta's
+previews), in `vercel.json` and `routes/api.ts` `securityHeaders`. If the Storage project ever moves to a custom domain, add it there.
+
+### The 9:16 version
+
+For an uploaded creative on a link ad, a second file becomes the Stories version through placement customisation
+(`asset_feed_spec`, `optimization_type: PLACEMENT`, two `asset_customization_rules`). Meta does not allow it on an existing post.
+**Reels positions are a live check**: `REELS_CUSTOMISATION_LIVE_CHECKED = false` in `src/services/ads/creatives.ts`, so only Stories
+gets the 9:16 version until a `validate_only` with `reels` succeeds (then flip it and record the result in research.md R11).
+
+### Previews
+
+Review asks `generatepreviews` for two placements (1 point each). Meta's answer is an iframe; the dashboard takes only its address,
+and only on `www.facebook.com`. When Meta will not preview for the token (a system-user token may not), the dashboard draws an
+**approximate preview**: the picture cropped to the frame (Feed 4:5, Stories/Reels 9:16), the Page's initial (never a photo of a
+person), the text cut at 125 characters, the headline and button, a message ad's greeting and quick questions.
+
+### Duplicate, archive, delete
+
+On the Campaigns tab: **Duplicate** (`POST /objects/:id/duplicate`) queues a `/copies` call: the copy is PAUSED, every name gets
+` · copy AR·<key>`, and it re-enters Meta's review and learning. **Archive** keeps the history; **Delete** is a separate confirmed
+action and never on a running object.
+
+### Not yet proven live (2026-10-22)
+
+- The system user has no Page / Instagram asset, so creative creates (and previews) are refused by Meta until it is assigned in
+  Business Settings → System users → Assign assets. Review then shows Meta's refusal and nothing is created.
+- `REELS_CUSTOMISATION_LIVE_CHECKED`, the `generatepreviews` answer for a system-user token, and `advideos` `file_url` from our
+  domain are checked on the first live run (quickstart §A5).
+
+## Troubleshooting a create
 
 | What you see | Meaning |
 |---|---|
