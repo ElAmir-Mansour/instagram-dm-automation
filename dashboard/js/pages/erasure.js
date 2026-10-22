@@ -58,7 +58,7 @@ const ErasurePage = {
     notice: null,
 
     /** The data types, in the order a person reads them: who, what was said, what was commented, what was sent. */
-    TYPES: ['conversations', 'messages', 'interactions', 'dmSendLog'],
+    TYPES: ['conversations', 'messages', 'interactions', 'dmSendLog', 'leads'],
 
     /** Identifiers listed before "and N more", and conversations shown (the server sends the newest five). */
     LIST_MAX: 12,

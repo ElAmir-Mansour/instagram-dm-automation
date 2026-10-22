@@ -35,14 +35,19 @@ import { CreativeError, placementAssetFeed } from './creatives.js';
 
 // ─── The spec ─────────────────────────────────────────────────────────────────────────────
 
-export type AdGoal = 'messages' | 'engagement' | 'reach' | 'traffic';
+export type AdGoal = 'messages' | 'engagement' | 'reach' | 'traffic' | 'leads';
 export type MessageDestination = 'instagram' | 'messenger' | 'whatsapp';
 export type SpecialCategory = 'none' | 'employment' | 'financial' | 'housing' | 'political';
 
 export interface CampaignSpec {
     name: string;
-    /** 'leads' is part of the contract but refused until A10. */
-    goal: AdGoal | 'leads';
+    /**
+     * 'leads' (A10) is an instant-form ad: it needs `leadFormId`, uploaded media, and on the server a `lead_ads` legal sign-off covering every
+     * target country (`ads/leads.ts checkLeadSpec`, called by drafts.ts before anything is written). AI proposals never produce one.
+     */
+    goal: AdGoal;
+    /** Lead ads only: the Meta id of an ACTIVE form of this tenant (`ads_lead_forms.meta_id`). */
+    leadFormId?: string;
     destinations?: MessageDestination[];
     specialCategory: SpecialCategory;
     /** `amount` is in MAJOR units (5 = 5 USD). With home 'adset' it is the budget of EACH ad set; with 'campaign' it is the one shared budget. */
@@ -173,6 +178,7 @@ const CAMPAIGN_OBJECTIVE: Record<AdGoal, string> = {
     engagement: 'OUTCOME_ENGAGEMENT',
     reach: 'OUTCOME_AWARENESS',
     traffic: 'OUTCOME_TRAFFIC',
+    leads: 'OUTCOME_LEADS',
 };
 
 const OPTIMIZATION_GOAL: Record<AdGoal, string> = {
@@ -180,6 +186,7 @@ const OPTIMIZATION_GOAL: Record<AdGoal, string> = {
     engagement: 'POST_ENGAGEMENT',
     reach: 'REACH',
     traffic: 'LINK_CLICKS',
+    leads: 'LEAD_GENERATION',
 };
 
 /**
@@ -191,7 +198,18 @@ export const OPTIMIZATION_CHOICES: Record<AdGoal, readonly string[]> = {
     engagement: ['POST_ENGAGEMENT', 'THRUPLAY'],
     reach: ['REACH', 'IMPRESSIONS'],
     traffic: ['LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
+    // QUALITY_LEAD (conversion leads) needs the CRM conversion feed, which is not built: not offered.
+    leads: ['LEAD_GENERATION'],
 };
+
+/**
+ * The buttons a lead ad may carry (research 01 §6: a CTA whose `value.lead_gen_form_id` opens the instant form). SIGN_UP is the default.
+ * LIVE-CHECK: the set Meta accepts with `lead_gen_form_id` on v26 (SIGN_UP and LEARN_MORE are documented; the others are in the CTA enum).
+ */
+export const LEAD_CTAS = ['SIGN_UP', 'LEARN_MORE', 'APPLY_NOW', 'SUBSCRIBE', 'GET_QUOTE'] as const;
+
+/** `link_data.link` of a lead ad: Meta's placeholder, the form opens instead of a page (research 01 §6). */
+export const LEAD_AD_LINK = 'https://fb.me/';
 
 /**
  * The positions the builder offers (A5), per platform. Never offered and refused if sent: Instagram Explore (`explore`, `explore_home`,
@@ -260,9 +278,11 @@ export function validateSpec(input: unknown): { ok: true; spec: CampaignSpec } |
     // goal
     const goalRaw = spec['goal'];
     let goal: AdGoal | null = null;
-    if (goalRaw === 'leads') bad('goal', 'Lead ads come later (A10).', 'UNSUPPORTED');
-    else if (goalRaw === 'messages' || goalRaw === 'engagement' || goalRaw === 'reach' || goalRaw === 'traffic') goal = goalRaw;
-    else bad('goal', 'The goal must be messages, engagement, reach or traffic.');
+    if (goalRaw === 'messages' || goalRaw === 'engagement' || goalRaw === 'reach' || goalRaw === 'traffic' || goalRaw === 'leads') goal = goalRaw;
+    else bad('goal', 'The goal must be messages, engagement, reach, traffic or leads.');
+    if (goal === 'leads' && (typeof spec['leadFormId'] !== 'string' || !/^[0-9]{5,25}$/.test(spec['leadFormId']))) {
+        bad('leadFormId', 'Choose one of your lead forms.');
+    }
 
     const category = spec['specialCategory'];
     const categoryOk = typeof category === 'string' && Object.prototype.hasOwnProperty.call(SPECIAL_CATEGORY, category);
@@ -340,6 +360,9 @@ export function validateSpec(input: unknown): { ok: true; spec: CampaignSpec } |
             validateCopy(raw['copy'], `${at}.copy`, bad);
             if (goal === 'traffic') validateLink(raw['link'], `${at}.link`, bad);
             if (goal === 'messages' && raw['message'] !== undefined) validateMessage(raw['message'], `${at}.message`, bad);
+            if (goal === 'leads' && isRec(raw['copy']) && raw['copy']['cta'] !== undefined && !(LEAD_CTAS as readonly unknown[]).includes(raw['copy']['cta'])) {
+                bad(`${at}.copy.cta`, `A lead ad's button is one of ${LEAD_CTAS.join(', ')}.`, 'UNSUPPORTED');
+            }
         });
     }
 
@@ -459,6 +482,9 @@ function validateCreative(ad: Rec, at: string, goal: AdGoal | null, bad: Bad): v
         if (c['platform'] === 'facebook' && goal === 'messages' && !FB_POST_MESSENGER_OK) {
             bad(`${at}.creative`, "A Facebook post can't be used for a Messenger message ad yet; use the Instagram copy of the reel.", 'UNSUPPORTED');
         }
+        if (goal === 'leads') {
+            bad(`${at}.creative`, 'A lead ad is built from an uploaded image or video, not an existing post.', 'UNSUPPORTED');
+        }
         if (c['platform'] === 'facebook' && goal === 'traffic') {
             bad(`${at}.creative`, 'Link clicks is for Instagram posts. A Facebook post is boosted with its own link: choose Engagement or Reach.', 'UNSUPPORTED');
         }
@@ -467,7 +493,7 @@ function validateCreative(ad: Rec, at: string, goal: AdGoal | null, bad: Bad): v
         for (const key of ['verticalMediaId', 'coverMediaId', 'verticalCoverMediaId']) if (c[key] !== undefined && !isText(c[key])) bad(`${at}.creative.${key}`, 'A media id is text.');
         // The 9:16 version is placement customisation (asset_feed_spec), mapped for link-click ads. A message ad's asset feed already
         // carries its destinations, and the two are not combined until a live check shows Meta accepts it.
-        if (c['verticalMediaId'] !== undefined && goal === 'messages') bad(`${at}.creative.verticalMediaId`, 'A 9:16 version is for link-click ads for now.', 'UNSUPPORTED');
+        if (c['verticalMediaId'] !== undefined && (goal === 'messages' || goal === 'leads')) bad(`${at}.creative.verticalMediaId`, 'A 9:16 version is for link-click ads for now.', 'UNSUPPORTED');
         // An uploaded ad is built as link_data / video_data, which has a place for a message CTA or a link: engagement and reach have neither.
         if (goal === 'engagement' || goal === 'reach') bad(`${at}.creative`, 'An uploaded image or video can be used for messages or link clicks. Engagement and reach use an existing post.', 'UNSUPPORTED');
     } else bad(`${at}.creative.source`, 'The creative is a post or uploaded media.');
@@ -578,6 +604,10 @@ export function mapSpec(input: CampaignSpec, ctx: SpecContext, campaignId?: stri
             params['destination_type'] = 'ON_POST';
         } else if (goal === 'reach') {
             params['promoted_object'] = { page_id: ctx.pageId };
+        } else if (goal === 'leads') {
+            // Instant form ads: the form opens on the ad itself (research 01 §6). The Page owns the form.
+            params['destination_type'] = 'ON_AD';
+            params['promoted_object'] = { page_id: ctx.pageId };
         }
         // Traffic sends no destination_type (as v1): Meta's ODAX table lists none for Traffic. The link is the creative's call to action.
         return params;
@@ -587,7 +617,7 @@ export function mapSpec(input: CampaignSpec, ctx: SpecContext, campaignId?: stri
     const creatives: GraphParams[] = [];
     const ads: AdPayload[] = [];
     spec.ads.forEach((ad, i) => {
-        creatives.push(buildCreative(ad, i, goal, destinations, ctx, opName, warnings));
+        creatives.push(buildCreative(ad, i, goal, destinations, ctx, opName, warnings, spec.leadFormId));
         ads.push({ adsetIndex: ad.adsetIndex, params: { name: opName(ad.name), status: 'PAUSED' } });
     });
 
@@ -689,7 +719,7 @@ function messageCta(destination: MessageDestination, welcome?: GraphParams): Gra
 
 function buildCreative(
     ad: CampaignSpec['ads'][number], index: number, goal: AdGoal, destinations: MessageDestination[], ctx: SpecContext,
-    opName: (name: string) => string, warnings: SpecPayloads['warnings'],
+    opName: (name: string) => string, warnings: SpecPayloads['warnings'], leadFormId?: string,
 ): GraphParams {
     const at = `ads.${index}`;
     const creative: GraphParams = { name: opName(ad.name) };
@@ -743,8 +773,9 @@ function buildCreative(
         const media = ctx.media?.[ad.creative.mediaId];
         if (!media) throw new SpecError('INVALID', `${at}.creative.mediaId`, 'That image or video was not found.');
         // `link` is required in link_data; a message ad has none, so it carries the destination's own CTA link.
-        const pageLink = goal === 'messages' ? CTA_BY_DESTINATION[destinations[0]!].link : link!;
-        const singleCta = goal === 'messages' ? (multi ? undefined : messageCta(destinations[0]!)) : trafficCta();
+        const leadCta = (): GraphParams => ({ type: ad.copy.cta ?? 'SIGN_UP', value: { lead_gen_form_id: leadFormId! } });
+        const pageLink = goal === 'messages' ? CTA_BY_DESTINATION[destinations[0]!].link : goal === 'leads' ? LEAD_AD_LINK : link!;
+        const singleCta = goal === 'messages' ? (multi ? undefined : messageCta(destinations[0]!)) : goal === 'leads' ? leadCta() : trafficCta();
         const story: GraphParams = { page_id: ctx.pageId };
         if (ctx.igUserId) story['instagram_user_id'] = ctx.igUserId;
         if (media.kind === 'image') {

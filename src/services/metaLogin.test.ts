@@ -15,7 +15,9 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { pool } from '../config/db.js';
 import { decryptSecret, isEncrypted } from '../config/crypto.js';
+import { metaHttp } from './http.js';
 import { setLogSink } from '../utils/log.js';
 import { AUDIT_ACTIONS } from './audit.js';
 import { FakeDb, FakeGraph, page, type GraphPage } from './metaLoginHarness.js';
@@ -400,6 +402,27 @@ describe('subscribePage and unsubscribePage', () => {
         assert.deepEqual(WEBHOOK_FIELDS, ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals']);
     });
 
+    it('with extra fields (lead ads, A10) POSTs WEBHOOK_FIELDS + them, deduped, and confirms every one on the read-back', async () => {
+        // `leadgen` is subscribed only for a tenant with a lead_ads sign-off, so it rides in as an argument: WEBHOOK_FIELDS stays the four it was.
+        const result = await subscribePage('200000000000001', TOKEN, APP.appId, ['leadgen', 'feed', 'leadgen']);
+        assert.deepEqual(result, { confirmed: true, warning: null });
+        const post = graph.called(/POST \/200000000000001\/subscribed_apps/)[0]!;
+        assert.equal(post.body, `subscribed_fields=${encodeURIComponent([...WEBHOOK_FIELDS, 'leadgen'].join(','))}`);
+        assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS, 'leadgen']);
+    });
+
+    it('is not confirmed when Meta keeps the base fields but drops the extra one (a POST that answered success proves nothing)', async () => {
+        const inner = (metaHttp as any).post;
+        (metaHttp as any).post = (url: string, body: any, cfg: any) => inner(url, body instanceof URLSearchParams && body.has('subscribed_fields')
+            ? new URLSearchParams({ subscribed_fields: body.get('subscribed_fields')!.split(',').filter((f) => f !== 'leadgen').join(',') }) : body, cfg);
+        assert.deepEqual(await subscribePage('200000000000001', TOKEN, APP.appId, ['leadgen']), { confirmed: false, warning: 'subscribe_unconfirmed' });
+    });
+
+    it('without extra fields still asks for exactly WEBHOOK_FIELDS', async () => {
+        await subscribePage('200000000000001', TOKEN, APP.appId, []);
+        assert.equal(graph.called(/POST \/200000000000001\/subscribed_apps/)[0]!.body, `subscribed_fields=${encodeURIComponent(WEBHOOK_FIELDS.join(','))}`);
+    });
+
     it('a failed POST is a warning, not a throw', async () => {
         graph.fail(/POST \/200000000000001\/subscribed_apps/, 400, { message: '(#200) Requires pages_manage_metadata permission', code: 200 });
         assert.deepEqual(await subscribePage('200000000000001', TOKEN, APP.appId), { confirmed: false, warning: 'subscribe_failed' });
@@ -468,6 +491,31 @@ describe('completeMetaConnection', () => {
             pageId: p.id, pageName: 'Page 1', instagramId: p.instagram_business_account!.id, instagramUsername: 'page1',
             replaced: false, webhookSubscribed: true, warnings: [], missingScopes: [], affectedFeatures: [],
         });
+    });
+
+    it('a tenant with a lead_ads sign-off keeps `leadgen` across a reconnect; one without, or whose sign-off cannot be read, subscribes the usual four', async () => {
+        let signoff: 'active' | 'none' | 'error' = 'active';
+        const inner = (pool as any).query;
+        (pool as any).query = async (sql: string, params: unknown[] = []) => {
+            if (/FROM ads_legal_signoffs/.test(sql)) {
+                if (signoff === 'error') throw new Error('relation "ads_legal_signoffs" does not exist');
+                return { rows: signoff === 'active' ? [{ id: 's1', creator_id: NEW_TENANT, scope: 'lead_ads', countries: ['EG'], recorded_by: null, recorded_at: new Date(), note: 'n', revoked_at: null }] : [], rowCount: signoff === 'active' ? 1 : 0 };
+            }
+            return inner(sql, params);
+        };
+        try {
+            await completeMetaConnection(complete({ reconnect: false }));
+            assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS, 'leadgen']);
+            for (const state of ['none', 'error'] as const) {
+                signoff = state;
+                db.creators.get(NEW_TENANT)!.page_access_token = null;
+                graph.subscribed.clear();
+                await completeMetaConnection(complete({ reconnect: false }));
+                assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS], state);
+            }
+        } finally {
+            (pool as any).query = inner;
+        }
     });
 
     it('validates the token, checks the Page is free, THEN subscribes, THEN writes', async () => {

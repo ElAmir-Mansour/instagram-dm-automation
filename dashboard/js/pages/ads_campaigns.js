@@ -32,6 +32,8 @@ const AdsTabs = {
         Object.freeze({ key: 'proposals', href: '#/ads_proposals', icon: 'sparkles', label: 'ads.tabs.proposals' }),
         Object.freeze({ key: 'audiences', href: '#/ads_audiences', icon: 'users', label: 'ads.tabs.audiences' }),
         Object.freeze({ key: 'rules', href: '#/ads_rules', icon: 'list-checks', label: 'ads.tabs.rules' }),
+        // A10: lead forms and leads, locked until a legal sign-off. The tab is always there; the page says when it is locked.
+        Object.freeze({ key: 'leads', href: '#/ads_leads', icon: 'clipboard-list', label: 'ads.tabs.leads' }),
         // A5: the full builder. Owners only on the server; the tab is shown to whoever sees the Ads area, and Create explains a refusal.
         Object.freeze({ key: 'create', href: '#/ads_create', icon: 'plus', label: 'ads.tabs.create' }),
     ]),

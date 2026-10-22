@@ -432,6 +432,60 @@ tab. Only its hash is kept; it is removed from every customer list already at Me
 
 Flow, hop by hop: `FLOWS.md` §7.6. Help Center: `#/help/ads#audiences`, `#lookalikes`, `#customer-lists`.
 
+## Lead ads
+
+**Where.** Ads → **Leads** (`#/ads_leads`) for the forms and the leads; Ads → **Create**, goal **Leads**, for the ad.
+
+**Locked until a legal sign-off.** A lead form collects personal data (names, phones, emails) under Egypt's PDPL 151/2020 (compliance
+deadline 2026-11-01: a controller licence, a separate e-marketing licence, consent for transfers abroad) and Saudi PDPL (consent,
+unsubscribe, records). So lead ads stay **locked per tenant** until the platform admin records a sign-off: Tenants → the tenant →
+**Ads: legal sign-off** → scope *Lead ads*, the countries the opinion covers, and a note. While locked:
+- `POST /api/ads/lead-forms` and a `goal: 'leads'` draft answer `403 LOCKED_LEGAL`; the Create tab shows the goal locked;
+- the Page is NOT subscribed to `leadgen`, so Meta sends no lead; a stray `ads.lead` job for a locked tenant fetches nothing.
+
+Recording the sign-off re-subscribes the Page with `leadgen` at once; revoking re-subscribes without it (and the 6-hourly catch-up
+re-checks both). Leads already stored stay readable and keep their retention date after a revocation.
+
+**Operator setup (once per app / per tenant).**
+1. Meta app → Webhooks → **Page** → subscribe the field **`leadgen`** (the app-level subscription; without it no Page sends leads).
+2. The tenant's Facebook connection needs `leads_retrieval` and `pages_manage_ads` (plus `pages_manage_metadata`, already held).
+   Without App Review these work only for people with a role on the app.
+3. If the Page uses **Leads Access Manager**, give the connecting person (or the app) access, or `GET /{leadgen_id}` is refused.
+4. Record the sign-off (above). Check with Meta's **Lead Ads Testing Tool**: a test lead appears in the Leads tab within minutes.
+
+**Make a form.** **New form** → name; language Arabic (`AR_AR`, default) or English; full name, email, phone, city; up to 5 questions of
+your own; the optional consent question ("May we contact you by message or WhatsApp?", key `contact_consent`); the thank-you screen
+(title, sentence, button, https link). Every form carries `privacy_policy.url = <site>/privacy`. Meta's restricted question types are
+refused (an allow-list), and so is a question of your own whose label names a restricted category (health, religion, orientation,
+criminal record, union, politics, ethnicity, money/account numbers, passwords, government ids) — `RESTRICTED_QUESTION` with the field.
+The form is created with ONE `POST /{page_id}/leadgen_forms` using the tenant's **Page token** (not the ads token, not the queue);
+a dialog's idempotency key makes a double submit one form; a create Meta never answered stays *Waiting for Meta* until the catch-up
+finds it on the Page by name. Forms made in Ads Manager are picked up by the catch-up (*Made in Meta*).
+
+**Make the ad.** Create → goal **Leads** → the form (active ones only) → an uploaded image or video (a post cannot carry the form) →
+the button (**Sign up**, Learn more, Apply now, Subscribe, Get quote). Countries are limited to the sign-off's. Mapping: campaign
+`OUTCOME_LEADS`; ad set `destination_type: ON_AD`, `optimization_goal: LEAD_GENERATION`, `promoted_object.page_id`; creative CTA
+`{ type, value: { lead_gen_form_id } }` with `link: https://fb.me/`. Everything PAUSED. Claude proposals never produce a lead ad.
+
+**How leads arrive.** The `leadgen` webhook → an `ads.lead` job (ids only) → `GET /{leadgen_id}` with the Page token → `ads_leads`.
+A throttle is not retried. Every 6 hours per tenant the catch-up lists the Page's forms and reads `/{form_id}/leads` with
+`filtering=[time_created GREATER_THAN <newest seen − 10 min>]` (up to 10 pages of 100), so a missed notification is recovered within
+24 h.
+
+**Storage, retention, erasure.** Answers are AES-256-GCM (`answers_enc`, key `TOKEN_ENCRYPTION_KEY`); emails and phones are also kept
+as HMAC keys (`person_keys`) for erasure. Retention is Settings → Ads → `leadRetentionDays` (default 90, 1–365); the drain's sweep
+nulls the answers and keys and keeps a count-only row, and a lowered period applies to existing leads. Erasure (Operations → data
+erasure) with an email or phone deletes that person's lead rows entirely. Leads are never sent to an AI. Nothing contacts a lead
+automatically; the consent answer is shown. The CSV export (owner only) is audited (`ads.leads_exported`, count and filters only).
+
+**Troubleshooting.**
+- *No leads arrive, Testing Tool lead missing:* the app-level `leadgen` field (step 1); the sign-off recorded (the Page's
+  `subscribed_apps` must list `leadgen`: `scripts/diagnose.mjs` shows the fields); `leads_retrieval` granted; Leads Access Manager.
+- *A lead appears hours later:* the notification was missed and the 6-hourly catch-up found it — expected.
+- *Form "Refused":* Meta's sentence is on the card (often a missing permission or a question Meta rejects).
+
+Flow, hop by hop: `FLOWS.md` §7.8. Help Center: `#/help/ads#lead-ads`, `#leads-and-privacy`.
+
 ---
 
 ## Troubleshooting

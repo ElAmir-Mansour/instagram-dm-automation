@@ -1302,3 +1302,52 @@ describe('migration v55: ads proposals (ads_proposals, studio_jobs ads_think)', 
         assert.deepEqual([...m![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]).sort(), [...STUDIO_JOB_KINDS].sort());
     });
 });
+
+// ─── v57: lead ads (locked) ─────────────────────────────────────────────────────────────────────
+
+describe('migration v57: ads lead forms and leads (encrypted answers, retention, erasure keys)', () => {
+    const FILE = 'migration_v57_ads_leads.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v56, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v56_ads_audiences_rules.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+    });
+
+    it('creates both tables idempotently, keyed by the tenant, with row level security on', () => {
+        for (const table of ['ads_lead_forms', 'ads_leads']) {
+            assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`));
+            assert.match(sql, new RegExp(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`));
+        }
+        assert.equal(sql.match(/creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/g)?.length, 2);
+        assert.doesNotMatch(sql, /CREATE TABLE IF NOT EXISTS ads_legal_signoffs/, 'the sign-off table is v56\'s');
+        for (const m of sql.matchAll(/CREATE (UNIQUE )?INDEX (\w+ )*/g)) assert.match(m[0], /IF NOT EXISTS/);
+    });
+
+    it('closes the vocabularies the code relies on', () => {
+        assert.match(sql, /origin IN \('app', 'meta'\)/);
+        assert.match(sql, /status IN \('pending', 'active', 'archived', 'failed'\)/);
+        assert.match(sql, /handed_to TEXT NOT NULL DEFAULT 'none' CHECK \(handed_to IN \('none', 'dm', 'whatsapp'\)\)/);
+        assert.match(sql, /received_via IN \('webhook', 'catchup'\)/);
+    });
+
+    it('stores answers only encrypted, one row per Meta lead, and keeps what retention and erasure need', () => {
+        assert.match(sql, /meta_lead_id TEXT NOT NULL UNIQUE/);
+        assert.match(sql, /answers_enc BYTEA,/);
+        assert.match(sql, /person_keys TEXT\[\] NOT NULL DEFAULT '\{\}'/);
+        assert.match(sql, /retain_until TIMESTAMPTZ NOT NULL/);
+        assert.match(sql, /purged_at TIMESTAMPTZ,/);
+        assert.match(sql, /ON ads_leads \(retain_until\) WHERE purged_at IS NULL/);
+        assert.match(sql, /ON ads_leads USING GIN \(person_keys\)/);
+        assert.match(sql, /form_id UUID REFERENCES ads_lead_forms\(id\) ON DELETE SET NULL/);
+        // No plaintext answer column of any kind.
+        assert.doesNotMatch(sql, /\b(answers|email|phone|full_name) (TEXT|JSONB)/);
+    });
+});

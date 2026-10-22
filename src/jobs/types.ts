@@ -16,7 +16,7 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
@@ -72,6 +72,19 @@ export type WaEventPayload =
  * failed. It also keeps the enqueue path free of any logic that could throw before the
  * acknowledgement to Meta, which is the whole reason the queue exists.
  */
+/**
+ * A Page `leadgen` webhook change (lead ads, A10): only the ids Meta sent, never the person's answers. The handler fetches the lead
+ * itself (`GET /{leadgen_id}`) with the tenant's Page token, so nothing personal ever sits in `jobs`.
+ */
+export interface LeadJobPayload {
+    leadgenId: string;
+    pageId: string | null;
+    formId: string | null;
+    adId: string | null;
+    /** Unix seconds, as Meta sent it. */
+    createdTime: number | null;
+}
+
 export interface JobPayloads {
     'comment.process': {
         /** One element of `entry.changes`, exactly as Meta sent it. */
@@ -86,6 +99,8 @@ export interface JobPayloads {
      * preference change (docs/specs/001-whatsapp-agent/contracts/webhook-inbound.md section 3). Never reaches an AI; see `WaEventPayload`.
      */
     'wa.event': WaEventPayload;
+    /** A lead from a lead ad (A10). See `LeadJobPayload`. */
+    'ads.lead': LeadJobPayload;
     /**
      * The one nudge for a link a sales DM sent (docs/DM_SALES_PLAN.md §7, S9), due `dm.sales.followup_minutes` after it. Unlike the two
      * above this is NOT a Meta event: it is written by the sales turn after the link was recorded, and everything it needs to decide is

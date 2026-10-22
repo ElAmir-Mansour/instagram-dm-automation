@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { decryptSecret, encryptSecret, hashPassword, isEncrypted, verifyPassword } from './crypto.js';
+import { decryptBytes, decryptSecret, encryptBytes, encryptSecret, hashPassword, isEncrypted, personKey, verifyPassword } from './crypto.js';
 
 const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
@@ -116,6 +116,43 @@ describe('encryptSecret / decryptSecret', () => {
 
         process.env.TOKEN_ENCRYPTION_KEY = 'abcd';
         assert.throws(() => encryptSecret('x'), /32 bytes/);
+    });
+});
+
+describe('encryptBytes / decryptBytes (lead answers)', () => {
+    const answers = JSON.stringify([{ name: 'email', values: ['ali@example.com'] }, { name: 'full_name', values: ['علي'] }]);
+
+    it('round-trips, and the plaintext is nowhere in the stored bytes', () => {
+        const stored = encryptBytes(answers);
+        assert.ok(Buffer.isBuffer(stored));
+        assert.equal(stored.includes(Buffer.from('ali@example.com')), false);
+        assert.equal(decryptBytes(stored), answers);
+    });
+
+    it('uses a fresh IV each time', () => {
+        assert.notDeepEqual(encryptBytes(answers), encryptBytes(answers));
+    });
+
+    it('refuses a tampered value and a wrong key instead of returning garbage', () => {
+        const stored = encryptBytes(answers);
+        const tampered = Buffer.from(stored);
+        tampered.writeUInt8(tampered.readUInt8(tampered.length - 1) ^ 1, tampered.length - 1);
+        assert.throws(() => decryptBytes(tampered));
+        process.env.TOKEN_ENCRYPTION_KEY = KEY_B;
+        assert.throws(() => decryptBytes(stored));
+        assert.throws(() => decryptBytes(Buffer.alloc(10)), /malformed/);
+    });
+});
+
+describe('personKey (erasure lookups)', () => {
+    it('is deterministic per key, differs between keys, and is not a bare SHA-256', () => {
+        const a = personKey('ali@example.com');
+        assert.equal(a, personKey('ali@example.com'));
+        assert.match(a, /^[0-9a-f]{64}$/);
+        assert.notEqual(a, crypto.createHash('sha256').update('ali@example.com').digest('hex'));
+        assert.notEqual(a, personKey('201012345678'));
+        process.env.TOKEN_ENCRYPTION_KEY = KEY_B;
+        assert.notEqual(personKey('ali@example.com'), a);
     });
 });
 

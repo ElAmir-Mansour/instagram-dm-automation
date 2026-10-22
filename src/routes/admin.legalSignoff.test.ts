@@ -195,3 +195,43 @@ describe('DELETE: revoking', () => {
         assert.equal(rows.find((r) => r.id === theirs.body.signoff.id)!.revoked_at, null, 'the other tenant keeps its sign-off');
     });
 });
+
+describe('lead ads: the Page subscription follows the sign-off (A10)', () => {
+    let posts: string[];
+    let restoreHttp: () => void;
+
+    beforeEach(async () => {
+        posts = [];
+        const { metaHttp } = await import('../services/http.js');
+        const original = { post: metaHttp.post, get: metaHttp.get };
+        (metaHttp as any).post = async (url: string, body: URLSearchParams) => { posts.push(`${url} ${body.get('subscribed_fields')}`); return { data: { success: true } }; };
+        (metaHttp as any).get = async () => ({ data: { data: [] } });
+        restoreHttp = () => { (metaHttp as any).post = original.post; (metaHttp as any).get = original.get; };
+        db.routes.unshift(
+            [/^SELECT id, facebook_page_id, page_access_token FROM creators WHERE id = \$1$/, () => ({ rows: [{ id: TENANT, facebook_page_id: '200000000000001', page_access_token: 'EAApage' }] })],
+            [/FROM ads_legal_signoffs WHERE creator_id = \$1 AND scope = \$2 AND revoked_at IS NULL/, ([creator, scope]) => ({ rows: rows.filter((r) => r.creator_id === creator && r.scope === scope && r.revoked_at === null) })],
+        );
+    });
+    afterEach(() => restoreHttp());
+
+    it('recording a lead_ads sign-off subscribes the Page to leadgen at once', async () => {
+        const r = await call('POST', base(), { ...good, scope: 'lead_ads' });
+        assert.equal(r.status, 201);
+        assert.equal(posts.length, 1);
+        assert.match(posts[0]!, /200000000000001\/subscribed_apps .*leadgen/);
+    });
+
+    it('a customer_lists sign-off does not touch the subscription', async () => {
+        assert.equal((await call('POST', base(), good)).status, 201);
+        assert.equal(posts.length, 0);
+    });
+
+    it('revoking re-subscribes without leadgen', async () => {
+        const created = await call('POST', base(), { ...good, scope: 'lead_ads' });
+        posts = [];
+        const r = await call('DELETE', `${base()}/${created.body.signoff.id}`, undefined);
+        assert.equal(r.body.revoked, true);
+        assert.equal(posts.length, 1);
+        assert.doesNotMatch(posts[0]!, /leadgen/);
+    });
+});

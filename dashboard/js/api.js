@@ -795,6 +795,15 @@ const API = {
     deleteAdsRule: (id) => API.request(`/ads/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     /** `{ runs }`: the last 50 checks, newest first. */
     getAdsRuleRuns: (id) => API.request(`/ads/rules/${encodeURIComponent(id)}/runs`),
+    /** Lead ads (A10): `{ locked, signoff, retentionDays, forms }`. */
+    getAdsLeadForms: () => API.request('/ads/lead-forms'),
+    /** FormInput → 201 `{ form }`. LOCKED_LEGAL, RESTRICTED_QUESTION (`field`), NOT_CONNECTED, META_ERROR. */
+    createAdsLeadForm: (body) => API.request('/ads/lead-forms', { method: 'POST', body: JSON.stringify(body || {}) }),
+    /** Owner only. `{ formId?, from?, to? }` → `{ leads, retentionDays }`: the answers, never stored in the browser. */
+    getAdsLeads: (query) => {
+        const qs = new URLSearchParams(query || {}).toString();
+        return API.request(`/ads/leads${qs ? `?${qs}` : ''}`);
+    },
 
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */

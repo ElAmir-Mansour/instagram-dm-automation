@@ -2632,6 +2632,46 @@ routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DIS
 7. **Delete.** `DELETE /api/ads/audiences/:id` `{ confirm: true }`: a `delete` op on the Meta id (or just the row when the create
    never landed); the row is marked `deleted` and kept.
 
+### 7.8 Lead ads: a lead → the Leads tab, behind a legal lock (Ads A10)
+
+Tables in **v57** (`ads_lead_forms`, `ads_leads`); the lock is A8's `ads_legal_signoffs` (v56). Code in `src/services/ads/leads.ts`;
+routes in `src/routes/adsLeads.ts` (mounted in `adsRouter` after the ADS_DISABLED gate); the screen is `#/ads_leads`
+(`dashboard/js/pages/ads_leads.js`) and the builder's Leads goal (`ads_create.js`). **Forms and leads use the tenant's PAGE token,
+not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing contacts a lead.**
+
+1. **The lock.** `activeSignoff(creatorId, 'lead_ads')` (**`legalSignoff.ts:139`**). Locked: `POST /api/ads/lead-forms` →
+   403 `LOCKED_LEGAL` (**`leads.ts:363`** `createLeadForm`, before any write); a `goal: 'leads'` draft → 403 `LOCKED_LEGAL`, or a
+   country outside the sign-off's `countries` → 403 on `adsets.<i>.targeting.countries` (**`leads.ts:586`** `checkLeadSpec`,
+   called by **`drafts.ts:321`** validate and **`:443`** create); `fetchAndStoreLead` answers `locked` without a Graph call.
+2. **The subscription.** Only a Page subscribed to `leadgen` is ever sent a lead. `subscribePage(…, extraFields)`
+   (**`metaLogin.ts:571`**) POSTs `WEBHOOK_FIELDS` + `leadgenFieldsFor(creatorId)` (**`:553`**: `['leadgen']` while a lead_ads
+   sign-off is active), and the connect path passes it too (**`:685`**), so a reconnect never drops it. The admin's sign-off routes
+   call `syncLeadgenSubscription` (**`leads.ts:631`**) after a lead_ads record and after any revoke (**`admin.ts:1310`**,
+   **`:1338`**); the catch-up re-syncs every 6 h. Prerequisite outside the code: the app-level Page webhook has the `leadgen` field.
+3. **A form.** `POST /api/ads/lead-forms` (owner; **`adsLeads.ts:82`**) → `validateForm` (**`leads.ts:142`**: `AR_AR` default,
+   an allow-list of question types, CUSTOM labels checked by `restrictedCategory`, https privacy and thank-you links, the optional
+   `contact_consent` question) → a `pending` row keyed by the dialog's idempotency key → ONE `POST /{page_id}/leadgen_forms`
+   (`buildFormParams`, **`:236`**) → `active` + `meta_id`, or `failed` with Meta's sentence; no answer leaves it `pending` for the
+   catch-up to adopt by name. Audit `ads.lead_form_saved`.
+4. **A lead arrives.** Meta's Page webhook `changes[].field === 'leadgen'` → `planLead` (**`router.ts:126`**, branch at **`:186`**;
+   the inline fallback at **`:301`**) → one `ads.lead` job, ids only, dedupe `lead:<leadgen_id>` → **`handlers.ts:80`** →
+   `fetchAndStoreLead` (**`leads.ts:479`**): tenant by Page id, the lock, `GET /{leadgen_id}?fields=id,created_time,ad_id,form_id,
+   field_data` with the Page token (a throttle → `throttled`, never retried; a refusal → `failed`; no answer → throws, the job
+   retries) → `storeLead` (**`:450`**): `answers_enc = encryptBytes(field_data)`, `person_keys` = HMAC of the normalised email and
+   phone, `consent_contact`, `retain_until = created_time + leadRetentionDays`, `ON CONFLICT (meta_lead_id) DO NOTHING`, and the
+   form's `last_lead_seen_at` moves.
+5. **The catch-up and retention.** The drain (**`api.ts:436`**) calls `sweepLeads` (**`leads.ts:770`**): `purgeExpiredLeads`
+   (**`:609`**: per tenant, answers and keys NULLed, `purged_at` set, where `retain_until` passed or `created_time` is older than
+   today's setting; the row stays as a count) then `catchUpLeads` (**`:721`**: tenants with a sign-off, at most every 6 h by
+   `ads.leads_caught_up.<t>`; the Page's forms reconciled; per active form `/{form_id}/leads` with `filtering` `time_created
+   GREATER_THAN` the newest seen − 10 min, ≤ 10 pages; a throttle ends that tenant's run).
+6. **Reading.** `GET /api/ads/lead-forms` (viewer; **`adsLeads.ts:65`**) answers the lock, the countries and the forms;
+   `GET /api/ads/leads` (owner; **`:99`**) decrypts in memory; `GET /api/ads/leads.csv` (owner; **`:115`**) is audited
+   (`ads.leads_exported`, count and filters only) before the file is sent (`leadsCsv`: BOM, every cell quoted, formulas defused).
+7. **Erasure.** `resolveErasureTarget` adds `leadPersonKeys` (**`erasure.ts:122`**, `leadPersonKeysForHandle`: an email, or a phone
+   also completed with EG and SA dial codes); counts, preview and `executeErasure` include `ads_leads WHERE person_keys && $4`;
+   the rows are deleted whole inside the erasure's transaction (**`:599`**; the statement lives in erasure.ts, the one cross-tenant path, not in the ads module).
+
 ## 8. Meta login → a connected Page
 
 A tenant connects its own Facebook Page and Instagram account with Facebook Login for Business instead of the operator
@@ -3640,6 +3680,10 @@ error, and several write **no row at all**.
 | 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
+| 7.8 | a `leadgen` change for a tenant with no lead_ads sign-off — `fetchAndStoreLead` | `ads.lead_locked` (`warn`) | **no** (nothing fetched) |
+| 7.8 | the app-level Page webhook has no `leadgen` field, or the Page is not subscribed (no sign-off yet) | *(none: Meta sends nothing)* | no; `scripts/diagnose.mjs` notes the missing field |
+| 7.8 | `GET /{leadgen_id}` refused (no `leads_retrieval`, Leads Access Manager) — `fetchAndStoreLead` | `ads.lead_read_refused` | no; the job ends `failed` and the catch-up will be refused too |
+| 7.8 | a throttle on the lead read | `ads.throttled` | no, until the 6-hourly catch-up |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |

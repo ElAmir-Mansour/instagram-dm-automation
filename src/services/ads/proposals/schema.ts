@@ -29,7 +29,11 @@ export const MAX_ICE_BREAKERS = 4;
 export const MAX_ICE_BREAKER_TITLE = 80;
 export const MAX_REVIEW_ITEMS = 3;
 
-export const GOALS = ['messages', 'reach', 'engagement', 'traffic', 'leads'] as const;
+/**
+ * The goals Claude may propose. Never 'leads' (A10): a lead form collects personal data behind a legal lock, so a lead campaign is only ever
+ * made by the owner in the builder. The response schema itself leaves it out, so the model cannot emit one; service.ts refuses it again.
+ */
+export const GOALS = ['messages', 'reach', 'engagement', 'traffic'] as const;
 export const BUDGET_KINDS = ['daily', 'lifetime'] as const;
 export const SPECIAL_CATEGORIES = ['none', 'employment', 'financial', 'housing', 'political'] as const;
 export const DESTINATIONS = ['instagram', 'messenger', 'whatsapp'] as const;

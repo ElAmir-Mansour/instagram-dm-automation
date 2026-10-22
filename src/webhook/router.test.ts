@@ -57,6 +57,32 @@ const dmDelivery = {
     }],
 };
 
+describe('planJobs: leadgen (lead ads, A10)', () => {
+    const leadgen = (value: Record<string, unknown>) => ({
+        object: 'page',
+        entry: [{ id: '200000000000001', time: 1, changes: [{ field: 'leadgen', value }] }],
+    });
+
+    it('a leadgen change is an ads.lead job keyed by the lead id, with ids only, and never a comment job', () => {
+        const planned = planJobs(leadgen({ leadgen_id: '9001', page_id: '200000000000001', form_id: '777', ad_id: '555', adgroup_id: '444', created_time: 1760000000 }));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'ads.lead');
+        assert.equal(planned[0]!.dedupeKey, 'lead:9001');
+        assert.equal(planned[0]!.tenantKey, '200000000000001');
+        assert.deepEqual(planned[0]!.payload, { leadgenId: '9001', pageId: '200000000000001', formId: '777', adId: '555', createdTime: 1760000000 });
+    });
+
+    it('a leadgen change without a lead id is dropped', () => {
+        assert.deepEqual(planJobs(leadgen({ page_id: '200000000000001' })), []);
+    });
+
+    it('a comment next to a lead still becomes a comment job', () => {
+        const body = leadgen({ leadgen_id: '9002' });
+        (body.entry[0]!.changes as any[]).push({ field: 'feed', value: { item: 'comment', comment_id: 'c1', verb: 'add' } });
+        assert.deepEqual(planJobs(body).map(j => j.kind), ['ads.lead', 'comment.process']);
+    });
+});
+
 describe('planJobs', () => {
     it('turns an Instagram comment into one comment job keyed on value.id', () => {
         const planned = planJobs(igComment);

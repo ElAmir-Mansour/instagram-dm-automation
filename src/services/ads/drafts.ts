@@ -21,6 +21,7 @@ import { queryOne } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
 import { waitUntil } from '../../utils/waitUntil.js';
 import { AudienceError, resolveSpecAudiences } from './audiences.js';
+import { checkLeadSpec } from './leads.js';
 import { AdsError } from '../adBoosts.js';
 import { loadAssistantState, type AssistantState } from '../inboxAssistant.js';
 import { mintAdLink } from '../links.js';
@@ -316,6 +317,9 @@ const EMPTY_POLICY: PolicyResult = { version: POLICY_VERSION, blocked: false, fi
 export async function validateDraft(creatorId: string, input: unknown): Promise<DraftValidation> {
     const checked = validateSpec(input);
     if (!checked.ok) return { estimate: null, previews: [], policy: EMPTY_POLICY, money: null, meta: null, problems: checked.problems, warnings: [], bots: [] };
+    // Lead ads (A10): the legal lock and the form, before anything is asked of Meta.
+    const leadRefusal = await checkLeadSpec(creatorId, checked.spec);
+    if (leadRefusal) return { estimate: null, previews: [], policy: EMPTY_POLICY, money: null, meta: null, problems: [{ field: leadRefusal.field, code: leadRefusal.code === 'LOCKED_LEGAL' ? 'UNSUPPORTED' : 'INVALID', message: leadRefusal.message }], warnings: [], bots: [] };
     let spec = checked.spec;
     try {
         spec = { ...spec, adsets: await resolveSpecAudiences(creatorId, spec.adsets) };
@@ -435,6 +439,9 @@ export async function createDraft(
 ): Promise<CreatedDraft> {
     const checked = validateSpec(input);
     if (!checked.ok) { const p = checked.problems[0]!; throw refused(400, p.code === 'UNSUPPORTED' ? 'UNSUPPORTED' : 'INVALID', p.message, p.field); }
+    // Lead ads (A10): 403 LOCKED_LEGAL without a covering sign-off, before anything is written.
+    const leadRefusal = await checkLeadSpec(creatorId, checked.spec);
+    if (leadRefusal) throw refused(leadRefusal.status, leadRefusal.code, leadRefusal.message, leadRefusal.field);
     let spec = checked.spec;
     try {
         // The picker sends our audience ids (A8): each is the tenant's and usable, and becomes its Meta id here.

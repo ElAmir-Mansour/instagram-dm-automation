@@ -205,7 +205,10 @@ export async function advanceProposal(creatorId: string, proposalId: string): Pr
     for (const item of outcome.items) {
         const spec = item.payload.task === 'draft_campaign' ? item.payload.spec : 'spec' in item.payload.item.change ? item.payload.item.change.spec : null;
         if (!spec) continue;
-        const v = validateSpec(spec);
+        // Lead ads (A10) are never proposed: a lead form collects personal data behind a legal lock, and the AI never sees or plans for it.
+        const v = (spec as { goal?: unknown }).goal === 'leads'
+            ? { ok: false as const, problems: [{ field: 'goal', message: 'Lead ads are not proposed by the AI; choose messages, traffic, engagement or reach.' }] }
+            : validateSpec(spec);
         if (!v.ok) {
             const problems = v.problems.map((p) => `spec.${p.field}: ${p.message}`);
             if (row.attempt <= 1) { await regenerate(row, 'spec', problems); return; }

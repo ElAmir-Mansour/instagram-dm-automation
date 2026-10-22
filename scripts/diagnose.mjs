@@ -282,6 +282,10 @@ async function checkMetaConfig(dbState) {
             warn('meta', `object "${sub.object}" is not subscribed to: ${missingFields.join(', ')}`,
                 'Events for an unsubscribed field are never sent, which is indistinguishable from no activity.');
         }
+        // Lead ads (A10): `leadgen` is needed only once a tenant has a lead_ads legal sign-off, so its absence is a fact, not a warning.
+        if (sub.object === 'page' && !fields.includes('leadgen')) {
+            fact('meta', 'page has no "leadgen" field: lead ads (locked until a legal sign-off) receive nothing until it is added in App Dashboard → Webhooks → Page');
+        }
     }
 
     for (const obj of Object.keys(EXPECTED_SUBSCRIPTIONS)) {

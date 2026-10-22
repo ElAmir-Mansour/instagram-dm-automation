@@ -45,6 +45,16 @@ function messageSpec(over: Partial<Spec> = {}): Spec {
     };
 }
 
+function leadSpec(over: Partial<Spec> = {}): Spec {
+    return {
+        name: 'Go course leads', goal: 'leads', leadFormId: '777000111', specialCategory: 'none',
+        budget: { home: 'adset', kind: 'lifetime', amount: 15, start: '2026-10-22T10:00:00.000Z', end: '2026-10-25T10:00:00.000Z' },
+        adsets: [{ name: 'EG', targeting: { countries: ['EG'], ageMin: 18, advantageAudience: true }, placements: 'automatic' }],
+        ads: [{ adsetIndex: 0, name: 'Image', creative: { source: 'media', mediaId: 'img1' }, copy: { primaryText: 'سجّل الآن', headline: 'دورة Go' } }],
+        ...over,
+    };
+}
+
 function problemsOf(spec: unknown): Array<{ field: string; code: string }> {
     const r = validateSpec(spec);
     assert.equal(r.ok, false, 'expected a problem');
@@ -389,11 +399,15 @@ describe('refusals', () => {
         assert.equal(validateSpec(withTargeting({ cities: [{ key: '2418956', radiusKm: 25 }] })).ok, true);
     });
 
-    it('lead ads are UNSUPPORTED until A10', () => {
-        const r = validateSpec({ ...messageSpec(), goal: 'leads' });
-        assert.equal(r.ok, false);
-        assert.deepEqual(!r.ok && r.problems.map(p => [p.field, p.code]), [['goal', 'UNSUPPORTED']]);
-        assert.match(!r.ok ? r.problems[0]!.message : '', /A10/);
+    it('a lead ad needs a lead form, uploaded media and a lead button (A10)', () => {
+        const lead = leadSpec();
+        assert.equal(validateSpec(lead).ok, true);
+        assert.deepEqual(problemsOf({ ...lead, leadFormId: undefined }), [{ field: 'leadFormId', code: 'INVALID' }]);
+        assert.deepEqual(problemsOf({ ...lead, ads: [{ ...lead.ads[0]!, creative: { source: 'post', postId: 'ig1', platform: 'instagram' } }] }),
+            [{ field: 'ads.0.creative', code: 'UNSUPPORTED' }]);
+        assert.deepEqual(problemsOf({ ...lead, ads: [{ ...lead.ads[0]!, copy: { primaryText: 'x', cta: 'SHOP_NOW' } }] }), [{ field: 'ads.0.copy.cta', code: 'UNSUPPORTED' }]);
+        assert.deepEqual(problemsOf({ ...lead, ads: [{ ...lead.ads[0]!, creative: { source: 'media', mediaId: 'img1', verticalMediaId: 'img1' } }] }),
+            [{ field: 'ads.0.creative.verticalMediaId', code: 'UNSUPPORTED' }]);
     });
 
     it('an EU country is refused: the DSA payor and beneficiary are not collected', () => {
@@ -772,5 +786,33 @@ describe('A5: the full builder', () => {
         const noVerticalCover = { ...media, vid9: { kind: 'video' as const, videoId: '999' } };
         // Without its own cover the 9:16 video borrows the main one's; with neither it is refused.
         assert.doesNotThrow(() => mapSpec(story4(), ctx({ media: noVerticalCover })));
+    });
+});
+
+describe('leads (A10): instant-form ads', () => {
+    it('OUTCOME_LEADS, ON_AD with the Page, LEAD_GENERATION, everything PAUSED', () => {
+        const p = mapSpec(leadSpec(), ctx());
+        assert.equal(p.campaign['objective'], 'OUTCOME_LEADS');
+        assert.equal(p.campaign['status'], 'PAUSED');
+        assert.equal(p.adsets[0]!['destination_type'], 'ON_AD');
+        assert.equal(p.adsets[0]!['optimization_goal'], 'LEAD_GENERATION');
+        assert.deepEqual(p.adsets[0]!['promoted_object'], { page_id: '100200300' });
+        assert.equal(p.adsets[0]!['status'], 'PAUSED');
+        assert.equal(p.ads[0]!.params['status'], 'PAUSED');
+        assert.deepEqual(OPTIMIZATION_CHOICES.leads, ['LEAD_GENERATION']);
+    });
+
+    it('the image creative opens the form: link fb.me, SIGN_UP by default with lead_gen_form_id, no ref tag', () => {
+        const c = mapSpec(leadSpec(), ctx()).creatives[0]!;
+        const data = (c['object_story_spec'] as any).link_data;
+        assert.equal(data.link, 'https://fb.me/');
+        assert.deepEqual(data.call_to_action, { type: 'SIGN_UP', value: { lead_gen_form_id: '777000111' } });
+        assert.equal(c['url_tags'], undefined);
+    });
+
+    it('a video creative carries the same button, and the owner\'s choice of lead button is kept', () => {
+        const spec = leadSpec();
+        const c = mapSpec({ ...spec, ads: [{ ...spec.ads[0]!, creative: { source: 'media', mediaId: 'vid1' }, copy: { primaryText: 'x', cta: 'APPLY_NOW' } }] }, ctx()).creatives[0]!;
+        assert.deepEqual((c['object_story_spec'] as any).video_data.call_to_action, { type: 'APPLY_NOW', value: { lead_gen_form_id: '777000111' } });
     });
 });

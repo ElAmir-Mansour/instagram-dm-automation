@@ -31,6 +31,7 @@ import { planWhatsAppEntry, WHATSAPP_OBJECT } from './whatsappPlan.js';
 import { handleWhatsAppInbound } from './whatsappInbound.js';
 import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
 import { isWhatsAppDmPayload } from '../jobs/types.js';
+import { fetchAndStoreLead } from '../services/ads/leads.js';
 
 /**
  * The id Meta gives this comment, for queue-level deduplication.
@@ -117,6 +118,32 @@ function hasEcho(body: any): boolean {
     return entries.some((entry) => Array.isArray(entry?.messaging) && entry.messaging.some((event: any) => event?.message?.is_echo));
 }
 
+/**
+ * A `leadgen` change → the `ads.lead` job (A10): the ids only (`value.leadgen_id`, `page_id`, `form_id`, `ad_id`, `created_time`), never an
+ * answer, which Meta does not send here anyway. The dedupe key is Meta's lead id, so a redelivered notification is one job. A change with no
+ * lead id cannot be fetched and is dropped (logged, no ids beyond the Page).
+ */
+export function planLead(change: any, entryId: string | undefined): EnqueueInput<'ads.lead'> | null {
+    const v = change?.value ?? {};
+    const id = (x: unknown): string | null => (typeof x === 'string' && x ? x : typeof x === 'number' ? String(x) : null);
+    const leadgenId = id(v.leadgen_id);
+    if (!leadgenId) {
+        log('warn', 'webhook.leadgen_without_id', { entry_id: entryId ?? null });
+        return null;
+    }
+    return {
+        kind: 'ads.lead',
+        payload: {
+            leadgenId,
+            pageId: id(v.page_id) ?? entryId ?? null,
+            formId: id(v.form_id),
+            adId: id(v.ad_id),
+            createdTime: typeof v.created_time === 'number' ? v.created_time : null,
+        },
+        dedupeKey: `lead:${leadgenId}`,
+    };
+}
+
 /** Flatten one webhook body into the jobs it implies, without touching the database. */
 export function planJobs(body: any, options: PlanOptions = {}): EnqueueInput[] {
     const planned: EnqueueInput[] = [];
@@ -154,6 +181,13 @@ export function planJobs(body: any, options: PlanOptions = {}): EnqueueInput[] {
 
         if (Array.isArray(entry?.changes)) {
             for (const change of entry.changes) {
+                // A lead from a lead ad (A10): its own job, never the comment pipeline. Only a Page subscribed to `leadgen` sends these,
+                // and only a tenant with a lead_ads legal sign-off is subscribed (leads.ts).
+                if (change?.field === 'leadgen') {
+                    const lead = planLead(change, entryId);
+                    if (lead) planned.push({ ...lead, tenantKey });
+                    continue;
+                }
                 planned.push({
                     kind: 'comment.process',
                     payload: { change, entryId },
@@ -264,6 +298,11 @@ async function processEntry(entry: any, objectType: string): Promise<void> {
         if (Array.isArray(entry?.changes)) {
             for (const change of entry.changes) {
                 try {
+                    if (change?.field === 'leadgen') {
+                        const lead = planLead(change, entryId);
+                        if (lead) await fetchAndStoreLead(lead.payload, 'webhook');
+                        continue;
+                    }
                     await handleCommentChange(change, entryId, FINAL_ATTEMPT);
                 } catch (err: any) {
                     log('error', 'webhook.comment_failed', {
