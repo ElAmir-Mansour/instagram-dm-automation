@@ -11,14 +11,14 @@
           "timestamp": 1761134400000,
           "message": {
             "mid": "aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAwMDAwMDAwMDAx",
-            "text": "كم سعر الكورس؟",
+            "text": "كم السعر؟",
             "referral": {
               "ref": "ar_0123456789ab",
               "ad_id": "120210000000000001",
               "source": "ADS",
               "type": "OPEN_THREAD",
               "ads_context_data": {
-                "ad_title": "كورس Go من الصفر",
+                "ad_title": "عرض الخريف",
                 "photo_url": "https://scontent.xx.fbcdn.net/v/ad-photo.jpg",
                 "video_url": "https://video.xx.fbcdn.net/v/ad-video.mp4"
               }

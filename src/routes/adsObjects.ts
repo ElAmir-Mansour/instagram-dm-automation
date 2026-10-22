@@ -23,6 +23,7 @@ import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, type O
 import { editsLeftThisHour, getOp, listOps, type AdsOpState, type OpView } from '../services/ads/ops.js';
 import { readAdsSettings, readHealth } from '../services/ads/settings.js';
 import { dayInTz, requestTodaySync, syncInsights, syncStructure } from '../services/ads/sync.js';
+import { resultsByAd, type AdConversationResults } from '../services/ads/attribution.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { waitUntil } from '../utils/waitUntil.js';
 import { describeError, log } from '../utils/log.js';
@@ -74,12 +75,16 @@ async function views(creatorId: string, rows: ObjectRow[]): Promise<ReturnType<t
     const adsets = rows.filter((r) => r.level === 'adset' && r.metaId).map((r) => r.metaId!);
     const left = adsets.length ? await editsLeftThisHour(creatorId, adsets) : new Map<string, number>();
     const open = await listOps(creatorId, OPEN_STATES, 500);
+    // A3: what came of each ad in the app (conversations, tracked clicks, hand-offs), one statement for every ad on the page.
+    const adIds = rows.filter((r) => r.level === 'ad' && r.metaId).map((r) => r.metaId!);
+    const app = adIds.length ? await resultsByAd(creatorId, adIds) : new Map<string, AdConversationResults>();
     const byKey = new Map<string, OpView[]>();
     for (const op of open) byKey.set(op.objectKey, [...(byKey.get(op.objectKey) ?? []), op]);
     return rows.map((r) => toObjectView(r, {
         results: r.metaId ? totals.get(`${r.level}:${r.metaId}`) ?? null : null,
         editsLeftThisHour: r.level === 'adset' && r.metaId ? left.get(r.metaId) ?? null : null,
         queuedOps: byKey.get(r.id) ?? [],
+        app: r.level === 'ad' && r.metaId ? app.get(r.metaId) ?? null : null,
     }));
 }
 

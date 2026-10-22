@@ -288,13 +288,24 @@ describe('toObjectView', () => {
 
     it('results: cost per conversation is spend over conversations, or null; the result follows the optimisation goal', () => {
         const v = toObjectView(row({ level: 'adset', optimizationGoal: 'CONVERSATIONS' }), { results: totals() });
-        assert.deepEqual(v.results, { spend: 20, impressions: 1000, reach: null, linkClicks: 30, conversations: 4, costPerConversation: 5, results: 4, costPerResult: 5 });
+        assert.deepEqual(v.results, {
+            spend: 20, impressions: 1000, reach: null, linkClicks: 30, conversations: 4, costPerConversation: 5, results: 4, costPerResult: 5,
+            appConversations: 0, trackedClicks: 0, handoffs: 0, costPerTrackedClick: null,
+        });
         const none = toObjectView(row({ optimizationGoal: 'CONVERSATIONS' }), { results: totals({ conversations: 0 }) });
         assert.equal(none.results!.costPerConversation, null);
         assert.equal(none.results!.results, null);
         const clicks = toObjectView(row({ optimizationGoal: 'LINK_CLICKS' }), { results: totals() });
         assert.equal(clicks.results!.results, 30);
         assert.equal(toObjectView(row()).results, null);
+    });
+
+    it('A3: an ad carries what the app saw of it (conversations, tracked clicks, hand-offs), and a cost per tracked click', () => {
+        const v = toObjectView(row({ level: 'ad', optimizationGoal: 'CONVERSATIONS' }), { results: totals(), app: { conversations: 3, trackedClicks: 4, handoffs: 1 } });
+        assert.equal(v.results!.appConversations, 3);
+        assert.equal(v.results!.trackedClicks, 4);
+        assert.equal(v.results!.handoffs, 1);
+        assert.equal(v.results!.costPerTrackedClick, 5);
     });
 
     it('lists only the ops still in flight, and shows a boost id and the creative of an ad', () => {

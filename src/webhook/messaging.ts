@@ -61,9 +61,10 @@ export interface NormalizedDm {
     metaMessageId: string | null;
     /**
      * The click-to-message ad this event came from (A3, `src/services/ads/attribution.ts` `adSourceOf`): `message.referral`, `postback.referral` or
-     * a standalone `referral`, in that order, `source: 'ADS'` only. Null for everything else, which is every DM there was before A3.
+     * a standalone `referral`, in that order, `source: 'ADS'` only. Null or absent for everything else, which is every DM there was before A3
+     * (and every WhatsApp message: its click-to-WhatsApp referral is `entry_source` `ctwa`, written by `whatsappInbound.ts`).
      */
-    adSource: AdSource | null;
+    adSource?: AdSource | null;
 }
 
 /** An ad referral with nothing to answer: no words, no button, no attachment. Recorded on the conversation, and nothing is sent (A3). */
@@ -154,7 +155,8 @@ export function normalizeDm(event: any, object?: unknown): NormalizedDm | null {
         isStoryMention,
         wordless,
         metaMessageId: event?.message?.mid ?? event?.postback?.mid ?? null,
-        adSource,
+        // Only when there is one: a DM that did not come from an ad is the same object it always was.
+        ...(adSource ? { adSource } : {}),
     };
 }
 

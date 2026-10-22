@@ -39,6 +39,7 @@ import {
     saveAdsSettings, saveAlerts, writeHealth,
 } from '../services/ads/settings.js';
 import { setSpendCap, SpendCapRefused, spendCapChangesLeft } from '../services/ads/spendCap.js';
+import { parseSwitchesInput, readAdsSwitches, writeAdsSwitches } from '../services/ads/switches.js';
 import { fetchAccountState } from '../services/ads/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { mountObjectRoutes } from './adsObjects.js';
@@ -190,6 +191,34 @@ adsRouter.post('/settings/alerts', canAdminister, async (req, res) => {
         res.json({ alerts: alertsView(parsed.value), ...(parsed.test ? { test: await sendAdsTest(creatorId) } : {}) });
     } catch (err) {
         await fail(req, res, err, 'save_ads_alerts');
+    }
+});
+
+/**
+ * The two A3 switches (both off by default): the bot is told which ad a conversation came from (`botContext`), and Meta's longer reply window for
+ * ad-started conversations, per platform (`extendedWindow`). Reading is any member's; changing them is the owner's. The settings view carries
+ * them too (`switches`); this is the card's own pair of routes.
+ */
+adsRouter.get('/settings/switches', canView, async (req, res) => {
+    try {
+        res.json({ switches: await readAdsSwitches(getTenantId(req)) });
+    } catch (err) {
+        await fail(req, res, err, 'read_ads_switches');
+    }
+});
+
+adsRouter.post('/settings/switches', canAdminister, async (req, res) => {
+    try {
+        const parsed = parseSwitchesInput(req.body);
+        if (!parsed.ok) {
+            res.status(400).json({ error: `${parsed.field} must be true or false.`, code: 'INVALID', field: parsed.field });
+            return;
+        }
+        const switches = await writeAdsSwitches(getTenantId(req), parsed.value, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsSwitchesWrite, null, { ...parsed.value });
+        res.json({ switches });
+    } catch (err) {
+        await fail(req, res, err, 'save_ads_switches');
     }
 });
 

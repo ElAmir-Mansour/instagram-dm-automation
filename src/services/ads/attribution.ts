@@ -24,6 +24,8 @@ import { queryOne, queryRows } from '../../db/query.js';
 import type { AdTouch, AdsContextData, ConversationEntrySource } from '../../db/rows.js';
 import { metaErrorCode, metaErrorSubcode } from '../http.js';
 import { describeError, log } from '../../utils/log.js';
+import { notifyAds } from './notify.js';
+import { readAdsSettings, readHealth } from './settings.js';
 import { readExtendedWindow, writeAdsSwitches, type AdPlatform, type AdsSwitches } from './switches.js';
 
 /** What `normalizeDm` reads off a messaging event that came from a click-to-message ad. */
@@ -345,23 +347,34 @@ export function isWindowRefusal(err: unknown): boolean {
 }
 
 /**
- * The ads alerts A3 raises: `business_ai` and `window_error`. Delivered through the ads alert channel (`ads/notify.ts`, once per kind per object
- * per day) when it exists; logged at error level either way, so the log alert sees it.
+ * The ads alerts A3 raises: `business_ai` and `window_error`. Delivered through the ads alert channel (`ads/notify.ts`: the tenant's Telegram and
+ * email, once per kind per object per day in the ad account's time zone), and logged at error level either way, so the log alert sees it.
  */
 export type AttributionAlertKind = 'business_ai' | 'window_error';
 
 export type AttributionAlertSink = (alert: { creatorId: string; kind: AttributionAlertKind; objectKey: string; detail: Record<string, unknown> }) => Promise<void>;
 
-let alertSink: AttributionAlertSink | null = null;
+/** The ads alert channel, addressed with what the tenant's stored ads settings and health say (the ad account and its UTC offset). */
+const notifySink: AttributionAlertSink = async ({ creatorId, kind, objectKey, detail }) => {
+    const [{ settings }, health] = await Promise.all([readAdsSettings(creatorId), readHealth(creatorId)]);
+    const conversationId = String(detail['conversation_id'] ?? '');
+    const alert = kind === 'business_ai'
+        ? { kind, conversationId } as const
+        : { kind, platform: detail['platform'] === 'messenger' ? 'messenger' as const : 'instagram' as const, conversationId } as const;
+    await notifyAds(alert, {
+        creatorId, adAccountId: settings.adAccountId ?? null, accountName: health.account?.name ?? null, offsetHours: health.account?.timezoneOffsetHours ?? 0,
+    }, { objectKey });
+};
 
-/** Wire the ads alert channel in (and tests a recorder). Null goes back to the log only. */
+let alertSink: AttributionAlertSink = notifySink;
+
+/** Tests swap in a recorder; null puts the ads alert channel back. */
 export function setAttributionAlertSink(sink: AttributionAlertSink | null): void {
-    alertSink = sink;
+    alertSink = sink ?? notifySink;
 }
 
 async function raiseAlert(creatorId: string, kind: AttributionAlertKind, objectKey: string, detail: Record<string, unknown>): Promise<void> {
     log('error', `ads.alert_${kind}`, { creator_id: creatorId, object_key: objectKey, ...detail });
-    if (!alertSink) return;
     try {
         await alertSink({ creatorId, kind, objectKey, detail });
     } catch (err) {

@@ -161,6 +161,14 @@ export interface ObjectView {
         costPerConversation: number | null;
         results: number | null;
         costPerResult: number | null;
+        /**
+         * A3, ads only: what the app saw that Meta cannot (`ads/attribution.ts` `resultsByAd`): conversations that began from this ad (by
+         * `entry_source.ad_id`), people's clicks on the tracked links sent in them, and the hand-offs to a person. Zero for any other level.
+         */
+        appConversations: number;
+        trackedClicks: number;
+        handoffs: number;
+        costPerTrackedClick: number | null;
     } | null;
     /** Ops on this object that have not finished: pending, running or in verify. */
     queued: QueuedOp[];
@@ -764,6 +772,8 @@ export interface ViewExtras {
     /** `editsLeftThisHour` of the ad set (4 minus the budget ops done in the last hour), when this row is an ad set. */
     editsLeftThisHour?: number | null;
     queuedOps?: QueuedOp[];
+    /** A3: the app-side results of an ad (`resultsByAd`), when this row is an ad. */
+    app?: { conversations: number; trackedClicks: number; handoffs: number } | null;
 }
 
 /** What the dashboard receives (contracts/dashboard-api.md): the stored row, plus results and queued ops the route read separately. */
@@ -805,6 +815,10 @@ export function toObjectView(row: ObjectRow, extras: ViewExtras = {}): ObjectVie
                   costPerConversation: per(t.spend, t.conversations),
                   results: resultOf(row.optimizationGoal, t),
                   costPerResult: per(t.spend, resultOf(row.optimizationGoal, t)),
+                  appConversations: extras.app?.conversations ?? 0,
+                  trackedClicks: extras.app?.trackedClicks ?? 0,
+                  handoffs: extras.app?.handoffs ?? 0,
+                  costPerTrackedClick: per(t.spend, extras.app?.trackedClicks ?? 0),
               }
             : null,
         queued: (extras.queuedOps ?? []).filter((o) => o.state === 'pending' || o.state === 'running' || o.state === 'verify'),

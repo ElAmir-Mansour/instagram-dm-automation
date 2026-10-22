@@ -247,6 +247,9 @@ export type AdsAlertKind = (typeof ADS_ALERT_KINDS)[number];
 /** The kinds shown on the card in A1. */
 export const A1_ALERT_KINDS: readonly AdsAlertKind[] = ADS_ALERT_KINDS.slice(0, 9);
 
+/** The kinds the card shows: A1's, and A3's two about ad conversations (Business AI holds a thread; the longer reply window was refused). */
+export const SHOWN_ALERT_KINDS: readonly AdsAlertKind[] = [...A1_ALERT_KINDS, 'business_ai', 'window_error'];
+
 /** Kinds that cannot be switched off: each means money may be spending with nobody watching. */
 export const REQUIRED_ALERT_KINDS: readonly AdsAlertKind[] = ['cap_paused', 'guard_blind', 'token_dead'];
 
@@ -318,13 +321,13 @@ export async function saveAlerts(creatorId: string, alerts: AdsAlertSettings, up
     await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsAlerts, creatorId), JSON.stringify(alerts), updatedBy);
 }
 
-/** The card's view of the alerts: A1's kinds only, and which of them cannot be switched off. */
+/** The card's view of the alerts: the kinds raised so far (`SHOWN_ALERT_KINDS`), and which of them cannot be switched off. */
 export function alertsView(a: AdsAlertSettings) {
     return {
         telegramChatId: a.telegramChatId,
         email: a.email,
         lang: a.lang,
-        kinds: Object.fromEntries(A1_ALERT_KINDS.map((k) => [k, a.kinds[k]])),
+        kinds: Object.fromEntries(SHOWN_ALERT_KINDS.map((k) => [k, a.kinds[k]])),
         required: [...REQUIRED_ALERT_KINDS],
     };
 }

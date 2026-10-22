@@ -11,7 +11,7 @@
           "timestamp": 1761134400000,
           "postback": {
             "mid": "m_postback-ad-2",
-            "title": "ما محتوى الكورس؟",
+            "title": "ما الذي يتضمنه العرض؟",
             "payload": "ICE_BREAKER_CONTENT",
             "referral": {
               "ref": "ar_0123456789ab",
@@ -19,7 +19,7 @@
               "source": "ADS",
               "type": "OPEN_THREAD",
               "ads_context_data": {
-                "ad_title": "كورس Go من الصفر",
+                "ad_title": "عرض الخريف",
                 "photo_url": "https://scontent.xx.fbcdn.net/v/ad-photo.jpg",
                 "post_id": "100000000000001_200000000000001"
               }
