@@ -647,6 +647,8 @@ const API = {
     testAdsSettings: () => API.request('/ads/settings/test', { method: 'POST' }),
     /** `{ telegramChatId?, email?, lang?, kinds?: { [kind]: boolean }, test? }` → `{ alerts, test?: { telegram, email } }`, each 'sent' | 'failed' | 'off'. A 400 carries `field`. */
     saveAdsAlerts: (data) => API.request('/ads/settings/alerts', { method: 'POST', body: JSON.stringify(data) }),
+    /** A3's two switches: `{ botContext?, extendedWindow?: { instagram?, messenger? } }` → `{ switches }`. Owner only; 400 `INVALID` names the field. */
+    saveAdsSwitches: (data) => API.request('/ads/settings/switches', { method: 'POST', body: JSON.stringify(data) }),
     /** Meta's own spending limit on the ad account: `{ amount: number|null (null clears), confirm: true }` → `{ op, spendCap: { amount, changesLeftToday }, verified }`. 429 `EDIT_LIMIT`. */
     setAdsSpendCap: (data) => API.request('/ads/spend-cap', { method: 'POST', body: JSON.stringify(data) }),
     /**
