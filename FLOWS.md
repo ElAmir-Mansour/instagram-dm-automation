@@ -3482,6 +3482,48 @@ its own ad account and its own payment method; Meta bills the client, never the 
    account, and `<metaId>` must not be another tenant's or another account's stored object. `src/services/ads/isolation.test.ts`
    also scans every SQL statement on an `ads_*` table for `creator_id`.
 
+### 11.6 — Rules: a condition on the stored copy → a protective op, or a proposal (A9)
+
+The owner's standing conditions (`src/services/ads/rulesEval.ts` pure, `rules.ts` the pass, `rulesWiring.ts` the reach into the rest,
+`rulesStore.ts` the tables; routes `src/routes/adsRules.ts`; screen `#/ads_rules`). **Our own evaluator, not Meta's `adrules_library`**:
+Meta's rules cannot ask for approval, cannot see our monthly cap or alerts, and its `CHANGE_BUDGET` would bypass the money rule and the
+4-budget-changes-an-hour accounting (research R14). The cost: a rule runs only when our drain does, which is every minute; the cap guard
+(§11.1) stays the hard safety net either way.
+
+1. **Save = approve.** `POST /api/ads/rules` (owner) → `parseRuleSpec` (**`rulesEval.ts:73`**: ≤ 5 conditions over spend, results, cost
+   per result, cost per conversation, CTR, CPM, frequency (today only, campaigns or ads: reach is not additive), spending pace (campaigns
+   and ad sets), rejected (notify only); windows today / 3d / 7d, each including today in the account's zone; a rule protects OR raises,
+   never both) → `createRule` sets `approved_by` = the saver, `approved_at` = now, audited `ads.rule_saved`. A PATCH that changes the rule
+   validates the whole rule after the change and re-approves it.
+2. **Due.** The drain (**`routes/api.ts:429`**, after the guard, before the ops queue) calls `evaluateDueRules`
+   (**`rulesWiring.ts:184`**): `dueRules` (**`rulesStore.ts:210`**) = enabled, approved, no run in the last 55 minutes; grouped by tenant
+   until the drain's deadline.
+3. **The account** (`account`, **`rulesWiring.ts:46`**): ads on, configured, token not dead, a stored account snapshot (currency, UTC
+   offset, Meta's minimum daily budget). Otherwise every due rule records a `blind` run with the reason and nothing else happens.
+4. **Order.** `evaluateTenantRules` (**`rules.ts:77`**) runs pause rules, then lower, then notify-only, then raise/resume ones, sharing
+   one `taken` set: **one action per object per evaluation**, and a protective rule claims an object first.
+5. **Fresh numbers or nothing** (`freshness`, **`rules.ts:128`**): today's rows older than 2 h (`sync.ts` `todayAt`) are read again once
+   per tenant per pass (`syncInsights(…, 'today')` within the pacer, 20 s). Refused (pacer/throttle) or failed and still stale: the rule
+   records `blind` (`throttled` / `stale`) and does not judge on old numbers.
+6. **Judge** (`planRule`, **`rulesEval.ts:388`**, over `evaluateObject` **`:309`**): the stored objects of the scope (`listObjects`;
+   a resume rule looks at PAUSED ones, a rejected-ad rule at every live one, the rest at delivering ones), the window totals from
+   `resultsFor`, "results" by the object's optimisation goal (`resultOf`). Below `min_data` = no data; all conditions must hold; money
+   spent with nothing bought is an infinite cost. Skips are recorded per object: `busy` (an op already queued on it), `already_paused`,
+   `no_budget` (no daily budget of its own), `at_minimum` (a cut never goes under Meta's minimum), `edit_limit` (`editsLeftThisHour`:
+   Meta's 4 an hour per ad set), `cooldown` (this rule acted on it in the last 24 h, `recentlyActed` **`rulesStore.ts:241`**), `taken`.
+7. **Act.** Pause / lower budget → `enqueue` (**`rulesWiring.ts:105`**) → `actions.enqueueWrite` (kind `status` / `budget`, actor
+   `{ userId: null, via: 'rule' }`, idempotency key per rule, object and hour, so a second drain in the hour finds the same op), audited
+   `ads.rule_acted`; `drainAdsOps` sends it in the same drain. Raise / resume → **one** `ads_proposals` row per run (`propose`,
+   **`rulesWiring.ts:125`**: kind `rule_raise`, source `rule`, state `open`, a review item over every matched object). Nothing raises
+   spend until the owner approves it in Proposals (§7.5): `approveProposal` re-runs the checks and `applyChange` sends a raise through
+   `requestBudget` (confirm + the money rule) and a resume through `requestStatus('ACTIVE')` (**`proposals/ports.ts:180`**).
+8. **Tell.** Every object something happened to (changed, proposed, or a "tell me") → one `rule_acted` alert (`notifyAds`, deduped per
+   rule and object a day by `ads_alerts`).
+9. **Record.** Every evaluation writes an `ads_rule_runs` row (`recordRun`, **`rulesStore.ts:231`**): `acted` (an op or an alert),
+   `proposed`, `ok`, `skipped_no_data` (objects to watch, none with enough data) or `blind` (`matched` = `{ reason }`). Only `ok`, `acted`
+   and `proposed` move `last_ok_at`. **24 h** without one (since the approval if never) → `rule_blind` (**`rules.ts:116`**), once a day.
+   Rows are kept 90 days (`health.ts` retention sweep).
+
 ## 12. Ads → conversation → results (Meta Ads Manager, A3)
 
 A person taps a click-to-message ad and writes. The app records which ad brought them, shows it in the Inbox, counts what came of it per ad, and (only if the
@@ -3692,6 +3734,12 @@ error, and several write **no row at all**.
 | 11 | a queued op whose target is another tenant's or another account's — **`ads/ops.ts`** `sendExec` | `ads.not_own_object` | the op `failed` with `NOT_OWN_OBJECT`; **Meta is not called**, no verify |
 | 11 | a queued op on a Meta id the stored copy has not seen yet (made in Ads Manager before the next sync) — `assertOpTarget` | `ads.op_target_unmirrored` (`warn`) | sent: the token is the tenant's own, so Meta refuses anything outside its business |
 | 11 | the overview cannot read alerts, spend or sign-offs (a table not migrated yet) — **`ads/tenantsOverview.ts`** | `admin.ads_alerts_unreadable` / `admin.ads_spend_unreadable` / `admin.ads_signoffs_unreadable` | the rest renders; cap use shows "unknown" |
+| 11.6 | a rule ran less than 55 minutes ago, is off, or was never approved — `rulesStore.dueRules` | *(none)* | no run row |
+| 11.6 | ads off, not configured, token dead, or no stored account snapshot — `rulesWiring` `account` | *(none)* | `ads_rule_runs` `blind` with the reason; `rule_blind` after 24 h |
+| 11.6 | today's results stale and the refresh refused (pacer, throttle) or failed — `rules.ts` `freshness` | *(none)* | `blind` (`throttled` / `stale`); nothing judged on old numbers |
+| 11.6 | every watched object below `min_data` | *(none)* | `skipped_no_data`; counts toward `rule_blind` |
+| 11.6 | matched, but skipped: an op already queued, already paused, no daily budget of its own, at Meta's minimum, 4 budget changes used this hour, acted on in the last 24 h, or claimed by an earlier rule | *(none)* | the run row, the reason in `matched[].skipped` |
+| 11.6 | a raise or resume matched | `ads.rule_acted` audit | an `open` `rule_raise` proposal: **nothing changes at Meta until the owner approves it** |
 | 7.5 | the Mac worker has no `ads_think` handler (aicourse-captions not pulled, or the worker not restarted) | the worker's "doesn't know the job kind" | the job `failed`, the proposal `failed` with that error |
 | 7.5 | the Mac is asleep or its worker stopped | none until the sweep | the proposal stays `drafting`; the daily cron fails it after 24 h |
 | 7.5 | a review found nothing worth changing — `advanceProposal` | `ads.proposal_nothing_to_propose` | the `drafting` row is deleted |

@@ -31,6 +31,7 @@ const AdsTabs = {
         Object.freeze({ key: 'results', href: '#/ads_results', icon: 'bar-chart-3', label: 'ads.tabs.results' }),
         Object.freeze({ key: 'proposals', href: '#/ads_proposals', icon: 'sparkles', label: 'ads.tabs.proposals' }),
         Object.freeze({ key: 'audiences', href: '#/ads_audiences', icon: 'users', label: 'ads.tabs.audiences' }),
+        Object.freeze({ key: 'rules', href: '#/ads_rules', icon: 'list-checks', label: 'ads.tabs.rules' }),
         // A5: the full builder. Owners only on the server; the tab is shown to whoever sees the Ads area, and Create explains a refusal.
         Object.freeze({ key: 'create', href: '#/ads_create', icon: 'plus', label: 'ads.tabs.create' }),
     ]),

@@ -177,7 +177,10 @@ export const applyPort: ApplyPort = {
         } else {
             for (const id of item.targets) {
                 const row = await ownObject(creatorId, settings.adAccountId, id);
-                if (item.kind === 'pause' || change.percent <= -100) {
+                if (item.kind === 'resume') {
+                    // Switching back on spends: confirmed by the approval, and requestStatus re-runs the money rule (A9 rule proposals).
+                    push(await requestStatus(actionCtx(creatorId, ctx, step++), row, 'ACTIVE', true));
+                } else if (item.kind === 'pause' || change.percent <= -100) {
                     push(await requestStatus(actionCtx(creatorId, ctx, step++), row, 'PAUSED', false));
                 } else {
                     if (row.budgetAmount === null) throw new ProposalError(409, 'INVALID', 'This budget is not in the stored copy; refresh and ask again.');

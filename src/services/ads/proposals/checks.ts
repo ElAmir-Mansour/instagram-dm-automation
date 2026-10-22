@@ -187,6 +187,11 @@ async function moneyForItem(money: MoneyPort, args: CheckArgs, item: ReviewItem)
         return { ok: true, item: { ...item, change: { ...item.change, amount } }, note, effect: { worstCaseDelta: 0, newWorstCase: null, currency } };
     }
 
+    // A rule's resume (A9): the worst case grows by what the budgets can spend again; requestStatus runs the real money rule when it is applied.
+    if (item.kind === 'resume') {
+        return { ok: true, item, note: null, effect: { worstCaseDelta: round2(base * span), newWorstCase: null, currency } };
+    }
+
     const percent = item.kind === 'pause' ? -100 : item.change.percent;
     if (percent <= 0) {
         return { ok: true, item, note: null, effect: { worstCaseDelta: round2((base * percent) / 100 * span), newWorstCase: null, currency } };

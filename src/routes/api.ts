@@ -105,6 +105,7 @@ import { runAdsHealth } from '../services/ads/health.js';
 import { expireProposals } from '../services/ads/proposals/store.js';
 import { runDailyReview } from '../services/ads/proposals/service.js';
 import { drainAdsOps } from '../services/ads/ops.js';
+import { evaluateDueRules } from '../services/ads/rulesWiring.js';
 import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
@@ -421,6 +422,16 @@ router.get('/jobs/drain', async (req, res) => {
     // (a button press tries inline first; this is the backstop and what runs a change that had to wait), then each enabled tenant's
     // campaigns are read once an hour and today's results every 4 hours. After the guard, so the guard is never starved of points. Both
     // stop at the drain's deadline and never throw.
+    // The owner's rules (src/services/ads/rules.ts), each about once an hour: pause / lower / notify are enqueued here and sent by the
+    // queue just below; raises and resumes become proposals. After the guard (the hard cap comes first), before the queue (so a rule's
+    // pause goes out in this same run). Never throws; stops at the deadline.
+    try {
+        const rules = await evaluateDueRules(sweepDeadline(startedAt));
+        if (rules.rules > 0) log('info', 'ads.rules_sweep', { ...rules });
+    } catch (err) {
+        log('error', 'ads.rules_sweep_failed', describeError(err));
+    }
+
     try {
         const ops = await drainAdsOps(sweepDeadline(startedAt));
         if (ops.ran > 0 || ops.reaped > 0) log('info', 'ads.ops_drain', { ...ops });
@@ -1101,7 +1112,7 @@ router.get('/cron/publish', async (req, res) => {
         }
 
         // Ads health (src/services/ads/health.ts): every enabled tenant's token, ad account status and funding, and the version Meta
-        // served; each problem is an alert, once a day. Then the ads retention sweep (alerts after a year, finished ops after 180 days).
+        // served; each problem is an alert, once a day. Then the ads retention sweep (alerts after a year, finished ops after 180 days, rule runs after 90 days).
         try {
             const health = await runAdsHealth();
             if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });

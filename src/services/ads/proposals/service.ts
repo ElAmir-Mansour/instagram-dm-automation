@@ -51,7 +51,7 @@ export const PROPOSAL_TIMEOUT_MS = 120_000;
 
 export const isMacProposalTenant = (creatorId: string): Promise<boolean> => isMacBrainAllowed(creatorId);
 
-const taskOf = (row: Pick<ProposalRow, 'kind'>): ProposalTask => (row.kind === 'change' ? 'review' : 'draft_campaign');
+const taskOf = (row: Pick<ProposalRow, 'kind'>): ProposalTask => (row.kind === 'change' || row.kind === 'rule_raise' ? 'review' : 'draft_campaign');
 const purposeOf = (task: ProposalTask): 'ads_draft' | 'ads_review' => (task === 'review' ? 'ads_review' : 'ads_draft');
 
 /** The provider layer can answer this tenant's purpose, or the request is refused before a row is written. */

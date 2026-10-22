@@ -47,6 +47,30 @@ describe('buildAdsAlertText', () => {
     });
 });
 
+describe('rule alerts (A9)', () => {
+    it('says what the rule did, the numbers behind it, and that a raise waits for approval', () => {
+        const acted: AdsAlert = {
+            kind: 'rule_acted', ruleId: 'r1', ruleName: 'Too expensive', objectName: 'Spring ad', currency: 'SAR', proposalId: null,
+            values: { 'cost_per_conversation:3d': 18.456, 'spend:today': 40 },
+            steps: [{ kind: 'op', objectId: 'o1', action: 'lower_budget', from: 50, to: 40, adsetMetaId: 's1' }, { kind: 'notify', objectId: 'o1' }],
+        };
+        const en = buildAdsAlertText(acted, target, 'en');
+        assert.match(en, /Too expensive/);
+        assert.match(en, /Spring ad/);
+        assert.match(en, /18\.46 SAR/);
+        assert.match(en, /from 50 SAR to 40 SAR/);
+        assert.match(buildAdsAlertText(acted, target, 'ar'), /خُفِّضت الميزانية/);
+        const raise = buildAdsAlertText({ ...acted, steps: [{ kind: 'propose', objectId: 'o1', action: 'resume' }] }, target, 'en');
+        assert.match(raise, /waits for your approval/);
+    });
+
+    it('a blind rule names the reason, in both languages', () => {
+        const blind: AdsAlert = { kind: 'rule_blind', ruleId: 'r1', ruleName: 'Pace', reason: 'throttled', hours: 26 };
+        assert.match(buildAdsAlertText(blind, target, 'en'), /26 hours[\s\S]*limiting requests/);
+        assert.match(buildAdsAlertText(blind, target, 'ar'), /26 ساعة/);
+    });
+});
+
 describe('localDay', () => {
     it('is the ad account\'s calendar day', () => {
         assert.equal(localDay(new Date('2026-10-31T22:00:00Z'), 3), '2026-11-01');

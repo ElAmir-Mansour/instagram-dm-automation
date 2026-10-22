@@ -787,6 +787,14 @@ const API = {
     uploadAdsCustomerList: (body) => API.request('/ads/audiences/customer-list', { method: 'POST', body: JSON.stringify(body || {}) }),
     deleteAdsAudience: (id) => API.request(`/ads/audiences/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) }),
     recordAdsAudienceOptOut: (contact) => API.request('/ads/audiences/opt-outs', { method: 'POST', body: JSON.stringify({ contact }) }),
+    /** A9 → `{ rules, templates, limits, currency }`. */
+    getAdsRules: () => API.request('/ads/rules'),
+    /** Saving is approving. Refusals: INVALID (`field`). */
+    createAdsRule: (rule) => API.request('/ads/rules', { method: 'POST', body: JSON.stringify(rule || {}) }),
+    updateAdsRule: (id, patch) => API.request(`/ads/rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch || {}) }),
+    deleteAdsRule: (id) => API.request(`/ads/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /** `{ runs }`: the last 50 checks, newest first. */
+    getAdsRuleRuns: (id) => API.request(`/ads/rules/${encodeURIComponent(id)}/runs`),
 
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */

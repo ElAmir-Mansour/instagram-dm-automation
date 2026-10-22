@@ -230,3 +230,26 @@
 @media (max-width: 480px) {
     .adsaud-actions .btn { flex: 1 1 100%; }
 }
+
+/* ─── Ads → Rules (#/ads_rules, A9): templates, the rule cards with their history, and the rule dialog. Logical properties only. ─── */
+.adsrule-intro { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsrule-intro p { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; }
+.adsrule-templates, .adsrule-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: var(--space-4); }
+.adsrule-tpl, .adsrule-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsrule-card[data-enabled="false"] { opacity: 0.8; }
+.adsrule-name { margin: 0; font-size: var(--fs-300, 1.05rem); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; flex: 1 1 10rem; }
+.adsrule-sentence { margin: 0; color: var(--text-default); overflow-wrap: anywhere; }
+.adsrule-last { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.adsrule-history { border-block-start: 1px solid var(--border-subtle); padding-block-start: var(--space-3); }
+.adsrule-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.adsrule-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsrule-when { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: var(--fs-100); }
+.adsrule-matched { margin: var(--space-2) 0 0; padding-inline-start: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-200); }
+.adsrule-value, .adsrule-step, .adsrule-skip { margin-inline-start: var(--space-2); }
+.adsrule-step { color: var(--text-strong); }
+.adsrule-skip { color: var(--text-muted); }
+.adsrule-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.adsrule-cond { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsrule-cond .form-input { inline-size: auto; flex: 1 1 8rem; min-block-size: var(--tap-target); }
+.adsrule-objects { max-block-size: 14rem; overflow-y: auto; }
+.adsrule-asks { display: flex; gap: var(--space-2); padding: var(--space-3); margin: 0; }

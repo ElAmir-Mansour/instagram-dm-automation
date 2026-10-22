@@ -21,6 +21,7 @@ import { APP_SETTING_KEYS, getSetting } from '../appSettings.js';
 import { excerpt, sendTelegramMessage, telegramReady } from '../notify.js';
 import { effectiveTo, emailReady, readNotifyChannels, sendEmail } from '../notifyEmail.js';
 import { readAlerts, type AdsAlertKind } from './settings.js';
+import type { PlannedStep, RuleActedAlert, RuleBlindAlert } from './rulesEval.js';
 
 export type AdsAlert =
     | { kind: 'cap_paused'; spent: number; cap: number; nextDay: number; paused: number; currency: string }
@@ -35,7 +36,10 @@ export type AdsAlert =
     | { kind: 'business_ai'; conversationId: string }
     | { kind: 'window_error'; platform: 'instagram' | 'messenger'; conversationId: string }
     // A7: the daily review made proposals (`ads/proposals/service.ts`). Nothing changed: they wait for the owner.
-    | { kind: 'proposal_ready'; count: number; titles: string[] };
+    | { kind: 'proposal_ready'; count: number; titles: string[] }
+    // A9: rules (`ads/rules.ts`). Acted = paused, lowered, proposed or "tell me"; blind = no real evaluation for 24 h.
+    | RuleActedAlert
+    | RuleBlindAlert;
 
 export interface AdsAlertTarget {
     creatorId: string;
@@ -80,6 +84,8 @@ function headline(a: AdsAlert, lang: Lang): string {
         case 'business_ai': return ar ? 'ذكاء ميتا للأعمال يتولى محادثة، فلا يستطيع المساعد الرد' : 'Meta Business AI holds a conversation, so the assistant cannot reply';
         case 'window_error': return ar ? 'رفضت ميتا ردًّا خارج نافذة المراسلة، فأُطفئت النافذة الأطول' : 'Meta refused a reply outside the messaging window; the longer window was switched off';
         case 'proposal_ready': return ar ? 'اقترح Claude تغييرات على إعلاناتك' : 'Claude proposed changes to your ads';
+        case 'rule_acted': return ar ? `تحققت شروط القاعدة «${excerpt(a.ruleName, 60)}»` : `The rule "${excerpt(a.ruleName, 60)}" matched`;
+        case 'rule_blind': return ar ? `القاعدة «${excerpt(a.ruleName, 60)}» لا تراقب إعلاناتك منذ ${a.hours} ساعة` : `The rule "${excerpt(a.ruleName, 60)}" has not watched your ads for ${a.hours} hours`;
     }
 }
 
@@ -149,6 +155,70 @@ function detail(a: AdsAlert, lang: Lang): string[] {
                 ar ? `${a.count} مقترح بانتظار موافقتك. لا يتغيّر شيء ولا يُنفَق شيء قبل أن توافق، وتنتهي صلاحيتها بعد 7 أيام.` : `${a.count} proposal(s) wait for your approval. Nothing changes or spends until you approve; they expire after 7 days.`,
                 ar ? 'المطلوب: افتح الإعلانات ← المقترحات.' : 'What to do: open Ads → Proposals.',
             ];
+        case 'rule_acted':
+            return [
+                ar ? `العنصر: ${excerpt(a.objectName, 80)}` : `Item: ${excerpt(a.objectName, 80)}`,
+                ...ruleValues(a.values, a.currency, lang),
+                ...a.steps.map((st) => ruleStep(st, a.currency, lang)),
+            ];
+        case 'rule_blind':
+            return [
+                ar ? `السبب: ${BLIND_TEXT[a.reason].ar}` : `Why: ${BLIND_TEXT[a.reason].en}`,
+                ar ? 'لا تُتخذ إجراءات هذه القاعدة ما دامت لا تقرأ أرقامًا حديثة؛ الحد الشهري يبقى نافذًا. المطلوب: افتح الإعلانات ← القواعد ← السجل.'
+                    : 'This rule takes no action while it cannot read fresh numbers; the monthly cap still applies. What to do: open Ads → Rules → History.',
+            ];
+    }
+}
+
+const BLIND_TEXT: Record<RuleBlindAlert['reason'], { ar: string; en: string }> = {
+    no_data: { ar: 'لا توجد بيانات كافية بعد (أقل من الحد الأدنى الذي وضعته).', en: 'not enough data yet (below the minimum you set).' },
+    not_configured: { ar: 'إعداد الإعلانات غير مكتمل.', en: 'the ads setup is incomplete.' },
+    token_dead: { ar: 'رفضت ميتا رمز الإعلانات.', en: 'Meta refused the ads token.' },
+    throttled: { ar: 'ميتا تحدّ من الطلبات حاليًا، فتعذّرت قراءة نتائج اليوم.', en: 'Meta is limiting requests, so today\'s results could not be read.' },
+    stale: { ar: 'تعذّرت قراءة نتائج اليوم من ميتا.', en: 'today\'s results could not be read from Meta.' },
+    error: { ar: 'خطأ أثناء الفحص (مسجَّل في السجلات).', en: 'an error during the check (in the logs).' },
+};
+
+const METRIC_TEXT: Record<string, { ar: string; en: string; money?: true; pct?: true }> = {
+    spend: { ar: 'الإنفاق', en: 'Spend', money: true },
+    results: { ar: 'النتائج', en: 'Results' },
+    cost_per_result: { ar: 'تكلفة النتيجة', en: 'Cost per result', money: true },
+    cost_per_conversation: { ar: 'تكلفة المحادثة', en: 'Cost per conversation', money: true },
+    ctr: { ar: 'نسبة النقر', en: 'CTR', pct: true },
+    frequency: { ar: 'التكرار', en: 'Frequency' },
+    cpm: { ar: 'تكلفة الألف ظهور', en: 'CPM', money: true },
+    budget_pace: { ar: 'وتيرة الإنفاق', en: 'Spending pace' },
+    rejected: { ar: 'مرفوض', en: 'Rejected' },
+};
+const WINDOW_TEXT: Record<string, { ar: string; en: string }> = {
+    today: { ar: 'اليوم', en: 'today' }, '3d': { ar: 'آخر 3 أيام', en: 'last 3 days' }, '7d': { ar: 'آخر 7 أيام', en: 'last 7 days' },
+};
+
+function ruleValues(values: Record<string, number | null>, currency: string, lang: Lang): string[] {
+    const ar = lang === 'ar';
+    return Object.entries(values).flatMap(([key, v]) => {
+        const [metric = '', window = ''] = key.split(':');
+        const m = METRIC_TEXT[metric];
+        if (!m || metric === 'rejected') return [];
+        const shown = v === null ? (ar ? 'بلا نتيجة بعد' : 'none yet') : m.money ? money(Math.round(v * 100) / 100, currency) : m.pct ? `${Math.round(v * 100) / 100}%` : String(Math.round(v * 100) / 100);
+        const w = WINDOW_TEXT[window] ?? { ar: window, en: window };
+        return [`${ar ? m.ar : m.en} (${ar ? w.ar : w.en}): ${shown}`];
+    });
+}
+
+function ruleStep(st: PlannedStep, currency: string, lang: Lang): string {
+    const ar = lang === 'ar';
+    switch (st.kind) {
+        case 'op':
+            return st.action === 'pause'
+                ? (ar ? 'الإجراء: أُوقف مؤقتًا.' : 'Done: paused.')
+                : (ar ? `الإجراء: خُفِّضت الميزانية اليومية من ${money(st.from, currency)} إلى ${money(st.to, currency)}.` : `Done: daily budget lowered from ${money(st.from, currency)} to ${money(st.to, currency)}.`);
+        case 'notify':
+            return ar ? 'هذا تنبيه فقط، لم يتغير شيء.' : 'This is a notice only; nothing changed.';
+        case 'propose':
+            return st.action === 'resume'
+                ? (ar ? 'الاستئناف يزيد الإنفاق، فأُنشئ مقترح ينتظر موافقتك في الإعلانات ← المقترحات.' : 'Resuming raises spend, so a proposal waits for your approval in Ads → Proposals.')
+                : (ar ? `رفع الميزانية من ${money(st.from, currency)} إلى ${money(st.to, currency)} يزيد الإنفاق، فأُنشئ مقترح ينتظر موافقتك في الإعلانات ← المقترحات.` : `Raising the budget from ${money(st.from, currency)} to ${money(st.to, currency)} raises spend, so a proposal waits for your approval in Ads → Proposals.`);
     }
 }
 

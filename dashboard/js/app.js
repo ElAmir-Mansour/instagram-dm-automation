@@ -119,6 +119,8 @@ const App = {
         ads_proposals: { src: 'ads_proposals', page: () => AdsProposalsPage, navAs: 'ads' },
         // Ads' audiences (#/ads_audiences, A8): engagement, video and lookalike audiences, and customer lists behind the legal lock.
         ads_audiences: { src: 'ads_audiences', page: () => AdsAudiencesPage, navAs: 'ads' },
+        // Ads' rules (#/ads_rules, A9): the owner's standing conditions. Pause / lower / notify run alone once saved; raises and resumes ask.
+        ads_rules: { src: 'ads_rules', page: () => AdsRulesPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -180,7 +182,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.70',
+    ASSET_VERSION: '12.71',
 
     _modules: Object.create(null),
 

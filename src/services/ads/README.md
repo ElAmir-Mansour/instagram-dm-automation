@@ -40,7 +40,11 @@ The home of everything that talks to the Meta Marketing API for ads. The design 
 | `policy.ts` | The policy check (A4): versioned bilingual rules, normalised matching, findings with spans in the original text, a rewrite per rule |
 | `spec.ts` | `CampaignSpec` → Graph params (A4), pure: messages (single and several destinations, greeting, ice breakers), engagement, reach, traffic; Boost's preset `boostToSpec`; the LIVE-CHECK flags |
 | `drafts.ts` | The builder's server steps (A4): `validateDraft` (Meta `validate_only`, money, minimum, bots) and `createDraft` (stored copy + chain of create ops, PAUSED) |
+| `rulesEval.ts` | Rules, pure (A9): validation, the templates, metrics over today / 3d / 7d, min data, the plan (protective ops vs proposals), blindness |
+| `rules.ts` | The rules pass for one tenant: order, fresh numbers or `blind`, act, propose, alert, record a run |
+| `rulesWiring.ts` | The pass wired to the stored copy, the queue, A7's proposals and the alerts; `evaluateDueRules` (the drain's share) |
+| `rulesStore.ts` | `ads_rules` and `ads_rule_runs`: save = approve, due rules, run rows, the cooldown read |
 | `metaAds.ts`, `manager.ts` | v1's Graph helpers and campaign controls (moved here in A2) |
 | `testDb.ts`, `testing/` | Tests only: fake pools (the advisory lock really waits; the queue's markers; objects and settings) |
 
-Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1), the sync and the queue (§11.2), and creating an ad (§11.3) hop by hop; Help → Ads is the user-facing article.
+Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1), the sync and the queue (§11.2), creating an ad (§11.3) and the rules (§11.6) hop by hop; Help → Ads is the user-facing article.

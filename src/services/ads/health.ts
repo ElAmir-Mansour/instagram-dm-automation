@@ -173,6 +173,7 @@ export async function runAdsHealth(opts: { now?: Date; deadline?: number } = {})
     try {
         out.swept += await queryCount("DELETE FROM ads_alerts WHERE created_at < NOW() - INTERVAL '1 year'");
         out.swept += await queryCount("DELETE FROM ads_ops WHERE created_at < NOW() - INTERVAL '180 days' AND state IN ('done', 'failed', 'cancelled')");
+        out.swept += await queryCount("DELETE FROM ads_rule_runs WHERE ran_at < NOW() - INTERVAL '90 days'");
         // Results are kept 37 months, Meta's own horizon for aggregate results (privacy.html says so); the breakdowns go with them.
         out.swept += await queryCount("DELETE FROM ads_insights_daily WHERE day < CURRENT_DATE - INTERVAL '37 months'");
         out.swept += await queryCount("DELETE FROM ads_insights_breakdown WHERE day < CURRENT_DATE - INTERVAL '37 months'");
