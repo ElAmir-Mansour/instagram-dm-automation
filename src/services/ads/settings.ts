@@ -247,8 +247,8 @@ export type AdsAlertKind = (typeof ADS_ALERT_KINDS)[number];
 /** The kinds shown on the card in A1. */
 export const A1_ALERT_KINDS: readonly AdsAlertKind[] = ADS_ALERT_KINDS.slice(0, 9);
 
-/** The kinds the card shows: A1's, and A3's two about ad conversations (Business AI holds a thread; the longer reply window was refused). */
-export const SHOWN_ALERT_KINDS: readonly AdsAlertKind[] = [...A1_ALERT_KINDS, 'business_ai', 'window_error'];
+/** The kinds the card shows: A1's, A3's two about ad conversations (Business AI holds a thread; the longer reply window was refused), and A7's daily-review proposals. */
+export const SHOWN_ALERT_KINDS: readonly AdsAlertKind[] = [...A1_ALERT_KINDS, 'business_ai', 'window_error', 'proposal_ready'];
 
 /** Kinds that cannot be switched off: each means money may be spending with nobody watching. */
 export const REQUIRED_ALERT_KINDS: readonly AdsAlertKind[] = ['cap_paused', 'guard_blind', 'token_dead'];

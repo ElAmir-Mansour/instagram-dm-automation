@@ -54,7 +54,7 @@ async function safely<T>(what: string, creatorId: string, fallback: T, read: () 
 
 export async function buildInput(
     creatorId: string,
-    opts: { task: ProposalTask; request?: string | null; post?: ProposalInput['post'] },
+    opts: { task: ProposalTask; request?: string | null; post?: ProposalInput['post']; recentPosts?: ProposalInput['recentPosts'] },
     ports: ProposalPorts,
     deps: InputDeps = DEFAULT_DEPS,
 ): Promise<ProposalInput> {
@@ -104,6 +104,9 @@ export async function buildInput(
         }),
         request,
         post,
+        ...(opts.recentPosts && opts.recentPosts.length
+            ? { recentPosts: opts.recentPosts.slice(0, 5).map((p) => ({ id: String(p.id), platform: String(p.platform), caption: clip(String(p.caption ?? ''), 300), kind: String(p.kind) })) }
+            : {}),
         policy: { rules: ports.policy ? ports.policy.rules(lang) : [] },
         account: { objects: snapshot?.objects ?? [], audiences: snapshot?.audiences ?? [] },
         daysOfData: snapshot?.daysOfData ?? 0,

@@ -324,3 +324,50 @@ export async function runChecks(args: CheckArgs): Promise<CheckOutcome> {
     if (dropped.length) for (const it of items) it.checks.dropped = [...dropped].sort((a, b) => a.index - b.index);
     return { kind: 'ok', items };
 }
+
+// ─── On approval ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type ApprovalCheck =
+    | { ok: true; checks: ProposalChecks; effect: ProposalEffect }
+    | { ok: false; code: 'POLICY_BLOCKED' | 'OVER_MONTHLY_CAP' | 'OVER_DAILY_MAX' | 'BELOW_META_MINIMUM' | 'ADS_NOT_CONFIGURED' | 'INVALID'; message: string; findings?: PolicyFinding[] };
+
+const MONEY_REFUSAL: Record<string, ApprovalCheck & { ok: false }> = {
+    OVER_MONTHLY_CAP: { ok: false, code: 'OVER_MONTHLY_CAP', message: 'This no longer fits what is left of your monthly cap. Ask again, or edit it in the builder.' },
+    OVER_DAILY_MAX: { ok: false, code: 'OVER_DAILY_MAX', message: 'This is over your max daily budget. Edit it in the builder.' },
+    BELOW_META_MINIMUM: { ok: false, code: 'BELOW_META_MINIMUM', message: 'What fits is below Meta\'s minimum budget.' },
+    NOT_CONFIGURED: { ok: false, code: 'ADS_NOT_CONFIGURED', message: 'Set a max daily budget and a monthly cap in Settings first.' },
+    UNREADABLE: { ok: false, code: 'OVER_MONTHLY_CAP', message: 'Meta could not be read to check the monthly cap; try again in a minute.' },
+};
+
+/**
+ * Approve re-runs the policy and the money rule on what is about to be applied (contracts/dashboard-api.md "Proposals"). Unlike drafting,
+ * nothing is adjusted here: the owner approved THIS amount, so a budget that no longer fits is refused with the reason, never quietly cut.
+ * The evidence check is not re-run: it was about the model, and the numbers have moved since.
+ */
+export async function recheckForApproval(args: { payload: ProposalPayload; input: ProposalInput; creatorId: string; ports: ProposalPorts }): Promise<ApprovalCheck> {
+    const { payload, input, ports } = args;
+    const lang = input.tenant.lang;
+    const checkArgs: CheckArgs = { task: payload.task, raw: null, input, attempt: 2, creatorId: args.creatorId, ports };
+    const checks = baseChecks(ports);
+    const spec = payload.task === 'draft_campaign' ? payload.spec : 'spec' in payload.item.change ? payload.item.change.spec : null;
+
+    if (spec) {
+        const findings = policyOf(ports, spec, lang);
+        checks.policy = findings;
+        if (findings.some((f) => f.severity === 'block')) return { ok: false, code: 'POLICY_BLOCKED', message: 'Meta would reject this text. Edit it in the builder.', findings };
+    }
+    if (!ports.money) return { ok: true, checks, effect: NO_EFFECT };
+
+    if (payload.task === 'draft_campaign' || spec) {
+        const m = await moneyForSpec(ports.money, checkArgs, spec!);
+        if (!m.ok) return MONEY_REFUSAL[m.reason] ?? MONEY_REFUSAL['OVER_MONTHLY_CAP']!;
+        if (m.spec.budget.amount !== spec!.budget.amount) return MONEY_REFUSAL['OVER_MONTHLY_CAP']!;
+        return { ok: true, checks, effect: m.effect };
+    }
+    if (payload.task !== 'review') return { ok: true, checks, effect: NO_EFFECT };
+    const item = payload.item;
+    const m = await moneyForItem(ports.money, checkArgs, item);
+    if (!m.ok) return MONEY_REFUSAL[m.reason] ?? { ok: false, code: 'INVALID', message: `This change cannot be applied: ${m.reason}.` };
+    if (JSON.stringify(m.item.change) !== JSON.stringify(item.change)) return MONEY_REFUSAL['OVER_MONTHLY_CAP']!;
+    return { ok: true, checks, effect: m.effect };
+}

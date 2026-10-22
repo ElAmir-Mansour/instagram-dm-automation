@@ -738,7 +738,9 @@ export type StudioJobKind =
     /** Claude on the Mac (v28, MONTEUR.md §6.3). */
     | 'monteur_think'
     /** v31: an infographic, written by Claude when the payload asks, then rendered. */
-    | 'render_infographic';
+    | 'render_infographic'
+    /** v55: an ad proposal drafted by Claude on the owner's Mac (Ads A7, src/services/ads/proposals/service.ts). */
+    | 'ads_think';
 export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
 
 export interface ScanLibraryPayload { root: string }
@@ -763,7 +765,7 @@ export interface StudioJobRow {
     kind: StudioJobKind;
     payload:
         | ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload
-        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload
+        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload | AdsThinkPayload
         | RenderInfographicPayload;
     status: StudioJobStatus;
     progress: string | null;
@@ -1122,6 +1124,24 @@ export interface MonteurThinkPayload {
     /** JSON Schema, converted from the Gemini `responseSchema` (think.ts `toJsonSchema`). */
     schema: Record<string, unknown>;
     retired?: true;
+}
+
+/**
+ * An `ads_think` (v55, Ads A7): Claude on the owner's Mac drafts an ad proposal. The worker (aicourse-captions
+ * scripts/studio/adsThinkJob.mjs) answers it exactly as it answers a `monteur_think`, with a `MonteurThinkResult`.
+ * Aggregates only: `user` is the proposal input (src/services/ads/proposals/input.ts), never customer data.
+ */
+export interface AdsThinkPayload {
+    proposalId: string;
+    /** 1, or 2 after the one regeneration the checks allow. */
+    attempt: number;
+    task: 'draft_campaign' | 'review';
+    purpose: 'ads_draft' | 'ads_review';
+    model: string;
+    system: string;
+    user: string;
+    /** JSON Schema (contracts/ai-proposal.schema.md). */
+    schema: Record<string, unknown>;
 }
 
 /** What the worker sends back for a `monteur_think`, as `completeJob` stores it. */

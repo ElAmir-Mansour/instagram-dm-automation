@@ -55,6 +55,11 @@ export interface ProposalInput {
     offers: { id: string; title: string; price: string | null; url_is_tracked: boolean; summary: string }[];
     request: string | null;
     post: { id: string; platform: string; caption: string; kind: string; organic: { views: number | null; reach: number | null; saves: number | null; skipRate: number | null } } | null;
+    /**
+     * The tenant's own recently published posts (at most 5), the creatives a draft from words alone may use: an ad needs a real post
+     * or uploaded media, and a model cannot invent either. An extension of the contract's input; captions are the tenant's own words.
+     */
+    recentPosts?: { id: string; platform: string; caption: string; kind: string }[];
     policy: { rules: { id: string; severity: 'block' | 'warn'; description: string }[] };
     account: { objects: InputObject[]; audiences: { id: string; kind: string; name: string; size: number | null }[] };
     /** How many days of results the stored copy holds (the daily review needs ≥ 3). Not sent to the model. */
@@ -124,7 +129,11 @@ export interface ProposalChecks {
     /** Review items the evidence check dropped, and why. */
     dropped?: { index: number; reason: string }[];
     /** Set when a regeneration was asked for, and why. */
-    regenerated?: 'schema' | 'policy' | null;
+    regenerated?: 'schema' | 'policy' | 'spec' | null;
+    /** What the regeneration told the model (the failed checks), kept so the second try is asked with it. */
+    feedback?: string[];
+    /** The ops approving enqueued, so `applying` can be settled into `applied` or `failed`. */
+    ops?: string[];
     /** A check that could not run because its phase is not wired yet (`ports.ts`). Approve refuses while one is listed. */
     unavailable?: ('policy' | 'money' | 'mirror' | 'apply')[];
 }

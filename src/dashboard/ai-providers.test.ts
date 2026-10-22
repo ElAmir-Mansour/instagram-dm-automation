@@ -330,7 +330,7 @@ describe('AI providers card — the pure helpers', () => {
     it('builds the routing table from the server\'s purposes, starting an unrouted purpose on Automatic at its own effort', () => {
         const ai = aiView({ config: { routing: { onboarding_proof: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const rows = View.routeRows(ai) as Json[];
-        assert.deepEqual(rows.map((r) => r.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']);
+        assert.deepEqual(rows.map((r) => r.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
         const draft = rows[0]!;
         assert.deepEqual({ ...draft.selected }, { provider: '', model: '', effort: 'high' });
         assert.equal(draft.saved, null);
@@ -512,7 +512,7 @@ describe('AI providers card — what it draws', () => {
     it('draws the routing table: a row per purpose, Automatic for an unrouted one with its model and effort off', () => {
         const { Card, View, t } = loaded({ config: { routing: { tenant_studio: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const markup = String(Card.renderLoaded());
-        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']) {
+        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']) {
             assert.ok(markup.includes(`id="aip-r-${purpose}"`), purpose);
             assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}`)), purpose);
             assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}.hint`)), `${purpose}: its hint`);

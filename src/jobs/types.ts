@@ -16,7 +16,7 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
@@ -91,6 +91,14 @@ export interface JobPayloads {
      * above this is NOT a Meta event: it is written by the sales turn after the link was recorded, and everything it needs to decide is
      * read again when it runs (`src/services/dmSales/followupJob.ts`), so the payload names only what the job is about.
      */
+    /**
+     * Move an AI ad proposal on (Ads A7, src/services/ads/proposals/service.ts `advanceProposal`): draft it on the tenant's own provider, or
+     * queue / read the owner's Mac job, then run the checks. Names only the proposal; everything is read again when it runs.
+     */
+    'ads.draft': {
+        creatorId: string;
+        proposalId: string;
+    };
     'dm.followup': {
         conversationId: string;
         creatorId: string;

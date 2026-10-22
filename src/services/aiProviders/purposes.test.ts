@@ -11,13 +11,27 @@ import { ProviderKeys } from './settings.js';
 import { describeAi } from './view.js';
 
 describe('AI_PURPOSES', () => {
-    it('is the five existing purposes in their order, then `dm` and `dm_whatsapp`', () => {
-        assert.deepEqual([...AI_PURPOSES], ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']);
+    it('is the five existing purposes in their order, then `dm`, `dm_whatsapp` and the two ads purposes', () => {
+        assert.deepEqual([...AI_PURPOSES], ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
     });
 
     it('has a default effort for every purpose, a real level each, and no other keys', () => {
         assert.deepEqual(Object.keys(PURPOSE_DEFAULT_EFFORT).sort(), [...AI_PURPOSES].sort());
         for (const purpose of AI_PURPOSES) assert.ok((EFFORTS as readonly string[]).includes(PURPOSE_DEFAULT_EFFORT[purpose]), purpose);
+    });
+});
+
+describe('the ads purposes (A7)', () => {
+    it('`ads_draft` and `ads_review` are purposes, at effort medium', () => {
+        for (const purpose of ['ads_draft', 'ads_review'] as const) {
+            assert.equal(isAiPurpose(purpose), true);
+            assert.equal(PURPOSE_DEFAULT_EFFORT[purpose], 'medium');
+        }
+    });
+
+    it('are NOT Mac-brain purposes: that set means "refuse on the layer", and the owner\'s drafts are Studio ads_think jobs instead', () => {
+        assert.equal(MAC_BRAIN_PURPOSES.has('ads_draft'), false);
+        assert.equal(MAC_BRAIN_PURPOSES.has('ads_review'), false);
     });
 });
 

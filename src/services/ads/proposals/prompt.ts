@@ -21,6 +21,8 @@ const SYSTEM = [
     `- A greeting has at most ${MAX_GREETING} characters; at most ${MAX_ICE_BREAKERS} ice breakers, each title at most ${MAX_ICE_BREAKER_TITLE} characters.`,
     '- The budget stays within limits.maxDailyBudget per day and what is left of the month (limits.remainingThisMonth), and is at least',
     '  Meta\'s minimum for the goal (limits.metaMinimumDaily). Prefer a short test (7 days) with an end date.',
+    '- Every ad\'s creative is { "source": "post", "postId", "platform" } naming the given post, or else one of recentPosts (pick the one that',
+    '  fits the request best). Never invent an id. With neither, answer the schema anyway and say so in assumptions.',
     '- When the request or post names an offer, link that offer (offers[].id); never invent prices, results or features the offers do not state.',
     `- rationale: at most ${MAX_DRAFT_RATIONALE} characters, in the tenant's language. assumptions: each choice you made and why.`,
     '- expected.range comes only from the account\'s own results above. With no history, range is null. Never invent a benchmark.',

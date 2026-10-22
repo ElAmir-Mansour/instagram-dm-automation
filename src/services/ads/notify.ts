@@ -33,7 +33,9 @@ export type AdsAlert =
     | { kind: 'ad_rejected' | 'ad_issues'; adId: string; adName: string | null; reason: string | null }
     // A3: ads → DM attribution (`ads/attribution.ts`).
     | { kind: 'business_ai'; conversationId: string }
-    | { kind: 'window_error'; platform: 'instagram' | 'messenger'; conversationId: string };
+    | { kind: 'window_error'; platform: 'instagram' | 'messenger'; conversationId: string }
+    // A7: the daily review made proposals (`ads/proposals/service.ts`). Nothing changed: they wait for the owner.
+    | { kind: 'proposal_ready'; count: number; titles: string[] };
 
 export interface AdsAlertTarget {
     creatorId: string;
@@ -77,6 +79,7 @@ function headline(a: AdsAlert, lang: Lang): string {
         case 'ad_issues': return ar ? 'إعلان فيه مشكلات عند ميتا' : 'An ad has issues at Meta';
         case 'business_ai': return ar ? 'ذكاء ميتا للأعمال يتولى محادثة، فلا يستطيع المساعد الرد' : 'Meta Business AI holds a conversation, so the assistant cannot reply';
         case 'window_error': return ar ? 'رفضت ميتا ردًّا خارج نافذة المراسلة، فأُطفئت النافذة الأطول' : 'Meta refused a reply outside the messaging window; the longer window was switched off';
+        case 'proposal_ready': return ar ? 'اقترح Claude تغييرات على إعلاناتك' : 'Claude proposed changes to your ads';
     }
 }
 
@@ -139,6 +142,12 @@ function detail(a: AdsAlert, lang: Lang): string[] {
             return [
                 ar ? `رفضت ميتا ردًّا في محادثة بدأت من إعلان على ${a.platform === 'instagram' ? 'إنستغرام' : 'ماسنجر'} لأنه خارج نافذة المراسلة.` : `Meta refused a reply in an ad-started ${a.platform === 'instagram' ? 'Instagram' : 'Messenger'} conversation for being outside the messaging window.`,
                 ar ? 'أُطفئ مفتاح «نافذة الرد الأطول» لهذه المنصة تلقائيًا، فعاد المساعد إلى نافذة الأربع والعشرين ساعة. لا تُعِد تشغيله قبل اختبار اليوم الثاني.' : 'The "longer reply window" switch for this platform was turned off by itself; the assistant is back on the 24-hour window. Do not turn it on again before the day-2 test passes.',
+            ];
+        case 'proposal_ready':
+            return [
+                ...a.titles.slice(0, 3).map((t) => `• ${excerpt(t, 120)}`),
+                ar ? `${a.count} مقترح بانتظار موافقتك. لا يتغيّر شيء ولا يُنفَق شيء قبل أن توافق، وتنتهي صلاحيتها بعد 7 أيام.` : `${a.count} proposal(s) wait for your approval. Nothing changes or spends until you approve; they expire after 7 days.`,
+                ar ? 'المطلوب: افتح الإعلانات ← المقترحات.' : 'What to do: open Ads → Proposals.',
             ];
     }
 }
