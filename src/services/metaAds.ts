@@ -13,12 +13,15 @@
  * Nothing spends until `activateBoostObjects` sets ad, ad set and campaign ACTIVE, the campaign LAST: until it is active, nothing under it
  * delivers, so an activation that fails half way spends nothing.
  *
- * Every create is a POST that may have landed even when it timed out, so it goes through `withRetry` with `creates: true`: only a failure
- * that proves Meta did nothing (a rate limit, a connection that never went out) is retried. Status changes are idempotent and retry normally.
+ * Every call goes through the ads Graph client (src/services/ads/graph.ts): the ads module's pinned version, the pacer, and no retry of a
+ * rate or edit limit. Every create is a POST that may have landed even when it timed out, so it is sent with `creates: true`: only a
+ * connection that never went out is retried. Status changes are idempotent and retry on a 5xx or a dropped connection.
  * Field names are the v25+ ones: `instagram_user_id`, not `instagram_actor_id`; `source_instagram_media_id`, not `instagram_story_id`.
  */
-import { GRAPH_BASE, metaFailure } from './instagram.js';
-import { metaErrorCode, metaErrorSubcode, metaHttp, withRetry } from './http.js';
+import { metaErrorCode, metaErrorSubcode } from './http.js';
+import { adsDelete, adsGet, adsPost, type GraphParams } from './ads/graph.js';
+
+export type { GraphParams };
 
 export type BoostPlatform = 'instagram' | 'facebook';
 export type BoostObjective = 'ENGAGEMENT' | 'AWARENESS' | 'TRAFFIC';
@@ -63,32 +66,25 @@ export function roundMoney(amount: number): number {
 export interface BoostLimits {
     /** Major units. No single boost's daily budget may exceed it. */
     maxDailyBudget: number;
-    /** Major units. What every boost counted this month may add up to, this one included. */
-    monthlyCap: number;
 }
 
-export type BudgetRefusal = 'INVALID' | 'BUDGET_OVER_DAILY_MAX' | 'BUDGET_OVER_MONTHLY_CAP' | 'BUDGET_UNDER_MINIMUM';
+export type BudgetRefusal = 'INVALID' | 'OVER_DAILY_MAX' | 'BELOW_META_MINIMUM';
 
 export type BudgetCheck =
     | { ok: true; dailyBudget: number; plannedTotal: number }
     | { ok: false; code: BudgetRefusal; field: 'dailyBudget' | 'days'; message: string };
 
 /**
- * THE spend guard. A boost spends at most `daily × days` (the ad set's lifetime budget), and it may be created or activated only when
- * that fits under the owner's limits:
- *   - the daily budget is at most `maxDailyBudget`,
- *   - it is at least Meta's minimum for the account, when known (Meta would refuse it anyway, less clearly),
- *   - `committedThisMonth` (every other boost counted this calendar month, see adBoosts.ts) plus this boost's total is at most `monthlyCap`.
- * Pure: the caller reads the limits and the committed amount, and must hold the tenant's boost lock between this check and its write.
+ * A boost's own budget: whole days within 1–30, a positive daily budget, at most `maxDailyBudget`, and at least Meta's minimum for the
+ * account when known (Meta would refuse it anyway, less clearly). A boost spends at most `daily × days` (the ad set's lifetime budget).
+ * Whether that total fits this month is the money rule's (src/services/ads/money.ts), not this.
  */
 export function checkBoostBudget(input: {
     dailyBudget: unknown;
     days: unknown;
-    limits: BoostLimits;
-    committedThisMonth: number;
+    limits: { maxDailyBudget: number | null };
     minDailyBudget?: number | null;
 }): BudgetCheck {
-    const { limits } = input;
     const days = input.days;
     if (typeof days !== 'number' || !Number.isInteger(days) || days < BOOST_DAYS_MIN || days > BOOST_DAYS_MAX) {
         return { ok: false, code: 'INVALID', field: 'days', message: `Days must be a whole number from ${BOOST_DAYS_MIN} to ${BOOST_DAYS_MAX}.` };
@@ -98,32 +94,18 @@ export function checkBoostBudget(input: {
         return { ok: false, code: 'INVALID', field: 'dailyBudget', message: 'The daily budget must be a positive amount.' };
     }
     const dailyBudget = roundMoney(raw);
-    if (!(limits.maxDailyBudget > 0) || !(limits.monthlyCap > 0)) {
+    const max = input.limits.maxDailyBudget;
+    if (typeof max !== 'number' || !(max > 0)) {
         // A missing limit is not "no limit": the caller should have refused as unconfigured, and this refuses again rather than spend.
-        return { ok: false, code: 'BUDGET_OVER_DAILY_MAX', field: 'dailyBudget', message: 'Set a max daily budget and a monthly spend cap in Settings first.' };
+        return { ok: false, code: 'OVER_DAILY_MAX', field: 'dailyBudget', message: 'Set a max daily budget and a monthly spend cap in Settings first.' };
     }
-    if (cents(dailyBudget) > cents(limits.maxDailyBudget)) {
-        return {
-            ok: false, code: 'BUDGET_OVER_DAILY_MAX', field: 'dailyBudget',
-            message: `The daily budget ${dailyBudget} is over your max daily budget of ${limits.maxDailyBudget}.`,
-        };
+    if (cents(dailyBudget) > cents(max)) {
+        return { ok: false, code: 'OVER_DAILY_MAX', field: 'dailyBudget', message: `The daily budget ${dailyBudget} is over your max daily budget of ${max}.` };
     }
     if (typeof input.minDailyBudget === 'number' && input.minDailyBudget > 0 && cents(dailyBudget) < cents(input.minDailyBudget)) {
-        return {
-            ok: false, code: 'BUDGET_UNDER_MINIMUM', field: 'dailyBudget',
-            message: `Meta's minimum daily budget for this ad account is ${input.minDailyBudget}.`,
-        };
+        return { ok: false, code: 'BELOW_META_MINIMUM', field: 'dailyBudget', message: `Meta's minimum daily budget for this ad account is ${input.minDailyBudget}.` };
     }
-    const plannedTotal = cents(dailyBudget) * days / 100;
-    const committed = Math.max(0, input.committedThisMonth);
-    if (cents(committed) + cents(plannedTotal) > cents(limits.monthlyCap)) {
-        const left = Math.max(0, cents(limits.monthlyCap) - cents(committed)) / 100;
-        return {
-            ok: false, code: 'BUDGET_OVER_MONTHLY_CAP', field: 'dailyBudget',
-            message: `This boost could spend ${plannedTotal}, but only ${left} of your monthly cap of ${limits.monthlyCap} is left this month.`,
-        };
-    }
-    return { ok: true, dailyBudget, plannedTotal };
+    return { ok: true, dailyBudget, plannedTotal: cents(dailyBudget) * days / 100 };
 }
 
 // ─── Inputs ───────────────────────────────────────────────────────────────────────────────
@@ -196,7 +178,6 @@ const OPTIMIZATION_GOAL: Record<BoostObjective, string> = {
 };
 
 /** Graph parameters: scalars as they are, objects and arrays as JSON. Form-encoded, the shape every Marketing API example uses. */
-export type GraphParams = Record<string, string | number | boolean | object>;
 
 function name(spec: Pick<BoostSpec, 'boostId' | 'platform'>, what: string): string {
     return `AutoReply boost ${spec.boostId} · ${spec.platform} · ${what}`;
@@ -377,46 +358,21 @@ export function readInsights(objective: BoostObjective, data: unknown): BoostIns
 
 // ─── Graph calls ──────────────────────────────────────────────────────────────────────────
 
-function form(params: GraphParams): URLSearchParams {
-    const body = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-        body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
-    }
-    return body;
-}
-
-function auth(token: string) {
-    return { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded' } };
-}
-
-/** A POST that creates something: retried only when Meta certainly did nothing. Throws a MetaApiError with Meta's own message. */
+/** A POST that creates something: resent only when Meta certainly did nothing (ads/graph.ts). Throws an AdsGraphError with Meta's own message. */
 async function createObject(path: string, params: GraphParams, token: string, label: string): Promise<string> {
-    try {
-        const res = await withRetry(() => metaHttp.post(`${GRAPH_BASE}/${path}`, form(params), auth(token)), { label, creates: true });
-        const id = res.data?.id;
-        if (typeof id !== 'string' && typeof id !== 'number') throw new Error(`${label}: Meta answered without an id.`);
-        return String(id);
-    } catch (error) {
-        throw metaFailure(`Meta ads (${label})`, error);
-    }
+    const res = await adsPost(path, params, token, { label, creates: true });
+    const id = res.data?.id;
+    if (typeof id !== 'string' && typeof id !== 'number') throw new Error(`${label}: Meta answered without an id.`);
+    return String(id);
 }
 
-/** Setting a status is idempotent, so it retries like a read. */
-export async function updateObject(id: string, params: GraphParams, token: string, label: string): Promise<void> {
-    try {
-        await withRetry(() => metaHttp.post(`${GRAPH_BASE}/${id}`, form(params), auth(token)), { label });
-    } catch (error) {
-        throw metaFailure(`Meta ads (${label})`, error);
-    }
+/** Setting a status is idempotent, so it retries like a read (but never on a rate or edit limit). */
+export async function updateObject(id: string, params: GraphParams, token: string, label: string, opts: { priority?: boolean } = {}): Promise<void> {
+    await adsPost(id, params, token, { label, ...opts });
 }
 
 export async function getNode(id: string, params: Record<string, string>, token: string, label: string): Promise<any> {
-    try {
-        const res = await withRetry(() => metaHttp.get(`${GRAPH_BASE}/${id}`, { params, headers: { Authorization: `Bearer ${token}` } }), { label });
-        return res.data;
-    } catch (error) {
-        throw metaFailure(`Meta ads (${label})`, error);
-    }
+    return (await adsGet(id, params, token, { label })).data;
 }
 
 export interface AdAccountInfo {
@@ -557,7 +513,7 @@ export async function pauseBoostCampaign(campaignId: string, token: string): Pro
 /** Deletes a campaign at Meta, which deletes its ad sets and ads. Deleting spends nothing; an object already gone counts as deleted. */
 export async function deleteAdObject(id: string, token: string): Promise<void> {
     try {
-        await withRetry(() => metaHttp.delete(`${GRAPH_BASE}/${id}`, { headers: { Authorization: `Bearer ${token}` } }), { label: 'delete ad object' });
+        await adsDelete(id, token, { label: 'delete ad object' });
     } catch (error) {
         // 100/33 means "does not exist" — or no permission, or an unsupported operation: Meta uses it for all three. It counts as deleted
         // only when a read of the object fails too; an object that can still be read was NOT deleted, and that is said.
@@ -565,7 +521,7 @@ export async function deleteAdObject(id: string, token: string): Promise<void> {
             const stillThere = await getNode(id, { fields: 'id' }, token, 'delete check').then(() => true, () => false);
             if (!stillThere) return;
         }
-        throw metaFailure('Meta ads (delete)', error);
+        throw error;
     }
 }
 
@@ -622,6 +578,14 @@ export interface AdAccountState extends AdAccountInfo {
     hasPaymentMethod: boolean | null;
     /** The account's UTC offset in hours (Meta's `timezone_offset_hours_utc`): Meta's `this_month` is the account's month. 0 when unknown. */
     timezoneOffsetHours: number;
+    /** Meta's `timezone_name`, e.g. "Asia/Riyadh". Null when not said. */
+    timezoneName: string | null;
+    /** Meta's `is_prepay_account`: the account is paid in advance (a balance runs down), not charged after. Null when not said. */
+    isPrepay: boolean | null;
+    /** The account's spending limit (`spend_cap`), major units; null when none is set or not said. */
+    spendCap: number | null;
+    /** `amount_spent`, major units: what counts against the spending limit (or the account's total without one). */
+    amountSpent: number | null;
     /** Meta's own display string, e.g. "Visa *1234". Never stored. */
     paymentMethod: string | null;
     billingUrl: string;
@@ -641,6 +605,17 @@ export function adsManagerUrl(adAccountId: string): string {
  * The account node read as the screen needs it. `paymentReadable` is false when the fields about billing could not be asked for: then
  * "has a payment method" is null (unknown), never false, so nothing is refused on a guess.
  */
+/**
+ * Meta's money string in MINOR units (`spend_cap`, `amount_spent` are read back in cents for a currency with cents) to major units. For a
+ * spending limit, 0 means "no limit" and is null. The write is in major units, which `/api/ads/spend-cap` checks by reading it back.
+ */
+function minorMoney(value: unknown, currency: string, zeroIsNone: boolean): number | null {
+    if (value === undefined || value === null || value === '' || !currency) return null;
+    const n = num(value);
+    if (zeroIsNone && n === 0) return null;
+    return roundMoney(fromMinorUnits(n, currency));
+}
+
 export function readAccountState(adAccountId: string, data: any, paymentReadable: boolean): AdAccountState {
     const currency = typeof data?.currency === 'string' ? data.currency : '';
     const status = typeof data?.account_status === 'number' ? data.account_status : null;
@@ -665,6 +640,10 @@ export function readAccountState(adAccountId: string, data: any, paymentReadable
         disableReason: reasonCode > 0 ? (DISABLE_REASONS[reasonCode] ?? `Meta disable reason ${reasonCode}`) : null,
         hasPaymentMethod: paymentReadable ? (hasSource ? true : said ? false : null) : null,
         timezoneOffsetHours: Number.isFinite(offset) && Math.abs(offset) <= 14 ? offset : 0,
+        timezoneName: typeof data?.timezone_name === 'string' && data.timezone_name ? data.timezone_name : null,
+        isPrepay: typeof data?.is_prepay_account === 'boolean' ? data.is_prepay_account : null,
+        spendCap: minorMoney(data?.spend_cap, currency, true),
+        amountSpent: minorMoney(data?.amount_spent, currency, false),
         paymentMethod: paymentReadable ? display : null,
         billingUrl: billingUrl(adAccountId),
         adsManagerUrl: adsManagerUrl(adAccountId),
@@ -672,14 +651,14 @@ export function readAccountState(adAccountId: string, data: any, paymentReadable
 }
 
 export async function fetchAccountState(adAccountId: string, token: string): Promise<AdAccountState> {
-    const base = 'name,currency,account_status,disable_reason,min_daily_budget,timezone_offset_hours_utc';
+    const base = 'name,currency,account_status,disable_reason,min_daily_budget,timezone_offset_hours_utc,timezone_name,is_prepay_account,spend_cap,amount_spent';
     try {
         const data = await getNode(`act_${adAccountId}`, { fields: `${base},funding_source,funding_source_details` }, token, 'ad account');
         return readAccountState(adAccountId, data, true);
     } catch (err) {
         // The billing fields need more than ads_read on some accounts: read the rest, and say "unknown" about payment.
         if (metaErrorCode(err) !== 100 && metaErrorCode(err) !== 200) throw err;
-        const data = await getNode(`act_${adAccountId}`, { fields: 'name,currency,account_status,timezone_offset_hours_utc' }, token, 'ad account');
+        const data = await getNode(`act_${adAccountId}`, { fields: 'name,currency,account_status,timezone_offset_hours_utc,timezone_name' }, token, 'ad account');
         return readAccountState(adAccountId, data, false);
     }
 }

@@ -89,6 +89,18 @@ export const APP_SETTING_KEYS = {
      */
     metaAdsScopesEnabled: 'meta.ads_scopes_enabled',
     /**
+     * The Marketing API version the ads module calls (src/services/ads/graph.ts), pinned on its own instead of following `META_API_VERSION`:
+     * that env var is the publisher's rollback lever, and ads must never silently drop below v25.0 (v24 ends 2026-11-10, and Advantage+
+     * behaviour differs by version). Unset means `v26.0`; a value below `v25.0` is refused when saved and ignored when read. Not a secret.
+     * Platform admin.
+     */
+    adsApiVersion: 'ads.api_version',
+    /**
+     * 'false' stops the platform admin's own alert channel from getting a copy of every tenant's ads alerts (src/services/ads/notify.ts).
+     * Unset or anything else means a copy is sent: a client's cap pause or dead token should reach the operator who manages the account.
+     */
+    adsCopyAdmin: 'ads.copy_admin',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -272,7 +284,14 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   (`src/services/adBoosts.ts`). Not a secret. The server refuses any boost over these.
  *   adsToken        the system-user token with `ads_management` / `ads_read` that Boost calls the Marketing API with. A SECRET: encrypted at
  *                   rest like the Page token, and never in an answer (`{ set, last4 }` is all the card is told).
- *   adsCapChecked   when the hourly monthly-cap guard last checked the tenant's ad account (`enforceMonthlyCaps`, adsManager.ts). Not a secret.
+ *   adsCapChecked   when the hourly monthly-cap guard last checked the tenant's ad account SUCCESSFULLY (src/services/ads/guard.ts). Not a secret.
+ *   adsCapAttempt   when the guard last tried, successful or not: a failing tenant is retried every 10 minutes. Not a secret.
+ *   adsEnabled      'true': the platform admin switched the Ads Manager on for the tenant; every /api/ads route 404s without it. Not a secret.
+ *   adsCeiling      the platform admin's ceiling on a managed client's limits, `{ maxDailyBudget, monthlyCap }`. Not a secret.
+ *   adsAlerts       where the tenant's ads alerts go: `{ telegramChatId, email, lang, kinds }` (src/services/ads/notify.ts). Not a secret.
+ *   adsHealth       the stored copy of the last ad account and token check (src/services/ads/health.ts). Not a secret: no token in it.
+ *   adsBotContext, adsExtendedWindow, adsShareSpend   switches of later phases (A3, A11), read with their defaults (off). Not secrets.
+ *   (All ads families are documented in src/services/ads/settings.ts.)
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -280,6 +299,14 @@ export const TENANT_SETTING_PREFIXES = {
     adsSettings: 'ads.settings.',
     adsToken: 'ads.token.',
     adsCapChecked: 'ads.cap_checked.',
+    adsCapAttempt: 'ads.cap_attempt.',
+    adsEnabled: 'ads.enabled.',
+    adsCeiling: 'ads.ceiling.',
+    adsAlerts: 'ads.alerts.',
+    adsHealth: 'ads.health.',
+    adsBotContext: 'ads.bot_context.',
+    adsExtendedWindow: 'ads.extended_window.',
+    adsShareSpend: 'ads.share_spend.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */

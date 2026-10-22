@@ -205,6 +205,32 @@ export const AUDIT_ACTIONS = {
     adsCampaignBudget: 'ads.campaign_budget',
     /** A campaign was deleted at Meta from the Ads screen. */
     adsCampaignDelete: 'ads.campaign_delete',
+    /** An ads write was queued (A2's paced queue). `detail` holds the op id, kind and target, never a token. */
+    adsOpEnqueued: 'ads.op_enqueued',
+    /** An ads op was applied at Meta. */
+    adsOpApplied: 'ads.op_applied',
+    /** An ads op failed at Meta. `detail` holds Meta's code. */
+    adsOpFailed: 'ads.op_failed',
+    /**
+     * The spending guard paused every active campaign in a tenant's ad account because the month reached (or would pass) the monthly cap.
+     * The actor is `ADS_GUARD_ACTOR_EMAIL`. `detail` holds the spend, the cap, the look-ahead and the campaign ids paused.
+     */
+    adsCapPaused: 'ads.cap_paused',
+    adsProposalDecided: 'ads.proposal_decided',
+    adsRuleSaved: 'ads.rule_saved',
+    adsRuleActed: 'ads.rule_acted',
+    adsAudienceCreated: 'ads.audience_created',
+    adsCustomerListUploaded: 'ads.customer_list_uploaded',
+    adsLeadFormSaved: 'ads.lead_form_saved',
+    adsLegalSignoff: 'ads.legal_signoff',
+    /** A platform admin switched the Ads Manager on or off for a tenant (`ads.enabled.<tenant>`). */
+    adsEnabledChanged: 'ads.enabled_changed',
+    /** A platform admin set a tenant's ads ceiling (`ads.ceiling.<tenant>`). `detail` holds both amounts. */
+    adsCeilingChanged: 'ads.ceiling_changed',
+    /** The owner set or cleared Meta's account spending limit from Settings. `detail` holds the amount asked for and what Meta read back. */
+    adsSpendCapChanged: 'ads.spend_cap_changed',
+    /** The owner changed where ads alerts go (Telegram chat id, email, language, kinds). `detail` names the fields, never the values. */
+    adsAlertsWrite: 'ads.alerts_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

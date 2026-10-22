@@ -1,54 +1,106 @@
 /**
- * Boost a published post with Meta ads, under `/api/ads` (docs/META_ADS_RESEARCH.md option 2; src/services/adBoosts.ts, metaAds.ts).
- * Mounted BELOW `resolveTenant` in api.ts, so every route acts as the session's tenant.
+ * The Ads Manager under `/api/ads` (contracts in docs/specs/002-meta-ads-manager, local; src/services/ads/README.md). Mounted BELOW
+ * `resolveTenant` in api.ts, so every route acts as the session's tenant.
  *
- *   GET    /settings               the Settings card: account id, { set, last4 } of the token, the limits, this month's committed amount, and
- *                                  what Meta says about the account (name, currency, status, minimum daily budget) or why it could not say
- *   POST   /settings               any of { adAccountId, token, maxDailyBudget, monthlyCap } → the same
- *   GET    /accounts               { accounts }: the ad accounts the saved token reaches (the card's picker)
- *   GET    /boosts                 { boosts }
- *   GET    /eligibility            ?postId&platform → { eligible, reason }
- *   POST   /boosts                 { postId, platform, dailyBudget, days, objective, country, link? } → 201 { boost }, created PAUSED
- *   POST   /boosts/:id/activate    { confirm: true } → { boost }. THE ONLY ROUTE THAT STARTS SPENDING
- *   POST   /boosts/:id/pause       → { boost }
- *   POST   /boosts/:id/refresh     → { boost } (spend and insights read again)
- *   DELETE /boosts/:id             → { boost }
- *   GET    /overview               the Ads screen: account (status, payment method, billing link), spend today / this month, the limits
- *                                  and this month's worst case, and every campaign in the ad account (src/services/adsManager.ts)
- *   POST   /campaigns/:id/status   { status: 'ACTIVE' | 'PAUSED', confirm } → { campaign }. ACTIVE spends: confirm, payment method, cap
- *   POST   /campaigns/:id/budget   { amount, endTime?, confirm? } → { campaign }. Raising a RUNNING campaign's budget needs confirm
- *   DELETE /campaigns/:id          → { ok }. Not while it is active
+ *   GET    /settings               the Settings card: steps, token { set, last4, source, expiresAt, health }, the stored account, limits,
+ *                                  ceiling, alert recipients, spending limit, switches. Stored data only
+ *   POST   /settings               any of { adAccountId, token, maxDailyBudget, monthlyCap, businessId, defaultCountries, leadRetentionDays }
+ *                                  → the same, plus `warnings: ['will_pause_all']` when the new cap is at or below this month's spend
+ *   POST   /settings/test          the token's scopes and assets, the tier and served version (live, 1–2 points), stored for the card
+ *   POST   /settings/alerts        { telegramChatId?, email?, lang?, kinds?, test? } → { alerts, test? }
+ *   POST   /spend-cap              { amount | null, confirm: true } → { op, spendCap, verified }: Meta's account spending limit
+ *   GET    /accounts               { accounts }: the ad accounts the token reached at the last test (stored)
+ *   GET    /money                  ?candidate=daily|lifetime:<amount>:<days> → { fits, remaining, worstCase, ... }: THE money rule
+ *   GET    /overview               the Ads screen; `{ configured: false, steps }` for a tenant that is not set up yet
+ *   GET    /boosts, /eligibility   Boost (v1 shapes)
+ *   POST   /boosts                 create PAUSED;  POST /boosts/:id/activate { confirm: true } spends;  /pause, /refresh;  DELETE /boosts/:id
+ *   POST   /campaigns/:id/status   { status, confirm };  POST /campaigns/:id/budget { amount, endTime?, confirm? };  DELETE /campaigns/:id
  *
- * **Tenant owner only, reads included** (`requireTenantRole('owner')`): this is the business's ad account and money. A refusal is
- * `{ error, code, field? }` (codes in adBoosts.ts `AdsErrorCode`); Meta's own refusals are 502 `META_ERROR` with `metaCode`. The token is
- * never in an answer, a log line or an audit row.
+ * **Every route answers 404 ADS_DISABLED unless the platform admin switched ads on for the tenant** (`ads.enabled.<tenant>`). Roles
+ * (research R18): reads are any member's (viewer and up); every write, the token test and the account list are the owner's. A refusal is
+ * `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }`. The token is never in an answer, a log line or an audit row.
  */
 import { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit, type AuditAction } from '../services/audit.js';
 import {
-    activateBoost, AdsError, createBoost, deleteBoost, describeAdsSettings, eligibilityFor, listAdAccountsFor, listBoosts, parseSettingsInput, pauseBoost,
-    readAdsSettings, refreshBoost, saveAdsSettings, type BoostView,
+    activateBoost, AdsError, createBoost, deleteBoost, eligibilityFor, listAdAccountsFor, listBoosts, metaRefusal, pauseBoost, refreshBoost,
+    type BoostView,
 } from '../services/adBoosts.js';
 import { deleteCampaign, readOverview, setCampaignBudget, setCampaignStatus } from '../services/adsManager.js';
+import { AdsGraphError, withAdsContext } from '../services/ads/graph.js';
+import { runGuard } from '../services/ads/guard.js';
+import { describeAdsSettings, testConnection } from '../services/ads/health.js';
+import { forgetMoneyPicture, MONEY_MAX, moneyFor, MoneyRefused, parseCandidate, readSpend, roundMoney } from '../services/ads/money.js';
+import { notifyAds, sendAdsTest } from '../services/ads/notify.js';
+import {
+    alertsView, isAdsEnabled, needsCeiling, parseAlertsInput, parseSettingsInput, readAdsSettings, readAlerts, readCeiling, readHealth,
+    saveAdsSettings, saveAlerts, writeHealth,
+} from '../services/ads/settings.js';
+import { setSpendCap, SpendCapRefused, spendCapChangesLeft } from '../services/ads/spendCap.js';
+import { fetchAccountState } from '../services/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
 
+const canView = requireTenantRole('viewer');
 const canAdminister = requireTenantRole('owner');
 
-function fail(res: Response, err: unknown, what: string): void {
-    if (err instanceof AdsError) {
-        res.status(err.status).json({
-            error: err.message, code: err.code,
-            ...(err.field ? { field: err.field } : {}),
-            ...(err.code === 'META_ERROR' ? { metaCode: err.metaCode ?? null } : {}),
+/**
+ * Every route: 404 ADS_DISABLED unless ads are on for the tenant; then the rest of the request runs with the tenant and its ad account as
+ * the Graph context, so every Marketing API call it makes is paced against that account.
+ */
+adsRouter.use(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const creatorId = getTenantId(req);
+        if (!(await isAdsEnabled(creatorId))) {
+            res.status(404).json({ error: 'Ads are not available for this account.', code: 'ADS_DISABLED' });
+            return;
+        }
+        const { settings } = await readAdsSettings(creatorId);
+        withAdsContext({ creatorId, adAccountId: settings.adAccountId }, () => next());
+    } catch (err) {
+        log('error', 'ads.gate_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the ads settings.' });
+    }
+});
+
+function body(req: Request): Record<string, unknown> {
+    return (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+}
+
+async function fail(req: Request, res: Response, err: unknown, what: string): Promise<void> {
+    const e = err instanceof AdsError ? err : null;
+    if (e || err instanceof AdsGraphError || err instanceof MoneyRefused) {
+        const r = e ?? metaRefusal(err);
+        if (r.code === 'TOKEN_INVALID') await markTokenDead(req, r.metaCode ?? null);
+        res.status(r.status).json({
+            error: r.message, code: r.code,
+            ...(r.field ? { field: r.field } : {}),
+            ...(r.metaCode !== undefined ? { metaCode: r.metaCode } : r.code === 'META_ERROR' ? { metaCode: null } : {}),
+            ...(r.extra.metaSubcode !== undefined ? { metaSubcode: r.extra.metaSubcode } : {}),
+            ...(r.extra.retryAt ? { retryAt: r.extra.retryAt.toISOString() } : {}),
         });
         return;
     }
     log('error', `ads.${what}_failed`, describeError(err));
     res.status(500).json({ error: `Failed to ${what.replace(/_/g, ' ')}.` });
+}
+
+/** Meta refused the token on a live call: the card says so at once, and the owner is told (once a day). Never throws. */
+async function markTokenDead(req: Request, code: number | null): Promise<void> {
+    try {
+        const creatorId = getTenantId(req);
+        const health = await readHealth(creatorId);
+        if (health.token.health === 'dead') return;
+        health.token = { ...health.token, health: 'dead', checkedAt: new Date().toISOString() };
+        await writeHealth(creatorId, health);
+        const { settings } = await readAdsSettings(creatorId);
+        await notifyAds({ kind: 'token_dead', code }, { creatorId, adAccountId: settings.adAccountId, accountName: health.account?.name ?? null, offsetHours: health.account?.timezoneOffsetHours ?? 0 });
+    } catch (err) {
+        log('warn', 'ads.token_dead_record_failed', describeError(err));
+    }
 }
 
 async function audit(req: Request, action: AuditAction, boost: BoostView | null, detail: Record<string, unknown>): Promise<void> {
@@ -62,11 +114,15 @@ async function audit(req: Request, action: AuditAction, boost: BoostView | null,
     });
 }
 
-adsRouter.get('/settings', canAdminister, async (req, res) => {
+const actorOf = (req: Request) => ({ userId: req.session?.userId ?? null });
+
+// ─── Settings ─────────────────────────────────────────────────────────────────────────────
+
+adsRouter.get('/settings', canView, async (req, res) => {
     try {
         res.json(await describeAdsSettings(getTenantId(req)));
     } catch (err) {
-        fail(res, err, 'read_ads_settings');
+        await fail(req, res, err, 'read_ads_settings');
     }
 });
 
@@ -74,19 +130,104 @@ adsRouter.post('/settings', canAdminister, async (req, res) => {
     try {
         const creatorId = getTenantId(req);
         const { settings } = await readAdsSettings(creatorId);
-        const parsed = parseSettingsInput(req.body, settings);
+        const ceiling = (await needsCeiling(creatorId)) ? await readCeiling(creatorId) : null;
+        const parsed = parseSettingsInput(req.body, settings, ceiling);
         if (!parsed.ok) {
-            res.status(400).json({ error: parsed.error, code: 'INVALID', field: parsed.field });
+            res.status(400).json({ error: parsed.error, code: parsed.code, field: parsed.field });
             return;
         }
         await saveAdsSettings(creatorId, parsed.value, settings, req.session?.userId ?? null);
+        forgetMoneyPicture(creatorId);
         // Which settings changed, never the token's value.
         const changed = [...Object.keys(parsed.value.settings), ...(parsed.value.token !== undefined ? [parsed.value.token === null ? 'token_removed' : 'token'] : [])];
         await audit(req, AUDIT_ACTIONS.adsSettingsWrite, null, { changed });
         log('info', 'ads.settings_written', { creator_id: creatorId, changed });
-        res.json(await describeAdsSettings(creatorId));
+
+        // A cap saved at or below what the month already spent: the save stands (lowering a cap is always allowed), the guard runs at once
+        // instead of within the hour, and the answer says every active campaign is being paused.
+        const warnings: string[] = [];
+        const newCap = parsed.value.settings.monthlyCap;
+        if (typeof newCap === 'number') {
+            const { settings: after, token } = await readAdsSettings(creatorId);
+            if (token && after.adAccountId) {
+                const spent = await readSpend(after.adAccountId, 'this_month', token);
+                const guard = await runGuard({ only: creatorId, force: true, deadline: Date.now() + 20_000 });
+                if ((spent !== null && Math.round(spent * 100) >= Math.round(newCap * 100)) || guard.paused > 0) warnings.push('will_pause_all');
+            }
+        }
+        res.json({ ...(await describeAdsSettings(creatorId)), ...(warnings.length ? { warnings } : {}) });
     } catch (err) {
-        fail(res, err, 'save_ads_settings');
+        await fail(req, res, err, 'save_ads_settings');
+    }
+});
+
+adsRouter.post('/settings/test', canAdminister, async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const result = await testConnection(creatorId);
+        res.json({ ...result, settings: await describeAdsSettings(creatorId) });
+    } catch (err) {
+        if (err instanceof Error && err.message === 'NO_TOKEN') {
+            res.status(409).json({ error: 'Paste a system-user token first.', code: 'ADS_NOT_CONFIGURED', field: 'token' });
+            return;
+        }
+        await fail(req, res, err, 'test_ads_connection');
+    }
+});
+
+adsRouter.post('/settings/alerts', canAdminister, async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const parsed = parseAlertsInput(req.body, await readAlerts(creatorId));
+        if (!parsed.ok) {
+            res.status(400).json({ error: parsed.error, code: 'INVALID', field: parsed.field });
+            return;
+        }
+        await saveAlerts(creatorId, parsed.value, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsAlertsWrite, null, { changed: Object.keys(body(req)).filter((k) => k !== 'test') });
+        res.json({ alerts: alertsView(parsed.value), ...(parsed.test ? { test: await sendAdsTest(creatorId) } : {}) });
+    } catch (err) {
+        await fail(req, res, err, 'save_ads_alerts');
+    }
+});
+
+adsRouter.post('/spend-cap', canAdminister, async (req, res) => {
+    const b = body(req);
+    if (b['confirm'] !== true) {
+        res.status(400).json({ error: 'Changing the account spending limit changes what Meta lets this account spend: confirm it.', code: 'INVALID', field: 'confirm' });
+        return;
+    }
+    const amount = b['amount'];
+    if (amount !== null && (typeof amount !== 'number' || !Number.isFinite(amount) || Math.round(amount * 100) <= 0 || amount > MONEY_MAX)) {
+        res.status(400).json({ error: `Enter an amount above 0 and at most ${MONEY_MAX}, or remove the limit.`, code: 'INVALID', field: 'amount' });
+        return;
+    }
+    try {
+        const creatorId = getTenantId(req);
+        const { settings, token } = await readAdsSettings(creatorId);
+        if (!token || !settings.adAccountId) {
+            res.status(409).json({ error: 'Set the ad account and the token first.', code: 'ADS_NOT_CONFIGURED' });
+            return;
+        }
+        const account = await fetchAccountState(settings.adAccountId, token);
+        const result = await setSpendCap({
+            creatorId, adAccountId: settings.adAccountId, currency: account.currency, offsetHours: account.timezoneOffsetHours,
+            amount: amount === null ? null : roundMoney(amount), token, userId: req.session?.userId ?? null,
+        });
+        const health = await readHealth(creatorId);
+        if (health.account) await writeHealth(creatorId, { ...health, account: { ...health.account, spendCap: result.amount } });
+        await audit(req, AUDIT_ACTIONS.adsSpendCapChanged, null, { asked: amount, read_back: result.amount, verified: result.verified, units: result.units, currency: account.currency });
+        res.json({
+            op: result.op,
+            spendCap: { amount: result.amount, changesLeftToday: await spendCapChangesLeft(creatorId, settings.adAccountId, account.timezoneOffsetHours) },
+            verified: result.verified,
+        });
+    } catch (err) {
+        if (err instanceof SpendCapRefused) {
+            res.status(429).json({ error: err.message, code: err.code, retryAt: err.retryAt.toISOString() });
+            return;
+        }
+        await fail(req, res, err, 'set_spend_cap');
     }
 });
 
@@ -94,56 +235,79 @@ adsRouter.get('/accounts', canAdminister, async (req, res) => {
     try {
         res.json({ accounts: await listAdAccountsFor(getTenantId(req)) });
     } catch (err) {
-        fail(res, err, 'list_ad_accounts');
+        await fail(req, res, err, 'list_ad_accounts');
     }
 });
 
-adsRouter.get('/boosts', canAdminister, async (req, res) => {
+// ─── The money rule ───────────────────────────────────────────────────────────────────────
+
+adsRouter.get('/money', canView, async (req, res) => {
+    try {
+        const raw = req.query['candidate'];
+        const candidate = raw === undefined || raw === '' ? null : parseCandidate(raw);
+        if (raw !== undefined && raw !== '' && !candidate) {
+            res.status(400).json({ error: 'candidate is daily:<amount>[:<days>] or lifetime:<amount>:<days>.', code: 'INVALID', field: 'candidate' });
+            return;
+        }
+        const creatorId = getTenantId(req);
+        const { settings, token } = await readAdsSettings(creatorId);
+        const limits = settings.adAccountId && settings.monthlyCap && settings.maxDailyBudget
+            ? { adAccountId: settings.adAccountId, monthlyCap: settings.monthlyCap, maxDailyBudget: settings.maxDailyBudget }
+            : null;
+        res.json(await moneyFor(creatorId, limits, token, candidate));
+    } catch (err) {
+        await fail(req, res, err, 'read_ads_money');
+    }
+});
+
+// ─── Boost ────────────────────────────────────────────────────────────────────────────────
+
+adsRouter.get('/boosts', canView, async (req, res) => {
     try {
         res.json({ boosts: await listBoosts(getTenantId(req)) });
     } catch (err) {
-        fail(res, err, 'list_boosts');
+        await fail(req, res, err, 'list_boosts');
     }
 });
 
-adsRouter.get('/eligibility', canAdminister, async (req, res) => {
+adsRouter.get('/eligibility', canView, async (req, res) => {
     try {
         res.json(await eligibilityFor(getTenantId(req), req.query['postId'], req.query['platform']));
     } catch (err) {
-        fail(res, err, 'check_eligibility');
+        await fail(req, res, err, 'check_eligibility');
     }
 });
 
 adsRouter.post('/boosts', canAdminister, async (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
+    const b = body(req);
     try {
         const boost = await createBoost(getTenantId(req), {
-            postId: body['postId'], platform: body['platform'], dailyBudget: body['dailyBudget'], days: body['days'],
-            objective: body['objective'], country: body['country'], link: body['link'],
+            postId: b['postId'], platform: b['platform'], dailyBudget: b['dailyBudget'], days: b['days'],
+            objective: b['objective'], country: b['country'], link: b['link'],
         }, req.session?.userId ?? null);
         await audit(req, AUDIT_ACTIONS.adsBoostCreate, boost, { outcome: 'created_paused' });
         res.status(201).json({ boost });
     } catch (err) {
         if (err instanceof AdsError && err.code === 'META_ERROR') {
             // An attempt Meta refused is on record too: objects may have been created and deleted.
-            await audit(req, AUDIT_ACTIONS.adsBoostCreate, null, { outcome: 'meta_refused', post_id: body['postId'] ?? null, meta_code: err.metaCode ?? null });
+            await audit(req, AUDIT_ACTIONS.adsBoostCreate, null, { outcome: 'meta_refused', post_id: b['postId'] ?? null, meta_code: err.metaCode ?? null });
         }
-        fail(res, err, 'create_boost');
+        await fail(req, res, err, 'create_boost');
     }
 });
 
 adsRouter.post('/boosts/:id/activate', canAdminister, async (req, res) => {
     // The dashboard's confirmation dialog sends this; a bare POST (a replayed request, a script) does not spend.
-    if (req.body?.confirm !== true) {
+    if (body(req)['confirm'] !== true) {
         res.status(400).json({ error: 'Activating spends money: confirm it.', code: 'INVALID', field: 'confirm' });
         return;
     }
     try {
-        const boost = await activateBoost(getTenantId(req), String(req.params['id']));
+        const boost = await activateBoost(getTenantId(req), String(req.params['id']), new Date(), actorOf(req));
         await audit(req, AUDIT_ACTIONS.adsBoostActivate, boost, {});
         res.json({ boost });
     } catch (err) {
-        fail(res, err, 'activate_boost');
+        await fail(req, res, err, 'activate_boost');
     }
 });
 
@@ -153,7 +317,7 @@ adsRouter.post('/boosts/:id/pause', canAdminister, async (req, res) => {
         await audit(req, AUDIT_ACTIONS.adsBoostPause, boost, {});
         res.json({ boost });
     } catch (err) {
-        fail(res, err, 'pause_boost');
+        await fail(req, res, err, 'pause_boost');
     }
 });
 
@@ -161,7 +325,7 @@ adsRouter.post('/boosts/:id/refresh', canAdminister, async (req, res) => {
     try {
         res.json({ boost: await refreshBoost(getTenantId(req), String(req.params['id'])) });
     } catch (err) {
-        fail(res, err, 'refresh_boost');
+        await fail(req, res, err, 'refresh_boost');
     }
 });
 
@@ -171,46 +335,46 @@ adsRouter.delete('/boosts/:id', canAdminister, async (req, res) => {
         await audit(req, AUDIT_ACTIONS.adsBoostDelete, boost, {});
         res.json({ boost });
     } catch (err) {
-        fail(res, err, 'delete_boost');
+        await fail(req, res, err, 'delete_boost');
     }
 });
 
 // ─── The Ads screen ───────────────────────────────────────────────────────────────────────
 
-adsRouter.get('/overview', canAdminister, async (req, res) => {
+adsRouter.get('/overview', canView, async (req, res) => {
     try {
         res.json(await readOverview(getTenantId(req)));
     } catch (err) {
-        fail(res, err, 'read_ads_overview');
+        await fail(req, res, err, 'read_ads_overview');
     }
 });
 
 adsRouter.post('/campaigns/:id/status', canAdminister, async (req, res) => {
-    const status = req.body?.status;
+    const status = body(req)['status'];
     // Switching on spends money: the screen's confirmation sends this, a bare POST does not spend.
-    if (status === 'ACTIVE' && req.body?.confirm !== true) {
+    if (status === 'ACTIVE' && body(req)['confirm'] !== true) {
         res.status(400).json({ error: 'Switching a campaign on spends money: confirm it.', code: 'INVALID', field: 'confirm' });
         return;
     }
     try {
-        const campaign = await setCampaignStatus(getTenantId(req), req.params['id'], status);
+        const campaign = await setCampaignStatus(getTenantId(req), req.params['id'], status, new Date(), actorOf(req));
         await audit(req, AUDIT_ACTIONS.adsCampaignStatus, null, { campaign_id: campaign.id, status, boost_id: campaign.boostId });
         res.json({ campaign });
     } catch (err) {
-        fail(res, err, 'set_campaign_status');
+        await fail(req, res, err, 'set_campaign_status');
     }
 });
 
 adsRouter.post('/campaigns/:id/budget', canAdminister, async (req, res) => {
     try {
-        const body = (req.body ?? {}) as { amount?: unknown; endTime?: unknown; confirm?: unknown };
-        const campaign = await setCampaignBudget(getTenantId(req), req.params['id'], body);
+        const b = body(req) as { amount?: unknown; endTime?: unknown; confirm?: unknown };
+        const campaign = await setCampaignBudget(getTenantId(req), req.params['id'], b, new Date(), actorOf(req));
         await audit(req, AUDIT_ACTIONS.adsCampaignBudget, null, {
             campaign_id: campaign.id, kind: campaign.budget.kind, amount: campaign.budget.amount, end_time: campaign.endTime, boost_id: campaign.boostId,
         });
         res.json({ campaign });
     } catch (err) {
-        fail(res, err, 'set_campaign_budget');
+        await fail(req, res, err, 'set_campaign_budget');
     }
 });
 
@@ -220,6 +384,6 @@ adsRouter.delete('/campaigns/:id', canAdminister, async (req, res) => {
         await audit(req, AUDIT_ACTIONS.adsCampaignDelete, null, { campaign_id: String(req.params['id']) });
         res.json(out);
     } catch (err) {
-        fail(res, err, 'delete_campaign');
+        await fail(req, res, err, 'delete_campaign');
     }
 });

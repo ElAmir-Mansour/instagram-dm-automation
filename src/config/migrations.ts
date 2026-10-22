@@ -64,6 +64,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v50_whatsapp.sql',
     'migration_v51_private_media.sql',
     'migration_v52_ad_boosts.sql',
+    'migration_v53_ads_core.sql',
 ] as const;
 
 export interface SchemaState {

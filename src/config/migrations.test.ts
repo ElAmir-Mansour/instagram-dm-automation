@@ -1141,3 +1141,84 @@ describe('migration v51: private media (media_uploads.is_private)', () => {
         assert.doesNotMatch(sql, /CREATE TABLE/i);
     });
 });
+
+// ─── v53: the Ads Manager's core tables ────────────────────────────────────────────────────────
+
+describe('migration v53: ads core (stored copy, results, ops queue, pacer, alerts)', () => {
+    const FILE = 'migration_v53_ads_core.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    const TABLES = ['ads_objects', 'ads_insights_daily', 'ads_ops', 'ads_pacer', 'ads_alerts'];
+
+    it('is registered right after v52, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('creates exactly the five ads tables, each keyed by the tenant with ON DELETE CASCADE, and enables RLS on every one in this file', () => {
+        assert.deepEqual(createdTables(raw).sort(), [...TABLES].sort());
+        const enabled = rlsEnabledTables(raw);
+        for (const t of TABLES) {
+            assert.ok(enabled.has(t), `${t} has RLS enabled`);
+            const body = sql.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\((.*?)\\);`))?.[1] ?? '';
+            assert.match(body, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/, `${t} is keyed by the tenant`);
+        }
+    });
+
+    it('constrains the closed vocabularies with CHECKs', () => {
+        assert.match(sql, /level TEXT NOT NULL CHECK \(level IN \('campaign', 'adset', 'ad', 'creative'\)\)/);
+        assert.match(sql, /origin TEXT NOT NULL CHECK \(origin IN \('app', 'boost', 'proposal', 'meta'\)\)/);
+        assert.match(sql, /CHECK \(budget_kind IN \('daily', 'lifetime', 'none'\)\)/);
+        assert.match(sql, /level TEXT NOT NULL CHECK \(level IN \('account', 'campaign', 'adset', 'ad'\)\)/);
+        assert.match(sql, /CHECK \(kind IN \('create', 'update', 'status', 'budget', 'archive', 'delete', 'spend_cap', 'audience_create', 'audience_users', 'lead_form', 'study'\)\)/);
+        assert.match(sql, /CHECK \(state IN \('pending', 'running', 'verify', 'done', 'failed', 'cancelled'\)\)/);
+        assert.match(sql, /idempotency_key TEXT UNIQUE/);
+        assert.match(sql, /depends_on UUID REFERENCES ads_ops\(id\)/);
+        assert.match(sql, /app_meta JSONB NOT NULL DEFAULT '\{\}'/);
+    });
+
+    it('has the unique keys the design relies on: one stored row per Meta object, one result row per day, one alert per kind and object a day', () => {
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_objects_meta ON ads_objects \(creator_id, level, meta_id\) WHERE meta_id IS NOT NULL/);
+        assert.match(sql, /PRIMARY KEY \(creator_id, level, meta_id, day\)/);
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_alerts_once_a_day ON ads_alerts \(creator_id, kind, object_key, day\)/);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_ads_ops_claim ON ads_ops \(ad_account_id, state, not_before\)/);
+        assert.match(sql, /ad_account_id TEXT PRIMARY KEY/);
+    });
+
+    it('holds one live boost per post and platform in the database, under a NEW index name (IF NOT EXISTS matches names, v15)', () => {
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_boosts_one_live ON ad_boosts \(scheduled_post_id, platform\) WHERE status IN \('creating', 'paused', 'active'\)/);
+        const earlier = allMigrationFiles().filter((f) => f.name !== FILE).map((f) => withoutComments(f.sql)).join('\n');
+        assert.doesNotMatch(earlier, /idx_ad_boosts_one_live/);
+    });
+
+    it('adds tracked_links.ads_object_id as a nullable reference that outlives the stored row', () => {
+        assert.match(sql, /ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS ads_object_id UUID REFERENCES ads_objects\(id\) ON DELETE SET NULL/);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_tracked_links_ads_object ON tracked_links \(ads_object_id\)/);
+    });
+
+    it('keeps ads on for every tenant that already has ads settings, and never overwrites a switch the admin set', () => {
+        assert.match(sql, /INSERT INTO app_settings \(key, value, is_secret\) SELECT 'ads\.enabled\.' \|\| substr\(key, length\('ads\.settings\.'\) \+ 1\), 'true', FALSE FROM app_settings WHERE key LIKE 'ads\.settings\.%' ON CONFLICT \(key\) DO NOTHING/);
+    });
+
+    it('backfills Boost\'s objects as origin boost, idempotently', () => {
+        const inserts = [...sql.matchAll(/INSERT INTO ads_objects[^;]*;/g)].map((m) => m[0]);
+        assert.equal(inserts.length, 4);
+        for (const s of inserts) {
+            assert.match(s, /'boost'/);
+            assert.match(s, /ON CONFLICT \(creator_id, level, meta_id\) WHERE meta_id IS NOT NULL DO NOTHING/);
+        }
+    });
+
+    it('is idempotent: every table and index is IF NOT EXISTS, and nothing is dropped', () => {
+        assert.equal((sql.match(/CREATE TABLE/g) ?? []).length, (sql.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+        assert.doesNotMatch(sql, /\bDROP\b|\bTRUNCATE\b|\bDELETE FROM\b|CONCURRENTLY/i);
+    });
+});

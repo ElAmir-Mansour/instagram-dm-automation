@@ -48,47 +48,44 @@ describe('money', () => {
 
 describe('checkBoostBudget: the spend guard', () => {
     it('accepts a boost inside every limit and gives its planned total', () => {
-        const check = checkBoostBudget({ dailyBudget: 5, days: 3, limits: LIMITS, committedThisMonth: 0 });
+        const check = checkBoostBudget({ dailyBudget: 5, days: 3, limits: LIMITS });
         assert.deepEqual(check, { ok: true, dailyBudget: 5, plannedTotal: 15 });
     });
 
     it('refuses a daily budget over the max, by a cent', () => {
-        const check = checkBoostBudget({ dailyBudget: 10.01, days: 1, limits: LIMITS, committedThisMonth: 0 });
+        const check = checkBoostBudget({ dailyBudget: 10.01, days: 1, limits: LIMITS });
         assert.equal(check.ok, false);
-        assert.equal(!check.ok && check.code, 'BUDGET_OVER_DAILY_MAX');
-        assert.equal(checkBoostBudget({ dailyBudget: 10, days: 1, limits: LIMITS, committedThisMonth: 0 }).ok, true, 'exactly the max is allowed');
+        assert.equal(!check.ok && check.code, 'OVER_DAILY_MAX');
+        assert.equal(checkBoostBudget({ dailyBudget: 10, days: 1, limits: LIMITS }).ok, true, 'exactly the max is allowed');
     });
 
-    it('refuses a total that would pass the monthly cap, counting what is already committed', () => {
-        const over = checkBoostBudget({ dailyBudget: 10, days: 3, limits: LIMITS, committedThisMonth: 70.01 });
-        assert.equal(!over.ok && over.code, 'BUDGET_OVER_MONTHLY_CAP');
-        assert.match(!over.ok ? over.message : '', /29\.99/, 'says how much of the cap is left');
-        assert.equal(checkBoostBudget({ dailyBudget: 10, days: 3, limits: LIMITS, committedThisMonth: 70 }).ok, true, 'exactly the cap is allowed');
+    it('no longer judges the month: whether the total fits is the money rule\'s (ads/money.ts), the same one every screen uses', () => {
+        assert.equal(checkBoostBudget({ dailyBudget: 10, days: 30, limits: LIMITS }).ok, true);
     });
 
     it('compares in cents, so 0.1 + 0.2 does not tip a boost over', () => {
-        const check = checkBoostBudget({ dailyBudget: 0.1, days: 3, limits: { maxDailyBudget: 1, monthlyCap: 0.5 }, committedThisMonth: 0.2 });
-        assert.equal(check.ok, true);
+        const check = checkBoostBudget({ dailyBudget: 0.1, days: 3, limits: { maxDailyBudget: 1 } });
+        assert.deepEqual(check, { ok: true, dailyBudget: 0.1, plannedTotal: 0.3 });
     });
 
     it("refuses a budget under Meta's minimum for the account when it is known", () => {
-        const check = checkBoostBudget({ dailyBudget: 50, days: 1, limits: { maxDailyBudget: 100, monthlyCap: 1000 }, committedThisMonth: 0, minDailyBudget: 53.75 });
-        assert.equal(!check.ok && check.code, 'BUDGET_UNDER_MINIMUM');
+        const check = checkBoostBudget({ dailyBudget: 50, days: 1, limits: { maxDailyBudget: 100 }, minDailyBudget: 53.75 });
+        assert.equal(!check.ok && check.code, 'BELOW_META_MINIMUM');
     });
 
     it('refuses rather than spends when a limit is missing', () => {
-        for (const limits of [{ maxDailyBudget: 0, monthlyCap: 100 }, { maxDailyBudget: 10, monthlyCap: NaN }]) {
-            assert.equal(checkBoostBudget({ dailyBudget: 1, days: 1, limits, committedThisMonth: 0 }).ok, false);
+        for (const limits of [{ maxDailyBudget: 0 }, { maxDailyBudget: NaN }, { maxDailyBudget: null }]) {
+            assert.equal(checkBoostBudget({ dailyBudget: 1, days: 1, limits }).ok, false);
         }
     });
 
     it('refuses nonsense days and amounts', () => {
         for (const days of [0, 31, 2.5, '3', null]) {
-            const check = checkBoostBudget({ dailyBudget: 5, days, limits: LIMITS, committedThisMonth: 0 });
+            const check = checkBoostBudget({ dailyBudget: 5, days, limits: LIMITS });
             assert.equal(!check.ok && check.field, 'days', `days ${String(days)}`);
         }
         for (const dailyBudget of [0, -5, 0.001, Infinity, '5', null]) {
-            const check = checkBoostBudget({ dailyBudget, days: 3, limits: LIMITS, committedThisMonth: 0 });
+            const check = checkBoostBudget({ dailyBudget, days: 3, limits: LIMITS });
             assert.equal(!check.ok && check.field, 'dailyBudget', `budget ${String(dailyBudget)}`);
         }
     });
