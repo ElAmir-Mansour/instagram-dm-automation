@@ -688,3 +688,51 @@ describe('isAcceptedWebhookObject', () => {
         }
     });
 });
+
+// ─── A3: ad referrals ───────────────────────────────────────────────────────────────────────────
+
+describe('planJobs — click-to-message ad referrals (A3)', () => {
+    const fixture = (name: string): any => JSON.parse(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8'));
+
+    it('enqueues an Instagram first message that carries a referral, keyed on its mid as any message', () => {
+        const planned = planJobs(fixture('ad-referral-instagram.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'dm.process');
+        assert.match(planned[0]!.dedupeKey!, /^dm:aWdf/);
+    });
+
+    it('enqueues a Messenger postback that carries a referral (a new thread), keyed on the postback mid', () => {
+        const planned = planJobs(fixture('ad-referral-messenger-postback.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.dedupeKey, 'dm:m_postback-ad-2');
+    });
+
+    it('enqueues a standalone referral from an ad (a returning person), keyed on who, which ad and when', () => {
+        const planned = planJobs(fixture('ad-referral-messenger-standalone.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'dm.process');
+        assert.equal(planned[0]!.dedupeKey, 'dmref:PSID-ad-3:120210000000000003:1761134400000');
+        assert.equal((planned[0]!.payload as any).object, 'page');
+    });
+
+    it('still drops a referral that is not from an ad, and a standalone referral event with no source', () => {
+        const planned = planJobs({
+            object: 'page',
+            entry: [{
+                id: 'p',
+                messaging: [
+                    { sender: { id: 'u' }, timestamp: 1, referral: { ref: 'promo', source: 'SHORTLINK', type: 'OPEN_THREAD' } },
+                    { sender: { id: 'u' }, timestamp: 2, referral: { ref: 'promo' } },
+                    { sender: { id: 'u' }, messaging_referral: { ref: 'promo' } },
+                ],
+            }],
+        });
+        assert.deepEqual(planned, []);
+    });
+
+    it('gives a standalone ad referral with no sender or timestamp no key (one attempt, like any event without a mid)', () => {
+        const planned = planJobs({ object: 'page', entry: [{ id: 'p', messaging: [{ referral: { ad_id: '1', source: 'ADS' } }] }] });
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.dedupeKey, undefined);
+    });
+});

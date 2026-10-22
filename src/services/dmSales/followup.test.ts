@@ -9,7 +9,9 @@
  *   - a click by a link-preview crawler or a prefetch does NOT stop it (Meta's own crawler opens every link the moment it is sent);
  *   - it is never sent 23 hours or more after the person's last message (Meta's window is 24 h; one hour of margin), and never without a
  *     message of theirs on record;
- *   - the rules fire in an order that names the reason that matters (an opt-out is an opt-out even if they also replied).
+ *   - the rules fire in an order that names the reason that matters (an opt-out is an opt-out even if they also replied);
+ *   - the 23 hour clock is `windowEndsAt` (`ads/attribution.ts`): only a conversation that began from a click-to-message ad, on a platform whose
+ *     `ads.extended_window` switch is on, may be nudged up to 7 days less an hour after the click; every other one keeps the 23 hours.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -138,6 +140,69 @@ describe('followupEligible: which reason is given when several apply', () => {
         const state = { lastInboundAt: at('2026-10-14T09:30:00Z') };
         assert.equal(followupEligible({ ...BASE, ...state }, NOW, [person()], RULES).reason, 'replied');
         assert.equal(followupEligible({ ...BASE, lastInboundAt: at('2026-10-13T09:00:00Z') }, NOW, [person()], RULES).reason, 'clicked');
+    });
+});
+
+describe('followupEligible: the ad window (ads.extended_window)', () => {
+    // A click on 2026-10-11 10:00Z; the person's first message came with it, and the link went out three days later (a person who came back).
+    const CLICK = '2026-10-11T10:00:00Z';
+    const DAY3 = at('2026-10-14T13:00:00Z');
+    const AD_STATE: Partial<FollowupState> = {
+        // Their last message is three days old: the default rule alone would have closed the window two days ago.
+        lastInboundAt: at('2026-10-11T10:00:30Z'), lastLinkAt: at('2026-10-11T10:01:00Z'),
+        entrySource: { kind: 'ctm', platform: 'instagram', at: CLICK },
+    };
+    const AD_RULES: Partial<FollowupRules> = { linkAt: at('2026-10-11T10:01:00Z'), extendedWindow: { instagram: true, messenger: false } };
+    const verdict = (state: Partial<FollowupState>, rules: Partial<FollowupRules>, now: Date) =>
+        followupEligible({ ...BASE, ...state }, now, [], { ...RULES, ...rules, linkAt: rules.linkAt ?? RULES.linkAt });
+
+    it('a ctm conversation with its platform\'s switch on may be nudged on day 3', () => {
+        assert.deepEqual(verdict(AD_STATE, AD_RULES, DAY3), { send: true, reason: 'ok' });
+    });
+
+    it('the same conversation with the switch off (or the rules silent about it) is past the 23 hour window', () => {
+        assert.equal(verdict(AD_STATE, { ...AD_RULES, extendedWindow: { instagram: false, messenger: false } }, DAY3).reason, 'window_expired');
+        assert.equal(verdict(AD_STATE, { ...AD_RULES, extendedWindow: undefined }, DAY3).reason, 'window_expired');
+    });
+
+    it('only the conversation\'s own platform counts: an Instagram ad with only the Messenger switch on is the 23 hour rule', () => {
+        assert.equal(verdict(AD_STATE, { ...AD_RULES, extendedWindow: { instagram: false, messenger: true } }, DAY3).reason, 'window_expired');
+        const messenger = { ...AD_STATE, entrySource: { kind: 'ctm' as const, platform: 'messenger' as const, at: CLICK } };
+        assert.equal(verdict(messenger, { ...AD_RULES, extendedWindow: { instagram: false, messenger: true } }, DAY3).reason, 'ok');
+    });
+
+    it('a conversation that did not begin from an ad never gets more than 23 hours, whatever the switches say', () => {
+        const all = { ...AD_RULES, extendedWindow: { instagram: true, messenger: true } };
+        assert.equal(verdict({ ...AD_STATE, entrySource: null }, all, DAY3).reason, 'window_expired');
+        assert.equal(verdict({ ...AD_STATE, entrySource: undefined }, all, DAY3).reason, 'window_expired');
+        for (const kind of ['link', 'qr', 'ctwa', 'ig_bridge', 'ice_breaker', 'organic'] as const) {
+            assert.equal(verdict({ ...AD_STATE, entrySource: { kind, platform: 'instagram', at: CLICK } }, all, DAY3).reason, 'window_expired', kind);
+        }
+    });
+
+    it('the extended window closes at the click plus 7 days less an hour, to the millisecond', () => {
+        const closes = Date.parse(CLICK) + 7 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000;
+        assert.equal(verdict(AD_STATE, AD_RULES, new Date(closes - 1)).reason, 'ok');
+        assert.equal(verdict(AD_STATE, AD_RULES, new Date(closes)).reason, 'window_expired');
+        assert.equal(verdict(AD_STATE, AD_RULES, at('2026-10-18T13:00:00Z')).reason, 'window_expired');
+    });
+
+    it('a person who wrote late keeps their own 23 hours when that is the later end', () => {
+        const state = { ...AD_STATE, lastInboundAt: at('2026-10-18T09:00:00Z'), lastLinkAt: at('2026-10-18T09:00:00Z') };
+        const rules = { ...AD_RULES, linkAt: at('2026-10-18T09:00:00Z') };
+        assert.equal(verdict(state, rules, at('2026-10-19T07:59:59Z')).reason, 'ok');
+        assert.equal(verdict(state, rules, at('2026-10-19T08:00:00Z')).reason, 'window_expired');
+    });
+
+    it('a ctm conversation whose click time is unreadable falls back to 23 hours from their last message', () => {
+        const state = { ...AD_STATE, entrySource: { kind: 'ctm' as const, platform: 'instagram' as const, at: 'not a date' } };
+        assert.equal(verdict(state, AD_RULES, DAY3).reason, 'window_expired');
+    });
+
+    it('the switch widens only the clock: every other rule still stops an ad conversation', () => {
+        assert.equal(verdict({ ...AD_STATE, optedOutAt: at('2026-10-12T09:00:00Z') }, AD_RULES, DAY3).reason, 'opted_out');
+        assert.equal(verdict({ ...AD_STATE, botActive: false }, AD_RULES, DAY3).reason, 'paused');
+        assert.equal(verdict({ ...AD_STATE, lastInboundAt: at('2026-10-12T09:00:00Z') }, AD_RULES, DAY3).reason, 'replied');
     });
 });
 
