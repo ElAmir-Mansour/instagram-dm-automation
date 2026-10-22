@@ -275,9 +275,11 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
   `FB_POST_MESSENGER_OK = false`. Meta's pages disagree (`object_story_id` "not supported" for Messenger creatives on one page,
   supported on another). Flip the constant only after a `validate_only` call that succeeds, and record the result in
   research.md R11.
-- **Creative opt-outs.** A creative built from a post takes only the keys Meta allows there (`POST_CREATIVE_OPT_OUTS`; live-checked
-  2026-10-22: Meta answered that `music` must be one of 7 keys). A media creative (A5) sends the full `CREATIVE_OPT_OUTS`; if Meta answers
-  "must be one of" or "unknown key", trim the list to what it names; `validate_only` shows it before anything is created.
+- **Creative opt-outs.** Meta accepts only 7 keys in `creative_features_spec` on EVERY creative (live-checked 2026-10-22 on a post
+  creative in A4, and on an uploaded video and a 9:16 placement creative in A5: "`music` must be one of {IG_VIDEO_NATIVE_SUBTITLE,
+  IMAGE_ANIMATION, PRODUCT_BROWSING, PRODUCT_METADATA_AUTOMATION, PROFILE_CARD, STANDARD_ENHANCEMENTS_CATALOG,
+  TEXT_OVERLAY_TRANSLATION}"; `adapt_to_placement` is refused too). `CREATIVE_OPT_OUTS` is the four of those that could change what is
+  shown, all OPT_OUT. The rewriting and generative features cannot be named through the API; the app never opts in to them.
 - **Real delivery** (review, conversations labelled with the ad, cost per conversation next day) is checked only with the
   owner's OK, one day at the minimum budget (quickstart §A4 step 4).
 

@@ -3341,7 +3341,7 @@ is created.
 category forbids interests too, and `political` is refused; the 9:16 version (**`spec.ts:766`**): link-click ads only, same kind as the
 main asset, `asset_feed_spec` from `placementAssetFeed` (**`ads/creatives.ts:79`**: labelled assets, `optimization_type: PLACEMENT`, a feed
 rule and a vertical rule — Stories only while `REELS_CUSTOMISATION_LIVE_CHECKED` is false) with the story spec reduced to the Page and the
-Instagram account, the opt-outs kept.
+Instagram account, the opt-outs kept (`CREATIVE_OPT_OUTS`: the four keys Meta allows, live-checked).
 
 **E. What Review adds.** After Meta's `validate_only` (§11.3 C 6): `reachEstimate` (**`ads/targetingSearch.ts:90`**, `act/reachestimate`
 on the first ad set's targeting, never throws) and, only when Meta accepted the draft, `generatePreviews` (**`ads/creatives.ts:238`**) for

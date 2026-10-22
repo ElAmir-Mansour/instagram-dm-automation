@@ -23,9 +23,9 @@
  *                               the 2026-10-22 live check (Meta refuses it in the call to action's value; it documents no other place).
  *   - FB_POST_MESSENGER_OK      whether an `object_story_id` creative can carry a Messenger CTA (the Messenger page says no, the
  *                               Instagram page says yes). Until a live check says yes, a Facebook post is refused for message ads.
- *   - CREATIVE_OPT_OUTS         the `creative_features_spec` keys of a MEDIA creative (a post creative takes only POST_CREATIVE_OPT_OUTS,
- *                               live-checked 2026-10-22). An "unknown key" error from Meta (validate_only tells) means: remove
- *                               that key from the list. Nothing else changes.
+ *   - CREATIVE_OPT_OUTS         the `creative_features_spec` keys of EVERY creative: live-checked 2026-10-22, Meta accepts only seven
+ *                               keys there (post, uploaded video and 9:16 creatives alike). A refused key (validate_only tells)
+ *                               means: remove it from the list. Nothing else changes.
  *
  * v1 Boost is a preset of this: `boostToSpec` turns a boost's inputs into a spec, and the tests compare what it produces with
  * `buildCampaignParams` / `buildAdSetParams` / `buildCreativeParams` in metaAds.ts.
@@ -147,25 +147,18 @@ export const POST_GREETING_PLACEMENT: 'cta_value' | 'omit' = 'omit';
 export const FB_POST_MESSENGER_OK = false;
 
 /**
- * The Advantage+ creative features that rewrite the owner's text or image, each sent as an explicit OPT_OUT: Arabic copy in فصحى, the
- * brand's no-women-images rule and the owner's exact wording must not be changed by Meta. `standard_enhancements` is NOT here: that
- * bundle is dead since v22. LIVE-CHECK: if Meta answers "unknown key" for one of these, delete it from this list (validate_only shows it).
+ * The Advantage+ creative feature keys every creative sends, each as an explicit OPT_OUT. LIVE-CHECKED 2026-10-22 (validate_only, v26):
+ * Meta accepts only {IG_VIDEO_NATIVE_SUBTITLE, IMAGE_ANIMATION, PRODUCT_BROWSING, PRODUCT_METADATA_AUTOMATION, PROFILE_CARD,
+ * STANDARD_ENHANCEMENTS_CATALOG, TEXT_OVERLAY_TRANSLATION} in `creative_features_spec` — first on a creative built from a post (A4), then
+ * on an uploaded video and on a 9:16 placement creative (A5) — and refuses every other key ("Param key 'music' … must be one of …"),
+ * `adapt_to_placement` included. So the rewriting and generative features (text, music, uncrop, background) cannot be named through this
+ * API at all; of the allowed keys, these four could change what is shown (Arabic copy in فصحى, the no-women-images rule, the brand), so
+ * they are opted out, and nothing is opted in. The product ones need a catalogue. If Meta widens the list, add the rewriting keys back.
  */
-export const CREATIVE_OPT_OUTS = [
-    'text_optimizations', 'image_touchups', 'image_brightness_and_contrast', 'image_uncrop', 'image_templates', 'enhance_cta', 'video_auto_crop',
-    'inline_comment', 'description_automation', 'text_generation', 'image_background_gen', 'add_text_overlay', 'music', 'product_extensions',
-    'site_extensions', 'ig_video_native_subtitle', 'reveal_details_over_time', 'carousel_to_video', 'profile_card', 'show_summary',
-    'show_destination_blurbs',
-] as const;
+export const CREATIVE_OPT_OUTS = ['ig_video_native_subtitle', 'image_animation', 'profile_card', 'text_overlay_translation'] as const;
 
-/**
- * A creative built from an existing POST takes only a few feature keys. LIVE-CHECKED 2026-10-22 (validate_only, v26, an Instagram reel):
- * Meta answered "(#100) Param key 'music' in degrees_of_freedom_spec[creative_features_spec] must be one of {IG_VIDEO_NATIVE_SUBTITLE,
- * IMAGE_ANIMATION, PRODUCT_BROWSING, PRODUCT_METADATA_AUTOMATION, PROFILE_CARD, STANDARD_ENHANCEMENTS_CATALOG, TEXT_OVERLAY_TRANSLATION}".
- * The rewriting features cannot touch a post used as it is anyway; of the allowed keys, these four could change what is shown (the
- * product ones need a catalogue), so they are opted out, and nothing is opted in (`adapt_to_placement` is not allowed here).
- */
-export const POST_CREATIVE_OPT_OUTS = ['ig_video_native_subtitle', 'image_animation', 'profile_card', 'text_overlay_translation'] as const;
+/** The same list for a creative built from a post (the name A4's live check gave it). */
+export const POST_CREATIVE_OPT_OUTS = CREATIVE_OPT_OUTS;
 
 const SPECIAL_CATEGORY: Record<SpecialCategory, string[]> = {
     none: [],
@@ -662,13 +655,10 @@ function buildTargeting(adset: CampaignSpec['adsets'][number], postPlatform: 'in
 // ─── Creatives ────────────────────────────────────────────────────────────────────────────
 
 function creativeFeatures(source: 'post' | 'media'): GraphParams {
+    // Every creative, post or media, takes the same allowed keys (see CREATIVE_OPT_OUTS). `source` stays for the day the lists part again.
+    void source;
     const features: Record<string, { enroll_status: string }> = {};
-    if (source === 'post') {
-        for (const key of POST_CREATIVE_OPT_OUTS) features[key] = { enroll_status: 'OPT_OUT' };
-        return { creative_features_spec: features };
-    }
     for (const key of CREATIVE_OPT_OUTS) features[key] = { enroll_status: 'OPT_OUT' };
-    features['adapt_to_placement'] = { enroll_status: 'OPT_IN' };
     return { creative_features_spec: features };
 }
 
