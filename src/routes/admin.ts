@@ -71,6 +71,7 @@ import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import { needsCeiling, parseCeiling, readCeiling, saveCeiling, setAdsEnabled } from '../services/ads/settings.js';
 import { seedApiBrain } from '../services/studio/settings.js';
+import { adminAdsRouter } from './adminAds.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
 import { profileErrorBody } from './profile.js';
@@ -340,6 +341,8 @@ router.use('/ai', aiRouter);
 
 /** The funnel from invite to a finished setup, for Operations (src/routes/adminOnboarding.ts). Counts and durations only. */
 router.use('/onboarding', onboardingFunnelRouter);
+// The Ads overview (A11). The per-tenant switch, ceiling and sign-off routes below it fall through this router.
+router.use('/ads', adminAdsRouter);
 
 // ─── Media storage ──────────────────────────────────────────────────────────
 

@@ -329,6 +329,21 @@ const API = {
     retryAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
     cancelAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 
+    // Ads for clients (A11), the platform admin's. `getAdminAdsTenants()` answers `{ tenants: [...] }`, one row per workspace (Postgres only, no Meta call);
+    // `spend` is in a row only when that client shares it. The sign-off routes answer 404 until the Audiences phase ships them (the page says so).
+    getAdminAdsTenants: () => API.request('/admin/ads/tenants'),
+    setAdminAdsEnabled: (id, enabled) => API.request(`/admin/ads/tenants/${encodeURIComponent(id)}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+    setAdminAdsCeiling: (id, maxDailyBudget, monthlyCap) => API.request(`/admin/ads/tenants/${encodeURIComponent(id)}/ceiling`, {
+        method: 'POST', body: JSON.stringify({ maxDailyBudget, monthlyCap }),
+    }),
+    addAdminAdsSignoff: (id, data) => API.request(`/admin/ads/tenants/${encodeURIComponent(id)}/legal-signoff`, { method: 'POST', body: JSON.stringify(data) }),
+    revokeAdminAdsSignoff: (id, signoffId) => API.request(
+        `/admin/ads/tenants/${encodeURIComponent(id)}/legal-signoff/${encodeURIComponent(signoffId)}`, { method: 'DELETE' }
+    ),
+    // The client's side (any member reads, the owner writes): `{ shareSpend, ceiling: { maxDailyBudget, monthlyCap } | null, managed }`. 404 = ads are off for this workspace.
+    getAdsShareSpend: () => API.request('/ads/settings/share-spend'),
+    setAdsShareSpend: (on) => API.request('/ads/settings/share-spend', { method: 'POST', body: JSON.stringify({ on }) }),
+
     /**
      * Data-subject erasure, in two halves that cannot be collapsed into one.
      * The preview returns a short-lived `token`; the POST takes nothing but

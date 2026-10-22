@@ -123,7 +123,7 @@
             try {
                 var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'monteur', 'infographics', 'inbox', 'ai_settings',
                              'analytics', 'growth', 'ads', 'activity', 'settings', 'help', 'operations', 'tenants',
-                             'tenant_detail', 'users', 'jobs', 'audit', 'erasure', 'invite', 'welcome'];
+                             'tenant_detail', 'admin_ads', 'users', 'jobs', 'audit', 'erasure', 'invite', 'welcome'];
                 /* The page is the first segment: #/help/worker#security is "help". */
                 var want = (location.hash || '').replace(/^#\/?/, '').split(/[\/?#]/)[0];
                 var page = PAGES.indexOf(want) === -1 ? 'overview' : want;
@@ -364,6 +364,10 @@
                         <li><a href="#/tenants" class="nav-item" data-page="tenants">
                             <i data-lucide="building-2" aria-hidden="true"></i>
                             <span data-i18n="nav.tenants">العملاء</span>
+                        </a></li>
+                        <li><a href="#/admin_ads" class="nav-item" data-page="admin_ads">
+                            <i data-lucide="megaphone" aria-hidden="true"></i>
+                            <span data-i18n="nav.admin_ads">إعلانات العملاء</span>
                         </a></li>
                         <li><a href="#/users" class="nav-item" data-page="users">
                             <i data-lucide="users" aria-hidden="true"></i>

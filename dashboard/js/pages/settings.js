@@ -324,6 +324,7 @@ const SettingsPage = {
         });
 
         this.bindEdits(container);
+        if (!ctx.adsHidden) App.loadPageModule('ads_client_card').then((card) => card && card.mount()).catch(() => {}); // A11: the account manager's ceiling + share-spend switch
         this.syncDirtyDots();
         UI.restoreFocus(focus);
         if (painted) {
@@ -3238,6 +3239,7 @@ const SettingsPage = {
                     ${this.adsAlertsBlock(ads)}
                     ${this.adsSwitchesBlock(ads)}
                     <p class="form-hint mbs-4">${t('boost.settings.safety')}</p>
+                    <div id="ads-client-block"></div>
                 </div>
             </section>
         `;

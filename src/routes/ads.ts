@@ -65,6 +65,7 @@ import { checkPolicy } from '../services/ads/policy.js';
 import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
 import { adsResultsRouter } from './adsResults.js';
 import { adsProposalsRouter } from './adsProposals.js';
+import { adsShareSpendRouter } from './adsShareSpend.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -592,3 +593,7 @@ adsRouter.use(adsResultsRouter);
 // ─── AI proposals (A7): Claude drafts, a person approves; approving enqueues PAUSED creates or the one change ─────────────────────
 
 adsRouter.use(adsProposalsRouter);
+
+// ─── Managed clients (A11): the client's share-spend switch and its ceiling (any member reads, the owner writes) ───────────────────
+
+adsRouter.use(adsShareSpendRouter);

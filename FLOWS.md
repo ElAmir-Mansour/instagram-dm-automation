@@ -3460,6 +3460,28 @@ its approximate mock; an iframe is shown only from `www.facebook.com` (CSP `fram
 - The Storage project on a custom domain: the browser's PUT is blocked by the CSP and the upload says it failed.
 - `ads.media.<tenant>` keeps 200 uploads; an older one is refused at Review ("upload it again").
 
+### 11.5 — Managed clients: one tenant, its own token, its own account (A11)
+
+Until Meta verifies the platform's business, every client tenant connects with a **system-user token from its own Meta business**,
+its own ad account and its own payment method; Meta bills the client, never the platform.
+
+1. The platform admin opens **Client ads** (`#/admin_ads`, `dashboard/js/pages/admin_ads.js`), sets the tenant's ceiling
+   (`POST /api/admin/ads/tenants/:id/ceiling`, A1) and switches ads on (`…/enabled`; 409 `CEILING_REQUIRED` without a ceiling).
+2. The client's owner follows Help → Ads → **For managed clients** (`ads#for-clients`), pastes the token, tests it, sets limits.
+   `POST /api/ads/settings` refuses a limit above the ceiling with `OVER_CEILING`.
+3. **Overview.** `GET /api/admin/ads/tenants` (`src/routes/adminAds.ts` → `src/services/ads/tenantsOverview.ts`) reads Postgres only:
+   the switch, ceiling and last health check from `app_settings` (the token row is selected as NULL: only its presence is read),
+   this month's spend from `ads_insights_daily` account rows in the account's own month and time zone, and `ads_alerts` of the last
+   7 days. It always shows **cap use as a percentage**; the amounts (`spend`, and the monthly cap with them) only when the client's
+   owner turned on `ads.share_spend.<t>` (`GET/POST /api/ads/settings/share-spend`, `src/routes/adsShareSpend.ts`, audited
+   `ads.share_spend_changed`). Sign-offs are `null` until A8's `ads_legal_signoffs` exists.
+4. **Isolation** (`src/services/ads/ownership.ts`). Every `:id` route resolves through `actions.ownObject`: the tenant's own row in its
+   current ad account, else `ownership.ownObject` says whose it is: another tenant's (or an old account's) object is 403
+   `NOT_OWN_OBJECT`, logged `ads.not_own_object` and audited; an id nobody has is 404. Every send of a queued op goes through
+   `ops.sendExec` → `deps.checkTarget` → `assertOpTarget`: the op's account must still be the tenant's, `act_<id>/…` must be that
+   account, and `<metaId>` must not be another tenant's or another account's stored object. `src/services/ads/isolation.test.ts`
+   also scans every SQL statement on an `ads_*` table for `creator_id`.
+
 ## 12. Ads → conversation → results (Meta Ads Manager, A3)
 
 A person taps a click-to-message ad and writes. The app records which ad brought them, shows it in the Inbox, counts what came of it per ad, and (only if the
@@ -3666,6 +3688,10 @@ error, and several write **no row at all**.
 | 11 | a guard check failed (token, Meta, throttle) — **`ads/guard.ts:116`** | `ads.cap_check_failed` | `ads.cap_attempt` only; `guard_blind` after 2 h |
 | 11 | an alert already sent today for the same kind and object — **`ads/notify.ts:168`** | `ads.alert_duplicate` | no (the row exists) |
 | 11 | an alert kind the tenant switched off — `notifyAds` | `ads.alert_sent` (`telegram: 'off'`) | the `ads_alerts` row, channels `off` |
+| 11 | a request names another tenant's ad object, or one from an account the tenant left — **`ads/actions.ts`** `ownObject` | `ads.not_own_object` (`warn`), audit `ads.not_own_object` | no: 403 `NOT_OWN_OBJECT` |
+| 11 | a queued op whose target is another tenant's or another account's — **`ads/ops.ts`** `sendExec` | `ads.not_own_object` | the op `failed` with `NOT_OWN_OBJECT`; **Meta is not called**, no verify |
+| 11 | a queued op on a Meta id the stored copy has not seen yet (made in Ads Manager before the next sync) — `assertOpTarget` | `ads.op_target_unmirrored` (`warn`) | sent: the token is the tenant's own, so Meta refuses anything outside its business |
+| 11 | the overview cannot read alerts, spend or sign-offs (a table not migrated yet) — **`ads/tenantsOverview.ts`** | `admin.ads_alerts_unreadable` / `admin.ads_spend_unreadable` / `admin.ads_signoffs_unreadable` | the rest renders; cap use shows "unknown" |
 | 7.5 | the Mac worker has no `ads_think` handler (aicourse-captions not pulled, or the worker not restarted) | the worker's "doesn't know the job kind" | the job `failed`, the proposal `failed` with that error |
 | 7.5 | the Mac is asleep or its worker stopped | none until the sweep | the proposal stays `drafting`; the daily cron fails it after 24 h |
 | 7.5 | a review found nothing worth changing — `advanceProposal` | `ads.proposal_nothing_to_propose` | the `drafting` row is deleted |

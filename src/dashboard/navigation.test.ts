@@ -70,7 +70,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         const found = groups();
         assert.deepEqual(found.map((g) => g.labelKey), ['nav.group.today', 'nav.group.replies', 'nav.group.content', 'nav.group.results', 'nav.group.admin']);
         assert.deepEqual(found.slice(0, 4).map((g) => g.pages), [['overview', 'inbox'], ['campaigns', 'ai_settings'], ['studio', 'posts'], ['analytics', 'growth', 'ads']]);
-        assert.deepEqual(found[4]!.pages, ['operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']);
+        assert.deepEqual(found[4]!.pages, ['operations', 'tenants', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']);
         assert.deepEqual(footPages(), ['settings', 'help']);
     });
 
@@ -93,7 +93,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         assert.equal(job.length, 9);
         assert.equal(job.length + footPages().length, 11);
         const all = [...INDEX.matchAll(/<a href="#\/[a-z_]+" class="nav-item(?: active)?" data-page="([a-z_]+)"/g)].map((m) => m[1]!);
-        assert.equal(all.length, 11 + 6, 'every sidebar link: eleven for the creator, six for the platform admin');
+        assert.equal(all.length, 11 + 7, 'every sidebar link: eleven for the creator, seven for the platform admin');
         assert.equal(new Set(all).size, all.length, 'no page twice');
     });
 
@@ -109,7 +109,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         const ar = loadDashboard({ lang: 'ar' });
         const en = loadDashboard({ lang: 'en' });
         const links = [...INDEX.matchAll(/<a href="#\/([a-z_]+)" class="nav-item(?: active)?" data-page="([a-z_]+)">[\s\S]*?<span data-i18n="([^"]+)">([^<]*)<\/span>/g)];
-        assert.equal(links.length, 17);
+        assert.equal(links.length, 18);
         for (const [, href, page, key, text] of links) {
             assert.equal(href, page, `${page}: the address is the page`);
             assert.equal(key, `nav.${page}`, `${page}: the label IS the page title, so the two cannot drift`);
@@ -170,7 +170,7 @@ function rig(options: { lang?: 'ar' | 'en'; admin?: boolean; globals?: Record<st
     const h = loadDashboard({ app: true, lang: options.lang ?? 'en', globals: { Admin: { confirm: () => {} }, ...(options.globals ?? {}) } });
     for (const id of ['page-title', 'page-subtitle', 'page-container', 'sidebar', 'main-content', 'mobile-menu-btn']) h.el(id);
     const items: Record<string, FakeEl> = {};
-    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'posts', 'analytics', 'growth', 'ads', 'settings', 'help', 'operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']) {
+    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'posts', 'analytics', 'growth', 'ads', 'settings', 'help', 'operations', 'tenants', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']) {
         items[page] = new FakeEl('', 'a');
         items[page]!.dataset = { page };
     }
@@ -256,7 +256,7 @@ describe('Administration group: closed by default, open for an admin page, remem
 
     it('opens for every administration page, a tenant’s own page (which reads as Tenants) included', () => {
         const s = adminShell();
-        for (const page of ['operations', 'tenants', 'tenant_detail', 'users', 'jobs', 'audit', 'erasure']) {
+        for (const page of ['operations', 'tenants', 'tenant_detail', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']) {
             s.App.syncAdminGroup('overview');
             assert.equal(s.isOpen(), false, `closed on Today before ${page}`);
             s.App.syncAdminGroup(page);
@@ -519,7 +519,7 @@ describe('nav links: the browser keeps Cmd, Ctrl, Shift and middle clicks (SH-24
         r.App.go = (page: string): void => { went.push(page); };
         r.App.prefetchPageModule = (): void => {};
         r.App.bindNavLinks();
-        assert.equal(bound.size, 18, '17 links and the brand mark');
+        assert.equal(bound.size, 19, '18 links and the brand mark');
         bound.get(r.items.help!)![0]!(click());
         bound.get(home)![0]!(click());
         bound.get(r.items.studio!)![0]!(click({ ctrlKey: true }));
