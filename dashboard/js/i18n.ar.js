@@ -5187,6 +5187,8 @@
     'boost.settings.connect.soon': 'ينتهي الوصول في {date}. أعد الربط في بطاقة إنستجرام وفيسبوك لتجديده.',
     'boost.settings.connect.expired': 'انتهى الوصول في {date}. أعد الربط في بطاقة إنستجرام وفيسبوك لتجديده.',
     'boost.settings.advanced': 'متقدم: ألصق رمز مستخدم النظام',
+    'boost.settings.tokenTitle': 'الوصول للإعلانات: ألصق رمز مستخدم النظام',
+    'boost.settings.tokenHow': 'الربط عبر فيسبوك مطفأ هنا، لذا يأتي الوصول للإعلانات من رمز. في إعدادات ميتا للأعمال ← مستخدمو النظام، امنح مستخدم نظام حسابك الإعلاني وصفحتك وحساب إنستجرام، وأنشئ رمزاً لا ينتهي بأذونات ads_management وads_read وbusiness_management، ثم ألصقه أدناه.',
     'boost.settings.accountPick': 'اختر حساباً إعلانياً',
     'boost.settings.accountPickHint': 'الحسابات الإعلانية التي يصل إليها هذا الوصول.',
     'boost.settings.accountInactive': 'غير نشط، الحالة {status}',

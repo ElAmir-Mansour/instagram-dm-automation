@@ -369,7 +369,7 @@ const SettingsPage = {
             case 'tiktok': return this.tiktokSection({ tiktok: ctx.tiktok, tiktokError: ctx.tiktokError });
             case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
-            case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError, { accounts: ctx.adsAccounts, failed: ctx.adsAccountsFailed });
+            case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError, { accounts: ctx.adsAccounts, failed: ctx.adsAccountsFailed }, this.metaConnectable(ctx));
             case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
             case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
             case 'appearance': return this.appearanceSection();
@@ -2823,8 +2823,19 @@ const SettingsPage = {
         `;
     },
 
-    /** Where the ads access comes from: the lead-in to Connect, or a Connect's state and how long it lasts. A pasted token has no block. */
-    adsConnectBlock(ads) {
+    /**
+     * Does the Instagram & Facebook card have a Connect / Reconnect button to send the owner to? Only when Facebook Connect is switched on
+     * and set up (`MetaConnect.canStart`). Without it, "Go to the Instagram & Facebook card" scrolled to a card with nothing to press.
+     */
+    metaConnectable(ctx) {
+        return typeof MetaConnect !== 'undefined' && !!ctx.meta && MetaConnect.canStart(ctx.meta);
+    },
+
+    /**
+     * Where the ads access comes from: the lead-in to Connect, or a Connect's state and how long it lasts. A pasted token has no block,
+     * and neither does a deployment where Connect is off: there the token form below is the way in.
+     */
+    adsConnectBlock(ads, connectable) {
         const token = ads.token || {};
         const openMeta = html`
             <div class="form-actions mbs-3">
@@ -2844,11 +2855,11 @@ const SettingsPage = {
                     ${date ? html`<p class="form-hint ${warn ? 'text-warning' : ''} mbs-3" id="ads-expiry">${
                         days <= 0 ? t('boost.settings.connect.expired', { date })
                             : (warn ? t('boost.settings.connect.soon', { date }) : t('boost.settings.connect.until', { date }))}</p>` : ''}
-                    ${warn ? openMeta : ''}
+                    ${warn && connectable ? openMeta : ''}
                 </div>
             `;
         }
-        if (token.set) return '';
+        if (token.set || !connectable) return '';
         return html`
             <div class="settings-block mbe-4" id="ads-connect-block">
                 <p class="form-label">${t('boost.settings.connect.title')}</p>
@@ -2891,7 +2902,7 @@ const SettingsPage = {
         `;
     },
 
-    adsSection(ads, error, list) {
+    adsSection(ads, error, list, connectable) {
         if (error || !ads) {
             return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
         }
@@ -2907,7 +2918,7 @@ const SettingsPage = {
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${t('boost.settings.intro')}</p>
                     ${this.adsChecklist(ads)}
-                    ${this.adsConnectBlock(ads)}
+                    ${this.adsConnectBlock(ads, connectable)}
                     ${this.adsAccountBlock(ads)}
                     <p class="form-hint mbe-4" id="ads-committed">
                         ${ads.monthlyCap === null || ads.monthlyCap === undefined
@@ -2918,8 +2929,12 @@ const SettingsPage = {
                     <form id="ads-settings-form" data-submit="settings:saveAds" novalidate>
                         ${token.set ? this.adsAccountField(ads, list) : ''}
                         ${fromConnect ? '' : html`
-                            <details class="settings-block mbe-4" id="ads-advanced" ${token.set ? html.raw('open') : ''}>
-                                <summary class="form-label">${t('boost.settings.advanced')}</summary>
+                            <details class="settings-block mbe-4" id="ads-advanced" ${token.set || !connectable ? html.raw('open') : ''}>
+                                <summary class="form-label tiktok-app-summary">
+                                    <i data-lucide="chevron-down" aria-hidden="true"></i>
+                                    ${connectable ? t('boost.settings.advanced') : t('boost.settings.tokenTitle')}
+                                </summary>
+                                ${connectable || token.set ? '' : html`<p class="form-hint mbs-3" id="ads-token-how">${t('boost.settings.tokenHow')}</p>`}
                                 ${token.set ? '' : html`<div class="mbs-4">${this.adsAccountField(ads, null)}</div>`}
                                 <div class="form-group mbs-4">
                                     <!-- Never prefilled: the token is never sent back. Blank means "keep what is saved". -->
