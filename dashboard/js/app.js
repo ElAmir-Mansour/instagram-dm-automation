@@ -111,6 +111,8 @@ const App = {
         // (`navAs`). The Ads area shares ONE stylesheet, `css/pages/ads.css`, declared by the `ads` entry above; this module asks the shell for it
         // (`loadPageCss('ads', ...)`) before it paints, so it has no `css` of its own (that would look for an `ads_campaigns.css`).
         ads_campaigns: { src: 'ads_campaigns', page: () => AdsCampaignsPage, navAs: 'ads' },
+        // A5: the full ad builder, the Ads area's third tab (Overview | Campaigns | Create). Quick mode stays Posts' Boost dialog.
+        ads_create: { src: 'ads_create', page: () => AdsCreatePage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },

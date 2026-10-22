@@ -49,13 +49,13 @@ describe('searchTargeting', () => {
         ]);
     });
 
-    it('asks for countries, cities and regions, and takes the geo key as the id', async () => {
+    it('asks for cities only, and takes the geo key as the id', async () => {
         const { graph, calls } = stubGraph(() => ({ data: [
             { key: 'SA', name: 'Saudi Arabia', type: 'country', country_code: 'SA' },
             { key: '2430536', name: 'Riyadh', type: 'city', country_code: 'SA', region: 'Riyadh Region' },
         ] }));
         const out = await searchTargeting(CTX, graph, 'adgeolocation', 'riy');
-        assert.deepEqual(calls[0]!.params, { type: 'adgeolocation', q: 'riy', limit: '25', location_types: '["country","city","region"]' });
+        assert.deepEqual(calls[0]!.params, { type: 'adgeolocation', q: 'riy', limit: '25', location_types: '["city"]' });
         assert.deepEqual(out.items, [
             { id: 'SA', name: 'Saudi Arabia', type: 'adgeolocation', countryCode: 'SA' },
             { id: '2430536', name: 'Riyadh', type: 'adgeolocation', countryCode: 'SA', region: 'Riyadh Region' },

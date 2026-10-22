@@ -70,7 +70,8 @@ export async function searchTargeting(ctx: AdsCallContext, graph: AdsGraph, type
     if (hit && Date.now() - hit.at < DAY_MS) return { items: hit.items };
 
     const params: Record<string, string> = { type, q: query, limit: '25' };
-    if (type === 'adgeolocation') params['location_types'] = '["country","city","region"]';
+    // Cities only: the builder's place picker fills `geo_locations.cities` (countries are chosen by code), and a region's key there is refused.
+    if (type === 'adgeolocation') params['location_types'] = '["city"]';
     const answer = await graph.get('search', params, `ads.targeting_search.${type}`);
     const items = (Array.isArray(answer?.data) ? answer.data : []).flatMap((row: unknown) => {
         const item = toItem(type, row);
