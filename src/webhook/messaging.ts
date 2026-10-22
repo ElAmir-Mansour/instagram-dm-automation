@@ -750,9 +750,9 @@ async function recordReferralOnly(dm: NormalizedDm, creatorId: string, platform:
 
 /**
  * The ad's context for the sales turn, or null: only when the tenant switched `ads.bot_context` on, and only what `adFactsFor` allows (the ad's
- * name, its offer, its text, the ice breaker tapped). Never throws: the switch read and the join each fail toward "no context".
+ * name, its offer, its text, the ice breaker tapped). Never throws: the switch read and the join each fail toward "no context". Exported for the test.
  */
-async function adContextFor(
+export async function adContextFor(
     creatorId: string,
     entry: NonNullable<ConversationRow['entry_source']>,
     offers: readonly { id: string; name: string }[],
