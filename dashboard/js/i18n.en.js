@@ -4927,6 +4927,8 @@
     'boost.settings.connect.soon': 'Access ends on {date}. Reconnect on the Instagram & Facebook card to renew it.',
     'boost.settings.connect.expired': 'Access ended on {date}. Reconnect on the Instagram & Facebook card to renew it.',
     'boost.settings.advanced': 'Advanced: paste a system-user token',
+    'boost.settings.tokenTitle': 'Ads access: paste a system-user token',
+    'boost.settings.tokenHow': 'Facebook Connect is off here, so ads access comes from a token. In Meta Business Settings → System users, give a system user your ad account, Page and Instagram account, generate a token that never expires with ads_management, ads_read and business_management, and paste it below.',
     'boost.settings.accountPick': 'Choose an ad account',
     'boost.settings.accountPickHint': 'The ad accounts this access can reach.',
     'boost.settings.accountInactive': 'not active, status {status}',
