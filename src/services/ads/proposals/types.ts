@@ -85,7 +85,8 @@ export interface ReviewItem {
     kind: ReviewKind;
     targets: string[];
     change: ReviewChange;
-    evidence: { window: '7d'; numbers: Record<string, number> };
+    /** `7d` for the model's review (the schema refuses any other); a split test's own length (`<days>d`) for a test_winner (studies.ts). */
+    evidence: { window: string; numbers: Record<string, number> };
     rationale: string;
 }
 

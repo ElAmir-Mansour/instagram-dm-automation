@@ -107,6 +107,8 @@ import { expireProposals } from '../services/ads/proposals/store.js';
 import { runDailyReview } from '../services/ads/proposals/service.js';
 import { drainAdsOps } from '../services/ads/ops.js';
 import { evaluateDueRules } from '../services/ads/rulesWiring.js';
+import { pollStudies } from '../services/ads/studies.js';
+import { studyPorts } from '../services/ads/studiesPorts.js';
 import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
@@ -438,6 +440,10 @@ router.get('/jobs/drain', async (req, res) => {
         if (ops.ran > 0 || ops.reaped > 0) log('info', 'ads.ops_drain', { ...ops });
         const sync = await syncAllAds(sweepDeadline(startedAt));
         if (sync.structure > 0 || sync.today > 0 || sync.failed > 0) log('info', 'ads.sync_sweep', { ...sync });
+        // Split tests (studies.ts): a finished create takes Meta's id; a running test's result is read every 6 h and once more half a day
+        // after it ends, which opens the keep-the-winner proposal. Meta is only read for running tests.
+        const studies = await pollStudies(studyPorts, sweepDeadline(startedAt), (row, err) => log('warn', 'ads.study_poll_failed', { creator_id: row.creatorId, study_id: row.id, ...describeError(err) }));
+        if (studies.checked > 0 || studies.failed > 0) log('info', 'ads.study_sweep', { ...studies });
     } catch (err) {
         log('error', 'ads.ops_sync_sweep_failed', describeError(err));
     }

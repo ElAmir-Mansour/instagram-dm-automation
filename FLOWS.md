@@ -2672,6 +2672,48 @@ not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing
    also completed with EG and SA dial codes); counts, preview and `executeErasure` include `ads_leads WHERE person_keys && $4`;
    the rows are deleted whole inside the erasure's transaction (**`:599`**; the statement lives in erasure.ts, the one cross-tenant path, not in the ads module).
 
+### 7.9 Split tests: two versions of an ad, or two audiences; Meta names the winner, a proposal keeps it (Ads A12)
+
+Table **v58** `ads_studies`. Code in `src/services/ads/studies.ts` (every rule, behind `StudyPorts`), `studiesStore.ts` (SQL) and
+`studiesPorts.ts` (the wiring to A1/A2/A7); routes in `src/routes/adsStudies.ts`, mounted in `adsRouter` after the ADS_DISABLED gate;
+the screen is `#/ads_tests` (`dashboard/js/pages/ads_tests.js`, the Tests tab). **Creating spends nothing; Start is the one spending
+action, confirmed and money-checked.**
+
+1. **Create.** `POST /api/ads/studies` (owner) → `createStudy` (**`studies.ts:561`**): `parseStudyInput` (**`:242`**: type, 2–7 ads or
+   2–5 ad sets, a daily budget, a start from TOMORROW in the account's day, 1–30 days, `confirm: true`) → `checkArms` (**`:276`**:
+   every arm the tenant's, in its current account, made at Meta and **PAUSED**; a creative test's ads in ONE ad set (the shared
+   audience); an audience test's ad sets with their own daily budget) → A1's money rule on `lifetime:<daily × days>:<days>` →
+   `resolveBusinessId` (**`:548`**: `ads.settings.businessId`, else `GET me/businesses`: one is saved, none or several is 409
+   `BUSINESS_REQUIRED` with `choices`; the screen saves the pick through `POST /api/ads/settings {businessId}` and resends). A
+   `creating` row, then for an audience test one A2 `requestBudget` per ad set (the daily budget split equally, the arms still
+   paused), then ONE `study` op: `POST <business>/ad_studies` with `buildStudyParams` (**`:320`**) — creative `SPLIT_TEST_V2`, each
+   cell `{ name, treatment_percentage, ads: [id] }`, `creative_test_config.daily_budget` in minor units, `cooldown_start_time =
+   start_time`, `observation_end_time = end_time`; audience `SPLIT_TEST` with `adsets: [id]`; shares `equalSplit` (100/n, the rest
+   to the first arms); unix seconds. `exec.edge: 'ad_studies'` makes it a tagged create (ops.ts appends ` AR·<op id>` to the name and,
+   if the answer is lost, reads the business's newest studies and matches the tag in `readBack` **before** it would ever send it
+   again).
+2. **Reconcile** (no Meta call). `GET /api/ads/studies` (viewer+) → `listStudies` (**`:672`**): a `creating` row takes its op's outcome
+   (`reconcileCreate`): `done` with `result.id` → `ready` + `meta_id`; `failed` → `failed` with Meta's words.
+3. **Start.** `POST /api/ads/studies/:id/start {confirm: true}` (owner) → `startStudy` (**`:623`**): only `ready`, and not past its end.
+   The money rule again on `startWorstCase` (the test's daily budget for the days left, plus a paused parent's budget that starting
+   switches on — a creative test's ad set spends beside the test ads), then A2's `requestStatus(ACTIVE, confirm)` per object —
+   the arms, then their ad set, then the campaign LAST — each with A2's own payment check, daily max and money rule under its lock.
+   One refusal stops there; what was switched on before it sits under a paused parent and spends nothing. → `running`.
+4. **Stop.** `POST /:id/stop` (owner): `requestStatus(PAUSED)` on the arms (and a creative test's ad set) → `stopped`. No confirm.
+5. **Results** (the drain, **`routes/api.ts:433`**, after `syncAllAds`): `pollStudies` (**`:707`**) over `open()` (the (tenant,
+   study) pairs still `creating`/`ready`/`running`, then each read inside its tenant): creates reconciled; a `ready` test past its end
+   → `stopped` ("never started"); a `running` one every 6 h, and once more 12 h after its end → `checkStudyResult` (**`:679`**):
+   `GET <study>/objectives?fields=id,name,is_primary` → `GET <objective>?fields=results` (2 points) → `parseObjectiveResults`
+   (**`:379`**: an object, a JSON string or a list of either; `high_performer_ids`, `winner_ad_object_id`, `winner_confidence`,
+   `confidence_by_ad_object_id`, a fraction or a percent → 0–100) → `decideResult` (**`:417`**: high performers that are arms, else
+   the declared winner; every arm "high", or none, is **no winner** once final). A failure (a throttle too) is logged
+   `ads.study_poll_failed` and left for the next drain, never retried in the run.
+6. **Keep the winner.** On the final read with a winner, `winnerProposal` (**`:442`**) → A7's `insertProposal` as an **`open`**
+   `test_winner` / source `study` proposal: a review item `{ kind: 'pause', targets: <the other arms>, change: { percent: -100 },
+   evidence: { window: '<days>d', numbers: { days, dailyBudget, confidence_<A..G> } } }`, the rationale in the tenant's language.
+   Once per study (`proposal_id`). Approving it is §7.5 step 4: A7's recheck and `applyChange` → one PAUSED `requestStatus` per
+   losing arm. Nothing changes by itself.
+
 ## 8. Meta login → a connected Page
 
 A tenant connects its own Facebook Page and Instagram account with Facebook Login for Business instead of the operator
