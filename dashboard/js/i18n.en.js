@@ -4944,6 +4944,7 @@
     // ─── Ads screen (#/ads): every campaign on the ad account, the owner's ───
     'nav.ads': 'Ads',
     'nav.ads_campaigns': 'Ad campaigns',
+    'page.ads_campaigns.subtitle': 'Every campaign, ad set and ad in your ad account, with its status, budget and results.',
     'page.ads.subtitle': 'Your Meta ad campaigns: what was spent, your limits, and starting or stopping each one.',
     'ads.head.title': 'Ads',
     'ads.refresh': 'Refresh',

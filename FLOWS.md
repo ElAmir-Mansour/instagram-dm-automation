@@ -3185,7 +3185,7 @@ found again → `failed`. A non-create write in `verify` reads the object back a
    when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
    `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:423`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
    older than **37 months** (**`ads/health.ts:175`**).
-4. `POST /api/ads/sync` (Refresh results): once per 15 minutes (`requestTodaySync`, **`sync.ts:724`**, else 429 `RATE_LIMITED` +
+4. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:724`**, else 429 `RATE_LIMITED` +
    `retryAt`), run under `waitUntil`; the drain is the backstop.
 
 **E. Disconnecting deletes the stored copy**
