@@ -56,6 +56,7 @@ import {
 } from '../services/erasure.js';
 import { sendError } from '../services/errorCodes.js';
 import { LegalSignoffError, listSignoffs, parseSignoffInput, recordSignoff, revokeSignoff } from '../services/ads/legalSignoff.js';
+import { syncLeadgenSubscription } from '../services/ads/leads.js';
 import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
@@ -1305,11 +1306,22 @@ router.post('/ads/tenants/:id/legal-signoff', async (req, res) => {
         await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, {
             change: 'recorded', signoff_id: signoff.id, scope: signoff.scope, countries: signoff.countries,
         });
+        // Lead ads (A10): the Page starts hearing `leadgen` now, not at the next 6-hourly catch-up.
+        if (signoff.scope === 'lead_ads') await syncLeadgenQuietly(id);
         res.status(201).json({ signoff });
     } catch (err) {
         failWith(res, err, 'admin.ads_signoff_record_failed', 'Failed to record the legal sign-off.');
     }
 });
+
+/** `syncLeadgenSubscription`, never failing the admin's request: a Page that cannot be reached converges at the next lead catch-up. */
+async function syncLeadgenQuietly(creatorId: string): Promise<void> {
+    try {
+        await syncLeadgenSubscription(creatorId);
+    } catch (err) {
+        log('warn', 'admin.leadgen_subscription_failed', { creator_id: creatorId, ...describeError(err) });
+    }
+}
 
 router.delete('/ads/tenants/:id/legal-signoff/:sid', async (req, res) => {
     try {
@@ -1321,6 +1333,9 @@ router.delete('/ads/tenants/:id/legal-signoff/:sid', async (req, res) => {
         const revoked = await revokeSignoff(id, sid);
         if (revoked) {
             await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, { change: 'revoked', signoff_id: sid });
+            // The scope of a revoked row is not at hand, and re-subscribing is idempotent: the Page keeps `leadgen` only while a lead_ads
+            // sign-off is still active, so a lead_ads revocation stops the notifications at once (A10).
+            await syncLeadgenQuietly(id);
         }
         res.json({ revoked });
     } catch (err) {

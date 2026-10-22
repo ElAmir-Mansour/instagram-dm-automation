@@ -259,6 +259,53 @@ describe('/api/ads policy, drafts/validate and drafts (A4)', () => {
         });
     });
 
+    describe('lead ads (A10): the legal lock on POST /drafts and /drafts/validate', () => {
+        const leadSpec = (countries = ['EG']) => spec({
+            goal: 'leads', destinations: undefined, leadFormId: '777000111',
+            adsets: [{ name: 'EG', targeting: { countries, ageMin: 18, advantageAudience: true }, placements: 'automatic' }],
+        }, { creative: { source: 'media', mediaId: 'm1' }, copy: { primaryText: 'سجّل الآن' }, message: undefined });
+        let signoff: Record<string, unknown> | null;
+        let formActive: boolean;
+
+        beforeEach(() => {
+            signoff = null;
+            formActive = true;
+            kit.db.on(/FROM ads_legal_signoffs WHERE creator_id = \$1 AND scope = \$2 AND revoked_at IS NULL/, () => ({ rows: signoff ? [signoff] : [] }));
+            kit.db.on(/FROM ads_lead_forms WHERE creator_id = \$1 AND meta_id = \$2 AND status = 'active'/, () => ({ rows: formActive ? [{ id: 'f1' }] : [] }));
+        });
+        const signed = (countries: string[]) => ({ id: 's1', creator_id: TENANT, scope: 'lead_ads', countries, recorded_by: null, recorded_at: new Date(), note: 'n', revoked_at: null });
+
+        it('without a lead_ads sign-off: 403 LOCKED_LEGAL, nothing written, Meta never called', async () => {
+            const res = await call('POST', '/drafts', { body: { spec: leadSpec() } });
+            assert.equal(res.statusCode, 403, JSON.stringify(res.body));
+            assert.equal(res.body.code, 'LOCKED_LEGAL');
+            assert.equal(inserted.length, 0);
+            assert.equal(kit.meta.length, 0);
+        });
+
+        it('a target country outside the sign-off is LOCKED_LEGAL on that field', async () => {
+            signoff = signed(['EG']);
+            const res = await call('POST', '/drafts', { body: { spec: leadSpec(['EG', 'SA']) } });
+            assert.equal(res.statusCode, 403);
+            assert.equal(res.body.field, 'adsets.0.targeting.countries');
+        });
+
+        it('a form that is not one of the tenant\'s active forms is INVALID on leadFormId', async () => {
+            signoff = signed(['EG']);
+            formActive = false;
+            const res = await call('POST', '/drafts', { body: { spec: leadSpec() } });
+            assert.equal(res.statusCode, 400);
+            assert.equal(res.body.field, 'leadFormId');
+        });
+
+        it('validate answers the lock as a problem and asks Meta nothing', async () => {
+            const res = await call('POST', '/drafts/validate', { role: 'operator', body: { spec: leadSpec() } });
+            assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+            assert.deepEqual(res.body.problems.map((p: any) => p.field), ['goal']);
+            assert.equal(kit.meta.length, 0);
+        });
+    });
+
     describe('POST /boosts with Send messages: the preset', () => {
         it('creates the same draft from the v1 inputs, origin boost', async () => {
             const res = await call('POST', '/boosts', { body: {

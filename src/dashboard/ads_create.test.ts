@@ -41,7 +41,7 @@ interface Rig {
     step(): string;
 }
 
-function load(lang: 'ar' | 'en' = 'en'): Rig {
+function load(lang: 'ar' | 'en' = 'en', extra: Json = {}): Rig {
     const calls: Rig['calls'] = [];
     const answers: Json = {
         validate: async () => ({
@@ -67,6 +67,7 @@ function load(lang: 'ar' | 'en' = 'en'): Rig {
         searchAdsTargeting: record('search', async () => ({ items: [{ id: '2430536', name: 'Riyadh', type: 'adgeolocation', region: 'Riyadh Region' }] })),
         signAdsUpload: record('sign', async () => ({ mediaId: 'm-main', url: 'https://app/api/uploads/m-main', upload: { method: 'PUT', url: 'https://x.supabase.co/storage/v1/object/upload/sign/media/a?token=t', headers: { 'content-type': 'video/mp4' } } })),
         prepareAdsMedia: record('prepare', async (body: Json) => ({ media: { mediaId: body.mediaId, kind: body.kind } })),
+        ...extra,
     };
     const h = loadDashboard({ lang, files: ['dashboard/js/pages/ads_builder.js', 'dashboard/js/pages/ads_campaigns.js', 'dashboard/js/pages/ads_create.js'], globals: { API: api, App: { canOperate: () => true, canAdminister: () => true } } });
     h.document.getElementById = (id: string) => h.el(id);
@@ -82,8 +83,8 @@ function load(lang: 'ar' | 'en' = 'en'): Rig {
     };
 }
 
-async function ready(lang: 'ar' | 'en' = 'en'): Promise<Rig> {
-    const r = load(lang);
+async function ready(lang: 'ar' | 'en' = 'en', extra: Json = {}): Promise<Rig> {
+    const r = load(lang, extra);
     await r.P.render();
     await settle();
     return r;
@@ -192,6 +193,64 @@ describe('only what is valid for the goal is offered', () => {
         assert.match(s, /id="adsc-pl-instagram-reels"/);
         assert.match(s, /id="adsc-pl-instagram-story"/);
         assert.doesNotMatch(s, /explore|messenger_stor|video_feeds/);
+    });
+});
+
+describe('the Leads goal (A10): locked until a legal sign-off', () => {
+    const unlocked = {
+        getAdsLeadForms: async () => ({
+            locked: false, signoff: { countries: ['EG'], recordedAt: '2026-10-20T00:00:00Z' }, retentionDays: 90,
+            forms: [
+                { id: 'f1', metaId: '777000111', name: 'Go workshop <b>form</b>', status: 'active', origin: 'app', leadCount: 0 },
+                { id: 'f2', metaId: null, name: 'Pending', status: 'pending', origin: 'app', leadCount: 0 },
+            ],
+        }),
+    };
+
+    it('locked (or unreadable): the goal is disabled and says why, with the Help link', async () => {
+        const r = await ready('en', { getAdsLeadForms: async () => ({ locked: true, signoff: null, forms: [], retentionDays: 90 }) });
+        assert.match(r.page(), /id="adsc-goal-leads"[^>]*disabled/);
+        assert.match(r.page(), /id="adsc-leads-locked"/);
+        assert.ok(r.page().includes('leads-and-privacy'));
+        field(r, 'goal', 'leads');
+        assert.equal(r.P.state.goal, 'traffic');
+    });
+
+    it('unlocked: the goal opens, picks the active form, an upload, SIGN_UP and the sign-off\'s countries', async () => {
+        const r = await ready('en', unlocked);
+        assert.doesNotMatch(r.page(), /id="adsc-goal-leads"[^>]*disabled/);
+        field(r, 'goal', 'leads');
+        assert.equal(r.P.state.goal, 'leads');
+        assert.equal(r.P.state.leadFormId, '777000111', 'the first ACTIVE form');
+        assert.equal(r.P.state.countries, 'EG');
+        field(r, 'name', 'Go leads');
+        r.act('next');
+        assert.match(r.step(), /id="adsc-lead-form"/);
+        assert.doesNotMatch(r.step(), /<option value="null"/, 'a pending form is not offered');
+        assert.ok(!r.step().includes('<b>form</b>'), 'the form name is escaped');
+        assert.ok(text(r.step()).includes('EG'));
+        r.P.state.step = 2;
+        r.P.repaintStep();
+        assert.match(r.step(), /id="adsc-leads-upload-only"/);
+        assert.doesNotMatch(r.step(), /id="adsc-source-post"/);
+        r.P.state.media = { mediaId: 'm1', kind: 'image', status: 'ready' };
+        r.P.state.primaryText = 'سجّل الآن';
+        const spec = r.P.buildSpec(r.P.state);
+        assert.equal(spec.goal, 'leads');
+        assert.equal(spec.leadFormId, '777000111');
+        assert.equal(spec.ads[0].creative.source, 'media');
+        assert.equal(spec.ads[0].copy.cta, 'SIGN_UP');
+        assert.equal(spec.destinations, undefined);
+    });
+
+    it('a country outside the sign-off stops the audience step', async () => {
+        const r = await ready('en', unlocked);
+        field(r, 'goal', 'leads');
+        r.P.state.countries = 'EG, SA';
+        r.P.state.step = r.P.STEPS.indexOf('audience');
+        assert.equal(r.P.stepProblem(r.P.state).field, 'countries');
+        r.P.state.countries = 'EG';
+        assert.equal(r.P.stepProblem(r.P.state), null);
     });
 });
 

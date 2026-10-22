@@ -244,6 +244,8 @@ export const AUDIT_ACTIONS = {
     adsNotOwnObject: 'ads.not_own_object',
     /** A client tenant's owner turned sharing of its ad spend with the platform admin on or off (`ads.share_spend.<tenant>`). */
     adsShareSpendChanged: 'ads.share_spend_changed',
+    /** The owner downloaded the leads CSV (A10). `detail` holds the row count and the form filter, never an answer, name, email or phone. */
+    adsLeadsExported: 'ads.leads_exported',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

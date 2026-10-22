@@ -296,6 +296,7 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   manual refresh waiting, an insights report to resume (`src/services/ads/sync.ts`). Not a secret.
  *   adsMedia        what Meta made of each uploaded ad image or video (A5): `{ [mediaId]: { kind, imageHash?, videoId?, videoStatus?, at } }`,
  *                   the newest 200 (`src/services/ads/adMedia.ts`). Not a secret.
+ *   adsLeadsCaughtUp when the 6-hourly lead catch-up last ran for the tenant (A10, `src/services/ads/leads.ts`), an ISO instant. Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -313,6 +314,7 @@ export const TENANT_SETTING_PREFIXES = {
     adsShareSpend: 'ads.share_spend.',
     adsSync: 'ads.sync.',
     adsMedia: 'ads.media.',
+    adsLeadsCaughtUp: 'ads.leads_caught_up.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */

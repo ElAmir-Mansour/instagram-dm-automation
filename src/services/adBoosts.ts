@@ -69,7 +69,8 @@ export type AdsErrorCode =
     | 'POLICY_WARNINGS'
     | 'VIDEO_PROCESSING'
     | 'STORAGE_ERROR'
-    | 'UNSUPPORTED';
+    | 'UNSUPPORTED'
+    | 'LOCKED_LEGAL';
 
 /** A refusal the route answers as `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }` with `status`. */
 export class AdsError extends Error {

@@ -38,6 +38,7 @@ import { pool } from '../config/db.js';
 import { queryRows } from '../db/query.js';
 import { signWithSessionSecret } from '../middleware/auth.js';
 import { log } from '../utils/log.js';
+import { eraseLeads, leadPersonKeysForHandle } from './ads/leads.js';
 
 /** Long enough to read the preview and decide; short enough that a leaked token is stale. */
 export const ERASURE_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -53,9 +54,15 @@ export interface ErasureCounts {
     conversations: number;
     interactions: number;
     dmSendLog: number;
+    /**
+     * Lead-ad leads (A10, `ads_leads`) that gave this handle as their email or phone number. Found by keyed hash (`person_keys`), never by
+     * decrypting anyone's answers. Deleted as whole rows: erasure is not retention. A token minted before leads existed has no `leads`; it
+     * reads as 0.
+     */
+    leads: number;
 }
 
-const ZERO_COUNTS: ErasureCounts = { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0 };
+const ZERO_COUNTS: ErasureCounts = { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0, leads: 0 };
 
 /**
  * Everything the handle resolved to.
@@ -72,6 +79,8 @@ export interface ErasureTarget {
     conversationIds: string[];
     usernames: string[];
     instagramUserIds: string[];
+    /** The handle as an email or a phone number, keyed-hashed (`ads/leads.ts leadPersonKeysForHandle`); empty for an Instagram handle. */
+    leadPersonKeys: string[];
 }
 
 /** Just enough of `pg`'s surface to run the same queries on the pool or inside a transaction. */
@@ -110,6 +119,7 @@ export async function resolveErasureTarget(handle: string, exec: Queryable = poo
         conversationIds,
         usernames: [...usernames],
         instagramUserIds: [...instagramUserIds],
+        leadPersonKeys: leadPersonKeysForHandle(needle),
     };
 }
 
@@ -120,8 +130,9 @@ export async function countErasure(target: ErasureTarget, exec: Queryable = pool
              (SELECT COUNT(*) FROM messages      WHERE conversation_id = ANY($1::uuid[]))::int AS messages,
              (SELECT COUNT(*) FROM conversations WHERE id = ANY($1::uuid[]))::int              AS conversations,
              (SELECT COUNT(*) FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))::int AS interactions,
-             (SELECT COUNT(*) FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))::int    AS dm_send_log`,
-        [target.conversationIds, target.usernames, target.instagramUserIds]
+             (SELECT COUNT(*) FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))::int    AS dm_send_log,
+             (SELECT COUNT(*) FROM ads_leads     WHERE person_keys && $4::text[])::int         AS leads`,
+        [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
     );
 
     const r = row.rows[0];
@@ -131,11 +142,12 @@ export async function countErasure(target: ErasureTarget, exec: Queryable = pool
         conversations: r.conversations ?? 0,
         interactions: r.interactions ?? 0,
         dmSendLog: r.dm_send_log ?? 0,
+        leads: r.leads ?? 0,
     };
 }
 
 export function countsTotal(counts: ErasureCounts): number {
-    return counts.messages + counts.conversations + counts.interactions + counts.dmSendLog;
+    return counts.messages + counts.conversations + counts.interactions + counts.dmSendLog + (counts.leads ?? 0);
 }
 
 /** Pure, so the "something changed since the preview" rule is testable. */
@@ -143,7 +155,8 @@ export function countsDrifted(expected: ErasureCounts, actual: ErasureCounts): b
     return expected.messages !== actual.messages
         || expected.conversations !== actual.conversations
         || expected.interactions !== actual.interactions
-        || expected.dmSendLog !== actual.dmSendLog;
+        || expected.dmSendLog !== actual.dmSendLog
+        || (expected.leads ?? 0) !== (actual.leads ?? 0);
 }
 
 // ─── The preview token ──────────────────────────────────────────────────────────────────
@@ -221,7 +234,9 @@ export function verifyErasureToken(raw: unknown, now = Date.now()): VerifiedToke
     }
     if (now > claims.exp) return { ok: false, reason: 'expired' };
 
-    return { ok: true, handle: claims.h, counts: c, expiresAt: claims.exp };
+    if (c.leads !== undefined && typeof c.leads !== 'number') return { ok: false, reason: 'malformed' };
+
+    return { ok: true, handle: claims.h, counts: { ...c, leads: c.leads ?? 0 }, expiresAt: claims.exp };
 }
 
 // ─── Preview ────────────────────────────────────────────────────────────────────────────
@@ -355,11 +370,14 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
                     UNION ALL
                     SELECT creator_id, COUNT(*) FROM dm_send_log
                      WHERE recipient_id = ANY($3::text[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM ads_leads
+                     WHERE person_keys && $4::text[] GROUP BY creator_id
                ) t
                LEFT JOIN creators c ON c.id = t.creator_id
               GROUP BY t.creator_id, c.name
               ORDER BY row_count DESC, c.name NULLS LAST`,
-            [target.conversationIds, target.usernames, target.instagramUserIds]
+            [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
         ),
         // The oldest and newest row of each table, over everything that matched.
         queryRows<any>(
@@ -371,8 +389,10 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
                  (SELECT MIN(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_first,
                  (SELECT MAX(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_last,
                  (SELECT MIN(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_first,
-                 (SELECT MAX(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_last`,
-            [target.conversationIds, target.usernames, target.instagramUserIds]
+                 (SELECT MAX(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_last,
+                 (SELECT MIN(created_time)     FROM ads_leads     WHERE person_keys && $4::text[])                AS leads_first,
+                 (SELECT MAX(created_time)     FROM ads_leads     WHERE person_keys && $4::text[])                AS leads_last`,
+            [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
         ),
     ]);
     const range = rangeRows[0] ?? {};
@@ -406,6 +426,7 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
             messages: { first: iso(range.messages_first), last: iso(range.messages_last) },
             interactions: { first: iso(range.interactions_first), last: iso(range.interactions_last) },
             dmSendLog: { first: iso(range.dm_send_log_first), last: iso(range.dm_send_log_last) },
+            leads: { first: iso(range.leads_first), last: iso(range.leads_last) },
         },
         sample: {
             conversations: conversations.map((r) => ({
@@ -572,6 +593,9 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
             'DELETE FROM dm_send_log WHERE recipient_id = ANY($1::text[])',
             [target.instagramUserIds]
         );
+        // Lead-ad leads (A10) that gave this email or phone number: whole rows, answers and all. Leads hold no conversation or username, so
+        // the keyed hash is the only way to them; an Instagram handle has no key and deletes no lead.
+        const deletedLeads = await eraseLeads(client, target.leadPersonKeys);
 
         handedOff = true;
         return {
@@ -583,6 +607,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
                 conversations: deletedConversations.rowCount ?? 0,
                 interactions: deletedInteractions.rowCount ?? 0,
                 dmSendLog: deletedSendLog.rowCount ?? 0,
+                leads: deletedLeads,
             },
             mediaDeleted,
             client,

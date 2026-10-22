@@ -101,6 +101,7 @@ import { iceBreakersRouter } from './iceBreakers.js';
 import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
+import { sweepLeads } from '../services/ads/leads.js';
 import { runAdsHealth } from '../services/ads/health.js';
 import { expireProposals } from '../services/ads/proposals/store.js';
 import { runDailyReview } from '../services/ads/proposals/service.js';
@@ -440,6 +441,11 @@ router.get('/jobs/drain', async (req, res) => {
     } catch (err) {
         log('error', 'ads.ops_sync_sweep_failed', describeError(err));
     }
+
+    // Lead ads (A10, src/services/ads/leads.ts): the retention sweep (answers past the tenant's period are deleted, a count stays), then the
+    // 6-hourly catch-up of leads a missed notification would lose, for tenants with a lead_ads sign-off only. Never throws.
+    const leads = await sweepLeads(new Date(), sweepDeadline(startedAt));
+    if (leads.purged > 0 || (leads.catchUp && (leads.catchUp.stored > 0 || leads.catchUp.failed > 0))) log('info', 'ads.leads_sweep', { purged: leads.purged, ...leads.catchUp });
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
     // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its

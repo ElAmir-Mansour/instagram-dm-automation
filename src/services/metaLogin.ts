@@ -37,6 +37,7 @@ import { API_VERSION, GRAPH_BASE } from './instagram.js';
 import { createOAuthState, type OAuthReturnTo } from './oauthState.js';
 import { getTenant, invalidateTenantCache } from './tenant.js';
 import { captureAdsAccess, forgetConnectedAdsAccess } from './adBoosts.js';
+import { activeSignoff } from './ads/legalSignoff.js';
 import { inspectionStatus, inspectToken, REQUIRED_SCOPES, type TokenInspection } from './tokenHealth.js';
 
 // ─── What we ask Meta for ───────────────────────────────────────────────────────────────
@@ -540,18 +541,41 @@ export interface SubscriptionResult {
 }
 
 /**
+ * The Page fields a tenant's subscription needs on top of WEBHOOK_FIELDS: `['leadgen']` while the tenant has a recorded `lead_ads` legal sign-off
+ * (A10), nothing otherwise. A Page that is not subscribed to `leadgen` is never sent a lead, which is exactly right for a tenant whose lead ads are
+ * locked: no lead is fetched, no personal data arrives. The connect path asks this so a RECONNECT (a fresh `subscribed_apps` POST replaces the field
+ * list, it does not add to it) never drops `leadgen` from a tenant that has it.
+ *
+ * It reads the sign-off table directly (`legalSignoff.ts` imports nothing of ours) instead of going through `ads/leads.ts`, which imports THIS module:
+ * going the other way would be an import cycle. Fail-soft by design: any error (the table not there yet, the database busy) is `[]`, the usual four
+ * fields, and the 6-hourly lead catch-up converges the subscription afterwards (`syncLeadgenSubscription`). A connection must never fail over this.
+ */
+export async function leadgenFieldsFor(creatorId: string): Promise<string[]> {
+    try {
+        return (await activeSignoff(creatorId, 'lead_ads')) ? ['leadgen'] : [];
+    } catch (err) {
+        log('warn', 'meta.leadgen_fields_unread', { creator_id: creatorId, ...describeError(err) });
+        return [];
+    }
+}
+
+/**
  * Subscribe the Page to the app's webhook (`POST /{page}/subscribed_apps`, the Page's own token), then read the edge back to
  * confirm it: a POST that answered success but left the Page without `messages` is a connection that never hears a DM. Never
  * throws: a failure is a warning on a connection that is still saved (the tenant can be re-subscribed; a connection thrown away
  * after the code was spent could not be).
+ *
+ * `extraFields` (A10: `leadgen`, only for a tenant with a lead_ads sign-off) are subscribed along with WEBHOOK_FIELDS, deduplicated, and every
+ * one of them has to be on the read-back for the subscription to count as confirmed.
  */
-export async function subscribePage(pageId: string, pageToken: string, appId: string | null): Promise<SubscriptionResult> {
+export async function subscribePage(pageId: string, pageToken: string, appId: string | null, extraFields: readonly string[] = []): Promise<SubscriptionResult> {
     const secrets = [pageToken];
+    const wanted = [...new Set([...WEBHOOK_FIELDS, ...extraFields])];
     try {
         await withRetry(
             () => metaHttp.post(
                 `${GRAPH_BASE}/${pageId}/subscribed_apps`,
-                new URLSearchParams({ subscribed_fields: WEBHOOK_FIELDS.join(',') }),
+                new URLSearchParams({ subscribed_fields: wanted.join(',') }),
                 { headers: { Authorization: `Bearer ${pageToken}` } }
             ),
             { label: 'meta.subscribe_page', retries: 2, baseMs: 400 }
@@ -569,8 +593,8 @@ export async function subscribePage(pageId: string, pageToken: string, appId: st
         const apps: Array<{ id?: unknown; subscribed_fields?: unknown }> = Array.isArray(response.data?.data) ? response.data.data : [];
         const ours = apps.find((a) => (appId ? a?.id === appId : true));
         const fields = Array.isArray(ours?.subscribed_fields) ? ours.subscribed_fields : [];
-        if (WEBHOOK_FIELDS.every((f) => fields.includes(f))) return { confirmed: true, warning: null };
-        log('warn', 'meta.subscribe_incomplete', { page_id: pageId, have: fields.length, want: WEBHOOK_FIELDS.length });
+        if (wanted.every((f) => fields.includes(f))) return { confirmed: true, warning: null };
+        log('warn', 'meta.subscribe_incomplete', { page_id: pageId, have: fields.length, want: wanted.length });
         return { confirmed: false, warning: 'subscribe_unconfirmed' };
     } catch (err) {
         log('warn', 'meta.subscribe_unread', { page_id: pageId, ...describeError(graphError('graph_failed', 'meta.read_subscription', err, secrets)) });
@@ -658,7 +682,7 @@ export async function completeMetaConnection(input: CompleteInput): Promise<Comp
         throw new MetaLoginError('encryption_unavailable', 'TOKEN_ENCRYPTION_KEY is not configured: a Page token cannot be stored.');
     }
 
-    const subscription = await subscribePage(choice.pageId, choice.accessToken, readMetaApp()?.appId ?? null);
+    const subscription = await subscribePage(choice.pageId, choice.accessToken, readMetaApp()?.appId ?? null, await leadgenFieldsFor(creatorId));
 
     let saved: { id: string } | null;
     try {

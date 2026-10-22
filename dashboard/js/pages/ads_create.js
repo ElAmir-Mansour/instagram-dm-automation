@@ -30,9 +30,14 @@
  */
 const AdsCreatePage = {
     STEPS: Object.freeze(['goal', 'destination', 'creative', 'copy', 'audience', 'placements', 'budget', 'review']),
-    /** The goals, in the order offered. `leads` is shown locked. */
+    /** The goals, in the order offered. `leads` (A10) is shown locked until GET /ads/lead-forms says the tenant's sign-off exists. */
     GOALS: Object.freeze(['messages', 'traffic', 'engagement', 'reach', 'leads']),
+    /** The goals that can be locked; `goalLocked` says whether one is, now. */
     LOCKED_GOALS: Object.freeze(['leads']),
+    /** A lead ad's buttons (spec.ts LEAD_CTAS): each opens the instant form. */
+    LEAD_CTAS: Object.freeze(['SIGN_UP', 'LEARN_MORE', 'APPLY_NOW', 'SUBSCRIBE', 'GET_QUOTE']),
+    /** GET /ads/lead-forms (A10), or null when it could not be read: lead ads then stay locked. */
+    leadForms: null,
     DESTINATIONS: Object.freeze(['instagram', 'messenger', 'whatsapp']),
     /** What each goal may optimise for, the default first (spec.ts OPTIMIZATION_CHOICES). */
     OPTIMIZATION: Object.freeze({
@@ -69,6 +74,24 @@ const AdsCreatePage = {
 
     // ─── The state ────────────────────────────────────────────────────────────────────────
 
+    /** Lead ads are locked unless the server said `locked: false` (a legal sign-off is recorded); every other goal is always open. */
+    goalLocked(goal) {
+        if (!this.LOCKED_GOALS.includes(goal)) return false;
+        return !(this.leadForms && this.leadForms.locked === false);
+    },
+
+    /** The tenant's forms Meta has (status active), for the Leads goal's picker. */
+    activeLeadForms() {
+        const forms = this.leadForms && Array.isArray(this.leadForms.forms) ? this.leadForms.forms : [];
+        return forms.filter((f) => f && f.status === 'active' && f.metaId);
+    },
+
+    /** The countries the lead_ads sign-off covers (upper-case ISO codes). */
+    leadCountries() {
+        const s = this.leadForms && this.leadForms.signoff;
+        return s && Array.isArray(s.countries) ? s.countries.map((c) => String(c).toUpperCase()) : [];
+    },
+
     /** A fresh builder. `preset` (from quick mode, or `{ spec }` from an AI proposal's "Edit in builder") fills any part of it. */
     fresh(preset) {
         const p = preset || {};
@@ -77,7 +100,7 @@ const AdsCreatePage = {
         const st = {
             step: 0,
             name: p.name || '',
-            goal: p.goal && this.GOALS.includes(p.goal) && !this.LOCKED_GOALS.includes(p.goal) ? p.goal : 'traffic',
+            goal: p.goal && this.GOALS.includes(p.goal) && !this.goalLocked(p.goal) ? p.goal : 'traffic',
             destinations: ['instagram'],
             optimization: '',
             link: { mode: 'offer', offerId: '', url: '' },
@@ -87,6 +110,7 @@ const AdsCreatePage = {
             media: null, cover: null, vertical: null, verticalCover: null, wantVertical: false,
             primaryText: '', headline: '', cta: 'LEARN_MORE',
             greeting: '', ice: [],
+            leadFormId: '',
             countries: (p.countries && p.countries.length ? p.countries : ['EG', 'SA']).join(', '),
             cities: [], ageMin: '18', ageMax: '', gender: 'all', locales: [], interests: [], advantage: true, includeAudiences: [], excludeAudiences: [],
             special: 'none',
@@ -111,7 +135,7 @@ const AdsCreatePage = {
         const set = Array.isArray(spec.adsets) && spec.adsets[0] ? spec.adsets[0] : null;
         const ad = Array.isArray(spec.ads) && spec.ads[0] ? spec.ads[0] : null;
         if (typeof spec.name === 'string') st.name = spec.name;
-        if (spec.goal && this.GOALS.includes(spec.goal) && !this.LOCKED_GOALS.includes(spec.goal)) st.goal = spec.goal;
+        if (spec.goal && this.GOALS.includes(spec.goal) && !this.goalLocked(spec.goal)) st.goal = spec.goal;
         if (Array.isArray(spec.destinations) && spec.destinations.length) st.destinations = spec.destinations.filter((d) => this.DESTINATIONS.includes(d));
         if (['none', 'employment', 'financial', 'housing', 'political'].includes(spec.specialCategory)) st.special = spec.specialCategory;
         const b = spec.budget || {};
@@ -212,13 +236,16 @@ const AdsCreatePage = {
             this.paint();
             return false;
         }
-        const [min, profile, posts] = await Promise.all([
+        const [min, profile, posts, leadForms] = await Promise.all([
             API.getAdsMinimumBudgets().catch(() => null),
             API.getProfile().catch(() => null),
             API.getScheduledPosts().catch(() => []),
+            // Lead ads (A10): unreadable means locked, never open.
+            Promise.resolve().then(() => API.getAdsLeadForms()).catch(() => null),
         ]);
         if (seq !== this._seq) return false;
         this.settings = settings;
+        this.leadForms = leadForms || null;
         this.currency = (settings.account && settings.account.currency) || (min && min.currency) || '';
         this.minimum = min && min.byGoal ? min.byGoal : {};
         this.offers = (profile && profile.profile && Array.isArray(profile.profile.offers) ? profile.profile.offers : []).filter((o) => o && o.id && o.url);
@@ -400,8 +427,9 @@ const AdsCreatePage = {
             <fieldset class="adsc-fieldset">
                 <legend class="sr-only">${t('adsCreate.step.goal')}</legend>
                 ${this.GOALS.map((g) => this.radio('goal', g, st.goal, t(`adsCreate.goal.${g}`), t(`adsCreate.goal.${g}.hint`),
-        { disabled: this.LOCKED_GOALS.includes(g), badge: this.LOCKED_GOALS.includes(g) ? t('adsCreate.goal.locked') : '' }))}
+        { disabled: this.goalLocked(g), badge: this.goalLocked(g) ? t('adsCreate.goal.locked') : '' }))}
             </fieldset>
+            ${this.goalLocked('leads') ? html`<p class="form-hint" id="adsc-leads-locked">${t('adsCreate.leads.locked')} ${UI.helpLink('ads#leads-and-privacy', t('help.link.learnMore'))}</p>` : ''}
             <div class="form-group">
                 <label class="form-label" for="adsc-name">${t('adsCreate.name')}</label>
                 <input type="text" class="form-input" id="adsc-name" maxlength="200" value="${st.name}" data-input="adsc:field" data-field="name" dir="auto"
@@ -433,6 +461,22 @@ const AdsCreatePage = {
                 </fieldset>
                 ${this.fieldError('destinations')}
                 <p class="form-hint">${t('adsCreate.dest.botNote')}</p>
+            `;
+        }
+        if (st.goal === 'leads') {
+            const forms = this.activeLeadForms();
+            const countries = this.leadCountries();
+            return html`
+                <div class="form-group">
+                    <label class="form-label" for="adsc-lead-form">${t('adsCreate.leads.form')}</label>
+                    ${forms.length ? html`
+                        <select class="form-input" id="adsc-lead-form" data-change="adsc:field" data-field="leadFormId">
+                            ${forms.map((f) => html`<option value="${f.metaId}" ${String(f.metaId) === st.leadFormId ? html.raw('selected') : ''}>${f.name}</option>`)}
+                        </select>` : html`<p class="form-hint" id="adsc-no-lead-forms">${t('adsCreate.leads.noForms')} <a href="#/ads_leads">${t('ads.tabs.leads')}</a></p>`}
+                    ${this.fieldError('leadFormId')}
+                </div>
+                <p class="form-hint" id="adsc-lead-countries">${t('adsCreate.leads.countries', { countries: countries.join('، ') || '—' })}</p>
+                <p class="form-hint">${t('adsCreate.leads.noContact')} ${UI.helpLink('ads#lead-ads', t('help.link.learnMore'))}</p>
             `;
         }
         if (st.goal === 'traffic') {
@@ -468,7 +512,7 @@ const AdsCreatePage = {
 
     /** Engagement and reach run on a post; messages and traffic may use a post or an upload (spec.ts validateCreative). */
     uploadsAllowed(st) {
-        return st.goal === 'messages' || st.goal === 'traffic';
+        return st.goal === 'messages' || st.goal === 'traffic' || st.goal === 'leads';
     },
 
     /** A Facebook post works only for engagement and reach (Messenger and link-click buttons need an Instagram post or an upload). */
@@ -486,9 +530,10 @@ const AdsCreatePage = {
 
     creativeMarkup(st) {
         const uploads = this.uploadsAllowed(st);
-        const source = uploads ? st.source : 'post';
+        // A lead ad is built from an upload only (spec.ts: a post creative cannot carry the form).
+        const source = st.goal === 'leads' ? 'media' : uploads ? st.source : 'post';
         return html`
-            ${uploads ? html`
+            ${st.goal === 'leads' ? html`<p class="form-hint" id="adsc-leads-upload-only">${t('adsCreate.leads.uploadOnly')}</p>` : uploads ? html`
                 <fieldset class="adsc-fieldset">
                     <legend class="form-label">${t('adsCreate.creative.legend')}</legend>
                     ${this.radio('source', 'media', source, t('adsCreate.creative.upload'), t('adsCreate.creative.upload.hint'))}
@@ -664,11 +709,11 @@ const AdsCreatePage = {
                 <label class="form-label" for="adsc-headline">${t('adsCreate.copy.headline')}</label>
                 <input type="text" class="form-input" id="adsc-headline" maxlength="255" dir="auto" value="${st.headline}" data-input="adsc:field" data-field="headline">
             </div>`;
-        const cta = st.goal === 'traffic' ? html`
+        const cta = st.goal === 'traffic' || st.goal === 'leads' ? html`
             <div class="form-group">
                 <label class="form-label" for="adsc-cta">${t('adsCreate.copy.cta')}</label>
                 <select class="form-input" id="adsc-cta" data-change="adsc:field" data-field="cta">
-                    ${this.CTAS.map((c) => html`<option value="${c}" ${c === st.cta ? html.raw('selected') : ''}>${t(`adsCreate.cta.${c}`)}</option>`)}
+                    ${(st.goal === 'leads' ? this.LEAD_CTAS : this.CTAS).map((c) => html`<option value="${c}" ${c === st.cta ? html.raw('selected') : ''}>${t(`adsCreate.cta.${c}`)}</option>`)}
                 </select>
             </div>` : '';
         const message = st.goal === 'messages' ? html`
@@ -1157,7 +1202,7 @@ const AdsCreatePage = {
         const safe = picture ? safeUrl(picture) : null;
         const page = (this.settings && this.settings.account && this.settings.account.name) || t('adsCreate.preview.page');
         const text = this.feedText(st.source === 'post' ? (post && post.caption) : st.primaryText);
-        const cta = st.goal === 'traffic' ? t(`adsCreate.cta.${st.cta}`) : st.goal === 'messages' ? t('adsCreate.preview.sendMessage') : '';
+        const cta = st.goal === 'traffic' || st.goal === 'leads' ? t(`adsCreate.cta.${st.cta}`) : st.goal === 'messages' ? t('adsCreate.preview.sendMessage') : '';
         return html`
             <div class="adsc-mock adsc-frame-${vertical ? '916' : '45'}" data-mock="true">
                 <p class="adsc-mock-label badge">${t('adsCreate.preview.approximate')}</p>
@@ -1215,7 +1260,7 @@ const AdsCreatePage = {
         if (st.kind === 'lifetime' && st.scheduled) {
             adset.schedule = [{ days: st.days.slice().sort(), startHour: Number(st.fromHour), endHour: Number(st.toHour) }];
         }
-        const usePost = st.source === 'post' || !this.uploadsAllowed(st);
+        const usePost = st.goal !== 'leads' && (st.source === 'post' || !this.uploadsAllowed(st));
         const creative = usePost
             ? { source: 'post', postId: st.postId, platform: this.postPlatforms(st).includes(st.platform) ? st.platform : 'instagram' }
             : {
@@ -1228,7 +1273,7 @@ const AdsCreatePage = {
             adsetIndex: 0,
             name: st.name || t('adsCreate.defaultName'),
             creative,
-            copy: { primaryText: usePost ? '' : st.primaryText, ...(st.headline && !usePost ? { headline: st.headline } : {}), ...(st.goal === 'traffic' ? { cta: st.cta } : {}) },
+            copy: { primaryText: usePost ? '' : st.primaryText, ...(st.headline && !usePost ? { headline: st.headline } : {}), ...(st.goal === 'traffic' || st.goal === 'leads' ? { cta: st.cta } : {}) },
         };
         if (st.goal === 'traffic') ad.link = st.link.mode === 'offer' && st.link.offerId ? { trackedOfferId: st.link.offerId } : { url: st.link.url.trim() };
         if (st.goal === 'messages' && (st.greeting.trim() || st.ice.length)) {
@@ -1243,6 +1288,7 @@ const AdsCreatePage = {
             ads: [ad],
         };
         if (st.goal === 'messages') spec.destinations = this.DESTINATIONS.filter((d) => st.destinations.includes(d));
+        if (st.goal === 'leads') spec.leadFormId = st.leadFormId;
         return spec;
     },
 
@@ -1254,18 +1300,24 @@ const AdsCreatePage = {
         if (key === 'destination') {
             if (st.goal === 'messages' && !st.destinations.length) return bad('destinations', t('adsCreate.err.destinations'));
             if (st.goal === 'traffic' && st.link.mode === 'url' && !/^https:\/\/\S+\.\S+/.test(st.link.url.trim())) return bad('url', t('adsCreate.err.url'));
+            if (st.goal === 'leads' && !st.leadFormId) return bad('leadFormId', t('adsCreate.leads.err.form'));
         }
         if (key === 'creative') {
-            if (st.source === 'post' || !this.uploadsAllowed(st)) { if (!st.postId) return bad('postId', t('adsCreate.err.post')); }
+            if (st.goal !== 'leads' && (st.source === 'post' || !this.uploadsAllowed(st))) { if (!st.postId) return bad('postId', t('adsCreate.err.post')); }
             else {
                 if (!st.media || !st.media.mediaId) return bad('media', t('adsCreate.err.media'));
                 if (st.media.kind === 'video' && !(st.cover && st.cover.mediaId)) return bad('cover', t('adsCreate.err.cover'));
                 if (['uploading', 'preparing', 'failed'].includes(st.media.status)) return bad('media', t('adsCreate.err.notReady'));
             }
         }
-        if (key === 'copy' && st.source === 'media' && this.uploadsAllowed(st) && !st.primaryText.trim()) return bad('primaryText', t('adsCreate.err.primary'));
+        if (key === 'copy' && (st.source === 'media' || st.goal === 'leads') && this.uploadsAllowed(st) && !st.primaryText.trim()) return bad('primaryText', t('adsCreate.err.primary'));
         if (key === 'audience') {
             if (!this.countries(st).length) return bad('countries', t('adsCreate.err.countries'));
+            if (st.goal === 'leads') {
+                const covered = this.leadCountries();
+                const outside = this.countries(st).filter((c) => !covered.includes(String(c).toUpperCase()));
+                if (outside.length) return bad('countries', t('adsCreate.leads.err.countries', { countries: covered.join('، ') || '—' }));
+            }
             const min = Number(st.ageMin);
             if (st.advantage && st.special === 'none' && (min < 18 || min > 25)) return bad('ageMin', t('adsCreate.err.advantageAge'));
             if (st.ageMax !== '' && Number(st.ageMax) < min) return bad('ageMax', t('adsCreate.err.ageMax'));
@@ -1332,14 +1384,24 @@ const AdsCreatePage = {
         let repaint = false;
         switch (name) {
             case 'goal':
-                if (!this.GOALS.includes(value) || this.LOCKED_GOALS.includes(value)) return;
+                if (!this.GOALS.includes(value) || this.goalLocked(value)) return;
+                const was = st.goal;
                 st.goal = value; st.optimization = '';
+                if (value === 'leads') {
+                    st.source = 'media';
+                    // A lead ad's button opens the form: "Sign up" unless the owner already chose a lead button for it.
+                    if (was !== 'leads') st.cta = 'SIGN_UP';
+                    if (!st.leadFormId && this.activeLeadForms()[0]) st.leadFormId = String(this.activeLeadForms()[0].metaId);
+                    const covered = this.leadCountries();
+                    if (covered.length) st.countries = covered.join(', ');
+                } else if (!this.CTAS.includes(st.cta)) st.cta = 'LEARN_MORE';
                 if (!this.postPlatforms(st).includes(st.platform)) st.platform = 'instagram';
                 break;
             case 'name': st.name = value; break;
             case 'optimization': st.optimization = value; repaint = true; break;
             case 'linkMode': st.link.mode = value === 'url' ? 'url' : 'offer'; repaint = true; break;
             case 'offerId': st.link.offerId = value; break;
+            case 'leadFormId': st.leadFormId = value; break;
             case 'url': st.link.url = value; break;
             case 'source': st.source = value === 'post' ? 'post' : 'media'; repaint = true; break;
             case 'postId': st.postId = value; break;
