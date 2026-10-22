@@ -9,12 +9,12 @@ SET LOCAL lock_timeout = '5s'; -- fail in 5 s rather than queue the publish swee
 -- States: drafting → open | failed; open → approved → applying → applied | failed; open → rejected | expired (`expires_at`, 7 days).
 -- The service enforces the moves (store.ts PROPOSAL_TRANSITIONS); the CHECK keeps the vocabulary closed.
 --
--- `studio_jobs_kind_check` gains `ads_think`: the owner's drafts are answered by Claude on his Mac (the Studio worker in aicourse-captions,
+-- `studio_jobs_kind_check` gains `ads_think`: the owner's drafts are answered by Claude on his Mac (the Studio worker,
 -- scripts/studio/adsThinkJob.mjs), like `monteur_think` (v28). The list below is v31's plus `ads_think`; no migration since v31 widened it.
 --
 -- Row level security on, deny-by-default like every table (v11). Keyed by the tenant, cascades with it.
 --
--- Rollout: `npm run migrate` BEFORE deploying, and restart the Mac worker after pulling aicourse-captions.
+-- Rollout: `npm run migrate` BEFORE deploying, and restart the Mac worker after pulling its repo (it needs the ads_think handler).
 
 CREATE TABLE IF NOT EXISTS ads_proposals (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

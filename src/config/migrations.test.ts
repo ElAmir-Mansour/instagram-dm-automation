@@ -1295,4 +1295,10 @@ describe('migration v55: ads proposals (ads_proposals, studio_jobs ads_think)', 
         const before = [...v31![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]);
         assert.deepEqual(kinds, [...before, 'ads_think']);
     });
+
+    it('allows exactly the kinds the queue knows (the latest widening is the one that counts)', async () => {
+        const { STUDIO_JOB_KINDS } = await import('../services/studio/jobs.js');
+        const m = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(sql);
+        assert.deepEqual([...m![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]).sort(), [...STUDIO_JOB_KINDS].sort());
+    });
 });

@@ -412,7 +412,7 @@ describe('migration v28', () => {
         assert.ok(list, 'the constraint is re-added');
         const kinds = [...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
         // v31 re-creates it again with render_infographic (infographics.test.ts holds it to the full list).
-        assert.deepEqual(kinds, STUDIO_JOB_KINDS.filter((k) => k !== 'render_infographic').sort());
+        assert.deepEqual(kinds, STUDIO_JOB_KINDS.filter((k) => k !== 'render_infographic' && k !== 'ads_think').sort());
         assert.ok(kinds.includes('monteur_think'));
     });
 

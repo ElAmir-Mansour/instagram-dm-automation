@@ -275,10 +275,10 @@ describe('parseInfographicResult', () => {
 describe('migration v31', () => {
     const sql = fs.readFileSync(new URL('../../config/migration_v31_infographics.sql', import.meta.url), 'utf8');
 
-    it('re-creates the kind CHECK with exactly the kinds the queue knows', () => {
+    it('re-creates the kind CHECK with exactly the kinds the queue knew then (v55 adds ads_think, migrations.test.ts holds it to the full list)', () => {
         const list = sql.match(/ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/);
         assert.ok(list);
-        assert.deepEqual([...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort(), [...STUDIO_JOB_KINDS].sort());
+        assert.deepEqual([...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort(), STUDIO_JOB_KINDS.filter((k) => k !== 'ads_think').sort());
         assert.ok(sql.indexOf('DROP CONSTRAINT IF EXISTS studio_jobs_kind_check') < sql.indexOf('ADD CONSTRAINT studio_jobs_kind_check'));
     });
 

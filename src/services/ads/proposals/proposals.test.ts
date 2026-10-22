@@ -25,13 +25,13 @@ const last7d = (over: Partial<InputObject['last7d']> = {}): InputObject['last7d'
 });
 
 const OBJECTS: InputObject[] = [
-    { id: 'c1', level: 'campaign', name: 'Courses', goal: 'messages', status: 'ACTIVE', budget: { kind: 'daily', amount: 20 }, targetingSummary: null, last7d: last7d() },
+    { id: 'c1', level: 'campaign', name: 'Lessons', goal: 'messages', status: 'ACTIVE', budget: { kind: 'daily', amount: 20 }, targetingSummary: null, last7d: last7d() },
     { id: 'a1', level: 'adset', name: 'Cairo 22-45', goal: 'messages', status: 'ACTIVE', budget: { kind: 'daily', amount: 10 }, targetingSummary: null, last7d: last7d({ spend: 70, results: 9, costPerResult: 7.78 }) },
     { id: 'a2', level: 'adset', name: 'Riyadh 25-40', goal: 'messages', status: 'ACTIVE', budget: { kind: 'daily', amount: 10 }, targetingSummary: null, last7d: last7d({ spend: 70, results: 3, costPerResult: 23.33 }) },
 ];
 
 const inputOf = (over: Partial<ProposalInput> = {}): ProposalInput => ({
-    tenant: { lang: 'ar', currency: 'SAR', timezone: 'Asia/Riyadh', countries: ['SA', 'EG'] },
+    tenant: { lang: 'ar', currency: 'SAR', timezone: 'Europe/Lisbon', countries: ['SA', 'EG'] },
     limits: { maxDailyBudget: 50, monthlyCap: 1000, remainingThisMonth: 640, metaMinimumDaily: { messages: 3.75 } },
     offers: [{ id: 'o1', title: 'دورة', price: '99 SAR', url_is_tracked: true, summary: 'ستة دروس' }],
     request: null,

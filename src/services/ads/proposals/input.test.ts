@@ -49,7 +49,7 @@ const OBJECT: InputObject = {
 
 const mirror: MirrorPort = {
     async snapshot() {
-        return { currency: 'SAR', timezone: 'Asia/Riyadh', objects: [OBJECT], audiences: [{ id: 'au1', kind: 'custom', name: 'Buyers', size: 1200 }], daysOfData: 21 };
+        return { currency: 'SAR', timezone: 'Europe/Lisbon', objects: [OBJECT], audiences: [{ id: 'au1', kind: 'custom', name: 'Buyers', size: 1200 }], daysOfData: 21 };
     },
 };
 const money: MoneyPort = {
@@ -68,7 +68,7 @@ const deps = { loadProfile: async () => ({ profile: PROFILE }) };
 describe('buildInput', () => {
     it('holds the tenant, the limits, the offers, the policy rules and the account aggregates', async () => {
         const input = await buildInput('t1', { task: 'draft_campaign', request: 'روّج للشمعة' }, FULL_PORTS, deps);
-        assert.deepEqual(input.tenant, { lang: 'ar', currency: 'SAR', timezone: 'Asia/Riyadh', countries: ['EG', 'SA'] });
+        assert.deepEqual(input.tenant, { lang: 'ar', currency: 'SAR', timezone: 'Europe/Lisbon', countries: ['EG', 'SA'] });
         assert.deepEqual(input.limits, { maxDailyBudget: 50, monthlyCap: 1000, remainingThisMonth: 640, metaMinimumDaily: { messages: 3.75, traffic: 3.75 } });
         assert.equal(input.task, 'draft_campaign');
         assert.equal(input.request, 'روّج للشمعة');
