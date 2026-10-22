@@ -87,7 +87,7 @@ const InboxPage = {
     /** The route's own cap. */
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
-    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused']),
+    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']),
     /** What `effective_ai` says (src/services/inboxAssistant.ts: a test fails when these differ). */
     EFFECTIVE_STATES: Object.freeze(['on', 'off_global', 'paused_thread', 'sales_test', 'sales_live']),
     /** The effective state → the state of the `assistant` status pill (components.js). No prototype, so a stranger finds nothing. */
@@ -668,7 +668,27 @@ const InboxPage = {
         if (this.filter === 'needs_you') return this.needsYou(thread);
         if (this.filter === 'hot') return Attention.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
+        if (this.filter === 'ads') return this.fromAd(thread);
         return true;
+    },
+
+    // ─── Ads → DM attribution (A3) ───────────────────────────────────────────
+    /** The thread began from an ad (click-to-message or click-to-WhatsApp), or a later ad brought the person back: what the Ads filter keeps. */
+    fromAd(thread) {
+        return !!thread && (!!thread.ad || Number(thread.adTouches) > 0);
+    },
+
+    /** "From ad: <name>" on a thread that began from one, "From an ad" when its name is not known; '' for any other. */
+    adBadge(thread) {
+        if (!thread || !thread.ad) return '';
+        const label = thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed');
+        return html`<span class="badge badge-info" data-from-ad><i data-lucide="megaphone" aria-hidden="true"></i><bdi dir="auto">${label}</bdi></span>`;
+    },
+
+    /** Meta Business AI holds the thread, so nothing the bot sends gets through until the owner takes it back. */
+    businessAiBadge(thread) {
+        if (!thread || thread.noReplyReason !== 'business_ai_owns_thread') return '';
+        return html`<span class="badge badge-warning" data-business-ai><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.ad.businessAi')}</span>`;
     },
 
     syncFilterButtons() {
@@ -921,6 +941,8 @@ const InboxPage = {
             <span class="thread-preview" dir="auto">${this.threadPreview(x)}</span>
             <span class="thread-badges">
                 ${this.assistantPill(x)}
+                ${this.businessAiBadge(x)}
+                ${this.adBadge(x)}
                 ${this.stageChip(x.stage)}
                 ${Attention.isHot(x) ? this.hotBadge() : ''}
                 ${this.needsReply(x)
@@ -982,6 +1004,7 @@ const InboxPage = {
         if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
         if (kind === 'hot') return html`<div class="empty-threads" data-empty="hot"><p>${t('inbox.noHot')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
+        if (kind === 'ads') return html`<div class="empty-threads" data-empty="ads"><p>${t('inbox.noAds')}</p>${UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help'))}</div>`;
         return html`
             <div class="empty-threads" data-empty="none">
                 <p>${t('inbox.noThreads')}</p>
@@ -1480,6 +1503,17 @@ const InboxPage = {
             chips.push(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }));
         }
         if (Attention.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
+        // A3: Meta Business AI holds the thread (the bot's sends are refused), and the ad the thread began from, each with where to read more.
+        if (thread.noReplyReason === 'business_ai_owns_thread') {
+            chips.push(this.metaChip(t('inbox.ad.businessAi'), { icon: 'alert-circle', accent: true, note: t('inbox.ad.businessAiNote') }));
+            chips.push(UI.helpLink('ads#business-ai', t('inbox.ad.businessAiHelp')));
+        }
+        if (thread.ad) {
+            chips.push(this.metaChip(thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed'), { icon: 'megaphone' }));
+            chips.push(UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help')));
+        } else if (Number(thread.adTouches) > 0) {
+            chips.push(this.metaChip(t('inbox.ad.returned'), { icon: 'megaphone' }));
+        }
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
         if (this.needsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
         // Marked handled by the owner, and the customer has not written since: why the two chips above are gone.

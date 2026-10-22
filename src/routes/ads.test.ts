@@ -127,13 +127,13 @@ describe('/api/ads', () => {
     });
 
     describe('roles', () => {
-        for (const url of ['/settings', '/overview', '/money', '/boosts']) {
+        for (const url of ['/settings', '/overview', '/money', '/boosts', '/settings/switches']) {
             it(`a viewer may read GET ${url}`, async () => {
                 const res = await call('GET', url, { role: 'viewer' });
                 assert.equal(res.statusCode, 200, JSON.stringify(res.body));
             });
         }
-        for (const [method, url] of [['POST', '/settings'], ['POST', '/settings/test'], ['POST', '/settings/alerts'], ['POST', '/spend-cap'], ['GET', '/accounts'], ['POST', '/boosts'], ['POST', '/boosts/x/activate'], ['POST', '/campaigns/123456/status'], ['POST', '/campaigns/123456/budget'], ['DELETE', '/campaigns/123456']] as const) {
+        for (const [method, url] of [['POST', '/settings'], ['POST', '/settings/test'], ['POST', '/settings/alerts'], ['POST', '/settings/switches'], ['POST', '/spend-cap'], ['GET', '/accounts'], ['POST', '/boosts'], ['POST', '/boosts/x/activate'], ['POST', '/campaigns/123456/status'], ['POST', '/campaigns/123456/budget'], ['DELETE', '/campaigns/123456']] as const) {
             it(`${method} ${url} is the owner's: an operator gets 403`, async () => {
                 const res = await call(method, url, { role: 'operator', body: { confirm: true } });
                 assert.equal(res.statusCode, 403);
@@ -278,6 +278,21 @@ describe('/api/ads', () => {
             assert.deepEqual(res.body.test, { telegram: 'sent', email: 'off' });
             const bad = await call('POST', '/settings/alerts', { body: { email: 'not-an-address' } });
             assert.deepEqual({ status: bad.statusCode, field: bad.body.field }, { status: 400, field: 'email' });
+        });
+    });
+
+    describe('/settings/switches (A3)', () => {
+        it('both off by default; the owner turns them on per field; a bad body names the field', async () => {
+            const read = await call('GET', '/settings/switches');
+            assert.deepEqual(read.body, { switches: { botContext: false, extendedWindow: { instagram: false, messenger: false } } });
+            const on = await call('POST', '/settings/switches', { body: { botContext: true, extendedWindow: { instagram: true } } });
+            assert.equal(on.statusCode, 200, JSON.stringify(on.body));
+            assert.deepEqual(on.body.switches, { botContext: true, extendedWindow: { instagram: true, messenger: false } });
+            assert.equal(settings.get(`ads.bot_context.${TENANT}`), 'on');
+            const bad = await call('POST', '/settings/switches', { body: { extendedWindow: { messenger: 'yes' } } });
+            assert.deepEqual({ status: bad.statusCode, code: bad.body.code, field: bad.body.field }, { status: 400, code: 'INVALID', field: 'extendedWindow.messenger' });
+            const view = await call('GET', '/settings');
+            assert.deepEqual(view.body.switches, { botContext: true, extendedWindow: { instagram: true, messenger: false } });
         });
     });
 });

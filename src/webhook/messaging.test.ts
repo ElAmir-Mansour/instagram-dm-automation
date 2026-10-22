@@ -36,9 +36,11 @@ import type { CreatorProfile } from '../services/profile/types.js';
 import { invalidateTenantCache, type Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    dmPlatform, dmPromptText, handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
+    adContextFor, dmPlatform, dmPromptText, handleMessagingEvent, isReferralOnly, needsDisclosure, normalizeDm, resolveDmPageId,
     STORY_MENTION_TEXT,
 } from './messaging.js';
+import { setAttributionAlertSink, type AttributionAlertKind } from '../services/ads/attribution.js';
+import { readFileSync } from 'node:fs';
 import { handlers } from '../jobs/handlers.js';
 import type { Job } from '../jobs/types.js';
 import { ATTACHMENT_ACK_TYPE, describeWordless, WORDLESS_MESSAGE_TYPES } from './attachments.js';
@@ -2091,5 +2093,163 @@ describe('handleMessagingEvent — a message with no words', () => {
         assert.equal(executed.length, 0);
         assert.equal(sends.length, 0);
         assert.equal(geminiCalls, 0);
+    });
+});
+
+
+// ─── A3: click-to-message ad referrals ──────────────────────────────────────────────────────────
+
+const adFixture = (name: string): any => JSON.parse(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8'));
+const adEvent = (name: string): any => adFixture(name).entry[0].messaging[0];
+
+describe('normalizeDm — the ad a message came from (A3)', () => {
+    it('reads message.referral (Instagram): the ad id, our ref, the context, the platform from the body object, and keeps the text', () => {
+        const dm = normalizeDm(adEvent('ad-referral-instagram.json'), 'instagram')!;
+        assert.equal(dm.text, 'كم السعر؟');
+        assert.deepEqual(dm.adSource, {
+            platform: 'instagram', adId: '120210000000000001', ref: 'ar_0123456789ab',
+            context: { ad_title: 'عرض الخريف', photo_url: 'https://scontent.xx.fbcdn.net/v/ad-photo.jpg', video_url: 'https://video.xx.fbcdn.net/v/ad-video.mp4' },
+            at: new Date(1761134400000).toISOString(),
+        });
+    });
+
+    it('answers a tapped ice breaker as text: the postback title is the message, the referral rides along (Messenger, new thread)', () => {
+        const dm = normalizeDm(adEvent('ad-referral-messenger-postback.json'), 'page')!;
+        assert.equal(dm.text, 'ما الذي يتضمنه العرض؟');
+        assert.equal(dm.payload, 'ICE_BREAKER_CONTENT');
+        assert.equal(dm.metaMessageId, 'm_postback-ad-2');
+        assert.equal(dm.adSource?.platform, 'messenger');
+        assert.equal(dm.adSource?.adId, '120210000000000002');
+        assert.equal(isReferralOnly(dm), false);
+    });
+
+    it('keeps a standalone referral (Messenger, existing thread) as a referral-only DM with no words and no mid', () => {
+        const dm = normalizeDm(adEvent('ad-referral-messenger-standalone.json'), 'page')!;
+        assert.ok(dm, 'it used to be skipped as empty');
+        assert.equal(dm.text, '');
+        assert.equal(dm.metaMessageId, null);
+        assert.equal(dm.adSource?.adId, '120210000000000003');
+        assert.equal(dm.adSource?.ref, null);
+        assert.equal(isReferralOnly(dm), true);
+    });
+
+    it('reads message.referral before postback.referral before the standalone referral', () => {
+        const ref = (ad_id: string) => ({ ad_id, source: 'ADS', type: 'OPEN_THREAD' });
+        const all = { sender: { id: 'u' }, message: { mid: 'm', text: 'hi', referral: ref('A') }, postback: { title: 't', referral: ref('B') }, referral: ref('C') };
+        assert.equal(normalizeDm(all)!.adSource?.adId, 'A');
+        assert.equal(normalizeDm({ ...all, message: undefined })!.adSource?.adId, 'B');
+        assert.equal(normalizeDm({ ...all, message: undefined, postback: undefined })!.adSource?.adId, 'C');
+    });
+
+    it('ignores a referral that is not from an ad, and leaves a DM without one exactly as it was', () => {
+        assert.equal(normalizeDm({ sender: { id: 'u' }, referral: { ref: 'promo', source: 'SHORTLINK' } }), null);
+        const plain = normalizeDm({ sender: { id: 'u' }, message: { mid: 'm', text: 'hi', referral: { ref: 'x', source: 'SHORTLINK' } } })!;
+        assert.equal('adSource' in plain, false);
+    });
+});
+
+describe('handleMessagingEvent — ad referrals (A3)', () => {
+    let alerts: Array<{ kind: AttributionAlertKind; objectKey: string }> = [];
+    beforeEach(() => {
+        alerts = [];
+        setAttributionAlertSink(async (a) => { alerts.push({ kind: a.kind, objectKey: a.objectKey }); });
+    });
+    afterEach(() => setAttributionAlertSink(null));
+
+    const touchRoute = (recorded: string): [RegExp, { rows: any[] }] => [/WITH cur AS/, { rows: [{ recorded }] }];
+
+    it('a referral with no words records the ad on the thread and sends nothing: no message row, no claim, no reply', async () => {
+        const event = adEvent('ad-referral-messenger-standalone.json');
+        const { executed, sends, error } = await runDm(event, { extraRoutes: [touchRoute('touch')] }, { lastAttempt: false, object: 'page' }, 'fb-page-1');
+        assert.equal(error, null);
+        assert.equal(sends.length, 0);
+        const upsert = executed.find((e) => /INSERT INTO conversations/.test(e.sql))!;
+        assert.doesNotMatch(upsert.sql, /last_message_at|handled_at/, 'nobody asked anything: the thread keeps its place in To do');
+        assert.equal(upsert.params[2], 'facebook');
+        const touch = executed.find((e) => /WITH cur AS/.test(e.sql))!;
+        assert.equal(JSON.parse(touch.params[2]).kind, 'ctm');
+        assert.equal(JSON.parse(touch.params[3]).ad_id, '120210000000000003');
+        assert.equal(touch.params[4], null, 'no inbound row of its own');
+        assert.equal(executed.some((e) => /INSERT INTO messages/.test(e.sql)), false);
+    });
+
+    it('a first message from an ad is recorded as the entry source (one statement, after the claim) and answered as usual', async () => {
+        const event = adEvent('ad-referral-instagram.json');
+        const { executed, sends, error } = await runDm(event, { extraRoutes: [touchRoute('entry')] }, { lastAttempt: false, object: 'instagram' }, '17841400000000001');
+        assert.equal(error, null);
+        const iClaim = executed.findIndex((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql));
+        const iTouch = executed.findIndex((e) => /WITH cur AS/.test(e.sql));
+        assert.ok(iClaim >= 0 && iTouch > iClaim);
+        assert.equal(executed[iTouch]!.params[4], 'msg-1', 'its own inbound row is not "an earlier message"');
+        assert.equal(sends.filter((s) => s.body?.message).length, 1);
+    });
+
+    it('a DM that did not come from an ad runs no attribution statement', async () => {
+        const { executed } = await runDm(textEvent());
+        assert.equal(executed.some((e) => /WITH cur AS|ad_touches|no_reply_reason = /.test(e.sql)), false);
+    });
+
+    it('Meta Business AI holding the thread (100 / 2534037): recorded, alerted once, handled, never retried and no hand-off', async () => {
+        const businessAi = async () => {
+            throw Object.assign(new Error('Business AI owns the thread'), { response: { status: 400, data: { error: { code: 100, error_subcode: 2534037 } } } });
+        };
+        const first = await runDm(textEvent(), { send: businessAi, extraRoutes: [[/SET no_reply_reason = 'business_ai_owns_thread'/, { rows: [{ id: 'conv-1' }] }]] });
+        assert.equal(first.error, null, 'not re-raised: a retry cannot succeed');
+        assert.equal(ranMarkHandled(first.executed), true);
+        assert.equal(ranRelease(first.executed), false);
+        assert.deepEqual(alerts.map((a) => a.kind), ['business_ai']);
+        // Already recorded: the UPDATE changes nothing, and nobody is told again.
+        const again = await runDm(textEvent(), { send: businessAi, extraRoutes: [[/SET no_reply_reason = 'business_ai_owns_thread'/, { rows: [] }]] });
+        assert.equal(again.error, null);
+        assert.equal(alerts.length, 1);
+    });
+
+    it('a reply that goes out clears a Business AI mark, and only when there was one', async () => {
+        const marked = await runDm(textEvent(), {
+            conversation: { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null, no_reply_reason: 'business_ai_owns_thread' },
+            extraRoutes: [[/SET no_reply_reason = NULL/, { rows: [{ id: 'conv-1' }] }]],
+        });
+        assert.equal(marked.error, null);
+        assert.ok(marked.executed.some((e) => /SET no_reply_reason = NULL/.test(e.sql)));
+        const clean = await runDm(textEvent());
+        assert.equal(clean.executed.some((e) => /SET no_reply_reason/.test(e.sql)), false);
+    });
+});
+
+describe('adContextFor — the bot is told about the ad only when the owner switched it on (A3)', () => {
+    const entry = { kind: 'ctm' as const, platform: 'instagram' as const, ad_id: '120210000000000001', ref: 'ar_0123456789ab', ads_context_data: { ad_title: 'عرض الخريف' }, at: '2026-10-22T00:00:00.000Z' };
+    const offers = [{ id: 'go', name: 'Go Bootcamp' }];
+
+    async function withDb<T>(rows: { switchOn: boolean; ad: Record<string, unknown> | null }, run: () => Promise<T>): Promise<{ out: T; sql: string[] }> {
+        const sql: string[] = [];
+        const original = pool.query;
+        (pool as any).query = async (text: string, params: any[] = []) => {
+            sql.push(text);
+            if (/FROM app_settings WHERE key = \$1/.test(text)) return { rows: params[0] === 'ads.bot_context.creator-1' && rows.switchOn ? [{ value: 'on', is_secret: false }] : [], rowCount: 0 };
+            if (/FROM ads_objects/.test(text)) return { rows: rows.ad ? [rows.ad] : [], rowCount: rows.ad ? 1 : 0 };
+            throw new Error(`unexpected SQL ${text}`);
+        };
+        try {
+            return { out: await run(), sql };
+        } finally {
+            (pool as any).query = original;
+        }
+    }
+
+    it('off (the default): nothing, and the stored copy is not even read', async () => {
+        const { out, sql } = await withDb({ switchOn: false, ad: null }, () => adContextFor('creator-1', entry, offers, null));
+        assert.equal(out, null);
+        assert.equal(sql.some((s) => /ads_objects/.test(s)), false);
+    });
+
+    it('on, joined to an ad the app made with an offer: name, offer, text and the ice breaker tapped', async () => {
+        const ad = { id: '01234567-89ab-cdef-0123-456789abcdef', meta_id: '120210000000000001', name: 'Go — reel 3', offer_id: 'go', primary_text: 'Learn Go in 8 weeks' };
+        const { out } = await withDb({ switchOn: true, ad }, () => adContextFor('creator-1', entry, offers, 'How much is it?'));
+        assert.deepEqual(out, { name: 'Go — reel 3', offerTitle: 'Go Bootcamp', primaryText: 'Learn Go in 8 weeks', tapped: 'How much is it?' });
+    });
+
+    it('on, an ad made in Meta\'s Ads Manager not synced yet: the title Meta sent, no offer', async () => {
+        const { out } = await withDb({ switchOn: true, ad: null }, () => adContextFor('creator-1', entry, offers, null));
+        assert.deepEqual(out, { name: 'عرض الخريف', offerTitle: null, primaryText: null, tapped: null });
     });
 });

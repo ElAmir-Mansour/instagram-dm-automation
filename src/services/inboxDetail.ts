@@ -147,6 +147,64 @@ export async function loadLinkClicks(tenantId: string, conversationIds: readonly
     return out;
 }
 
+// ─── Ads → DM attribution (A3) ────────────────────────────────────────────────────────────
+
+/** The ad a conversation began from, as the inbox draws it. `name` is the ad's own name when the app knows it, else the title/headline Meta sent. */
+export interface ConversationAd {
+    kind: 'ctm' | 'ctwa';
+    platform: 'instagram' | 'messenger' | 'whatsapp' | null;
+    adId: string | null;
+    name: string | null;
+}
+
+const cleanText = (v: unknown, max = 300): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+
+/** `conversations.entry_source` as an object: JSONB arrives parsed, a driver that hands it back as text is parsed here, anything else is none. */
+function entrySourceOf(row: Record<string, unknown>): Record<string, unknown> | null {
+    let v = row.entry_source;
+    if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { return null; }
+    }
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+/** The ad id of a conversation that began from a click-to-message or click-to-WhatsApp ad, or null: what `adNamesFor` is asked about. Pure. */
+export function adIdOf(row: Record<string, unknown>): string | null {
+    const es = entrySourceOf(row);
+    if (!es || (es.kind !== 'ctm' && es.kind !== 'ctwa')) return null;
+    return cleanText(es.ad_id, 64);
+}
+
+/**
+ * The ad a thread began from (`entry_source.kind` `ctm` or `ctwa`), or null for any other beginning. The name is the app's own (`names`, from
+ * `adNamesFor`), else Meta's `ads_context_data.ad_title` (click-to-message) or `headline` (click-to-WhatsApp), else null. Pure.
+ */
+export function adOf(row: Record<string, unknown>, names?: ReadonlyMap<string, string> | null): ConversationAd | null {
+    const es = entrySourceOf(row);
+    if (!es || (es.kind !== 'ctm' && es.kind !== 'ctwa')) return null;
+    const adId = cleanText(es.ad_id, 64);
+    const fromMeta = es.kind === 'ctm'
+        ? cleanText((es.ads_context_data as Record<string, unknown> | null | undefined)?.ad_title)
+        : cleanText(es.headline);
+    const platform = es.kind === 'ctwa' ? 'whatsapp' : es.platform === 'instagram' || es.platform === 'messenger' ? es.platform : null;
+    return { kind: es.kind, platform, adId, name: (adId && names?.get(adId)) || fromMeta };
+}
+
+/** How many later ad touches the thread has (`ad_touches`, v54): 0 for a database without the column. Pure. */
+export function adTouchCountOf(row: Record<string, unknown>): number {
+    let v = row.ad_touches;
+    if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { return 0; }
+    }
+    return Array.isArray(v) ? v.length : 0;
+}
+
+/** `conversations.no_reply_reason` (v54): a short lower-case code, or null. Today only `business_ai_owns_thread`. Pure. */
+export function noReplyReasonOf(row: Record<string, unknown>): string | null {
+    const v = row.no_reply_reason;
+    return typeof v === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(v) ? v : null;
+}
+
 /**
  * One conversation as the inbox reads it. The row is passed through (`c.*` has always been the answer) and the fields this release added are
  * pinned to a type, so a database without v40 answers null for each and the dashboard reads one shape before and after the migration.
@@ -164,10 +222,15 @@ export function conversationView<T extends Record<string, unknown>>(
     row: T,
     platform: ConversationPlatform | null,
     clicks?: LinkClicks | null,
-    assistant: AssistantState | null = null
+    assistant: AssistantState | null = null,
+    adNames?: ReadonlyMap<string, string> | null
 ) {
     return {
         ...row,
+        // Ads → DM attribution (A3): the ad the thread began from, how many later ad touches it has, and why the bot cannot answer it at all.
+        ad: adOf(row, adNames),
+        adTouches: adTouchCountOf(row),
+        noReplyReason: noReplyReasonOf(row),
         platform,
         ...profileView(row),
         ...salesView(row),

@@ -3106,6 +3106,67 @@ const SettingsPage = {
         `;
     },
 
+    /**
+     * A3: the two switches for conversations that began from an ad, both off until the owner turns them on. "Give the bot the ad's context"
+     * (the bot is told which ad and offer the person came from) and Meta's longer reply window, per platform (turned on only after the day-2
+     * check; it switches itself off if Meta refuses a reply for being outside the window).
+     */
+    adsSwitchesBlock(ads) {
+        const sw = ads.switches && typeof ads.switches === 'object' ? ads.switches : {};
+        const win = sw.extendedWindow && typeof sw.extendedWindow === 'object' ? sw.extendedWindow : {};
+        const check = (id, name, on, label) => html`
+            <div class="check-row">
+                <input type="checkbox" id="${id}" name="${name}" ${on ? html.raw('checked') : ''}>
+                <span class="check-text"><label class="check-label" for="${id}">${label}</label></span>
+            </div>`;
+        return html`
+            <div class="settings-block mbe-4" id="ads-switches">
+                <p class="form-label">${t('settings.ads.switches.title')}</p>
+                <p class="form-hint">${t('settings.ads.switches.intro')}</p>
+                <div id="ads-switches-error"></div>
+                <form id="ads-switches-form" class="mbs-3" data-submit="settings:saveAdsSwitches" novalidate>
+                    <fieldset class="form-group fieldset-plain">
+                        <legend class="form-label">${t('settings.ads.switches.botContext')}</legend>
+                        ${check('ads-switch-bot', 'botContext', sw.botContext === true, t('settings.ads.switches.botContextOn'))}
+                        <p class="form-hint">${t('settings.ads.switches.botContextHint')} ${UI.helpLink('ads#bot-and-ads', t('help.link.adsBotContext'))}</p>
+                    </fieldset>
+                    <fieldset class="form-group fieldset-plain">
+                        <legend class="form-label">${t('settings.ads.switches.window')}</legend>
+                        ${check('ads-switch-window-ig', 'windowInstagram', win.instagram === true, t('settings.ads.switches.windowInstagram'))}
+                        ${check('ads-switch-window-fb', 'windowMessenger', win.messenger === true, t('settings.ads.switches.windowMessenger'))}
+                        <p class="form-hint">${t('settings.ads.switches.windowHint')} ${UI.helpLink('ads#reply-window', t('help.link.adsReplyWindow'))}</p>
+                    </fieldset>
+                    <div class="form-actions">
+                        ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.ads.switches.save'), id: 'ads-switches-save' })}
+                    </div>
+                </form>
+            </div>
+        `;
+    },
+
+    async saveAdsSwitches(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return undefined;
+        const host = document.getElementById('ads-switches-error');
+        if (host) host.innerHTML = '';
+        try {
+            const data = new FormData(form);
+            const answer = await API.saveAdsSwitches({
+                botContext: data.get('botContext') !== null,
+                extendedWindow: { instagram: data.get('windowInstagram') !== null, messenger: data.get('windowMessenger') !== null },
+            });
+            const view = this._adsView;
+            if (view && answer && answer.switches) this._adsView = { ads: Object.assign({}, view.ads, { switches: answer.switches }), list: view.list, connectable: view.connectable };
+            UI.toast(t('settings.ads.switches.saved'), 'success');
+        } catch (err) {
+            if (host) { host.innerHTML = esc(UI.errorStrip(this.adsFailure(err), '', 'ads-switches-error-strip')); UI.icons(host); } else UI.toast(this.adsFailure(err), 'error');
+        } finally {
+            restore();
+        }
+        return undefined;
+    },
+
     adsSection(ads, error, list, connectable) {
         if (error || !ads) {
             return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
@@ -3175,6 +3236,7 @@ const SettingsPage = {
                     </form>
                     <div class="mbs-4" id="ads-spendcap-region">${this.adsSpendCapBlock(ads)}</div>
                     ${this.adsAlertsBlock(ads)}
+                    ${this.adsSwitchesBlock(ads)}
                     <p class="form-hint mbs-4">${t('boost.settings.safety')}</p>
                 </div>
             </section>
@@ -3926,6 +3988,7 @@ UI.registerActions('settings', {
     setAdsSpendCap: (el, e) => SettingsPage.setAdsSpendCap(el, e),
     clearAdsSpendCap: (el) => SettingsPage.clearAdsSpendCap(el),
     saveAdsAlerts: (el, e) => SettingsPage.saveAdsAlerts(el, e),
+    saveAdsSwitches: (el, e) => SettingsPage.saveAdsSwitches(el, e),
     testAdsAlerts: (el) => SettingsPage.testAdsAlerts(el),
     testNotify: (el) => SettingsPage.testNotify(el),
     removeNotifyToken: (el) => SettingsPage.removeNotifyToken(el),

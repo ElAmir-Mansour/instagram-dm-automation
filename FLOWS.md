@@ -29,7 +29,8 @@ bug it was written to fix.
 [8. Meta login → a connected Page](#8-meta-login--a-connected-page) ·
 [9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait) ·
 [10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5) ·
-[11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard)
+[11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard) ·
+[12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3)
 
 ---
 
@@ -516,7 +517,10 @@ function (**`src/webhook/router.ts:64`**) drops:
   whose `app_id` is this deployment's own app is still dropped. The queue reads that switch only for a
   delivery that holds an echo (**`enqueueWebhookBody`**), and reads it as off when it cannot.
 - **everything with neither `message` nor `postback`** (**:68-70**) — read watermarks, delivery
-  receipts, reactions, referrals, handover-protocol events.
+  receipts, reactions, referrals, handover-protocol events. **Except one referral (A3):** a standalone
+  `referral` whose `source` is `ADS` (a person who already has a Messenger thread tapped a click-to-Messenger ad) is a job,
+  because it says which ad brought them (`isAdReferral`, §12.1). A referral from an `m.me` or `ig.me` link is
+  still dropped.
 
 > **Why filter at plan time rather than in the handler.** None of those could ever reach a reply
 > — `normalizeDm` rejects every one of them — but they were each becoming a `jobs` row first,
@@ -531,7 +535,9 @@ through even if nothing answerable is visible, because the handler is the thing 
 dropping a real customer message is far worse than one wasted job.
 
 Dedupe key is `dm:<mid>` from `message.mid` or `postback.mid`
-(**`src/webhook/router.ts:41-44`**); `tenantKey` is `entry.id` as before.
+(**`src/webhook/router.ts:49`**); `tenantKey` is `entry.id` as before. A standalone ad referral has no `mid`, so
+`dmDedupeKey` makes it `dmref:<sender>:<ad id or ref>:<timestamp>`: who, which ad and when is what makes it one event,
+and a redelivery is refused at enqueue like a message's.
 
 The handler adapter is **`src/jobs/handlers.ts:38`** → `handleMessagingEvent`.
 
@@ -547,6 +553,7 @@ does not go through `isActionableMessagingEvent`) hands the event to `handleEcho
 | plain text message | `event.message.text` | `message_type = 'text'` |
 | quick reply | `event.message.quick_reply.payload` (text still from `message.text`) | `'text'`, payload kept |
 | postback | `event.postback.title` → text, `event.postback.payload` → payload | `'text'`, payload kept |
+| **ad referral, no words** (A3) | a standalone `event.referral` with `source: 'ADS'`, no `message` and no `postback` | no message row; recorded on the conversation only (§2.4b), job outcome `ad_referral_recorded` |
 | **no words** | no text and no payload, but `message.attachments[]`, `message.reply_to.story` or `message.is_unsupported` (`src/webhook/attachments.ts`, `describeWordless`) | `message_type` = its kind (`image`, `video`, `audio`, `file`, `sticker`, `share`, `reel`, `story_share`, `story_mention`, `story_reply`, `attachment`), `text` = a placeholder (`[photo]`) |
 
 A **message with no words** is stored whole (`raw_payload` is the Meta event, which already holds each attachment's `type` and
@@ -556,8 +563,15 @@ mention, `.media` for the rest, nothing for a sticker), claimed as an outbound r
 never in place of a real answer. Skipped, with the message still marked handled, when the bot is paused, the agent is off, the claim
 refuses or the send quota refuses (no retry for an acknowledgement); a transient send failure takes the claim back and retries.
 
-Rejection: no `senderId`, or no text, no payload *and* nothing word-less (read and delivery receipts, reactions, referrals, and an
-unsend, `message.is_deleted`, even one that still lists attachments). An attachment alone is no longer rejected: it used to be, which
+**`adSource` (A3).** `normalizeDm` also returns `adSource`, from `adSourceOf` (**`src/services/ads/attribution.ts`**): the first of
+`message.referral` (Instagram click-to-Direct, on the person's first message), `postback.referral` (Messenger click-to-Messenger, a NEW thread: the
+greeting's or an ice breaker's postback) and the event's own `referral` (Messenger, an EXISTING thread). It is an ad only when `source` is `ADS`
+(an `ig.me` or `m.me` link's referral is not) and there is an `ad_id` or a `ref`; the platform comes from the body's `object`. Everything else about
+the event reads as before: a postback's `title` is still the person's words, so an **ice-breaker tap is answered as the question they tapped**. Null
+for every event that is not from an ad, which is every event but the ones above.
+
+Rejection: no `senderId`, or no text, no payload *and* nothing word-less *and* no `adSource` (read and delivery receipts, reactions, referrals that are
+not ads, and an unsend, `message.is_deleted`, even one that still lists attachments). An attachment alone is no longer rejected: it used to be, which
 was a person waiting for an answer to a message nobody had stored. `dm.skipped_empty` logs `has_message`, `is_deleted` and the
 attachment types.
 
@@ -608,6 +622,24 @@ to be a separate `last_message_at` write.
 An empty result is impossible if the statement does what this code assumes, so it is logged as an
 `error` and returns (**:274-280**) rather than throwing a `TypeError` three lines later from a
 place that says nothing about the cause.
+
+### 2.4b — The ad touch, and the referral with no words (A3)
+
+Only an event with an `adSource` does any of this; every other DM costs nothing extra here. **Meta only sends the referral if the Page is subscribed to
+`messaging_referrals`** (`WEBHOOK_FIELDS` in **`src/services/metaLogin.ts`**, beside `feed`, `messages` and `messaging_postbacks`; a Page connected before A3
+is subscribed again only by the next Facebook reconnect, which re-posts `subscribed_apps`; the App Dashboard's Page webhook needs the field too, and
+`scripts/diagnose.mjs` warns when the app-level `page` subscription lacks it). Instagram needs nothing more: its ad referral rides on `messages`.
+
+1. **Recorded** by `recordAdTouch` (**`src/services/ads/attribution.ts`**), in one statement that takes the conversation's row lock. The FIRST touch
+   (no entry source yet, and no inbound message before this event's own) becomes `conversations.entry_source`
+   `{ kind: 'ctm', platform, ad_id, ref, ads_context_data: { ad_title, photo_url, video_url, post_id }, at }` and **is never rewritten**. Every later
+   touch goes in front of `conversations.ad_touches` (v54, newest 10). The same touch twice (a redelivery) is `duplicate` and writes nothing.
+   `ads.touch_recorded` logs which of `entry` / `touch` / `duplicate` / `missing` happened. It never throws: attribution must not cost a reply.
+2. **A referral with no words sends nothing.** No inbound row is claimed, there is nothing to answer, and the job ends done with the outcome
+   `ad_referral_recorded` (the conversation is created or updated, its entry source or touch recorded). A person's first referral that arrives with a
+   message or an ice-breaker postback is recorded the same way and the message is then answered like any other.
+3. **The join to the ad is not done here.** The conversation keeps the raw `ad_id` and our own `ref`; the Inbox and the Ads screen join at read time
+   (§12.3), so an ad made in Meta's own Ads Manager before the next sync costs this path nothing.
 
 ### 2.5 — `claimInbound` and the 300-second re-claim window
 
@@ -694,7 +726,11 @@ turn concluded; released and re-raised when the send quota stopped it; the catch
    bot and says nothing. No `mark_seen`, no model.
 4. **Model.** `mark_seen` and `typing_on` go out while the model thinks (best effort: a failure is `dm.sender_action_failed` and nothing more).
    The layer is asked for purpose `dm` with the static prompt as the cached system text and the conversation's facts in front of the last user
-   turn. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
+   turn. **Ad context (A3, `ads.bot_context`, off by default):** for a conversation that began from an ad, and only when the tenant's owner switched it
+   on, the facts block gets up to three lines, `AD CONTEXT: The person came from the ad "<name>" about <offer>. The ad said: "<text, at most 200 characters>". They
+   tapped: "<ice breaker>".` (`adFactsFor`, **`attribution.ts`**: the ad's name from the stored copy, else the title Meta sent; the offer from the ad's
+   `app_meta.offer_id`; never the media links). **With the switch off the prompt is byte for byte what it was**, pinned by the golden tests in
+   `prompt.test.ts`. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
    `[buttons: …]` instead of the stored `[Structured Template]`, and a customer's button tap carries its code, `(tapped: OTHER_COURSES)`. The old
    path's history is untouched. A failure of any kind is the legacy Gemini path once when `gemini_fallback` is on, else a hand-off
    (`dm.engine_failed`): never silence.
@@ -729,10 +765,13 @@ One short nudge, a few hours after a sales DM sent a link, to someone who has no
    delay AGAIN. It sends only if: the sales mode answers this sender, follow-ups are not switched off, the agent is on, no opt-out, no hand-off,
    the AI not paused, no nudge sent yet (one per conversation, ever), the stage still `link`, no newer link, the person has not written since the
    link, no click by a PERSON (`link_clicks.is_prefetch = false`: Meta's own crawler opens every link, and does not count), and less than 23 hours
-   since their last message (Meta's window is 24). Otherwise the job ends as done and says why (`dm.followup_skipped`, `reason`).
+   since their last message (Meta's window is 24). **The 23 hours is the default of `windowEndsAt` (A3, `ads/attribution.ts`)**: for a conversation that
+   began from an ad (`entry_source.kind = 'ctm'`) on a platform whose `ads.extended_window` switch is on, the window closes at the LATER of their last
+   message + 23 h and the ad click + 7 days − 1 h (Meta's window for a click-to-message ad since 2026-09-28 runs from the click). The job reads the
+   switch only for an ad conversation, so every other one costs no extra statement. Otherwise the job ends as done and says why (`dm.followup_skipped`, `reason`).
 4. **Claimed before it is sent, so it goes at most once.** One conditional `UPDATE` (`followups_sent + 1`, stage `follow_up`) that repeats the rules
    that matter; two drains at once, a retry and a reaped claim cannot both win it. A send that fails gives the claim back and is retried by the
-   runner, except Meta's final answers (a dead token, a blocked recipient, outside the window), which are not.
+   runner, except Meta's final answers (a dead token, a blocked recipient, outside the window, error 551, Business AI's hold: §2.9), which are not.
 5. **The line** is the kit's (`SalesLines.nudge`, per register and English): no model, no link, no number. It is sent as `RESPONSE` through
    `sendDirectMessage`, recorded as an outbound `messages` row with `ai_meta {kind: 'followup'}`, and the same quota check as every send applies.
 
@@ -1010,6 +1049,19 @@ messaging window and rejected once that window matters).
 (**`src/webhook/messaging.ts:382-384`**), so a failed first reply still discloses next time.
 
 Then the outbound `messages` row (**`src/webhook/messaging.ts:387-397`**).
+
+**Two refusals that belong to ad traffic (A3).**
+
+- **Meta Business AI owns the thread.** An Instagram send that fails with error **100** and subcode **2534037** means Meta's own Business AI is
+  answering that thread, and an untagged send is refused until the owner takes it back. `isBusinessAiBlock` recognises it and `noteBusinessAiBlock`
+  (**`attribution.ts`**) sets `conversations.no_reply_reason = 'business_ai_owns_thread'` (v54), raises a `business_ai` alert **once** (the reason is
+  set only when it was not already, and the alert channel dedupes per day on top), and **nothing is retried**: Meta's answer will not change. The next
+  send that succeeds clears it (`clearNoReplyReason`, one statement that touches no row in the usual case). The owner's fix is in Meta Business Suite:
+  Business AI → "Take control of conversations with your Business AI". The Inbox shows a notice on the thread meanwhile. The follow-up nudge's
+  send handles the same two refusals (`isFinalSendFailure` is now also true for 551).
+- **A send outside the window on an ad conversation.** Error 10 / subcode 2018278, or 551, on a `ctm` conversation whose platform has
+  `ads.extended_window` on means the 7-day window was not what Meta counts: `isWindowRefusal` → `noteWindowRefusal` turns that platform's switch
+  OFF by itself and raises a `window_error` alert. Without the switch, or on any other conversation, the refusal is what it always was.
 
 ### 2.10 — `markHandled`, last
 
@@ -3194,6 +3246,70 @@ Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/setti
 (`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:823`**): `ads_objects`, `ads_insights_daily` and
 `ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
 
+## 12. Ads → conversation → results (Meta Ads Manager, A3)
+
+A person taps a click-to-message ad and writes. The app records which ad brought them, shows it in the Inbox, counts what came of it per ad, and (only if the
+owner switches each on) tells the bot about the ad and uses Meta's longer reply window. Meta's own numbers for the ad come from the stored copy (the ads core,
+v53); this flow is what Meta cannot see. The DM half of it is §2.2, §2.4b, §2.6b, §2.6c and §2.9; this section is the whole path in one place. Line numbers
+are left out on purpose while A3 is being wired: every step names its function.
+
+### 12.1 — The click arrives
+
+1. **The subscription.** `WEBHOOK_FIELDS` (**`src/services/metaLogin.ts`**) is `feed, messages, messaging_postbacks` and now `messaging_referrals`. Without the
+   last, Meta never sends the Messenger referrals below.
+2. **Three shapes** (all through `POST /webhook`, signature unchanged, then a `dm.process` job; `contracts/webhook-inbound.md`):
+   - **Instagram click-to-Direct**: `message.referral` on the person's first message.
+   - **Messenger click-to-Messenger, a new thread**: `postback.referral` on the greeting or an ice-breaker postback.
+   - **Messenger, an existing thread**: a standalone `referral` event, no `message`, no `postback`.
+   Each carries `{ ref?, ad_id, source: 'ADS', type: 'OPEN_THREAD', ads_context_data: { ad_title, photo_url?, video_url?, post_id? } }`.
+3. **The router accepts the standalone one** (`isActionableMessagingEvent`, **`router.ts`**, only when `source` is `ADS`), with its own dedupe key
+   (`dmref:…`, §2.1). It used to be dropped.
+4. **`normalizeDm` returns `adSource`** (§2.2) and `recordAdTouch` writes it (§2.4b): the first touch is the conversation's `entry_source` (`kind: 'ctm'`), never
+   rewritten; later ones go to `ad_touches`. A referral with no words ends the job as `ad_referral_recorded` and sends nothing.
+5. **WhatsApp is a different shape and the same idea.** A click-to-WhatsApp message carries `referral.source_id` (the ad's id), `ctwa_clid` and
+   `headline`; **`src/webhook/whatsapp.ts`** `entrySourceOf` stores them as `entry_source` `{ kind: 'ctwa', ad_id: source_id, … }` (v50, §10.13). It is
+   not `ctm`: no touches, no bot context, no extended window (WhatsApp's free-reply rules are §10.9).
+
+### 12.2 — What the bot does with it (two switches, both OFF)
+
+Both are the owner's, per tenant, on Settings → Meta ads (`POST /api/ads/settings/switches`, **`src/services/ads/switches.ts`**). Every read fails toward OFF:
+a database that is behind, or a value that does not parse, is the switch off.
+
+1. **`ads.bot_context.<t>`** (`'on'` or absent). On: the sales turn's facts block says which ad the person came from (§2.6b). Off: the prompt is byte for
+   byte what it was (golden tests).
+2. **`ads.extended_window.<t>`** (`{instagram, messenger}`). On for a platform: a `ctm` conversation from that platform may be written to until the later of
+   their last message + 23 h and the click + 7 d − 1 h, instead of 23 h from their last message (`windowFor`, `windowEndsAt`, §2.6c). **Turned on only after the
+   live day-2 check** (a real ad conversation written to on day 2 and again past day 3, on each platform). A send Meta refuses for the window turns that platform
+   off by itself and raises `window_error` (§2.9).
+3. **Business AI** is not a switch: when Meta's own AI holds an Instagram thread the bot is silent, and the conversation says why (§2.9).
+
+### 12.3 — The join, at read time
+
+The stored conversation holds only what Meta sent (`ad_id`, `ref`, the title and media links, `at`). Whatever shows an ad's name or counts its results joins then:
+
+1. **By our own `ref` first.** An ad the app creates carries `ar_<12 hex of ads_objects.id>` (`refFor`, `refPrefix`), so it joins before the mirror has Meta's id for it.
+2. **Then by `ad_id`** against `ads_objects.meta_id` at level `ad` (`joinAd`). An ad made in Meta's own Ads Manager joins after the next sync; until then the
+   conversation keeps the raw `ad_id`, and the chip shows the title Meta sent. A database without the ads core (v53) answers null, never an error.
+3. **The Inbox** (`adNamesFor`): the "from ad" chip on a `ctm` or `ctwa` conversation, an Ads filter on the list, and the Business AI notice from `no_reply_reason`.
+   A conversation with only later `ad_touches` shows "Came back from an ad" and is kept by the Ads filter too.
+
+### 12.4 — Results per ad
+
+`resultsByAd` (**`attribution.ts`**), one statement over the v54 partial index `(creator_id, entry_source->>'ad_id')`, for the ads the Ads screen is showing
+(`ObjectView.results`): per Meta ad id, **conversations** (distinct, Instagram, Messenger and WhatsApp alike, since `ctwa` joins by `ad_id = source_id`),
+**tracked-link clicks** by a person (`link_clicks.is_prefetch = false`, through `tracked_links.conversation_id`) and **handoffs** (`handoff_at` set). Only the
+first touch counts: a conversation belongs to the ad that started it. A failure is no results (`ads.results_unreadable`), never an error on the screen.
+
+> **Why the first touch is never rewritten.** A person who taps three ads in a week is one conversation, and the sale is owed to the ad that opened it.
+> Overwriting would move credit to whichever ad they saw last and make an old ad's results shrink as people re-engage; `ad_touches` keeps the later ones for the
+> Inbox without crediting them.
+
+### 12.5 — Rollout and what can go wrong
+
+`npm run migrate` (v54: `ad_touches`, `no_reply_reason`, the index) **before** the deploy: the DM path writes `ad_touches` and the Inbox reads both columns.
+The two switches ship dark. `docs/specs/002-meta-ads-manager/contracts/webhook-inbound.md` and `research.md` §R10 are the contract; the Help Center article `ads`
+(sections `message-ads-inbox`, `bot-and-ads`, `reply-window`, `business-ai`) is what the owner reads.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -3217,6 +3333,9 @@ error, and several write **no row at all**.
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
 | 2 | the sender's profile lookup (Instagram only) is refused, throttled, or cannot run on a database without v40 — **`senderProfile.ts`** `refreshSenderProfile` | `dm.profile_failed` (`warn`); a throttled one is silent | no (the reply is unaffected; the attempt is recorded in `conversations.profile_checked_at`) |
 | 2 | a **permanent** Meta refusal of the reply (a blocked recipient, a dead token) — the catch in **`messaging.ts`** (`isPermanentMetaError`) | `dm.pipeline_failed` | inbound row, `handled_at` set; **no outbound row, and nothing in `jobs`** (the job completes `done`): the inbox's "reply failed" chip cannot show it, only the logs can |
+| 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |
+| 2 | **Meta Business AI owns the Instagram thread** (error 100 / 2534037, A3) — `noteBusinessAiBlock` | `ads.alert_business_ai` (`error`), once per conversation | `conversations.no_reply_reason = 'business_ai_owns_thread'`; **not retried**, no outbound row; cleared by the next send that goes out |
+| 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |

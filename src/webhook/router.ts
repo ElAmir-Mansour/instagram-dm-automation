@@ -48,7 +48,20 @@ function commentDedupeKey(change: any): string | undefined {
 /** Same idea for DMs; `messages.meta_message_id UNIQUE` is the layer below. */
 function dmDedupeKey(event: any): string | undefined {
     const mid = event?.message?.mid ?? event?.postback?.mid;
-    return typeof mid === 'string' && mid ? `dm:${mid}` : undefined;
+    if (typeof mid === 'string' && mid) return `dm:${mid}`;
+    // A standalone ad referral (a returning person tapped a click-to-Messenger ad, A3) has no `mid`. Who, which ad and when is what makes it one
+    // event, so a redelivery of it is refused at enqueue like a message's.
+    if (isAdReferral(event?.referral)) {
+        const sender = event?.sender?.id;
+        const ts = event?.timestamp;
+        if (sender && ts) return `dmref:${sender}:${event.referral.ad_id ?? event.referral.ref ?? ''}:${ts}`;
+    }
+    return undefined;
+}
+
+/** A referral from a click-to-message ad (`source: 'ADS'`), as opposed to an `m.me`/`ig.me` link's or any other. */
+function isAdReferral(referral: any): boolean {
+    return Boolean(referral) && typeof referral === 'object' && String(referral.source ?? '').toUpperCase() === 'ADS';
 }
 
 /**
@@ -65,7 +78,7 @@ function dmDedupeKey(event: any): string | undefined {
  * Filtering here rather than in the handler keeps the queue a record of work, which is what
  * makes "how much is pending" a number worth reading.
  *
- * Erring towards enqueueing: an event with a `message` or a `postback` goes through even if
+ * Erring towards enqueueing: an event with a `message` or a `postback` (or an ad's standalone `referral`, A3) goes through even if
  * this function cannot see anything answerable in it, because the handler is the thing that
  * knows, and dropping a real customer message would be far worse than one wasted job.
  */
@@ -77,6 +90,10 @@ function isActionableMessagingEvent(event: any, options: PlanOptions = {}): bool
     if (event?.message?.is_echo) return Boolean(options.echoes) && !echoFromOwnApp(event);
     if (event?.message) return true;
     if (event?.postback) return true;
+    // A standalone ad referral: a person who already has a thread tapped a click-to-Messenger ad (A3). It carries no words, but it says which ad
+    // brought them, which is the whole of ads → DM attribution; `handleMessagingEvent` records it and sends nothing. Other referrals (m.me links)
+    // stay dropped, as before.
+    if (isAdReferral(event?.referral)) return true;
     return false;
 }
 

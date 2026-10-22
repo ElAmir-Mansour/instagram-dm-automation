@@ -56,7 +56,8 @@ import {
     classifyOutcome, expectedFailureSql, isOutcome, outcomeCountsSql, outcomeLateral, outcomeSql, readOutcomeCounts, successPercent,
 } from '../services/outcomes.js';
 import { tenantTimezone } from '../services/profile/timezone.js';
-import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { adIdOf, annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { adNamesFor } from '../services/ads/attribution.js';
 import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
@@ -3608,16 +3609,19 @@ router.get('/conversations', async (req, res) => {
         // tracked-links tables answers the list without counts rather than not at all.
         // And what the assistant is set to (UX US1, FR-006): each item's `effective_ai` is read from it, and the page's "assistant is off" strip
         // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
-        const [clicks, assistant] = await Promise.all([
+        // And the stored copy's names for the ads that started these threads (A3: the "from ad" chip). Its own optional lookup: no name is the
+        // title Meta sent with the click, never a failed list.
+        const [clicks, assistant, adNames] = await Promise.all([
             loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
             loadAssistantState(tenantId),
+            adNamesFor(tenantId, result.rows.map((row) => adIdOf(row)).filter((id): id is string => Boolean(id))),
         ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
             // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
             // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant)),
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant, adNames)),
             // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
             // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
             assistant,
@@ -3928,8 +3932,9 @@ async function conversationSummary(tenantId: string, id: string) {
     const found = await pool.query(conversationsQuery('c.creator_id = $1 AND c.id = $2', 3, 4), [tenantId, id, 1, 0]);
     const row = found.rows[0];
     if (!row) return null;
-    const [clicks, assistant] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId)]);
-    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant);
+    const adId = adIdOf(row);
+    const [clicks, assistant, adNames] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId), adNamesFor(tenantId, adId ? [adId] : [])]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant, adNames);
 }
 
 /**

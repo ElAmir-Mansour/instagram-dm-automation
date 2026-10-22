@@ -231,6 +231,8 @@ export const AUDIT_ACTIONS = {
     adsSpendCapChanged: 'ads.spend_cap_changed',
     /** The owner changed where ads alerts go (Telegram chat id, email, language, kinds). `detail` names the fields, never the values. */
     adsAlertsWrite: 'ads.alerts_write',
+    /** The owner turned an A3 switch on or off (`ads.bot_context`, `ads.extended_window`). `detail` holds the switches changed and their new values. */
+    adsSwitchesWrite: 'ads.switches_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

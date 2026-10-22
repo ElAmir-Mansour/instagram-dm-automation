@@ -181,20 +181,51 @@ export interface ConversationRow {
     entry_source?: ConversationEntrySource | null;
     /** v50. WhatsApp: the end of the click-to-WhatsApp free-entry window, or NULL. With `last_inbound_at` it decides whether a free-form reply may go out. */
     free_window_expires_at?: Timestamptz | null;
+    /** v54. Later Meta ad referrals on a conversation whose `entry_source` is already set, newest first, at most 10 (`src/services/ads/attribution.ts`). */
+    ad_touches?: AdTouch[];
+    /** v54. Why the bot cannot answer this conversation at all, or NULL. See `ConversationNoReplyReason`. */
+    no_reply_reason?: ConversationNoReplyReason | null;
+}
+
+/** v54. `conversations.no_reply_reason`: Meta Business AI holds the thread (send error 100/2534037), so the bot's sends are refused until the owner takes it back. */
+export type ConversationNoReplyReason = 'business_ai_owns_thread';
+
+/** v54. One later ad referral, in `conversations.ad_touches`. */
+export interface AdTouch {
+    ad_id: string | null;
+    ref: string | null;
+    platform: 'instagram' | 'messenger';
+    at: string;
+}
+
+/**
+ * v54. What Meta's click-to-message referral carries about the ad (`referral.ads_context_data`), as Meta sent it: the ad's title and its media links.
+ * Stored on the conversation (privacy.html says so); never shown to the model unless `ads.bot_context` is on.
+ */
+export interface AdsContextData {
+    ad_title?: string;
+    photo_url?: string;
+    video_url?: string;
+    post_id?: string;
 }
 
 /**
  * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried (and `label` the owner's name for
  * that link, copied when the thread began: a link renamed or deleted later does not rewrite how an old thread began), `ad_id`, `ctwa_clid` and
  * `headline` come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601). A QR code and a short link are both `link`.
+ * v54: `ctm` is a click-to-message ad on Instagram Direct or Messenger (`ad_id`, our own `ref` when the app made the ad, `platform`, `ads_context_data`).
  */
 export interface ConversationEntrySource {
-    kind: 'link' | 'qr' | 'ctwa' | 'ig_bridge' | 'ice_breaker' | 'organic';
+    kind: 'link' | 'qr' | 'ctwa' | 'ctm' | 'ig_bridge' | 'ice_breaker' | 'organic';
     ref?: string;
     label?: string;
     ad_id?: string;
     ctwa_clid?: string;
     headline?: string;
+    /** v54, `ctm` only: which network's click-to-message ad (Instagram Direct or Messenger). */
+    platform?: 'instagram' | 'messenger';
+    /** v54, `ctm` only: the ad's title and media links Meta sent with the referral. */
+    ads_context_data?: AdsContextData;
     at: string;
 }
 

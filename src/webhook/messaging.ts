@@ -6,6 +6,11 @@
  */
 import { queryCount, queryOne } from '../db/query.js';
 import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/rows.js';
+import {
+    adFactsFor, adPlatformOf, adSourceOf, clearNoReplyReason, isBusinessAiBlock, isWindowRefusal, joinAd, noteBusinessAiBlock, noteWindowRefusal,
+    entrySourceFor, recordAdTouch, type AdFacts, type AdSource,
+} from '../services/ads/attribution.js';
+import { readBotContext } from '../services/ads/switches.js';
 import { generateDmReply } from '../services/dmEngine.js';
 import { answersWithSales, readSalesSettings } from '../services/dmSales/mode.js';
 import { runSalesTurn } from '../services/dmSales/turn.js';
@@ -54,6 +59,17 @@ export interface NormalizedDm {
     wordless: Wordless | null;
     /** Meta's message id — the dedupe key. Null for events that carry none. */
     metaMessageId: string | null;
+    /**
+     * The click-to-message ad this event came from (A3, `src/services/ads/attribution.ts` `adSourceOf`): `message.referral`, `postback.referral` or
+     * a standalone `referral`, in that order, `source: 'ADS'` only. Null or absent for everything else, which is every DM there was before A3
+     * (and every WhatsApp message: its click-to-WhatsApp referral is `entry_source` `ctwa`, written by `whatsappInbound.ts`).
+     */
+    adSource?: AdSource | null;
+}
+
+/** An ad referral with nothing to answer: no words, no button, no attachment. Recorded on the conversation, and nothing is sent (A3). */
+export function isReferralOnly(dm: NormalizedDm): boolean {
+    return Boolean(dm.adSource) && !dm.text && !dm.payload && !dm.wordless;
 }
 
 /** What a story mention says, in the absence of any text the person actually typed: the placeholder it has always been stored as. */
@@ -93,7 +109,7 @@ export function dmPromptText(dm: NormalizedDm): string {
  * Exported for src/webhook/messaging.test.ts. It is pure, and the alternative is a test that
  * reaches it only through the whole database-and-Gemini pipeline.
  */
-export function normalizeDm(event: any): NormalizedDm | null {
+export function normalizeDm(event: any, object?: unknown): NormalizedDm | null {
     const senderId = event?.sender?.id;
 
     // An unsend (`message.is_deleted`) is not a new message, even one that still lists attachments: nothing to store and nobody to answer.
@@ -125,7 +141,12 @@ export function normalizeDm(event: any): NormalizedDm | null {
     // A message with no words, and only then: a caption, a typed line or a tapped button is words, and is answered as it always was.
     const wordless = !text && !payload ? describeWordless(event?.message) : null;
 
-    if (!senderId || (!text && !payload && !wordless)) return skippedEmpty(event);
+    // The ad it came from (A3). A tapped ice breaker on a click-to-Messenger ad is a postback whose `title` is the question: it is already the text
+    // above, so the bot answers the question they tapped. A referral with nothing else (a returning person who only opened the thread) is kept
+    // for the record and answered by nobody.
+    const adSource = adSourceOf(event, object);
+
+    if (!senderId || (!text && !payload && !wordless && !adSource)) return skippedEmpty(event);
 
     return {
         senderId,
@@ -134,6 +155,8 @@ export function normalizeDm(event: any): NormalizedDm | null {
         isStoryMention,
         wordless,
         metaMessageId: event?.message?.mid ?? event?.postback?.mid ?? null,
+        // Only when there is one: a DM that did not come from an ad is the same object it always was.
+        ...(adSource ? { adSource } : {}),
     };
 }
 
@@ -223,7 +246,7 @@ export async function handleMessagingEvent(
         return;
     }
 
-    const dm = normalizeDm(event);
+    const dm = normalizeDm(event, options.object);
     if (!dm) return;
 
     // The Meta message id is the dedupe key, so it is the field to correlate on: every line
@@ -379,6 +402,14 @@ async function answerDm(
         return;
     }
 
+    // An ad referral with nothing to answer (A3): a returning person tapped a click-to-Messenger ad, or a referral arrived on its own. The thread is
+    // made or found and the ad recorded on it; no message row (there are no words), no reply, and the thread's place in the owner's To do is left
+    // alone: nobody asked anything yet.
+    if (isReferralOnly(dm)) {
+        await recordReferralOnly(dm, creator.id, dmPlatform(options.object, creator, [recipientId, entryId]));
+        return;
+    }
+
     // 1. Fetch or create the conversation thread.
     //    One statement, not SELECT-then-INSERT: two DMs a second apart raced on the
     //    unique_creator_user constraint and the loser's duplicate-key error killed the batch.
@@ -390,14 +421,15 @@ async function answerDm(
     //    To do. Only this path clears it: the owner's own reply, an echo of his Instagram-app reply and the bot's
     //    messages move `last_message_at` elsewhere and leave the stamp alone.
     const platform = dmPlatform(options.object, creator, [recipientId, entryId]);
-    const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at'>>(
+    //    `entry_source` and `no_reply_reason` (A3) ride on the same RETURNING: an ad conversation's context and a Business AI block cost no statement.
+    const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at' | 'entry_source' | 'no_reply_reason'>>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status, platform)
          VALUES ($1, $2, 'active', $3)
          ON CONFLICT (creator_id, instagram_user_id)
          DO UPDATE SET last_message_at = NOW(),
                        handled_at = NULL,
                        platform = COALESCE(conversations.platform, EXCLUDED.platform)
-         RETURNING id, is_bot_active, ai_disclosed_at`,
+         RETURNING id, is_bot_active, ai_disclosed_at, entry_source, no_reply_reason`,
         [creator.id, dm.senderId, platform]
     );
 
@@ -418,6 +450,15 @@ async function answerDm(
     }
     if (claim.resumed) {
         log('info', 'dm.resumed', { message_id: claim.id, reply_attempts: claim.attempts });
+    }
+
+    // The ad this message came from (A3): the conversation's entry source when this is its first message, else one more touch. One statement, and
+    // only for a message that carries a referral; every other DM runs exactly the statements it always did. A retry finds its own touch already
+    // recorded and adds nothing.
+    let entrySource = conversation.entry_source ?? null;
+    if (dm.adSource) {
+        const recorded = await recordAdTouch({ conversationId, creatorId: creator.id, source: dm.adSource, inboundId: claim.id });
+        if (recorded === 'entry') entrySource = entrySourceFor(dm.adSource);
     }
 
     // Who the sender is, for the inbox (v40): Instagram only, on first contact and at most once a day after that, started now so it
@@ -490,6 +531,12 @@ async function answerDm(
         handoffCtx = dmCtx;
 
         if (useSales) {
+            // The ad's context, for a conversation that began from a click-to-message ad and a tenant who switched `ads.bot_context` on (A3). Off,
+            // the default, `ad` is absent and the turn's prompt is byte for byte what it was; a conversation that did not begin from an ad does
+            // not even read the switch.
+            const ad = entrySource?.kind === 'ctm'
+                ? await adContextFor(creator.id, entrySource, dmCtx.offers, event?.postback && dm.text ? dm.text : null)
+                : null;
             // The sales turn owns the reply, its quota check, the disclosure and the record of both (src/services/dmSales/turn.ts); this
             // function keeps the claim: handled once the turn has concluded, released for a retry when the quota stopped it, and the
             // catch below still decides what a thrown error means.
@@ -500,6 +547,7 @@ async function answerDm(
                 inbound: { id: claim.id, senderId: dm.senderId, text: dmPromptText(dm), payload: dm.payload || undefined },
                 ctx: dmCtx,
                 disclosure: { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) },
+                ...(ad ? { ad } : {}),
             });
             if (turn.kind === 'quota') {
                 if (mayRetry) {
@@ -509,6 +557,8 @@ async function answerDm(
                 await markHandled(claim.id);
                 return;
             }
+            // Something went out, so Meta Business AI no longer holds the thread (A3): the Inbox notice goes away. No statement unless one was set.
+            if (conversation.no_reply_reason && SENT_OUTCOMES.has(turn.outcome)) await clearNoReplyReason(conversationId);
             await markHandled(claim.id);
             return;
         }
@@ -609,6 +659,7 @@ async function answerDm(
         if (discloseNow) {
             await queryCount('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversationId]);
         }
+        if (conversation.no_reply_reason) await clearNoReplyReason(conversationId);
 
         // Log outbound message
         // `sender = 'ai'` (v26): the inbox tags Gemini's replies apart from the operator's own.
@@ -631,6 +682,21 @@ async function answerDm(
         log('error', 'dm.pipeline_failed', { creator_id: creator.id, ...describeError(aiError) });
 
         await noteMetaFailure(creator.id, aiError);
+
+        // Meta Business AI owns this thread (100 / 2534037, A3): every send is refused until the owner takes control back in Meta Business Suite. Not
+        // retried (it cannot succeed), not handed over (the hand-off line would be refused the same way): recorded on the conversation, and the
+        // owner told once.
+        if (isBusinessAiBlock(aiError)) {
+            await noteBusinessAiBlock(creator.id, conversationId);
+            await markHandled(claim.id);
+            return;
+        }
+        // Refused for being outside the messaging window, in a conversation that began from an ad: the longer ad window we were told to assume
+        // did not hold, so that platform's `ads.extended_window` switches itself off. What happens to this message is decided below, as before.
+        if (isWindowRefusal(aiError) && entrySource?.kind === 'ctm') {
+            const adPlatform = adPlatformOf(platform);
+            if (adPlatform) await noteWindowRefusal(creator.id, adPlatform, conversationId);
+        }
 
         // A Gemini rate limit, a Meta 500 and a socket reset are all transient — and all of
         // them used to end here, logged and swallowed, with the job marked done and the
@@ -656,4 +722,45 @@ async function answerDm(
 
         await markHandled(claim.id);
     }
+}
+
+/** The sales turn's outcomes that mean Meta took a message from the bot. */
+const SENT_OUTCOMES: ReadonlySet<string> = new Set(['sent', 'handoff', 'opt_out', 'calm']);
+
+/**
+ * A referral with nothing to answer (A3): find or make the thread and record the ad on it. The thread's `last_message_at` and `handled_at` are
+ * left alone (no message arrived), and nothing is sent. The job ends with the outcome `ad_referral_recorded`.
+ */
+async function recordReferralOnly(dm: NormalizedDm, creatorId: string, platform: ConversationPlatform | null): Promise<void> {
+    const conversation = await queryOne<Pick<ConversationRow, 'id'>>(
+        `INSERT INTO conversations (creator_id, instagram_user_id, status, platform)
+         VALUES ($1, $2, 'active', $3)
+         ON CONFLICT (creator_id, instagram_user_id)
+         DO UPDATE SET platform = COALESCE(conversations.platform, EXCLUDED.platform)
+         RETURNING id`,
+        [creatorId, dm.senderId, platform]
+    );
+    if (!conversation) {
+        log('error', 'dm.conversation_upsert_empty', { creator_id: creatorId, referral_only: true });
+        return;
+    }
+    const recorded = await recordAdTouch({ conversationId: conversation.id, creatorId, source: dm.adSource! });
+    log('info', 'dm.outcome', { outcome: 'ad_referral_recorded', conversation_id: conversation.id, recorded, platform: dm.adSource!.platform });
+}
+
+/**
+ * The ad's context for the sales turn, or null: only when the tenant switched `ads.bot_context` on, and only what `adFactsFor` allows (the ad's
+ * name, its offer, its text, the ice breaker tapped). Never throws: the switch read and the join each fail toward "no context". Exported for the test.
+ */
+export async function adContextFor(
+    creatorId: string,
+    entry: NonNullable<ConversationRow['entry_source']>,
+    offers: readonly { id: string; name: string }[],
+    tapped: string | null
+): Promise<AdFacts | null> {
+    if (!(await readBotContext(creatorId))) return null;
+    const joined = await joinAd(creatorId, { ref: entry.ref ?? null, adId: entry.ad_id ?? null });
+    const facts = adFactsFor({ entry, joined, offers, tapped });
+    log('info', 'dm.ad_context', { given: Boolean(facts), joined: Boolean(joined), has_offer: Boolean(facts?.offerTitle) });
+    return facts;
 }

@@ -187,6 +187,13 @@
       funding_source_details only the type and whether one is present are kept.
   If any of the three changes, change both languages here and the stamp.
 
+  META ADS, PHASE A3 (ADS → DM ATTRIBUTION) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R10, T083). Section 1 (#ads-ar / #ads-en):
+    · conversations.entry_source {kind:'ctm', ad_id, ref, ads_context_data:{ad_title, photo_url, video_url, post_id}, at} on the first touch,
+      conversations.ad_touches (newest 10) after: recordAdTouch, src/services/ads/attribution.ts, from normalizeDm's adSource;
+    · used for the Inbox chip (adNamesFor) and per-ad results (resultsByAd); to the model only with ads.bot_context on, and then
+      adFactsFor's name/offer/text (no media links, no ad id): src/webhook/messaging.ts adContextFor;
+    · deleted with the conversation (columns on conversations, so erasure of the conversation removes them).
+
   META ADS, PHASE A2 (STORED COPY) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R2, R4, T059). Sections 1 and 4 add:
     · STORED COPY: the connected ad account's campaign structure (campaigns, ad sets, ads, creatives: names, statuses, budgets, dates,
       a display summary of targeting such as countries and ages, Meta's review notes) in ads_objects, and daily results per ad (spend,
@@ -263,7 +270,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.58">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.60">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1400,6 +1407,15 @@
                         يعلّق أو يراسل على إنستجرام أو فيسبوك.
                     </li>
                     <li>
+                        <strong>المحادثات التي تبدأ من إعلان:</strong> حين يضغط شخص على إعلان مراسلة لصاحب الحساب،
+                        ترسل ميتا مع رسالته معلومات عن الإعلان، فتحفظها الأداة مع المحادثة: معرّف الإعلان، ورمز التتبّع
+                        الذي تضعه الأداة في إعلاناتها، وعنوان الإعلان وروابط صورته أو الفيديو كما أرسلتها ميتا، ووقت
+                        الضغطة (وآخر عشر ضغطات لاحقة على إعلانات أخرى). تُستعمل لإظهار الإعلان الذي بدأ المحادثة في
+                        صندوق الرسائل، ولعدّ نتائج كل إعلان (المحادثات، والنقرات على الروابط المتتبَّعة، والتحويل إلى
+                        شخص). ولا تُعطى للذكاء الاصطناعي إلا إن شغّل صاحب الحساب «أعطِ المساعد سياق الإعلان»، وحينها
+                        يُعطى اسم الإعلان والعرض ونصّه فقط، لا روابط الصور والفيديو ولا المعرّف. وتُحذف مع المحادثة.
+                    </li>
+                    <li>
                         <strong>الدفع بين صاحب الحساب وميتا:</strong> تُخصم تكلفة الإعلانات من وسيلة الدفع في
                         حسابه الإعلاني لدى ميتا، ولا ترى الأداة بيانات البطاقة أو الفوترة ولا تخزّنها.
                     </li>
@@ -1987,6 +2003,16 @@
                     <li>
                         <strong>Nothing about people who comment or message:</strong> nothing about anyone
                         who comments or messages on Instagram or Facebook is sent to Meta for advertising.
+                    </li>
+                    <li>
+                        <strong>Conversations that start from an ad:</strong> when someone taps one of the owner's
+                        message ads, Meta sends details of the ad with their message, and the app stores them with the
+                        conversation: the ad's ID, the tracking code the app puts on its own ads, the ad's title and the
+                        image or video links as Meta sent them, and when the tap happened (plus the last ten later taps on
+                        other ads). They are used to show which ad started the conversation in the inbox and to count
+                        each ad's results (conversations, clicks on tracked links, hand-offs to a person). They reach the
+                        AI only if the owner turns on "Give the assistant the ad's context", and then only the ad's name, offer
+                        and text, never the media links or the ID. They are deleted with the conversation.
                     </li>
                     <li>
                         <strong>Payment is between the owner and Meta:</strong> the ads are charged to the

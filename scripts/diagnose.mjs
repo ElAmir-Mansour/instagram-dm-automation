@@ -230,9 +230,11 @@ async function checkDeployment() {
 // database could have shown that, because the deliveries were going somewhere else entirely.
 // This is the only check that can see it.
 
+// `messaging_referrals` (A3): a returning person's tap on a click-to-Messenger ad arrives only on this field, so without it ads → DM attribution
+// silently misses every existing thread. A new thread's referral rides on `messaging_postbacks`; Instagram's on `messages`.
 const EXPECTED_SUBSCRIPTIONS = {
     instagram: ['comments', 'messages'],
-    page: ['feed', 'messages'],
+    page: ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals'],
 };
 
 async function checkMetaConfig(dbState) {

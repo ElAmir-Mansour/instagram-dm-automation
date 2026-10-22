@@ -20,11 +20,14 @@
  * Never a model, never a link: the nudge is the kit's line, so there is nothing to guard and no new URL to send.
  */
 import { queryCount, queryOne, queryRows } from '../../db/query.js';
+import type { ConversationEntrySource } from '../../db/rows.js';
 import { getJobQueue } from '../../jobs/queue.js';
 import type { JobPayloads } from '../../jobs/types.js';
 import { describeError, log } from '../../utils/log.js';
 import { checkFairSendQuota } from '../../utils/rateLimiter.js';
 import { APP_SETTING_KEYS, getSetting } from '../appSettings.js';
+import { adPlatformOf, isBusinessAiBlock, isWindowRefusal, noteBusinessAiBlock, noteWindowRefusal } from '../ads/attribution.js';
+import { readExtendedWindow } from '../ads/switches.js';
 import { isPermanentMetaError, metaErrorCode } from '../http.js';
 import { sendDirectMessage } from '../instagram.js';
 import { profileContextOrLegacy } from '../profile/context.js';
@@ -135,6 +138,10 @@ interface FactsRow {
     opted_out_at: Date | null;
     handoff_at: Date | null;
     agent_active: boolean | null;
+    /** v50/v54: how the thread began. `kind: 'ctm'` is a click-to-message ad (its own window, `ads/attribution.ts`). */
+    entry_source: ConversationEntrySource | null;
+    /** `'instagram'`, `'facebook'` (Messenger) or `'whatsapp'`. */
+    platform: string | null;
 }
 
 const asDate = (value: Date | string | null | undefined): Date | null => {
@@ -149,11 +156,17 @@ const asDate = (value: Date | string | null | undefined): Date | null => {
  * times is never earlier than the truth, which is the direction a 24 hour window must err in.
  */
 export async function loadFollowupState(conversationId: string, creatorId: string): Promise<FollowupState | null> {
+    return (await loadFollowupConversation(conversationId, creatorId))?.state ?? null;
+}
+
+/** `loadFollowupState`, with the conversation's `platform` beside it (the send's ad refusal needs it). Same single statement. */
+async function loadFollowupConversation(conversationId: string, creatorId: string): Promise<{ state: FollowupState; platform: string | null } | null> {
     const row = await queryOne<FactsRow & Record<string, unknown>>(
         `SELECT c.stage, c.instagram_user_id AS sender_id, c.is_bot_active, c.last_link_at, c.last_inbound_at,
                 (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound') AS last_inbound_message_at,
                 c.followups_sent, c.opted_out_at, c.handoff_at,
-                COALESCE((SELECT a.is_active FROM ai_agents a WHERE a.creator_id = c.creator_id), FALSE) AS agent_active
+                COALESCE((SELECT a.is_active FROM ai_agents a WHERE a.creator_id = c.creator_id), FALSE) AS agent_active,
+                c.entry_source, c.platform
            FROM conversations c
           WHERE c.id = $1 AND c.creator_id = $2`,
         [conversationId, creatorId]
@@ -161,7 +174,8 @@ export async function loadFollowupState(conversationId: string, creatorId: strin
     if (!row) return null;
     const stamped = asDate(row.last_inbound_at);
     const stored = asDate(row.last_inbound_message_at);
-    return {
+    const entry = row.entry_source;
+    const state: FollowupState = {
         stage: isStage(row.stage) ? row.stage : 'new',
         senderId: row.sender_id,
         botActive: row.is_bot_active === true,
@@ -171,7 +185,10 @@ export async function loadFollowupState(conversationId: string, creatorId: strin
         lastInboundAt: stamped && stored ? (stamped.getTime() >= stored.getTime() ? stamped : stored) : stamped ?? stored,
         optedOutAt: asDate(row.opted_out_at),
         handoffAt: asDate(row.handoff_at),
+        // Only an ad conversation's source matters to the rules; any other is left off, so the state is what it was for a conversation without one.
+        ...(entry && typeof entry === 'object' && entry.kind === 'ctm' ? { entrySource: { kind: entry.kind, platform: entry.platform, at: entry.at } } : {}),
     };
+    return { state, platform: typeof row.platform === 'string' ? row.platform : null };
 }
 
 /**
@@ -225,12 +242,13 @@ async function releaseFollowup(conversationId: string, creatorId: string): Promi
 
 /**
  * Meta's answers that retrying cannot change: the permanent codes (a dead token, a missing permission, a recipient who blocked DMs), 100 (the
- * recipient or the request is not valid: a permanent DM failure here, as `dmFallbackReply` treats it) and 10 (outside the allowed messaging window:
- * the person's last message is older than Meta counts, whatever 23 hours says).
+ * recipient or the request is not valid: a permanent DM failure here, as `dmFallbackReply` treats it, and Meta Business AI's hold on an Instagram thread,
+ * 100 / 2534037), 10 (outside the allowed messaging window: the person's last message is older than Meta counts, whatever 23 hours says) and 551
+ * ("this person isn't available right now", which an ad thread past its window also answers with).
  */
 export function isFinalSendFailure(err: unknown): boolean {
     const code = metaErrorCode(err);
-    return isPermanentMetaError(err) || code === 10 || code === 100;
+    return isPermanentMetaError(err) || code === 10 || code === 100 || code === 551;
 }
 
 export type FollowupOutcome =
@@ -262,15 +280,20 @@ export async function runFollowup(payload: JobPayloads['dm.followup'], options: 
     if (Number.isNaN(linkAt.getTime())) return skip('bad_payload');
 
     // Everything the decision rests on is read now, not taken from the job: the job is hours old.
-    const [state, clicks, sales, delayMinutes] = await Promise.all([
-        loadFollowupState(conversationId, creatorId),
+    const [loaded, clicks, sales, delayMinutes] = await Promise.all([
+        loadFollowupConversation(conversationId, creatorId),
         loadLinkClicks(conversationId, creatorId),
         readSalesSettings(creatorId),
         getFollowupMinutes(),
     ]);
-    if (!state) return skip('conversation_gone');
+    if (!loaded) return skip('conversation_gone');
+    const { state } = loaded;
+    // A conversation that began from a click-to-message ad may have a longer window, per platform (`ads.extended_window`). Only that conversation
+    // reads the switch: every other one costs no extra statement and is judged on the 23 hour rule, as before.
+    const isAd = state.entrySource?.kind === 'ctm';
+    const extendedWindow = isAd ? await readExtendedWindow(creatorId) : undefined;
 
-    const verdict = followupEligible(state, now, clicks, { sales, linkAt, delayMinutes });
+    const verdict = followupEligible(state, now, clicks, { sales, linkAt, delayMinutes, ...(extendedWindow ? { extendedWindow } : {}) });
     if (!verdict.send) return skip(verdict.reason, { stage: state.stage, real_clicks: clicks.filter((c) => !c.isPrefetch).length });
 
     // The person it goes to, through the tenant's own Meta connection. A tenant that is switched off or has no token sends nothing.
@@ -301,6 +324,12 @@ export async function runFollowup(payload: JobPayloads['dm.followup'], options: 
             log('error', 'dm.followup_release_failed', { ...logBase, ...describeError(releaseErr) });
         }
         await noteMetaFailure(creatorId, err);
+        // Two refusals that belong to ad traffic. Both stay final (below): Meta's answer will not change, so neither is retried.
+        if (isBusinessAiBlock(err)) await noteBusinessAiBlock(creatorId, conversationId);
+        if (isAd && isWindowRefusal(err)) {
+            const platform = adPlatformOf(loaded.platform) ?? state.entrySource?.platform ?? null;
+            if (platform) await noteWindowRefusal(creatorId, platform, conversationId);
+        }
         if (isFinalSendFailure(err)) {
             log('error', 'dm.followup_failed', { ...logBase, ...describeError(err), effect: 'not retried: Meta\'s answer will not change' });
             return skip('send_refused');

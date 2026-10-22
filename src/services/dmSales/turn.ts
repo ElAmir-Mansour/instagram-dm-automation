@@ -72,7 +72,7 @@ import type { SalesTransport, SentMessage } from './transport.js';
 import { salesTurns, STRUCTURED_TEMPLATE_TEXT } from './history.js';
 import { loadAgent, loadHistory, loadSalesState, recordTurn, supersession, type HistoryRow, type SalesState, type TurnRecord } from './store.js';
 import { capUtf8Bytes, utf8Bytes } from './text.js';
-import { MAX_REPLY_BYTES, NO_OFFER, type Intent, type SalesQuickReply, type SalesReply } from './types.js';
+import { MAX_REPLY_BYTES, NO_OFFER, type Intent, type SalesQuickReply, type SalesFacts, type SalesReply } from './types.js';
 
 /** How much of the conversation the model reads: the last twelve messages (DM plan §3). */
 export const SALES_HISTORY_WINDOW = 12;
@@ -141,6 +141,11 @@ export interface SalesTurnInput {
      * transport they are not read.
      */
     transport?: SalesTransport;
+    /**
+     * A3: what the facts block says about the click-to-message ad this conversation began from. Given by the webhook only when the owner switched
+     * `ads.bot_context` on and the conversation is an ad one; absent, the prompt is byte for byte what it was.
+     */
+    ad?: SalesFacts['ad'];
 }
 
 export type SalesTurnOutcome =
@@ -392,6 +397,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         ...(tappedIntent ? { tapped: { intent: tappedIntent } } : {}),
         ...(guidance ? { variant: guidance } : {}),
         ...(transport ? { channel: transport.channel } : {}),
+        ...(input.ad ? { ad: input.ad } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);

@@ -64,8 +64,13 @@ export function loginScopes(adsScopes: boolean): string[] {
  */
 export const CORE_SCOPES: readonly string[] = ['pages_show_list', 'pages_manage_metadata', 'instagram_basic', 'instagram_manage_comments'];
 
-/** The Page-level webhook fields the Page is subscribed to (`POST /{page}/subscribed_apps`). Instagram comments arrive on the app-level subscription. */
-export const WEBHOOK_FIELDS: readonly string[] = ['feed', 'messages', 'messaging_postbacks'];
+/**
+ * The Page-level webhook fields the Page is subscribed to (`POST /{page}/subscribed_apps`). Instagram comments arrive on the app-level subscription.
+ * `messaging_referrals` (A3): a person who already has a Messenger thread and taps a click-to-message ad is announced ONLY by a standalone referral
+ * event on this field (a new thread's referral rides on `messaging_postbacks`, Instagram's on `messages`). The App Dashboard's Page webhook needs the
+ * field too; `scripts/diagnose.mjs` checks it.
+ */
+export const WEBHOOK_FIELDS: readonly string[] = ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals'];
 
 /** What each optional permission pays for, as stable codes the dashboard turns into words. */
 export const SCOPE_FEATURES: Readonly<Record<string, string>> = {
