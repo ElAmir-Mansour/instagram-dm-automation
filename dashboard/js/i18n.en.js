@@ -4943,6 +4943,8 @@
 
     // ─── Ads screen (#/ads): every campaign on the ad account, the owner's ───
     'nav.ads': 'Ads',
+    'nav.ads_campaigns': 'Ad campaigns',
+    'page.ads_campaigns.subtitle': 'Every campaign, ad set and ad in your ad account, with its status, budget and results.',
     'page.ads.subtitle': 'Your Meta ad campaigns: what was spent, your limits, and starting or stopping each one.',
     'ads.head.title': 'Ads',
     'ads.refresh': 'Refresh',
@@ -4958,6 +4960,8 @@
     'ads.account.status': 'Status',
     'ads.account.payment': 'Payment',
     'ads.account.error': 'The ad account could not be read.',
+    'ads.account.unchecked': 'The ad account has not been checked yet.',
+    'ads.account.uncheckedHint': 'Open Settings and press Test connection in the Meta ads card, or wait for the nightly check. Campaigns appear once the first sync runs (within the hour).',
     'ads.account.openManager': 'Open in Ads Manager',
     'ads.account.status.active': 'Active',
     'ads.account.status.disabled': 'Disabled',

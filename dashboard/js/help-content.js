@@ -1628,7 +1628,7 @@ const HelpContent = {
                             'يعرض تبويب **الحملات** كل ما في حسابك الإعلاني: الحملات، وتحت كل حملة مجموعاتها الإعلانية، وتحت كل مجموعة إعلاناتها. ويشمل ذلك ما أنشأته من هنا بزر **ترويج**، وما أنشأته في مدير إعلانات ميتا نفسه.',
                             { ul: [
                                 'الأرقام والحالات نسخة محفوظة لدينا، لا قراءة مباشرة من ميتا في كل مرة. تُحدَّث البنية كل ساعة، ونتائج اليوم كل أربع ساعات، ونتائج آخر 28 يوماً مرة في اليوم. ويظهر وقت آخر تحديث أعلى الصفحة.',
-                                'زر **تحديث النتائج** يطلب قراءة نتائج اليوم الآن، مرة كل 15 دقيقة على الأكثر.',
+                                'زر **تحديث النتائج** يقرأ الآن قائمة الحملات ونتائج اليوم، مرة كل 15 دقيقة على الأكثر.',
                                 'نتائج آخر ثلاثة أيام مبدئية: قد تعدّلها ميتا قليلاً حتى تستقر.',
                                 'كل مبلغ يُعرض دون الضريبة؛ فواتير ميتا هي السجل المحاسبي.',
                             ] },
@@ -1646,7 +1646,7 @@ const HelpContent = {
                             'The **Campaigns** tab shows everything in your ad account: campaigns, their ad sets under each, and the ads under each ad set. That includes what you made here with **Boost** and what you made in Meta Ads Manager itself.',
                             { ul: [
                                 'Numbers and statuses are a stored copy, not a live read from Meta on every view. The structure refreshes every hour, today\'s results every four hours, and the last 28 days once a day. The time of the last update is at the top of the page.',
-                                '**Refresh results** asks for today\'s results now, at most once every 15 minutes.',
+                                '**Refresh results** reads the campaign list and today\'s results now, at most once every 15 minutes.',
                                 'Results for the last three days are provisional: Meta may still revise them slightly.',
                                 'Every amount is shown excluding tax; Meta\'s invoices are the accounting record.',
                             ] },

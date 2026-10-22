@@ -11,7 +11,7 @@
  *   DELETE /objects/:id                    { confirm: true } → { op }; never on an ACTIVE object                     owner
  *   GET    /ops/:id                        { op }                                                                    any member
  *   GET    /ops?state=pending,running,verify   { ops }                                                               any member
- *   POST   /sync                           { queued: true, notBefore }; 429 RATE_LIMITED + retryAt within 15 min      operator
+ *   POST   /sync                           the campaign list and today's results now: { queued: true, notBefore }; 429 RATE_LIMITED + retryAt within 15 min   operator
  *
  * **Every GET reads Postgres only** (research R2: on Meta's Limited tier a few live page views would lock the account out of the API, the
  * cap guard included). Every write is an `ads_ops` row (src/services/ads/actions.ts), answered at once with the op; the screen polls
@@ -22,7 +22,7 @@ import { requestArchive, requestBudget, requestDelete, requestStatus, ownObject,
 import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, type ObjectLevel, type ObjectRow } from '../services/ads/mirror.js';
 import { editsLeftThisHour, getOp, listOps, type AdsOpState, type OpView } from '../services/ads/ops.js';
 import { readAdsSettings, readHealth } from '../services/ads/settings.js';
-import { dayInTz, requestTodaySync, syncInsights } from '../services/ads/sync.js';
+import { dayInTz, requestTodaySync, syncInsights, syncStructure } from '../services/ads/sync.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { waitUntil } from '../utils/waitUntil.js';
 import { describeError, log } from '../utils/log.js';
@@ -195,7 +195,7 @@ export function mountObjectRoutes(router: Router, fail: Fail): void {
         }
     });
 
-    /** Today's results now: at most once every 15 minutes (it costs points every screen shares). Runs under `waitUntil`; the drain is the backstop. */
+    /** The campaign list and today's results now: at most once every 15 minutes (it costs points every screen shares). Runs under `waitUntil`; the drain is the backstop. */
     router.post('/sync', canOperate, async (req, res) => {
         try {
             const creatorId = getTenantId(req);
@@ -204,7 +204,11 @@ export function mountObjectRoutes(router: Router, fail: Fail): void {
                 res.status(429).json({ error: 'Results were refreshed a moment ago; try again at the time shown.', code: 'RATE_LIMITED', retryAt: asked.retryAt });
                 return;
             }
-            waitUntil(syncInsights(creatorId, 'today').catch((err) => log('warn', 'ads.manual_sync_failed', { creator_id: creatorId, ...describeError(err) })));
+            // The campaign list first (a campaign made a minute ago in Ads Manager should appear), then today's results: 2–4 points, at most
+            // once per 15 minutes.
+            waitUntil(syncStructure(creatorId)
+                .then(() => syncInsights(creatorId, 'today'))
+                .catch((err) => log('warn', 'ads.manual_sync_failed', { creator_id: creatorId, ...describeError(err) })));
             res.status(202).json(asked);
         } catch (err) {
             await fail(req, res, err, 'request_ads_sync');

@@ -246,6 +246,11 @@ const AdsPage = {
         }
         const data = this.data || {};
         if (!data.configured) return html`<div id="ads-page" class="ads-page">${header}${this.firstRun()}</div>`;
+        // No stored account check yet (the daily health check has not run since setup, and nobody pressed Test connection): say that, and
+        // still show what the stored copy has. A check that FAILED is the account problem card alone.
+        if (!data.account && !data.accountError) {
+            return html`<div id="ads-page" class="ads-page">${header}${this.banners()}${this.accountUnchecked()}${this.attentionSection()}${this.queuedSection()}${this.campaignsLink()}</div>`;
+        }
         if (!data.account) return html`<div id="ads-page" class="ads-page">${header}${this.banners()}${this.accountProblem()}</div>`;
         return html`
             <div id="ads-page" class="ads-page">
@@ -331,6 +336,21 @@ const AdsPage = {
             }));
         }
         return out;
+    },
+
+    /** Configured, but the account has never been checked: the stored copy has no account yet. Not an error, a step. */
+    accountUnchecked() {
+        return UI.card({
+            id: 'ads-account-unchecked',
+            title: t('ads.account.unchecked'),
+            body: html`
+                <p class="form-hint">${t('ads.account.uncheckedHint')}</p>
+                <div class="ads-actions">
+                    ${UI._anchorButton({ href: '#/settings?s=ads', label: t('ads.notConfigured.cta'), icon: 'settings', variant: 'secondary' })}
+                    ${UI.helpLink('ads#account-health', t('ads.health.title'))}
+                </div>
+            `,
+        });
     },
 
     /** Configured, but Meta would not describe the account (a token that lapsed, an account that was removed): say so instead of showing empty numbers. */
