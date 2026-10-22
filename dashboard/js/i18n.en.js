@@ -4935,6 +4935,7 @@
     'nav.ads_create': 'Create an ad campaign',
     'nav.ads_proposals': 'Ad proposals',
     'page.ads_create.subtitle': 'Any goal, audience, placement and budget, step by step. Everything is created paused.',
+    'page.ads_proposals.subtitle': 'Campaigns and changes Claude drafts for you, checked against Meta\'s rules and your cap. Nothing happens until you approve.',
     'page.ads.subtitle': 'Your Meta ad campaigns: what was spent, your limits, and starting or stopping each one.',
     'ads.head.title': 'Ads',
     'ads.refresh': 'Refresh',
