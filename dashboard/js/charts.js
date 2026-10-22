@@ -371,6 +371,9 @@ const Charts = {
         });
         const present = rows.filter((r) => r.value !== null);
         if (present.length < 2) return Charts._empty(opts.emptyMessage || '');
+        // Days the source may still revise (ads results: Meta restates the last 3 days). Shaded behind the line, and named in the
+        // screen-reader table; a series without the flag draws exactly as before.
+        const provisional = (Array.isArray(points) ? points : []).map((p) => !!(p && p.provisional === true));
 
         const fmt = typeof opts.format === 'function' ? opts.format : (v) => UI.formatNumber(v);
         const W = 600, H = 160, TOP = 8, BOTTOM = H - 8;
@@ -411,9 +414,13 @@ const Charts = {
         if (lastIndex >= 0 && !dots.includes(lastIndex)) dots.push(lastIndex);
 
         const dayText = (d) => (d ? UI.formatDayShort(d) : '');
+        const shades = provisional.map((on, i) => (on
+            ? html`<rect class="chart-line-provisional" x="${(rtl ? W - (i + 1) * slot : i * slot).toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="${grid}"></rect>`
+            : ''));
+        const provisionalText = (i) => (provisional[i] && opts.provisionalLabel ? ` (${opts.provisionalLabel})` : '');
         const hits = rows.map((r, i) => {
             const x = rtl ? W - (i + 1) * slot : i * slot;
-            return html`<rect x="${x.toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="transparent"><title>${dayText(r.day)}: ${r.value === null ? '—' : fmt(r.value)}</title></rect>`;
+            return html`<rect x="${x.toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="transparent"><title>${dayText(r.day)}${provisionalText(i)}: ${r.value === null ? '—' : fmt(r.value)}</title></rect>`;
         });
 
         // At most five dates, evenly spaced, always the first and the last. Every other one is
@@ -434,6 +441,7 @@ const Charts = {
                 </div>
                 <svg class="chart-line-svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none"
                      role="img" aria-label="${opts.label || ''}" focusable="false">
+                    ${shades}
                     <line x1="0" x2="${W}" y1="${TOP}" y2="${TOP}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
                     <line x1="0" x2="${W}" y1="${(TOP + BOTTOM) / 2}" y2="${(TOP + BOTTOM) / 2}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
                     <line x1="0" x2="${W}" y1="${BOTTOM}" y2="${BOTTOM}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
@@ -449,7 +457,44 @@ const Charts = {
             ${Charts._srTable(
                 opts.label || '',
                 [opts.dayHeader || 'Day', opts.valueHeader || 'Value'],
-                rows.map((r) => [dayText(r.day), r.value === null ? '—' : fmt(r.value)])
+                rows.map((r, i) => [`${dayText(r.day)}${provisionalText(i)}`, r.value === null ? '—' : fmt(r.value)])
             )}`;
+    },
+
+    /**
+     * Horizontal bars that compare one measure across a few named things (ads, countries, placements): a form for magnitude by
+     * identity, so one hue, sorted by the caller, the value written beside each bar in text ink (never the bar's colour), and a
+     * screen-reader table. `items` are `{ label, value, display? }`; a null value is "—" with no bar. The bar grows from the reading
+     * edge: in Arabic the rect is anchored on the right.
+     */
+    compareBars(items, options) {
+        const opts = options || {};
+        const list = (Array.isArray(items) ? items : []).map((it) => {
+            const n = it && it.value !== null && it.value !== undefined && it.value !== '' ? Number(it.value) : NaN;
+            return { label: it ? String(it.label ?? '') : '', value: Number.isFinite(n) ? n : null, display: it ? it.display : undefined };
+        });
+        if (!list.some((it) => it.value !== null && it.value > 0)) return Charts._empty(opts.emptyMessage || '');
+        const fmt = typeof opts.format === 'function' ? opts.format : (v) => UI.formatNumber(v);
+        const peak = Math.max(...list.map((it) => (it.value === null ? 0 : it.value)));
+        const rtl = I18N.isRtl();
+        const fill = Charts.token(opts.token || '--chart-accent', 'currentColor');
+        const track = Charts.token('--chart-grid', 'rgba(255,255,255,0.08)');
+        const text = (it) => (it.display !== undefined && it.display !== null ? it.display : it.value === null ? '—' : fmt(it.value));
+        return html`
+            <div class="chart-bars" aria-hidden="true">
+                ${list.map((it) => {
+                    const w = it.value === null || peak <= 0 ? 0 : Math.max(0, Math.min(100, (it.value / peak) * 100));
+                    return html`
+                        <div class="chart-bars-row">
+                            <span class="chart-bars-label">${it.label}</span>
+                            <svg class="chart-bars-svg" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                                <rect x="0" y="0" width="100" height="8" rx="4" fill="${track}"></rect>
+                                ${w > 0 ? html`<rect class="chart-bars-fill" x="${(rtl ? 100 - w : 0).toFixed(2)}" y="0" width="${w.toFixed(2)}" height="8" rx="4" fill="${fill}"></rect>` : ''}
+                            </svg>
+                            <span class="chart-bars-value">${text(it)}</span>
+                        </div>`;
+                })}
+            </div>
+            ${Charts._srTable(opts.label || '', [opts.nameHeader || 'Name', opts.valueHeader || 'Value'], list.map((it) => [it.label, text(it)]))}`;
     },
 };

@@ -111,6 +111,8 @@ const App = {
         // (`navAs`). The Ads area shares ONE stylesheet, `css/pages/ads.css`, declared by the `ads` entry above; this module asks the shell for it
         // (`loadPageCss('ads', ...)`) before it paints, so it has no `css` of its own (that would look for an `ads_campaigns.css`).
         ads_campaigns: { src: 'ads_campaigns', page: () => AdsCampaignsPage, navAs: 'ads' },
+        // Ads' third tab (#/ads_results): what the money did, day by day, from the stored copy (A6). Same stylesheet rule as Campaigns.
+        ads_results: { src: 'ads_results', page: () => AdsResultsPage, navAs: 'ads' },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -167,7 +169,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.61',
+    ASSET_VERSION: '12.62',
 
     _modules: Object.create(null),
 

@@ -1964,6 +1964,96 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'results',
+                    title: { ar: 'اقرأ نتائج إعلاناتك', en: 'Read your ad results' },
+                    body: {
+                        ar: [
+                            'تبويب **النتائج** في شاشة الإعلانات يعرض ما فعله المال يوماً بيوم. اختر الفترة (7 أو 28 أو 90 يوماً)، ثم اختر ما تُعرض نتائجه: الحساب الإعلاني كله، أو حملة واحدة، أو إعلاناً واحداً.',
+                            { ul: [
+                                '**الإنفاق**: ما أنفقته ميتا في كل يوم.',
+                                '**النتائج**: ما اشتُري الإعلان من أجله، كما اخترته في الحملة: محادثات، أو نقرات على الرابط، أو عملاء محتملون، أو متابعون. وفي الحملة التي فيها إعلانات بأهداف مختلفة تُعدّ نتيجة كل إعلان بهدفه هو ثم تُجمع.',
+                                '**تكلفة النتيجة** و**تكلفة المحادثة** و**تكلفة النقرة المتتبَّعة**: الإنفاق مقسوماً على العدد. وإن كان العدد صفراً تظهر «—»، لا صفر.',
+                                '**قارن حسب**: الإعلان، أو الدولة (مصر والسعودية مثلاً)، أو مكان الظهور (الريلز، والقصص، والخلاصة). ومجموع الدول يساوي المجموع الكلي.',
+                                '**كل إعلان**: جدول بالإنفاق والمحادثات ونقرات الرابط والنقرات المتتبَّعة والتحويلات إلى شخص والمتابعين الجدد والعملاء المحتملين.',
+                            ] },
+                            'الأرقام من نسخة محفوظة لدى أوتوريبلاي تُحدَّث من ميتا كل بضع ساعات، وتُعاد قراءة آخر 28 يوماً كل ليلة. لذلك تفتح الشاشة فوراً ولا تستهلك من حصة ميتا المحدودة لحسابك شيئاً. ويظهر في أعلاها وقت **آخر تحديث**، ويستطيع المالك أن يضغط **تحديث النتائج** ليطلب تحديثاً، مرة كل 15 دقيقة على الأكثر. والطلب يدخل الطابور ويُنفَّذ في حدود ميتا، وتعرض الشاشة متى يُتوقَّع.',
+                            { ul: [
+                                'الأيام أيام منطقة الحساب الإعلاني الزمنية، كما في مدير الإعلانات، لا منطقة جهازك.',
+                                'المبالغ دون الضريبة، وفواتير ميتا هي السجل المحاسبي المعتمد.',
+                                'إن كان في النتائج عملتان فلا تُجمعان أبداً: لكل عملة مجاميعها، والرسوم بعملة واحدة.',
+                            ] },
+                            { tip: 'تجد ملخصاً للإعلانات أيضاً في شاشة **النمو والتسويق** (بطاقة «المدفوع (الإعلانات)» تحت الأرقام العضوية)، وفي شاشة **النتائج** (صف لكل إعلان تحت حملات الرسائل، عليه شارة «إعلان»).' },
+                        ],
+                        en: [
+                            'The **Results** tab of the Ads screen shows what the money did, day by day. Pick a period (7, 28 or 90 days), then what to show: the whole ad account, one campaign or one ad.',
+                            { ul: [
+                                '**Spend**: what Meta spent each day.',
+                                '**Results**: what the ad was bought for, as chosen in the campaign: conversations, link clicks, leads or followers. In a campaign whose ads have different goals, each ad is counted by its own goal, then added up.',
+                                '**Cost per result**, **Cost per conversation** and **Cost per tracked click**: spend divided by the count. When the count is zero you see “—”, not zero.',
+                                '**Compare by**: ad, country (Egypt and Saudi Arabia, for example) or placement (Reels, Stories, Feed). The countries add up to the total.',
+                                '**Every ad**: a table of spend, conversations, link clicks, tracked clicks, hand-offs to a person, new followers and leads.',
+                            ] },
+                            'The numbers come from a copy AutoReply keeps, refreshed from Meta every few hours, and the last 28 days are read again every night. So the screen opens at once and uses none of your account’s limited Meta allowance. **Last updated** is shown at the top, and the owner can press **Refresh results** to ask for a refresh, at most once every 15 minutes. The request joins the queue and runs within Meta’s limits; the screen says when it is expected.',
+                            { ul: [
+                                'Days are in the ad account’s time zone, as in Ads Manager, not your device’s.',
+                                'Amounts exclude tax. Meta’s invoices are the accounting record.',
+                                'When results come in two currencies they are never added together: each currency has its own totals, and the charts show one currency.',
+                            ] },
+                            { tip: 'You also find a summary of your ads on **Growth** (the “Paid (ads)” card under the organic numbers) and on **Results** (one row per ad under the message campaigns, with an “Ad” badge).' },
+                        ],
+                    },
+                },
+                {
+                    id: 'provisional-numbers',
+                    title: { ar: 'لماذا تتغيّر أرقام آخر ثلاثة أيام', en: 'Why the last three days change' },
+                    body: {
+                        ar: [
+                            'لا تثبت أرقام ميتا يوم حدوثها. فالمحادثة أو النقرة قد تُنسب إلى الإعلان بعد أيام، وقد تُستبعد نقرات غير صالحة، ولذلك تعدّل ميتا نتائج اليوم الواحد حتى 28 يوماً بعده. ومعظم التعديل يقع في الأيام الأولى.',
+                            { ul: [
+                                'تُعاد قراءة آخر 28 يوماً من ميتا كل ليلة، فتُصحَّح الأرقام المحفوظة تلقائياً.',
+                                'آخر ثلاثة أيام أولية: مظلّلة في الرسوم، ومعلَّمة بكلمة «أولي» في الجداول، وتذكر الشاشة من أي يوم تبدأ.',
+                                'حين تقارن بمدير الإعلانات فقارن الأيام المستقرة. أما الأيام الأولية فقد تختلف قليلاً حتى تُعاد قراءتها.',
+                            ] },
+                            { tip: 'لا تحكم على إعلان من أرقام يومه الأول. انتظر حتى تستقر الأيام، أو قارن فترات متساوية مستقرة.' },
+                        ],
+                        en: [
+                            'Meta’s numbers are not final on the day they happen. A conversation or a click can be credited to an ad days later, and invalid clicks can be removed, so Meta revises a day’s results for up to 28 days after it. Most of the change happens in the first few days.',
+                            { ul: [
+                                'The last 28 days are read from Meta again every night, so the stored numbers correct themselves.',
+                                'The last three days are provisional: shaded on the charts, marked “provisional” in the tables, and the screen says from which day.',
+                                'When you compare with Ads Manager, compare the settled days. Provisional days can differ a little until they are read again.',
+                            ] },
+                            { tip: 'Do not judge an ad by its first day. Wait for the days to settle, or compare settled periods of the same length.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'cost-per-conversation',
+                    title: { ar: 'تكلفة المحادثة والنقرة المتتبَّعة', en: 'Cost per conversation and per tracked click' },
+                    body: {
+                        ar: [
+                            'تكلفة المحادثة هي الإنفاق مقسوماً على عدد المحادثات التي قالت ميتا إن الإعلان بدأها. وأوتوريبلاي تضيف ما لا تراه ميتا، من سجلاتها هي:',
+                            { dl: [
+                                ['نقرات رابط الإعلان', 'نقرات الناس على الرابط المتتبَّع الخاص بالإعلان (رابط `/r/` الذي تصنعه أوتوريبلاي لعرضك).'],
+                                ['نقرات عبر المحادثة', 'نقرات الناس على الروابط التي أرسلها المساعد في محادثات بدأها هذا الإعلان.'],
+                                ['تحويلات إلى شخص', 'محادثات بدأها الإعلان ثم طُلب فيها أن يتولّاها شخص منكم.'],
+                            ] },
+                            'وتكلفة النقرة المتتبَّعة هي الإنفاق مقسوماً على مجموع النوعين. لا تُعدّ إلا نقرات الناس، فمعاينات الروابط التي تصنعها التطبيقات والبرامج الآلية مستبعدة. والنقرة تُحسب في يوم وقوعها بمنطقة الحساب الإعلاني الزمنية. وليس للنقرة دولة ولا مكان ظهور، فهي في المقارنة حسب الإعلان وحدها.',
+                            { warn: 'لا نعرض رقماً يقارن الإنفاق بالمبيعات. فالبيع يتم على موقع آخر (متجر، أو منصة تعليمية، أو صفحة دفع)، ولا تراه ميتا ولا أوتوريبلاي، وأي رقم من هذا النوع سيكون مختلَقاً. أقرب ما نعرفه هو النقرات المتتبَّعة على رابط العرض، والمحادثات التي تحوّلت إلى شخص.' },
+                        ],
+                        en: [
+                            'Cost per conversation is spend divided by the conversations Meta says the ad started. AutoReply adds what Meta cannot see, from its own records:',
+                            { dl: [
+                                ['Clicks on the ad’s link', 'People’s clicks on the ad’s own tracked link (the `/r/` link AutoReply makes for your offer).'],
+                                ['Clicks via the chat', 'People’s clicks on the links the assistant sent in conversations this ad started.'],
+                                ['Handed to a person', 'Conversations the ad started in which a person from your team was asked to take over.'],
+                            ] },
+                            'Cost per tracked click is spend divided by both kinds together. Only people’s clicks count: link previews made by apps and bots are left out. A click counts on the day it happened, in the ad account’s time zone. A click has no country or placement, so it appears in the comparison by ad only.',
+                            { warn: 'We show no figure that compares spend with sales. The sale happens on another website (a store, a learning platform or a checkout page), which neither Meta nor AutoReply can see, so any such number would be made up. The closest we know is the tracked clicks on your offer’s link, and the conversations handed to a person.' },
+                        ],
+                    },
+                },
+                {
                     id: 'troubleshooting',
                     title: { ar: 'حلول مشكلات الإعلانات', en: 'Ads troubleshooting' },
                     body: {

@@ -18,6 +18,7 @@
  *                    "↑ 12% vs the previous 28 days" — only where the two compare exactly (see
  *                    `previousAccountTotal`), else null.
  */
+import { readPaidSeries, type PaidSeries } from './paid.js';
 import type { AccountDayMetrics, AccountInsightsDailyRow, PostInsightRow, PostMetrics } from '../../db/rows.js';
 import { queryRows } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
@@ -218,6 +219,8 @@ export interface Overview {
     by_platform: { platform: string; posts: number; followers: number | null; views: number | null; reach: number | null; avg_views: number | null }[];
     /** Why a number is empty, by key, e.g. `follows`: "Instagram shares this once…". */
     notes: Record<string, string>;
+    /** What the ads did over the same window (A6, src/services/growth/paid.ts); null without ads rows. Set by `getOverview`. */
+    paid?: PaidSeries | null;
 }
 
 type DayRow = Pick<AccountInsightsDailyRow, 'platform' | 'day' | 'metrics'>;
@@ -445,7 +448,7 @@ export async function getOverview(creatorId: string, query: { days?: unknown; pl
     const today = utcDay(now);
     const settings = await getGrowthSettings(creatorId);
 
-    const [posts, days, latest, timezone] = await Promise.all([
+    const [posts, days, latest, timezone, paid] = await Promise.all([
         readPosts(creatorId, platforms, Math.max(windowDays, 90)),
         // Two windows: this one, and the one before it that `previous` compares against.
         queryRows<Pick<AccountInsightsDailyRow, 'platform' | 'day' | 'metrics'>>(
@@ -462,6 +465,7 @@ export async function getOverview(creatorId: string, query: { days?: unknown; pl
             [creatorId, platforms]
         ),
         tenantTimezone(creatorId, settings.audience.timezone),
+        readPaidSeries(creatorId, addDays(today, -(windowDays - 1)), today),
     ]);
 
     const latestFollowers: Record<string, number | undefined> = {};
@@ -469,7 +473,7 @@ export async function getOverview(creatorId: string, query: { days?: unknown; pl
         const n = Number(row.followers);
         if (Number.isFinite(n)) latestFollowers[row.platform] = n;
     }
-    return buildOverview({ posts, days, latestFollowers, windowDays, today, timezone, platforms }, platform);
+    return { ...buildOverview({ posts, days, latestFollowers, windowDays, today, timezone, platforms }, platform), paid };
 }
 
 export const POST_SORTS = [

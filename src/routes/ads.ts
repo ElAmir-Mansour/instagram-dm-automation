@@ -50,6 +50,7 @@ import { mountObjectRoutes } from './adsObjects.js';
 import { createDraft, DraftRefused, validateDraft } from '../services/ads/drafts.js';
 import { checkPolicy } from '../services/ads/policy.js';
 import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
+import { adsResultsRouter } from './adsResults.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
@@ -510,3 +511,7 @@ async function boostMessages(req: Request, res: Response, b: Record<string, unkn
 // ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
 
 mountObjectRoutes(adsRouter, fail);
+
+// ─── The Results tab (A6): per-day results from the stored copy, never Meta ────────────────────────────────────────────────────────
+
+adsRouter.use(adsResultsRouter);

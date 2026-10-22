@@ -311,6 +311,7 @@ const AnalyticsPage = {
                         ${this.windowMeta()}
                     </div>
                     <div class="table-wrapper" id="analytics-campaigns"></div>
+                    <div class="table-wrapper analytics-ad-rows" id="analytics-ad-rows" hidden></div>
                 </div>
 
                 <div class="chart-card surface">
@@ -377,6 +378,78 @@ const AnalyticsPage = {
         this.fillStrip(dailyRes);
         this.fillCampaigns(campaignRes);
         this.fillFailures(failuresRes);
+        // The ads beside the DM campaigns (A6). Last, and on its own: it never holds up or takes down anything above.
+        this.fillAdRows(days, live);
+    },
+
+    /**
+     * The ads that ran in the window, under the DM campaigns, each labelled "Ad" (A6, research R20): what it spent, the conversations it
+     * started, and the app's own figures for it (tracked-link clicks, hand-offs to a person). From the ads stored copy, never Meta. A
+     * workspace without ads, a member Ads is hidden from, or any failure leaves the table hidden and says nothing: these rows are extra,
+     * the DM campaigns above are the panel. Spend excludes tax; there is no sales-based figure (sales happen on another website, out of Meta's and our sight).
+     */
+    async fillAdRows(days, live) {
+        const host = document.getElementById('analytics-ad-rows');
+        if (!host || typeof API.getAdsResults !== 'function') return;
+        const to = new Date().toISOString().slice(0, 10);
+        const from = new Date(Date.now() - (Math.max(1, Number(days) || 1) - 1) * 86400000).toISOString().slice(0, 10);
+        let answer;
+        try {
+            answer = await API.getAdsResults({ level: 'ad', from, to });
+        } catch {
+            return;
+        }
+        if (typeof live === 'function' && !live()) return;
+        const markup = this.adRowsMarkup(answer);
+        if (!markup) {
+            host.hidden = true;
+            host.innerHTML = '';
+            return;
+        }
+        host.innerHTML = esc(markup);
+        host.hidden = false;
+        UI.icons(host);
+    },
+
+    /** The rows: ads that are running or spent in the window, most spend first. Null when there are none. */
+    adRowsMarkup(answer) {
+        const objects = answer && Array.isArray(answer.objects) ? answer.objects : [];
+        const byId = new Map(objects.map((o) => [o && o.id, o]));
+        const rows = (answer && Array.isArray(answer.perObject) ? answer.perObject : [])
+            .filter((p) => p && ((Number(p.spend) || 0) > 0 || (byId.get(p.id) && byId.get(p.id).effectiveStatus === 'ACTIVE')))
+            .sort((a, b) => (Number(b.spend) || 0) - (Number(a.spend) || 0));
+        if (!rows.length) return null;
+        const money = (v, cur) => (v === null || v === undefined ? '—' : `⁦${UI.formatNumber(v)}${cur ? ` ${cur}` : ''}⁩`);
+        const count = (v) => (v === null || v === undefined ? '—' : UI.formatNumber(v));
+        return html`
+            <table class="data-table analytics-ads-table" aria-label="${t('analytics.adRow.tableLabel')}">
+                <thead>
+                    <tr>
+                        <th scope="col">${t('analytics.adRow.name')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.spend')}*</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.conversations')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.tracked')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.handoffs')}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map((p) => {
+                        const o = byId.get(p.id);
+                        const tracked = (Number(p.trackedClicks && p.trackedClicks.direct) || 0) + (Number(p.trackedClicks && p.trackedClicks.viaChat) || 0);
+                        return html`
+                            <tr data-ad="${p.id}">
+                                <td><span class="badge badge-info analytics-ad-badge">${t('analytics.adRow.badge')}</span> <span dir="auto">${(o && o.name) || p.id}</span></td>
+                                <td class="cell-num text-strong">${money(p.spend, p.currency)}</td>
+                                <td class="cell-num">${count(p.conversations)}</td>
+                                <td class="cell-num">${count(tracked)}</td>
+                                <td class="cell-num">${count(p.handoffs)}</td>
+                            </tr>
+                        `;
+                    })}
+                </tbody>
+            </table>
+            <p class="text-meta analytics-ads-note">* ${t('ads.tax.note')} <a href="#/ads_results">${t('analytics.adRow.open')}</a></p>
+        `;
     },
 
     /**
