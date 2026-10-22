@@ -22,8 +22,8 @@
   CLAIMS ABOUT WHAT THE SERVICE DOES ARE TRACEABLE, as on /privacy:
     comment → private reply, optional public reply, a like
         src/webhook/comments.ts (sendPrivateReply, sendPublicReply, likeComment)
-    DM replies written by Gemini
-        src/services/ai.ts
+    DM replies written by Gemini, or by a provider the operator routes `dm` to
+        src/services/ai.ts, src/services/dmEngine.ts, src/services/dmSales/turn.ts
     publishing is a queue, not a clock
         see the note at the top of public/pricing.html (drain every ~5-15 min)
     Meta connected by a Page access token, never a password
@@ -977,7 +977,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>شروط خدمة <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: <time datetime="2026-10-08" dir="ltr">2026-10-08</time></p>
+                <p class="stamp">آخر تحديث: <time datetime="2026-10-15" dir="ltr">2026-10-15</time></p>
                 <p class="applies">تحكم شروط الخدمة هذه استخدامك لتطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     بما في ذلك ربطه بحساباتك على إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1051,7 +1051,8 @@
                         حدّدتها، تُرسَل رسالة خاصة إلى كاتبه (وردّ علني على التعليق إن فعّلته)،
                         ويُسجَّل إعجاب بذلك التعليق؛ كما يُرَدّ على الرسائل الخاصة الواردة إلى حسابك.
                         الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي
-                        (<bdi lang="en" dir="ltr">Google Gemini</bdi>)، لا إنسان.
+                        (<bdi lang="en" dir="ltr">Google Gemini</bdi> افتراضياً، أو مزوّد ذكاء اصطناعي آخر يختاره المُشغّل
+                        كما توضّح <a href="/privacy">سياسة الخصوصية</a>)، لا إنسان.
                     </li>
                 </ul>
                 <p>
@@ -1272,7 +1273,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Terms of Service</h1>
-                <p class="stamp">Last updated: <time datetime="2026-10-08">2026-10-08</time></p>
+                <p class="stamp">Last updated: <time datetime="2026-10-15">2026-10-15</time></p>
                 <p class="applies">These Terms of Service govern your use of <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, including connecting it to your Instagram, Facebook, TikTok and YouTube accounts.</p>
 
@@ -1350,7 +1351,8 @@
                         wrote it (and a public reply under the comment, if you turn that on), plus
                         a like on that comment; and replies to direct messages sent to your
                         account. Direct-message replies are written by an AI model (Google
-                        Gemini), not a person.
+                        Gemini by default, or another AI provider the operator chooses, as the
+                        <a href="/privacy">privacy policy</a> describes), not a person.
                     </li>
                 </ul>
                 <p>

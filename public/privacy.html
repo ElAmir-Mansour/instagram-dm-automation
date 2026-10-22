@@ -129,6 +129,26 @@
     · the audit_log row Connect writes holds the channel id and scopes only,
       not the name (src/routes/youtube.ts, the callback);
     · no third-party content, ads or cookies: the YouTube code has none.
+
+  DM REPLIES THROUGH AN AI PROVIDER — ADDED 2026-10-15 (section 3's third
+  paragraph, and the DM sentences in section 5 and on /data-deletion and /terms).
+  Gemini is the default engine; the operator can change it per account, and the
+  claims are what the code does when they do:
+    · the engine is per account, `gemini` by default, `providers` the other:
+      DM_ENGINES / DEFAULT_DM_ENGINE, src/services/dmEngine.ts:37-43;
+    · `providers` sends the same persona, knowledge base and history window as
+      Gemini (HISTORY_WINDOW = 8, src/services/ai.ts:97) through the `dm` route:
+      generateDmViaLayer(), dmEngine.ts:145-201;
+    · sales mode always uses the `dm` route, with up to 12 messages:
+      SALES_HISTORY_WINDOW, src/services/dmSales/turn.ts:72, and the turn's
+      facts (stage, link sent, button tapped, the CAMPAIGN'S keyword, never the
+      comment's text): salesFactsBlock(), src/services/dmSales/prompt.ts:163-174,
+      the keyword from bridge.ts:138;
+    · each turn is direction and text only (dmTurns(), dmEngine.ts:105-113;
+      salesTurns(), dmSales/history.ts:114): no username, account id or
+      conversation id is in any request the layer builds;
+    · a provider that fails is answered once by Gemini when the account's
+      fallback is on (generateDmReply(), dmEngine.ts:235; turn.ts:370-381).
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -1314,7 +1334,7 @@
                 <h2 id="gemini-ar">3. الردّ الآلي و«جيميناي» من جوجل</h2>
                 <p>
                     الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
-                    يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
+                    يُرسَل افتراضياً <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة <bdi lang="en" dir="ltr">Gemini API</bdi></a>
                     من جوجل.
                 </p>
@@ -1322,6 +1342,15 @@
                     ما يُرسَل إلى جوجل هو النصوص واتجاه كل رسالة فقط. <strong>لا يُرسَل اسمك ولا
                     معرّف حسابك ولا معرّف المحادثة</strong> إلى جوجل. ونصوص التعليقات لا تُرسَل
                     إلى جوجل إطلاقاً — مسار التعليقات لا يستخدم الذكاء الاصطناعي.
+                </p>
+                <p>
+                    ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
+                    الاصطناعي المذكورين في القسم 5، والحساب الذي يستخدم وضع المبيعات في الأداة تُكتب ردوده بهذه
+                    الطريقة دائماً. وعندئذٍ يُرسَل <strong>نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة</strong>،
+                    مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل، ومعها ملاحظات عن المحادثة نفسها: كأن يُذكر
+                    هل أُرسل إليك رابط من قبل، وأيّ أزرار الحساب ضغطت، أو أنك علّقت على منشور بالكلمة المفتاحية
+                    التي حدّدها الحساب (الكلمة نفسها، لا تعليقك). <strong>ولا يُرسَل إليه كذلك اسمك ولا معرّف حسابك
+                    ولا معرّف المحادثة.</strong> وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ «جيميناي» كما سبق.
                 </p>
                 <p>
                     وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
@@ -1413,7 +1442,7 @@
                 <h3 id="ai-providers-ar">مزوّدو الذكاء الاصطناعي (جهات معالجة فرعية)</h3>
                 <p>
                     يستطيع مُشغّل الأداة (القسم 9) أن يفعّل مزوّداً أو أكثر من المزوّدين التاليين ليكتب مسودّات بالذكاء
-                    الاصطناعي لحساب صاحب الحساب. <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
+                    الاصطناعي لحساب صاحب الحساب، والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3). <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
                     وما لم يفعل ذلك لا يصله شيء.
                 </p>
                 <ul>
@@ -1446,9 +1475,9 @@
                 </ul>
                 <p>
                     <strong>ما يُرسَل إليهم:</strong> ملف صاحب الحساب ومحتواه — ما يكتبه عن نفسه وعن نشاطه، ونصوص موقعه
-                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. <strong>لا يُرسَل عبر هذا المسار
-                    شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong> (أما نصوص الرسائل الخاصة التي تصل إلى جوجل فموضّحة
-                    في القسم 3). ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
+                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ
+                    على رسائله الخاصة، <strong>يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً</strong>، على النحو الموضّح في القسم 3 تماماً؛
+                    <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
                     وما يصل إلى كل منهم يخضع لسياسته هو، ولا نستطيع حذفه نيابةً عنك.
                 </p>
 
@@ -1807,7 +1836,7 @@
                 <h2 id="gemini-en">3. Automated replies and Google Gemini</h2>
                 <p>
                     Replies to direct messages are written by an AI model, not a person. To
-                    generate one, <strong>the text of your message and the last eight messages
+                    generate one, by default, <strong>the text of your message and the last eight messages
                     in the thread</strong> are sent to Google's
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API</a>.
                 </p>
@@ -1816,6 +1845,17 @@
                     nothing more. <strong>Your username, your account ID, and the conversation
                     ID are not sent to Google.</strong> Comment text is never sent to Google at
                     all — the comment path does not use AI.
+                </p>
+                <p>
+                    The operator of the tool (section 9) can instead have an account's replies written by one
+                    of the AI providers listed in section 5, and an account that uses the tool's sales mode
+                    always has them written that way. Then <strong>the text of your message and up to the last
+                    twelve messages in the thread</strong>, with the direction of each, are sent to that provider
+                    in place of Google, together with notes about the conversation itself: for example, whether
+                    you have already been sent a link, which of the account's buttons you tapped, or that you
+                    commented the account's keyword on a post (the keyword, not your comment). <strong>Your
+                    username, your account ID and the conversation ID are not sent to it either.</strong> If that
+                    provider cannot answer, the reply may be written by Gemini as described above.
                 </p>
                 <p>
                     As Meta's policy requires, the first message in a thread — and another one
@@ -1915,7 +1955,8 @@
                 <h3 id="ai-providers-en">AI providers (sub-processors)</h3>
                 <p>
                     The operator of the tool (section 9) can switch on one or more of the providers below to write
-                    AI drafts for an account owner. <strong>None of them is used unless the operator has added its key and left it
+                    AI drafts for an account owner and, where the operator chooses, the replies to its direct messages
+                    (section 3). <strong>None of them is used unless the operator has added its key and left it
                     switched on</strong>; until then nothing reaches it.
                 </p>
                 <ul>
@@ -1948,9 +1989,10 @@
                 <p>
                     <strong>What is sent to them:</strong> the account owner's profile and content — what they write about
                     themselves and their work, the text of their site and the links they provide, and the posts being written
-                    for them and their captions — so that a draft can be written for them. <strong>Nothing about people who
-                    comment or message on Instagram or Facebook is sent through this route</strong> (the direct-message text
-                    that reaches Google is described in section 3). Each provider is used with the operator's key, not the
+                    for them and their captions — so that a draft can be written for them. When the operator has a provider write
+                    an account's direct-message replies, <strong>the text of the conversation is sent to that provider
+                    too</strong>, exactly as section 3 describes; <strong>nothing else about people who comment or message
+                    on Instagram or Facebook is sent through this route</strong>. Each provider is used with the operator's key, not the
                     account owner's. What reaches each of them is governed by its own
                     policy, and we cannot delete it on your behalf.
                 </p>
