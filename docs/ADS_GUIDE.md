@@ -275,8 +275,9 @@ cause first, then ask for **one** review in Meta's Account Quality; repeated app
   `FB_POST_MESSENGER_OK = false`. Meta's pages disagree (`object_story_id` "not supported" for Messenger creatives on one page,
   supported on another). Flip the constant only after a `validate_only` call that succeeds, and record the result in
   research.md R11.
-- **Creative opt-outs** (`CREATIVE_OPT_OUTS`) are sent on every creative. If Meta answers "unknown key", remove that key from
-  the list; `validate_only` shows it before anything is created.
+- **Creative opt-outs.** A creative built from a post takes only the keys Meta allows there (`POST_CREATIVE_OPT_OUTS`; live-checked
+  2026-10-22: Meta answered that `music` must be one of 7 keys). A media creative (A5) sends the full `CREATIVE_OPT_OUTS`; if Meta answers
+  "must be one of" or "unknown key", trim the list to what it names; `validate_only` shows it before anything is created.
 - **Real delivery** (review, conversations labelled with the ad, cost per conversation next day) is checked only with the
   owner's OK, one day at the minimum budget (quickstart §A4 step 4).
 
