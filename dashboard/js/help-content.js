@@ -2299,6 +2299,140 @@ const HelpContent = {
                         ],
                     },
                 },
+                {
+                    id: 'audiences',
+                    title: { ar: 'الجماهير: اعرض إعلاناتك على من يعرفونك', en: 'Audiences: show your ads to people who know you' },
+                    body: {
+                        ar: [
+                            'الجمهور مجموعة محفوظة من الأشخاص تبنيها ميتا من نشاطهم على حساباتك أنت، ثم تضمّها إلى حملة أو تستبعدها منها في خطوة **الجمهور** من منشئ الحملات. لا تخرج أي بيانات اتصال من التطبيق لبناء هذه الأنواع: ميتا تعرف من تفاعل مع حسابك.',
+                            { dl: [
+                                ['المتفاعلون على إنستغرام', 'من أعجبوا أو علّقوا أو حفظوا أو شاركوا أو زاروا حسابك، أو من أرسلوا إليه رسالة. حتى 730 يومًا.'],
+                                ['المتفاعلون مع صفحة فيسبوك', 'من تفاعلوا مع الصفحة أو منشوراتها، أو زاروها، أو نقروا زرًا فيها، أو أرسلوا رسالة. حتى 730 يومًا.'],
+                                ['من أرسلوا رسالة', 'من راسلوا حسابك على إنستغرام أو صفحتك أو كليهما. حتى 730 يومًا.'],
+                                ['مشاهدو الفيديو', 'من شاهدوا نسبة تختارها (3 ثوانٍ، أو ThruPlay، أو 25% إلى 95%) من مقاطع منشورة تختارها. حتى 365 يومًا.'],
+                            ] },
+                            { ol: [
+                                'افتح **الإعلانات** ثم تبويب **الجماهير**، واضغط **جمهور جديد**.',
+                                'اختر النوع، ثم من يدخل فيه والمدة بالأيام.',
+                                'اكتب اسمًا محايدًا أو اترك الخانة فارغة ليُختار اسم تلقائيًا، ثم اضغط **أنشئ الجمهور**.',
+                                'يظهر الجمهور «قيد الإنشاء» حتى تبنيه ميتا، ثم «جاهز» مع حجمه التقريبي. تتحقق الصفحة بنفسها كل بضع ثوانٍ.',
+                            ] },
+                            { h: 'الحالات' },
+                            { dl: [
+                                ['جاهز', 'يمكن استخدامه في أي حملة.'],
+                                ['صغير جدًا', 'تحتاج ميتا إلى نحو 1,000 شخص لعرض الإعلانات. أطِل المدة أو أضف مصادر. ويمكن أن يكون مصدرًا لجمهور مشابه متى بلغ 100 شخص.'],
+                                ['علّمته ميتا', 'رأت ميتا أن الجمهور يوحي بمعلومات حساسة، فلا يمكن استخدامه. احذفه وأنشئ جمهورًا باسم محايد.'],
+                            ] },
+                            { warn: 'الأسماء محايدة دائمًا. تمنع شروط ميتا أي اسم أو معيار يوحي بالصحة أو الضائقة المالية أو الدين أو التوجه أو السياسة، ويرفض التطبيق هذه الأسماء. ولا تُستخدم تصنيفات الردّ الآلي لمحادثاتك الخاصة (مثل من تردد بسبب السعر) لبناء الجماهير أو تسميتها أبدًا.' },
+                            { tip: 'قبل أول جمهور يجب أن يقبل مالك الحساب الإعلاني شروط الجماهير المخصصة من ميتا. لا تسمح ميتا بقبولها من خلال التطبيق، فإن لم تُقبل ظهر في تبويب الجماهير زر يفتح صفحة الشروط في ميتا.' },
+                        ],
+                        en: [
+                            'An audience is a saved group of people that Meta builds from what they did on your own accounts. You then include it in a campaign or leave it out, in the **Audience** step of the campaign builder. No contact data leaves the app to build these kinds: Meta knows who engaged with your account.',
+                            { dl: [
+                                ['Instagram engagers', 'People who liked, commented, saved, shared, visited your account, or sent it a message. Up to 730 days.'],
+                                ['Facebook Page engagers', 'People who engaged with the Page or its posts, visited it, clicked a button on it, or sent a message. Up to 730 days.'],
+                                ['People who messaged', 'People who messaged your Instagram account, your Page, or both. Up to 730 days.'],
+                                ['Video viewers', 'People who watched a share you choose (3 seconds, ThruPlay, or 25% to 95%) of published videos you choose. Up to 365 days.'],
+                            ] },
+                            { ol: [
+                                'Open **Ads**, then the **Audiences** tab, and press **New audience**.',
+                                'Choose the kind, then who is in it and over how many days.',
+                                'Type a neutral name, or leave it empty for an automatic one, and press **Create audience**.',
+                                'The audience shows “Being created” until Meta has built it, then “Ready” with its approximate size. The page checks again by itself every few seconds.',
+                            ] },
+                            { h: 'Statuses' },
+                            { dl: [
+                                ['Ready', 'Can be used in any campaign.'],
+                                ['Too small', 'Meta needs about 1,000 people to show ads. Make the window longer or add sources. It can still be the source of a lookalike once it has 100 people.'],
+                                ['Flagged by Meta', 'Meta judged that the audience suggests sensitive information, so it cannot be used. Delete it and create one with a neutral name.'],
+                            ] },
+                            { warn: 'Names are always neutral. Meta’s terms forbid any name or criterion that suggests health, money troubles, religion, orientation or politics, and the app refuses such names. The automated replies’ labels for your private conversations (such as someone who hesitated over the price) are never used to build or name an audience.' },
+                            { tip: 'Before the first audience, the ad account’s owner must accept Meta’s Custom Audience Terms. Meta does not let an app accept them, so when they are not accepted the Audiences tab shows a button that opens the terms in Meta.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'lookalikes',
+                    title: { ar: 'الجماهير المشابهة', en: 'Lookalikes' },
+                    body: {
+                        ar: [
+                            'الجمهور المشابه أشخاص جدد في دولة واحدة يشبهون أحد جماهيرك. هو أسهل طريق للوصول إلى من لم يعرفوك بعد لكنهم يشبهون من تفاعلوا معك.',
+                            { ol: [
+                                'أنشئ أولًا جمهورًا مصدرًا، مثل المتفاعلين على إنستغرام في آخر 90 يومًا، وانتظر حتى يصبح جاهزًا.',
+                                'اضغط **جمهور جديد** ثم **جمهور مشابه**.',
+                                'اختر الجمهور المصدر والدولة (مصر أو السعودية أو غيرهما) والحجم من 1% إلى 20%.',
+                            ] },
+                            { ul: [
+                                '1% هو الأقرب شبهًا والأصغر عددًا، والنسبة الأكبر تصل إلى عدد أكبر يشبهونهم بدرجة أقل.',
+                                'تحتاج ميتا إلى 100 شخص على الأقل من الدولة المختارة في الجمهور المصدر.',
+                                'لكل دولة جمهور مشابه خاص بها: لمصر والسعودية أنشئ اثنين.',
+                                'تحدّث ميتا الجمهور المشابه كل بضعة أيام، ويصبح غير نشط إن لم يُستخدم 90 يومًا.',
+                                'لا يمكن أن يكون جمهور مشابه مصدرًا لجمهور مشابه آخر.',
+                            ] },
+                        ],
+                        en: [
+                            'A lookalike is new people in one country who resemble one of your audiences. It is the easiest way to reach people who do not know you yet but resemble those who engaged with you.',
+                            { ol: [
+                                'First create a source audience, such as Instagram engagers of the last 90 days, and wait until it is ready.',
+                                'Press **New audience**, then **Lookalike**.',
+                                'Choose the source audience, the country (Egypt, Saudi Arabia or another) and the size, from 1% to 20%.',
+                            ] },
+                            { ul: [
+                                '1% is the closest match and the smallest; a larger percentage reaches more people who resemble them less.',
+                                'Meta needs at least 100 people from the chosen country in the source audience.',
+                                'Each country has its own lookalike: for Egypt and Saudi Arabia, create two.',
+                                'Meta refreshes a lookalike every few days, and it goes inactive when unused for 90 days.',
+                                'A lookalike cannot be the source of another lookalike.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'customer-lists',
+                    title: { ar: 'قوائم العملاء: مقفلة حتى الاعتماد القانوني', en: 'Customer lists: locked until a legal sign-off' },
+                    body: {
+                        ar: [
+                            'قائمة العملاء جمهور تبنيه من بريد عملائك الإلكتروني أو أرقام هواتفهم. ورفعها معالجةٌ لبيانات شخصية يخضع لقانون حماية البيانات الشخصية في مصر (رقم 151 لسنة 2020، ومهلة الامتثال تنتهي في 1 نوفمبر 2026) ونظام حماية البيانات الشخصية في السعودية، اللذين يشترطان الموافقة وحق الاعتراض وحفظ السجلات.',
+                            { h: 'لماذا هي مقفلة' },
+                            'تبقى قوائم العملاء مقفلة لكل حساب حتى يسجّل مدير المنصة اعتمادًا قانونيًا لدول ذلك الحساب: من أصدر الرأي القانوني، ومتى، ولأي دول. يظهر الخيار في تبويب الجماهير لكنه مقفل، ومعه ما يلزم لفتحه. وإذا أُلغي الاعتماد أُقفلت القوائم من جديد.',
+                            { h: 'بعد فتحها' },
+                            { ol: [
+                                'الصق القائمة أو اختر ملف ‎.csv أو ‎.txt حتى 3 ميغابايت. يساعد سطر عناوين مثل email, phone, first name.',
+                                'اختر دولة الأرقام التي بلا رمز دولة (من الدول المشمولة بالاعتماد فقط).',
+                                'أكّد أن هؤلاء الأشخاص وافقوا على تلقي التسويق منك وأن لديك أساسًا قانونيًا، ثم اضغط **موّه وارفع**.',
+                                'يعرض التطبيق ما أُرسل وما استُبعد: من طلبوا عدم التواصل، والصفوف غير الصالحة، والصفوف من دول غير مشمولة، والمكرر.',
+                            ] },
+                            { h: 'ما يحدث للقائمة' },
+                            { ul: [
+                                'تُموَّه داخل التطبيق: يُوحَّد كل بريد ورقم (أحرف صغيرة، ورمز الدولة) ثم يُحوَّل بدالة SHA-256 إلى رمز لا يُقرأ، قبل أن يُرسل أي شيء إلى ميتا.',
+                                'لا تُحفظ: يُقرأ النص في الطلب نفسه ثم يُترك. لا يبقى منه إلا عدد الصفوف المرسلة. وتُمسح الرموز المموّهة من قائمة الانتظار فور انتهاء الرفع.',
+                                'يُستبعد من طلبوا عدم التواصل تلقائيًا: من أوقفوا رسائل واتساب أو سحبوا فيها موافقتهم على التسويق، ومن سجّلتَ أنهم طلبوا ألا يكونوا في قوائمك (طلبات عدم الاستهداف).',
+                                'تطابق ميتا الرموز مع حساباتها ثم تحذفها بعد المطابقة.',
+                            ] },
+                            { tip: 'إذا طلب أحد ألا يظهر في إعلاناتك، سجّل رقمه أو بريده في **طلبات عدم الاستهداف** من تبويب الجماهير. يُحفظ مموّهًا فقط، ويُحذف من القوائم المرفوعة لدى ميتا، ويُستبعد من أي رفع لاحق.' },
+                        ],
+                        en: [
+                            'A customer list is an audience built from your customers’ emails or phone numbers. Uploading one is processing personal data under Egypt’s Personal Data Protection Law (No. 151 of 2020; the compliance period ends on 1 November 2026) and Saudi Arabia’s Personal Data Protection Law, which require consent, a right to object and kept records.',
+                            { h: 'Why it is locked' },
+                            'Customer lists stay locked for each account until the platform admin records a legal sign-off for that account’s countries: who gave the legal opinion, when, and for which countries. The option shows in the Audiences tab, locked, with what is needed to open it. If the sign-off is revoked, lists lock again.',
+                            { h: 'Once unlocked' },
+                            { ol: [
+                                'Paste the list or choose a .csv or .txt file of up to 3 MB. A header row such as email, phone, first name helps.',
+                                'Choose the country of numbers that have no country code (only countries the sign-off covers).',
+                                'Confirm that these people agreed to receive marketing from you and that you have a legal basis, then press **Scramble and upload**.',
+                                'The app shows what was sent and what was left out: people who opted out, invalid rows, rows from countries not covered, and duplicates.',
+                            ] },
+                            { h: 'What happens to the list' },
+                            { ul: [
+                                'Scrambled in the app: every email and number is normalised (lowercase, with the country code) and turned by SHA-256 into a code that cannot be read, before anything is sent to Meta.',
+                                'Not kept: the text is read within the request and dropped. All that stays is how many rows were sent. The scrambled codes are cleared from the queue as soon as the upload ends.',
+                                'Opted-out people are left out automatically: people who stopped WhatsApp messages or withdrew marketing consent there, and people you recorded as asking not to be in your lists (Do-not-target requests).',
+                                'Meta matches the codes against its accounts and deletes them after matching.',
+                            ] },
+                            { tip: 'If someone asks not to see your ads, record their number or email under **Do-not-target requests** in the Audiences tab. It is stored scrambled only, removed from the lists already at Meta, and left out of every later upload.' },
+                        ],
+                    },
+                },
             ],
         },
         // ─── 6. Carousel Studio overview ─────────────────────────────────────

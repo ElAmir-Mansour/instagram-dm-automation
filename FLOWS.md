@@ -2537,7 +2537,7 @@ same words (`monteur.brain: 'api'` is never retried on Gemini or the Mac).
 
 ### 7.5 Proposals: an ad drafted by Claude, applied only after a person approves (Ads A7)
 
-(§7.2–7.4 are left for later phases.) The same split as §7 and §7.1, for ads: **the owner's drafts are Studio `ads_think` jobs
+(§7.2–7.4 are left for later phases; §7.6 is audiences.) The same split as §7 and §7.1, for ads: **the owner's drafts are Studio `ads_think` jobs
 on his Mac; every other tenant's go to the AI providers layer on its own key.** `ads_draft` / `ads_review` are NOT in
 `MAC_BRAIN_PURPOSES` (that set means "refuse on the layer"): a Mac tenant simply never asks the layer for them. Code in
 `src/services/ads/proposals/` (types.ts names every file); routes in `src/routes/adsProposals.ts`.
@@ -2579,6 +2579,58 @@ on his Mac; every other tenant's go to the AI providers layer on its own key.** 
    older than 24 h → `failed`, "the Mac did not answer") then `runDailyReview` (**`service.ts:367`**): for each `ads.enabled`
    tenant with ≥ 3 days of results and an active object, one review a day (≤ 3 proposals), skipped quietly without an AI for it;
    when it opens, one `proposal_ready` alert (A1 `notifyAds`).
+
+### 7.6 Audiences: engagement, lookalikes, and customer lists behind a legal lock (Ads A8)
+
+Tables in **v56** (`ads_audiences`, `ads_legal_signoffs`; the same file holds A9's `ads_rules` / `ads_rule_runs`). Code in
+`src/services/ads/audiences.ts` (rules, store, sync fold-in), `hashing.ts` (customer lists), `legalSignoff.ts` (the lock);
+routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DISABLED gate; the screen is `#/ads_audiences`
+(`dashboard/js/pages/ads_audiences.js`). **Every write goes through A2's `ads_ops`; nothing here calls Meta inline.**
+
+1. **Engagement and video audiences.** `POST /api/ads/audiences` (owner; **`adsAudiences.ts:217`**) → `parseAudienceInput`
+   (**`audiences.ts:233`**: kind, retention ≤ 730 days, video ≤ 365, 1–50 video ids) and `validateAudienceName` (**`:171`**:
+   names implying health, money troubles, religion, orientation, politics or a DM-bot segment are 400 `INVALID`
+   `reason: sensitive_name`; a blank name gets a neutral Arabic one). `tosAccepted.custom === false` (the account read A1 stores,
+   `health.account.tosAccepted`) → 409 `TERMS_NOT_ACCEPTED` with Meta's acceptance link: **the API cannot accept the terms.**
+   `buildCreateParams` (**`:363`**) builds the rule JSON on the tenant's own `instagram_page_id` (`ig_business`) or
+   `facebook_page_id` (`page`), or the legacy array rule for video (`subtype: ENGAGEMENT`); then a `creating` row and one
+   `audience_create` op (`object_key = audience:<id>`, POST `act_<id>/customaudiences`). The queue appends ` AR·<op id>` to the
+   name and verifies a lost create by that tag.
+2. **Lookalikes.** Same route, `kind: lookalike`: the seed must be the tenant's, not a lookalike, have a Meta id, not be flagged or
+   still building, and have `size_lower ≥ 100` (409 `SEED_TOO_SMALL`). Params `subtype: LOOKALIKE`, `origin_audience_id`,
+   `lookalike_spec {ratio 0.01–0.20, country}`.
+3. **Size and status.** `syncStructure` → `syncAudiences` (**`sync.ts:568`**), only when the tenant has a live audience:
+   `adoptCreatedMetaIds` (**`audiences.ts:596`**: `meta_id` from the done `audience_create` op's `result.id`), then
+   `GET act_<id>/customaudiences` (≤ 2 pages, 1 point each) → `applyAudienceReads` (**`:612`**) → `classifyAudienceRead`
+   (**`:420`**): `operation_status 471` → `flagged` (unusable; Meta reviews only in its own UI), `delivery_status 300` or an upper
+   bound < 1,000 → `too_small`, 414/441 → still `creating`, else `ready`. Fail-soft: a failed read never fails the sync.
+   `GET /api/ads/audiences` also adopts ids, and lists each audience with its newest op (a failed create with 200/1870090 shows
+   the terms message).
+4. **Builder.** The picker (`AdsAudiencePicker` in ads_audiences.js, mounted by `ads_create.js` in the audience step) sends our
+   audience ids; `createDraft` / `validateDraft` run `resolveSpecAudiences` (**`audiences.ts:688`**): each id is the tenant's,
+   an included one is `ready`, an excluded one has a Meta id; numeric ids (made in Ads Manager) pass through. A special category
+   cannot exclude (spec.ts).
+5. **Customer lists.** `POST /api/ads/audiences/customer-list` (owner; **`adsAudiences.ts:258`**):
+   1. **The lock first:** no non-revoked `customer_lists` row in `ads_legal_signoffs` → 403 `LOCKED_LEGAL` **before the text is
+      read**. Only the platform admin writes that table (`POST/DELETE /api/admin/ads/tenants/:id/legal-signoff`,
+      **`admin.ts:1284`**; tenant detail → "Ads: legal sign-off"). Egypt PDPL 151/2020 (deadline 2026-11-01) and Saudi PDPL.
+   2. The JSON body carries `{ name, columns | 'auto', defaultCountry?, text }` (≤ 3 MB; the browser reads a file with
+      FileReader). `parseCustomerText` (**`hashing.ts:259`**) → `prepareCustomerList` (**`:331`**): normalise (email trim +
+      lowercase; phone digits with the country code, no leading zero, `defaultCountry` for national numbers; names lowercase with
+      no punctuation; country ISO-2), drop rows with no email or phone, drop rows whose country is outside the sign-off's
+      `countries`, drop opted-out rows (`loadOptOutHashes`, **`:437`**: `conversations.wa_phone` with `opted_out_at`, the newest
+      `contact_consents` marketing row `withdrawn`, and `customer_list_optout` hashes), dedupe, SHA-256 every cell.
+   3. A row with only `{ columns, rows_sent, matched_estimate }` in `spec`, one `audience_create` op, then one `audience_users` op
+      per ≤ 10,000 rows (`toBatches` / `buildUsersParams`: `session {session_id, batch_seq, last_batch_flag,
+      estimated_num_total}`), each `dependsOn` the create, `path: '{dep}/users'`, `scrub: true` (ops.ts empties `exec.params` in
+      the statement that ends the op). Audit `ads.customer_list_uploaded` with counts only. **The raw text is never stored,
+      logged, audited or echoed** (pinned by `ads.audiences.test.ts`).
+6. **Opt-outs.** `POST /api/ads/audiences/opt-outs` (owner; **`adsAudiences.ts:321`**) `{ contact }` (a `+`/`00` phone or an
+   email) → only `sha256(normalised)` in `contact_consents` (`platform 'customer_list_optout'`, `withdrawn`), plus a
+   `DELETE <audience>/users` op (scrubbed) on each of the tenant's customer lists at Meta. A WhatsApp STOP excludes the number
+   from later uploads through `opted_out_at`; removal from lists already at Meta needs this route.
+7. **Delete.** `DELETE /api/ads/audiences/:id` `{ confirm: true }`: a `delete` op on the Meta id (or just the row when the create
+   never landed); the row is marked `deleted` and kept.
 
 ## 8. Meta login → a connected Page
 

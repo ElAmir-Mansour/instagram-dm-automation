@@ -55,6 +55,7 @@ import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
 import { sendError } from '../services/errorCodes.js';
+import { LegalSignoffError, listSignoffs, parseSignoffInput, recordSignoff, revokeSignoff } from '../services/ads/legalSignoff.js';
 import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
@@ -1247,6 +1248,80 @@ router.get('/tenants/:id/invites', async (req, res) => {
         res.json({ invites: await listInvites(id) });
     } catch (err) {
         failWith(res, err, 'admin.invites_list_failed', 'Failed to list invites.');
+    }
+});
+
+// ─── Ads legal sign-off (Ads Manager A8, v56) ───────────────────────────────────────────────────────────────────────
+
+/**
+ * The platform admin's record that a legal opinion covers customer lists or lead ads for some countries (Egypt PDPL 151/2020,
+ * Saudi PDPL). Until a non-revoked row exists the tenant's capability stays locked (`services/ads/legalSignoff.ts`). The tenant
+ * is the one in the PATH; the body cannot name another. Audited with the scope, countries and ids, never the note's text.
+ */
+async function adsTenantExists(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
+    return (await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [id])).length > 0;
+}
+
+/** `{ error, code: 'INVALID', field }` for a refused sign-off body. */
+function answerSignoffRefusal(res: Response, err: LegalSignoffError): void {
+    res.status(400).json({ error: err.message, code: err.code, field: err.field });
+}
+
+router.get('/ads/tenants/:id/legal-signoff', async (req, res) => {
+    try {
+        const { id } = req.params as { id: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        res.json({ signoffs: await listSignoffs(id, { includeRevoked: true }) });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_list_failed', 'Failed to list the legal sign-offs.');
+    }
+});
+
+router.post('/ads/tenants/:id/legal-signoff', async (req, res) => {
+    try {
+        const { id } = req.params as { id: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        let input;
+        try {
+            input = parseSignoffInput(req.body);
+        } catch (err) {
+            if (err instanceof LegalSignoffError) {
+                answerSignoffRefusal(res, err);
+                return;
+            }
+            throw err;
+        }
+        const signoff = await recordSignoff(id, input, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, {
+            change: 'recorded', signoff_id: signoff.id, scope: signoff.scope, countries: signoff.countries,
+        });
+        res.status(201).json({ signoff });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_record_failed', 'Failed to record the legal sign-off.');
+    }
+});
+
+router.delete('/ads/tenants/:id/legal-signoff/:sid', async (req, res) => {
+    try {
+        const { id, sid } = req.params as { id: string; sid: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        const revoked = await revokeSignoff(id, sid);
+        if (revoked) {
+            await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, { change: 'revoked', signoff_id: sid });
+        }
+        res.json({ revoked });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_revoke_failed', 'Failed to revoke the legal sign-off.');
     }
 });
 

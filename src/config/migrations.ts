@@ -67,6 +67,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v53_ads_core.sql',
     'migration_v54_ads_attribution.sql',
     'migration_v55_ads_proposals.sql',
+    'migration_v56_ads_audiences_rules.sql',
 ] as const;
 
 export interface SchemaState {

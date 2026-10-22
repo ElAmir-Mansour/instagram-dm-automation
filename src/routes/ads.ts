@@ -54,6 +54,7 @@ import { parseSwitchesInput, readAdsSwitches, writeAdsSwitches } from '../servic
 import { fetchAccountState } from '../services/ads/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { mountObjectRoutes } from './adsObjects.js';
+import { mountAudienceRoutes } from './adsAudiences.js';
 import { createDraft, DraftRefused, minimumDailyBudget, validateDraft } from '../services/ads/drafts.js';
 import { prepareMedia } from '../services/ads/adMedia.js';
 import { signAdUpload } from '../services/ads/adUploads.js';
@@ -580,6 +581,9 @@ adsRouter.get('/minimum-budgets', canView, async (req, res) => {
 // ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
 
 mountObjectRoutes(adsRouter, fail);
+
+// Audiences (A8): engagement, video, lookalike and customer-list audiences; the legal lock and the opt-out list (routes/adsAudiences.ts).
+mountAudienceRoutes(adsRouter, fail);
 
 // ─── The Results tab (A6): per-day results from the stored copy, never Meta ────────────────────────────────────────────────────────
 

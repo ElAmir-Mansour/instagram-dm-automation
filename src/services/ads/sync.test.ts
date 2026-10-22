@@ -287,6 +287,30 @@ describe('syncStructure', () => {
         assert.equal(stateOf(w).account.tz, 'Asia/Baghdad');
     });
 
+    it('reads the audiences only when the tenant has some, adopts create-op ids first, and stores Meta\'s size and status (A8)', async () => {
+        await syncStructure(C, {}, w.deps);
+        assert.equal(graphCalls(w).filter((c) => c.path.endsWith('/customaudiences')).length, 0, 'no audiences, no read');
+
+        w.db.routes.push(
+            [/^SELECT 1 FROM ads_audiences/, () => ({ rows: [{ '?column?': 1 }] })],
+            [/^\s*UPDATE ads_audiences a\s+SET meta_id = o\.result/, () => ({ rows: [] })],
+            [/^SELECT .* FROM ads_audiences WHERE creator_id = \$1 AND status <> 'deleted'$/, () => ({ rows: [{ id: 'aud-1', creator_id: C, meta_id: '6001', kind: 'ig_engagement', status: 'creating' }] })],
+            [/^UPDATE ads_audiences SET meta_id = \$3, status/, ([, id]) => ({ rows: [{ id }] })],
+        );
+        const base = w.get;
+        w.get = (path, params) => path.endsWith('/customaudiences')
+            ? { data: [{ id: '6001', name: 'x', approximate_count_lower_bound: 4000, approximate_count_upper_bound: 5000, operation_status: { code: 471 } }] }
+            : base(path, params);
+        await syncStructure(C, {}, w.deps);
+        const read = graphCalls(w).filter((c) => c.path === `act_${ACCOUNT}/customaudiences`);
+        assert.equal(read.length, 1);
+        assert.match(String(read[0]!.params['fields']), /operation_status,delivery_status/);
+        assert.equal(w.sql(/UPDATE ads_audiences a\s+SET meta_id = o\.result/).length >= 1, true);
+        const update = w.sql(/^UPDATE ads_audiences SET meta_id = \$3, status/);
+        assert.equal(update.length, 1);
+        assert.deepEqual(update[0]!.params.slice(1, 6), ['aud-1', '6001', 'flagged', 4000, 5000]);
+    });
+
     it('follows paging.next by its cursor and reads every page before marking deletions', async () => {
         let page = 0;
         w.get = (path, params) => {

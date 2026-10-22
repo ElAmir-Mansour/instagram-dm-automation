@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { queryOne } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
 import { waitUntil } from '../../utils/waitUntil.js';
+import { AudienceError, resolveSpecAudiences } from './audiences.js';
 import { AdsError } from '../adBoosts.js';
 import { loadAssistantState, type AssistantState } from '../inboxAssistant.js';
 import { mintAdLink } from '../links.js';
@@ -315,7 +316,13 @@ const EMPTY_POLICY: PolicyResult = { version: POLICY_VERSION, blocked: false, fi
 export async function validateDraft(creatorId: string, input: unknown): Promise<DraftValidation> {
     const checked = validateSpec(input);
     if (!checked.ok) return { estimate: null, previews: [], policy: EMPTY_POLICY, money: null, meta: null, problems: checked.problems, warnings: [], bots: [] };
-    const spec = checked.spec;
+    let spec = checked.spec;
+    try {
+        spec = { ...spec, adsets: await resolveSpecAudiences(creatorId, spec.adsets) };
+    } catch (err) {
+        if (!(err instanceof AudienceError)) throw err;
+        return { estimate: null, previews: [], policy: EMPTY_POLICY, money: null, meta: null, problems: [{ field: err.field ?? 'adsets', code: 'INVALID', message: err.message }], warnings: [], bots: [] };
+    }
     const facts = await readFacts(creatorId, spec);
     const policy = checkPolicy(policyFieldsOf(spec, facts.captions));
     const bots = spec.goal === 'messages' ? botStates(spec.destinations ?? [], facts.bots) : [];
@@ -428,7 +435,14 @@ export async function createDraft(
 ): Promise<CreatedDraft> {
     const checked = validateSpec(input);
     if (!checked.ok) { const p = checked.problems[0]!; throw refused(400, p.code === 'UNSUPPORTED' ? 'UNSUPPORTED' : 'INVALID', p.message, p.field); }
-    const spec = checked.spec;
+    let spec = checked.spec;
+    try {
+        // The picker sends our audience ids (A8): each is the tenant's and usable, and becomes its Meta id here.
+        spec = { ...spec, adsets: await resolveSpecAudiences(creatorId, spec.adsets) };
+    } catch (err) {
+        if (err instanceof AudienceError) throw refused(err.status, err.code, err.message, err.field);
+        throw err;
+    }
     const facts = await readFacts(creatorId, spec);
     if (facts.mediaRefusal) throw facts.mediaRefusal;
 

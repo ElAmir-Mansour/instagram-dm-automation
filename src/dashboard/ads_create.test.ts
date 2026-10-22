@@ -241,6 +241,19 @@ describe('the audience rules', () => {
 });
 
 describe('the CampaignSpec', () => {
+    it('carries the saved audiences the pickers chose (A8), and no exclusion under a special category', async () => {
+        const r = await ready();
+        const st = r.P.state;
+        st.includeAudiences = ['aud-1'];
+        st.excludeAudiences = ['aud-2'];
+        let spec = r.P.buildSpec(st);
+        assert.deepEqual(plain(spec.adsets[0].targeting.includeAudiences), ['aud-1']);
+        assert.deepEqual(plain(spec.adsets[0].targeting.excludeAudiences), ['aud-2']);
+        st.special = 'employment';
+        spec = r.P.buildSpec(st);
+        assert.equal(spec.adsets[0].targeting.excludeAudiences, undefined);
+    });
+
     it('is the contract\'s shape: a total budget carries its end, a schedule only with a total budget', async () => {
         const r = await ready();
         const st = r.P.state;

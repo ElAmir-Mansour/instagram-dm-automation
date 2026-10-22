@@ -390,6 +390,50 @@ Help Center: `#/help/ads#results`, `#provisional-numbers`, `#cost-per-conversati
 
 ---
 
+## Audiences
+
+**Where.** Ads → **Audiences** (`#/ads_audiences`). Saved groups of people that Meta builds; the builder's audience step includes or
+excludes them (the picker under interests).
+
+**Before the first one.** The ad account's owner accepts Meta's **Custom Audience Terms** once, in Meta. The API cannot accept them:
+when the stored account read says they are not accepted, the tab shows a banner and a button to Meta's terms page, and creates are
+refused with `TERMS_NOT_ACCEPTED`. A create that Meta refuses with `200/1870090` shows the same message on its card.
+
+| Kind | Built from | Window |
+|---|---|---|
+| Instagram engagers | the connected Instagram account: engaged, any interaction, profile visit, or messaged | up to 730 days |
+| Facebook Page engagers | the connected Page: engaged, visited, clicked a button, saved, or messaged | up to 730 days |
+| People who messaged | Instagram, the Page, or both | up to 730 days |
+| Video viewers | 1–50 published reels/videos: 3 s, ThruPlay, 25/50/75/95% | up to 365 days |
+| Lookalike | a ready (or "too small" but ≥ 100 people) non-lookalike audience, one country, 1–20% | — |
+| Customer list | emails / phones the owner uploads — **locked** until a legal sign-off (below) | — |
+
+- **Statuses.** *Being created* until Meta has built it (the page re-reads every 10 s); *Ready* with Meta's size range; *Too small*
+  under about 1,000 people (cannot be targeted, can seed a lookalike from 100); *Flagged by Meta* (`operation_status 471`: Meta
+  judged it implies sensitive data; unusable, review only in Meta's UI; delete it and recreate with a neutral name).
+- **Names are neutral.** The server refuses names implying health, financial status, religion, orientation, politics, or a DM-bot
+  segment (`reason: sensitive_name`). The bot's conversation labels never become an audience or a seed.
+- **Sizes** come from the hourly structure sync (`act_<id>/customaudiences`, only for tenants that have an audience).
+
+**Customer lists and the legal lock.** Uploading contacts is personal-data processing under Egypt's PDPL 151/2020 (compliance
+deadline 2026-11-01) and Saudi PDPL. So a tenant's customer lists stay **locked** until the platform admin records a sign-off:
+Tenants → the tenant → **Ads: legal sign-off** → scope *Customer-list audiences*, countries (e.g. `EG, SA`), and a note saying who gave
+the opinion and where it is filed. Revoking locks it again from the tenant's next request; rows are never deleted. Locked, the tab
+shows what is needed and a Help link, and the API answers `403 LOCKED_LEGAL` before reading any text.
+
+Unlocked, the owner pastes a list or picks a `.csv`/`.txt` (≤ 3 MB), chooses the country of numbers without a country code (only
+covered countries), ticks the consent box and presses **Scramble and upload**. In the request the server normalises and SHA-256-hashes
+every value, leaves out opted-out people (WhatsApp STOP / withdrawn marketing consent, and recorded do-not-target requests), rows
+outside the covered countries, invalid rows and duplicates, and queues the hashes in batches of ≤ 10,000. The list text is never
+stored; the hashes are cleared from the queue when each batch ends; the audience keeps only how many rows were sent.
+
+**Do-not-target requests.** When someone asks not to be shown your ads, record their `+country` phone or email at the bottom of the
+tab. Only its hash is kept; it is removed from every customer list already at Meta and left out of later uploads.
+
+Flow, hop by hop: `FLOWS.md` §7.6. Help Center: `#/help/ads#audiences`, `#lookalikes`, `#customer-lists`.
+
+---
+
 ## Troubleshooting
 
 - **No Connect button:** Connect is optional and off unless the platform enables it. Paste a system-user token.
