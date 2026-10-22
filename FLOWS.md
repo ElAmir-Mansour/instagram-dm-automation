@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Ten flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Eleven flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -28,7 +28,8 @@ bug it was written to fix.
 [7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask) ·
 [8. Meta login → a connected Page](#8-meta-login--a-connected-page) ·
 [9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait) ·
-[10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5)
+[10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5) ·
+[11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard)
 
 ---
 
@@ -3038,6 +3039,89 @@ test when asked for what they should not be asked for, and each step is tested w
 | 13.10 | **Words from a file, only when the agent will answer** (**`:475`**, **`whatsappMediaInput.ts:171`** `readInboundMedia`). The owner's own switch (`ai_agents.is_active`) is checked first (`agent_off`: nothing is transcribed, nothing is said). A photo, video or document **with a caption**: the caption is the message, answered as typed text (the model does not see the image). **A voice note** (**:193** `transcribeVoice`): `transcribeAudio` (**`services/transcribe.ts`**) from the private copy, language `ar`, Groq only (a provider that does not train on what it is sent; paid OpenAI stays off), the transcript stored as the row's `text` (`UPDATE messages SET text`), and the turn runs on it; a transcript that is itself a stop phrase is a stop (13.3). A retried voice note whose row holds a transcript is not sent to Groq again |
 | 13.11 | **A voice note that cannot be read** (no file, a format Groq refuses, a **429**, a timeout, silence, no provider): **ONE line** asking for text, whatever the reason, never a retry (`wa.voice_unreadable` with the reason). **A file with no caption**: the same line, the kit's `attachments.media` in the owner's register. Both go through **Instagram's own claim** (`CLAIM_ACK`, **`attachmentAck.ts`**, exported for this): the outbound row is inserted FIRST and only when no later message of theirs is waiting, no words are being answered, and the line was not said within a day; a send that fails for good takes the claim back, a send that MAY have landed keeps it. The line carries the automated-service disclosure when it is the first thing said (`ai_disclosed_at` is stamped after). The row says NULL when the line went out, `superseded` when the claim was refused (`wa.media_ack_skipped`), else why it could not be sent (`window_closed`, `billable_blocked`, `connection_invalid`, `failure`) |
 
+## 11. Ads: the money rule and the guard
+
+The Ads Manager (`src/services/ads/`, README there) runs on Meta's **Limited** access tier: about 60 points per 5 minutes per ad
+account, and a 300 s block past that. Every Marketing API call goes through one client with its own pinned version, and **one money
+rule** decides everything that can start or raise spend. This section walks that rule from a click to Meta, and the hourly guard that
+holds the cap after switch-on. (The stored copy and the paced queue of phase A2 will get §11.2.)
+
+### 11.1 — Money rule and guard
+
+**A. Every ads request**
+
+1. `/api/ads/*` is mounted below `resolveTenant` (`routes/api.ts:1611`). The router's first middleware, **`routes/ads.ts:54`**, answers
+   **404 `ADS_DISABLED`** unless `ads.enabled.<tenant>` is `'true'` (the platform admin's switch, `routes/admin.ts`
+   `POST /ads/tenants/:id/enabled`; migration v53 set it for every tenant that already had ads settings). It then runs the rest of the
+   request inside `withAdsContext({ creatorId, adAccountId })` (**`ads/graph.ts`** `withAdsContext`), so every Graph call it makes is
+   paced against that account.
+2. Each Graph call — `adsGet` / `adsPost` / `adsDelete`, and v1's `metaAds.ts` helpers, which delegate to them — goes through
+   **`ads/graph.ts:155`** `call`:
+   - the version is `ads.api_version` (`adsApiVersion`, default `v26.0`, never below `v25.0`), **not** `META_API_VERSION`;
+   - `reserve` (**`ads/pacer.ts:131`**) takes 1 point for a read, 3 for a write, from 45 of the 60 per 300 s; refused →
+     `AdsGraphError('throttle', retryAt)` **without calling Meta** (`graph.ts:167`);
+   - the answer's usage headers go to `observe` (Meta's `acc_id_util_pct` replaces our count); a `facebook-api-version` that is not the
+     pinned one logs **`ads.version_mismatch`**;
+   - an error is classified (`classifyAdsError`): a throttle blocks the account until Meta's `reset_time_duration` /
+     `estimated_time_to_regain_access` (300 s default), logs **`ads.throttled`** with `retry_at` (`graph.ts:194`) and is thrown at once.
+     `withRetry({ ads: true })` (**`http.ts:138`** `isAdsLimitError`) never retries a rate or edit limit.
+3. The route turns it into the answer (`metaRefusal`, `adBoosts.ts`): throttle → **429 `RATE_LIMITED`** + `retryAt`; 613/1487632,
+   613/4841018, 17/1885172 → 429 `EDIT_LIMIT`; 190/102 → **409 `TOKEN_INVALID`** (never 401, which signs the dashboard out), and the
+   tenant's `ads.health` is marked dead with a `token_dead` alert.
+
+**B. The rule (`ads/money.ts`, pure)**
+
+`worstCase = spentThisMonth + Σ remainingThisMonth(ACTIVE campaigns) + aboutToRun + candidate ≤ monthlyCap` (`checkCandidate`,
+**`money.ts:215`**). The month is the **ad account's** calendar month; a daily budget counts today at **1.75×** and each later day once
+(`remainingThisMonth`, **`money.ts:156`**); a lifetime budget counts its whole unspent part. `remaining` = cap − the worst case without
+a candidate, the one figure every screen shows (`GET /api/ads/money`, `moneyFor`, **`money.ts:526`**, cached 60 s per tenant). Figures
+exclude tax.
+
+**C. Activating a boost (the step that spends): `activateBoost`, **`adBoosts.ts:463`****
+
+1. The daily max (`checkDailyMax`: a lifetime budget as `total / days`), the payment method, then the month **read live, outside any
+   transaction** — `readMonth`, **`adBoosts.ts:479`** (spend this month + every campaign).
+2. `checkAndStartSpend` (**`money.ts:461`**, called at **`adBoosts.ts:486`**): ONE short transaction that takes
+   `pg_advisory_xact_lock(hashtextextended('ads:<tenant>', 0))` (`lockMoney`), sums what is about to run (`aboutToRun`, **`money.ts:397`**:
+   pending and running spend ops, `verify` ones for a day, and `done` ones that finished after the month was read minus 2 minutes), re-runs
+   the rule, re-reads the boost `FOR UPDATE`, writes `activated_at`, and inserts the activation as a **`running` `ads_ops` row** carrying
+   `worst_case_delta`. Refused → **400 `OVER_MONTHLY_CAP`** with the numbers.
+3. Meta is called **after** the commit (**`adBoosts.ts:501`**: ad → ad set → campaign, the campaign last), then `finishSpendOp`:
+   `done`, `failed`, or **`verify`** when the call may have landed (a timeout, a 5xx) — a `verify` op keeps counting for a day.
+
+> **Why this order.** v1 read Meta *inside* the locked transaction (up to 40 s of Graph retries holding a pooled connection and the
+> lock). Reading first and recording the activation as a running op keeps the transaction to milliseconds and still lets a second
+> activation racing this one see it (`ads/money.db.test.ts`).
+
+Resume (`setCampaignStatus`) and a budget raise on a running campaign (`setCampaignBudget`, the candidate is the *extra* worst case) in
+`adsManager.ts` follow the same three steps.
+
+**D. The guard: `runGuard`, **`ads/guard.ts:66`**, from every `/api/jobs/drain` (`routes/api.ts:406`, with the drain's deadline)**
+
+1. For each tenant with `ads.enabled.<t>` (**`guard.ts:80`** `guardTenant`): skip if the last **successful** check (`ads.cap_checked`)
+   was under an hour ago, or the last attempt (`ads.cap_attempt`) failed under 10 minutes ago. No token, account or cap → skip.
+2. Write `ads.cap_attempt`, read the account, this month's spend and the campaigns; if `shouldPauseAll` (spent ≥ cap, or spent + one more
+   day — daily budgets at 1.75× — > cap), `pauseAll` (**`guard.ts:143`**) pauses every ACTIVE campaign (also those made in Meta Ads
+   Manager) as `priority` calls, marks matching boosts paused, writes the **`ads.cap_paused`** audit row (actor `system:ads-guard`) and
+   sends the **`cap_paused`** alert.
+3. Only then **`ads.cap_checked`** = now (**`guard.ts:114`**). A failure leaves it, so the next drain 10 minutes on tries again; a
+   `token_dead` marks `ads.health` and alerts; two hours without a success raises **`guard_blind`** (**`guard.ts:126`**), and the Ads
+   screen shows "Spending is not being watched" (`guardState` in `health.ts`).
+4. Saving a cap at or below the month's spend (`POST /api/ads/settings`, **`routes/ads.ts:154`**) runs the guard for that tenant at once
+   (`force`) and answers `warnings: ['will_pause_all']`.
+
+**E. Alerts and the daily health check**
+
+- `notifyAds` (**`ads/notify.ts:162`**) inserts the `ads_alerts` row first — unique `(tenant, kind, object, day)` in the account's time zone,
+  so a second alert that day is not sent — then sends in the tenant's language to its own Telegram chat / email (`ads.alerts.<t>`, the
+  deployment's bot and Resend key), a bilingual copy to the admin unless `ads.copy_admin` is `'false'`, and records each channel's
+  outcome on the row. Never throws. `cap_paused`, `guard_blind`, `token_dead` cannot be switched off.
+- `runAdsHealth` (**`ads/health.ts:155`**, from the daily cron, `routes/api.ts:1085`): per tenant `checkTenantHealth` (**`health.ts:113`**) —
+  token (`debug_token` for a Connect token, `GET /me` for a pasted one), account status and funding, served version — written to
+  `ads.health.<t>` (the stored copy the screens read) and turned into alerts; then the retention sweep (`ads_alerts` after a year,
+  finished `ads_ops` after 180 days).
+
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -3146,5 +3230,12 @@ error, and several write **no row at all**.
 | 10 | a reply sent and its record failed — **`whatsappAnswer.ts`** | `wa.answered_unrecorded` (`error`) | the customer was answered; **no outbound row** and no state move; concluded as answered, never retried |
 | 10 | a follow-up for a WhatsApp conversation — **`followupJob.ts`** `scheduleFollowup` | `dm.followup_not_scheduled` (`reason: 'channel'`) | no job |
 | 10 | a person's reply from the inbox on a closed window — **`routes/api.ts`** `replyOnWhatsApp` | `wa.send_refused` (`reason: 'window_closed'`) | no: `409 WHATSAPP_WINDOW_CLOSED`, nothing stored, bot not paused |
+| 11 | ads are off for the tenant — **`routes/ads.ts:54`** | *(none)* | no: every `/api/ads` route answers 404 `ADS_DISABLED` |
+| 11 | the pacer refused (our own 45-point budget, or Meta's block) — **`ads/graph.ts:167`** | `ads.paced` (`retry_at`) | no Meta call at all; 429 `RATE_LIMITED` |
+| 11 | Meta throttled the ad account — **`ads/graph.ts:194`** | `ads.throttled` (`retry_at`) | `ads_pacer.blocked_until`; **never retried** |
+| 11 | the guard checked an hour ago, or failed under 10 minutes ago — **`ads/guard.ts:86`** | *(none)* | no |
+| 11 | a guard check failed (token, Meta, throttle) — **`ads/guard.ts:116`** | `ads.cap_check_failed` | `ads.cap_attempt` only; `guard_blind` after 2 h |
+| 11 | an alert already sent today for the same kind and object — **`ads/notify.ts:168`** | `ads.alert_duplicate` | no (the row exists) |
+| 11 | an alert kind the tenant switched off — `notifyAds` | `ads.alert_sent` (`telegram: 'off'`) | the `ads_alerts` row, channels `off` |
 
 `RUNBOOK.md` works these backwards from the symptom.

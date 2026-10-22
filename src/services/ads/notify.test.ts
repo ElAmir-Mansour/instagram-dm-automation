@@ -13,14 +13,14 @@ import { buildAdsAlertText, localDay, notifyAds, sendAdsTest, type AdsAlert } fr
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const BOT = '123456789:AAH_fake_token_for_tests_0123456789abcd';
 const KEY = 're_AbCdEfGh_0123456789abcdefghijkl';
-const target = { creatorId: TENANT, adAccountId: '509787248064459', accountName: 'ElAmir Mansour', offsetHours: 3 };
+const target = { creatorId: TENANT, adAccountId: '509787248064459', accountName: 'Test Account', offsetHours: 3 };
 const capPaused: AdsAlert = { kind: 'cap_paused', spent: 101.5, cap: 100, nextDay: 17.5, paused: 2, currency: 'USD' };
 
 describe('buildAdsAlertText', () => {
     it('writes each kind in Arabic and in English, naming the ad account and the numbers, never a token', () => {
         for (const lang of ['ar', 'en'] as const) {
             const text = buildAdsAlertText(capPaused, target, lang);
-            assert.match(text, /509787248064459|ElAmir Mansour/);
+            assert.match(text, /509787248064459|Test Account/);
             assert.match(text, /101\.5/);
             assert.match(text, /100/);
         }

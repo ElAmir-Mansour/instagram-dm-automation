@@ -17,7 +17,7 @@ const ACC = '509787248064459';
 const NOW = new Date('2026-10-22T10:00:00Z');
 
 const snapshot = (over: Partial<AccountSnapshot>): AccountSnapshot => ({
-    name: 'Acc', currency: 'USD', timezone: 'Asia/Riyadh', timezoneOffsetHours: 3, status: 1, statusLabel: 'active', disableReason: null,
+    name: 'Acc', currency: 'USD', timezone: 'Europe/Test', timezoneOffsetHours: 3, status: 1, statusLabel: 'active', disableReason: null,
     hasPaymentMethod: true, isPrepay: false, spendCap: null, amountSpent: 0, minDailyBudget: 1, billingUrl: '', adsManagerUrl: '', syncedAt: NOW.toISOString(), ...over,
 });
 
@@ -67,7 +67,7 @@ describe('checkTenantHealth and runAdsHealth', () => {
         ]);
         alerts = [];
         deleted = [];
-        account = { name: 'ElAmir Mansour', currency: 'USD', account_status: 1, timezone_offset_hours_utc: 3, timezone_name: 'Asia/Riyadh', funding_source_details: { id: '1', display_string: 'Visa *1234', type: 1 }, is_prepay_account: false, spend_cap: '0', amount_spent: '1250' };
+        account = { name: 'Test Account', currency: 'USD', account_status: 1, timezone_offset_hours_utc: 3, timezone_name: 'Europe/Test', funding_source_details: { id: '1', display_string: 'Visa *1234', type: 1 }, is_prepay_account: false, spend_cap: '0', amount_spent: '1250' };
         headers = { 'facebook-api-version': 'v26.0' };
         meFails = null;
         debugToken = { is_valid: true, type: 'USER', expires_at: 0, scopes: ['ads_management', 'ads_read', 'business_management'] };
@@ -106,8 +106,8 @@ describe('checkTenantHealth and runAdsHealth', () => {
         assert.deepEqual(r.alerts, []);
         const h = health();
         assert.equal(h.token.health, 'ok');
-        assert.equal(h.account.name, 'ElAmir Mansour');
-        assert.equal(h.account.timezone, 'Asia/Riyadh');
+        assert.equal(h.account.name, 'Test Account');
+        assert.equal(h.account.timezone, 'Europe/Test');
         assert.equal(h.account.hasPaymentMethod, true);
         assert.equal(h.account.amountSpent, 12.5, 'amount_spent is read in cents');
         assert.equal(h.account.spendCap, null, 'a spend cap of 0 is no limit');

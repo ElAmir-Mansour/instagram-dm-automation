@@ -17,10 +17,10 @@ import { loadDashboard, settle, type Json } from './_harness.js';
 const text = (markup: unknown): string => String(markup).replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
 
 const STEPS_NONE = [
-    { id: 'token', done: false, hint: 'Connect Instagram and Facebook first.' },
-    { id: 'account', done: false, hint: 'Choose the ad account.' },
-    { id: 'payment', done: false, hint: null },
-    { id: 'limits', done: false, hint: 'Set both limits.' },
+    { id: 'token', done: false, hint: 'Paste a system-user token.', hintCode: 'token_missing' },
+    { id: 'account', done: false, hint: 'Choose the ad account.', hintCode: 'account_missing' },
+    { id: 'payment', done: false, hint: null, hintCode: null },
+    { id: 'limits', done: false, hint: 'Set both limits.', hintCode: 'limits_missing' },
 ];
 
 const ACCOUNT = {
@@ -109,8 +109,8 @@ describe('Ads screen: a tenant that has not finished setting up gets the steps, 
         it(`/overview {configured:false, steps} renders the four steps with their hints and help links (${lang})`, async () => {
             const { html, t } = await renderAds(lang, { configured: false, steps: STEPS_NONE, money: null, helpUrl: '#/help/ads' });
             for (const id of ['token', 'account', 'payment', 'limits']) assert.match(html, new RegExp(`data-step="${id}"`), `step ${id}`);
-            assert.ok(text(html).includes('Connect Instagram and Facebook first.'), 'a step\'s hint is shown');
-            assert.ok(text(html).includes('Set both limits.'));
+            assert.ok(text(html).includes(lang === 'ar' ? 'الصق رمز مستخدم نظام' : 'Paste a system-user token with'), 'a step\'s hint is shown, in the reader\'s language');
+            assert.ok(text(html).includes(t('ads.stepHint.limits_missing')));
             assert.match(html, /href="#\/help\/ads#connect"/, 'each step links to the connect help');
             assert.match(html, /href="#\/settings\?s=ads"/, 'the way into Settings');
             assert.equal(text(html).includes(t('ads.loadFailed')), false, 'not the error panel');
@@ -120,7 +120,7 @@ describe('Ads screen: a tenant that has not finished setting up gets the steps, 
     }
 
     it('a step that is done says so in a word, not by colour alone', async () => {
-        const steps = STEPS_NONE.map((s, i) => (i === 0 ? { ...s, done: true, hint: null } : s));
+        const steps = STEPS_NONE.map((s, i) => (i === 0 ? { ...s, done: true, hint: null, hintCode: null } : s));
         const { html, t } = await renderAds('en', { configured: false, steps, money: null });
         assert.match(html, /data-step="token"[^>]*data-done="true"/);
         assert.match(html, /data-step="account"[^>]*data-done="false"/);
@@ -211,7 +211,7 @@ describe('Settings: the Meta ads card (T034)', () => {
     it('an unconfigured tenant still gets the steps and the hints, and no spending-limit row to press', async () => {
         const bare = { ...SETTINGS, configured: false, steps: STEPS_NONE, token: { set: false, last4: null, source: null, expiresAt: null, health: 'unknown' }, account: null, adAccountId: null, limits: { maxDailyBudget: null, monthlyCap: null }, ceiling: null };
         const { html } = await renderSettings('en', bare);
-        assert.ok(text(html).includes('Choose the ad account.'), 'the hint of a step that is not done');
+        assert.ok(/Choose the ad account \(the act=|اختر حساب الإعلانات/.test(text(html)), 'the hint of a step that is not done');
         assert.equal(html.includes('data-action="settings:testAdsConnection"'), false, 'no Test connection without a token');
         assert.equal(html.includes('data-submit="settings:setAdsSpendCap"'), false);
     });

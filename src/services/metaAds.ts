@@ -578,7 +578,7 @@ export interface AdAccountState extends AdAccountInfo {
     hasPaymentMethod: boolean | null;
     /** The account's UTC offset in hours (Meta's `timezone_offset_hours_utc`): Meta's `this_month` is the account's month. 0 when unknown. */
     timezoneOffsetHours: number;
-    /** Meta's `timezone_name`, e.g. "Asia/Riyadh". Null when not said. */
+    /** Meta's `timezone_name`, an IANA zone name. Null when not said. */
     timezoneName: string | null;
     /** Meta's `is_prepay_account`: the account is paid in advance (a balance runs down), not charged after. Null when not said. */
     isPrepay: boolean | null;

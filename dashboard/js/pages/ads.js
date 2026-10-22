@@ -341,7 +341,7 @@ const AdsPage = {
                         <i data-lucide="${step.done ? 'check-circle' : 'circle-dashed'}" aria-hidden="true"></i>
                         <span class="ads-step-text">
                             <span>${t(`ads.step.${step.id}`)}</span>
-                            ${!step.done && step.hint ? html`<span class="form-hint" dir="auto">${step.hint}</span>` : ''}
+                            ${!step.done && step.hintCode ? html`<span class="form-hint">${t(`ads.stepHint.${step.hintCode}`)}</span>` : ''}
                         </span>
                         <span class="sr-only">${step.done ? t('ads.step.done') : t('ads.step.todo')}</span>
                         ${UI.helpLink('ads#connect', t('ads.step.helpFor', { step: t(`ads.step.${step.id}`) }), { iconOnly: true })}

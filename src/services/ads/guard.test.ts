@@ -73,7 +73,7 @@ describe('runGuard', () => {
         originalTelegram = telegramHttp.post;
         (metaHttp as any).get = async (url: string) => {
             if (meta.fail) throw metaError(meta.fail);
-            if (url.endsWith(`/act_${ACC}`)) return { data: { name: 'ElAmir Mansour', currency: 'USD', account_status: 1, timezone_offset_hours_utc: 3, funding_source: '123' }, headers: {} };
+            if (url.endsWith(`/act_${ACC}`)) return { data: { name: 'Test Account', currency: 'USD', account_status: 1, timezone_offset_hours_utc: 3, funding_source: '123' }, headers: {} };
             if (url.endsWith(`/act_${ACC}/insights`)) return { data: { data: [{ spend: meta.spent }] }, headers: {} };
             if (url.endsWith(`/act_${ACC}/campaigns`)) return { data: { data: meta.campaigns }, headers: {} };
             throw new Error(`unexpected GET ${url}`);

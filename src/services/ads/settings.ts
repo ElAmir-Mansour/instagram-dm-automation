@@ -405,10 +405,31 @@ export async function readSwitches(creatorId: string): Promise<AdsSwitches> {
 
 export type SetupStepId = 'token' | 'account' | 'payment' | 'limits';
 
+export type StepHintCode =
+    | 'token_missing' | 'token_dead' | 'account_missing' | 'account_status' | 'payment_unchecked' | 'payment_missing' | 'payment_unknown' | 'limits_missing';
+
 export interface SetupStep {
     id: SetupStepId;
     done: boolean;
+    /** What to do next, in English (logs, the API); the screens show `ads.stepHint.<hintCode>` in the reader's language. */
     hint: string | null;
+    hintCode: StepHintCode | null;
+}
+
+const HINTS: Record<StepHintCode, string> = {
+    token_missing: 'Paste a system-user token with ads_management and ads_read.',
+    token_dead: 'Meta no longer accepts this token: generate a new one and paste it.',
+    account_missing: 'Choose the ad account (the act= number in Ads Manager).',
+    account_status: 'Meta says this ad account is not active.',
+    payment_unchecked: 'Press Test connection to check the payment method.',
+    payment_missing: 'Add a payment method in Meta (billing).',
+    payment_unknown: 'Meta did not say whether there is a payment method.',
+    limits_missing: 'Set the max daily budget and the monthly spend cap.',
+};
+
+function step(id: SetupStepId, done: boolean, code: StepHintCode | null): SetupStep {
+    const hintCode = done ? null : code;
+    return { id, done, hint: hintCode ? HINTS[hintCode] : null, hintCode };
 }
 
 /** The four steps an unconfigured tenant sees instead of an error (Overview and the Settings card), from stored data only. */
@@ -416,26 +437,10 @@ export function setupSteps(settings: AdsSettings, tokenSet: boolean, health: Ads
     const tokenDead = health.token.health === 'dead';
     const account = health.account;
     return [
-        {
-            id: 'token',
-            done: tokenSet && !tokenDead,
-            hint: !tokenSet ? 'Paste a system-user token with ads_management and ads_read.' : tokenDead ? 'Meta no longer accepts this token: generate a new one and paste it.' : null,
-        },
-        {
-            id: 'account',
-            done: Boolean(settings.adAccountId) && (account === null || account.statusLabel === 'active'),
-            hint: !settings.adAccountId ? 'Choose the ad account (the act= number in Ads Manager).' : account && account.statusLabel !== 'active' ? `Meta says this ad account is ${account.statusLabel}.` : null,
-        },
-        {
-            id: 'payment',
-            done: account?.hasPaymentMethod === true,
-            hint: !account ? 'Press Test connection to check the payment method.' : account.hasPaymentMethod === false ? 'Add a payment method in Meta (billing).' : account.hasPaymentMethod === null ? 'Meta did not say whether there is a payment method.' : null,
-        },
-        {
-            id: 'limits',
-            done: Boolean(settings.maxDailyBudget && settings.monthlyCap),
-            hint: settings.maxDailyBudget && settings.monthlyCap ? null : 'Set the max daily budget and the monthly spend cap.',
-        },
+        step('token', tokenSet && !tokenDead, !tokenSet ? 'token_missing' : 'token_dead'),
+        step('account', Boolean(settings.adAccountId) && (account === null || account.statusLabel === 'active'), !settings.adAccountId ? 'account_missing' : 'account_status'),
+        step('payment', account?.hasPaymentMethod === true, !account ? 'payment_unchecked' : account.hasPaymentMethod === false ? 'payment_missing' : 'payment_unknown'),
+        step('limits', Boolean(settings.maxDailyBudget && settings.monthlyCap), 'limits_missing'),
     ];
 }
 

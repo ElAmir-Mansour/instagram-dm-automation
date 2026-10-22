@@ -643,7 +643,7 @@ const API = {
      * A 400 carries `field`: `INVALID`, or `OVER_CEILING` (the platform admin's limit for this tenant).
      */
     saveAdsSettings: (data) => API.request('/ads/settings', { method: 'POST', body: JSON.stringify(data) }),
-    /** LIVE (one or two Meta calls): `{ ok, scopes, missingScopes, assets: { adAccounts, pages, igAccounts }, tier, servedVersion, settings }`. 400 `TOKEN_INVALID`, 409 `ADS_NOT_CONFIGURED`. */
+    /** LIVE (one or two Meta calls): `{ ok, scopes, missingScopes, assets: { adAccounts, pages, igAccounts }, tier, servedVersion, settings }`. 409 `TOKEN_INVALID` (never 401) or `ADS_NOT_CONFIGURED`, 429 `RATE_LIMITED`. */
     testAdsSettings: () => API.request('/ads/settings/test', { method: 'POST' }),
     /** `{ telegramChatId?, email?, lang?, kinds?: { [kind]: boolean }, test? }` → `{ alerts, test?: { telegram, email } }`, each 'sent' | 'failed' | 'off'. A 400 carries `field`. */
     saveAdsAlerts: (data) => API.request('/ads/settings/alerts', { method: 'POST', body: JSON.stringify(data) }),
