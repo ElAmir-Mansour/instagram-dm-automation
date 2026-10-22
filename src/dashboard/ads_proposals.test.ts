@@ -15,7 +15,7 @@ import { loadDashboard, settle, type Json } from './_harness.js';
 const text = (markup: unknown): string => String(markup).replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/[⁦⁧⁨⁩]/g, '').replace(/\s+/g, ' ').trim();
 
 const SPEC: Json = {
-    name: 'AI course — messages test', goal: 'messages', destinations: ['instagram'], specialCategory: 'none',
+    name: 'Workshop — messages test', goal: 'messages', destinations: ['instagram'], specialCategory: 'none',
     budget: { home: 'campaign', kind: 'daily', amount: 10, start: '2026-11-01T00:00:00Z', end: '2026-11-08T00:00:00Z' },
     adsets: [{ name: 'EG', targeting: { countries: ['EG', 'SA'], ageMin: 22, ageMax: 45, advantageAudience: false }, placements: 'automatic' }],
     ads: [{ adsetIndex: 0, name: 'Ad', creative: { source: 'post', postId: 'p1', platform: 'instagram' }, copy: { primaryText: 'Learn AI from zero <b>now</b>' } }],
@@ -23,7 +23,7 @@ const SPEC: Json = {
 
 function proposal(over: Json = {}): Json {
     return {
-        id: 'p-open', kind: 'new_campaign', source: 'request', state: 'open', request: 'promote the course', post: null, spec: SPEC, change: null,
+        id: 'p-open', kind: 'new_campaign', source: 'request', state: 'open', request: 'promote the workshop', post: null, spec: SPEC, change: null,
         rationale: 'Messages cost less than clicks in your account <script>x</script>', assumptions: ['Ages 22–45 because your buyers are'],
         expected: { metric: 'conversations', range: [8, 14] }, evidence: { window: '7d', numbers: { spend: 70, costPerResult: 10 } },
         effect: { worstCaseDelta: 70, newWorstCase: 430, currency: 'USD' },
@@ -96,7 +96,7 @@ describe('Proposals tab: the cards (T133)', () => {
     });
 
     it('shows a waiting card for a draft, with the Mac copy, and follows it until it is open', async () => {
-        const drafting = proposal({ id: 'p-d', state: 'drafting', spec: null, rationale: null, via: 'mac', request: 'promote the course' });
+        const drafting = proposal({ id: 'p-d', state: 'drafting', spec: null, rationale: null, via: 'mac', request: 'promote the workshop' });
         const { h, page, screen, called } = await open({ list: [drafting], api: { getAdsProposal: async () => ({ proposal: proposal({ id: 'p-d' }) }) } });
         let html = screen();
         assert.match(html, /id="adsprop-p-d"[^>]*aria-busy="true"/);
@@ -179,9 +179,9 @@ describe('Proposals tab: approve, edit, reject (T133)', () => {
         const { h, page, modals, called, screen } = await open();
         page.suggest();
         assert.equal(modals.length, 1);
-        h.el('adsprop-request', { value: 'messages for the course' } as Json);
+        h.el('adsprop-request', { value: 'messages for the workshop' } as Json);
         await page.suggestSend();
-        assert.deepEqual(JSON.parse(JSON.stringify(called('requestAdsProposal')[0]![1])), [{ request: 'messages for the course' }]);
+        assert.deepEqual(JSON.parse(JSON.stringify(called('requestAdsProposal')[0]![1])), [{ request: 'messages for the workshop' }]);
         assert.match(screen(), /id="adsprop-p-new"/);
         page.destroy();
     });

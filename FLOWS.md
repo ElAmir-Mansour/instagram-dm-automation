@@ -2535,6 +2535,51 @@ down or refusing the operator's key `503 AI_UNAVAILABLE` / `AI_PROVIDER_REJECTED
 AI_ANSWER_UNUSABLE`. An infographic refused for any of them has no row and no job; a Monteur call fails its attempt with the
 same words (`monteur.brain: 'api'` is never retried on Gemini or the Mac).
 
+### 7.5 Proposals: an ad drafted by Claude, applied only after a person approves (Ads A7)
+
+(§7.2–7.4 are left for later phases.) The same split as §7 and §7.1, for ads: **the owner's drafts are Studio `ads_think` jobs
+on his Mac; every other tenant's go to the AI providers layer on its own key.** `ads_draft` / `ads_review` are NOT in
+`MAC_BRAIN_PURPOSES` (that set means "refuse on the layer"): a Mac tenant simply never asks the layer for them. Code in
+`src/services/ads/proposals/` (types.ts names every file); routes in `src/routes/adsProposals.ts`.
+
+1. **Request.** `POST /api/ads/proposals` (operator+) → `requestProposal` (**`service.ts:120`**): the owner's words (≤ 1000) or a
+   published post (`loadPost`). A tenant the Mac is not for is checked first with `resolveRoute(ads_draft)`: no provider is
+   **409 `AI_NOT_CONFIGURED`** and no row. Then a `drafting` row (`insertProposal`, **`store.ts:61`**, `model.via` = `mac`|`api`)
+   and `queueAdvance` (**`advance.ts:17`**): an `ads.draft` app job (**`jobs/handlers.ts:73`**) drained inline under `waitUntil`.
+2. **Advance** (`advanceProposal`, **`service.ts:161`**, idempotent; never moves a row that is not `drafting`). The input is
+   `buildInput` (**`input.ts:55`**): **aggregates only** (FR-049) — the stored copy's names, budgets, statuses, targeting summaries
+   and 7-day totals (`mirrorPort`, **`ports.ts:74`**), the offers' title/price/summary with emails and phone numbers stripped, the
+   limits (`moneyPort`), the policy rule descriptions, the request, a post's caption and organic counts, and for a request with no
+   post up to 5 recently published posts as creatives. One prompt (`prompt.ts`) and schema (`schema.ts`) for both paths.
+   - **Mac tenant**: no `ads_think` job for (proposal, attempt) → `enqueueJob(..., 'ads_think', { proposalId, attempt, task,
+     purpose, model: THINK_MODEL, system, user, schema })` — the Mac-brain guard in `enqueueJob`/`claimJob` lets it through
+     (`isMacBrainJob`, **`macBrain.ts:159`**). Pending/claimed → wait. The worker (aicourse-captions
+     `scripts/studio/adsThinkJob.mjs`, the same claude CLI call as a `monteur_think`) answers `{ output, model, usage }`;
+     `completeJob` stores it (`parseMonteurThinkResult`) and, **after its transaction commits**, `queueAdvance(..., 'mac_done')`
+     (**`studio/jobs.ts:448`**); `failJob` and an exhausted claim do the same with `mac_failed` (**`:1020`**) → the proposal fails
+     with the worker's error.
+   - **Any other tenant**: `generate({ purpose: ads_draft | ads_review })` on its own route; `no_provider` → `failed`
+     (`AI_NOT_CONFIGURED`), a non-retryable refusal → `failed`, anything else throws and the job runner retries.
+3. **Checks** (`runChecks`, **`checks.ts:230`**, contract order): schema → evidence (a review item quoting a number not in the
+   input, or an object not in the account, is **dropped**) → policy (A4 `checkPolicy`; a `block` asks again once) → money (A1
+   `moneyFor`; over the daily max or the month's remaining → **reduced** with a note; below Meta's minimum → `failed`). Then
+   spec.ts `validateSpec` (the builder's own rules; asked again once). A regeneration is attempt 2 with the failed checks as
+   feedback (a second `ads_think` job on the Mac). Pass → `open` with payload, rationale, evidence, effect, checks, model; a review
+   with 2–3 items inserts the others as `open` rows; a review with none deletes its `drafting` row.
+4. **Approve** (`POST /:id/approve`, owner, `confirm: true`; `approveProposal`, **`service.ts:270`**): refused 409 `NOT_WIRED`
+   without the ports; an `open` row past `expires_at` becomes `expired`. `recheckForApproval` (**`checks.ts:347`**) runs policy and
+   money again and **adjusts nothing** (a budget that no longer fits is 409 `OVER_MONTHLY_CAP`); a new campaign also gets Meta's
+   `validate_only` (`validateDraft`). Then `open → approved`, `applyPort` (**`ports.ts:142`**): a new campaign through A4's
+   `createDraft` (every object PAUSED), a change through A2's `requestStatus` / `requestBudget`; every op is tagged
+   `ads_ops.proposal_id` and actor `via: 'proposal'`, new objects `origin: 'proposal'` → `applying` with the op ids in `checks.ops`.
+   `settleApplying` (**`service.ts:328`**, on every list read) moves it to `applied` when all ops are done, `failed` when one failed.
+   Audit `ads.proposal_decided`.
+5. **Reject** (`POST /:id/reject`, owner): `open → rejected` with the reason. Nothing is enqueued.
+6. **Daily cron** (**`routes/api.ts:1115`**): `expireProposals` (**`store.ts:144`**: `open` past 7 days → `expired`; `drafting`
+   older than 24 h → `failed`, "the Mac did not answer") then `runDailyReview` (**`service.ts:367`**): for each `ads.enabled`
+   tenant with ≥ 3 days of results and an active object, one review a day (≤ 3 proposals), skipped quietly without an AI for it;
+   when it opens, one `proposal_ready` alert (A1 `notifyAds`).
+
 ## 8. Meta login → a connected Page
 
 A tenant connects its own Facebook Page and Instagram account with Facebook Login for Business instead of the operator
@@ -3569,5 +3614,9 @@ error, and several write **no row at all**.
 | 11 | a guard check failed (token, Meta, throttle) — **`ads/guard.ts:116`** | `ads.cap_check_failed` | `ads.cap_attempt` only; `guard_blind` after 2 h |
 | 11 | an alert already sent today for the same kind and object — **`ads/notify.ts:168`** | `ads.alert_duplicate` | no (the row exists) |
 | 11 | an alert kind the tenant switched off — `notifyAds` | `ads.alert_sent` (`telegram: 'off'`) | the `ads_alerts` row, channels `off` |
+| 7.5 | the Mac worker has no `ads_think` handler (aicourse-captions not pulled, or the worker not restarted) | the worker's "doesn't know the job kind" | the job `failed`, the proposal `failed` with that error |
+| 7.5 | the Mac is asleep or its worker stopped | none until the sweep | the proposal stays `drafting`; the daily cron fails it after 24 h |
+| 7.5 | a review found nothing worth changing — `advanceProposal` | `ads.proposal_nothing_to_propose` | the `drafting` row is deleted |
+| 7.5 | a tenant with ads on but < 3 days of results, or no AI for it — `runDailyReview` | `ads.daily_review` (`queued: 0`) | no |
 
 `RUNBOOK.md` works these backwards from the symptom.
