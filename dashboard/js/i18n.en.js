@@ -4962,6 +4962,8 @@
     'nav.ads': 'Ads',
     'nav.ads_campaigns': 'Ad campaigns',
     'page.ads_campaigns.subtitle': 'Every campaign, ad set and ad in your ad account, with its status, budget and results.',
+    'nav.ads_results': 'Ad results',
+    'page.ads_results.subtitle': 'What your spend did, day by day: spend, results and the cost of each conversation and click, from the stored copy.',
     'page.ads.subtitle': 'Your Meta ad campaigns: what was spent, your limits, and starting or stopping each one.',
     'ads.head.title': 'Ads',
     'ads.refresh': 'Refresh',

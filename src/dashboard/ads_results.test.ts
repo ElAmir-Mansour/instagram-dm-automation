@@ -243,6 +243,14 @@ describe('Results tab: calm states', () => {
         assert.equal(screen().includes('chart-line-svg'), false);
     });
 
+    for (const lang of ['en', 'ar'] as const) {
+        it(`the shell's title and subtitle for the page are real strings, not keys (${lang})`, async () => {
+            const { h } = await open({ lang });
+            assert.notEqual(h.t('nav.ads_results'), 'nav.ads_results');
+            assert.notEqual(h.t('page.ads_results.subtitle'), 'page.ads_results.subtitle');
+        });
+    }
+
     it('the tab bar has Overview, Campaigns and Results, with Results current', async () => {
         const { h, screen } = await open();
         assert.match(screen(), /href="#\/ads_results" aria-current="page"/);
