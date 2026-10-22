@@ -135,6 +135,15 @@ export function normaliseAdAccountId(input: unknown): string | null {
     return /^[0-9]{5,25}$/.test(digits) ? digits : null;
 }
 
+/**
+ * EU member states. Meta requires `dsa_payor` and `dsa_beneficiary` (who pays, who benefits, under the EU Digital Services Act) on any ad
+ * set that targets one, and Boost does not collect them yet, so such a country is refused with that reason rather than failing at Meta.
+ */
+export const EU_COUNTRIES: ReadonlySet<string> = new Set([
+    'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO',
+    'SK', 'SI', 'ES', 'SE',
+]);
+
 /** An ISO 3166-1 alpha-2 country code, upper-cased, or null. */
 export function normaliseCountry(input: unknown): string | null {
     if (typeof input !== 'string') return null;
@@ -238,7 +247,8 @@ export function buildAdSetParams(spec: BoostSpec, campaignId: string, now: Date)
         },
     };
     if (spec.objective === 'ENGAGEMENT') params['destination_type'] = 'ON_POST';
-    if (spec.objective === 'TRAFFIC') params['destination_type'] = 'WEBSITE';
+    // TRAFFIC sends no destination_type: Meta's ODAX table lists none for Traffic, and WEBSITE is documented only under other objectives.
+    // The link is the creative's call to action.
     if (spec.objective === 'AWARENESS') params['promoted_object'] = { page_id: spec.pageId };
     return params;
 }
@@ -549,8 +559,12 @@ export async function deleteAdObject(id: string, token: string): Promise<void> {
     try {
         await withRetry(() => metaHttp.delete(`${GRAPH_BASE}/${id}`, { headers: { Authorization: `Bearer ${token}` } }), { label: 'delete ad object' });
     } catch (error) {
-        // 100/33, "does not exist": an object already deleted, which is the outcome asked for.
-        if (metaErrorCode(error) === 100 && metaErrorSubcode(error) === 33) return;
+        // 100/33 means "does not exist" — or no permission, or an unsupported operation: Meta uses it for all three. It counts as deleted
+        // only when a read of the object fails too; an object that can still be read was NOT deleted, and that is said.
+        if (metaErrorCode(error) === 100 && metaErrorSubcode(error) === 33) {
+            const stillThere = await getNode(id, { fields: 'id' }, token, 'delete check').then(() => true, () => false);
+            if (!stillThere) return;
+        }
         throw metaFailure('Meta ads (delete)', error);
     }
 }
@@ -604,8 +618,10 @@ export interface AdAccountState extends AdAccountInfo {
     id: string;
     statusLabel: AccountStatusLabel;
     disableReason: string | null;
-    /** Null when Meta would not say (a token without the permission to read billing). */
+    /** Null when Meta would not say (a token without the permission to read billing, or the field left out). */
     hasPaymentMethod: boolean | null;
+    /** The account's UTC offset in hours (Meta's `timezone_offset_hours_utc`): Meta's `this_month` is the account's month. 0 when unknown. */
+    timezoneOffsetHours: number;
     /** Meta's own display string, e.g. "Visa *1234". Never stored. */
     paymentMethod: string | null;
     billingUrl: string;
@@ -633,6 +649,11 @@ export function readAccountState(adAccountId: string, data: any, paymentReadable
     const display = details && typeof details.display_string === 'string' && details.display_string.trim() ? details.display_string.trim().slice(0, 80) : null;
     const source = data?.funding_source;
     const hasSource = (typeof source === 'string' && source !== '' && source !== '0') || (typeof source === 'number' && source > 0) || display !== null;
+    // Meta leaves fields it will not show out of the answer. Only a funding source that is present and empty is "none"; one that is
+    // absent altogether is "could not tell", so Activate is never refused on a guess (an account with no payment method just gets no
+    // delivery, which Meta says itself).
+    const said = Object.prototype.hasOwnProperty.call(data ?? {}, 'funding_source') || Object.prototype.hasOwnProperty.call(data ?? {}, 'funding_source_details');
+    const offset = num(data?.timezone_offset_hours_utc);
     const minMinor = num(data?.min_daily_budget);
     return {
         id: adAccountId,
@@ -642,7 +663,8 @@ export function readAccountState(adAccountId: string, data: any, paymentReadable
         minDailyBudget: minMinor > 0 && currency ? fromMinorUnits(minMinor, currency) : null,
         statusLabel: accountStatusLabel(status),
         disableReason: reasonCode > 0 ? (DISABLE_REASONS[reasonCode] ?? `Meta disable reason ${reasonCode}`) : null,
-        hasPaymentMethod: paymentReadable ? hasSource : null,
+        hasPaymentMethod: paymentReadable ? (hasSource ? true : said ? false : null) : null,
+        timezoneOffsetHours: Number.isFinite(offset) && Math.abs(offset) <= 14 ? offset : 0,
         paymentMethod: paymentReadable ? display : null,
         billingUrl: billingUrl(adAccountId),
         adsManagerUrl: adsManagerUrl(adAccountId),
@@ -650,14 +672,14 @@ export function readAccountState(adAccountId: string, data: any, paymentReadable
 }
 
 export async function fetchAccountState(adAccountId: string, token: string): Promise<AdAccountState> {
-    const base = 'name,currency,account_status,disable_reason,min_daily_budget';
+    const base = 'name,currency,account_status,disable_reason,min_daily_budget,timezone_offset_hours_utc';
     try {
         const data = await getNode(`act_${adAccountId}`, { fields: `${base},funding_source,funding_source_details` }, token, 'ad account');
         return readAccountState(adAccountId, data, true);
     } catch (err) {
         // The billing fields need more than ads_read on some accounts: read the rest, and say "unknown" about payment.
         if (metaErrorCode(err) !== 100 && metaErrorCode(err) !== 200) throw err;
-        const data = await getNode(`act_${adAccountId}`, { fields: 'name,currency,account_status' }, token, 'ad account');
+        const data = await getNode(`act_${adAccountId}`, { fields: 'name,currency,account_status,timezone_offset_hours_utc' }, token, 'ad account');
         return readAccountState(adAccountId, data, false);
     }
 }

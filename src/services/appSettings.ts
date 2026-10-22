@@ -272,12 +272,14 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   (`src/services/adBoosts.ts`). Not a secret. The server refuses any boost over these.
  *   adsToken        the system-user token with `ads_management` / `ads_read` that Boost calls the Marketing API with. A SECRET: encrypted at
  *                   rest like the Page token, and never in an answer (`{ set, last4 }` is all the card is told).
+ *   adsCapChecked   when the hourly monthly-cap guard last checked the tenant's ad account (`enforceMonthlyCaps`, adsManager.ts). Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
     dmVariants: 'dm.variants.',
     adsSettings: 'ads.settings.',
     adsToken: 'ads.token.',
+    adsCapChecked: 'ads.cap_checked.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */

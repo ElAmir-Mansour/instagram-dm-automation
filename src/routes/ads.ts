@@ -16,7 +16,7 @@
  *   GET    /overview               the Ads screen: account (status, payment method, billing link), spend today / this month, the limits
  *                                  and this month's worst case, and every campaign in the ad account (src/services/adsManager.ts)
  *   POST   /campaigns/:id/status   { status: 'ACTIVE' | 'PAUSED', confirm } → { campaign }. ACTIVE spends: confirm, payment method, cap
- *   POST   /campaigns/:id/budget   { amount, endTime? } → { campaign }
+ *   POST   /campaigns/:id/budget   { amount, endTime?, confirm? } → { campaign }. Raising a RUNNING campaign's budget needs confirm
  *   DELETE /campaigns/:id          → { ok }. Not while it is active
  *
  * **Tenant owner only, reads included** (`requireTenantRole('owner')`): this is the business's ad account and money. A refusal is
@@ -203,7 +203,7 @@ adsRouter.post('/campaigns/:id/status', canAdminister, async (req, res) => {
 
 adsRouter.post('/campaigns/:id/budget', canAdminister, async (req, res) => {
     try {
-        const body = (req.body ?? {}) as { amount?: unknown; endTime?: unknown };
+        const body = (req.body ?? {}) as { amount?: unknown; endTime?: unknown; confirm?: unknown };
         const campaign = await setCampaignBudget(getTenantId(req), req.params['id'], body);
         await audit(req, AUDIT_ACTIONS.adsCampaignBudget, null, {
             campaign_id: campaign.id, kind: campaign.budget.kind, amount: campaign.budget.amount, end_time: campaign.endTime, boost_id: campaign.boostId,

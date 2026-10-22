@@ -173,7 +173,7 @@ describe('payloads: everything is created PAUSED', () => {
         assert.deepEqual(reach['promoted_object'], { page_id: '100200300' });
         const traffic = buildAdSetParams(spec({ objective: 'TRAFFIC', link: 'https://x.co/' }), 'c1', NOW);
         assert.equal(traffic['optimization_goal'], 'LINK_CLICKS');
-        assert.equal(traffic['destination_type'], 'WEBSITE');
+        assert.equal(traffic['destination_type'], undefined, 'Meta documents no destination_type for Traffic: the link is the call to action');
     });
 
     it('ad set: a whole-unit currency is not multiplied by 100', () => {

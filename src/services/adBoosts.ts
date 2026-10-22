@@ -19,10 +19,11 @@ import { getTenant } from './tenant.js';
 import { withTransaction, type Exec } from './studio/common.js';
 import { MetaApiError } from './instagram.js';
 import { inspectToken } from './tokenHealth.js';
+import { checkWorstCase, readMonth } from './adsCap.js';
 import {
     activateBoostObjects, BOOST_OBJECTIVES, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
     normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
-    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, fetchAccountState, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
+    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, fetchAccountState, currencyOffset, EU_COUNTRIES, type AdAccountState, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
     type BudgetRefusal, type CreatedObjects, type Eligibility,
 } from './metaAds.js';
 
@@ -491,6 +492,9 @@ export async function createBoost(creatorId: string, input: CreateInput, userId:
     const objective = input.objective as BoostObjective;
     const country = normaliseCountry(input.country);
     if (!country) throw new AdsError(400, 'INVALID', 'The country is a two-letter code, e.g. SA.', 'country');
+    if (EU_COUNTRIES.has(country)) {
+        throw new AdsError(400, 'INVALID', 'Boosting into an EU country needs who pays and who benefits declared (EU Digital Services Act), which Boost does not ask for yet. Choose a country outside the EU, or boost it from Ads Manager.', 'country');
+    }
     const link = input.link === undefined || input.link === null || input.link === '' ? null : normaliseLink(input.link);
     if (input.link && !link) throw new AdsError(400, 'INVALID', 'The link must be an https address.', 'link');
 
@@ -507,6 +511,10 @@ export async function createBoost(creatorId: string, input: CreateInput, userId:
         account = await readAdAccount(settings.adAccountId, token);
     } catch (err) {
         throw metaRefusal(err);
+    }
+    // A currency Meta counts in whole units (JPY, KRW…) has no cents: 50.5 would be rounded to 51 at Meta, past the planned total.
+    if (currencyOffset(account.currency) === 1 && typeof input.dailyBudget === 'number' && !Number.isInteger(input.dailyBudget)) {
+        throw new AdsError(400, 'INVALID', `${account.currency} has no cents: enter a whole amount.`, 'dailyBudget');
     }
     const mediaId = await mediaIdFor(target, token);
     try {
@@ -608,11 +616,22 @@ export async function activateBoost(creatorId: string, id: string, now = new Dat
         await lockTenantBoosts(tx, creatorId);
         const fresh = (await tx.query<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, creatorId])).rows[0];
         if (!fresh || fresh.status !== 'paused') throw new AdsError(409, 'BOOST_STATE', 'This boost changed meanwhile: reload and try again.');
-        const check = checkBoostBudget({
-            dailyBudget: Number(fresh.daily_budget), days: fresh.days, limits: settings,
-            committedThisMonth: await committedThisMonth(tx, creatorId, id, now),
-        });
-        if (!check.ok) throw budgetRefusal(check);
+        if (Math.round(Number(fresh.daily_budget) * 100) > Math.round(settings.maxDailyBudget * 100)) {
+            throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `Its daily budget ${Number(fresh.daily_budget)} is over your max daily budget of ${settings.maxDailyBudget}.`);
+        }
+        // THE cap (adsCap.ts): what Meta says the account spent this month, plus what every active campaign (made anywhere) could still
+        // spend, plus this boost's whole total (a lifetime budget may be spent early, so all of it is counted in this month).
+        let month;
+        try {
+            month = await readMonth(settings.adAccountId, token, account.currency, account.timezoneOffsetHours, fresh.campaign_id, now);
+        } catch (err) {
+            throw err instanceof AdsError ? err : new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : String(err));
+        }
+        const cap = checkWorstCase({ spentThisMonth: month.spentThisMonth, othersRemaining: month.othersRemaining, thisRemaining: Number(fresh.planned_total), monthlyCap: settings.monthlyCap });
+        if (!cap.ok) {
+            throw new AdsError(400, 'BUDGET_OVER_MONTHLY_CAP',
+                `Activating could bring this month to ${cap.worstCase}, over your monthly cap of ${settings.monthlyCap} (spent ${month.spentThisMonth}, other active campaigns could add ${month.othersRemaining}). Lower the budget, pause a campaign, or raise the cap.`);
+        }
         await tx.query('UPDATE ad_boosts SET activated_at = $2, ends_at = $3, updated_at = NOW() WHERE id = $1', [id, now, boostWindow(fresh.days, now).end]);
     });
 
@@ -630,7 +649,9 @@ export async function activateBoost(creatorId: string, id: string, now = new Dat
 export async function pauseBoost(creatorId: string, id: string): Promise<BoostView> {
     const { token } = await requireConfig(creatorId);
     const row = await readBoost(creatorId, id);
-    if (row.status !== 'active' || !row.campaign_id) throw new AdsError(409, 'BOOST_STATE', `Only an active boost can be paused; this one is ${row.status}.`);
+    // A `paused` row that was activated may be running: its activation's last call can time out after landing. Pausing it is always safe.
+    const mayRun = row.status === 'active' || (row.status === 'paused' && row.activated_at !== null);
+    if (!mayRun || !row.campaign_id) throw new AdsError(409, 'BOOST_STATE', `Only an active boost can be paused; this one is ${row.status}.`);
     try {
         await pauseBoostCampaign(row.campaign_id, token);
     } catch (err) {
@@ -645,6 +666,10 @@ export async function deleteBoost(creatorId: string, id: string): Promise<BoostV
     const row = await readBoost(creatorId, id);
     if (row.status === 'active' || row.status === 'creating' || row.status === 'deleted') {
         throw new AdsError(409, 'BOOST_STATE', row.status === 'active' ? 'Pause the boost before deleting it.' : `This boost is ${row.status}.`);
+    }
+    // The last spend first: once deleted, the row's spend is what counts as spent this month, and it must not be a day old.
+    if (row.ad_id && row.activated_at) {
+        await syncRow(row, token, new Date()).catch((err) => log('warn', 'ads.sync_before_delete_failed', { boost_id: id, ...describeError(err) }));
     }
     try {
         if (row.campaign_id) await deleteAdObject(row.campaign_id, token);
@@ -674,12 +699,13 @@ async function syncRow(row: AdBoostRow, token: string, now: Date): Promise<AdBoo
     if (!row.ad_id) return row;
     const state = await readAdState(row.ad_id, row.objective, token);
     const status = nextStatus(row.status, state.effectiveStatus, row.ends_at, row.activated_at !== null, now);
-    return updateBoost(row.id, {
-        status,
-        spend: state.insights ? state.insights.spend : row.spend,
-        insights: state.insights ?? row.insights,
-        synced_at: now,
-    });
+    // Only if nobody changed the row since it was read: an activation or a pause that ran meanwhile wins over this older picture.
+    const updated = await queryOne<AdBoostRow>(
+        `UPDATE ad_boosts SET status = $3, spend = $4, insights = $5::jsonb, synced_at = $6, updated_at = NOW()
+          WHERE id = $1 AND status = $2 RETURNING *`,
+        [row.id, row.status, status, state.insights ? state.insights.spend : row.spend, JSON.stringify(state.insights ?? row.insights ?? null), now]
+    );
+    return updated ?? (await queryOne<AdBoostRow>('SELECT * FROM ad_boosts WHERE id = $1', [row.id])) ?? row;
 }
 
 export async function refreshBoost(creatorId: string, id: string, now = new Date()): Promise<BoostView> {
@@ -707,6 +733,21 @@ export async function syncAllBoosts(now = new Date()): Promise<{ synced: number;
     );
     const out = { synced: 0, failed: 0, skipped: 0 };
     const tokens = new Map<string, string | null>();
+
+    // A chain that died mid-way (the function was frozen or timed out) leaves a row in `creating` forever, counted against the cap. After
+    // ten minutes it is failed, and whatever it created (all PAUSED) is deleted.
+    const stuck = await queryRows<AdBoostRow>(
+        "SELECT * FROM ad_boosts WHERE status = 'creating' AND created_at < $1 ORDER BY created_at LIMIT 20",
+        [new Date(now.getTime() - 10 * 60_000)]
+    );
+    for (const row of stuck) {
+        if (!tokens.has(row.creator_id)) tokens.set(row.creator_id, (await readAdsSettings(row.creator_id)).token);
+        const token = tokens.get(row.creator_id);
+        if (token) await cleanUp({ campaignId: row.campaign_id ?? undefined, creativeId: row.creative_id ?? undefined }, token);
+        await queryOne("UPDATE ad_boosts SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1 AND status = 'creating' RETURNING id",
+            [row.id, 'Creating this boost stopped part way; what was made at Meta (all paused) was deleted.']);
+        log('warn', 'ads.boost_creating_swept', { creator_id: row.creator_id, boost_id: row.id });
+    }
     for (const row of rows) {
         if (!tokens.has(row.creator_id)) tokens.set(row.creator_id, (await readAdsSettings(row.creator_id)).token);
         const token = tokens.get(row.creator_id);

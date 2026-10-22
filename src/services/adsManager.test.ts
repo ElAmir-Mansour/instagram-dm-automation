@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { campaignBudget, campaignInsights, checkWorstCase, daysLeftThisMonth, remainingThisMonth, type RawCampaign } from './adsManager.js';
+import { campaignBudget, campaignInsights, checkWorstCase, daysLeftThisMonth, oneDayRemaining, remainingThisMonth, shouldPauseAll, type RawCampaign } from './adsCap.js';
 import { accountStatusLabel, billingUrl, readAccountState } from './metaAds.js';
 
 const NOW = new Date('2026-10-22T10:00:00Z');
@@ -12,13 +12,13 @@ const NOW = new Date('2026-10-22T10:00:00Z');
 describe('campaignBudget: where an edit writes to', () => {
     it('a campaign budget is edited on the campaign', () => {
         assert.deepEqual(campaignBudget({ id: '111111', daily_budget: '1500' }, 'USD'),
-            { kind: 'daily', amount: 15, level: 'campaign', holderId: '111111', editable: true });
+            { kind: 'daily', amount: 15, level: 'campaign', holderId: '111111', adsetId: null, editable: true });
         assert.equal(campaignBudget({ id: '111111', lifetime_budget: '5000' }, 'USD').kind, 'lifetime');
     });
 
     it('a single ad set (every boost) is edited on the ad set', () => {
         const b = campaignBudget({ id: '111111', adsets: { data: [{ id: '222222', lifetime_budget: '1500' }] } }, 'USD');
-        assert.deepEqual(b, { kind: 'lifetime', amount: 15, level: 'adset', holderId: '222222', editable: true });
+        assert.deepEqual(b, { kind: 'lifetime', amount: 15, level: 'adset', holderId: '222222', adsetId: '222222', editable: true });
     });
 
     it('several ad sets with their own budgets are shown, not edited', () => {
@@ -109,7 +109,7 @@ describe('the account: status and payment method', () => {
     });
 
     it('no funding source is "no payment method"; a card is shown by Meta\'s own string', () => {
-        const none = readAccountState('509787248064459', { name: 'Shop', currency: 'USD', account_status: 1, min_daily_budget: 100 }, true);
+        const none = readAccountState('509787248064459', { name: 'Shop', currency: 'USD', account_status: 1, min_daily_budget: 100, funding_source: null }, true);
         assert.equal(none.hasPaymentMethod, false);
         assert.equal(none.minDailyBudget, 1);
         assert.equal(none.billingUrl, billingUrl('509787248064459'));
@@ -118,9 +118,14 @@ describe('the account: status and payment method', () => {
         assert.equal(card.paymentMethod, 'Visa *1234');
     });
 
-    it('says "unknown", never "none", when the billing fields could not be read', () => {
-        const s = readAccountState('509787248064459', { currency: 'USD', account_status: 1 }, false);
-        assert.equal(s.hasPaymentMethod, null);
+    it('says "unknown", never "none", when the billing fields could not be read or were left out', () => {
+        assert.equal(readAccountState('509787248064459', { currency: 'USD', account_status: 1 }, false).hasPaymentMethod, null);
+        assert.equal(readAccountState('509787248064459', { currency: 'USD', account_status: 1 }, true).hasPaymentMethod, null, 'asked, but Meta left the field out');
+    });
+
+    it("reads the account's timezone offset, and ignores nonsense", () => {
+        assert.equal(readAccountState('1', { currency: 'USD', timezone_offset_hours_utc: 3 }, true).timezoneOffsetHours, 3);
+        assert.equal(readAccountState('1', { currency: 'USD', timezone_offset_hours_utc: 99 }, true).timezoneOffsetHours, 0);
     });
 
     it('reads a disable reason', () => {
@@ -129,5 +134,41 @@ describe('the account: status and payment method', () => {
 
     it('links to Meta\'s billing page for the account', () => {
         assert.equal(billingUrl('509787248064459'), 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=509787248064459');
+    });
+});
+
+describe('the account month', () => {
+    it("ends at midnight in the ad account's timezone, not UTC", () => {
+        // 22:00 UTC on Oct 31 is already Nov 1 in Riyadh (UTC+3): the account's month has 30 days left, not a few hours.
+        const lateOct = new Date('2026-10-31T22:00:00Z');
+        assert.equal(daysLeftThisMonth(null, null, lateOct, 0), 1, 'UTC: two hours of October left, counted as a day');
+        assert.equal(daysLeftThisMonth(null, null, lateOct, 3), 30, 'Riyadh: November has begun, 30 days');
+    });
+});
+
+describe('oneDayRemaining and shouldPauseAll: the hourly guard', () => {
+    it('counts one day of a daily budget, even on the last day of the month', () => {
+        assert.equal(oneDayRemaining({ id: '1', daily_budget: '500' }, 'USD', 0, new Date('2026-10-31T23:30:00Z')), 5);
+    });
+
+    it("counts a lifetime budget's whole unspent part, and nothing for an ended window", () => {
+        assert.equal(oneDayRemaining({ id: '1', lifetime_budget: '3000' }, 'USD', 10, NOW), 20);
+        assert.equal(oneDayRemaining({ id: '1', daily_budget: '500', stop_time: '2026-10-01T00:00:00Z' }, 'USD', 0, NOW), 0);
+    });
+
+    it('pauses everything once the month reaches the cap, or today could pass it', () => {
+        assert.equal(shouldPauseAll({ spentThisMonth: 100, nextDayRemaining: 0, monthlyCap: 100 }), true, 'reached');
+        assert.equal(shouldPauseAll({ spentThisMonth: 95, nextDayRemaining: 5.01, monthlyCap: 100 }), true, 'today could pass it');
+        assert.equal(shouldPauseAll({ spentThisMonth: 95, nextDayRemaining: 5, monthlyCap: 100 }), false, 'exactly fits');
+    });
+});
+
+describe('remainingThisMonth: a paused ad set does not shrink the running one', () => {
+    it("sets the campaign's spend against the ad set only when it is the campaign's ONLY ad set", () => {
+        const c: RawCampaign = { id: '1', adsets: { data: [
+            { id: '2', status: 'ACTIVE', lifetime_budget: '2000' },
+            { id: '3', status: 'PAUSED', lifetime_budget: '9000' },
+        ] } };
+        assert.equal(remainingThisMonth(c, 'USD', 15, NOW), 20, 'the paused sibling\'s spend is not subtracted from the running one');
     });
 });

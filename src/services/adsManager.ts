@@ -3,181 +3,30 @@
  * today and this month, payment status, and the controls: pause, resume, change a budget or end date, delete. Boosts made from the
  * Posts screen are campaigns here too, and their controls go through `adBoosts.ts` so the boost record stays right.
  *
- * THE MONEY RULE for a campaign that is not a boost: it may be switched on, or its budget raised, only if the WORST CASE this month
- * fits under the owner's monthly cap. Worst case = what Meta says the account spent this month + the most every active campaign
- * could still spend before the month ends (`remainingThisMonth`): a lifetime budget's unspent part, or a daily budget × the days left
- * in its window this month. It is checked under the same per-tenant lock as boosts. A daily budget is also held to the max daily
- * budget. And nothing is switched on while Meta says the account has no payment method: the API cannot add one, so the screen links
- * to Meta's billing page instead.
+ * Money rules (the cap itself is `adsCap.ts`, one rule for everything):
+ *   - switching a campaign on, or raising an active one's budget, needs the owner's confirmation, a payment method on the account (when
+ *     Meta says there is none), the worst case this month under the monthly cap, and a daily budget at most the max daily budget;
+ *   - `enforceMonthlyCaps` (hourly, from the drain) pauses every active campaign in the account once the month's spend reaches the cap or
+ *     today's budgets would carry it past: the cap holds after switch-on too, also for campaigns made elsewhere.
+ * Writes that check the cap run under the tenant's boost lock (`lockTenantBoosts`), so two at once cannot both fit.
  */
 import { describeError, log } from '../utils/log.js';
 import { queryOne, queryRows } from '../db/query.js';
 import {
-    activateBoost, AdsError, committedThisMonth, deleteBoost, lockTenantBoosts, metaRefusal, pauseBoost, requireConfig,
+    activateBoost, AdsError, committedThisMonth, deleteBoost, lockTenantBoosts, metaRefusal, pauseBoost, readAdsSettings, requireConfig,
     updateBoost, type AdBoostRow,
 } from './adBoosts.js';
 import {
-    deleteAdObject, fetchAccountState, fromMinorUnits, getNode, graphTime, num, readInsights, roundMoney, toMinorUnits, updateObject,
-    type AdAccountState, type BoostInsights, type BoostObjective,
+    CAMPAIGN_FIELDS, campaignBudget, campaignInsights, checkWorstCase, isActive, lifetimeSpend, oneDayRemaining, readCampaigns, readMonth, readSpend,
+    remainingThisMonth, shouldPauseAll, type CampaignBudget, type RawCampaign,
+} from './adsCap.js';
+import { getSetting, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
+import {
+    deleteAdObject, fetchAccountState, getNode, graphTime, roundMoney, toMinorUnits, updateObject, type AdAccountState, type BoostInsights,
 } from './metaAds.js';
 import { withTransaction } from './studio/common.js';
 
-const DAY_MS = 86_400_000;
-
-// ─── Pure ─────────────────────────────────────────────────────────────────────────────────
-
-/** What Graph returns for a budget holder (a campaign or an ad set): budgets in MINOR units, as strings. */
-interface RawBudgetHolder {
-    id?: string;
-    status?: string;
-    daily_budget?: string | number;
-    lifetime_budget?: string | number;
-    start_time?: string;
-    end_time?: string;
-    stop_time?: string;
-}
-
-export interface RawCampaign extends RawBudgetHolder {
-    id: string;
-    name?: string;
-    objective?: string;
-    effective_status?: string;
-    adsets?: { data?: RawBudgetHolder[] };
-    insights?: { data?: unknown[] };
-}
-
-export interface CampaignBudget {
-    kind: 'daily' | 'lifetime' | 'none';
-    /** Major units: the daily amount for `daily`, the total for `lifetime`. */
-    amount: number | null;
-    /** Where the budget lives, i.e. what an edit writes to. */
-    level: 'campaign' | 'adset' | null;
-    /** The id an edit writes to. Internal: not sent to the screen. */
-    holderId: string | null;
-    editable: boolean;
-}
-
-function minor(value: unknown): number {
-    return num(value);
-}
-
-/**
- * Where a campaign's budget lives. A campaign budget (Advantage campaign budget) is edited on the campaign; otherwise a campaign with
- * ONE ad set (every boost) is edited on that ad set. Several ad sets with their own budgets are "set per ad set": shown, not editable
- * here (Ads Manager does that well, and summing them into one number to edit would be a guess).
- */
-export function campaignBudget(c: RawCampaign, currency: string): CampaignBudget {
-    if (minor(c.daily_budget) > 0) return { kind: 'daily', amount: fromMinorUnits(minor(c.daily_budget), currency), level: 'campaign', holderId: c.id, editable: true };
-    if (minor(c.lifetime_budget) > 0) return { kind: 'lifetime', amount: fromMinorUnits(minor(c.lifetime_budget), currency), level: 'campaign', holderId: c.id, editable: true };
-    const sets = c.adsets?.data ?? [];
-    if (sets.length === 1) {
-        const s = sets[0]!;
-        if (minor(s.daily_budget) > 0) return { kind: 'daily', amount: fromMinorUnits(minor(s.daily_budget), currency), level: 'adset', holderId: s.id ?? null, editable: Boolean(s.id) };
-        if (minor(s.lifetime_budget) > 0) return { kind: 'lifetime', amount: fromMinorUnits(minor(s.lifetime_budget), currency), level: 'adset', holderId: s.id ?? null, editable: Boolean(s.id) };
-    }
-    return { kind: 'none', amount: null, level: null, holderId: null, editable: false };
-}
-
-/** Whole days of a window left inside this UTC month, from now (or the window's start, if later). Rounded up: a day begun is counted. */
-export function daysLeftThisMonth(start: Date | null, end: Date | null, now: Date): number {
-    const monthEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-    const from = Math.max(now.getTime(), start?.getTime() ?? 0);
-    const to = Math.min(monthEnd, end?.getTime() ?? Infinity);
-    return to > from ? Math.ceil((to - from) / DAY_MS) : 0;
-}
-
-function date(value: unknown): Date | null {
-    if (typeof value !== 'string' || !value) return null;
-    const t = Date.parse(value);
-    return Number.isNaN(t) ? null : new Date(t);
-}
-
-/** The most one budget holder can still spend this month. `spentMinor` is what it has spent in its lifetime (for a lifetime budget). */
-function holderRemaining(h: RawBudgetHolder, spentMinor: number, now: Date): number {
-    const end = date(h.end_time ?? h.stop_time);
-    if (minor(h.lifetime_budget) > 0) {
-        if (end && end.getTime() <= now.getTime()) return 0;
-        return Math.max(0, minor(h.lifetime_budget) - spentMinor);
-    }
-    if (minor(h.daily_budget) > 0) return minor(h.daily_budget) * daysLeftThisMonth(date(h.start_time), end, now);
-    return 0;
-}
-
-/**
- * The most a campaign can still spend before this UTC month ends, in major units: its own budget, or the sum over its ad sets. With
- * ad-set lifetime budgets, the campaign's lifetime spend is shared out against them, which can only over-count (the safe side).
- */
-export function remainingThisMonth(c: RawCampaign, currency: string, spentLifetime: number, now: Date): number {
-    const spentMinor = toMinorUnits(spentLifetime, currency);
-    if (minor(c.daily_budget) > 0 || minor(c.lifetime_budget) > 0) return roundMoney(fromMinorUnits(holderRemaining(c, spentMinor, now), currency));
-    const sets = (c.adsets?.data ?? []).filter((s) => s.status !== 'PAUSED' && s.status !== 'DELETED' && s.status !== 'ARCHIVED');
-    const total = sets.reduce((sum, s) => sum + holderRemaining(s, sets.length === 1 ? spentMinor : 0, now), 0);
-    return roundMoney(fromMinorUnits(total, currency));
-}
-
-export type CapCheck = { ok: true; worstCase: number } | { ok: false; worstCase: number; left: number };
-
-/** spentThisMonth + the others' remaining + this one's remaining must fit under the cap. */
-export function checkWorstCase(input: { spentThisMonth: number; othersRemaining: number; thisRemaining: number; monthlyCap: number }): CapCheck {
-    const c = (n: number) => Math.round(n * 100);
-    const worstCase = roundMoney(input.spentThisMonth + input.othersRemaining + input.thisRemaining);
-    if (c(worstCase) <= c(input.monthlyCap)) return { ok: true, worstCase };
-    const left = Math.max(0, c(input.monthlyCap) - c(input.spentThisMonth + input.othersRemaining)) / 100;
-    return { ok: false, worstCase, left };
-}
-
-const OBJECTIVE_TO_BOOST: Record<string, BoostObjective> = {
-    OUTCOME_ENGAGEMENT: 'ENGAGEMENT',
-    OUTCOME_AWARENESS: 'AWARENESS',
-    OUTCOME_TRAFFIC: 'TRAFFIC',
-};
-
-export function campaignInsights(c: RawCampaign): BoostInsights | null {
-    const objective = OBJECTIVE_TO_BOOST[c.objective ?? ''];
-    const insights = readInsights(objective ?? 'AWARENESS', c.insights ?? { data: [] });
-    if (!insights) return null;
-    // An objective outside the three Boost uses has no single "result" here: say nothing rather than a wrong number.
-    return objective ? insights : { ...insights, results: 0 };
-}
-
-export function isActive(c: Pick<RawCampaign, 'status' | 'effective_status'>): boolean {
-    return c.status === 'ACTIVE';
-}
-
-// ─── Reading the account ──────────────────────────────────────────────────────────────────
-
-/** The statuses listed: everything but deleted and archived. */
-const LISTED_STATUSES = ['ACTIVE', 'PAUSED', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'DISAPPROVED', 'PREAPPROVED', 'PENDING_BILLING_INFO', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'];
-
-const CAMPAIGN_FIELDS = [
-    'id', 'name', 'objective', 'status', 'effective_status', 'daily_budget', 'lifetime_budget', 'start_time', 'stop_time',
-    'adsets.limit(25){id,status,daily_budget,lifetime_budget,start_time,end_time}',
-    'insights.date_preset(maximum){spend,reach,impressions,clicks,cpm,actions}',
-].join(',');
-
-async function readCampaigns(adAccountId: string, token: string): Promise<RawCampaign[]> {
-    const data = await getNode(`act_${adAccountId}/campaigns`, {
-        fields: CAMPAIGN_FIELDS, limit: '50', effective_status: JSON.stringify(LISTED_STATUSES),
-    }, token, 'campaigns');
-    return Array.isArray(data?.data) ? data.data.filter((c: any) => typeof c?.id === 'string') : [];
-}
-
-async function readCampaign(campaignId: string, token: string): Promise<RawCampaign> {
-    const data = await getNode(campaignId, { fields: CAMPAIGN_FIELDS }, token, 'campaign');
-    if (typeof data?.id !== 'string') throw new AdsError(404, 'CAMPAIGN_NOT_FOUND', 'No such campaign.');
-    return data as RawCampaign;
-}
-
-async function readSpend(adAccountId: string, preset: 'today' | 'this_month', token: string): Promise<number | null> {
-    try {
-        const data = await getNode(`act_${adAccountId}/insights`, { fields: 'spend', date_preset: preset }, token, `spend ${preset}`);
-        const row = Array.isArray(data?.data) ? data.data[0] : null;
-        return row ? roundMoney(num(row.spend)) : 0;
-    } catch (err) {
-        log('warn', 'ads.spend_unreadable', { preset, ...describeError(err) });
-        return null;
-    }
-}
+// ─── Views ────────────────────────────────────────────────────────────────────────────────
 
 export interface CampaignView {
     id: string;
@@ -185,7 +34,7 @@ export interface CampaignView {
     objective: string | null;
     status: string | null;
     effectiveStatus: string | null;
-    budget: Omit<CampaignBudget, 'holderId'>;
+    budget: Omit<CampaignBudget, 'holderId' | 'adsetId'>;
     startTime: string | null;
     endTime: string | null;
     insights: BoostInsights | null;
@@ -194,7 +43,7 @@ export interface CampaignView {
 }
 
 function toCampaignView(c: RawCampaign, currency: string, boost: { id: string; scheduled_post_id: string | null } | undefined): CampaignView {
-    const { holderId: _holder, ...budget } = campaignBudget(c, currency);
+    const { holderId: _holder, adsetId: _adset, ...budget } = campaignBudget(c, currency);
     const sets = c.adsets?.data ?? [];
     const end = c.stop_time ?? (sets.length === 1 ? sets[0]!.end_time : undefined) ?? null;
     return {
@@ -229,11 +78,7 @@ export interface AdsOverview {
     campaigns: CampaignView[];
 }
 
-function lifetimeSpend(c: RawCampaign): number {
-    return campaignInsights(c)?.spend ?? 0;
-}
-
-/** Everything the Ads screen shows, read from Meta in four calls (account, two spend reads, campaigns). */
+/** Everything the Ads screen shows: the account, spend today and this month, every listed campaign. */
 export async function readOverview(creatorId: string, now = new Date()): Promise<AdsOverview> {
     const { settings, token } = await requireConfig(creatorId);
     const committed = await committedThisMonth(null, creatorId, null, now);
@@ -250,7 +95,7 @@ export async function readOverview(creatorId: string, now = new Date()): Promise
         readCampaigns(settings.adAccountId, token).catch((err) => { throw metaRefusal(err); }),
         boostsByCampaign(creatorId),
     ]);
-    const othersRemaining = raw.filter(isActive).reduce((sum, c) => sum + remainingThisMonth(c, account.currency, lifetimeSpend(c), now), 0);
+    const othersRemaining = raw.filter(isActive).reduce((sum, c) => sum + remainingThisMonth(c, account.currency, lifetimeSpend(c), now, account.timezoneOffsetHours), 0);
     limits.worstCaseThisMonth = thisMonth === null ? null : roundMoney(thisMonth + othersRemaining);
     return {
         configured: true,
@@ -287,36 +132,58 @@ async function ownCampaign(adAccountId: string, id: string, token: string): Prom
 }
 
 async function viewOf(creatorId: string, id: string, token: string, currency: string): Promise<CampaignView> {
-    const [c, boosts] = await Promise.all([readCampaign(id, token).catch((err) => { throw err instanceof AdsError ? err : metaRefusal(err); }), boostsByCampaign(creatorId)]);
-    return toCampaignView(c, currency, boosts.get(id));
+    let c: RawCampaign;
+    try {
+        c = await getNode(id, { fields: CAMPAIGN_FIELDS }, token, 'campaign');
+    } catch (err) {
+        throw metaRefusal(err);
+    }
+    return toCampaignView(c, currency, (await boostsByCampaign(creatorId)).get(id));
+}
+
+async function accountOf(adAccountId: string, token: string): Promise<AdAccountState> {
+    try {
+        return await fetchAccountState(adAccountId, token);
+    } catch (err) {
+        throw metaRefusal(err);
+    }
+}
+
+async function month(adAccountId: string, token: string, account: AdAccountState, excludeId: string, now: Date) {
+    try {
+        return await readMonth(adAccountId, token, account.currency, account.timezoneOffsetHours, excludeId, now);
+    } catch (err) {
+        throw new AdsError(502, 'META_ERROR', err instanceof Error ? err.message : String(err));
+    }
+}
+
+/** The boost row follows Meta's status only while it is a live boost: a completed or failed one keeps its history. */
+async function followBoost(boost: AdBoostRow | null, status: 'active' | 'paused'): Promise<void> {
+    if (boost && (boost.status === 'active' || boost.status === 'paused')) await updateBoost(boost.id, { status });
 }
 
 /**
- * Pause or resume a campaign. Resuming is the step that spends, so it needs a payment method on the account and the worst case to fit
- * under the cap; a boost that has never run is activated through `activateBoost`, which also moves its window to start now.
+ * Pause or resume a campaign. Resuming is the step that spends, so it needs a payment method (unless Meta did not say), the worst case
+ * to fit under the cap, and a daily budget within the max. A boost that has never run is activated through `activateBoost`, which also
+ * moves its window to start now.
  */
 export async function setCampaignStatus(creatorId: string, rawId: unknown, status: unknown, now = new Date()): Promise<CampaignView> {
     if (status !== 'ACTIVE' && status !== 'PAUSED') throw new AdsError(400, 'INVALID', 'The status is ACTIVE or PAUSED.', 'status');
     const id = campaignId(rawId);
     const { settings, token } = await requireConfig(creatorId);
-    let account: AdAccountState;
-    try {
-        account = await fetchAccountState(settings.adAccountId, token);
-    } catch (err) {
-        throw metaRefusal(err);
-    }
+    const account = await accountOf(settings.adAccountId, token);
     const campaign = await ownCampaign(settings.adAccountId, id, token);
     const boost = await boostFor(creatorId, id);
 
     if (status === 'PAUSED') {
-        if (boost && boost.status === 'active') await pauseBoost(creatorId, boost.id);
+        if (boost && (boost.status === 'active' || (boost.status === 'paused' && boost.activated_at))) await pauseBoost(creatorId, boost.id);
         else {
             try {
                 await updateObject(id, { status: 'PAUSED' }, token, 'pause campaign');
             } catch (err) {
                 throw metaRefusal(err);
             }
-            if (boost) await updateBoost(boost.id, { status: 'paused' });
+            await followBoost(boost, 'paused');
         }
         log('info', 'ads.campaign_paused', { creator_id: creatorId, campaign_id: id });
         return viewOf(creatorId, id, token, account.currency);
@@ -332,18 +199,16 @@ export async function setCampaignStatus(creatorId: string, rawId: unknown, statu
 
     await withTransaction(async (tx) => {
         await lockTenantBoosts(tx, creatorId);
-        const [thisMonth, all] = await Promise.all([readSpend(settings.adAccountId, 'this_month', token), readCampaigns(settings.adAccountId, token)]);
-        if (thisMonth === null) throw new AdsError(502, 'META_ERROR', 'Meta did not say what the account spent this month, so the cap cannot be checked. Try again.');
-        const others = all.filter((c) => c.id !== id && isActive(c)).reduce((sum, c) => sum + remainingThisMonth(c, account.currency, lifetimeSpend(c), now), 0);
-        const mine = remainingThisMonth(campaign, account.currency, lifetimeSpend(campaign), now);
-        const check = checkWorstCase({ spentThisMonth: thisMonth, othersRemaining: others, thisRemaining: mine, monthlyCap: settings.monthlyCap });
+        const budget = campaignBudget(campaign, account.currency);
+        if (budget.kind === 'daily' && budget.amount !== null && Math.round(budget.amount * 100) > Math.round(settings.maxDailyBudget * 100)) {
+            throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `Its daily budget ${budget.amount} is over your max daily budget of ${settings.maxDailyBudget}. Lower it first.`);
+        }
+        const m = await month(settings.adAccountId, token, account, id, now);
+        const mine = remainingThisMonth(campaign, account.currency, lifetimeSpend(campaign), now, account.timezoneOffsetHours);
+        const check = checkWorstCase({ spentThisMonth: m.spentThisMonth, othersRemaining: m.othersRemaining, thisRemaining: mine, monthlyCap: settings.monthlyCap });
         if (!check.ok) {
             throw new AdsError(400, 'BUDGET_OVER_MONTHLY_CAP',
                 `Switching this on could bring this month to ${check.worstCase}, over your monthly cap of ${settings.monthlyCap}. Lower its budget, pause another campaign, or raise the cap.`);
-        }
-        const budget = campaignBudget(campaign, account.currency);
-        if (budget.kind === 'daily' && budget.amount !== null && budget.amount > settings.maxDailyBudget) {
-            throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `Its daily budget ${budget.amount} is over your max daily budget of ${settings.maxDailyBudget}.`);
         }
         try {
             await updateObject(id, { status: 'ACTIVE' }, token, 'resume campaign');
@@ -351,76 +216,94 @@ export async function setCampaignStatus(creatorId: string, rawId: unknown, statu
             throw metaRefusal(err);
         }
     });
-    if (boost) await updateBoost(boost.id, { status: 'active' });
+    await followBoost(boost, 'active');
     log('info', 'ads.campaign_resumed', { creator_id: creatorId, campaign_id: id });
     return viewOf(creatorId, id, token, account.currency);
 }
 
+export interface BudgetInput {
+    amount?: unknown;
+    endTime?: unknown;
+    /** Required to RAISE an active campaign's budget: that spends more, so the screen asks first. */
+    confirm?: unknown;
+}
+
 /**
  * Change a campaign's budget (daily amount, or lifetime total) and optionally its end. Only where the budget has one home (the campaign,
- * or its single ad set). A daily budget is held to the max daily budget; an active campaign's new worst case must fit under the cap.
+ * or its single ad set); the end date is written on the single ad set (a campaign's `stop_time` is derived from its ad sets). A daily
+ * budget, or a boost's total spread over its days, is held to the max daily budget; raising an active campaign needs `confirm` and the
+ * new worst case under the cap.
  */
-export async function setCampaignBudget(creatorId: string, rawId: unknown, body: { amount?: unknown; endTime?: unknown }, now = new Date()): Promise<CampaignView> {
+export async function setCampaignBudget(creatorId: string, rawId: unknown, body: BudgetInput, now = new Date()): Promise<CampaignView> {
     const id = campaignId(rawId);
     const amount = body.amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount) || Math.round(amount * 100) <= 0) throw new AdsError(400, 'INVALID', 'Enter an amount above 0.', 'amount');
     let end: Date | null = null;
     if (body.endTime !== undefined && body.endTime !== null && body.endTime !== '') {
-        end = date(body.endTime);
-        if (!end || end.getTime() <= now.getTime() + 3600_000) throw new AdsError(400, 'INVALID', 'The end must be a date at least an hour from now.', 'endTime');
+        const t = typeof body.endTime === 'string' ? Date.parse(body.endTime) : NaN;
+        if (Number.isNaN(t) || t <= now.getTime() + 3_600_000) throw new AdsError(400, 'INVALID', 'The end must be a date at least an hour from now.', 'endTime');
+        end = new Date(t);
     }
     const { settings, token } = await requireConfig(creatorId);
-    let account: AdAccountState;
-    try {
-        account = await fetchAccountState(settings.adAccountId, token);
-    } catch (err) {
-        throw metaRefusal(err);
-    }
+    const account = await accountOf(settings.adAccountId, token);
     const campaign = await ownCampaign(settings.adAccountId, id, token);
     const budget = campaignBudget(campaign, account.currency);
     if (!budget.editable || !budget.holderId) {
         throw new AdsError(409, 'BUDGET_NOT_EDITABLE', 'This campaign has a budget on each of several ad sets: change them in Ads Manager.');
     }
+    if (end && !budget.adsetId) {
+        throw new AdsError(409, 'BUDGET_NOT_EDITABLE', 'This campaign has several ad sets, each with its own end date: change them in Ads Manager.', 'endTime');
+    }
     const value = roundMoney(amount);
-    if (budget.kind === 'daily' && value > settings.maxDailyBudget) {
+    const boost = await boostFor(creatorId, id);
+    if (budget.kind === 'daily' && Math.round(value * 100) > Math.round(settings.maxDailyBudget * 100)) {
         throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `The daily budget ${value} is over your max daily budget of ${settings.maxDailyBudget}.`, 'amount');
+    }
+    if (budget.kind === 'lifetime' && boost && Math.round((value / boost.days) * 100) > Math.round(settings.maxDailyBudget * 100)) {
+        throw new AdsError(400, 'BUDGET_OVER_DAILY_MAX', `${value} over ${boost.days} day(s) is more than your max daily budget of ${settings.maxDailyBudget} a day.`, 'amount');
     }
     const spent = lifetimeSpend(campaign);
     if (budget.kind === 'lifetime' && value <= spent) {
         throw new AdsError(400, 'INVALID', `This campaign has already spent ${spent}: the total must be more than that.`, 'amount');
     }
-    const boost = await boostFor(creatorId, id);
+    const raising = budget.amount !== null && Math.round(value * 100) > Math.round(budget.amount * 100);
+    if (isActive(campaign) && raising && body.confirm !== true) {
+        throw new AdsError(400, 'INVALID', 'Raising a running campaign\'s budget spends more: confirm it.', 'confirm');
+    }
 
     await withTransaction(async (tx) => {
         await lockTenantBoosts(tx, creatorId);
-        // What the campaign would look like after the edit, for the cap.
         const field = budget.kind === 'daily' ? 'daily_budget' : 'lifetime_budget';
         const minorValue = String(toMinorUnits(value, account.currency));
-        const after: RawCampaign = budget.level === 'campaign'
-            ? { ...campaign, [field]: minorValue, ...(end ? { stop_time: end.toISOString() } : {}) }
-            : { ...campaign, adsets: { data: [{ ...(campaign.adsets?.data?.[0] ?? {}), [field]: minorValue, ...(end ? { end_time: end.toISOString() } : {}) }] } };
+        // The campaign as it would be after the edit, for the cap.
+        const sets = campaign.adsets?.data ?? [];
+        const after: RawCampaign = {
+            ...campaign,
+            ...(budget.level === 'campaign' ? { [field]: minorValue } : {}),
+            adsets: { data: sets.map((s) => (s.id === budget.adsetId ? { ...s, ...(budget.level === 'adset' ? { [field]: minorValue } : {}), ...(end ? { end_time: end.toISOString() } : {}) } : s)) },
+        };
 
         if (boost && boost.status !== 'active' && !boost.activated_at) {
-            // A boost that has not run is counted at its planned total (adBoosts.ts): the new total must fit like a new boost would.
+            // A boost that has not run is a reservation (adBoosts.ts): the new total must fit like a new boost would.
             const committed = await committedThisMonth(tx, creatorId, boost.id, now);
-            const total = budget.kind === 'lifetime' ? value : value * boost.days;
+            const total = budget.kind === 'lifetime' ? value : roundMoney(value * boost.days);
             if (Math.round((committed + total) * 100) > Math.round(settings.monthlyCap * 100)) {
                 throw new AdsError(400, 'BUDGET_OVER_MONTHLY_CAP', `This boost could spend ${total}, but only ${Math.max(0, roundMoney(settings.monthlyCap - committed))} of your monthly cap is left.`, 'amount');
             }
         } else if (isActive(campaign)) {
-            const [thisMonth, all] = await Promise.all([readSpend(settings.adAccountId, 'this_month', token), readCampaigns(settings.adAccountId, token)]);
-            if (thisMonth === null) throw new AdsError(502, 'META_ERROR', 'Meta did not say what the account spent this month, so the cap cannot be checked. Try again.');
-            const others = all.filter((c) => c.id !== id && isActive(c)).reduce((sum, c) => sum + remainingThisMonth(c, account.currency, lifetimeSpend(c), now), 0);
-            const check = checkWorstCase({ spentThisMonth: thisMonth, othersRemaining: others, thisRemaining: remainingThisMonth(after, account.currency, spent, now), monthlyCap: settings.monthlyCap });
+            const m = await month(settings.adAccountId, token, account, id, now);
+            const check = checkWorstCase({
+                spentThisMonth: m.spentThisMonth, othersRemaining: m.othersRemaining,
+                thisRemaining: remainingThisMonth(after, account.currency, spent, now, account.timezoneOffsetHours), monthlyCap: settings.monthlyCap,
+            });
             if (!check.ok) {
                 throw new AdsError(400, 'BUDGET_OVER_MONTHLY_CAP', `This budget could bring this month to ${check.worstCase}, over your monthly cap of ${settings.monthlyCap}.`, 'amount');
             }
         }
 
-        const params: Record<string, string> = { [field]: minorValue };
-        if (end) params[budget.level === 'campaign' ? 'stop_time' : 'end_time'] = graphTime(end);
         try {
-            await updateObject(budget.holderId!, params, token, 'budget');
+            await updateObject(budget.holderId!, { [field]: minorValue }, token, 'budget');
+            if (end) await updateObject(budget.adsetId!, { end_time: graphTime(end) }, token, 'end date');
         } catch (err) {
             throw metaRefusal(err);
         }
@@ -433,7 +316,7 @@ export async function setCampaignBudget(creatorId: string, rawId: unknown, body:
             });
         }
     });
-    log('info', 'ads.campaign_budget', { creator_id: creatorId, campaign_id: id, kind: budget.kind, level: budget.level });
+    log('info', 'ads.campaign_budget', { creator_id: creatorId, campaign_id: id, kind: budget.kind, level: budget.level, raised: raising });
     return viewOf(creatorId, id, token, account.currency);
 }
 
@@ -444,7 +327,7 @@ export async function deleteCampaign(creatorId: string, rawId: unknown): Promise
     const campaign = await ownCampaign(settings.adAccountId, id, token);
     if (isActive(campaign)) throw new AdsError(409, 'CAMPAIGN_ACTIVE', 'Pause the campaign before deleting it.');
     const boost = await boostFor(creatorId, id);
-    if (boost) {
+    if (boost && boost.status !== 'active' && boost.status !== 'creating') {
         await deleteBoost(creatorId, boost.id);
     } else {
         try {
@@ -452,8 +335,65 @@ export async function deleteCampaign(creatorId: string, rawId: unknown): Promise
         } catch (err) {
             throw metaRefusal(err);
         }
+        if (boost) await updateBoost(boost.id, { status: 'deleted' });
     }
     log('info', 'ads.campaign_deleted', { creator_id: creatorId, campaign_id: id, boost: Boolean(boost) });
     return { ok: true };
 }
 
+// ─── The guard ────────────────────────────────────────────────────────────────────────────
+
+/** How often each tenant's account is checked against its cap. */
+export const CAP_CHECK_INTERVAL_MS = 60 * 60_000;
+
+/** Tenants with ads settings saved: the `ads.settings.<tenant>` rows. */
+async function tenantsWithAds(): Promise<string[]> {
+    const rows = await queryRows<{ key: string }>("SELECT key FROM app_settings WHERE key LIKE 'ads.settings.%'");
+    return rows.map((r) => r.key.slice(TENANT_SETTING_PREFIXES.adsSettings.length)).filter((id) => /^[A-Za-z0-9-]{1,64}$/.test(id));
+}
+
+/**
+ * THE cap after switch-on. For every tenant with ads configured, at most once an hour: if the month's spend has reached the monthly cap,
+ * or one more day of every active campaign's budget would carry it past, every active campaign in the account is PAUSED (pausing spends
+ * nothing and is undone with one tap on the Ads screen). Campaigns made in Ads Manager are paused too: the cap is the owner's ceiling for
+ * the account, wherever a campaign came from. Fail-soft per tenant; a Meta that cannot be read pauses nothing and is retried next hour.
+ */
+export async function enforceMonthlyCaps(now = new Date()): Promise<{ checked: number; paused: number; failed: number }> {
+    const out = { checked: 0, paused: 0, failed: 0 };
+    for (const creatorId of await tenantsWithAds()) {
+        const checkedKey = tenantSettingKey(TENANT_SETTING_PREFIXES.adsCapChecked, creatorId);
+        const last = Date.parse((await getSetting(checkedKey)) ?? '');
+        if (!Number.isNaN(last) && now.getTime() - last < CAP_CHECK_INTERVAL_MS) continue;
+        await setSetting(checkedKey, now.toISOString(), null);
+
+        const { settings, token } = await readAdsSettings(creatorId);
+        if (!token || !settings.adAccountId || !settings.monthlyCap) continue;
+        out.checked++;
+        try {
+            const account = await fetchAccountState(settings.adAccountId, token);
+            const [spent, campaigns] = await Promise.all([readSpend(settings.adAccountId, 'this_month', token), readCampaigns(settings.adAccountId, token)]);
+            if (spent === null) throw new Error('this month\'s spend unreadable');
+            const active = campaigns.filter(isActive);
+            const nextDay = nextDayRemaining(active, account, now);
+            if (!shouldPauseAll({ spentThisMonth: spent, nextDayRemaining: nextDay, monthlyCap: settings.monthlyCap })) continue;
+            const boosts = await boostsByCampaign(creatorId);
+            for (const c of active) {
+                await updateObject(c.id, { status: 'PAUSED' }, token, 'cap pause');
+                const b = boosts.get(c.id);
+                if (b) await queryOne("UPDATE ad_boosts SET status = 'paused', error = $2, updated_at = NOW() WHERE id = $1 AND status = 'active' RETURNING id",
+                    [b.id, 'Paused automatically: this month reached your monthly spending cap.']);
+                out.paused++;
+            }
+            log('warn', 'ads.cap_paused_all', { creator_id: creatorId, spent, next_day: nextDay, cap: settings.monthlyCap, paused: active.length });
+        } catch (err) {
+            out.failed++;
+            log('warn', 'ads.cap_check_failed', { creator_id: creatorId, ...describeError(err) });
+        }
+    }
+    return out;
+}
+
+/** One more day of the active campaigns (`oneDayRemaining` each). */
+export function nextDayRemaining(active: readonly RawCampaign[], account: Pick<AdAccountState, 'currency'>, now: Date): number {
+    return roundMoney(active.reduce((sum, c) => sum + oneDayRemaining(c, account.currency, lifetimeSpend(c), now), 0));
+}
