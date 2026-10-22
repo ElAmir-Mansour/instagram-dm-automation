@@ -129,6 +129,82 @@
     · the audit_log row Connect writes holds the channel id and scopes only,
       not the name (src/routes/youtube.ts, the callback);
     · no third-party content, ads or cookies: the YouTube code has none.
+
+  DM REPLIES THROUGH AN AI PROVIDER — ADDED 2026-10-15 (section 3's third
+  paragraph, and the DM sentences in section 5 and on /data-deletion and /terms).
+  Gemini is the default engine; the operator can change it per account, and the
+  claims are what the code does when they do:
+    · the engine is per account, `gemini` by default, `providers` the other:
+      DM_ENGINES / DEFAULT_DM_ENGINE, src/services/dmEngine.ts:37-43;
+    · `providers` sends the same persona, knowledge base and history window as
+      Gemini (HISTORY_WINDOW = 8, src/services/ai.ts:97) through the `dm` route:
+      generateDmViaLayer(), dmEngine.ts:145-201;
+    · sales mode always uses the `dm` route, with up to 12 messages:
+      SALES_HISTORY_WINDOW, src/services/dmSales/turn.ts:72, and the turn's
+      facts (stage, link sent, button tapped, the CAMPAIGN'S keyword, never the
+      comment's text): salesFactsBlock(), src/services/dmSales/prompt.ts:163-174,
+      the keyword from bridge.ts:138;
+    · each turn is direction and text only (dmTurns(), dmEngine.ts:105-113;
+      salesTurns(), dmSales/history.ts:114): no username, account id or
+      conversation id is in any request the layer builds;
+    · a provider that fails is answered once by Gemini when the account's
+      fallback is on (generateDmReply(), dmEngine.ts:235; turn.ts:370-381).
+
+  WHATSAPP — ADDED 2026-10-19, STACKED ON THE DM-PROVIDER TEXT ABOVE (docs/specs/001-whatsapp-agent: FR-028, FR-029, FR-018, research R4,
+  R12). Section 1's "When you send a message on WhatsApp" (id whatsapp-ar / whatsapp-en: the anchor the go-live gate, T061, can look
+  for) and the WhatsApp lines in sections 2, 3, 4, 5, 6 and 7 claim the following. What Meta says is cited to Meta, not to code.
+    · WhatsApp arrives as `object: 'whatsapp'` through the same webhook and is stored by handleWhatsAppInbound(),
+      src/webhook/whatsappInbound.ts:466;
+    · what is stored for a contact: the conversation (WhatsApp user id in the instagram_user_id column, phone, username, parent id,
+      profile name, entry source) whatsappInbound.ts:268-290; entrySourceOf() = ad id, click id, headline, src/webhook/whatsapp.ts:315;
+      the message (text, which holds a caption or a tapped button's title; payload = the button's id; message_type; the raw event)
+      whatsappInbound.ts:297-303; replies are stored as outbound rows with their text;
+    · "LESS, NEVER MORE": only a sender on the owner's test list is stored in full; anyone else is the user id, the time and the message type
+      (whatsappInbound.ts:24-28, :284-287, :299-301), and the queue row's payload is cut to ids, type and time when the job ends
+      (:457-476; redactedInboundPayload(), src/webhook/whatsappRedact.ts:38). The page says "less may be stored, never more" without naming
+      the criterion, so it stays true when the go-live gate (T061) changes who is stored in full. THAT CHANGE MUST RE-READ THIS PARAGRAPH;
+    · the raw event is cleared after RAW_PAYLOAD_RETENTION_DAYS (30 on this page, see OWNER item 3): pruneRawPayloads(),
+      src/services/retention.ts:105, one UPDATE on messages for every platform; done queue rows go after 7 days (DONE_JOB_RETENTION_DAYS,
+      retention.ts:49); failed rows stay (section 4's older text);
+    · replies come from Groq, Anthropic or OpenAI only, never Google, never OpenRouter or a custom address: NO_TRAINING_PROVIDERS and
+      PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp, src/services/aiProviders/purposes.ts:63, :70. A turn that has a transport asks for purpose
+      `dm_whatsapp` (src/services/dmSales/turn.ts:449) and never falls back to Gemini (turn.ts:37, :403);
+    · "do not train" is the rule those three were put on the list for (purposes.ts:58-62; research R4: Groq's services agreement,
+      Anthropic's API default, OpenAI's API terms). The page states it as OUR rule and points to their policies; it does not speak for them;
+    · what goes to the provider: up to 12 messages, text and direction only, the tapped button's code, and the conversation's facts, and no
+      name, phone or id: SALES_HISTORY_WINDOW, turn.ts:77; loadHistory() selects direction, text, sender, payload (dmSales/store.ts:120);
+      salesTurns(), dmSales/history.ts:114; salesFactsBlock(), dmSales/prompt.ts:163;
+    · a provider that cannot answer hands the conversation to a person, with no Gemini: turn.ts:401-413, whatsappAnswer.ts:16;
+    · VOICE NOTES AND FILES ARE WORDED CONDITIONALLY ON PURPOSE. transcribeAudio() (src/services/transcribe.ts:38-45, :128) and
+      saveInboundMedia() (src/services/whatsappMedia.ts:135) exist and enforce the rules the page states (Groq, or OpenAI when paid AI is
+      allowed; a private copy: whatsappMedia.ts:178, storage.ts:30-47). BUT AS OF 2026-10-19 NOTHING IN THE PIPELINE CALLS EITHER (only
+      their tests do; the inbound handler marks media and voice notes `unsupported_type`, whatsappInbound.ts:145). So the page says what
+      is done "when" a voice note is turned into text, and what the tool "can" keep of a file. WHEN THE INTEGRATION LANDS, CHECK THESE
+      SENTENCES AGAINST IT;
+    · customer files: kept while a message names them and deleted with the conversation (erasure.ts:478, :548); one no message names is deleted
+      after 30 days (PRIVATE_MEDIA_ORPHAN_DAYS, retention.ts:506; pruneOrphanedPrivateMedia(), :536); private bucket `media-private`, never
+      the public route (storage.ts:30-47);
+    · owner alerts: Telegram and/or an email through Resend, when the owner switched them on and a conversation needs him or a lead got its
+      link. The alert carries the name (WhatsApp profile name, else username, else the last 4 of the id), the last thing the person wrote
+      cut to 200 characters with links replaced, the window state and the inbox link: notifyOwner(), dmSales/handoff.ts:123-180;
+      buildNoticeText(), notify.ts:362; noticeWho(), :354; excerpt(), :251; emailBody(), notifyEmail.ts:367; Resend: notifyEmail.ts:44;
+      Telegram: notify.ts:23. The same alert exists for Instagram and Facebook DMs, so the page says so;
+    · opting out: «إيقاف» / "stop" as the WHOLE message (alone or with a please) is read by the sales turn's prefilter before any model
+      (prefilter.ts:126, :208; turn.ts:346). The assistant answers with one line saying no more messages (turn.ts:569; kits.ts:375),
+      pauses the conversation and stamps opted_out_at (dmSales/store.ts:181; turn.ts:224), and follow-ups check opted_out_at
+      (dmSales/followup.ts:148). consent.ts's matchStopMessage() and withdrawAll() are NOT called by the pipeline yet ("Nothing imports
+      this module yet"), so the page promises no consent record;
+    · a person on request: the model's wants_human intent is forced into a hand-off (dmSales/coerce.ts:137) that pauses the bot
+      (turn.ts:224); the first reply says it is automated (whatsappAnswer.ts:205; kits.ts:229, :587);
+    · deletion is carried out by hand through the erasure route. It matches the WhatsApp user id (the instagram_user_id column) or a username
+      (resolveErasureTarget(), erasure.ts:88) and deletes the messages with their raw events, the conversation (phone, name, username, entry
+      source), its tracked links and clicks, and the contact's private files (executeErasure(), erasure.ts:515-558; eraseCustomerMedia(), :478).
+      The Storage object goes with the next daily sweep (eraseCustomerMedia()'s docblock, erasure.ts:462-477). No route searches by phone: the operator finds the
+      user id from the phone or username by hand, which is why the deletion page asks for one;
+    · the WhatsApp token is stored enc:v1, AES-256-GCM (src/services/whatsappConnections.ts:314);
+    · from Meta's documentation, read 2026-10-19 (developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security):
+      Meta acts as data processor / service provider for the Cloud API, a message has a maximum retention of 30 days, and the Cloud API
+      manages the encryption keys on the business's behalf. Not checkable from code; re-read the page when Meta revises it.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -1034,10 +1110,10 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 15 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 19 أكتوبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
-                    وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
+                    وعلى تكامله مع إنستجرام وفيسبوك وواتساب وتيك توك ويوتيوب.</p>
 
                 <nav class="toc" aria-labelledby="toc-h-ar">
                     <p class="toc-h" id="toc-h-ar">المحتويات</p>
@@ -1057,7 +1133,8 @@
                 <p>
                     «أوتوريبلاي برو» أداة تُشغّلها صاحبة أو صاحب حساب واحد على إنستجرام وفيسبوك،
                     وتقوم مع مَن يعلّق أو يراسل ذلك الحساب بأمرين فقط: الردّ الآلي على التعليقات
-                    التي تُطابِق كلمة مفتاحية محدّدة مسبقاً، والردّ على الرسائل الخاصة الواردة إليه.
+                    التي تُطابِق كلمة مفتاحية محدّدة مسبقاً، والردّ على الرسائل الخاصة الواردة إليه، وعلى رسائل
+                    واتساب الواردة إلى رقمه إن ربط رقماً.
                     وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي تنشر عليه الفيديوهات وكاروسيلات
                     الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. وإن
                     ربط قناة على يوتيوب، فهي ترفع إليها مقاطعه القصيرة بوصفها
@@ -1073,7 +1150,8 @@
                 <p>
                     تعمل الخدمة عبر تطبيق مُسجَّل في «منصّة مطوّري ميتا» باسم
                     <span class="code" lang="en" dir="ltr">AutoResponseBot</span>، وهو الاسم الذي
-                    تجده لدى ميتا، بينما <strong>أوتوريبلاي برو</strong> هو اسم المنتج نفسه. ويجري
+                    تجده لدى ميتا، بينما <strong>أوتوريبلاي برو</strong> هو اسم المنتج نفسه. وتصل رسائل واتساب عبر
+                    <bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi>، وهي واجهة ميتا الرسمية لواتساب للأعمال. ويجري
                     الوصول إلى تيك توك عبر تطبيق منفصل مُسجَّل في «منصّة مطوّري تيك توك»
                     (<bdi lang="en" dir="ltr">TikTok for Developers</bdi>)، باستخدام
                     <span class="code" lang="en" dir="ltr">Login Kit</span>
@@ -1160,9 +1238,63 @@
                     </li>
                 </ul>
                 <p>
-                    لا نطلب ولا نتلقّى ولا نخزّن بريدك الإلكتروني أو رقم هاتفك أو عنوانك أو بيانات
-                    الدفع. لكن نصّ رسالتك يُخزَّن كما كتبته: إن ذكرتَ فيه معلومة شخصية، فهي مخزّنة
+                    لا نطلب ولا نتلقّى ولا نخزّن بريدك الإلكتروني أو عنوانك أو بيانات الدفع، ولا يصلنا
+                    رقم هاتفك من إنستجرام أو فيسبوك؛ أمّا على واتساب فرقمك جزء ممّا تسلّمه ميتا إلينا،
+                    كما يوضّح القسم التالي. لكن نصّ رسالتك يُخزَّن كما كتبته: إن ذكرتَ فيه معلومة شخصية، فهي مخزّنة
                     لأنك كتبتها.
+                </p>
+
+                <h3 id="whatsapp-ar">عندما ترسل رسالة على واتساب</h3>
+                <p>
+                    إن ربط صاحب الحساب رقماً على واتساب للأعمال، فرسائلك إليه تصل عبر
+                    <bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi> من ميتا، ويردّ عليها المساعد الآلي كما يوضّح
+                    القسم 3. تُسلّم ميتا إلينا الرسالة ومعها ما يخصّك: اسمك في ملفك على واتساب، ومعرّفاً تمنحه لك ميتا
+                    عند هذا النشاط (معرّف مستخدم واتساب الخاص بالنشاط)، ورقم هاتفك إن شاركته ميتا معنا — وقد لا
+                    تفعل إن كنت تستخدم اسم مستخدم على واتساب — واسم المستخدم هذا إن وُجد. وإن بدأتَ المحادثة من إعلان
+                    «انقر للمراسلة عبر واتساب»، فيصلنا معها معرّف الإعلان ومعرّف النقرة وعنوان الإعلان.
+                </p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن عنك:</strong> اسمك على واتساب، ورقم هاتفك إن وصل، ومعرّفك عند ميتا، واسم
+                        المستخدم على واتساب إن وُجد، وكيف بدأت المحادثة (من إعلان مثلاً)، ووقت آخر رسالة منك.
+                    </li>
+                    <li>
+                        <strong>نصّ رسالتك كما كتبته</strong>، ووصف الصورة أو الملف إن كتبتَ له وصفاً، وعنوان الزرّ أو
+                        الصفّ الذي ضغطتَه ومعرّفه، ونوع الرسالة، ومعرّفها عند ميتا. والردود المُرسَلة إليك تُخزَّن
+                        بنصّها.
+                    </li>
+                    <li>
+                        <strong>الحدث الأصلي كما ورد من ميتا</strong>، حرفياً وبالكامل. يحتوي على ما سبق كلّه، فهو نسخة
+                        ثانية منه. مدة الاحتفاظ به في القسم 4.
+                    </li>
+                    <li>
+                        <strong>إن كانت رسالتك مقطعاً صوتياً أو صورة أو فيديو أو ملصقاً أو مستنداً</strong>، نخزّن نوعها
+                        والمعرّف الذي تمنحه لها ميتا، داخل الحدث الأصلي أعلاه. ويمكن للأداة أن تنزّل الملف نفسه من ميتا
+                        وتحفظ منه نسخة خاصة مع المحادثة: في مساحة تخزين غير علنية لدى
+                        <bdi lang="en" dir="ltr">Supabase</bdi>، لا يُقدَّم الملف من أي عنوان علني. أمّا المقطع الصوتي فيُحوَّل
+                        إلى نصّ كما يوضّح القسم 3.
+                    </li>
+                    <li>
+                        الروابط القصيرة (<span class="code" lang="en" dir="ltr">/r/…</span>) في الردود تعمل هنا كما وُصف
+                        أعلاه للرسائل الخاصة على إنستجرام: يُسجَّل فتحها بالطريقة نفسها وللمدة نفسها، وتُحذف مع محادثتك.
+                    </li>
+                </ul>
+                <p>
+                    وقد يُخزَّن أقلّ من ذلك بحسب ما ضبطه صاحب الحساب لمساعد واتساب — كأن يُحفَظ فقط أن رسالة وصلت
+                    ووقتها ونوعها ومعرّف مرسلها عند ميتا، بلا نصّ ولا اسم ولا رقم — لكن لا يُخزَّن أكثر من ذلك أبداً.
+                </p>
+                <p>
+                    يقرأ صاحب الحساب المحادثة في صندوق رسائله بلوحة التحكم، ويستطيع الردّ عليها بنفسه. وحين تحتاج
+                    محادثة إليه، قد تصله رسالة تنبيه على بريده الإلكتروني أو على تيليجرام، إن فعّل ذلك: فيها اسمك على
+                    واتساب أو اسم المستخدم (أو آخر أربعة أحرف من معرّفك إن لم يكن لك أيٌّ منهما)، ومقتطف من آخر ما كتبتَه (حتى 200 حرف،
+                    وتُستبدَل الروابط فيه بـ«[link]»)، ورابط إلى المحادثة. وتنبيهات مماثلة تُرسَل عن الرسائل الخاصة على
+                    إنستجرام وفيسبوك. وتمرّ عبر <bdi lang="en" dir="ltr">Resend</bdi> و<bdi lang="en" dir="ltr">Telegram</bdi>
+                    (القسم 5).
+                </p>
+                <p>
+                    <strong>لإيقاف الرسائل:</strong> اكتب «إيقاف» أو <bdi lang="en" dir="ltr">stop</bdi> وحدها في
+                    رسالة. يردّ المساعد بسطر واحد يؤكّد أن لا رسائل أخرى، ويتوقّف عن الردّ في هذه المحادثة، ولا
+                    يرسل لك متابعات بعد ذلك.
                 </p>
 
                 <h3>عندما يربط صاحب الحساب تيك توك</h3>
@@ -1306,6 +1438,7 @@
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
+                    <li>الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب، وتنبيه صاحب الحساب حين تحتاج محادثة إليه.</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
@@ -1314,9 +1447,10 @@
                 <h2 id="gemini-ar">3. الردّ الآلي و«جيميناي» من جوجل</h2>
                 <p>
                     الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
-                    يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
+                    يُرسَل افتراضياً <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة <bdi lang="en" dir="ltr">Gemini API</bdi></a>
-                    من جوجل.
+                    من جوجل. هذا على إنستجرام وفيسبوك؛ أمّا رسائل واتساب فلا تُرسَل إلى جوجل
+                    إطلاقاً (أدناه).
                 </p>
                 <p>
                     ما يُرسَل إلى جوجل هو النصوص واتجاه كل رسالة فقط. <strong>لا يُرسَل اسمك ولا
@@ -1324,8 +1458,35 @@
                     إلى جوجل إطلاقاً — مسار التعليقات لا يستخدم الذكاء الاصطناعي.
                 </p>
                 <p>
+                    ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
+                    الاصطناعي المذكورين في القسم 5، والحساب الذي يستخدم وضع المبيعات في الأداة تُكتب ردوده بهذه
+                    الطريقة دائماً. وعندئذٍ يُرسَل <strong>نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة</strong>،
+                    مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل، ومعها ملاحظات عن المحادثة نفسها: كأن يُذكر
+                    هل أُرسل إليك رابط من قبل، وأيّ أزرار الحساب ضغطت، أو أنك علّقت على منشور بالكلمة المفتاحية
+                    التي حدّدها الحساب (الكلمة نفسها، لا تعليقك). <strong>ولا يُرسَل إليه كذلك اسمك ولا معرّف حسابك
+                    ولا معرّف المحادثة.</strong> وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ «جيميناي» كما سبق.
+                </p>
+                <p>
+                    <strong>رسائل واتساب لا تذهب إلى جوجل إطلاقاً.</strong> ردودها يكتبها
+                    <bdi lang="en" dir="ltr">Groq</bdi> أو <bdi lang="en" dir="ltr">Anthropic</bdi> أو
+                    <bdi lang="en" dir="ltr">OpenAI</bdi> فقط — وهي الجهات التي نقصر عليها رسائل واتساب لأن شروط
+                    واجهاتها البرمجية تنصّ على ألّا تدرّب نماذجها على ما يُرسَل إليها (سياساتها في القسم 5) — ولا تُرسَل
+                    رسائل واتساب إلى جوجل ولا إلى <bdi lang="en" dir="ltr">OpenRouter</bdi> ولا إلى خدمة بعنوان يضيفه
+                    المُشغّل، ولو فُعِّلت. وما يُرسَل هو ما وُصف في الفقرة السابقة: نصّ رسالتك وما يصل إلى آخر اثنتي
+                    عشرة رسالة من المحادثة، مع اتجاه كل رسالة، وملاحظات عن المحادثة نفسها؛
+                    <strong>ولا يُرسَل اسمك على واتساب ولا رقم هاتفك ولا معرّفك ولا معرّف المحادثة.</strong> وإن تعذّر على
+                    المزوّد الردّ، لا يكتب «جيميناي» الردّ بدلاً منه، بل تُحوَّل المحادثة إلى صاحب الحساب.
+                </p>
+                <p>
+                    <strong>المقاطع الصوتية:</strong> حين يُحوَّل مقطع صوتي إلى نصّ ليُجاب عنه، يُرسَل الصوت إلى
+                    <bdi lang="en" dir="ltr">Groq</bdi> (نموذج <bdi lang="en" dir="ltr">Whisper</bdi> للتعرّف على الكلام)،
+                    أو إلى <bdi lang="en" dir="ltr">OpenAI</bdi> إن سمح المُشغّل بالخدمات المدفوعة؛ ولا يُرسَل إلى أي جهة
+                    أخرى. ويُعامَل النصّ الناتج كأنك كتبتَه.
+                </p>
+                <p>
                     وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
-                    بأنك تتحدّث إلى خدمة آلية.
+                    بأنك تتحدّث إلى خدمة آلية. وإن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم على أن يتوقّف عن الردّ
+                    وتُحوَّل المحادثة إلى صاحب الحساب.
                 </p>
 
                 <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
@@ -1344,9 +1505,19 @@
                     </li>
                     <li><strong>سجلّ «رسالة واحدة في اليوم» وعدّادات الحدّ:</strong> تُحذف بعد 48 ساعة.</li>
                     <li>
+                        <strong>واتساب — الحدث الأصلي وصفوف الطابور:</strong> يسري عليهما ما سبق. وحين لا تُحفَظ الرسالة كاملة،
+                        يُختصَر الحدث في صفّ الطابور عند انتهاء معالجته إلى معرّفات ونوع الرسالة ووقتها، بلا نصّ ولا اسم
+                        ولا رقم. أمّا إن بقي الصفّ فاشلاً فقد يبقى حدثه كاملاً بلا حدّ زمني، كما في الرسائل الخاصة.
+                    </li>
+                    <li>
+                        <strong>واتساب — الملفات:</strong> الملف الذي تُرسله، إن حُفظت منه نسخة، يبقى ما دامت رسالة في المحادثة
+                        تشير إليه، ويُحذف مع المحادثة. وملف لا تشير إليه أي رسالة يُحذف بعد 30 يوماً من حفظه. أمّا نسخة ميتا
+                        فتخضع لمدتها (القسم 5).
+                    </li>
+                    <li>
                         <strong>نصوص الرسائل والمحادثات وسجلّ التفاعلات:</strong> تبقى بلا مدة
                         انتهاء تلقائية، حتى يحذفها صاحب الحساب. السبب أنها هي ما يقرأه صاحب
-                        الحساب في صندوق رسائله. <strong>هذا يشمل نصّ رسائلك الخاصة.</strong> إن
+                        الحساب في صندوق رسائله. <strong>هذا يشمل نصّ رسائلك الخاصة، وعلى واتساب يشمل كذلك اسمك ورقم هاتفك ومعرّفك.</strong> إن
                         أردتَ حذفها، فالطريق هو <a href="/data-deletion">صفحة حذف البيانات</a>.
                     </li>
                     <li>
@@ -1376,6 +1547,14 @@
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
                         وعبرها تُرسَل الردود.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
+                    </li>
+                    <li>
+                        <strong>ميتا — واتساب</strong> (<bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi>) — منها تأتي
+                        رسائل واتساب، وعبرها تُرسَل الردود. تعمل ميتا هنا جهةَ معالجة للبيانات؛ وتفيد وثائقها بأن الرسالة
+                        يُحتفَظ بها لديها مدة أقصاها 30 يوماً، وبأن واجهتها هي التي تدير مفاتيح التشفير وفكّه نيابةً
+                        عن النشاط.
+                        <a href="https://developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security" target="_blank" rel="noopener noreferrer">ما تقوله ميتا عن بيانات واجهة واتساب</a> ·
+                        <a href="https://www.facebook.com/legal/Meta-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">شروط ميتا لمنصّة واتساب للأعمال</a>.
                     </li>
                     <li>
                         <strong>تيك توك</strong> — فقط إن ربطه صاحب الحساب. منه تأتي بيانات الملف
@@ -1408,12 +1587,23 @@
                         ولا تحتوي على نصوص الرسائل.
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Vercel</bdi></a>.
                     </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Resend</bdi></strong> — يرسل بريداً إلكترونياً تنبيهياً إلى صاحب
+                        الحساب حين تحتاج محادثة إليه، إن فعّل ذلك. يحتوي التنبيه على اسمك ومقتطف من آخر ما كتبتَه، كما في
+                        القسم 1 (واتساب)، فيمرّ ذلك المقتطف عبر <bdi lang="en" dir="ltr">Resend</bdi>.
+                        <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Resend</bdi></a>.
+                    </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Telegram</bdi></strong> — الأمر نفسه إن اختار صاحب الحساب
+                        تنبيهات تيليجرام، بدلاً من البريد أو معه.
+                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Telegram</bdi></a>.
+                    </li>
                 </ul>
 
                 <h3 id="ai-providers-ar">مزوّدو الذكاء الاصطناعي (جهات معالجة فرعية)</h3>
                 <p>
                     يستطيع مُشغّل الأداة (القسم 9) أن يفعّل مزوّداً أو أكثر من المزوّدين التاليين ليكتب مسودّات بالذكاء
-                    الاصطناعي لحساب صاحب الحساب. <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
+                    الاصطناعي لحساب صاحب الحساب، والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3). <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
                     وما لم يفعل ذلك لا يصله شيء.
                 </p>
                 <ul>
@@ -1446,16 +1636,24 @@
                 </ul>
                 <p>
                     <strong>ما يُرسَل إليهم:</strong> ملف صاحب الحساب ومحتواه — ما يكتبه عن نفسه وعن نشاطه، ونصوص موقعه
-                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. <strong>لا يُرسَل عبر هذا المسار
-                    شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong> (أما نصوص الرسائل الخاصة التي تصل إلى جوجل فموضّحة
-                    في القسم 3). ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
+                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ
+                    على رسائله الخاصة، <strong>يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً</strong>، على النحو الموضّح في القسم 3 تماماً؛
+                    <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
                     وما يصل إلى كل منهم يخضع لسياسته هو، ولا نستطيع حذفه نيابةً عنك.
+                </p>
+                <p>
+                    <strong>رسائل واتساب:</strong> لا يكتب ردودَها إلا <bdi lang="en" dir="ltr">Groq</bdi> أو
+                    <bdi lang="en" dir="ltr">Anthropic</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi>، ولا يحوّل مقاطعها
+                    الصوتية إلى نصّ إلا <bdi lang="en" dir="ltr">Groq</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi>
+                    (القسم 3)؛ ولا يصل شيء منها إلى جوجل ولا إلى <bdi lang="en" dir="ltr">OpenRouter</bdi> ولا إلى خدمة
+                    بعنوان يضيفه المُشغّل.
                 </p>
 
                 <h2 id="deletion-ar">6. حذف بياناتك</h2>
                 <p>
                     يمكنك طلب حذف بياناتك في أي وقت. الخطوات، وما يُحذف فعلاً وما لا يُحذف،
-                    في <a href="/data-deletion">صفحة حذف البيانات</a>.
+                    في <a href="/data-deletion">صفحة حذف البيانات</a>. ويشمل ذلك محادثاتك على واتساب
+                    وما حُفظ منها من ملفات.
                 </p>
                 <p>
                     ويستطيع صاحب الحساب الذي ربط يوتيوب أن يسحب وصول الأداة من جهة جوجل أيضاً، على
@@ -1471,7 +1669,7 @@
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
-                        رمز وصول ميتا الخاص بصاحب الحساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
+                        رمز وصول ميتا الخاص بصاحب الحساب، ورمز وصول واتساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
                         <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
@@ -1479,7 +1677,8 @@
                 </ul>
                 <p>
                     ولا نزعم أكثر من ذلك: لا يوجد تشفير من طرف إلى طرف، ونصوص الرسائل مخزّنة
-                    كنصّ صريح داخل قاعدة البيانات ليقرأها صاحب الحساب.
+                    كنصّ صريح داخل قاعدة البيانات ليقرأها صاحب الحساب، والملفات الواردة من واتساب، إن حُفظت، ليست مشفّرة من
+                    طرف إلى طرف كذلك.
                 </p>
 
                 <h2 id="changes-ar">8. تغييرات هذه الصفحة</h2>
@@ -1519,9 +1718,9 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 15 October 2026</p>
+                <p class="stamp">Last updated: 19 October 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
-                    https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
+                    https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, WhatsApp, TikTok and YouTube.</p>
 
                 <nav class="toc" aria-labelledby="toc-h-en">
                     <p class="toc-h" id="toc-h-en">Contents</p>
@@ -1542,7 +1741,8 @@
                     AutoReply Pro is a tool operated by the owner of a single Instagram and
                     Facebook account. With the people who comment on or message that account, it
                     does two things: it replies automatically to comments that match a keyword the
-                    owner configured, and it answers direct messages sent to the account. If the
+                    owner configured, and it answers direct messages sent to the account (and, if the owner connects a
+                    WhatsApp number, the messages sent to that number). If the
                     owner also connects a TikTok account, it posts the videos and photo carousels
                     the owner schedules to that account, or sends them to its drafts, and does
                     nothing else there. If the owner connects a YouTube channel, it uploads the
@@ -1560,7 +1760,8 @@
                 <p>
                     The service runs through an app registered on the Meta Developer Platform as
                     <span class="code">AutoResponseBot</span>, which is the name Meta holds;
-                    <strong>AutoReply Pro</strong> is the name of the product itself. TikTok
+                    <strong>AutoReply Pro</strong> is the name of the product itself. WhatsApp messages arrive through
+                    Meta's official <span class="code">WhatsApp Cloud API</span> for WhatsApp Business. TikTok
                     access goes through a separate app registered on TikTok for Developers, using
                     TikTok's official <span class="code">Login Kit</span>,
                     <span class="code">Content Posting API</span> and
@@ -1646,10 +1847,68 @@
                     </li>
                 </ul>
                 <p>
-                    We do not ask for, receive, or store your email address, phone number,
-                    postal address, or payment details. Your message text, however, is stored as
+                    We do not ask for, receive, or store your email address, postal address, or
+                    payment details, and your phone number does not reach us from Instagram or Facebook; on
+                    WhatsApp it is part of what Meta delivers to us, as the next part explains. Your message text, however, is stored as
                     written: if you put something personal in it, that is stored because you
                     wrote it.
+                </p>
+
+                <h3 id="whatsapp-en">When you send a message on WhatsApp</h3>
+                <p>
+                    If the account owner has connected a WhatsApp Business number, your messages to it arrive through
+                    Meta's <span class="code">WhatsApp Cloud API</span>, and the automated assistant answers them as
+                    section 3 describes. Meta delivers the message to us together with what identifies you: the name on
+                    your WhatsApp profile, an identifier Meta gives this business for you (a business-scoped user ID),
+                    your phone number if Meta shares it with us — it may not, if you use a WhatsApp username — and that
+                    username, if you have one. If you started the conversation from a Click to WhatsApp ad, the ad's ID,
+                    click ID and headline come with it.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Stored about you:</strong> your WhatsApp name, your phone number if it came, your Meta
+                        user ID, your WhatsApp username if you have one, how the conversation began (from an ad, for
+                        example), and when you last wrote.
+                    </li>
+                    <li>
+                        <strong>The text of your message as you wrote it</strong>, the caption of a photo or file if you
+                        wrote one, the title and ID of a button or list row you tapped, the type of message, and
+                        Meta's message ID. Replies sent to you are stored the same way, with their text.
+                    </li>
+                    <li>
+                        <strong>The verbatim event Meta sent us</strong>, in full. It contains all of the above, so it
+                        is a second copy of it. Its retention is in section 4.
+                    </li>
+                    <li>
+                        <strong>If your message is a voice note, photo, video, sticker or document</strong>, we store
+                        what kind it was and the identifier Meta gives it, inside the event above. The tool can also
+                        download the file itself from Meta and keep a private copy of it with the conversation: in a
+                        non-public storage area at Supabase, never served from a public address. A voice note is turned
+                        into text as section 3 describes.
+                    </li>
+                    <li>
+                        The short links in replies (<span class="code">/r/…</span>) work here as described above for
+                        Instagram direct messages: their opening is recorded in the same way and kept for the same time,
+                        and they are deleted with your conversation.
+                    </li>
+                </ul>
+                <p>
+                    Less than this may be stored, depending on how the account owner has set the WhatsApp assistant
+                    up — for example, only that a message arrived, when, of what type, and the sender's Meta user ID,
+                    with no text, name or number — but never more.
+                </p>
+                <p>
+                    The account owner reads the conversation in the inbox of their dashboard and can reply to it by
+                    hand. When a conversation needs the owner, an alert may reach them by email or on Telegram, if they
+                    switched that on: it carries your WhatsApp name or username (or the last four characters of your ID if there
+                    is neither), an excerpt of the last thing you wrote (up to 200 characters, with links replaced by
+                    “[link]”), and a link to the conversation. Similar alerts exist for direct messages on Instagram and
+                    Facebook. They travel through Resend and Telegram (section 5).
+                </p>
+                <p>
+                    <strong>To stop the messages:</strong> write «إيقاف» or “stop” on its own in a message. The
+                    assistant answers with one line confirming that no more messages will come, stops replying in that
+                    conversation, and sends you no follow-ups after that.
                 </p>
 
                 <h3>When the account owner connects TikTok</h3>
@@ -1799,6 +2058,7 @@
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
+                    <li>To answer you if you message a WhatsApp number the account owner connected, and to alert the account owner when a conversation needs them.</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
@@ -1807,9 +2067,10 @@
                 <h2 id="gemini-en">3. Automated replies and Google Gemini</h2>
                 <p>
                     Replies to direct messages are written by an AI model, not a person. To
-                    generate one, <strong>the text of your message and the last eight messages
+                    generate one, by default, <strong>the text of your message and the last eight messages
                     in the thread</strong> are sent to Google's
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API</a>.
+                    That is so on Instagram and Facebook; WhatsApp messages are never sent to Google (below).
                 </p>
                 <p>
                     What is sent to Google is message text and the direction of each message,
@@ -1818,8 +2079,37 @@
                     all — the comment path does not use AI.
                 </p>
                 <p>
+                    The operator of the tool (section 9) can instead have an account's replies written by one
+                    of the AI providers listed in section 5, and an account that uses the tool's sales mode
+                    always has them written that way. Then <strong>the text of your message and up to the last
+                    twelve messages in the thread</strong>, with the direction of each, are sent to that provider
+                    in place of Google, together with notes about the conversation itself: for example, whether
+                    you have already been sent a link, which of the account's buttons you tapped, or that you
+                    commented the account's keyword on a post (the keyword, not your comment). <strong>Your
+                    username, your account ID and the conversation ID are not sent to it either.</strong> If that
+                    provider cannot answer, the reply may be written by Gemini as described above.
+                </p>
+                <p>
+                    <strong>WhatsApp messages are never sent to Google.</strong> Their replies are written only by
+                    Groq, Anthropic or OpenAI — the providers WhatsApp messages are limited to because the terms of
+                    their APIs say they do not train their models on what is sent to them (their policies are linked in
+                    section 5) — and WhatsApp messages are not sent to Google, to OpenRouter, or to a service at an
+                    address the operator enters, even if one is switched on. What is sent is what the previous
+                    paragraph describes: the text of your message and up to the last twelve messages in the thread,
+                    with the direction of each, and notes about the conversation itself;
+                    <strong>your WhatsApp name, your phone number, your ID and the conversation ID are not sent.</strong>
+                    If the provider cannot answer, Gemini does not write the reply instead; the conversation is handed
+                    to the account owner.
+                </p>
+                <p>
+                    <strong>Voice notes:</strong> when a voice note is turned into text so that it can be answered, the
+                    audio is sent to Groq (its Whisper speech model), or to OpenAI if the operator has allowed paid
+                    services; it is sent to no one else. The text it produces is treated as if you had typed it.
+                </p>
+                <p>
                     As Meta's policy requires, the first message in a thread — and another one
-                    after a long gap — tells you that you are talking to an automated service.
+                    after a long gap — tells you that you are talking to an automated service. If you ask for a person,
+                    the assistant is built to stop replying and hand the conversation to the account owner.
                 </p>
 
                 <h2 id="retention-en">4. How long it is kept</h2>
@@ -1839,10 +2129,21 @@
                     </li>
                     <li><strong>The one-DM-per-day log and the rate counters:</strong> deleted after 48 hours.</li>
                     <li>
+                        <strong>WhatsApp — the verbatim event and the queue rows:</strong> what is said above applies to them. When a
+                        message is not stored in full, the event in its queue row is cut down when its processing ends to IDs, the
+                        message type and its time, with no text, name or number. A row that stays failed may keep its full event with no
+                        time limit, as for direct messages.
+                    </li>
+                    <li>
+                        <strong>WhatsApp — files:</strong> a file you send, if a copy of it was kept, stays as long as a message in the
+                        conversation points to it, and is deleted with the conversation. A file that no message points to is deleted 30
+                        days after it was saved. Meta's own copy follows Meta's period (section 5).
+                    </li>
+                    <li>
                         <strong>Message text, conversations, and the interaction log:</strong>
                         kept with no automatic expiry until the account owner deletes them,
                         because they are what the owner reads in their own inbox.
-                        <strong>This includes the text of your private messages.</strong> If you
+                        <strong>This includes the text of your private messages, and on WhatsApp your name, phone number and ID as well.</strong> If you
                         want yours removed, the route is the
                         <a href="/data-deletion">data deletion page</a>.
                     </li>
@@ -1878,6 +2179,14 @@
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
                     </li>
                     <li>
+                        <strong>Meta — WhatsApp</strong> (<span class="code">WhatsApp Cloud API</span>) — WhatsApp messages
+                        arrive from it, and replies are sent back through it. Meta acts as a data processor here; its
+                        documentation says a message is kept by it for at most 30 days, and that its API manages the
+                        encryption and decryption keys on the business's behalf.
+                        <a href="https://developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security" target="_blank" rel="noopener noreferrer">What Meta says about WhatsApp API data</a> ·
+                        <a href="https://www.facebook.com/legal/Meta-Terms-for-WhatsApp-Business-Platform" target="_blank" rel="noopener noreferrer">Meta's terms for the WhatsApp Business Platform</a>.
+                    </li>
+                    <li>
                         <strong>TikTok</strong> — only if the account owner connects it. The
                         account's basic profile and posting options come from TikTok, and the
                         owner's scheduled videos, photos and captions are posted to it, or sent to
@@ -1910,12 +2219,24 @@
                         and do not contain message text.
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Vercel's privacy policy</a>.
                     </li>
+                    <li>
+                        <strong>Resend</strong> — sends the account owner an alert email when a conversation needs them, if
+                        they switched that on. The alert carries your name and an excerpt of the last thing you wrote, as
+                        section 1 (WhatsApp) says, so that excerpt passes through Resend.
+                        <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Resend's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Telegram</strong> — the same, if the account owner chose Telegram alerts instead of email or as
+                        well.
+                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">Telegram's privacy policy</a>.
+                    </li>
                 </ul>
 
                 <h3 id="ai-providers-en">AI providers (sub-processors)</h3>
                 <p>
                     The operator of the tool (section 9) can switch on one or more of the providers below to write
-                    AI drafts for an account owner. <strong>None of them is used unless the operator has added its key and left it
+                    AI drafts for an account owner and, where the operator chooses, the replies to its direct messages
+                    (section 3). <strong>None of them is used unless the operator has added its key and left it
                     switched on</strong>; until then nothing reaches it.
                 </p>
                 <ul>
@@ -1948,18 +2269,25 @@
                 <p>
                     <strong>What is sent to them:</strong> the account owner's profile and content — what they write about
                     themselves and their work, the text of their site and the links they provide, and the posts being written
-                    for them and their captions — so that a draft can be written for them. <strong>Nothing about people who
-                    comment or message on Instagram or Facebook is sent through this route</strong> (the direct-message text
-                    that reaches Google is described in section 3). Each provider is used with the operator's key, not the
+                    for them and their captions — so that a draft can be written for them. When the operator has a provider write
+                    an account's direct-message replies, <strong>the text of the conversation is sent to that provider
+                    too</strong>, exactly as section 3 describes; <strong>nothing else about people who comment or message
+                    on Instagram or Facebook is sent through this route</strong>. Each provider is used with the operator's key, not the
                     account owner's. What reaches each of them is governed by its own
                     policy, and we cannot delete it on your behalf.
+                </p>
+                <p>
+                    <strong>WhatsApp messages:</strong> only Groq, Anthropic or OpenAI writes their replies, and only Groq
+                    or OpenAI turns their voice notes into text (section 3); nothing from them reaches Google, OpenRouter
+                    or a service at an address the operator enters.
                 </p>
 
                 <h2 id="deletion-en">6. Deleting your data</h2>
                 <p>
                     You can ask for your data to be deleted at any time. The steps, and what is
                     and is not actually erased, are on the
-                    <a href="/data-deletion">data deletion page</a>.
+                    <a href="/data-deletion">data deletion page</a>. That includes your conversations on
+                    WhatsApp and any files kept from them.
                 </p>
                 <p>
                     An account owner who connected YouTube can also remove the app's access from
@@ -1976,7 +2304,7 @@
                         it is processed, so no one else can inject forged events into the system.
                     </li>
                     <li>
-                        The account owner's Meta access token, and their TikTok and YouTube access
+                        The account owner's Meta access token, their WhatsApp access token, and their TikTok and YouTube access
                         and refresh tokens, are <strong>encrypted before they are stored</strong>,
                         with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
@@ -1984,7 +2312,8 @@
                 </ul>
                 <p>
                     We claim no more than that: there is no end-to-end encryption, and message
-                    text sits in the database in plain text so that the account owner can read it.
+                    text sits in the database in plain text so that the account owner can read it; and files received on WhatsApp, if
+                    kept, are not end-to-end encrypted either.
                 </p>
 
                 <h2 id="changes-en">8. Changes to this page</h2>
