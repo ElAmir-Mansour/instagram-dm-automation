@@ -43,6 +43,13 @@ const AdsBuilder = {
         days: 'adsb-days', greeting: 'adsb-greeting', link: 'adsb-link', amount: 'adsb-daily', dailyBudget: 'adsb-daily',
     }),
 
+    /**
+     * Whether an ad built from a POST can carry its own greeting and ice breakers. It cannot: Meta refuses `page_welcome_message` on a post
+     * creative (live check 2026-10-22, spec.ts POST_GREETING_PLACEMENT), so quick mode, which always boosts a post, hides those fields and
+     * says the chat opens with Meta's greeting. Uploaded-media ads (A5) have them.
+     */
+    GREETING_ON_POST: false,
+
     /** How long typing must pause before the text is checked. */
     POLICY_DEBOUNCE_MS: 400,
     GREETING_MAX: 300,
@@ -175,7 +182,7 @@ const AdsBuilder = {
         const fields = {};
         const caption = String(st.post && st.post.caption ? st.post.caption : '');
         if (caption.trim()) fields.caption = caption;
-        if (st.goal === 'messages') {
+        if (st.goal === 'messages' && this.GREETING_ON_POST) {
             const greeting = String(st.greeting || '').trim();
             if (greeting) fields.greeting = greeting;
             this.iceRows(st).forEach((r, i) => {
@@ -214,7 +221,7 @@ const AdsBuilder = {
             creative: { source: 'post', postId: String(st.post.id), platform: st.platform },
             copy: { primaryText: String((st.post && st.post.caption) || '') },
         };
-        if (st.goal === 'messages') {
+        if (st.goal === 'messages' && this.GREETING_ON_POST) {
             ad.message = {
                 greeting: String(st.greeting || '').trim(),
                 iceBreakers: this.iceRows(st).map((r) => (r.response ? { title: r.title, response: r.response } : { title: r.title })),
@@ -255,6 +262,7 @@ const AdsBuilder = {
         }
         if (st.goal === 'messages') {
             if (!st.destinations.length) return { message: t('adsBuilder.err.destinations'), field: 'destinations' };
+            if (!this.GREETING_ON_POST) return null;
             const greeting = String(st.greeting || '').trim();
             if (!greeting) return { message: t('adsBuilder.err.greeting'), field: 'greeting' };
             if (Array.from(greeting).length > this.GREETING_MAX) return { message: t('adsBuilder.err.greetingLong', { max: this.GREETING_MAX }), field: 'greeting' };
@@ -329,6 +337,8 @@ const AdsBuilder = {
                         </div>
                         <p class="form-hint" id="adsb-dest-hint">${t('adsBuilder.dest.hint')}</p>
                     </fieldset>
+                    ${this.GREETING_ON_POST ? '' : html`<p class="form-hint" id="adsb-no-greeting">${t('adsBuilder.greeting.notOnPost')}</p>`}
+                    <div class="${this.GREETING_ON_POST ? html.raw('') : html.raw('hidden')}" id="adsb-greeting-block">
                     <div class="form-group">
                         <label class="form-label" for="adsb-greeting">${t('adsBuilder.greeting')}</label>
                         <textarea class="field" id="adsb-greeting" rows="3" maxlength="${this.GREETING_MAX}" dir="auto" data-field="greeting" data-input="adsb:field"
@@ -336,6 +346,7 @@ const AdsBuilder = {
                         <p class="form-hint" id="adsb-greeting-hint">${t('adsBuilder.greeting.hint', { max: this.GREETING_MAX })}</p>
                     </div>
                     <div class="form-group" id="adsb-ice">${this.iceMarkup(st)}</div>
+                    </div>
                 </div>
                 <div class="form-group hidden" id="adsb-link-group">
                     <label class="form-label" for="adsb-link">${t('adsBuilder.link.label')}</label>
