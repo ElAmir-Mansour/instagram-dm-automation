@@ -36,6 +36,7 @@ import { metaHttp, metaErrorCode, metaErrorSubcode, withRetry } from './http.js'
 import { API_VERSION, GRAPH_BASE } from './instagram.js';
 import { createOAuthState, type OAuthReturnTo } from './oauthState.js';
 import { getTenant, invalidateTenantCache } from './tenant.js';
+import { captureAdsAccess, forgetConnectedAdsAccess } from './adBoosts.js';
 import { inspectionStatus, inspectToken, REQUIRED_SCOPES, type TokenInspection } from './tokenHealth.js';
 
 // ─── What we ask Meta for ───────────────────────────────────────────────────────────────
@@ -45,6 +46,17 @@ import { inspectionStatus, inspectToken, REQUIRED_SCOPES, type TokenInspection }
  * the app's own paths need (`REQUIRED_SCOPES`) plus the two the Growth insights need.
  */
 export const LOGIN_SCOPES: readonly string[] = [...new Set([...REQUIRED_SCOPES, 'instagram_manage_insights', 'read_insights'])];
+
+/**
+ * What Boost needs (docs/META_ADS_RESEARCH.md): asked for on top of LOGIN_SCOPES only when `meta.ads_scopes_enabled` is on, and never
+ * required. A person who grants them gets the ads token stored for their tenant (`captureAdsAccess`); one who declines connects as before.
+ */
+export const ADS_SCOPES: readonly string[] = ['ads_read', 'ads_management', 'business_management'];
+
+/** What the dialog asks for in `scope=` mode. */
+export function loginScopes(adsScopes: boolean): string[] {
+    return adsScopes ? [...new Set([...LOGIN_SCOPES, ...ADS_SCOPES])] : [...LOGIN_SCOPES];
+}
 
 /**
  * What a connection cannot work without. A user who declined any of these is not connected (a connection that reads no comments
@@ -197,7 +209,7 @@ export function isAuthType(value: unknown): value is AuthType {
  * one, `scope=` lists what we need, which works for people with a role on the app. `authType` is a reconnect: `rerequest` asks
  * again for permissions that were declined, `reauthorize` renews Instagram's 90-day data access.
  */
-export function buildLoginUrl(input: { appId: string; redirectUri: string; state: string; configId: string | null; authType?: AuthType | null }): string {
+export function buildLoginUrl(input: { appId: string; redirectUri: string; state: string; configId: string | null; authType?: AuthType | null; adsScopes?: boolean }): string {
     const params = new URLSearchParams({
         client_id: input.appId,
         redirect_uri: input.redirectUri,
@@ -208,7 +220,7 @@ export function buildLoginUrl(input: { appId: string; redirectUri: string; state
         params.set('config_id', input.configId);
         params.set('override_default_response_type', 'true');
     } else {
-        params.set('scope', LOGIN_SCOPES.join(','));
+        params.set('scope', loginScopes(input.adsScopes === true).join(','));
     }
     if (input.authType) params.set('auth_type', input.authType);
     return `https://www.facebook.com/${API_VERSION}/dialog/oauth?${params.toString()}`;
@@ -217,6 +229,7 @@ export function buildLoginUrl(input: { appId: string; redirectUri: string; state
 /** Whether the tenant may start the flow now, and with what: the checks `POST /connect` makes before it mints a state. */
 export interface LoginAvailability {
     enabled: boolean;
+    adsScopes: boolean;
     app: MetaApp | null;
     configId: string | null;
     redirectUri: string | null;
@@ -224,7 +237,7 @@ export interface LoginAvailability {
 
 export async function loginAvailability(): Promise<LoginAvailability> {
     const [settings, redirectUri] = await Promise.all([getMetaLoginSettings(), metaRedirectUri()]);
-    return { enabled: settings.enabled, app: readMetaApp(), configId: settings.configId, redirectUri };
+    return { enabled: settings.enabled, adsScopes: settings.adsScopesEnabled, app: readMetaApp(), configId: settings.configId, redirectUri };
 }
 
 // ─── Graph: the exchange and the reads ──────────────────────────────────────────────────
@@ -792,6 +805,12 @@ export async function finishLogin(input: FinishLoginInput): Promise<LoginOutcome
         throw new MetaLoginError('permissions_missing', `Required permissions were declined: ${missingCore.join(', ')}.`, { secrets: [userToken] });
     }
 
+    // Boost: when the person granted the ads permissions, their token becomes the tenant's ads token and a sole ad account is picked.
+    // The one deliberate exception to "the user token is never stored", and only for ads. Fail-soft: it never stops the connection.
+    await captureAdsAccess(input.creatorId, userToken, permissions.granted, input.userId).catch((err) => {
+        log('warn', 'meta.ads_capture_failed', { creator_id: input.creatorId, reason: scrubSecrets(err instanceof Error ? err.message : String(err), [userToken]) });
+    });
+
     const choices = classifyPages(pages);
     const plan = planPages(choices);
     if (plan.kind === 'none') throw new MetaLoginError('no_pages', 'This Facebook account manages no Page.');
@@ -942,6 +961,10 @@ export async function removeMetaConnection(
         [creatorId, onlyIfMetaUser]
     );
     invalidateTenantCache();
+    // The ads token that came with that Connect goes with it (a pasted one stays: the owner put it there by hand).
+    if (cleared > 0) {
+        await forgetConnectedAdsAccess(creatorId).catch((err) => log('warn', 'meta.ads_forget_failed', { creator_id: creatorId, ...describeError(err) }));
+    }
     return { cleared: cleared > 0, unsubscribed };
 }
 

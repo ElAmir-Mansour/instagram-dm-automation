@@ -81,6 +81,14 @@ export const APP_SETTING_KEYS = {
      */
     metaLoginConfigId: 'meta.login_config_id',
     /**
+     * 'true': Connect (Facebook Login) also asks for `ads_read`, `ads_management` and `business_management`, so a tenant who grants them
+     * gets Boost with no token to paste (`captureAdsAccess` in src/services/adBoosts.ts). Off by default, and off means the dialog asks for
+     * exactly what it asked before: asking for a permission the app's use cases do not include makes Meta refuse the WHOLE dialog, so this
+     * goes on only after the operator added "Create & manage ads with Marketing API" to the app. With a configuration id the permissions
+     * come from the configuration instead, and this only changes what Settings lists. Not a secret. Platform admin, `POST /api/meta/app-settings`.
+     */
+    metaAdsScopesEnabled: 'meta.ads_scopes_enabled',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -260,11 +268,20 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   deactivated), so a row is never orphaned.
  *   dmVariants      the owner's A/B wording experiment for the DM sales turn: up to three variants of how to open and how to offer the link, their
  *                   weights, and whether it is running (DM plan S14, `src/services/dmSales/variantStore.ts`). Not a secret.
+ *   adsSettings     the owner's Meta ads limits for Boost: the ad account id, the max daily budget and the monthly spend cap, as JSON
+ *                   (`src/services/adBoosts.ts`). Not a secret. The server refuses any boost over these.
+ *   adsToken        the system-user token with `ads_management` / `ads_read` that Boost calls the Marketing API with. A SECRET: encrypted at
+ *                   rest like the Page token, and never in an answer (`{ set, last4 }` is all the card is told).
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
     dmVariants: 'dm.variants.',
+    adsSettings: 'ads.settings.',
+    adsToken: 'ads.token.',
 } as const;
+
+/** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */
+const SECRET_TENANT_PREFIXES: readonly string[] = [TENANT_SETTING_PREFIXES.adsToken];
 
 export type TenantSettingKey = `${(typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES]}${string}`;
 
@@ -292,7 +309,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
 ]);
 
 export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {
-    return SECRET_KEYS.has(key as AppSettingKey);
+    return SECRET_KEYS.has(key as AppSettingKey) || SECRET_TENANT_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /** The decrypted value, or null when unset. */
@@ -482,6 +499,8 @@ export interface MetaLoginSettings {
     configId: string | null;
     /** Where the id came from, so the card can say "set in the environment". */
     configIdSource: 'database' | 'env' | null;
+    /** Whether Connect also asks for the ads permissions (`meta.ads_scopes_enabled`). Default false. */
+    adsScopesEnabled: boolean;
 }
 
 /** A Login for Business configuration id is a number: Meta's own are 15 or 16 digits, and nothing shorter than 6 or longer than 30 is one. */
@@ -492,9 +511,10 @@ export const META_CONFIG_ID_PATTERN = /^[0-9]{6,30}$/;
  * `META_LOGIN_CONFIG_ID`). A saved or env value that is not a configuration id is ignored with a log line, never sent to Meta.
  */
 export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
-    const [enabled, dbConfig] = await Promise.all([
+    const [enabled, dbConfig, adsScopes] = await Promise.all([
         getSetting(APP_SETTING_KEYS.metaLoginEnabled),
         getSetting(APP_SETTING_KEYS.metaLoginConfigId),
+        getSetting(APP_SETTING_KEYS.metaAdsScopesEnabled),
     ]);
     const envConfig = process.env.META_LOGIN_CONFIG_ID?.trim() || null;
     const candidate = dbConfig ?? envConfig;
@@ -504,6 +524,7 @@ export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
         enabled: enabled === 'true',
         configId,
         configIdSource: configId ? (dbConfig ? 'database' : 'env') : null,
+        adsScopesEnabled: adsScopes === 'true',
     };
 }
 

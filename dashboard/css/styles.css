@@ -5782,3 +5782,12 @@ ul.log-cards { list-style: none; }
 .ui-card-fields { display: grid; gap: var(--space-2); margin: 0; }
 .ui-card-field { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
 .ui-card-field dd { margin: 0; min-inline-size: 0; text-align: end; overflow-wrap: anywhere; }
+
+/* Boost (Meta ads) on a published post card, and the dialog's summary. */
+.boost-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.boost-box { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.boost-box-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.boost-metrics { gap: var(--space-3); }
+.boost-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.boost-summary { padding: var(--space-3); border-radius: var(--radius-sm); }
+.boost-summary p { margin: 0; }

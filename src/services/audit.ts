@@ -189,6 +189,16 @@ export const AUDIT_ACTIONS = {
     whatsappEntryLinkDelete: 'whatsapp.entry_link_delete',
     /** The number's WhatsApp ice breakers and commands were changed from Settings. `detail` holds the counts, never the texts. */
     whatsappIceBreakersWrite: 'whatsapp.ice_breakers_write',
+    /** The Meta ads settings for Boost (ad account, limits, the ads token) were changed. `detail` names which, never the token. */
+    adsSettingsWrite: 'ads.settings_write',
+    /** A boost was created at Meta, PAUSED (it spends nothing). `detail` holds the post, platform, budget, days and the outcome. */
+    adsBoostCreate: 'ads.boost_create',
+    /** The owner confirmed Activate: the boost's campaign, ad set and ad were set ACTIVE and it can spend up to its planned total. */
+    adsBoostActivate: 'ads.boost_activate',
+    /** A boost's campaign was paused. */
+    adsBoostPause: 'ads.boost_pause',
+    /** A boost's campaign was deleted at Meta. */
+    adsBoostDelete: 'ads.boost_delete',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

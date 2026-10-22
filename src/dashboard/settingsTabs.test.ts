@@ -116,7 +116,7 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
     it('each card is in the tab the owner named, and the developer cards are the platform admin\'s alone', () => {
         const { Settings } = load('en', 'admin');
         const where = (group: string): string[] => Array.from<Json>(Settings.visibleCards(group)).map((c) => c.id);
-        assert.deepEqual(where('connections'), ['meta', 'tiktok', 'youtube', 'whatsapp']);
+        assert.deepEqual(where('connections'), ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads']);
         assert.deepEqual(where('messages'), ['iceb', 'alerts']);
         assert.deepEqual(where('appearance'), ['appearance']);
         assert.deepEqual(where('advanced'), ['token', 'webhook', 'account']);

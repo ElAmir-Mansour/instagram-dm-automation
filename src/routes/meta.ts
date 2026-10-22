@@ -38,7 +38,7 @@ import {
 } from '../services/oauthState.js';
 import {
     assertPageFree, buildLoginUrl, CALLBACK_PATH as META_CALLBACK_PATH, completeMetaConnection, CORE_SCOPES, disconnectMeta,
-    finishLogin, getMetaConnection, isAuthType, loginAvailability, LOGIN_SCOPES, mayConnect, MetaLoginError, publicChoices,
+    ADS_SCOPES, finishLogin, getMetaConnection, isAuthType, loginAvailability, loginScopes, mayConnect, MetaLoginError, publicChoices,
     readIntent, readMetaApp, readPickPayload, replacesConnection, WEBHOOK_FIELDS,
 } from '../services/metaLogin.js';
 import { readCommentCheck } from '../services/metaCommentCheck.js';
@@ -298,7 +298,7 @@ metaRouter.post('/connect', canAdminister, async (req, res) => {
         res.json({
             url: buildLoginUrl({
                 appId: availability.app.appId, redirectUri: availability.redirectUri, state,
-                configId: availability.configId, authType: body.authType ?? null,
+                configId: availability.configId, authType: body.authType ?? null, adsScopes: availability.adsScopes,
             }),
         });
     } catch (err) {
@@ -428,7 +428,10 @@ metaRouter.get('/app-settings', requirePlatformAdmin, async (_req, res) => {
             // What to register in Meta's dashboard: Facebook Login → Valid OAuth Redirect URIs, and the Deauthorize Callback URL (the same
             // settings page), which is how a person's removing the app disconnects their tenants here.
             register: base ? { redirectUri: `${base}${CALLBACK_PATH}`, deauthorizeUrl: `${base}${DEAUTHORIZE_PATH}` } : null,
-            scopes: [...LOGIN_SCOPES],
+            scopes: loginScopes(settings.adsScopesEnabled),
+            // Connect also asks for the ads permissions (Boost). Only after the app has the Marketing API use case: see appSettings.ts.
+            adsScopesEnabled: settings.adsScopesEnabled,
+            adsScopes: [...ADS_SCOPES],
             coreScopes: [...CORE_SCOPES],
             webhookFields: [...WEBHOOK_FIELDS],
         });
@@ -448,6 +451,10 @@ metaRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
             res.status(400).json({ error: 'enabled must be true or false.' });
             return;
         }
+        if (body.adsScopesEnabled !== undefined && typeof body.adsScopesEnabled !== 'boolean') {
+            res.status(400).json({ error: 'adsScopesEnabled must be true or false.' });
+            return;
+        }
         if (body.configId !== undefined && typeof body.configId !== 'string') {
             res.status(400).json({ error: 'configId must be text.' });
             return;
@@ -465,6 +472,10 @@ metaRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
         if (configId !== undefined) {
             await setSetting(APP_SETTING_KEYS.metaLoginConfigId, configId || null, updatedBy);
             changed.push('config_id');
+        }
+        if (typeof body.adsScopesEnabled === 'boolean') {
+            await setSetting(APP_SETTING_KEYS.metaAdsScopesEnabled, body.adsScopesEnabled ? 'true' : null, updatedBy);
+            changed.push('ads_scopes_enabled');
         }
         if (changed.length === 0) {
             res.status(400).json({ error: 'Nothing to save.' });

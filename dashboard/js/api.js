@@ -625,6 +625,29 @@ const API = {
     /** Instagram Business Discovery for each saved competitor username. */
     getGrowthCompetitors: () => API.request('/growth/competitors'),
 
+    // ─── Boost: Meta ads for a published post (the tenant OWNER's; a 403 means "hide Boost", never an error) ───
+    // Budgets are in MAJOR units of the ad account's currency. Everything is created PAUSED: only `activateBoost` spends money.
+    /** `{ configured, adAccountId, token: { set, last4 }, tokenSource: 'connect'|'pasted'|null, tokenExpiresAt, maxDailyBudget, monthlyCap, committedThisMonth, account, accountError }`. */
+    getAdsSettings: () => API.request('/ads/settings'),
+    /** Any subset of `{ adAccountId, token, maxDailyBudget, monthlyCap }` ('' clears the id and the token). Answers the settings shape, probed. A 400 carries `field`. */
+    saveAdsSettings: (data) => API.request('/ads/settings', { method: 'POST', body: JSON.stringify(data) }),
+    /** `{ accounts: [{ id, name, currency, status }] }` (status 1 = active): the ad accounts the saved token can reach. 409 `ADS_NOT_CONFIGURED` without a token. */
+    getAdsAccounts: () => API.request('/ads/accounts'),
+    /** `{ boosts }`, newest first. */
+    getAdsBoosts: () => API.request('/ads/boosts'),
+    /** `{ eligible: boolean|null, reason }` for one published post on one platform (`instagram` | `facebook`). */
+    getAdsEligibility: (postId, platform) => API.request(
+        `/ads/eligibility?postId=${encodeURIComponent(postId)}&platform=${encodeURIComponent(platform)}`
+    ),
+    /** `{ postId, platform, dailyBudget, days, objective, country, link? }` → 201 `{ boost }`, PAUSED (spends nothing). */
+    createBoost: (data) => API.request('/ads/boosts', { method: 'POST', body: JSON.stringify(data) }),
+    /** THIS STARTS SPENDING MONEY: the caller has asked first. */
+    activateBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}/activate`, { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+    pauseBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
+    deleteBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /** Re-reads the spend and insights from Meta. */
+    refreshBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),
