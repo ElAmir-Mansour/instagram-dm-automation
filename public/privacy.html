@@ -129,6 +129,40 @@
     · the audit_log row Connect writes holds the channel id and scopes only,
       not the name (src/routes/youtube.ts, the callback);
     · no third-party content, ads or cookies: the YouTube code has none.
+
+  META ADS (BOOST) — ADDED 2026-10-22 WITH PR #225 (migration v52). Section 1
+  "When the account owner boosts a post" and the ads lines in sections 2, 4,
+  5, 6 and 7 claim the following, and the code does it:
+    · the owner's own data only: the ad account id, the max daily budget and
+      the monthly cap (app_settings `ads.settings.<tenant>`), and the ads
+      token, encrypted (`ads.token.<tenant>`, isSecretSetting → encryptSecret):
+      src/services/adBoosts.ts readAdsSettings()/saveAdsSettings();
+    · the token comes from Connect when the owner grants ads_management
+      (captureAdsAccess(), called from finishLogin() in metaLogin.ts; the ads
+      permissions are asked only while meta.ads_scopes_enabled is on), or is
+      pasted on the Settings card;
+    · per boost (table ad_boosts, migration_v52): the post, platform, media id,
+      ad account, objective, country, optional link, currency, budget, days,
+      total, status, Meta's campaign/ad set/creative/ad ids, spend, and
+      insights = reach, impressions, clicks, CPM, results — AGGREGATE numbers
+      (readInsights(), metaAds.ts). Meta never tells the app who saw or
+      clicked an ad, and the app asks for nothing that would;
+    · targeting is a country, age 18+ and Meta's own audience automation
+      (buildAdSetParams(), metaAds.ts). No custom audience, no pixel, no list
+      of people: nothing about commenters or DM senders is sent to Meta for
+      ads — no code path reads interactions/messages for ads;
+    · payment is between the owner and Meta: the app never sees or stores card
+      or billing details;
+    · kept: ad_boosts rows have no expiry (the record of money spent); a deleted
+      post sets scheduled_post_id NULL (ON DELETE SET NULL), a deleted boost is
+      status 'deleted', the row stays. Rows go with the tenant (ON DELETE
+      CASCADE on creators);
+    · removed: a Connect ads token is deleted when Meta is disconnected or the
+      app is removed in Facebook (forgetConnectedAdsAccess(), from
+      removeMetaConnection()); a pasted token stays until removed on the card;
+    · audit_log `ads.*` rows: post id, platform, budget, days, total, currency,
+      status, campaign id; settings_write names WHICH fields changed. Never the
+      token (src/routes/ads.ts audit()).
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -1034,7 +1068,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 15 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 22 أكتوبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1300,6 +1334,44 @@
                     واسم القناة وصورتها.
                 </p>
 
+                <h3 id="ads-ar">عندما يروّج صاحب الحساب منشوراً (إعلانات ميتا)</h3>
+                <p>
+                    وهذا الجزء أيضاً عن بيانات صاحب الحساب نفسه. يستطيع صاحب الحساب أن يروّج منشوراً نشره على
+                    إنستجرام أو فيسبوك بإعلان يُنشأ في حسابه الإعلاني لدى ميتا عبر
+                    <bdi lang="en" dir="ltr">Marketing API</bdi>. ولا يحدث ذلك إلا إن أعدّه صاحب الحساب بنفسه: إمّا بمنح
+                    صلاحيات الإعلانات عند ربط ميتا، وإمّا بلصق رمز وصول في الإعدادات. ويُنشأ كل إعلان
+                    <strong>موقوفاً</strong>، ولا يبدأ الإنفاق إلا بعد أن يؤكّد صاحب الحساب «التفعيل» بنفسه.
+                </p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن، من صاحب الحساب:</strong> معرّف حسابه الإعلاني، والحدّ الأقصى للميزانية
+                        اليومية، وسقف الإنفاق الشهري. وترفض الأداة أي ترويج يتجاوزهما.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن، مشفّراً:</strong> رمز الوصول الذي تُنشأ به الإعلانات، مشفّراً أثناء التخزين
+                        بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi> (القسم 7). ويُخزَّن بجانبه مصدره (الربط أو اللصق) وتاريخ انتهائه.
+                    </li>
+                    <li>
+                        <strong>عن كل ترويج:</strong> المنشور والمنصّة، والهدف، والبلد المستهدف، والرابط إن وُجد،
+                        والعملة والميزانية والمدة والإجمالي، والحالة، ومعرّفات الحملة والمجموعة الإعلانية والتصميم
+                        والإعلان لدى ميتا، والمبلغ المُنفَق، وأرقام الأداء: الوصول ومرات الظهور والنقرات وتكلفة الألف
+                        ظهور والنتائج.
+                    </li>
+                    <li>
+                        <strong>أرقام مجمّعة فقط:</strong> لا تُخبر ميتا الأداة بمن رأى الإعلان أو نقر عليه، ولا تطلب
+                        الأداة ذلك. والاستهداف بلد وعمر 18 فأكثر وأتمتة الجمهور الخاصة بميتا، بلا جماهير مخصّصة
+                        ولا بكسل ولا قوائم أشخاص.
+                    </li>
+                    <li>
+                        <strong>لا شيء عمّن يعلّق أو يراسل:</strong> لا يُرسَل إلى ميتا لأغراض الإعلان أي شيء عمّن
+                        يعلّق أو يراسل على إنستجرام أو فيسبوك.
+                    </li>
+                    <li>
+                        <strong>الدفع بين صاحب الحساب وميتا:</strong> تُخصم تكلفة الإعلانات من وسيلة الدفع في
+                        حسابه الإعلاني لدى ميتا، ولا ترى الأداة بيانات البطاقة أو الفوترة ولا تخزّنها.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
@@ -1308,6 +1380,7 @@
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
+                    <li>ترويج المنشورات التي يختارها صاحب الحساب بإعلانات في حسابه الإعلاني لدى ميتا، ضمن الحدود التي وضعها، وإظهار ما أنفقه كل ترويج ونتائجه.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
@@ -1367,6 +1440,13 @@
                         المرفوعة على منشوراته المجدولة إلى أن يحذفها. ويحتفظ سجلّ التدقيق بقيد لكل مرة رُبط
                         فيها يوتيوب، فيه معرّف القناة والصلاحيات الممنوحة.
                     </li>
+                    <li>
+                        <strong>إعلانات ميتا</strong> — سجلّ كل ترويج (المنصرف والنتائج ومعرّفات ميتا) يبقى بلا مدة
+                        انتهاء تلقائية، لأنه سجلّ لمال أُنفق: لا يُمحى بحذف المنشور ولا بحذف الترويج. ورمز الوصول
+                        الذي جاء مع ربط ميتا يُحذف عندما يفصل صاحب الحساب ميتا أو يزيل التطبيق من فيسبوك، أمّا
+                        الرمز الملصوق فيبقى حتى يزيله من الإعدادات. ويحتفظ سجلّ التدقيق بقيد لكل ترويج أُنشئ أو فُعّل
+                        أو أُوقف أو حُذف، فيه المنشور والميزانية والمدة والحالة ومعرّف الحملة، ولا يحوي الرمز أبداً.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
@@ -1374,7 +1454,9 @@
                 <ul>
                     <li>
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
-                        وعبرها تُرسَل الردود.
+                        وعبرها تُرسَل الردود. وإن روّج صاحب الحساب منشوراً، تتلقّى ميتا ما يلزم لإنشاء الإعلان
+                        في حسابه الإعلاني (المنشور والميزانية والمدة والبلد والرابط) وتعيد المنصرف والنتائج
+                        المجمّعة (القسم 1).
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
                     </li>
                     <li>
@@ -1462,6 +1544,10 @@
                     <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>؛
                     وما يحدث للبيانات المخزّنة بعدها موضّح في القسم 4.
                 </p>
+                <p>
+                    ويستطيع صاحب الحساب أن يوقف ترويجاً أو يحذفه في أي وقت من صفحة المنشورات، وأن يزيل رمز
+                    الإعلانات من الإعدادات أو بفصل ميتا. وتبقى الإعلانات وسجلّاتها لدى ميتا خاضعة لسياستها.
+                </p>
 
                 <h2 id="security-ar">7. كيف تُحفَظ البيانات</h2>
                 <ul>
@@ -1471,7 +1557,7 @@
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
-                        رمز وصول ميتا الخاص بصاحب الحساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
+                        رمز وصول ميتا الخاص بصاحب الحساب، ورمز وصول الإعلانات إن وُجد، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
                         <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
@@ -1519,7 +1605,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 15 October 2026</p>
+                <p class="stamp">Last updated: 22 October 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
 
@@ -1793,6 +1879,48 @@
                     stored tokens and the channel's name and picture.
                 </p>
 
+                <h3 id="ads-en">When the account owner boosts a post (Meta ads)</h3>
+                <p>
+                    This part is about the account owner's own data too. The owner can boost a post they
+                    published on Instagram or Facebook with an ad created in their own Meta ad account,
+                    through Meta's Marketing API. This happens only if the owner set it up: by granting the
+                    ads permissions when connecting Meta, or by pasting an access token in Settings. Every
+                    ad is created <strong>paused</strong>, and nothing is spent until the owner confirms
+                    "Activate" themselves.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Stored, from the owner:</strong> their ad account ID, their maximum daily
+                        budget and their monthly spending cap. The app refuses any boost above them.
+                    </li>
+                    <li>
+                        <strong>Stored, encrypted:</strong> the access token the ads are created with,
+                        encrypted at rest with AES-256-GCM (section 7). Beside it, the app stores where it came
+                        from (connecting or pasting) and when it expires.
+                    </li>
+                    <li>
+                        <strong>For each boost:</strong> the post and platform, the objective, the target
+                        country, the link if there is one, the currency, budget, number of days and total,
+                        the status, Meta's IDs for the campaign, ad set, creative and ad, the amount spent,
+                        and the results: reach, impressions, clicks, cost per thousand impressions and the
+                        objective's results.
+                    </li>
+                    <li>
+                        <strong>Totals only:</strong> Meta does not tell the app who saw or clicked an ad,
+                        and the app does not ask. Targeting is a country, age 18 and over, and Meta's own
+                        audience automation: no custom audiences, no pixel, no lists of people.
+                    </li>
+                    <li>
+                        <strong>Nothing about people who comment or message:</strong> nothing about anyone
+                        who comments or messages on Instagram or Facebook is sent to Meta for advertising.
+                    </li>
+                    <li>
+                        <strong>Payment is between the owner and Meta:</strong> the ads are charged to the
+                        payment method on the owner's Meta ad account. The app never sees or stores card or
+                        billing details.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
@@ -1801,6 +1929,7 @@
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
+                    <li>To boost the posts the account owner chooses with ads in their own Meta ad account, within the limits they set, and to show what each boost spent and achieved.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
                 </ul>
 
@@ -1867,6 +1996,15 @@
                         posts until the owner deletes them. The audit log keeps an entry for each time
                         YouTube was connected, with the channel ID and the scopes granted.
                     </li>
+                    <li>
+                        <strong>Meta ads</strong> — the record of each boost (amount spent, results and
+                        Meta's IDs) has no automatic expiry, because it is a record of money spent: deleting
+                        the post or the boost does not erase it. An access token that came from connecting
+                        Meta is deleted when the owner disconnects Meta or removes the app in Facebook. A
+                        pasted token stays until the owner removes it in Settings. The audit log keeps an
+                        entry for each boost created, activated, paused or deleted, with the post, budget,
+                        days, status and campaign ID, and never the token.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
@@ -1874,7 +2012,10 @@
                 <ul>
                     <li>
                         <strong>Meta</strong> (Instagram and Facebook) — comments and messages
-                        arrive from Meta, and replies are sent back through it.
+                        arrive from Meta, and replies are sent back through it. If the account owner
+                        boosts a post, Meta receives what it needs to create the ad in the owner's ad
+                        account (the post, budget, days, country and link) and returns the spend and the
+                        totals (section 1).
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
                     </li>
                     <li>
@@ -1967,6 +2108,11 @@
                     <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>;
                     what happens to the stored data then is in section 4.
                 </p>
+                <p>
+                    An account owner can pause or delete a boost at any time from the Posts screen, and
+                    remove the ads token in Settings or by disconnecting Meta. The ads and their records
+                    at Meta remain subject to Meta's own policy.
+                </p>
 
                 <h2 id="security-en">7. How the data is protected</h2>
                 <ul>
@@ -1976,7 +2122,7 @@
                         it is processed, so no one else can inject forged events into the system.
                     </li>
                     <li>
-                        The account owner's Meta access token, and their TikTok and YouTube access
+                        The account owner's Meta access token, their ads access token if there is one, and their TikTok and YouTube access
                         and refresh tokens, are <strong>encrypted before they are stored</strong>,
                         with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
