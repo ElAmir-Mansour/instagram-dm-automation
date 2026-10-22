@@ -697,14 +697,6 @@ const API = {
      * tokenHealth: 'ok'|'expiring'|'dead'|'unknown', guard: { lastCheckedAt, blind } }`.
      */
     getAdsOverview: () => API.request('/ads/overview'),
-    /** Answers `{ campaign }`. ACTIVE starts spending money: `confirm` is sent as true only after the owner said yes to the question that names the budget. */
-    setAdsCampaignStatus: (id, status, confirm) => API.request(`/ads/campaigns/${encodeURIComponent(id)}/status`, {
-        method: 'POST', body: JSON.stringify(confirm ? { status, confirm: true } : { status }),
-    }),
-    /** `{ amount, endTime? }`: the DAILY budget of a daily campaign, the TOTAL of a lifetime one. Answers `{ campaign }`. */
-    setAdsCampaignBudget: (id, data) => API.request(`/ads/campaigns/${encodeURIComponent(id)}/budget`, { method: 'POST', body: JSON.stringify(data) }),
-    /** Answers `{ ok: true }`; the server refuses a campaign that is ACTIVE. */
-    deleteAdsCampaign: (id) => API.request(`/ads/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
     // ─── Ads → Campaigns (#/ads_campaigns): the stored copy of the ad account, and the queue every change goes through ───
     /** `{ level?, status?, parentId? }` (a list is joined with commas) → `{ items: ObjectView[], syncedAt }`. Read from Postgres: no call to Meta. */

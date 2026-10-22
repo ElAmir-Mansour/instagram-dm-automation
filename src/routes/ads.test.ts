@@ -133,7 +133,7 @@ describe('/api/ads', () => {
                 assert.equal(res.statusCode, 200, JSON.stringify(res.body));
             });
         }
-        for (const [method, url] of [['POST', '/settings'], ['POST', '/settings/test'], ['POST', '/settings/alerts'], ['POST', '/settings/switches'], ['POST', '/spend-cap'], ['GET', '/accounts'], ['POST', '/boosts'], ['POST', '/boosts/x/activate'], ['POST', '/campaigns/123456/status'], ['POST', '/campaigns/123456/budget'], ['DELETE', '/campaigns/123456']] as const) {
+        for (const [method, url] of [['POST', '/settings'], ['POST', '/settings/test'], ['POST', '/settings/alerts'], ['POST', '/settings/switches'], ['POST', '/spend-cap'], ['GET', '/accounts'], ['POST', '/boosts'], ['POST', '/boosts/x/activate']] as const) {
             it(`${method} ${url} is the owner's: an operator gets 403`, async () => {
                 const res = await call(method, url, { role: 'operator', body: { confirm: true } });
                 assert.equal(res.statusCode, 403);
@@ -143,9 +143,9 @@ describe('/api/ads', () => {
     });
 
     describe('confirm before spending', () => {
-        it('activate, resume and the spending limit need confirm: true, refused before any Meta call', async () => {
+        it('activate and the spending limit need confirm: true, refused before any Meta call', async () => {
             configure();
-            for (const [url, b] of [['/boosts/x/activate', {}], ['/campaigns/123456/status', { status: 'ACTIVE' }], ['/spend-cap', { amount: 50 }]] as const) {
+            for (const [url, b] of [['/boosts/x/activate', {}], ['/spend-cap', { amount: 50 }]] as const) {
                 const res = await call('POST', url, { body: b });
                 assert.equal(res.statusCode, 400, url);
                 assert.deepEqual({ code: res.body.code, field: res.body.field }, { code: 'INVALID', field: 'confirm' });
@@ -208,7 +208,7 @@ describe('/api/ads', () => {
             const res = await call('GET', '/overview');
             assert.equal(res.statusCode, 200, 'the overview answers from the stored copy');
             assert.equal(metaGets.length, 0, 'the overview never calls Meta (A2: stored copy only)');
-            const resume = await call('POST', '/campaigns/123456/status', { body: { status: 'ACTIVE', confirm: true } });
+            const resume = await call('POST', '/spend-cap', { body: { amount: 50, confirm: true } });
             assert.equal(resume.statusCode, 429);
             assert.equal(resume.body.code, 'RATE_LIMITED');
             assert.equal(resume.body.metaCode, 80004);

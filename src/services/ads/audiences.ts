@@ -23,7 +23,7 @@
  * queued `audience_users` ops and are scrubbed when those finish.
  */
 import { queryRows } from '../../db/query.js';
-import { normaliseAdAccountId, normaliseCountry } from '../metaAds.js';
+import { normaliseAdAccountId, normaliseCountry } from './metaAds.js';
 
 // ─── Kinds, limits and specs ─────────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 # Ads Manager: operator and client guide
 
-Covers the Meta ads module (Marketing API) of AutoReply Pro as of phase A1 ("Safety foundation"). The in-app version of the
+Covers the Meta ads module (Marketing API) of AutoReply Pro, phases A1–A12 (all shipped 2026-10-22). The in-app version of the
 connection steps and the money rule is the Help Center article `#/help/ads` (Arabic and English); this file is the
 operator's copy and may be more technical. The spec lives in `docs/specs/002-meta-ads-manager/` (local, not public).
 
@@ -9,10 +9,12 @@ operator's copy and may be more technical. The spec lives in `docs/specs/002-met
 ## What the Ads Manager does
 
 AutoReply Pro creates, watches and limits Meta ads for a tenant's own ad account. A1 is the safety layer under every ad
-action; the screens that build ads come in later phases.
+action. On top of it, the **Ads** screen has these tabs: Overview, Campaigns (A2), Create (A4 message ads, A5 every goal),
+Results (A6), Proposals (A7, Claude drafts; nothing runs until you approve), Audiences (A8), Rules (A9), Leads (A10) and
+Tests (A12). Managed clients (A11) use the same screens with their own token and ad account. Each has a section below.
 
-- **Boost** a post from the Scheduler (`ad_boosts`, v52) and manage the campaigns in the **Ads** screen: activate, pause,
-  change a budget, delete. Everything is created **PAUSED**; nothing is spent until the owner confirms **Activate**.
+- **Boost** a post from the Scheduler (`ad_boosts`, v52) and manage the campaigns in **Ads → Campaigns**: activate, pause,
+  change a budget, duplicate, archive, delete. Everything is created **PAUSED**; nothing is spent until the owner confirms **Activate**.
 - **One money rule** (see below) used by every screen and every action, so Boost, Settings and the Ads overview show the
   same "remaining this month" figure.
 - **A spending guard** that pauses ACTIVE campaigns when the month's worst case would pass the monthly cap. It looks at
@@ -487,6 +489,180 @@ automatically; the consent answer is shown. The CSV export (owner only) is audit
 Flow, hop by hop: `FLOWS.md` §7.8. Help Center: `#/help/ads#lead-ads`, `#leads-and-privacy`.
 
 ---
+
+## Let Claude draft
+
+The **Proposals** tab (`#/ads_proposals`, `dashboard/js/pages/ads_proposals.js`) is where Claude drafts campaigns and changes
+for you. **Nothing is created, changed or spent until you press Approve**, and a new campaign is then created **PAUSED**.
+
+### Ask for a campaign
+
+1. Press **Suggest a campaign** (on Proposals or on the Overview) and write one sentence: what to advertise, where, for how
+   long ("messages for the new workshop, Egypt and Saudi Arabia, a one-week test"). Or press **Suggest a campaign** on a
+   published post in **Posts**: Claude builds the campaign on that post.
+2. A **Drafting** card appears. For your own account Claude writes it **on your Mac** (a Studio `ads_think` job, Claude Code
+   on your plan, never an API key), so it can take a few minutes, and it needs the Mac awake with the Studio worker running.
+   You can leave the page; the card updates by itself. A draft the Mac never answers fails after 24 hours.
+3. The card shows the goal, budget, countries and ages, the ad text, **why** (the rationale), what Claude **assumed**, the
+   expected range (only from your own results; none when you have no history), and what it adds to this month's **worst case**.
+
+### What is checked before you see it
+
+| Check | What happens |
+|---|---|
+| Schema | an answer that does not fit is asked again once with the errors, then fails |
+| Policy (A4) | a blocked phrase ("guaranteed", income figures, …) is asked again once with the findings, then fails; warnings are shown on the card |
+| Money (A1) | over your max daily budget or what is left of the monthly cap → the budget is **reduced** to fit, with a note; below Meta's minimum → fails |
+| Evidence (daily review) | a number that is not in your account's own results drops the item |
+| Builder rules (A4/A5) | the same `validateSpec` as the builder, asked again once |
+
+### Approve, edit, reject
+
+- **Approve** asks once, then re-runs the policy check and the money rule (nothing is adjusted at this point: if it no longer
+  fits, it is refused with the reason) and Meta's `validate_only`. Then the ops are queued: the campaign, ad set, creative and
+  ad, all PAUSED, each op tagged with the proposal. Switch it on in **Campaigns** when you are ready.
+- **Edit in builder** opens **Create** (`ads_create.js`) filled with the draft; whatever you create there is your own campaign,
+  and the proposal stays until you reject it or it expires.
+- **Reject** creates nothing.
+- A proposal you do not decide **expires after 7 days**.
+
+### The daily review
+
+Once a day (the daily cron) Claude reviews your running ads with at least 3 days of results and proposes **at most 3**
+changes: pause, lower or raise a budget, move budget between ad sets, or a new ad from a post. Each change shows the numbers it
+is based on. You get the **proposal_ready** alert (Settings → Ads alerts → "Claude proposed changes"); it can be switched off.
+
+### What the AI sees
+
+Aggregates only (FR-049, `src/services/ads/proposals/input.ts` `buildInput`): campaign and ad set names, budgets, statuses,
+targeting summary and 7-day totals; your offers' name, price and a short summary (emails and phone numbers removed); your
+limits and Meta's minimum; the policy rules; your own request; a post's caption and public counts. **Never** customers'
+messages, names, phone numbers, emails, lead answers or contact lists. Other businesses on the platform use the AI provider
+set for them in Operations → AI providers (purposes `ads_draft`, `ads_review`); without one they see `AI_NOT_CONFIGURED`.
+
+### When it goes wrong
+
+| Symptom | Cause and fix |
+|---|---|
+| Drafting for a long time | the Mac is asleep or the Studio worker is stopped: wake it; the card picks up the answer. After 24 h it fails: ask again |
+| Failed: "doesn't know the job kind ads_think" | the Mac worker is older than the handler: pull aicourse-captions and restart the worker (launchd) |
+| `AI_NOT_CONFIGURED` (another business) | no AI provider is set up for it: Operations → AI providers |
+| Approve: `OVER_MONTHLY_CAP` | spending moved since the draft; ask for a new one, or edit it in the builder |
+| Approve: `POLICY_BLOCKED` | the text breaks a rule; edit it in the builder |
+| Approve: `NOT_WIRED` | a deployment without the A1–A5 parts; not expected in production |
+
+## Rules
+
+The **Rules** tab (`#/ads_rules`, `dashboard/js/pages/ads_rules.js`) holds your standing conditions. They are checked about once an
+hour (the drain, `src/services/ads/rules.ts`), on the stored copy, after today's results are read again if they are older than 2 hours.
+
+- **Saving a rule is approving it.** From the next check, its protective actions run on their own: **pause**, **lower the daily budget**
+  by a percentage (5–90%, never below Meta's minimum), **tell me** (an alert).
+- **Raising a budget (5–100%) or resuming never runs on its own.** Each time the rule matches, it makes one proposal in **Proposals**;
+  approving it re-runs the money rule (monthly cap, daily max) exactly like a change you make by hand.
+- **Conditions** (up to 5, all must hold): spend, results, cost per result, cost per conversation, CTR, CPM, frequency (today only, on
+  campaigns or ads: reach does not add up across days), spending pace (campaigns and ad sets), rejected ad (tell me only). Windows: today,
+  last 3 days, last 7 days, each including today, in the ad account's time zone. **Only after** a minimum of impressions and/or spend.
+  Money spent with no result counts as too expensive, so set a minimum.
+- **Limits it keeps:** one action per item per check (pause rules first), Meta's 4 budget changes per ad set per hour, a 24-hour pause
+  before the same rule changes the same item again, an item with a change already waiting is left alone.
+- **Templates:** cost per conversation too high → pause (you set the amount; 3 days, after 500 impressions); spending too fast → tell me
+  (ad sets, pace above 1.5); frequency over 3 → lower 20% (campaigns, today, after 1,000 impressions); ad rejected → tell me.
+- **History:** every check is a row (`ads_rule_runs`, 90 days): watched / acted / proposed / not enough data / could not check (with
+  the reason). **24 hours without a real check → a "rule is not watching" alert** (`rule_blind`). Each action → one `rule_acted` alert per
+  item per day.
+
+### When it goes wrong
+
+| Symptom | Cause and fix |
+|---|---|
+| "Not watching" badge | no real check for 24 h: open History. Not enough data → wait or lower "Only after"; token refused → paste a new ads token (Settings → Meta ads); Meta limiting requests → usually clears next hour |
+| Lower budget "skipped: no daily budget of its own" | the budget is on the ad sets (or is a lifetime budget): point the rule at ad sets, or at a campaign with a daily campaign budget |
+| "Meta's 4 budget changes this hour are used" | tried again next hour |
+| A raise rule matched, nothing changed | by design: approve the proposal in Proposals |
+
+## Testing two versions
+
+The **Tests** tab (`#/ads_tests`, `dashboard/js/pages/ads_tests.js`) runs Meta's own split test: two to seven versions of an ad,
+or two to five audiences, at the same time. Meta splits the audience so nobody sees two versions, and at the end names the
+better one with its confidence. **Creating a test spends nothing; only Start spends, and it asks first.**
+
+### Before you start
+
+- Build the versions in **Create**, and leave them **paused**:
+  - **Two versions of the ad:** two or more ads in **one** ad set (they share its audience). Change one thing only (the image,
+    the text or the headline), or you will not know which change made the difference.
+  - **Two audiences:** two or more ad sets in one campaign, each with **its own daily budget** (a campaign budget cannot be
+    split per arm). The test sets their daily budgets equal.
+- A **Meta business portfolio** is needed (studies belong to the business, not the ad account). If none is saved, the form asks
+  you to pick one and saves it in the ads settings (`ads.settings.businessId`).
+
+### Steps
+
+1. **Tests → New test.** Choose what you compare, tick the paused versions, enter the **daily budget for the whole test**, the
+   start date (tomorrow at the earliest, in the ad account's time zone) and the end date (1–30 days later).
+2. The form shows the equal split (two arms 50/50, three 34/33/33) and the **worst case** (daily budget × days). It counts
+   against your monthly cap: a test that would go over it is refused with the reason.
+3. **Create the test.** The arms stay paused. The test is made at Meta through the queue (`Being created at Meta…`, usually
+   under a minute), then reads **Ready**.
+4. **Start** asks once, naming the daily budget, the days, the worst case and that the ad account's payment method is charged.
+   It runs the money rule again, then switches on the arms, then their ad set, then the campaign last, each with the usual
+   payment check and limits. A refusal stops there with the reason, and nothing spends.
+5. **Stop** pauses the arms at any time; the result so far stays.
+
+### Reading the result
+
+- While it runs, the result is read every 6 hours; the last read is about half a day after the end (Meta settles its numbers).
+- The winner is marked with Meta's **confidence**. Low confidence means the difference is not proven: run it longer, or with a
+  bigger budget. "**No clear winner**" is a real answer (Meta could not separate them), not a fault.
+- With a winner, a **proposal to pause the other versions** appears in **Proposals** (kind "test winner", from a split test). It
+  only happens when you approve it, and approving re-checks it first. It expires after 7 days like any proposal.
+
+### When it goes wrong
+
+| Symptom | Cause and fix |
+|---|---|
+| `BUSINESS_REQUIRED` | no business portfolio saved, and the token sees none or several: pick one in the form; if the list is empty, add the system user to the business in Business Settings |
+| "Every version must be paused" | an arm is running: pause it in **Campaigns**, then create the test |
+| "…in the same ad set" | a creative test's ads come from different ad sets: build them in one ad set |
+| "…its own daily budget" | an audience test's ad set uses the campaign's budget or a lifetime budget: rebuild it with a daily budget |
+| Failed after create | Meta refused the study (its words are on the card): often an ad already in another running test, or a start date in the past |
+| `OVER_MONTHLY_CAP` / `OVER_DAILY_MAX` | the test does not fit your limits: lower the daily budget or shorten it |
+| Ready, never started, dates passed | it is marked stopped ("never started"); make a new one |
+
+### Live-check caveats (not yet proven against Meta)
+
+- `creative_test_config.daily_budget` is sent as the WHOLE test's daily budget in minor units; the money rule counts daily × days.
+  Confirm on the first live test that Meta spends that much in total, not that much per arm.
+- The shape of an objective's `results` is read tolerantly (an object, JSON text, or a list); confirm the confidence scale.
+
+## For managed clients
+
+Until Meta verifies the owner's business, every managed client uses its own system-user token, its own Meta business,
+its own ad account and its own payment method. Meta bills the client directly; the platform never pays Meta for a client.
+
+**Admin (once per client)**
+1. The platform admin's **Client ads** page (`#/admin_ads`) → the tenant's row → set the ceiling (max daily budget, monthly cap) → switch Ads on.
+   Without a ceiling the switch is refused (`CEILING_REQUIRED`).
+2. Send the client to Help → Ads → For managed clients (`#/help/ads#for-clients`).
+3. Check the row once the client says it is done: token health `ok`, account status `active`, payment method yes.
+
+**Client (about 20 minutes)**
+1. Business Settings → Users → System users → Add (Employee).
+2. Assign assets with full control: the ad account, the Page, the Instagram account and the AutoReply app.
+3. Generate token: expiry Never, with `ads_management`, `ads_read`, `business_management`, `pages_read_engagement`,
+   `pages_show_list`, `pages_manage_ads`. Assign the assets first; a token carries what was assigned when it was made.
+4. Settings → Meta ads: paste the token, test the connection, pick the ad account, check the payment method, set the
+   max daily budget and the monthly cap.
+
+**Limits and the ceiling.** The client's limits must be at or below the ceiling; a save above it is refused with
+`OVER_CEILING` and shows the allowed value. To allow more, raise the ceiling on the **Client ads** page.
+
+**Who sees what.** The admin sees health, open alerts and cap use as a percentage. Amounts spent, the daily max and the
+monthly cap are visible only if the client turns on "Share spend" (`ads.share_spend.<t>`, owner only, audited).
+
+**Isolation.** Every read and every write re-checks `creator_id` and `ad_account_id`
+(`src/services/ads/ownership.ts`). Another tenant's object id gives `NOT_OWN_OBJECT`, which is logged and audited.
 
 ## Troubleshooting
 

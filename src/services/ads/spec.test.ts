@@ -11,7 +11,7 @@ import {
     type AdGoal, type CampaignSpec, type MessageDestination, type SpecContext,
 } from './spec.js';
 import { VERTICAL_IG_POSITIONS } from './creatives.js';
-import { buildAdSetParams, buildCampaignParams, buildCreativeParams, type BoostSpec } from '../metaAds.js';
+import { buildAdSetParams, buildCampaignParams, buildCreativeParams, type BoostSpec } from './metaAds.js';
 
 const NOW = new Date('2026-10-22T10:00:00.000Z');
 const OP_TAG = 'AR·op42';

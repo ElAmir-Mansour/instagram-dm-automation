@@ -16,7 +16,7 @@
  *     ads.bot_context.<t>, ads.extended_window.<t>, ads.share_spend.<t>   phases A3 and A11; read here with their defaults (off)
  *   platform: ads.api_version (ads/graph.ts), ads.copy_admin (ads/notify.ts)
  *
- * Moved here from adBoosts.ts (which re-exports it for one phase).
+ * Moved here from adBoosts.ts in A2.
  */
 import { getSetting, last4, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from '../appSettings.js';
 import { getPlatformOwnerId } from '../tenant.js';
