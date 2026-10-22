@@ -126,6 +126,15 @@ describe('Proposals tab: the cards (T133)', () => {
     });
 });
 
+describe('Proposals tab: the shell', () => {
+    for (const lang of ['en', 'ar'] as const) {
+        it(`has its page title and subtitle in ${lang} (the shell reads page.<route>.subtitle)`, () => {
+            const h = loadDashboard({ lang, files: ['dashboard/js/pages/ads_campaigns.js', 'dashboard/js/pages/ads_proposals.js'] });
+            for (const key of ['nav.ads_proposals', 'page.ads_proposals.subtitle', 'ads.tabs.proposals']) assert.notEqual(h.t(key), key, key);
+        });
+    }
+});
+
 describe('Proposals tab: approve, edit, reject (T133)', () => {
     it('approve asks first, then sends confirm, and shows the new state', async () => {
         const { page, confirms, called, screen } = await open();
