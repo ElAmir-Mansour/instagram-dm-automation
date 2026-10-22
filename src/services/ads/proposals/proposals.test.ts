@@ -187,8 +187,8 @@ describe('schema', () => {
         const review = validateReview({ items: [itemOf({ change: { amount: 3 } as never }), itemOf({ kind: 'nope' as never })] });
         assert.equal(review.ok, false);
         if (!review.ok) {
-            assert.ok(review.errors.some((e) => e.startsWith('items[0]!.change:')), JSON.stringify(review.errors));
-            assert.ok(review.errors.some((e) => e.startsWith('items[1]!.kind: must be one of')));
+            assert.ok(review.errors.some((e) => e.startsWith('items[0].change:')), JSON.stringify(review.errors));
+            assert.ok(review.errors.some((e) => e.startsWith('items[1].kind: must be one of')));
         }
     });
 
@@ -198,13 +198,13 @@ describe('schema', () => {
         if (!four.ok) assert.ok(four.errors.includes('items: at most 3 items'));
         const long = validateReview({ items: [itemOf({ rationale: 'r'.repeat(401) })] });
         assert.equal(long.ok, false);
-        if (!long.ok) assert.ok(long.errors.includes('items[0]!.rationale: at most 400 characters'));
+        if (!long.ok) assert.ok(long.errors.includes('items[0].rationale: at most 400 characters'));
     });
 
     it('requires evidence numbers to be numbers', () => {
         const result = validateReview({ items: [itemOf({ evidence: { window: '7d', numbers: { spend: 'a lot' as never } } })] });
         assert.equal(result.ok, false);
-        if (!result.ok) assert.ok(result.errors.includes('items[0]!.evidence.numbers.spend: must be a finite number'));
+        if (!result.ok) assert.ok(result.errors.includes('items[0].evidence.numbers.spend: must be a finite number'));
     });
 });
 
