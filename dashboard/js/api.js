@@ -627,10 +627,12 @@ const API = {
 
     // ─── Boost: Meta ads for a published post (the tenant OWNER's; a 403 means "hide Boost", never an error) ───
     // Budgets are in MAJOR units of the ad account's currency. Everything is created PAUSED: only `activateBoost` spends money.
-    /** `{ configured, adAccountId, token: { set, last4 }, maxDailyBudget, monthlyCap, committedThisMonth, account, accountError }`. */
+    /** `{ configured, adAccountId, token: { set, last4 }, tokenSource: 'connect'|'pasted'|null, tokenExpiresAt, maxDailyBudget, monthlyCap, committedThisMonth, account, accountError }`. */
     getAdsSettings: () => API.request('/ads/settings'),
     /** Any subset of `{ adAccountId, token, maxDailyBudget, monthlyCap }` ('' clears the id and the token). Answers the settings shape, probed. A 400 carries `field`. */
     saveAdsSettings: (data) => API.request('/ads/settings', { method: 'POST', body: JSON.stringify(data) }),
+    /** `{ accounts: [{ id, name, currency, status }] }` (status 1 = active): the ad accounts the saved token can reach. 409 `ADS_NOT_CONFIGURED` without a token. */
+    getAdsAccounts: () => API.request('/ads/accounts'),
     /** `{ boosts }`, newest first. */
     getAdsBoosts: () => API.request('/ads/boosts'),
     /** `{ eligible: boolean|null, reason }` for one published post on one platform (`instagram` | `facebook`). */

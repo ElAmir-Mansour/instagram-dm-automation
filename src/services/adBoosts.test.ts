@@ -8,8 +8,9 @@ import { isSecretSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from './ap
 import { monthStartUtc, nextStatus, parseSettingsInput, parseStoredSettings, type AdsSettings } from './adBoosts.js';
 
 const TENANT = '0b6f3c2e-1111-4222-8333-944445555666';
-const EMPTY: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null };
-const SET: AdsSettings = { adAccountId: '509787248064459', maxDailyBudget: 10, monthlyCap: 100 };
+const EMPTY: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null };
+const LIMITS = { adAccountId: '509787248064459', maxDailyBudget: 10, monthlyCap: 100 };
+const SET: AdsSettings = { ...LIMITS, tokenSource: null, tokenExpiresAt: null };
 
 describe('ads settings storage', () => {
     it('encrypts the ads token, and only the token', () => {
@@ -23,13 +24,21 @@ describe('ads settings storage', () => {
         assert.deepEqual(parseStoredSettings('{not json'), EMPTY);
         assert.deepEqual(parseStoredSettings(JSON.stringify({ adAccountId: 'x', maxDailyBudget: -1, monthlyCap: '100' })), EMPTY);
     });
+
+    it('keeps where the token came from, and drops a source or date it does not know', () => {
+        const connected = { ...SET, tokenSource: 'connect', tokenExpiresAt: '2026-12-21T10:00:00.000Z' } as const;
+        assert.deepEqual(parseStoredSettings(JSON.stringify(connected)), connected);
+        const odd = parseStoredSettings(JSON.stringify({ ...SET, tokenSource: 'stolen', tokenExpiresAt: 'soon' }));
+        assert.equal(odd.tokenSource, null);
+        assert.equal(odd.tokenExpiresAt, null);
+    });
 });
 
 describe('parseSettingsInput', () => {
     it('accepts a full card, with act_ and amounts as strings', () => {
         const parsed = parseSettingsInput({ adAccountId: 'act_509787248064459', token: 'EAAB' + 'x'.repeat(40), maxDailyBudget: '10', monthlyCap: 100 }, EMPTY);
         assert.equal(parsed.ok, true);
-        assert.deepEqual(parsed.ok && parsed.value.settings, SET);
+        assert.deepEqual(parsed.ok && parsed.value.settings, LIMITS);
         assert.equal(parsed.ok && parsed.value.token, 'EAAB' + 'x'.repeat(40));
     });
 

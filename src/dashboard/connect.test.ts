@@ -434,10 +434,10 @@ describe('the operator\'s fields', () => {
         form = formOf({ configId: '987654321098765', enabled: 'on' });
         l.MetaConnect.afterChange = () => undefined;
         await l.MetaConnect.saveApp(form, { preventDefault: () => undefined });
-        assert.deepEqual(plain(l.calls.find((c) => c.fn === 'saveMetaAppSettings')!.args[0]), { enabled: true, configId: '987654321098765' });
+        assert.deepEqual(plain(l.calls.find((c) => c.fn === 'saveMetaAppSettings')!.args[0]), { enabled: true, configId: '987654321098765', adsScopesEnabled: false });
         form = formOf({ configId: '' });
         await l.MetaConnect.saveApp(form, { preventDefault: () => undefined });
-        assert.deepEqual(plain(l.calls.filter((c) => c.fn === 'saveMetaAppSettings')[1]!.args[0]), { enabled: false, configId: '' }, 'an unticked box is a real "off", an empty id a real "back to the default"');
+        assert.deepEqual(plain(l.calls.filter((c) => c.fn === 'saveMetaAppSettings')[1]!.args[0]), { enabled: false, configId: '', adsScopesEnabled: false }, 'an unticked box is a real "off", an empty id a real "back to the default"');
     });
 });
 

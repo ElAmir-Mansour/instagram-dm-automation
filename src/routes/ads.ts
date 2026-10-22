@@ -5,6 +5,7 @@
  *   GET    /settings               the Settings card: account id, { set, last4 } of the token, the limits, this month's committed amount, and
  *                                  what Meta says about the account (name, currency, status, minimum daily budget) or why it could not say
  *   POST   /settings               any of { adAccountId, token, maxDailyBudget, monthlyCap } → the same
+ *   GET    /accounts               { accounts }: the ad accounts the saved token reaches (the card's picker)
  *   GET    /boosts                 { boosts }
  *   GET    /eligibility            ?postId&platform → { eligible, reason }
  *   POST   /boosts                 { postId, platform, dailyBudget, days, objective, country, link? } → 201 { boost }, created PAUSED
@@ -21,7 +22,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit, type AuditAction } from '../services/audit.js';
 import {
-    activateBoost, AdsError, createBoost, deleteBoost, describeAdsSettings, eligibilityFor, listBoosts, parseSettingsInput, pauseBoost,
+    activateBoost, AdsError, createBoost, deleteBoost, describeAdsSettings, eligibilityFor, listAdAccountsFor, listBoosts, parseSettingsInput, pauseBoost,
     readAdsSettings, refreshBoost, saveAdsSettings, type BoostView,
 } from '../services/adBoosts.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
@@ -80,6 +81,14 @@ adsRouter.post('/settings', canAdminister, async (req, res) => {
         res.json(await describeAdsSettings(creatorId));
     } catch (err) {
         fail(res, err, 'save_ads_settings');
+    }
+});
+
+adsRouter.get('/accounts', canAdminister, async (req, res) => {
+    try {
+        res.json({ accounts: await listAdAccountsFor(getTenantId(req)) });
+    } catch (err) {
+        fail(res, err, 'list_ad_accounts');
     }
 });
 

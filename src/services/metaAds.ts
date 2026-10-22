@@ -439,6 +439,43 @@ export async function readAdAccount(adAccountId: string, token: string): Promise
     };
 }
 
+export interface AdAccountChoice {
+    /** The digits, without `act_`. */
+    id: string;
+    name: string | null;
+    currency: string | null;
+    /** Meta's `account_status`: 1 is active. */
+    status: number | null;
+}
+
+/** `/me/adaccounts`: every ad account the token reaches (the first 50, which is more than any one business here has). */
+export async function listAdAccounts(token: string): Promise<AdAccountChoice[]> {
+    const data = await getNode('me/adaccounts', { fields: 'account_id,name,currency,account_status', limit: '50' }, token, 'ad accounts');
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    return rows
+        .map((r: any): AdAccountChoice | null => {
+            const id = normaliseAdAccountId(typeof r?.account_id === 'string' ? r.account_id : typeof r?.id === 'string' ? r.id : '');
+            if (!id) return null;
+            return {
+                id,
+                name: typeof r?.name === 'string' ? r.name : null,
+                currency: typeof r?.currency === 'string' ? r.currency : null,
+                status: typeof r?.account_status === 'number' ? r.account_status : null,
+            };
+        })
+        .filter((r: AdAccountChoice | null): r is AdAccountChoice => r !== null);
+}
+
+/**
+ * The ad account to save on its own after Connect: the saved one when the token still reaches it, else the only ACTIVE one. Null when
+ * there is a real choice (or none), which the Settings card's picker then asks.
+ */
+export function pickAdAccount(accounts: readonly AdAccountChoice[], saved: string | null): string | null {
+    if (saved && accounts.some((a) => a.id === saved)) return saved;
+    const active = accounts.filter((a) => a.status === 1);
+    return active.length === 1 ? active[0]!.id : null;
+}
+
 /**
  * The `<page>_<post>` id a Facebook creative needs. Feed posts are stored that way already; a photo post is stored by its photo id, whose
  * `page_story_id` is the post. A video is stored by its video id, and a Page video's post is `<page>_<video>`.

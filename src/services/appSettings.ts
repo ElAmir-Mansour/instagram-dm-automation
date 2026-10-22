@@ -81,6 +81,14 @@ export const APP_SETTING_KEYS = {
      */
     metaLoginConfigId: 'meta.login_config_id',
     /**
+     * 'true': Connect (Facebook Login) also asks for `ads_read`, `ads_management` and `business_management`, so a tenant who grants them
+     * gets Boost with no token to paste (`captureAdsAccess` in src/services/adBoosts.ts). Off by default, and off means the dialog asks for
+     * exactly what it asked before: asking for a permission the app's use cases do not include makes Meta refuse the WHOLE dialog, so this
+     * goes on only after the operator added "Create & manage ads with Marketing API" to the app. With a configuration id the permissions
+     * come from the configuration instead, and this only changes what Settings lists. Not a secret. Platform admin, `POST /api/meta/app-settings`.
+     */
+    metaAdsScopesEnabled: 'meta.ads_scopes_enabled',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -491,6 +499,8 @@ export interface MetaLoginSettings {
     configId: string | null;
     /** Where the id came from, so the card can say "set in the environment". */
     configIdSource: 'database' | 'env' | null;
+    /** Whether Connect also asks for the ads permissions (`meta.ads_scopes_enabled`). Default false. */
+    adsScopesEnabled: boolean;
 }
 
 /** A Login for Business configuration id is a number: Meta's own are 15 or 16 digits, and nothing shorter than 6 or longer than 30 is one. */
@@ -501,9 +511,10 @@ export const META_CONFIG_ID_PATTERN = /^[0-9]{6,30}$/;
  * `META_LOGIN_CONFIG_ID`). A saved or env value that is not a configuration id is ignored with a log line, never sent to Meta.
  */
 export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
-    const [enabled, dbConfig] = await Promise.all([
+    const [enabled, dbConfig, adsScopes] = await Promise.all([
         getSetting(APP_SETTING_KEYS.metaLoginEnabled),
         getSetting(APP_SETTING_KEYS.metaLoginConfigId),
+        getSetting(APP_SETTING_KEYS.metaAdsScopesEnabled),
     ]);
     const envConfig = process.env.META_LOGIN_CONFIG_ID?.trim() || null;
     const candidate = dbConfig ?? envConfig;
@@ -513,6 +524,7 @@ export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
         enabled: enabled === 'true',
         configId,
         configIdSource: configId ? (dbConfig ? 'database' : 'env') : null,
+        adsScopesEnabled: adsScopes === 'true',
     };
 }
 

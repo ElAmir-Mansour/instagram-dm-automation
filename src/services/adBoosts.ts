@@ -18,10 +18,11 @@ import { publishedPlatforms } from './publishedIds.js';
 import { getTenant } from './tenant.js';
 import { withTransaction, type Exec } from './studio/common.js';
 import { MetaApiError } from './instagram.js';
+import { inspectToken } from './tokenHealth.js';
 import {
     activateBoostObjects, BOOST_OBJECTIVES, BOOST_PLATFORMS, checkBoostBudget, checkEligibility, createPausedBoost, deleteAdObject,
     normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem, pauseBoostCampaign, readAdAccount, readAdState,
-    resolveFacebookStoryId, roundMoney, boostWindow, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
+    resolveFacebookStoryId, roundMoney, boostWindow, listAdAccounts, pickAdAccount, type AdAccountChoice, type AdAccountInfo, type BoostInsights, type BoostObjective, type BoostPlatform,
     type BudgetRefusal, type CreatedObjects, type Eligibility,
 } from './metaAds.js';
 
@@ -57,9 +58,16 @@ export interface AdsSettings {
     adAccountId: string | null;
     maxDailyBudget: number | null;
     monthlyCap: number | null;
+    /**
+     * Where the ads token came from: `connect` (granted on Facebook Login, a long-lived USER token of about 60 days that a Reconnect
+     * renews, and removed when Meta is disconnected) or `pasted` (a system-user token the owner pasted, which never expires).
+     */
+    tokenSource: 'connect' | 'pasted' | null;
+    /** ISO time a `connect` token stops working, from Meta's `debug_token`. Null for one that does not expire, or unknown. */
+    tokenExpiresAt: string | null;
 }
 
-const EMPTY_SETTINGS: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null };
+const EMPTY_SETTINGS: AdsSettings = { adAccountId: null, maxDailyBudget: null, monthlyCap: null, tokenSource: null, tokenExpiresAt: null };
 
 /** The highest limit the card accepts, in major units: a typo of an extra zero or three should be refused, not spent. */
 export const ADS_LIMIT_MAX = 1_000_000;
@@ -77,6 +85,8 @@ export function parseStoredSettings(raw: string | null): AdsSettings {
             adAccountId: normaliseAdAccountId(parsed['adAccountId']),
             maxDailyBudget: positiveMoney(parsed['maxDailyBudget']),
             monthlyCap: positiveMoney(parsed['monthlyCap']),
+            tokenSource: parsed['tokenSource'] === 'connect' || parsed['tokenSource'] === 'pasted' ? parsed['tokenSource'] : null,
+            tokenExpiresAt: typeof parsed['tokenExpiresAt'] === 'string' && !Number.isNaN(Date.parse(parsed['tokenExpiresAt'])) ? parsed['tokenExpiresAt'] : null,
         };
     } catch {
         return { ...EMPTY_SETTINGS };
@@ -142,8 +152,10 @@ export async function readAdsSettings(creatorId: string): Promise<{ settings: Ad
 }
 
 export async function saveAdsSettings(creatorId: string, input: SettingsInput, current: AdsSettings, updatedBy: string | null): Promise<void> {
-    if (Object.keys(input.settings).length > 0) {
-        const next = { ...current, ...input.settings };
+    // A token typed on the card is a pasted one; removing it forgets where the old one came from.
+    const tokenMeta: Partial<AdsSettings> = input.token === undefined ? {} : { tokenSource: input.token ? 'pasted' : null, tokenExpiresAt: null };
+    if (Object.keys(input.settings).length > 0 || input.token !== undefined) {
+        const next = { ...current, ...input.settings, ...tokenMeta };
         await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId), JSON.stringify(next), updatedBy);
     }
     if (input.token !== undefined) {
@@ -159,6 +171,8 @@ export interface AdsSettingsView {
     configured: boolean;
     adAccountId: string | null;
     token: { set: boolean; last4: string | null };
+    tokenSource: AdsSettings['tokenSource'];
+    tokenExpiresAt: string | null;
     maxDailyBudget: number | null;
     monthlyCap: number | null;
     committedThisMonth: number;
@@ -182,12 +196,66 @@ export async function describeAdsSettings(creatorId: string, now = new Date()): 
         configured: isConfigured(settings, token),
         adAccountId: settings.adAccountId,
         token: { set: Boolean(token), last4: token ? last4(token) : null },
+        tokenSource: token ? settings.tokenSource : null,
+        tokenExpiresAt: token ? settings.tokenExpiresAt : null,
         maxDailyBudget: settings.maxDailyBudget,
         monthlyCap: settings.monthlyCap,
         committedThisMonth: await committedThisMonth(null, creatorId, null, now),
         account,
         accountError,
     };
+}
+
+// ─── One-click: the ads token from Connect ────────────────────────────────────────────────
+
+/**
+ * Called by Facebook Login's callback (`finishLogin`) with the person's long-lived user token and what they granted. With
+ * `ads_management` granted, the token becomes the tenant's ads token (encrypted), its expiry is read from `debug_token`, and the ad
+ * account is filled when there is only one to choose (`pickAdAccount`). The limits are never filled: they decide how much money can be
+ * spent, so the owner sets them. Without the permission nothing changes, so a pasted token is never replaced by "no ads access".
+ */
+export async function captureAdsAccess(creatorId: string, userToken: string, granted: readonly string[], updatedBy: string | null): Promise<{ captured: boolean; adAccountId: string | null }> {
+    if (!granted.includes('ads_management')) return { captured: false, adAccountId: null };
+    const { settings } = await readAdsSettings(creatorId);
+    const [accounts, inspection] = await Promise.all([
+        listAdAccounts(userToken).catch((err) => {
+            log('warn', 'ads.connect_accounts_unreadable', { creator_id: creatorId, metaCode: err instanceof MetaApiError ? err.metaCode ?? null : null });
+            return [] as AdAccountChoice[];
+        }),
+        inspectToken(userToken).catch(() => null),
+    ]);
+    const adAccountId = pickAdAccount(accounts, settings.adAccountId);
+    const next: AdsSettings = {
+        ...settings,
+        adAccountId: adAccountId ?? (settings.adAccountId && accounts.length === 0 ? settings.adAccountId : null),
+        tokenSource: 'connect',
+        tokenExpiresAt: inspection?.expiresAt ? inspection.expiresAt.toISOString() : null,
+    };
+    await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, creatorId), userToken, updatedBy);
+    await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId), JSON.stringify(next), updatedBy);
+    log('info', 'ads.connect_captured', { creator_id: creatorId, accounts: accounts.length, ad_account_picked: Boolean(next.adAccountId) });
+    return { captured: true, adAccountId: next.adAccountId };
+}
+
+/** Meta was disconnected (or the person removed the app): an ads token that came with that Connect goes too. A pasted one stays. */
+export async function forgetConnectedAdsAccess(creatorId: string): Promise<boolean> {
+    const { settings, token } = await readAdsSettings(creatorId);
+    if (!token || settings.tokenSource !== 'connect') return false;
+    await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, creatorId), null, null);
+    await setSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, creatorId), JSON.stringify({ ...settings, tokenSource: null, tokenExpiresAt: null }), null);
+    log('info', 'ads.connect_forgotten', { creator_id: creatorId });
+    return true;
+}
+
+/** The ad accounts the saved token reaches, for the Settings card's picker. */
+export async function listAdAccountsFor(creatorId: string): Promise<AdAccountChoice[]> {
+    const { token } = await readAdsSettings(creatorId);
+    if (!token) throw new AdsError(409, 'ADS_NOT_CONFIGURED', 'Connect Meta with ads access (or paste a token) first.');
+    try {
+        return await listAdAccounts(token);
+    } catch (err) {
+        throw metaRefusal(err);
+    }
 }
 
 async function requireConfig(creatorId: string): Promise<{ settings: AdsSettings & { adAccountId: string; maxDailyBudget: number; monthlyCap: number }; token: string }> {

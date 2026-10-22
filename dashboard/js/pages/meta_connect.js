@@ -280,6 +280,14 @@ const MetaConnect = {
                         <p class="form-hint" id="meta-app-enabled-hint">${t('meta.app.enabledHint')}</p>
                     </div>
                     <div class="form-group">
+                        <label class="check-row check-row-tap" for="meta-app-ads-scopes">
+                            <input type="checkbox" id="meta-app-ads-scopes" name="adsScopesEnabled" ${app.adsScopesEnabled ? html.raw('checked') : ''}
+                                   aria-describedby="meta-app-ads-scopes-hint">
+                            <span class="check-label">${t('meta.app.adsScopes')}</span>
+                        </label>
+                        <p class="form-hint text-warning" id="meta-app-ads-scopes-hint">${t('meta.app.adsScopesHint')}</p>
+                    </div>
+                    <div class="form-group">
                         <label class="form-label" for="meta-app-config">
                             ${t('meta.app.configId')} <span class="label-optional">${t('common.optional')}</span>
                         </label>
@@ -657,8 +665,8 @@ const MetaConnect = {
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
-            // Both are always sent: an emptied id is a real "back to the default", an unticked box a real "off".
-            await API.saveMetaAppSettings({ enabled: data.get('enabled') === 'on', configId });
+            // All three are always sent: an emptied id is a real "back to the default", an unticked box a real "off".
+            await API.saveMetaAppSettings({ enabled: data.get('enabled') === 'on', configId, adsScopesEnabled: data.get('adsScopesEnabled') === 'on' });
             UI.toast(t('meta.app.saved'), 'success');
             await this.changed();
             UI.restoreFocus(focus);

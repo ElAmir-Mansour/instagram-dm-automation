@@ -213,6 +213,8 @@ const SettingsPage = {
             // Boost (Meta ads): the tenant OWNER's, so nobody else is asked. A 403 or a 404 (not deployed here) hides the card: no error panel for a
             // thing this person was never offered.
             ads: null, adsError: null, adsHidden: false,
+            // The ad accounts the saved token can reach: null = not asked (no token), [] = none; `adsAccountsFailed` = asked and refused.
+            adsAccounts: null, adsAccountsFailed: false,
         };
         const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad] = await Promise.allSettled([
             API.getTokenStatus(),
@@ -234,7 +236,16 @@ const SettingsPage = {
             App.canAdminister() ? App.loadPageModule('ice_breakers') : Promise.resolve(null),
             API.getWhatsAppConnection(),
             App.loadPageModule('whatsapp_card'),
-            App.canAdminister() ? API.getAdsSettings() : Promise.resolve(null),
+            App.canAdminister() ? API.getAdsSettings().then(async (settings) => {
+                // Asked in the same breath as the rest, and only with a token to ask with. A failure is the free-text field, never a broken card.
+                if (settings && settings.token && settings.token.set) {
+                    try {
+                        const res = await API.getAdsAccounts();
+                        ctx.adsAccounts = Array.isArray(res && res.accounts) ? res.accounts : [];
+                    } catch (_) { ctx.adsAccountsFailed = true; }
+                }
+                return settings;
+            }) : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -358,7 +369,7 @@ const SettingsPage = {
             case 'tiktok': return this.tiktokSection({ tiktok: ctx.tiktok, tiktokError: ctx.tiktokError });
             case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
-            case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError);
+            case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError, { accounts: ctx.adsAccounts, failed: ctx.adsAccountsFailed });
             case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
             case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
             case 'appearance': return this.appearanceSection();
@@ -2759,7 +2770,95 @@ const SettingsPage = {
         `;
     },
 
-    adsSection(ads, error) {
+    /** The days left on a Connect token, or null when there is no expiry to speak of. Zero or less once it is past. */
+    adsDaysLeft(iso, now) {
+        const at = iso ? Date.parse(iso) : NaN;
+        if (!Number.isFinite(at)) return null;
+        return Math.ceil((at - (Number.isFinite(now) ? now : Date.now())) / 86400000);
+    },
+
+    /** One option's text: `Name · 1234 · USD`, the id and currency as isolated Latin runs; an inactive account says why it cannot be chosen. */
+    adsAccountLabel(a) {
+        const bare = String(a.id || '').replace(/^act_/, '');
+        const parts = [a.name || '', `\u2066${bare}\u2069`];
+        if (a.currency) parts.push(`\u2066${a.currency}\u2069`);
+        let text = parts.filter(Boolean).join(' · ');
+        if (a.status !== 1) text += ` (${t('boost.settings.accountInactive', { status: a.status === null || a.status === undefined ? '—' : String(a.status) })})`;
+        return text;
+    },
+
+    /**
+     * The Ad account control: a select of what the token can reach, or (no token, no list, or the list failed) the free-text field it always was.
+     * Either way it is `name="adAccountId"`, so saving is the same.
+     */
+    adsAccountField(ads, list) {
+        const saved = String(ads.adAccountId || '').replace(/^act_/, '');
+        const accounts = list && Array.isArray(list.accounts) ? list.accounts : null;
+        if (accounts && accounts.length) {
+            const known = accounts.some((a) => String(a.id).replace(/^act_/, '') === saved);
+            return html`
+                <div class="form-group">
+                    <label class="form-label" for="ads-account">${t('boost.settings.accountPick')}</label>
+                    <select class="select" id="ads-account" name="adAccountId" dir="auto" aria-describedby="ads-account-hint">
+                        <option value="" ${saved ? '' : html.raw('selected')}>${t('boost.settings.accountPick')}</option>
+                        ${saved && !known ? html`<option value="${saved}" selected>${UI.ltr(saved)}</option>` : ''}
+                        ${accounts.map((a) => {
+                            const bare = String(a.id).replace(/^act_/, '');
+                            return html`<option value="${bare}" ${a.status === 1 ? '' : html.raw('disabled')} ${bare === saved ? html.raw('selected') : ''}>${this.adsAccountLabel(a)}</option>`;
+                        })}
+                    </select>
+                    <p class="form-hint" id="ads-account-hint">${t('boost.settings.accountPickHint')}</p>
+                </div>
+            `;
+        }
+        const note = list && list.failed ? t('boost.settings.accountsFailed') : (accounts ? t('boost.settings.accountsNone') : t('boost.settings.accountIdHint'));
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="ads-account">${t('boost.settings.accountId')}</label>
+                <input class="field field-mono" id="ads-account" name="adAccountId" type="text" dir="ltr" maxlength="40"
+                       autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="act_1234567890"
+                       value="${ads.adAccountId || ''}" aria-describedby="ads-account-hint">
+                <p class="form-hint" id="ads-account-hint">${note}</p>
+            </div>
+        `;
+    },
+
+    /** Where the ads access comes from: the lead-in to Connect, or a Connect's state and how long it lasts. A pasted token has no block. */
+    adsConnectBlock(ads) {
+        const token = ads.token || {};
+        const openMeta = html`
+            <div class="form-actions mbs-3">
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'link', label: t('boost.settings.connect.go'),
+                    action: 'settings:openCard', data: { card: 'meta' }, id: 'ads-go-meta',
+                })}
+            </div>
+        `;
+        if (token.set && ads.tokenSource === 'connect') {
+            const days = this.adsDaysLeft(ads.tokenExpiresAt);
+            const date = ads.tokenExpiresAt ? UI.formatDay(ads.tokenExpiresAt) : '';
+            const warn = days !== null && days <= 14;
+            return html`
+                <div class="settings-block mbe-4" id="ads-connect-block">
+                    <p class="form-label"><span class="health-pill health-fresh"><i data-lucide="link" aria-hidden="true"></i> ${t('boost.settings.connect.via')}</span></p>
+                    ${date ? html`<p class="form-hint ${warn ? 'text-warning' : ''} mbs-3" id="ads-expiry">${
+                        days <= 0 ? t('boost.settings.connect.expired', { date })
+                            : (warn ? t('boost.settings.connect.soon', { date }) : t('boost.settings.connect.until', { date }))}</p>` : ''}
+                    ${warn ? openMeta : ''}
+                </div>
+            `;
+        }
+        if (token.set) return '';
+        return html`
+            <div class="settings-block mbe-4" id="ads-connect-block">
+                <p class="form-label">${t('boost.settings.connect.title')}</p>
+                <p class="form-hint mbs-3">${t('boost.settings.connect.body')}</p>
+                ${openMeta}
+            </div>
+        `;
+    },
+
+    adsSection(ads, error, list) {
         if (error || !ads) {
             return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
         }
@@ -2768,6 +2867,7 @@ const SettingsPage = {
         const num = (v) => (v === null || v === undefined ? '' : String(v));
         const unit = currency ? html` <span class="label-optional">${UI.ltr(currency)}</span>` : '';
         const committed = Number(ads.committedThisMonth) || 0;
+        const fromConnect = Boolean(token.set && ads.tokenSource === 'connect');
         return html`
             <section class="section" id="settings-ads-card">
                 <h2 class="section-title">${t('boost.settings.title')}</h2>
@@ -2778,6 +2878,7 @@ const SettingsPage = {
                             ? html`<span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.ready')}</span>`
                             : html`<span class="badge badge-neutral">${t('boost.settings.notReady')}</span>`}
                     </p>
+                    ${this.adsConnectBlock(ads)}
                     ${this.adsAccountBlock(ads)}
                     <p class="form-hint mbe-4" id="ads-committed">
                         ${ads.monthlyCap === null || ads.monthlyCap === undefined
@@ -2786,23 +2887,24 @@ const SettingsPage = {
                     </p>
                     <div id="ads-settings-error"></div>
                     <form id="ads-settings-form" data-submit="settings:saveAds" novalidate>
-                        <div class="form-group">
-                            <label class="form-label" for="ads-account">${t('boost.settings.accountId')}</label>
-                            <input class="field field-mono" id="ads-account" name="adAccountId" type="text" dir="ltr" maxlength="40"
-                                   autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="act_1234567890"
-                                   value="${ads.adAccountId || ''}" aria-describedby="ads-account-hint">
-                            <p class="form-hint" id="ads-account-hint">${t('boost.settings.accountIdHint')}</p>
-                        </div>
-                        <div class="form-group">
-                            <!-- Never prefilled: the token is never sent back. Blank means "keep what is saved". -->
-                            <label class="form-label" for="ads-token">${t('boost.settings.token')}</label>
-                            <input class="field field-mono" id="ads-token" name="token" type="password" dir="ltr" maxlength="512"
-                                   autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="EAA…"
-                                   aria-describedby="ads-token-hint">
-                            <p class="form-hint" id="ads-token-hint">${token.set
-                                ? (token.last4 ? this.ltrIn('boost.settings.tokenSaved', { mask: `••••${token.last4}` }, 'mask') : t('boost.settings.tokenSavedShort'))
-                                : t('boost.settings.tokenNone')}</p>
-                        </div>
+                        ${token.set ? this.adsAccountField(ads, list) : ''}
+                        ${fromConnect ? '' : html`
+                            <details class="settings-block mbe-4" id="ads-advanced" ${token.set ? html.raw('open') : ''}>
+                                <summary class="form-label">${t('boost.settings.advanced')}</summary>
+                                ${token.set ? '' : html`<div class="mbs-4">${this.adsAccountField(ads, null)}</div>`}
+                                <div class="form-group mbs-4">
+                                    <!-- Never prefilled: the token is never sent back. Blank means "keep what is saved". -->
+                                    <label class="form-label" for="ads-token">${t('boost.settings.token')}</label>
+                                    <input class="field field-mono" id="ads-token" name="token" type="password" dir="ltr" maxlength="512"
+                                           autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="EAA…"
+                                           aria-describedby="ads-token-hint">
+                                    <p class="form-hint" id="ads-token-hint">${token.set
+                                        ? (token.last4 ? this.ltrIn('boost.settings.tokenSaved', { mask: `••••${token.last4}` }, 'mask') : t('boost.settings.tokenSavedShort'))
+                                        : t('boost.settings.tokenNone')}</p>
+                                </div>
+                            </details>
+                        `}
+                        <p class="form-hint mbe-3" id="ads-limits-why">${t('boost.settings.limitsWhy')}</p>
                         <div class="form-group">
                             <label class="form-label" for="ads-max-daily">${t('boost.settings.maxDaily')}${unit}</label>
                             <input class="field field-mono" id="ads-max-daily" name="maxDailyBudget" type="number" dir="ltr" inputmode="decimal"

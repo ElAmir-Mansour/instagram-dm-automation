@@ -8,7 +8,7 @@ import { afterEach, describe, it } from 'node:test';
 import { metaHttp } from './http.js';
 import {
     activateBoostObjects, buildAdParams, buildAdSetActivationParams, buildAdSetParams, buildCampaignParams, buildCreativeParams,
-    checkBoostBudget, createPausedBoost, currencyOffset, graphTime, normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem,
+    checkBoostBudget, createPausedBoost, currencyOffset, pickAdAccount, graphTime, normaliseAdAccountId, normaliseCountry, normaliseLink, objectiveProblem,
     readEligibility, readInsights, storyIdIfComplete, toMinorUnits, type BoostSpec,
 } from './metaAds.js';
 
@@ -119,6 +119,21 @@ describe('inputs', () => {
     it('knows a complete Facebook story id from a bare photo or video id', () => {
         assert.equal(storyIdIfComplete('100200300_400500600'), '100200300_400500600');
         assert.equal(storyIdIfComplete('400500600'), null);
+    });
+});
+
+describe('pickAdAccount: what Connect fills in on its own', () => {
+    const a = (id: string, status = 1) => ({ id, name: id, currency: 'USD', status });
+    it('takes the only active account', () => {
+        assert.equal(pickAdAccount([a('111111'), a('222222', 2)], null), '111111');
+    });
+    it('keeps the saved account while the token still reaches it', () => {
+        assert.equal(pickAdAccount([a('111111'), a('222222')], '222222'), '222222');
+    });
+    it('leaves a real choice to the owner, and an unreachable saved one is not kept', () => {
+        assert.equal(pickAdAccount([a('111111'), a('222222')], null), null);
+        assert.equal(pickAdAccount([a('111111'), a('222222')], '999999'), null);
+        assert.equal(pickAdAccount([], null), null);
     });
 });
 
