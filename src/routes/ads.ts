@@ -15,6 +15,10 @@
  *   GET    /boosts, /eligibility   Boost (v1 shapes)
  *   POST   /boosts                 create PAUSED;  POST /boosts/:id/activate { confirm: true } spends;  /pause, /refresh;  DELETE /boosts/:id
  *   POST   /campaigns/:id/status   { status, confirm };  POST /campaigns/:id/budget { amount, endTime?, confirm? };  DELETE /campaigns/:id
+ *   POST   /policy                 { fields: { name: text } } → { version, blocked, findings }: the policy check alone, no Meta call (A4)
+ *   POST   /drafts/validate        { spec } → { policy, money, meta, problems, warnings, bots }: creates nothing (A4)
+ *   POST   /drafts                 { spec, confirmPolicyWarnings? } → 201 { campaignId, ops }: everything PAUSED (A4)
+ *   POST   /boosts with `objective: 'MESSAGES'` (or `goal: 'messages'`) is the same draft, from the Boost preset (spec.ts boostToSpec)
  *
  * **Every route answers 404 ADS_DISABLED unless the platform admin switched ads on for the tenant** (`ads.enabled.<tenant>`). Roles
  * (research R18): reads are any member's (viewer and up); every write, the token test and the account list are the owner's. A refusal is
@@ -43,11 +47,15 @@ import { parseSwitchesInput, readAdsSwitches, writeAdsSwitches } from '../servic
 import { fetchAccountState } from '../services/ads/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { mountObjectRoutes } from './adsObjects.js';
+import { createDraft, DraftRefused, validateDraft } from '../services/ads/drafts.js';
+import { checkPolicy } from '../services/ads/policy.js';
+import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
 import { describeError, log } from '../utils/log.js';
 
 export const adsRouter = Router();
 
 const canView = requireTenantRole('viewer');
+const canOperate = requireTenantRole('operator');
 const canAdminister = requireTenantRole('owner');
 
 /**
@@ -311,6 +319,10 @@ adsRouter.get('/eligibility', canView, async (req, res) => {
 
 adsRouter.post('/boosts', canAdminister, async (req, res) => {
     const b = body(req);
+    if (b['objective'] === 'MESSAGES' || b['goal'] === 'messages') {
+        await boostMessages(req, res, b);
+        return;
+    }
     try {
         const boost = await createBoost(getTenantId(req), {
             postId: b['postId'], platform: b['platform'], dailyBudget: b['dailyBudget'], days: b['days'],
@@ -418,6 +430,82 @@ adsRouter.delete('/campaigns/:id', canAdminister, async (req, res) => {
         await fail(req, res, err, 'delete_campaign');
     }
 });
+
+// ─── The builder (A4): the policy check, Meta's validation, the draft ──────────────────────
+
+const POLICY_MAX_FIELDS = 40;
+const POLICY_MAX_CHARS = 5000;
+
+/** Refusals that carry the policy findings are answered with them, so the dialog draws them on the text again. */
+async function failDraft(req: Request, res: Response, err: unknown, what: string): Promise<void> {
+    if (err instanceof DraftRefused) {
+        res.status(err.status).json({ error: err.message, code: err.code, findings: err.findings });
+        return;
+    }
+    await fail(req, res, err, what);
+}
+
+adsRouter.post('/policy', canOperate, (req, res) => {
+    const fields = body(req)['fields'];
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+        res.status(400).json({ error: 'fields is an object of field name → text.', code: 'INVALID', field: 'fields' });
+        return;
+    }
+    const entries = Object.entries(fields as Record<string, unknown>);
+    if (entries.length > POLICY_MAX_FIELDS || entries.some(([k, v]) => k.length > 100 || (v !== null && typeof v !== 'string') || (typeof v === 'string' && v.length > POLICY_MAX_CHARS))) {
+        res.status(400).json({ error: `At most ${POLICY_MAX_FIELDS} fields of text, each at most ${POLICY_MAX_CHARS} characters.`, code: 'INVALID', field: 'fields' });
+        return;
+    }
+    res.json(checkPolicy(Object.fromEntries(entries) as Record<string, string | null>));
+});
+
+adsRouter.post('/drafts/validate', canOperate, async (req, res) => {
+    const b = body(req);
+    try {
+        res.json(await validateDraft(getTenantId(req), b['spec'] ?? b));
+    } catch (err) {
+        await failDraft(req, res, err, 'validate_ad_draft');
+    }
+});
+
+async function createAndAnswer(req: Request, res: Response, spec: unknown, confirmPolicyWarnings: boolean, origin: 'app' | 'boost'): Promise<void> {
+    try {
+        const draft = await createDraft(getTenantId(req), spec, { confirmPolicyWarnings, actor: { userId: req.session?.userId ?? null, via: 'owner' }, origin });
+        const s = (spec ?? {}) as { goal?: unknown; destinations?: unknown; budget?: unknown };
+        await audit(req, AUDIT_ACTIONS.adsDraftCreate, null, {
+            campaign_object: draft.campaignId, origin, goal: s.goal ?? null, destinations: s.destinations ?? null, budget: s.budget ?? null,
+            ops: draft.ops.map((o) => o.id), outcome: 'created_paused',
+        });
+        res.status(201).json(draft);
+    } catch (err) {
+        await failDraft(req, res, err, 'create_ad_draft');
+    }
+}
+
+adsRouter.post('/drafts', canAdminister, async (req, res) => {
+    const b = body(req);
+    await createAndAnswer(req, res, b['spec'], b['confirmPolicyWarnings'] === true, 'app');
+});
+
+/** Boost with "Send messages": the v1 inputs as a `CampaignSpec` (spec.ts `boostToSpec`), created like any draft. */
+async function boostMessages(req: Request, res: Response, b: Record<string, unknown>): Promise<void> {
+    const days = b['days'];
+    const daily = b['dailyBudget'];
+    if (typeof b['postId'] !== 'string' || (b['platform'] !== 'instagram' && b['platform'] !== 'facebook')
+        || typeof daily !== 'number' || typeof days !== 'number' || typeof b['country'] !== 'string') {
+        res.status(400).json({ error: 'postId, platform, dailyBudget, days and country are required.', code: 'INVALID' });
+        return;
+    }
+    const iceBreakers = Array.isArray(b['iceBreakers']) ? (b['iceBreakers'] as Array<Record<string, unknown>>).map((x) => ({
+        title: String(x?.['title'] ?? ''), ...(typeof x?.['response'] === 'string' && x['response'] ? { response: x['response'] as string } : {}),
+    })) : undefined;
+    const spec = boostToSpec({
+        postId: b['postId'], platform: b['platform'], dailyBudget: daily, days, objective: 'MESSAGES', country: String(b['country']).toUpperCase(),
+        destinations: Array.isArray(b['destinations']) ? (b['destinations'] as MessageDestination[]) : undefined,
+        greeting: typeof b['greeting'] === 'string' ? b['greeting'] : undefined, iceBreakers,
+    }, new Date());
+    await createAndAnswer(req, res, spec, b['confirmPolicyWarnings'] === true, 'boost');
+}
 
 // ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
 

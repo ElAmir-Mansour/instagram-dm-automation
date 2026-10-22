@@ -3246,6 +3246,71 @@ Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/setti
 (`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:823`**): `ads_objects`, `ads_insights_daily` and
 `ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
 
+### 11.3 — Create: spec → ops → Meta (A4: message ads and the policy check)
+
+Every ad the app makes is one `CampaignSpec` (contracts/dashboard-api.md), mapped by ONE pure function to Graph parameters. The
+builder's quick mode and Boost's "Send messages" preset end in the same two server functions, so they cannot drift apart.
+
+**A. Quick mode** (`dashboard/js/pages/ads_builder.js`, `AdsBuilder.openQuick`). The Scheduler's **Boost** (`posts.js` `boostOpen`,
+**`posts.js:3815`**) loads the module on demand (page registry `ads_builder`, `routable: false`); only a module that cannot load opens the
+older form. The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
+four ice breakers; the post's caption is shown read-only because it IS the ad text. What is left of the month comes from `GET /money`,
+asked once when the dialog opens.
+
+**B. The policy check while typing.** `POST /api/ads/policy` (**`routes/ads.ts:448`**, operator) → `checkPolicy` (**`ads/policy.ts:550`**):
+pure, no Meta call, nothing stored, asked 400 ms after the typing stops. The text is folded first (tatweel, alef forms, diacritics,
+Arabic-Indic digits, zero-width characters), matched by versioned rules (`POLICY_VERSION`), and every finding's `[start, end)` is mapped
+back onto the ORIGINAL text, so the dialog wraps exactly those characters in `<mark>`.
+
+**C. Review: `POST /api/ads/drafts/validate`** (**`routes/ads.ts:462`**, operator) → `validateDraft` (**`ads/drafts.ts:269`**). Creates
+nothing. In order:
+1. `validateSpec` (`spec.ts`): shape and limits (greeting ≤ 300, ≤ 4 ice breakers, title ≤ 80, answer ≤ 300), special-category rules,
+   `leads` and a Facebook post for a message ad refused `UNSUPPORTED` (`FB_POST_MESSENGER_OK = false` until the live check, T094).
+2. The facts (`readFacts`): the stored account (currency), the Page and IG ids, the post's caption **from `scheduled_posts`**, never the
+   browser's, the WhatsApp number, the DM assistant and the WhatsApp agent modes.
+3. `checkPolicy` over the caption, the greeting and the ice breakers.
+4. `mapSpec` (**`spec.ts:447`**) with a placeholder link, so a mapping that cannot be made (no WhatsApp number, no IG account) is a problem.
+5. The money rule: `moneyFor` with the candidate `lifetime:<total>:<days>` (the same rule as `GET /money`, §11.1), and Meta's minimum
+   (`GET act_<id>/minimum_budgets`, cached a day per account, else the account's `min_daily_budget`).
+6. Only when nothing above blocks: `execution_options=['validate_only']` on the **campaign and every creative** (`metaValidate`,
+   **`drafts.ts:239`**, 3 points each). The creative is where a message ad's mapping is proved (CTA, greeting, opt-outs). A throttle answers
+   429 `RATE_LIMITED`; any other refusal is Meta's message in `meta.error`.
+7. The bots: per destination `on | off | test | sales_test | not_connected` (`botStates`). A warning, never a block.
+
+**D. Create: `POST /api/ads/drafts`** (**`routes/ads.ts:485`**, owner) → `createDraft` (**`drafts.ts:354`**). The server trusts nothing
+from Review:
+1. `validateSpec`, the facts, `checkPolicy` again. A block → **422 `POLICY_BLOCKED`** with `findings`; a warning without
+   `confirmPolicyWarnings: true` → **409 `POLICY_WARNINGS`** with `findings`. This is the gate before any create op.
+2. `moneyFor` again: `OVER_MONTHLY_CAP` / `OVER_DAILY_MAX` (409), `ADS_NOT_CONFIGURED`; Meta's minimum: `BELOW_META_MINIMUM` (400). The
+   draft spends nothing; the money rule runs once more at Activate, which is what spends.
+3. ONE transaction, no Graph call in it: the stored copy (`ads_objects`: campaign, ad set(s), and per ad its ad and its creative, origin
+   `app` or `boost`, status `PAUSED`, `app_meta` = goal, destinations, greeting, ice breakers, offer, post, `refShort`, policy version);
+   a tracked link per (ad, offer) when the ad links to an offer (`mintAdLink`, **`links.ts:176`**, in the same transaction: its foreign key
+   names the new ad row); then the chain of create ops, each `depends_on` the one before: campaign → ad set(s) → creative → ad (→ the
+   next creative → ad). An op names the ids it needs from earlier ops as `{op:<op id>}` in its params; `execute` fills them from those
+   ops' results (`resolveParams`, **`ops.ts:673`**) and fails the op without calling Meta when one is missing.
+4. After the commit the chain runs inline under `waitUntil`, one op after another (`runOpInline`); the drain finishes the rest (§11.2 B).
+   Each create's name gets `AR·<op id>` when it is sent, and a timeout is settled by `verify` (§11.2 C). Answer: **201 `{ campaignId,
+   ops }`**. The dialog says the ad is PAUSED and links to the Ads screen, where Activate is a confirmed status op.
+
+**E. Boost "Send messages" is a preset.** `POST /api/ads/boosts` with `objective: 'MESSAGES'` (or `goal: 'messages'`) → `boostMessages`
+(**`routes/ads.ts:491`**) → `boostToSpec` (**`spec.ts:724`**: a lifetime budget of daily × days on the ad set, one country, age 18+,
+Advantage+ audience) → step D with origin `boost`. The v1 objectives (engagement, reach, link clicks) keep v1's synchronous path and
+`ad_boosts`.
+
+**F. Results the app can count and Meta cannot.** `trackedClicksFor` (**`ads/mirror.ts:792`**), on every ad row of `/objects`:
+`direct` = people's clicks (`link_clicks.is_prefetch = FALSE`) on the ad's own `/r/` link (`tracked_links.ads_object_id`), `viaChat` =
+people's clicks on links the bot sent in conversations the ad started (`conversations.entry_source->>'ad_id'`).
+
+**G. Where it can silently do nothing**
+- The policy check passes a text it has no rule for: it is a lint, not Meta's reviewer. A missed pattern is added to `policy.ts` and
+  `POLICY_VERSION` bumped; never special-cased in a route.
+- The bot warning is ignored and Activate works anyway: people message and nobody answers (or nobody is sold to, in sales test mode).
+- The chain stops part way (a dead token, a Meta refusal on the ad set): the campaign exists at Meta, PAUSED, with nothing under it.
+  The failed op says why in `ads_ops.result`; the later ops fail `DEPENDENCY_FAILED`. Nothing spends.
+- `POST_GREETING_PLACEMENT = 'cta_value'` is unverified for a creative built from a post: Review's `validate_only` on the creative is
+  the check; if Meta refuses it there, nothing is created.
+
 ## 12. Ads → conversation → results (Meta Ads Manager, A3)
 
 A person taps a click-to-message ad and writes. The app records which ad brought them, shows it in the Inbox, counts what came of it per ad, and (only if the

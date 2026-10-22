@@ -5,6 +5,7 @@
  * `https://<our domain>/r/<code>`, and `GET /r/:code` (src/routes/links.ts) answers 302 to the address stored here and counts the visit.
  *
  *   createTrackedLink   mint (or reuse) the code for one (conversation, offer). Nothing calls it yet: S6 does, when a sales turn sends a link.
+ *   mintAdLink          mint (or reuse) the code for one (ad, offer): the link an ad carries (research R25), counted per ad.
  *   resolve             code -> the link, or null.
  *   recordClick         one row in `link_clicks`: when, person-or-preview, a coarse device class.
  *
@@ -146,6 +147,53 @@ export async function createTrackedLink(
         } catch (err) {
             const code = (err as { code?: unknown } | null)?.code;
             if (code === '23505' && attempt < MAX_CODE_ATTEMPTS) continue;
+            throw err;
+        }
+    }
+}
+
+/**
+ * One link per (ad, offer) (research R25, FR-027): the row carries the ad's `ads_objects.id` instead of a conversation, so a click on the ad's
+ * own link is counted per ad (`trackedClicks.direct`). Made BEFORE the ad's creative is created, so the creative names `<public base>/r/<code>`.
+ * The same (ad, offer) asked for again gets the same code: the CTE returns the existing row's code and inserts only when there is none. There is
+ * no unique index on the pair (v53 adds only a lookup index), so two concurrent mints for one ad could make two rows; an ad is created by one
+ * op at a time, so that does not happen, and a second row would still count clicks for the same ad.
+ */
+export const MINT_AD_LINK_SQL = `WITH existing AS (
+   SELECT code FROM tracked_links WHERE creator_id = $1 AND offer_id = $2 AND ads_object_id = $3 ORDER BY created_at LIMIT 1
+ ), inserted AS (
+   INSERT INTO tracked_links (code, creator_id, offer_id, target_url, ads_object_id)
+   SELECT $4, $1, $2, $5, $3 WHERE NOT EXISTS (SELECT 1 FROM existing)
+   RETURNING code
+ )
+ SELECT code FROM existing UNION ALL SELECT code FROM inserted`;
+
+/**
+ * The code of the tracked link for one offer in one ad. `targetUrl` is the offer's address (the caller reads it from the profile, as the sales
+ * turn does). Throws `InvalidTargetUrlError` for an address a link may not point to, and whatever the database throws: the caller then refuses
+ * the ad's link, it never silently swaps in an untracked one.
+ */
+export async function mintAdLink(
+    input: { creatorId: string; offerId: string; adsObjectId: string; targetUrl: string },
+    /** The caller's transaction, when the ad's `ads_objects` row is written in it (drafts.ts): the link's foreign key names that row. */
+    exec?: { query: (sql: string, params: unknown[]) => Promise<{ rows: Array<{ code: string }> }> },
+): Promise<string> {
+    const { creatorId, offerId, adsObjectId } = input;
+    if (typeof creatorId !== 'string' || creatorId === '') throw new TypeError('mintAdLink needs a creatorId');
+    if (typeof offerId !== 'string' || offerId === '' || offerId.length > 100) throw new TypeError('mintAdLink needs an offerId of 1 to 100 characters');
+    if (typeof adsObjectId !== 'string' || adsObjectId === '') throw new TypeError('mintAdLink needs an adsObjectId');
+    const wire = toWireUrl(input.targetUrl);
+
+    for (let attempt = 1; ; attempt++) {
+        try {
+            const params = [creatorId, offerId, adsObjectId, generateLinkCode(), wire];
+            const row = exec ? (await exec.query(MINT_AD_LINK_SQL, params)).rows[0] : await queryOne<{ code: string }>(MINT_AD_LINK_SQL, params);
+            if (!row) throw new Error('mintAdLink: the statement returned no row');
+            return row.code;
+        } catch (err) {
+            const code = (err as { code?: unknown } | null)?.code;
+            // Inside a transaction a failed statement aborts it, so there is no second try there (a 59-bit collision is not worth one).
+            if (code === '23505' && attempt < MAX_CODE_ATTEMPTS && !exec) continue;
             throw err;
         }
     }

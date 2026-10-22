@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import {
     boostIdFromName, breakdownsUnavailable, childrenOf, effectiveLabelKey, getObject, listObjects, markMissing, missDecision, resetBreakdownAvailability,
-    resultsFor, reviewReasons, spendFromMirror, toObjectRow, toObjectView, upsertBreakdowns, upsertInsights, upsertObjects, type BreakdownRow, type InsightRow,
+    resultsFor, reviewReasons, spendFromMirror, toObjectRow, toObjectView, TRACKED_DIRECT_SQL, TRACKED_VIA_CHAT_SQL, trackedClicksFor, upsertBreakdowns, upsertInsights, upsertObjects, type BreakdownRow, type InsightRow,
     type ObjectRow, type ParsedObject, type QueuedOp, type ResultTotals,
 } from './mirror.js';
 
@@ -325,5 +325,44 @@ describe('toObjectView', () => {
         assert.equal(boostIdFromName('AutoReply boost 7f9c2a10-aaaa-4000-8000-000000000001 · instagram · ad'), '7f9c2a10-aaaa-4000-8000-000000000001');
         assert.equal(boostIdFromName('My AutoReply boost campaign'), null);
         assert.equal(boostIdFromName(null), null);
+    });
+});
+
+describe('trackedClicksFor (A4, research R25): the clicks Meta cannot see, per ad', () => {
+    const AD1 = '33333333-3333-4333-8333-333333333333';
+    const AD2 = '44444444-4444-4444-8444-444444444444';
+    const flat = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+
+    it('counts the ad\'s own link and the links the bot sent in chats the ad started, people only, for this tenant', async () => {
+        db.routes.push([new RegExp('^' + flat(TRACKED_DIRECT_SQL).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), (p) => {
+            assert.equal(p[0], C);
+            assert.deepEqual(p[1], [AD1, AD2]);
+            return { rows: [{ k: AD1, n: 7 }] };
+        }]);
+        db.routes.push([new RegExp('^' + flat(TRACKED_VIA_CHAT_SQL).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), (p) => {
+            assert.equal(p[0], C);
+            assert.deepEqual(p[1], ['900']);
+            return { rows: [{ k: '900', n: 3 }] };
+        }]);
+        const out = await trackedClicksFor(C, [{ id: AD1, metaId: '900' }, { id: AD2, metaId: null }]);
+        assert.deepEqual(out.get(AD1), { direct: 7, viaChat: 3 });
+        assert.deepEqual(out.get(AD2), { direct: 0, viaChat: 0 }, 'an ad asked for is answered, zeros included');
+        for (const sql of [TRACKED_DIRECT_SQL, TRACKED_VIA_CHAT_SQL]) {
+            assert.match(flat(sql), /c\.is_prefetch = FALSE/, 'previews and prefetches are not people');
+            assert.match(flat(sql), /t\.creator_id = \$1/);
+        }
+        assert.match(flat(TRACKED_VIA_CHAT_SQL), /v\.creator_id = \$1/);
+    });
+
+    it('asks nothing for no ads, and only the direct count when no ad has a Meta id yet', async () => {
+        assert.equal((await trackedClicksFor(C, [])).size, 0);
+        await trackedClicksFor(C, [{ id: AD1, metaId: null }]);
+        assert.equal(db.statements.filter((s) => s.sql.includes('entry_source')).length, 0);
+        assert.equal(db.statements.length, 1);
+    });
+
+    it('the view carries them for an ad and never for another level', () => {
+        assert.deepEqual(toObjectView(row({ level: 'ad' }), { trackedClicks: { direct: 2, viaChat: 1 } }).trackedClicks, { direct: 2, viaChat: 1 });
+        assert.equal(toObjectView(row({ level: 'campaign' }), { trackedClicks: { direct: 2, viaChat: 1 } }).trackedClicks, null);
     });
 });

@@ -205,6 +205,8 @@ export const AUDIT_ACTIONS = {
     adsCampaignBudget: 'ads.campaign_budget',
     /** A campaign was deleted at Meta from the Ads screen. */
     adsCampaignDelete: 'ads.campaign_delete',
+    /** A builder draft (A4) was created PAUSED: its stored copy and its chain of create ops. `detail` holds the goal, the destinations, the budget and the op ids. */
+    adsDraftCreate: 'ads.draft_create',
     /** An ads write was queued (A2's paced queue). `detail` holds the op id, kind and target, never a token. */
     adsOpEnqueued: 'ads.op_enqueued',
     /** An ads op was applied at Meta. */

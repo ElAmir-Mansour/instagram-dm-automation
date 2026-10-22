@@ -185,6 +185,114 @@ sending (`running`), checking (`verify`: Meta did not answer, so the app reads b
 
 ---
 
+## Your first message ad
+
+A message ad is an ad whose button opens a chat (Instagram Direct, Messenger, WhatsApp, or a mix) instead of a website.
+The DM assistant or the WhatsApp agent answers there. It is built from an existing post (best: an Instagram reel) with the
+Scheduler (Posts) screen's **Boost** button → goal **Send messages** (the "quick mode" of the ads builder,
+`dashboard/js/pages/ads_builder.js`). Everything is created **PAUSED**; nothing is spent until **Activate** on the Ads screen.
+
+### Before you start
+
+| Need | Why |
+|---|---|
+| Ads connected, **Max daily budget** and **Monthly spend cap** set | the money rule refuses a create or an activate that does not fit (see "Limits and the money rule") |
+| A published reel or post | the creative points at the existing post (`source_instagram_media_id`, or `object_story_id` for Facebook) |
+| Instagram: an IG professional account connected to the Page | `INSTAGRAM_DIRECT` destination needs `instagram_user_id` |
+| WhatsApp: a WhatsApp Business number linked to the Page | `promoted_object.whatsapp_phone_number`; without it the create is refused (`UNSUPPORTED`, field `destinations`) |
+| Messenger: the Page | a **Facebook post is refused for Messenger** until live-checked (below): use the Instagram copy of the reel |
+| The assistant for each destination is **on** | otherwise the people who click are not answered (see step 8) |
+
+### Steps
+
+1. **Scheduler → open the reel → Boost.** The quick-mode dialog opens with the post preselected. The caption is shown read-only: it
+   *is* the ad text for a boosted post.
+2. **Goal → Send messages**, then tick the **destinations** (one or more of Instagram, Messenger, WhatsApp). More than one
+   destination makes one ad with several message buttons (`asset_feed_spec.optimization_type = DOF_MESSAGING_DESTINATION`).
+3. **Countries** (default from settings, `SA` when empty), **daily budget** and **days** (1 to 30). The total (daily × days) is
+   sent as a **lifetime budget** on the ad set with an end time, so Meta never spends more than the total. The money rule checks
+   the total against the monthly cap, and `amount / days` against the max daily budget.
+4. **Greeting** (≤ 300 characters) and up to **4 ice breakers**: title ≤ 80, optional automatic answer ≤ 300. Example copy
+   (فصحى, passes the policy check):
+
+   | Field | Text |
+   |---|---|
+   | Caption (ad text) | تعلّم بناء وكلاء الذكاء الاصطناعي خطوة بخطوة بمشاريع عملية |
+   | Greeting | مرحبًا! يسعدنا مساعدتك في اختيار الدورة المناسبة. ما الذي تودّ معرفته؟ |
+   | Ice breaker 1 | ما محتوى الدورة؟ |
+   | Ice breaker 2 | هل تناسب المبتدئين؟ — answer: نعم، تبدأ من الأساسيات وتبني مشروعاً كاملاً بالتدريج. |
+   | Ice breaker 3 | كيف أسجّل؟ |
+
+5. **Review** runs `POST /api/ads/drafts/validate` (about 7 Meta points): the **policy check** (on the caption as stored), the
+   **money check**, **Meta's validation** (`validate_only` on the campaign and on the creative; nothing is created) and **the minimum
+   daily budget** Meta accepts for the account. Meta is asked only when nothing else blocks.
+   The policy check also runs while you type (`POST /api/ads/policy`, debounced, no Meta call).
+   - **Block** findings highlight the phrase with the reason and a rewrite, and disable **Create** until the text changes.
+   - **Warn** findings (certificate wording, "limited time" with no date, a "you…?" question) need the box
+     "I have read the warnings" (`confirmPolicyWarnings: true`; without it the server answers `POLICY_WARNINGS`).
+   - A caption that is blocked cannot be fixed here (it belongs to the post): choose another post.
+6. **Create** (`POST /api/ads/drafts`) re-runs the policy check and the money check on the server, then queues four ops:
+   campaign → ad set → creative → ad, each waiting for the previous one (`depends_on`). Every object is `PAUSED` and its
+   name ends with the tag `AR·<op id>`, which is how an op that timed out is found again instead of being re-sent. The ad set and
+   the ad get the ids of their parents from the earlier ops (`{op:<id>}` placeholders, filled when they run).
+7. **Activate** from the Ads screen. The money rule runs again at that moment (the month may have moved since).
+8. **Bot check before activating.** Review warns per destination: assistant **off** → nobody answers; WhatsApp agent in **test** →
+   only the listed test senders get an answer; DM sales in **test** (`sales_test`) → everyone is answered but only testers are sold
+   to; **not connected** → no answer. The DM assistant answers ad conversations like any other DM
+   (they carry the ad's id in `conversations.entry_source`), and the Ads screen counts those conversations per ad.
+   Do **not** activate while the warning stands unless you want unanswered chats.
+
+### Checklist before you press Activate
+
+- [ ] Review showed no block; every warning was read, and you agree with each.
+- [ ] The total and the "remaining this month" figure are what you meant (the total is a **lifetime** budget).
+- [ ] Meta's minimum budget for the account is below your daily figure (else `BELOW_META_MINIMUM`).
+- [ ] The assistant for every chosen destination is **on** (not off, not test).
+- [ ] In Meta Ads Manager (search `AR·`): campaign, ad set, ad and creative exist, all paused, and the preview shows the right
+      post and the right button (Send message / Message / WhatsApp).
+- [ ] The page your offer links to (for the owner: the Udemy course description) has no income claims: Meta reviews it too.
+
+### The policy check, in one page
+
+`src/services/ads/policy.ts` (versioned, deterministic, Arabic normalised, no model). Why: repeated rejections can restrict the
+ad account and the Page the bot runs on. **Block:** income figures («اكسب 500$ يومياً»), passive income and get-rich wording
+(«دخل سلبي», «ثراء سريع»), minimal effort («بدون مجهود», «وأنت نائم»), quitting a job («اترك وظيفتك»), guaranteed results
+(«مضمون 100%»), job promises («احصل على وظيفة»), and "you + personal attribute" («هل أنت عاطل عن العمل؟», «ديونك؟»).
+**Warn:** «هل أنت مبرمج؟» (borderline), «شهادة معتمدة» (may make Meta treat it as the EMPLOYMENT special ad category, which narrows
+targeting), «لفترة محدودة» without a date. The rule of thumb: **sell the skill, not the money.** Passing the check does not
+promise approval; Meta reviews each ad (typically within 24 hours) and can re-review it later. After a rejection: fix the
+cause first, then ask for **one** review in Meta's Account Quality; repeated appeals slow the answer.
+
+### Live-check caveats (not yet proven against Meta; do not promise these to a client)
+
+- **Greeting on a post creative is unverified.** Meta documents `page_welcome_message` only for creatives built from media
+  (`link_data` / `video_data`), not for a post (`object_story_id`, `source_instagram_media_id`). The code puts it in
+  `call_to_action.value.page_welcome_message` and `validate_only` should tell. The constant is `POST_GREETING_PLACEMENT`
+  (`'cta_value'` or `'omit'`) in `src/services/ads/spec.ts`; when it is `'omit'`, Review shows the warning
+  `NO_GREETING_ON_POST` and the chat opens with Meta's default greeting. Check on the first real create (T094/R11).
+- **A Facebook post for a Messenger ad is refused** (`UNSUPPORTED`, field `ads.<i>.creative`) while
+  `FB_POST_MESSENGER_OK = false`. Meta's pages disagree (`object_story_id` "not supported" for Messenger creatives on one page,
+  supported on another). Flip the constant only after a `validate_only` call that succeeds, and record the result in
+  research.md R11.
+- **Creative opt-outs** (`CREATIVE_OPT_OUTS`) are sent on every creative. If Meta answers "unknown key", remove that key from
+  the list; `validate_only` shows it before anything is created.
+- **Real delivery** (review, conversations labelled with the ad, cost per conversation next day) is checked only with the
+  owner's OK, one day at the minimum budget (quickstart §A4 step 4).
+
+### Troubleshooting a create
+
+| What you see | Meaning |
+|---|---|
+| `POLICY_BLOCKED` (422, with `findings`) | the server's policy check blocked a text; edit it, or choose another post if it is the caption |
+| `POLICY_WARNINGS` (409, with `findings`) | a warning was not confirmed; read it, tick the box, create again |
+| `OVER_MONTHLY_CAP`, `OVER_DAILY_MAX` | the money rule (`GET /money`); Review shows what is left |
+| `BELOW_META_MINIMUM` | the daily figure is below Meta's minimum for this account |
+| `UNSUPPORTED` + field | not allowed yet: Facebook post for Messenger, WhatsApp without a linked number, a lead goal (A10), several destinations with a special ad category |
+| Review: "Meta said no" | Meta's `validate_only` refused the campaign or the creative; its message names the field. Fix and Review again |
+| `RATE_LIMITED` (`retryAt`) | the pacer is waiting; nothing was lost |
+| Ads Manager shows a campaign but no ad | an op later in the chain failed or is waiting; the failed op shows Meta's reason, the ops after it fail `DEPENDENCY_FAILED`. Nothing spends |
+| Creative fails: the Page or IG account is not assigned | the system user has no Page / IG asset (A1's probe, 2026-10-22): assign them in Business Settings → System users → Assign assets |
+
 ## Troubleshooting
 
 - **No Connect button:** Connect is optional and off unless the platform enables it. Paste a system-user token.

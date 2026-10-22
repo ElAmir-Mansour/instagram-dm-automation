@@ -719,6 +719,14 @@ const API = {
     /** Asks for a results refresh from Meta (the owner's). 429 `RATE_LIMITED` with `retryAt` when one ran in the last 15 minutes. */
     requestAdsSync: () => API.request('/ads/sync', { method: 'POST' }),
 
+    // ─── Ad builder (A4): the policy check, Meta's validation and the draft. A `CampaignSpec` is in MAJOR units of the account's currency. ───
+    /** `{ fields: { caption?, greeting?, 'iceBreakers.0.title'?, ... } }` -> `{ version, blocked, findings }`. No Meta call: safe to ask as the owner types (the page waits 400 ms). */
+    checkAdsPolicy: (fields) => API.request('/ads/policy', { method: 'POST', body: JSON.stringify({ fields }) }),
+    /** A `CampaignSpec` -> `{ policy: { blocked, findings }, money: { fits, remaining, reason, currency }, meta: { ok, error?, minimumBudget }, problems: [{ field, code, message }], warnings: [{ code, field, message }], bots: [{ destination, state: 'on'|'test'|'off'|'not_connected' }] }`. Creates nothing. */
+    validateAdsDraft: (spec) => API.request('/ads/drafts/validate', { method: 'POST', body: JSON.stringify({ spec }) }),
+    /** Creates the draft PAUSED (spends nothing) -> 201 `{ campaignId, ops }`. Refusals carry a `code`: `POLICY_BLOCKED` (`err.body.findings`), `OVER_MONTHLY_CAP`, `OVER_DAILY_MAX`, `BELOW_META_MINIMUM`, `INVALID` (`err.body.field`), `UNSUPPORTED`, `META_ERROR`, `RATE_LIMITED`. `confirmPolicyWarnings` is true only after the owner ticked "I have read the warnings". */
+    createAdsDraft: (spec, confirmPolicyWarnings) => API.request('/ads/drafts', { method: 'POST', body: JSON.stringify({ spec, confirmPolicyWarnings: !!confirmPolicyWarnings }) }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

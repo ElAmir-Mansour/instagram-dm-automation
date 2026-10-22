@@ -5797,6 +5797,35 @@ ul.log-cards { list-style: none; }
 .boost-actions .btn { min-block-size: var(--tap-target); }
 .boost-link { display: inline-flex; align-items: center; gap: var(--space-1); min-block-size: var(--tap-target); }
 
+/* Ad builder, quick mode (ads_builder.js): the dialog Boost opens. Logical properties only; every target is 44px. */
+.adsb-caption { margin: 0; padding: var(--space-3); border-inline-start: 3px solid var(--border-strong, var(--border-subtle)); background: var(--surface-sunken); border-radius: var(--radius-sm); max-block-size: 7.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.adsb-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.adsb-subtitle { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.adsb-dests { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.adsb-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-4); }
+.adsb-ice-row { display: flex; align-items: flex-start; gap: var(--space-2); padding-block: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.adsb-ice-fields { flex: 1; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.adsb-ice-row .btn { min-block-size: var(--tap-target); min-inline-size: var(--tap-target); }
+.adsb-ice-add { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-block-start: var(--space-2); }
+.adsb-ice-add .btn { min-block-size: var(--tap-target); }
+.adsb-policy-box { display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-fields, .adsb-findings, .adsb-review ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.adsb-field { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.adsb-field-name { margin: 0 0 var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
+.adsb-snippet { margin: 0 0 var(--space-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.adsb-mark { background: var(--warning-soft); color: var(--text-strong); border-radius: 2px; padding-inline: 2px; text-decoration: underline wavy var(--warning-text); text-underline-offset: 3px; }
+.adsb-finding--block .adsb-mark, .adsb-field:has(.adsb-finding--block) .adsb-mark { background: var(--danger-soft); text-decoration-color: var(--danger-text); }
+.adsb-finding { display: flex; flex-direction: column; gap: var(--space-1); padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--warning-text); }
+.adsb-finding--block { border-inline-start-color: var(--danger-text); }
+.adsb-finding .badge { align-self: flex-start; }
+.adsb-why, .adsb-rewrite { margin: 0; font-size: var(--fs-200); }
+.adsb-clean { margin: 0; display: flex; align-items: center; gap: var(--space-2); }
+.adsb-review { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-review p, .adsb-block p { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); }
+.adsb-review li { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-200); }
+.adsb-review li a { min-block-size: var(--tap-target); display: inline-flex; align-items: center; }
+.adsb-ack { margin-block-start: var(--space-2); }
+
 /* The Meta ads readiness steps and the alert kinds are drawn by the Settings card (Settings does not load pages/ads.css); every other `.ads-` rule lives in css/pages/ads.css. */
 .ads-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .ads-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }

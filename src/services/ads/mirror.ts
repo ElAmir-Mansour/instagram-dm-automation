@@ -170,6 +170,12 @@ export interface ObjectView {
         handoffs: number;
         costPerTrackedClick: number | null;
     } | null;
+    /**
+     * Ads only (null for every other level): clicks on the app's own `/r/` links that Meta cannot see (research R25). `direct` = clicks on the
+     * ad's own tracked link (`tracked_links.ads_object_id`); `viaChat` = clicks on links the bot sent in conversations the ad started
+     * (`conversations.entry_source->>'ad_id'`). People only: link previews and prefetches are not counted.
+     */
+    trackedClicks: TrackedClicks | null;
     /** Ops on this object that have not finished: pending, running or in verify. */
     queued: QueuedOp[];
     parentId: string | null;
@@ -767,8 +773,39 @@ export function resultOf(goal: string | null, t: ResultTotals): number | null {
 
 const per = (spend: number, count: number | null): number | null => (count && count > 0 ? roundMoney(spend / count) : null);
 
+export interface TrackedClicks { direct: number; viaChat: number }
+
+/** The SQL of `trackedClicksFor`, exported so a test pins what is counted. */
+export const TRACKED_DIRECT_SQL = `SELECT t.ads_object_id::text AS k, COUNT(*)::int AS n
+   FROM link_clicks c JOIN tracked_links t ON t.code = c.code
+  WHERE t.creator_id = $1 AND t.ads_object_id = ANY($2::uuid[]) AND c.is_prefetch = FALSE
+  GROUP BY t.ads_object_id`;
+export const TRACKED_VIA_CHAT_SQL = `SELECT v.entry_source->>'ad_id' AS k, COUNT(*)::int AS n
+   FROM link_clicks c JOIN tracked_links t ON t.code = c.code JOIN conversations v ON v.id = t.conversation_id
+  WHERE t.creator_id = $1 AND v.creator_id = $1 AND v.entry_source->>'ad_id' = ANY($2::text[]) AND c.is_prefetch = FALSE
+  GROUP BY v.entry_source->>'ad_id'`;
+
+/**
+ * Both kinds of tracked click for some ads, by the ad's `ads_objects.id`. An ad without a Meta id yet can only have direct clicks. Every ad
+ * asked for is in the answer (zeros included), so the screen can tell "no clicks" from "not counted".
+ */
+export async function trackedClicksFor(creatorId: string, ads: ReadonlyArray<{ id: string; metaId: string | null }>): Promise<Map<string, TrackedClicks>> {
+    const out = new Map<string, TrackedClicks>(ads.map((a) => [a.id, { direct: 0, viaChat: 0 }]));
+    if (ads.length === 0) return out;
+    const direct = await queryRows<{ k: string; n: number }>(TRACKED_DIRECT_SQL, [creatorId, ads.map((a) => a.id)]);
+    for (const r of direct) { const c = out.get(r.k); if (c) c.direct = Number(r.n) || 0; }
+    const byMeta = new Map(ads.filter((a) => a.metaId).map((a) => [a.metaId!, a.id]));
+    if (byMeta.size) {
+        const chat = await queryRows<{ k: string; n: number }>(TRACKED_VIA_CHAT_SQL, [creatorId, [...byMeta.keys()]]);
+        for (const r of chat) { const id = byMeta.get(r.k); const c = id ? out.get(id) : undefined; if (c) c.viaChat = Number(r.n) || 0; }
+    }
+    return out;
+}
+
 export interface ViewExtras {
     results?: ResultTotals | null;
+    /** Ads only: the tracked clicks (`trackedClicksFor`). */
+    trackedClicks?: TrackedClicks | null;
     /** `editsLeftThisHour` of the ad set (4 minus the budget ops done in the last hour), when this row is an ad set. */
     editsLeftThisHour?: number | null;
     queuedOps?: QueuedOp[];
@@ -821,6 +858,7 @@ export function toObjectView(row: ObjectRow, extras: ViewExtras = {}): ObjectVie
                   costPerTrackedClick: per(t.spend, extras.app?.trackedClicks ?? 0),
               }
             : null,
+        trackedClicks: row.level === 'ad' ? extras.trackedClicks ?? null : null,
         queued: (extras.queuedOps ?? []).filter((o) => o.state === 'pending' || o.state === 'running' || o.state === 'verify'),
         parentId: row.parentId,
         syncedAt: row.syncedAt,

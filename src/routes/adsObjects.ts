@@ -19,7 +19,7 @@
  */
 import type { Request, Response, Router } from 'express';
 import { requestArchive, requestBudget, requestDelete, requestStatus, ownObject, type ActionContext } from '../services/ads/actions.js';
-import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, type ObjectLevel, type ObjectRow } from '../services/ads/mirror.js';
+import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, trackedClicksFor, type ObjectLevel, type ObjectRow } from '../services/ads/mirror.js';
 import { editsLeftThisHour, getOp, listOps, type AdsOpState, type OpView } from '../services/ads/ops.js';
 import { readAdsSettings, readHealth } from '../services/ads/settings.js';
 import { dayInTz, readSyncState, requestTodaySync, syncInsights, syncStructure } from '../services/ads/sync.js';
@@ -80,8 +80,10 @@ async function views(creatorId: string, rows: ObjectRow[]): Promise<ReturnType<t
     const app = adIds.length ? await resultsByAd(creatorId, adIds) : new Map<string, AdConversationResults>();
     const byKey = new Map<string, OpView[]>();
     for (const op of open) byKey.set(op.objectKey, [...(byKey.get(op.objectKey) ?? []), op]);
+    const clicks = await trackedClicksFor(creatorId, rows.filter((r) => r.level === 'ad'));
     return rows.map((r) => toObjectView(r, {
         results: r.metaId ? totals.get(`${r.level}:${r.metaId}`) ?? null : null,
+        trackedClicks: clicks.get(r.id) ?? null,
         editsLeftThisHour: r.level === 'adset' && r.metaId ? left.get(r.metaId) ?? null : null,
         queuedOps: byKey.get(r.id) ?? [],
         app: r.level === 'ad' && r.metaId ? app.get(r.metaId) ?? null : null,

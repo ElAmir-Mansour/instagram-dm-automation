@@ -37,7 +37,10 @@ The home of everything that talks to the Meta Marketing API for ads. The design 
 | `sync.ts` | The structure sync (hourly), today's results (4 h), the 28 days and breakdowns (daily); `requestTodaySync` |
 | `mirror.ts` | The stored copy: upserts, deletion marking, the reads and `ObjectView`, `forgetStoredCopy` |
 | `overview.ts` | `GET /overview` from the stored copy: health, money, needs attention, queued changes |
+| `policy.ts` | The policy check (A4): versioned bilingual rules, normalised matching, findings with spans in the original text, a rewrite per rule |
+| `spec.ts` | `CampaignSpec` → Graph params (A4), pure: messages (single and several destinations, greeting, ice breakers), engagement, reach, traffic; Boost's preset `boostToSpec`; the LIVE-CHECK flags |
+| `drafts.ts` | The builder's server steps (A4): `validateDraft` (Meta `validate_only`, money, minimum, bots) and `createDraft` (stored copy + chain of create ops, PAUSED) |
 | `metaAds.ts`, `manager.ts` | v1's Graph helpers and campaign controls (moved here in A2) |
 | `testDb.ts`, `testing/` | Tests only: fake pools (the advisory lock really waits; the queue's markers; objects and settings) |
 
-Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1) and the sync and the queue (§11.2) hop by hop; Help → Ads is the user-facing article.
+Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1), the sync and the queue (§11.2), and creating an ad (§11.3) hop by hop; Help → Ads is the user-facing article.

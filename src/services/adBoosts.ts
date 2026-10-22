@@ -63,7 +63,10 @@ export type AdsErrorCode =
     | 'BUDGET_NOT_EDITABLE'
     | 'CAMPAIGN_ACTIVE'
     | 'CAMPAIGN_NOT_FOUND'
-    | 'NOT_FOUND';
+    | 'NOT_FOUND'
+    | 'POLICY_BLOCKED'
+    | 'POLICY_WARNINGS'
+    | 'UNSUPPORTED';
 
 /** A refusal the route answers as `{ error, code, field?, metaCode?, metaSubcode?, retryAt? }` with `status`. */
 export class AdsError extends Error {
