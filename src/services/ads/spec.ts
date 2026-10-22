@@ -23,7 +23,8 @@
  *                               the 2026-10-22 live check (Meta refuses it in the call to action's value; it documents no other place).
  *   - FB_POST_MESSENGER_OK      whether an `object_story_id` creative can carry a Messenger CTA (the Messenger page says no, the
  *                               Instagram page says yes). Until a live check says yes, a Facebook post is refused for message ads.
- *   - CREATIVE_OPT_OUTS         the `creative_features_spec` keys. An "unknown key" error from Meta (validate_only tells) means: remove
+ *   - CREATIVE_OPT_OUTS         the `creative_features_spec` keys of a MEDIA creative (a post creative takes only POST_CREATIVE_OPT_OUTS,
+ *                               live-checked 2026-10-22). An "unknown key" error from Meta (validate_only tells) means: remove
  *                               that key from the list. Nothing else changes.
  *
  * v1 Boost is a preset of this: `boostToSpec` turns a boost's inputs into a spec, and the tests compare what it produces with
@@ -153,6 +154,15 @@ export const CREATIVE_OPT_OUTS = [
     'site_extensions', 'ig_video_native_subtitle', 'reveal_details_over_time', 'carousel_to_video', 'profile_card', 'show_summary',
     'show_destination_blurbs',
 ] as const;
+
+/**
+ * A creative built from an existing POST takes only a few feature keys. LIVE-CHECKED 2026-10-22 (validate_only, v26, an Instagram reel):
+ * Meta answered "(#100) Param key 'music' in degrees_of_freedom_spec[creative_features_spec] must be one of {IG_VIDEO_NATIVE_SUBTITLE,
+ * IMAGE_ANIMATION, PRODUCT_BROWSING, PRODUCT_METADATA_AUTOMATION, PROFILE_CARD, STANDARD_ENHANCEMENTS_CATALOG, TEXT_OVERLAY_TRANSLATION}".
+ * The rewriting features cannot touch a post used as it is anyway; of the allowed keys, these four could change what is shown (the
+ * product ones need a catalogue), so they are opted out, and nothing is opted in (`adapt_to_placement` is not allowed here).
+ */
+export const POST_CREATIVE_OPT_OUTS = ['ig_video_native_subtitle', 'image_animation', 'profile_card', 'text_overlay_translation'] as const;
 
 const SPECIAL_CATEGORY: Record<SpecialCategory, string[]> = {
     none: [],
@@ -589,8 +599,12 @@ function buildTargeting(adset: CampaignSpec['adsets'][number], postPlatform: 'in
 
 // ─── Creatives ────────────────────────────────────────────────────────────────────────────
 
-function creativeFeatures(): GraphParams {
+function creativeFeatures(source: 'post' | 'media'): GraphParams {
     const features: Record<string, { enroll_status: string }> = {};
+    if (source === 'post') {
+        for (const key of POST_CREATIVE_OPT_OUTS) features[key] = { enroll_status: 'OPT_OUT' };
+        return { creative_features_spec: features };
+    }
     for (const key of CREATIVE_OPT_OUTS) features[key] = { enroll_status: 'OPT_OUT' };
     features['adapt_to_placement'] = { enroll_status: 'OPT_IN' };
     return { creative_features_spec: features };
@@ -709,7 +723,7 @@ function buildCreative(
         // to its ad by `ad_id` whether or not the `ref` arrives.
         creative['url_tags'] = `ref=ar_${ctx.refShort}`;
     }
-    creative['degrees_of_freedom_spec'] = creativeFeatures();
+    creative['degrees_of_freedom_spec'] = creativeFeatures(ad.creative.source);
     return creative;
 }
 

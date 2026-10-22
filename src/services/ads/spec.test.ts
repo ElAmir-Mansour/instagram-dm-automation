@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-    adParams, adsetParams, boostToSpec, CREATIVE_OPT_OUTS, FB_POST_MESSENGER_OK, mapSpec, messageDestinationType, POST_GREETING_PLACEMENT,
+    adParams, adsetParams, boostToSpec, CREATIVE_OPT_OUTS, FB_POST_MESSENGER_OK, POST_CREATIVE_OPT_OUTS, mapSpec, messageDestinationType, POST_GREETING_PLACEMENT,
     SpecError, validateSpec,
     type AdGoal, type CampaignSpec, type MessageDestination, type SpecContext,
 } from './spec.js';
@@ -232,25 +232,38 @@ describe('what is always explicit', () => {
         assert.equal(campaignHome.campaign['buying_type'], 'AUCTION');
     });
 
-    it('every creative opts out of the rewriting features and in to adapt_to_placement', () => {
-        assert.ok(CREATIVE_OPT_OUTS.length > 15);
-        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('standard_enhancements'), 'dead since v22');
-        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('adapt_to_placement'));
+    it('a post creative sends only the keys Meta allows there (live check 2026-10-22), all OPT_OUT', () => {
+        assert.deepEqual([...POST_CREATIVE_OPT_OUTS].sort(), ['ig_video_native_subtitle', 'image_animation', 'profile_card', 'text_overlay_translation']);
+        const allowed = new Set(['ig_video_native_subtitle', 'image_animation', 'product_browsing', 'product_metadata_automation', 'profile_card', 'standard_enhancements_catalog', 'text_overlay_translation']);
         const traffic = (): Spec => ({
             ...messageSpec(), goal: 'traffic', destinations: undefined,
             ads: [{ adsetIndex: 0, name: 'A', creative: { source: 'post', postId: 'ig1', platform: 'instagram' }, copy: { primaryText: '' }, link: { trackedOfferId: 'offer1' } }],
         });
-        const everyCreative = [
+        const postCreatives = [
             ...mapSpec(messageSpec(), ctx()).creatives,
             ...mapSpec(traffic(), ctx()).creatives,
             ...mapSpec({ ...traffic(), goal: 'engagement', ads: [{ ...traffic().ads[0]!, creative: { source: 'post', postId: 'fb1', platform: 'facebook' } }] }, ctx()).creatives,
             ...mapSpec(messageSpec({ destinations: ['messenger', 'whatsapp'] }), ctx()).creatives,
         ];
-        for (const creative of everyCreative) {
+        for (const creative of postCreatives) {
             const features = (creative['degrees_of_freedom_spec'] as { creative_features_spec: Record<string, { enroll_status: string }> }).creative_features_spec;
-            for (const key of CREATIVE_OPT_OUTS) assert.deepEqual(features[key], { enroll_status: 'OPT_OUT' }, key);
-            assert.deepEqual(features['adapt_to_placement'], { enroll_status: 'OPT_IN' });
+            assert.deepEqual(Object.keys(features).sort(), [...POST_CREATIVE_OPT_OUTS].sort());
+            for (const key of Object.keys(features)) {
+                assert.ok(allowed.has(key), `${key} is one Meta allows on a post creative`);
+                assert.deepEqual(features[key], { enroll_status: 'OPT_OUT' });
+            }
         }
+    });
+
+    it('a media creative opts out of every rewriting feature and in to adapt_to_placement', () => {
+        assert.ok(CREATIVE_OPT_OUTS.length > 15);
+        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('standard_enhancements'), 'dead since v22');
+        assert.ok(!(CREATIVE_OPT_OUTS as readonly string[]).includes('adapt_to_placement'));
+        const base = messageSpec();
+        const creative = mapSpec({ ...base, ads: [{ ...base.ads[0]!, creative: { source: 'media', mediaId: 'img1' }, copy: { primaryText: 'Learn Go' } }] }, ctx()).creatives[0]!;
+        const features = (creative['degrees_of_freedom_spec'] as { creative_features_spec: Record<string, { enroll_status: string }> }).creative_features_spec;
+        for (const key of CREATIVE_OPT_OUTS) assert.deepEqual(features[key], { enroll_status: 'OPT_OUT' }, key);
+        assert.deepEqual(features['adapt_to_placement'], { enroll_status: 'OPT_IN' });
     });
 
     it('every name carries the op tag; messages and traffic creatives carry url_tags ref=ar_<refShort>', () => {
