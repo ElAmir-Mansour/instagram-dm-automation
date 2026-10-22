@@ -12,7 +12,7 @@ import {
 
 const CTX: AdsCallContext = { tenantId: 't1', adAccountId: 'act_123', token: 'tok' };
 const COPY = { primaryText: 'تعلّم البرمجة خطوة بخطوة', headline: 'ابدأ اليوم', cta: 'LEARN_MORE' };
-const LINK = 'https://example.com/course';
+const LINK = 'https://example.com/learn';
 
 interface Call { method: string; path: string; params: Record<string, any>; label: string }
 

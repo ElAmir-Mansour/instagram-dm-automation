@@ -217,7 +217,7 @@ describe('/api/ads full builder routes (A5)', () => {
             }));
             const start = new Date(Date.now() + 60_000);
             const spec = {
-                name: 'Go course', goal: 'traffic', specialCategory: 'none',
+                name: 'Go class', goal: 'traffic', specialCategory: 'none',
                 budget: { home: 'adset', kind: 'lifetime', amount: 25, start: start.toISOString(), end: new Date(start.getTime() + 5 * 86_400_000).toISOString() },
                 adsets: [{ name: 'EG+SA', placements: { instagram: ['reels', 'story'] }, targeting: { countries: ['EG', 'SA'], ageMin: 22, ageMax: 45, advantageAudience: false } }],
                 ads: [{ adsetIndex: 0, name: 'Video', copy: { primaryText: 'تعلّم Go', cta: 'LEARN_MORE' }, link: { url: 'https://example.com/go' }, creative: { source: 'media', mediaId: VID, coverMediaId: COVER, verticalMediaId: VERT } }],
