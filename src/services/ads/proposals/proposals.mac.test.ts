@@ -159,10 +159,10 @@ beforeEach(() => {
     } as JobQueue;
     const prevQueue = setJobQueue(queue);
     const prevWait = setWaitUntil((work) => { pending.push(work.catch(() => undefined)); });
-    const prevCaller = setAiCaller((async (args) => {
+    const prevCaller = setAiCaller((async (args: { purpose: string; creatorId: string | null }) => {
         aiCalls.push({ purpose: args.purpose, creatorId: args.creatorId });
         return { json: aiAnswer, usage: {}, billed: [], model: 'claude-sonnet-5-5', provider: 'anthropic', stopReason: 'end', elapsed_ms: 1, usd: 0.01, priced: true, costSource: 'table', effort: 'medium', route: 'default', usageId: 'u1' };
-    }) as AiCaller);
+    }) as unknown as AiCaller);
     const prevPorts = setProposalPorts(FULL);
     setProposalInputDeps({ loadProfile: async () => ({ profile: defaultProfile({ lang: 'ar', rules: [] }) }) });
     const prevSink = setLogSink((_level, line) => { if (process.env.DBG) console.error(line); });
