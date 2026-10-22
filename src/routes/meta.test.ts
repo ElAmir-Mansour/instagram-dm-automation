@@ -823,7 +823,7 @@ describe('GET and POST /api/meta/app-settings', () => {
         assert.equal(r.json.mode, 'configuration');
         assert.deepEqual(r.json.register, { redirectUri: `${BASE}/api/meta/callback`, deauthorizeUrl: `${BASE}/api/meta/deauthorize` });
         assert.deepEqual(r.json.scopes, [...LOGIN_SCOPES]);
-        assert.deepEqual(r.json.webhookFields, ['feed', 'messages', 'messaging_postbacks']);
+        assert.deepEqual(r.json.webhookFields, ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals']);
         assert.deepEqual(r.json.app, { idSet: true, secretSet: true });
         assert.ok(!r.text.includes(process.env.META_APP_SECRET!));
     });

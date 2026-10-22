@@ -397,7 +397,7 @@ describe('subscribePage and unsubscribePage', () => {
         assert.equal(post!.authorization, `Bearer ${TOKEN}`);
         assert.equal(`${get!.method} ${get!.path}`, 'GET /200000000000001/subscribed_apps');
         assert.equal(get!.authorization, `Bearer ${TOKEN}`);
-        assert.deepEqual(WEBHOOK_FIELDS, ['feed', 'messages', 'messaging_postbacks']);
+        assert.deepEqual(WEBHOOK_FIELDS, ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals']);
     });
 
     it('a failed POST is a warning, not a throw', async () => {
