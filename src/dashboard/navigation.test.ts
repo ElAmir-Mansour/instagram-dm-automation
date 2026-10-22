@@ -69,7 +69,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
     it('is Today, Replies, Content, Results, in that order, and Administration after them', () => {
         const found = groups();
         assert.deepEqual(found.map((g) => g.labelKey), ['nav.group.today', 'nav.group.replies', 'nav.group.content', 'nav.group.results', 'nav.group.admin']);
-        assert.deepEqual(found.slice(0, 4).map((g) => g.pages), [['overview', 'inbox'], ['campaigns', 'ai_settings'], ['studio', 'posts'], ['analytics', 'growth']]);
+        assert.deepEqual(found.slice(0, 4).map((g) => g.pages), [['overview', 'inbox'], ['campaigns', 'ai_settings'], ['studio', 'posts'], ['analytics', 'growth', 'ads']]);
         assert.deepEqual(found[4]!.pages, ['operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']);
         assert.deepEqual(footPages(), ['settings', 'help']);
     });
@@ -83,17 +83,17 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         }
         // A group's items are <li> children of that list: nothing else sits in it.
         for (const g of groups()) {
-            const items = (g.markup.match(/<li>/g) ?? []).length;
+            const items = (g.markup.match(/<li(?:\s[^>]*)?>/g) ?? []).length;
             assert.equal(items, g.pages.length, `${g.labelKey}: one <li> per link`);
         }
     });
 
-    it('has ten creator items (8 job items, Settings, Help): SC-005, down from thirteen', () => {
+    it('has eleven creator items (9 job items, Settings, Help; Ads is the owner\'s alone): SC-005, down from thirteen', () => {
         const job = groups().slice(0, 4).flatMap((g) => g.pages);
-        assert.equal(job.length, 8);
-        assert.equal(job.length + footPages().length, 10);
+        assert.equal(job.length, 9);
+        assert.equal(job.length + footPages().length, 11);
         const all = [...INDEX.matchAll(/<a href="#\/[a-z_]+" class="nav-item(?: active)?" data-page="([a-z_]+)"/g)].map((m) => m[1]!);
-        assert.equal(all.length, 10 + 6, 'every sidebar link: ten for the creator, six for the platform admin');
+        assert.equal(all.length, 11 + 6, 'every sidebar link: eleven for the creator, six for the platform admin');
         assert.equal(new Set(all).size, all.length, 'no page twice');
     });
 
@@ -109,7 +109,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         const ar = loadDashboard({ lang: 'ar' });
         const en = loadDashboard({ lang: 'en' });
         const links = [...INDEX.matchAll(/<a href="#\/([a-z_]+)" class="nav-item(?: active)?" data-page="([a-z_]+)">[\s\S]*?<span data-i18n="([^"]+)">([^<]*)<\/span>/g)];
-        assert.equal(links.length, 16);
+        assert.equal(links.length, 17);
         for (const [, href, page, key, text] of links) {
             assert.equal(href, page, `${page}: the address is the page`);
             assert.equal(key, `nav.${page}`, `${page}: the label IS the page title, so the two cannot drift`);
@@ -170,7 +170,7 @@ function rig(options: { lang?: 'ar' | 'en'; admin?: boolean; globals?: Record<st
     const h = loadDashboard({ app: true, lang: options.lang ?? 'en', globals: { Admin: { confirm: () => {} }, ...(options.globals ?? {}) } });
     for (const id of ['page-title', 'page-subtitle', 'page-container', 'sidebar', 'main-content', 'mobile-menu-btn']) h.el(id);
     const items: Record<string, FakeEl> = {};
-    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'posts', 'analytics', 'growth', 'settings', 'help', 'operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']) {
+    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'posts', 'analytics', 'growth', 'ads', 'settings', 'help', 'operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']) {
         items[page] = new FakeEl('', 'a');
         items[page]!.dataset = { page };
     }
@@ -519,7 +519,7 @@ describe('nav links: the browser keeps Cmd, Ctrl, Shift and middle clicks (SH-24
         r.App.go = (page: string): void => { went.push(page); };
         r.App.prefetchPageModule = (): void => {};
         r.App.bindNavLinks();
-        assert.equal(bound.size, 17, '16 links and the brand mark');
+        assert.equal(bound.size, 18, '17 links and the brand mark');
         bound.get(r.items.help!)![0]!(click());
         bound.get(home)![0]!(click());
         bound.get(r.items.studio!)![0]!(click({ ctrlKey: true }));

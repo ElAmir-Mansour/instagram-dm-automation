@@ -5789,5 +5789,51 @@ ul.log-cards { list-style: none; }
 .boost-box-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .boost-metrics { gap: var(--space-3); }
 .boost-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.boost-summary { padding: var(--space-3); border-radius: var(--radius-sm); }
+.boost-summary { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); }
 .boost-summary p { margin: 0; }
+.boost-summary p + p { margin-block-start: var(--space-1); }
+.boost-summary strong { font-size: var(--fs-300); color: var(--text-strong); }
+.boost-summary-lead { font-size: var(--fs-200); color: var(--text-muted); }
+.boost-actions .btn { min-block-size: var(--tap-target); }
+.boost-link { display: inline-flex; align-items: center; gap: var(--space-1); min-block-size: var(--tap-target); }
+
+/* ─── Ads screen (#/ads): the owner's campaigns, spend and limits. Logical properties only; every target is 44px. ─── */
+.ads-page { display: flex; flex-direction: column; gap: var(--space-5); }
+.ads-page .stats-grid, .ads-page .section { margin-block-end: 0; }
+.ads-account-block { display: flex; flex-direction: column; gap: var(--space-3); }
+.ads-account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3) var(--space-5); margin: 0; }
+.ads-account-grid dd { margin: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-inline-size: 0; overflow-wrap: anywhere; }
+.ads-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ads-actions .btn { min-block-size: var(--tap-target); }
+.ads-name { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.ads-name-meta { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ads-post-link { display: inline-flex; align-items: center; min-block-size: var(--tap-target); }
+.ads-meter { inline-size: 100%; margin-block-end: var(--space-2); }
+.ads-stat .stat-sub { margin-block-start: var(--space-1); }
+.ads-payment-missing .ads-actions, #ads-first-run .ads-actions, #ads-account-problem .ads-actions { margin-block-start: var(--space-3); }
+/* The numbered steps of the first-run and no-payment cards: calm text, the number in the highlighter's label colour. */
+.ads-steps { margin: var(--space-3) 0 0; padding-inline-start: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ads-steps li { padding-inline-start: var(--space-1); }
+.ads-steps li::marker { color: var(--accent-text); font-weight: var(--fw-semibold); }
+.ads-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-4); flex-wrap: wrap; margin-block-end: var(--space-3); }
+.ads-section-head .section-title, .ads-section-head p { margin: 0; }
+.ads-limits { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); flex-wrap: wrap; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
+.ads-limits-text { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; font-size: var(--fs-200); color: var(--text-default); }
+.ads-limits-text strong { color: var(--text-strong); }
+.ads-limits-note { flex-basis: 100%; margin: 0; }
+.ads-payment-missing .btn { min-block-size: var(--tap-target); }
+.ads-name-sub { display: block; font-size: var(--fs-100); color: var(--text-muted); }
+.ads-budget { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.ads-state { display: inline-flex; align-items: center; gap: var(--space-1); }
+.ads-state [data-lucide], .ads-stat .stat-sub [data-lucide] { inline-size: 14px; block-size: 14px; flex-shrink: 0; }
+.ads-stat .stat-sub [data-lucide] { vertical-align: -2px; }
+.ads-stat--warn { border-color: var(--border-warning); }
+.ads-edit-name { margin: 0 0 var(--space-1); }
+.ads-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ads-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ads-check [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; color: var(--text-muted); }
+.ads-check--done [data-lucide] { color: var(--success-text); }
+@media (max-width: 480px) {
+    .ads-actions .btn, .ads-limits .btn { flex: 1 1 auto; }
+    .ads-limits-text { flex-direction: column; }
+}

@@ -99,6 +99,7 @@ import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
 import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
+import { enforceMonthlyCaps } from '../services/adsManager.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -396,6 +397,15 @@ router.get('/jobs/drain', async (req, res) => {
     // TikTok answers asynchronously, so a drain also asks after uploads TikTok has not
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
+
+    // The monthly ad spending cap, after switch-on (adsManager.ts): at most once an hour per tenant, every active campaign in the ad
+    // account is paused once the month reaches the owner's cap. Fail-soft and silent when no tenant has ads configured.
+    try {
+        const caps = await enforceMonthlyCaps();
+        if (caps.paused > 0 || caps.failed > 0) log('info', 'ads.cap_sweep', { ...caps });
+    } catch (err) {
+        log('error', 'ads.cap_sweep_failed', describeError(err));
+    }
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
     // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its

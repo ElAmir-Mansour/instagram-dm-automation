@@ -648,6 +648,18 @@ const API = {
     /** Re-reads the spend and insights from Meta. */
     refreshBoost: (id) => API.request(`/ads/boosts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
 
+    // ─── Ads screen (#/ads): every campaign on the ad account, not only the boosts. The tenant OWNER's. ───
+    /** `{ configured, account, accountError, spend, limits, campaigns }`. */
+    getAdsOverview: () => API.request('/ads/overview'),
+    /** Answers `{ campaign }`. ACTIVE starts spending money: `confirm` is sent as true only after the owner said yes to the question that names the budget. */
+    setAdsCampaignStatus: (id, status, confirm) => API.request(`/ads/campaigns/${encodeURIComponent(id)}/status`, {
+        method: 'POST', body: JSON.stringify(confirm ? { status, confirm: true } : { status }),
+    }),
+    /** `{ amount, endTime? }`: the DAILY budget of a daily campaign, the TOTAL of a lifetime one. Answers `{ campaign }`. */
+    setAdsCampaignBudget: (id, data) => API.request(`/ads/campaigns/${encodeURIComponent(id)}/budget`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Answers `{ ok: true }`; the server refuses a campaign that is ACTIVE. */
+    deleteAdsCampaign: (id) => API.request(`/ads/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

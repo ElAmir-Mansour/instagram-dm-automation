@@ -2858,6 +2858,39 @@ const SettingsPage = {
         `;
     },
 
+    /**
+     * What Boost needs, as three things that are each done or not, so a first-time owner sees which one is missing (the old line said
+     * "needs the ad account, the token and both limits" and left the guessing to them). Done is a check mark AND a word, never colour alone.
+     * When all three are done: the way to the Ads screen, and the one thing this card cannot do for them (the payment method, Meta's alone).
+     */
+    adsChecklist(ads) {
+        const token = ads.token || {};
+        const items = [
+            { id: 'access', done: Boolean(token.set) },
+            { id: 'account', done: Boolean(ads.adAccountId) && !ads.accountError && Boolean(ads.account) },
+            { id: 'limits', done: ads.maxDailyBudget !== null && ads.maxDailyBudget !== undefined && ads.monthlyCap !== null && ads.monthlyCap !== undefined },
+        ];
+        const ready = Boolean(ads.configured);
+        return html`
+            <div class="mbe-4" id="ads-readiness">
+                <ul class="ads-checklist" id="ads-checklist" aria-label="${t('boost.settings.check.label')}">
+                    ${items.map((item) => html`
+                        <li class="ads-check ${item.done ? html.raw('ads-check--done') : ''}" data-check="${item.id}">
+                            <i data-lucide="${item.done ? 'check-circle' : 'circle-dashed'}" aria-hidden="true"></i>
+                            <span>${t(`boost.settings.check.${item.id}`)}</span>
+                            <span class="sr-only">${item.done ? t('boost.settings.check.done') : t('boost.settings.check.todo')}</span>
+                        </li>
+                    `)}
+                </ul>
+                ${ready ? html`
+                    <p class="mbs-3" id="ads-ready-note"><span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.ready')}</span></p>
+                    <p class="form-hint mbs-3">${t('boost.settings.paymentNote')}</p>
+                    <div class="form-actions mbs-3">${UI._anchorButton({ href: '#/ads', label: t('boost.settings.openAds'), icon: 'megaphone', variant: 'secondary', size: 'sm' })}</div>
+                ` : html`<p class="form-hint mbs-3">${t('boost.settings.notReady')}</p>`}
+            </div>
+        `;
+    },
+
     adsSection(ads, error, list) {
         if (error || !ads) {
             return this.cardError('settings-ads-card', t('boost.settings.title'), t('boost.settings.loadFailed', { message: (error && error.message) || t('error.unexpected') }));
@@ -2873,11 +2906,7 @@ const SettingsPage = {
                 <h2 class="section-title">${t('boost.settings.title')}</h2>
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${t('boost.settings.intro')}</p>
-                    <p class="mbe-4">
-                        ${ads.configured
-                            ? html`<span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('boost.settings.ready')}</span>`
-                            : html`<span class="badge badge-neutral">${t('boost.settings.notReady')}</span>`}
-                    </p>
+                    ${this.adsChecklist(ads)}
                     ${this.adsConnectBlock(ads)}
                     ${this.adsAccountBlock(ads)}
                     <p class="form-hint mbe-4" id="ads-committed">
@@ -2905,17 +2934,19 @@ const SettingsPage = {
                             </details>
                         `}
                         <p class="form-hint mbe-3" id="ads-limits-why">${t('boost.settings.limitsWhy')}</p>
-                        <div class="form-group">
-                            <label class="form-label" for="ads-max-daily">${t('boost.settings.maxDaily')}${unit}</label>
-                            <input class="field field-mono" id="ads-max-daily" name="maxDailyBudget" type="number" dir="ltr" inputmode="decimal"
-                                   min="0" step="any" value="${num(ads.maxDailyBudget)}" aria-describedby="ads-max-daily-hint">
-                            <p class="form-hint" id="ads-max-daily-hint">${t('boost.settings.maxDailyHint')}</p>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="ads-monthly-cap">${t('boost.settings.monthlyCap')}${unit}</label>
-                            <input class="field field-mono" id="ads-monthly-cap" name="monthlyCap" type="number" dir="ltr" inputmode="decimal"
-                                   min="0" step="any" value="${num(ads.monthlyCap)}" aria-describedby="ads-monthly-cap-hint">
-                            <p class="form-hint" id="ads-monthly-cap-hint">${t('boost.settings.monthlyCapHint')}</p>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="ads-max-daily">${t('boost.settings.maxDaily')}${unit}</label>
+                                <input class="field field-mono" id="ads-max-daily" name="maxDailyBudget" type="number" dir="ltr" inputmode="decimal"
+                                       min="0" step="any" value="${num(ads.maxDailyBudget)}" aria-describedby="ads-max-daily-hint">
+                                <p class="form-hint" id="ads-max-daily-hint">${t('boost.settings.maxDailyHint')}</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="ads-monthly-cap">${t('boost.settings.monthlyCap')}${unit}</label>
+                                <input class="field field-mono" id="ads-monthly-cap" name="monthlyCap" type="number" dir="ltr" inputmode="decimal"
+                                       min="0" step="any" value="${num(ads.monthlyCap)}" aria-describedby="ads-monthly-cap-hint">
+                                <p class="form-hint" id="ads-monthly-cap-hint">${t('boost.settings.monthlyCapHint')}</p>
+                            </div>
                         </div>
                         <div class="form-actions">
                             ${UI.button({

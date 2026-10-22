@@ -135,6 +135,15 @@ export function normaliseAdAccountId(input: unknown): string | null {
     return /^[0-9]{5,25}$/.test(digits) ? digits : null;
 }
 
+/**
+ * EU member states. Meta requires `dsa_payor` and `dsa_beneficiary` (who pays, who benefits, under the EU Digital Services Act) on any ad
+ * set that targets one, and Boost does not collect them yet, so such a country is refused with that reason rather than failing at Meta.
+ */
+export const EU_COUNTRIES: ReadonlySet<string> = new Set([
+    'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO',
+    'SK', 'SI', 'ES', 'SE',
+]);
+
 /** An ISO 3166-1 alpha-2 country code, upper-cased, or null. */
 export function normaliseCountry(input: unknown): string | null {
     if (typeof input !== 'string') return null;
@@ -238,7 +247,8 @@ export function buildAdSetParams(spec: BoostSpec, campaignId: string, now: Date)
         },
     };
     if (spec.objective === 'ENGAGEMENT') params['destination_type'] = 'ON_POST';
-    if (spec.objective === 'TRAFFIC') params['destination_type'] = 'WEBSITE';
+    // TRAFFIC sends no destination_type: Meta's ODAX table lists none for Traffic, and WEBSITE is documented only under other objectives.
+    // The link is the creative's call to action.
     if (spec.objective === 'AWARENESS') params['promoted_object'] = { page_id: spec.pageId };
     return params;
 }
@@ -337,7 +347,7 @@ const RESULT_ACTION: Record<BoostObjective, string> = {
     TRAFFIC: 'link_click',
 };
 
-function num(value: unknown): number {
+export function num(value: unknown): number {
     const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
     return Number.isFinite(n) ? n : 0;
 }
@@ -392,7 +402,7 @@ async function createObject(path: string, params: GraphParams, token: string, la
 }
 
 /** Setting a status is idempotent, so it retries like a read. */
-async function updateObject(id: string, params: GraphParams, token: string, label: string): Promise<void> {
+export async function updateObject(id: string, params: GraphParams, token: string, label: string): Promise<void> {
     try {
         await withRetry(() => metaHttp.post(`${GRAPH_BASE}/${id}`, form(params), auth(token)), { label });
     } catch (error) {
@@ -400,7 +410,7 @@ async function updateObject(id: string, params: GraphParams, token: string, labe
     }
 }
 
-async function getNode(id: string, params: Record<string, string>, token: string, label: string): Promise<any> {
+export async function getNode(id: string, params: Record<string, string>, token: string, label: string): Promise<any> {
     try {
         const res = await withRetry(() => metaHttp.get(`${GRAPH_BASE}/${id}`, { params, headers: { Authorization: `Bearer ${token}` } }), { label });
         return res.data;
@@ -549,8 +559,12 @@ export async function deleteAdObject(id: string, token: string): Promise<void> {
     try {
         await withRetry(() => metaHttp.delete(`${GRAPH_BASE}/${id}`, { headers: { Authorization: `Bearer ${token}` } }), { label: 'delete ad object' });
     } catch (error) {
-        // 100/33, "does not exist": an object already deleted, which is the outcome asked for.
-        if (metaErrorCode(error) === 100 && metaErrorSubcode(error) === 33) return;
+        // 100/33 means "does not exist" — or no permission, or an unsupported operation: Meta uses it for all three. It counts as deleted
+        // only when a read of the object fails too; an object that can still be read was NOT deleted, and that is said.
+        if (metaErrorCode(error) === 100 && metaErrorSubcode(error) === 33) {
+            const stillThere = await getNode(id, { fields: 'id' }, token, 'delete check').then(() => true, () => false);
+            if (!stillThere) return;
+        }
         throw metaFailure('Meta ads (delete)', error);
     }
 }
@@ -570,4 +584,102 @@ export async function readAdState(adId: string, objective: BoostObjective, token
         effectiveStatus: typeof node?.effective_status === 'string' ? node.effective_status : null,
         insights: readInsights(objective, insights),
     };
+}
+
+// ─── The account's state: status and payment method (the Ads screen; activation refuses without a payment method) ─────────
+
+export type AccountStatusLabel = 'active' | 'disabled' | 'unsettled' | 'pending_review' | 'closed' | 'other';
+
+/** Meta's numeric `account_status` as a word the screen can show. @see https://developers.facebook.com/docs/marketing-api/reference/ad-account */
+export function accountStatusLabel(status: number | null): AccountStatusLabel {
+    switch (status) {
+        case 1: case 9: case 201: return 'active';
+        case 2: return 'disabled';
+        case 3: case 8: return 'unsettled';
+        case 7: return 'pending_review';
+        case 100: case 101: case 202: return 'closed';
+        default: return 'other';
+    }
+}
+
+const DISABLE_REASONS: Record<number, string> = {
+    1: 'Ads integrity policy',
+    2: 'Intellectual property review',
+    3: 'Payment risk',
+    4: 'Account shut down',
+    5: 'Advertiser review',
+    6: 'Business integrity review',
+    7: 'Permanently closed',
+    8: 'Unused reseller account',
+    9: 'Unused account',
+};
+
+export interface AdAccountState extends AdAccountInfo {
+    id: string;
+    statusLabel: AccountStatusLabel;
+    disableReason: string | null;
+    /** Null when Meta would not say (a token without the permission to read billing, or the field left out). */
+    hasPaymentMethod: boolean | null;
+    /** The account's UTC offset in hours (Meta's `timezone_offset_hours_utc`): Meta's `this_month` is the account's month. 0 when unknown. */
+    timezoneOffsetHours: number;
+    /** Meta's own display string, e.g. "Visa *1234". Never stored. */
+    paymentMethod: string | null;
+    billingUrl: string;
+    adsManagerUrl: string;
+}
+
+/** Where the owner adds a payment method: Meta's billing page for this ad account. The Marketing API cannot add one. */
+export function billingUrl(adAccountId: string): string {
+    return `https://business.facebook.com/billing_hub/payment_settings/?asset_id=${encodeURIComponent(adAccountId)}`;
+}
+
+export function adsManagerUrl(adAccountId: string): string {
+    return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${encodeURIComponent(adAccountId)}`;
+}
+
+/**
+ * The account node read as the screen needs it. `paymentReadable` is false when the fields about billing could not be asked for: then
+ * "has a payment method" is null (unknown), never false, so nothing is refused on a guess.
+ */
+export function readAccountState(adAccountId: string, data: any, paymentReadable: boolean): AdAccountState {
+    const currency = typeof data?.currency === 'string' ? data.currency : '';
+    const status = typeof data?.account_status === 'number' ? data.account_status : null;
+    const reasonCode = typeof data?.disable_reason === 'number' ? data.disable_reason : 0;
+    const details = data?.funding_source_details;
+    const display = details && typeof details.display_string === 'string' && details.display_string.trim() ? details.display_string.trim().slice(0, 80) : null;
+    const source = data?.funding_source;
+    const hasSource = (typeof source === 'string' && source !== '' && source !== '0') || (typeof source === 'number' && source > 0) || display !== null;
+    // Meta leaves fields it will not show out of the answer. Only a funding source that is present and empty is "none"; one that is
+    // absent altogether is "could not tell", so Activate is never refused on a guess (an account with no payment method just gets no
+    // delivery, which Meta says itself).
+    const said = Object.prototype.hasOwnProperty.call(data ?? {}, 'funding_source') || Object.prototype.hasOwnProperty.call(data ?? {}, 'funding_source_details');
+    const offset = num(data?.timezone_offset_hours_utc);
+    const minMinor = num(data?.min_daily_budget);
+    return {
+        id: adAccountId,
+        name: typeof data?.name === 'string' ? data.name : null,
+        currency,
+        status,
+        minDailyBudget: minMinor > 0 && currency ? fromMinorUnits(minMinor, currency) : null,
+        statusLabel: accountStatusLabel(status),
+        disableReason: reasonCode > 0 ? (DISABLE_REASONS[reasonCode] ?? `Meta disable reason ${reasonCode}`) : null,
+        hasPaymentMethod: paymentReadable ? (hasSource ? true : said ? false : null) : null,
+        timezoneOffsetHours: Number.isFinite(offset) && Math.abs(offset) <= 14 ? offset : 0,
+        paymentMethod: paymentReadable ? display : null,
+        billingUrl: billingUrl(adAccountId),
+        adsManagerUrl: adsManagerUrl(adAccountId),
+    };
+}
+
+export async function fetchAccountState(adAccountId: string, token: string): Promise<AdAccountState> {
+    const base = 'name,currency,account_status,disable_reason,min_daily_budget,timezone_offset_hours_utc';
+    try {
+        const data = await getNode(`act_${adAccountId}`, { fields: `${base},funding_source,funding_source_details` }, token, 'ad account');
+        return readAccountState(adAccountId, data, true);
+    } catch (err) {
+        // The billing fields need more than ads_read on some accounts: read the rest, and say "unknown" about payment.
+        if (metaErrorCode(err) !== 100 && metaErrorCode(err) !== 200) throw err;
+        const data = await getNode(`act_${adAccountId}`, { fields: 'name,currency,account_status,timezone_offset_hours_utc' }, token, 'ad account');
+        return readAccountState(adAccountId, data, false);
+    }
 }

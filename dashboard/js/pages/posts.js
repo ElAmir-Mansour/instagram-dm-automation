@@ -3605,6 +3605,19 @@ const PostsPage = {
         return `⁦${UI.formatNumber(n)}${currency ? ` ${currency}` : ''}⁩`;
     },
 
+    /** "one day", "3 days": the count with its own plural form, so a sentence never says "1 days" (Arabic has six forms). */
+    boostDays(n) {
+        const count = Number(n);
+        return Number.isFinite(count) ? t('boost.daysCount', { count }) : '—';
+    },
+
+    /** The ad account in a sentence: its name, else its id, isolated by its own first strong letter. */
+    boostAccount() {
+        const settings = this.ads.settings || {};
+        const name = (settings.account && settings.account.name) || settings.adAccountId || '';
+        return `⁨${String(name)}⁩`;
+    },
+
     boostStatusChip(status) {
         const tone = { creating: 'badge-info', paused: 'badge-neutral', active: 'badge-success', completed: 'badge-info', failed: 'badge-danger' };
         const key = `boost.status.${status}`;
@@ -3648,7 +3661,7 @@ const PostsPage = {
                 </div>
                 <p class="post-card-meta">
                     <i data-lucide="info" aria-hidden="true"></i>
-                    <span>${t('boost.plan', { daily: money(b.dailyBudget), days: UI.formatNumber(b.days), total: money(b.plannedTotal) })}</span>
+                    <span>${t('boost.plan', { daily: money(b.dailyBudget), days: this.boostDays(b.days), total: money(b.plannedTotal) })}</span>
                 </p>
                 ${b.spend !== null && b.spend !== undefined && (b.status === 'active' || b.status === 'completed' || b.status === 'paused') ? html`
                     <p class="post-card-meta">
@@ -3679,6 +3692,7 @@ const PostsPage = {
                         variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
                         action: 'posts:boostDelete', data: { boost: id }, focusKey: `boost-delete-${id}`,
                     }) : ''}
+                    ${b.status !== 'failed' && b.status !== 'creating' ? html`<a class="boost-link" href="#/ads"><i data-lucide="megaphone" aria-hidden="true"></i> ${t('boost.viewAds')}</a>` : ''}
                 </div>
             </div>
         `;
@@ -3710,7 +3724,7 @@ const PostsPage = {
         const money = (n) => this.boostMoney(n, b.currency);
         UI.confirm({
             title: t('boost.activate.title'),
-            body: t('boost.activate.body', { total: money(b.plannedTotal), days: UI.formatNumber(b.days) }),
+            body: t('boost.activate.body', { total: money(b.plannedTotal), days: this.boostDays(b.days), account: this.boostAccount() }),
             hint: t('boost.activate.hint', { daily: money(b.dailyBudget) }),
             confirmLabel: t('boost.activate.confirm'),
             confirmIcon: 'play',
@@ -3819,7 +3833,7 @@ const PostsPage = {
                 <div class="form-group">
                     <label class="form-label" for="boost-daily">${t('boost.dialog.daily')} ${currency ? html`<span class="label-optional">${UI.ltr(currency)}</span>` : ''}</label>
                     <input class="field field-mono" id="boost-daily" name="dailyBudget" type="number" dir="ltr" inputmode="decimal"
-                           min="0" step="any" value="${start}" data-input="posts:boostChange" aria-describedby="boost-daily-hint" required>
+                           min="0" step="any" value="${start}" data-input="posts:boostChange" data-change="posts:boostCommit" aria-describedby="boost-daily-hint" required>
                     <p class="form-hint" id="boost-daily-hint">${min > 0
                         ? t('boost.dialog.dailyHintMin', { max: this.boostMoney(max, currency), min: this.boostMoney(min, currency) })
                         : t('boost.dialog.dailyHint', { max: this.boostMoney(max, currency) })}</p>
@@ -3827,7 +3841,7 @@ const PostsPage = {
                 <div class="form-group">
                     <label class="form-label" for="boost-days">${t('boost.dialog.days')}</label>
                     <input class="field field-mono" id="boost-days" name="days" type="number" dir="ltr" inputmode="numeric"
-                           min="1" max="30" step="1" value="3" data-input="posts:boostChange" aria-describedby="boost-days-hint" required>
+                           min="1" max="30" step="1" value="3" data-input="posts:boostChange" data-change="posts:boostCommit" aria-describedby="boost-days-hint" required>
                     <p class="form-hint" id="boost-days-hint">${t('boost.dialog.daysHint')}</p>
                 </div>
                 <div class="form-group">
@@ -3849,7 +3863,8 @@ const PostsPage = {
                     <datalist id="boost-countries">${this.BOOST_COUNTRIES.map((c) => html`<option value="${c}"></option>`)}</datalist>
                     <p class="form-hint" id="boost-country-hint">${t('boost.dialog.countryHint')}</p>
                 </div>
-                <div class="boost-summary surface" id="boost-summary" role="status" aria-live="polite"></div>
+                <!-- Not a live region: it is rewritten on every keystroke. The total is read out once, when a field is left (boostCommit). -->
+                <div class="boost-summary surface" id="boost-summary"></div>
                 <div id="boost-eligibility" role="status" aria-live="polite"></div>
                 <p class="form-hint">${t('boost.dialog.safety')}</p>
                 <div class="modal-actions">
@@ -3900,7 +3915,7 @@ const PostsPage = {
         const money = (n) => this.boostMoney(n, currency);
         const lines = [];
         const total = Number.isFinite(v.dailyBudget) && Number.isFinite(v.days) && v.dailyBudget > 0 && v.days > 0 ? v.dailyBudget * v.days : null;
-        lines.push(html`<p><strong>${total === null ? t('boost.dialog.totalUnknown') : t('boost.dialog.total', { daily: money(v.dailyBudget), days: UI.formatNumber(v.days), total: money(total) })}</strong></p>`);
+        lines.push(html`<p><strong>${total === null ? t('boost.dialog.totalUnknown') : t('boost.dialog.total', { daily: money(v.dailyBudget), days: this.boostDays(v.days), total: money(total) })}</strong></p>`);
         let over = false;
         if (settings.monthlyCap !== null && settings.monthlyCap !== undefined) {
             const remaining = Math.max(0, Number(settings.monthlyCap) - (Number(settings.committedThisMonth) || 0));
@@ -3946,6 +3961,14 @@ const PostsPage = {
     boostOnChange(el) {
         this.boostRecalc();
         if (el && el.id === 'boost-platform') this.boostEligibility();
+    },
+
+    /** A budget or days field was left: the total is said once, for a screen reader, instead of on every digit. */
+    boostCommit() {
+        this.boostRecalc();
+        const summary = document.getElementById('boost-summary');
+        const said = summary && typeof summary.textContent === 'string' ? summary.textContent.replace(/\s+/g, ' ').trim() : '';
+        if (said && typeof Motion !== 'undefined' && typeof Motion.announce === 'function') Motion.announce(said);
     },
 
     showBoostError(message, field) {
@@ -4020,8 +4043,9 @@ const PostsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('boost.created.title'))}
             <p class="modal-body-text" dir="auto">${t('boost.created.body')}</p>
-            ${boost && boost.plannedTotal !== undefined ? html`<p class="form-hint">${t('boost.created.hint', { total: money(boost.plannedTotal), days: UI.formatNumber(boost.days) })}</p>` : ''}
+            ${boost && boost.plannedTotal !== undefined ? html`<p class="form-hint">${t('boost.created.hint', { total: money(boost.plannedTotal), days: this.boostDays(boost.days) })}</p>` : ''}
             <div class="modal-actions">
+                ${UI._anchorButton({ href: '#/ads', label: t('boost.created.openAds'), icon: 'megaphone', variant: 'secondary' })}
                 ${UI.button({ variant: 'primary', label: t('common.close'), action: 'ui:closeModal' })}
             </div>
         `);
@@ -4927,6 +4951,7 @@ UI.registerActions('posts', {
     boostOpen: (el) => PostsPage.boostOpen(el.dataset.id),
     boostChange: (el) => PostsPage.boostOnChange(el),
     boostSubmit: (el, e) => PostsPage.boostSubmit(el, e),
+    boostCommit: () => PostsPage.boostCommit(),
     boostActivate: (el) => PostsPage.boostActivate(el.dataset.boost),
     boostPause: (el) => PostsPage.boostPause(el),
     boostRefresh: (el) => PostsPage.boostRefresh(el),

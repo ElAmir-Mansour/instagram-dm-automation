@@ -104,6 +104,9 @@ const App = {
         // content's (Meta insights), plus the SEO tools and the coach. `?tab=seo` is its
         // second view and is handled in place through `onHashChange`.
         growth: { src: 'growth', page: () => GrowthPage },
+        // Next to Growth: the content's numbers and the money spent promoting it. The workspace OWNER's (the page itself says so to anyone else, and the
+        // nav item is hidden for them: `data-owner-only`).
+        ads: { src: 'ads', page: () => AdsPage },
         // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
         // (`analytics`) is current while it is open.
         activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
@@ -158,7 +161,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.52',
+    ASSET_VERSION: '12.54',
 
     _modules: Object.create(null),
 
@@ -1278,6 +1281,12 @@ const App = {
         const admin = this.isAdmin();
         document.querySelectorAll('[data-admin-only]').forEach((el) => {
             el.classList.toggle('hidden', !admin);
+        });
+
+        // Items only the workspace owner can use (Ads): the link is not there rather than there and refused.
+        const owner = this.canAdminister();
+        document.querySelectorAll('[data-owner-only]').forEach((el) => {
+            el.classList.toggle('hidden', !owner);
         });
 
         // Affordances that need a real user account rather than the shared
