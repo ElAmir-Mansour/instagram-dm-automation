@@ -17,7 +17,7 @@ import { guardState } from './health.js';
 import { aboutToRun, checkCandidate, isActive, remainingThisMonth, roundMoney, toMinorUnits, type RawCampaign } from './money.js';
 import { listObjects, lastSyncedAt, resultsFor, reviewReasons, spendFromMirror, type ObjectRow } from './mirror.js';
 import { listOps, type OpView } from './ops.js';
-import { dayInTz } from './sync.js';
+import { dayInTz, readSyncState } from './sync.js';
 
 export interface AttentionItem {
     kind: 'rejected' | 'issues' | 'billing' | 'op_failed';
@@ -100,17 +100,20 @@ export async function readOverview(creatorId: string, now = new Date()): Promise
     const account = health.account;
     const tz = account?.timezone ?? 'UTC';
     const today = dayInTz(now, tz);
-    const [guard, objects, ops, syncedAt, spend] = await Promise.all([
+    const [guard, objects, ops, rowsSyncedAt, spend, state] = await Promise.all([
         guardState(creatorId, now),
         listObjects(creatorId),
         listOps(creatorId, ['pending', 'running', 'verify', 'failed'], 200),
         lastSyncedAt(creatorId),
         spendFromMirror(creatorId, adAccountId, today, monthStart(today)),
+        readSyncState(creatorId),
     ]);
+    // The sync's own clock says when the account was last read: an account with no campaigns (or no spend) is up to date, not "never read".
+    const syncedAt = state.structureAt ?? rowsSyncedAt;
     const mine = objects.filter((o) => o.adAccountId === adAccountId);
     const campaigns = mine.filter((o) => o.level === 'campaign');
     const byId = new Map(mine.map((o) => [o.id, o]));
-    const hasResults = spend.syncedAt !== null;
+    const hasResults = spend.syncedAt !== null || state.todayAt !== null;
 
     // The money rule over the stored copy (see the header).
     let money: OverviewMoney | null = null;
@@ -125,7 +128,7 @@ export async function readOverview(creatorId: string, now = new Date()): Promise
             const spent = spentBy.get(c.metaId!)?.spend ?? 0;
             return sum + remainingThisMonth(rawFromMirror(c, adsets, spent), currency, spent, now, account?.timezoneOffsetHours ?? 0);
         }, 0));
-        const readAt = spend.syncedAt ? new Date(spend.syncedAt) : now;
+        const readAt = spend.syncedAt ? new Date(spend.syncedAt) : state.todayAt ? new Date(state.todayAt) : now;
         const check = hasResults
             ? checkCandidate({ spentThisMonth: spend.spentThisMonth, othersRemaining, aboutToRun: await aboutToRun(null, creatorId, readAt, null), candidate: 0, monthlyCap: settings.monthlyCap })
             : null;

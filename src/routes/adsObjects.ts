@@ -22,7 +22,7 @@ import { requestArchive, requestBudget, requestDelete, requestStatus, ownObject,
 import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, type ObjectLevel, type ObjectRow } from '../services/ads/mirror.js';
 import { editsLeftThisHour, getOp, listOps, type AdsOpState, type OpView } from '../services/ads/ops.js';
 import { readAdsSettings, readHealth } from '../services/ads/settings.js';
-import { dayInTz, requestTodaySync, syncInsights, syncStructure } from '../services/ads/sync.js';
+import { dayInTz, readSyncState, requestTodaySync, syncInsights, syncStructure } from '../services/ads/sync.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { waitUntil } from '../utils/waitUntil.js';
 import { describeError, log } from '../utils/log.js';
@@ -112,7 +112,10 @@ export function mountObjectRoutes(router: Router, fail: Fail): void {
             const rows = (await listObjects(creatorId, {
                 ...(level ? { level: level as ObjectLevel } : {}), ...(statuses.length ? { status: statuses } : {}), ...(parentId ? { parentId } : {}),
             })).filter((r) => r.adAccountId === account);
-            res.json({ items: await views(creatorId, rows), syncedAt: await lastSyncedAt(creatorId) });
+            // When the account was last READ (the sync's own clock), not when a row last changed: an account with no campaigns is still
+            // up to date, and must not say "never updated".
+            const state = await readSyncState(creatorId);
+            res.json({ items: await views(creatorId, rows), syncedAt: state.structureAt ?? await lastSyncedAt(creatorId) });
         } catch (err) {
             await fail(req, res, err, 'list_ads_objects');
         }
