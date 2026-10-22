@@ -18,6 +18,13 @@
  *   POST   /policy                 { fields: { name: text } } → { version, blocked, findings }: the policy check alone, no Meta call (A4)
  *   POST   /drafts/validate        { spec } → { policy, money, meta, problems, warnings, bots }: creates nothing (A4)
  *   POST   /drafts                 { spec, confirmPolicyWarnings? } → 201 { campaignId, ops }: everything PAUSED (A4)
+ *   POST   /uploads/sign           { filename, mime, size } → 201 { mediaId, url, upload: { method, url, headers }, expiresAt }: a signed
+ *                                  direct upload to Storage, so a video is never in a request body here (A5)
+ *   POST   /creatives/from-media   { mediaId, kind: 'image'|'video', coverMediaId? } → { op: null, media }: the upload handed to Meta
+ *                                  (adimages, or advideos with file_url); a video needs a cover (A5)
+ *   GET    /targeting/search       ?type=adinterest|adgeolocation|adlocale&q= → { items }: cached 24 h per query (A5)
+ *   GET    /minimum-budgets        { currency, byGoal, syncedAt }: Meta's minimum daily budget, the floor the server enforces (A5)
+ *   POST   /objects/:id/duplicate  { deep? } → { op }: a PAUSED copy (A5; adsObjects.ts)
  *   POST   /boosts with `objective: 'MESSAGES'` (or `goal: 'messages'`) is the same draft, from the Boost preset (spec.ts boostToSpec)
  *
  * **Every route answers 404 ADS_DISABLED unless the platform admin switched ads on for the tenant** (`ads.enabled.<tenant>`). Roles
@@ -47,7 +54,12 @@ import { parseSwitchesInput, readAdsSwitches, writeAdsSwitches } from '../servic
 import { fetchAccountState } from '../services/ads/metaAds.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { mountObjectRoutes } from './adsObjects.js';
-import { createDraft, DraftRefused, validateDraft } from '../services/ads/drafts.js';
+import { createDraft, DraftRefused, minimumDailyBudget, validateDraft } from '../services/ads/drafts.js';
+import { prepareMedia } from '../services/ads/adMedia.js';
+import { signAdUpload } from '../services/ads/adUploads.js';
+import { adsGraph } from '../services/ads/graphPort.js';
+import { searchTargeting, type TargetingType } from '../services/ads/targetingSearch.js';
+import { getPublicBaseUrl } from '../services/appSettings.js';
 import { checkPolicy } from '../services/ads/policy.js';
 import { boostToSpec, type MessageDestination } from '../services/ads/spec.js';
 import { describeError, log } from '../utils/log.js';
@@ -506,6 +518,62 @@ async function boostMessages(req: Request, res: Response, b: Record<string, unkn
     }, new Date());
     await createAndAnswer(req, res, spec, b['confirmPolicyWarnings'] === true, 'boost');
 }
+
+// ─── The full builder (A5): uploads, targeting search, minimum budgets ─────────────────────────────────────────────────────────
+
+/** The tenant's ad account and token, or 409 ADS_NOT_CONFIGURED. */
+async function callContext(req: Request): Promise<{ tenantId: string; adAccountId: string; token: string }> {
+    const tenantId = getTenantId(req);
+    const { settings, token } = await readAdsSettings(tenantId);
+    if (!token || !settings.adAccountId) throw new AdsError(409, 'ADS_NOT_CONFIGURED', 'Connect the ad account and the token in Settings first.');
+    return { tenantId, adAccountId: settings.adAccountId, token };
+}
+
+adsRouter.post('/uploads/sign', canAdminister, async (req, res) => {
+    try {
+        const base = await getPublicBaseUrl(null);
+        if (!base) throw new AdsError(409, 'INVALID', 'Set the public address of the app first: Meta fetches uploads from it.');
+        res.status(201).json(await signAdUpload(getTenantId(req), body(req), base));
+    } catch (err) {
+        await fail(req, res, err, 'sign_ad_upload');
+    }
+});
+
+adsRouter.post('/creatives/from-media', canAdminister, async (req, res) => {
+    try {
+        const media = await prepareMedia(await callContext(req), body(req));
+        res.json({ op: null, media });
+    } catch (err) {
+        await fail(req, res, err, 'prepare_ad_media');
+    }
+});
+
+const TARGETING_TYPES: readonly TargetingType[] = ['adinterest', 'adgeolocation', 'adlocale'];
+
+adsRouter.get('/targeting/search', canOperate, async (req, res) => {
+    try {
+        const type = String(req.query['type'] ?? '') as TargetingType;
+        if (!TARGETING_TYPES.includes(type)) throw new AdsError(400, 'INVALID', 'type is adinterest, adgeolocation or adlocale.', 'type');
+        const ctx = await callContext(req);
+        res.json(await searchTargeting(ctx, adsGraph(ctx), type, String(req.query['q'] ?? '')));
+    } catch (err) {
+        await fail(req, res, err, 'search_targeting');
+    }
+});
+
+adsRouter.get('/minimum-budgets', canView, async (req, res) => {
+    try {
+        const ctx = await callContext(req);
+        const health = await readHealth(ctx.tenantId);
+        const currency = health.account?.currency ?? null;
+        // One floor for every goal: every ad set the builder makes is billed on impressions, and this is the one the server enforces.
+        const min = currency ? await minimumDailyBudget({ adAccountId: ctx.adAccountId, token: ctx.token, currency, minDailyBudget: health.account?.minDailyBudget ?? null }) : null;
+        const byGoal = min === null ? {} : { messages: min, engagement: min, reach: min, traffic: min };
+        res.json({ currency, byGoal, syncedAt: health.account?.syncedAt ?? null });
+    } catch (err) {
+        await fail(req, res, err, 'read_minimum_budgets');
+    }
+});
 
 // ─── The Campaigns tab and the queue (A2): stored reads, every write an op ─────────────────────────────────────────────────────────
 

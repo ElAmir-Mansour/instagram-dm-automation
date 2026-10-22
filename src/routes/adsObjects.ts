@@ -8,6 +8,7 @@
  *   POST   /objects/:id/status             { status: 'ACTIVE'|'PAUSED', confirm?, requestId? } → { op }             owner
  *   POST   /objects/:id/budget             { kind?, amount, endTime?, confirm?, requestId? } → { op, endOp }        owner
  *   POST   /objects/:id/archive            → { op }                                                                  owner
+ *   POST   /objects/:id/duplicate          { deep? } → { op }: a PAUSED copy (A5)                                    owner
  *   DELETE /objects/:id                    { confirm: true } → { op }; never on an ACTIVE object                     owner
  *   GET    /ops/:id                        { op }                                                                    any member
  *   GET    /ops?state=pending,running,verify   { ops }                                                               any member
@@ -18,7 +19,7 @@
  * `GET /ops/:id`. Every `:id` is resolved through `ownObject` (the tenant's row, in the tenant's current ad account) and nothing else.
  */
 import type { Request, Response, Router } from 'express';
-import { requestArchive, requestBudget, requestDelete, requestStatus, ownObject, type ActionContext } from '../services/ads/actions.js';
+import { requestArchive, requestBudget, requestDelete, requestDuplicate, requestStatus, ownObject, type ActionContext } from '../services/ads/actions.js';
 import { childrenOf, lastSyncedAt, listObjects, resultsFor, toObjectView, trackedClicksFor, type ObjectLevel, type ObjectRow } from '../services/ads/mirror.js';
 import { editsLeftThisHour, getOp, listOps, type AdsOpState, type OpView } from '../services/ads/ops.js';
 import { readAdsSettings, readHealth } from '../services/ads/settings.js';
@@ -171,6 +172,14 @@ export function mountObjectRoutes(router: Router, fail: Fail): void {
             res.status(202).json({ op: await requestArchive(ctxOf(req), await objectOf(req)) });
         } catch (err) {
             await fail(req, res, err, 'archive_object');
+        }
+    });
+
+    router.post('/objects/:id/duplicate', canAdminister, async (req, res) => {
+        try {
+            res.status(202).json({ op: await requestDuplicate(ctxOf(req), await objectOf(req), body(req)['deep']) });
+        } catch (err) {
+            await fail(req, res, err, 'duplicate_object');
         }
     });
 

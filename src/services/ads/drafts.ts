@@ -36,6 +36,10 @@ import { moneyFor, parseCandidate, type MoneyAnswer } from './money.js';
 import { enqueue, runOpInline, type OpActor, type OpView } from './ops.js';
 import { checkPolicy, POLICY_VERSION, type PolicyFinding, type PolicyResult } from './policy.js';
 import { readAdsSettings, readHealth } from './settings.js';
+import { resolveSpecMedia } from './adMedia.js';
+import { generatePreviews, type PreviewPlacement, type PreviewResult } from './creatives.js';
+import { adsGraph } from './graphPort.js';
+import { reachEstimate } from './targetingSearch.js';
 import {
     adParams, adsetParams, mapSpec, SpecError, validateSpec, type CampaignSpec, type MessageDestination, type SpecContext, type SpecPayloads,
     type SpecProblem,
@@ -133,6 +137,10 @@ interface DraftFacts {
     igUserId: string | null;
     whatsappPhone: string | null;
     posts: SpecContext['posts'];
+    /** A5 uploads: the hash or video id Meta gave each one, and the video covers. */
+    media: NonNullable<SpecContext['media']>;
+    /** Why an upload cannot be used yet (not handed to Meta, a video still processing): a problem in Review, a refusal at create. */
+    mediaRefusal: AdsError | null;
     captions: Record<string, string>;
     bots: BotFacts;
     limits: { adAccountId: string; monthlyCap: number; maxDailyBudget: number } | null;
@@ -169,6 +177,15 @@ async function readFacts(creatorId: string, spec: CampaignSpec): Promise<DraftFa
         captions[id] = row.caption ?? '';
     }
 
+    let media: DraftFacts['media'] = {};
+    let mediaRefusal: AdsError | null = null;
+    try {
+        media = await resolveSpecMedia({ tenantId: creatorId, adAccountId: settings.adAccountId, token }, spec);
+    } catch (err) {
+        if (!(err instanceof AdsError)) throw err;
+        mediaRefusal = err;
+    }
+
     const [assistant, wa, waSettings] = await Promise.all([
         loadAssistantState(creatorId),
         getConnection(creatorId).catch(() => null),
@@ -181,7 +198,7 @@ async function readFacts(creatorId: string, spec: CampaignSpec): Promise<DraftFa
         adAccountId: settings.adAccountId, token, currency: account.currency, minDailyBudget: account.minDailyBudget ?? null,
         pageId: tenant?.facebook_page_id ?? null, igUserId: tenant?.instagram_page_id ?? null,
         whatsappPhone: digits.length >= 8 ? digits : null,
-        posts, captions,
+        posts, media, mediaRefusal, captions,
         bots: { assistant, igConnected: !!tenant?.instagram_page_id, fbConnected: !!tenant?.facebook_page_id, whatsapp: { connected: waConnected, mode: waSettings?.mode ?? null } },
         limits: settings.monthlyCap && settings.maxDailyBudget ? { adAccountId: settings.adAccountId, monthlyCap: settings.monthlyCap, maxDailyBudget: settings.maxDailyBudget } : null,
     };
@@ -191,7 +208,7 @@ function contextOf(f: DraftFacts, extra: { refShort: string; links?: Record<stri
     if (!f.pageId) throw new SpecError('UNSUPPORTED', 'destinations', 'Connect the Facebook Page first: every ad runs under the Page.');
     return {
         adAccountId: f.adAccountId, currency: f.currency, pageId: f.pageId, igUserId: f.igUserId, whatsappPhone: f.whatsappPhone,
-        opTag: '', refShort: extra.refShort, now: new Date(), posts: f.posts, links: extra.links ?? {},
+        opTag: '', refShort: extra.refShort, now: new Date(), posts: f.posts, media: f.media, links: extra.links ?? {},
     };
 }
 
@@ -256,6 +273,10 @@ async function metaValidate(f: DraftFacts, p: SpecPayloads): Promise<Omit<MetaCh
 // ─── Validate ─────────────────────────────────────────────────────────────────────────────
 
 export interface DraftValidation {
+    /** Meta's reach estimate for the first ad set's targeting, or null when Meta cannot say (A5). */
+    estimate: { lower: number; upper: number } | null;
+    /** Meta's render of the first ad per placement; `html: null` means the dashboard draws its approximate preview (A5). */
+    previews: PreviewResult[];
     policy: PolicyResult;
     money: (MoneyAnswer & { candidate: string | null }) | null;
     meta: MetaCheck | null;
@@ -268,7 +289,7 @@ const EMPTY_POLICY: PolicyResult = { version: POLICY_VERSION, blocked: false, fi
 
 export async function validateDraft(creatorId: string, input: unknown): Promise<DraftValidation> {
     const checked = validateSpec(input);
-    if (!checked.ok) return { policy: EMPTY_POLICY, money: null, meta: null, problems: checked.problems, warnings: [], bots: [] };
+    if (!checked.ok) return { estimate: null, previews: [], policy: EMPTY_POLICY, money: null, meta: null, problems: checked.problems, warnings: [], bots: [] };
     const spec = checked.spec;
     const facts = await readFacts(creatorId, spec);
     const policy = checkPolicy(policyFieldsOf(spec, facts.captions));
@@ -276,7 +297,8 @@ export async function validateDraft(creatorId: string, input: unknown): Promise<
 
     let payloads: SpecPayloads | null = null;
     const problems: SpecProblem[] = [];
-    try {
+    if (facts.mediaRefusal) problems.push({ field: facts.mediaRefusal.field ?? 'ads.0.creative', code: 'INVALID', message: facts.mediaRefusal.message });
+    else try {
         // A tracked offer link is only minted at create; here a placeholder of the same shape stands in so the creative can be checked.
         const links = Object.fromEntries(spec.ads.flatMap((a) => (a.link && 'trackedOfferId' in a.link ? [[a.link.trackedOfferId, 'https://example.com/r/AAAAAAAAAA']] : [])));
         payloads = mapSpec(spec, contextOf(facts, { refShort: 'validate', links }));
@@ -297,7 +319,32 @@ export async function validateDraft(creatorId: string, input: unknown): Promise<
     let meta: MetaCheck = { ok: false, error: undefined, minimumBudget };
     if (payloads && !policy.blocked && problems.length === 0) meta = { ...(await metaValidate(facts, payloads)), minimumBudget };
     else meta = { ok: false, error: 'Not sent to Meta: fix what is listed first.', minimumBudget };
-    return { policy, money, meta, problems, warnings: payloads?.warnings ?? [], bots };
+
+    // A5: what Meta says about reach, and how the first ad looks. Both are hints that never block (and never throw); 1 point each.
+    let estimate: DraftValidation['estimate'] = null;
+    let previews: PreviewResult[] = [];
+    if (payloads) {
+        const call = { tenantId: creatorId, adAccountId: facts.adAccountId, token: facts.token };
+        const graph = adsGraph(call);
+        estimate = await reachEstimate(call, graph, payloads.adsets[0]!['targeting'] as object);
+        if (meta.ok) previews = await generatePreviews(call, graph, payloads.creatives[0]!, previewPlacements(spec.adsets[0]!.placements));
+    }
+    return { estimate, previews, policy, money, meta, problems, warnings: payloads?.warnings ?? [], bots };
+}
+
+/**
+ * The two placements previewed (Meta charges a point each): the feed and the vertical frame the owner chose, or, with automatic
+ * placements, Instagram's feed and Reels (the account's main surface; quickstart §A5 asks for at least Feed and Reels).
+ */
+export function previewPlacements(placements: CampaignSpec['adsets'][number]['placements']): PreviewPlacement[] {
+    if (placements === 'automatic') return ['instagram_feed', 'instagram_reels'];
+    const ig = placements.instagram ?? [];
+    const fb = placements.facebook ?? [];
+    const feed: PreviewPlacement | null = ig.includes('stream') ? 'instagram_feed' : fb.includes('feed') ? 'feed' : null;
+    const vertical: PreviewPlacement | null = ig.includes('reels') ? 'instagram_reels' : fb.includes('facebook_reels') ? 'facebook_reels'
+        : ig.includes('story') ? 'instagram_story' : null;
+    const out = [feed, vertical].filter((p): p is PreviewPlacement => p !== null);
+    return out.length > 0 ? out : ['instagram_feed'];
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────────────────
@@ -358,6 +405,7 @@ export async function createDraft(
     if (!checked.ok) { const p = checked.problems[0]!; throw refused(400, p.code === 'UNSUPPORTED' ? 'UNSUPPORTED' : 'INVALID', p.message, p.field); }
     const spec = checked.spec;
     const facts = await readFacts(creatorId, spec);
+    if (facts.mediaRefusal) throw facts.mediaRefusal;
 
     // The copy, on the server, before anything is written (T091): a block is refused whatever the browser said.
     const policy = checkPolicy(policyFieldsOf(spec, facts.captions));

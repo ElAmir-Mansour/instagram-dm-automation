@@ -17,6 +17,8 @@ import { AdsError, metaRefusal } from '../adBoosts.js';
 import { CAMPAIGN_FIELDS, checkAndStartSpend, checkDailyMax, isActive, lifetimeSpend, readMonth, remainingThisMonth, type RawCampaign } from './money.js';
 import { fromMinorUnits, getNode, graphTime, roundMoney, toMinorUnits } from './metaAds.js';
 import { childrenOf, getObject, type ObjectRow } from './mirror.js';
+import type { GraphParams } from './graph.js';
+import { copyParams } from './lifecycle.js';
 import { BUDGET_EDITS_PER_HOUR, editsLeftThisHour, enqueue, getOp, runOpInline, type AdsOpKind, type EnqueueInput, type OpActor, type OpPayload, type OpView } from './ops.js';
 import { readAdsSettings, readHealth, type AdsSettings } from './settings.js';
 import { waitUntil } from '../../utils/waitUntil.js';
@@ -83,7 +85,7 @@ interface PlainWrite {
     objectKey: string;
     kind: AdsOpKind;
     metaId: string;
-    params?: Record<string, string | number>;
+    params?: GraphParams;
     method?: 'POST' | 'DELETE';
     extraPayload?: OpPayload;
 }
@@ -301,6 +303,24 @@ export async function requestDelete(ctx: ActionContext, row: ObjectRow, confirm:
     if (row.status === 'DELETED') throw new AdsError(409, 'INVALID', 'This object is already deleted.');
     const { settings } = await configured(ctx.creatorId);
     return enqueueWrite(ctx, settings.adAccountId, { objectKey: row.id, kind: 'delete', metaId: row.metaId, method: 'DELETE' });
+}
+
+/**
+ * Duplicate a campaign, ad set or ad (`POST /{id}/copies`, A5): the copy is ALWAYS created PAUSED, with ` · copy AR·<key>` added to every
+ * name in it, and it re-enters Meta's review and learning. Not a spend: nothing runs until it is switched on like any other object. The
+ * sync brings the copy into the stored copy; the op's result names its id. `deep` copies everything under it too.
+ */
+export async function requestDuplicate(ctx: ActionContext, row: ObjectRow, deep: unknown): Promise<OpView> {
+    if (!row.metaId || row.level === 'creative') throw new AdsError(409, 'INVALID', 'This object cannot be duplicated.');
+    if (row.status === 'DELETED') throw new AdsError(409, 'INVALID', 'A deleted object cannot be duplicated.');
+    const { settings } = await configured(ctx.creatorId);
+    const now = ctx.now ?? new Date();
+    // The key in the name is the press's own, so a retried press is one copy (the op's idempotency key) with one recognisable name.
+    const key = idempotencyKey(ctx, `copy:${row.id}`, now).replace(/[^A-Za-z0-9]/g, '').slice(-12);
+    return enqueueWrite(ctx, settings.adAccountId, {
+        objectKey: row.id, kind: 'update', metaId: `${row.metaId}/copies`,
+        params: copyParams(key, row.level === 'ad' ? false : deep !== false) as GraphParams,
+    });
 }
 
 // ─── v1 adapters (Boost and the old campaign routes): the same ops, waited for ────────────────────────────────────────────────────
