@@ -80,7 +80,8 @@ export function classifyDebugToken(data: unknown, now: number = Date.now()): Rec
     }
 
     const body = data as { is_valid: boolean; error?: { code?: unknown } };
-    const inspection = describeInspection(body);
+    // `now`, not the real clock: "has data access lapsed?" is a question about the same instant as "is it expiring?" below.
+    const inspection = describeInspection(body, now);
 
     if (!body.is_valid) {
         const code = body.error?.code;
@@ -93,7 +94,7 @@ export function classifyDebugToken(data: unknown, now: number = Date.now()): Rec
 
     // The same reading the rest of the product uses (`inspectionStatus`): a wrong type, or data access that already lapsed, is
     // invalid even though Meta calls the token valid.
-    if (inspectionStatus(inspection) === 'invalid') {
+    if (inspectionStatus(inspection, now) === 'invalid') {
         return { kind: 'invalid', reason: inspection.error, inspection, expiring: null };
     }
 
