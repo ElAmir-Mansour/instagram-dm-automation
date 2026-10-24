@@ -241,8 +241,10 @@ export interface BucketInfo {
 
 export interface ObjectStream {
     body: Readable;
-    /** The object's length when Supabase sent it unencoded, else null. */
+    /** The length of what `body` carries when Supabase sent it unencoded, else null: the slice's length for a partial answer. */
     length: number | null;
+    /** True when Supabase answered a range with 206 and `body` is only those bytes; false when it sent the whole object. */
+    partial: boolean;
 }
 
 /** Storage's fixed lifetime for a signed upload URL. */
@@ -431,16 +433,19 @@ export class SupabaseStorageClient {
      * Only the wait for the first byte is timed. A timeout on the whole fetch would cut off a
      * slow client halfway through a video; once the body flows, the route's own duration is the
      * bound. `identity` because a compressed transfer would make Content-Length describe bytes
-     * the client never sees.
+     * the client never sees. With `range` (inclusive), only those bytes are asked for: see
+     * `src/utils/byteRange.ts` for why the upload route must never stream a whole reel per piece.
      */
-    async openStream(path: string): Promise<ObjectStream | null> {
+    async openStream(path: string, range?: { start: number; end: number }): Promise<ObjectStream | null> {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('first byte timeout')), FIRST_BYTE_TIMEOUT_MS);
         let response: Response;
         try {
             response = await this.send(this.objectUrl('/object/authenticated', path), {
                 method: 'GET',
-                headers: this.headers({ 'Accept-Encoding': 'identity' }),
+                headers: this.headers(range
+                    ? { 'Accept-Encoding': 'identity', Range: `bytes=${range.start}-${range.end}` }
+                    : { 'Accept-Encoding': 'identity' }),
                 signal: controller.signal,
             }, 'read the file');
         } finally {
@@ -457,7 +462,9 @@ export class SupabaseStorageClient {
         const declared = Number(response.headers.get('content-length'));
         const length = encoding === 'identity' && response.headers.has('content-length')
             && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
-        return { body: Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>), length };
+        // A range Supabase ignored comes back 200 with the whole object; the caller then serves it whole, as before.
+        const partial = range !== undefined && response.status === 206;
+        return { body: Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>), length, partial };
     }
 
     /**
