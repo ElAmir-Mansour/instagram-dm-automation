@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pipeline } from 'node:stream/promises';
 import { pool } from '../config/db.js';
+import { contentRange, parseByteRange } from '../utils/byteRange.js';
 import { isDiagnosticProbe } from '../utils/probe.js';
 import {
     createLegacySession, createSession, describeSessionLifetime, requireAuth, createDownloadToken, consumeDownloadToken
@@ -1233,7 +1234,7 @@ router.get('/uploads/:id', async (req, res) => {
         }
 
         const store = await getMediaStore();
-        const media = await store.open(id, { headOnly: req.method === 'HEAD' });
+        const media = await store.open(id, { headOnly: req.method === 'HEAD', range: req.headers?.range });
 
         if (!media) {
             res.status(404).send('Not Found');
@@ -1249,13 +1250,37 @@ router.get('/uploads/:id', async (req, res) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        // Pieces of a file are answered as pieces (src/utils/byteRange.ts): a player or Meta's fetcher asking for 1MB of a 30MB
+        // reel used to get all 30MB, once per piece, and Vercel's CDN does not answer a ranged request from its cache.
+        res.setHeader('Accept-Ranges', 'bytes');
 
-        // A legacy BYTEA row: exactly what this route always did.
+        if (media.kind === 'unsatisfiable') {
+            res.setHeader('Content-Range', `bytes */${media.total}`);
+            res.status(416).end();
+            return;
+        }
+
+        // A legacy BYTEA row: exactly what this route always did, unless a piece of it was asked for.
         if (media.kind === 'bytes') {
+            const asked = req.method === 'HEAD' ? { kind: 'none' as const } : parseByteRange(req.headers?.range, media.data.length);
+            if (asked.kind === 'unsatisfiable') {
+                res.setHeader('Content-Range', `bytes */${asked.total}`);
+                res.status(416).end();
+                return;
+            }
+            if (asked.kind === 'range') {
+                res.setHeader('Content-Range', contentRange(asked));
+                res.status(206).send(media.data.subarray(asked.start, asked.end + 1));
+                return;
+            }
             res.send(media.data);
             return;
         }
 
+        if (media.range) {
+            res.status(206);
+            res.setHeader('Content-Range', contentRange(media.range));
+        }
         if (media.size !== null) res.setHeader('Content-Length', String(media.size));
         if (!media.body) {
             res.status(200).end();

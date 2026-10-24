@@ -87,9 +87,9 @@ function handler(): (req: unknown, res: unknown) => Promise<void> {
     return layer!.route!.stack[layer!.route!.stack.length - 1]!.handle as (req: unknown, res: unknown) => Promise<void>;
 }
 
-async function serve(id: string, method = 'GET'): Promise<FakeResponse> {
+async function serve(id: string, method = 'GET', headers: Record<string, string> = {}): Promise<FakeResponse> {
     const res = new FakeResponse();
-    await handler()({ method, params: { id }, headers: {} }, res);
+    await handler()({ method, params: { id }, headers }, res);
     return res;
 }
 
@@ -99,6 +99,8 @@ interface Row { mime_type: string; storage_path: string | null; size_bytes: stri
 let rows: Map<string, Row>;
 let settings: Map<string, { value: string; is_secret: boolean }>;
 let fetched: string[];
+/** The Range header each Supabase request carried (null for none), in order. */
+let fetchedRanges: Array<string | null>;
 let upstream: () => Response;
 let logged: Array<{ level: string; event: string }>;
 
@@ -122,6 +124,7 @@ beforeEach(() => {
     ]);
     settings = new Map();
     fetched = [];
+    fetchedRanges = [];
     logged = [];
     upstream = () => { throw new Error('Supabase was not expected to be asked'); };
     savedEnv = { enc: process.env.TOKEN_ENCRYPTION_KEY, url: process.env.SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY };
@@ -143,8 +146,9 @@ beforeEach(() => {
         }
         throw new Error(`no result arranged for SQL: ${flat}`);
     };
-    previousFetch = setStorageFetch(async (input: string) => {
+    previousFetch = setStorageFetch(async (input: string, init?: RequestInit) => {
         fetched.push(input);
+        fetchedRanges.push(new Headers(init?.headers).get('range'));
         return upstream();
     });
     setMediaStore(null);
@@ -340,5 +344,91 @@ describe('GET /uploads/:id — a legacy row whose bytes are still in Postgres', 
         assert.equal((await serve('2b8a7a0e-3c1f-4f7e-9d0a-1234567890ab')).statusCode, 404);
         assert.equal((await serve('not-a-uuid.jpg')).statusCode, 404);
         assert.deepEqual(fetched, []);
+    });
+});
+
+// ─── Ranges ─────────────────────────────────────────────────────────────────────────────────
+//
+// A piece of a file costs what it asks for (src/utils/byteRange.ts). Before this, `bytes=0-1023` of a 6MB reel streamed all 6MB,
+// once per piece, and Vercel's CDN does not answer ranges from its cache: 18.6GB of a 10GB free tier in October 2026.
+
+describe('GET /uploads/:id — a Range asks for a piece, and gets only that piece', () => {
+    it('asks Supabase for just those bytes and answers 206 with Content-Range', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.alloc(1024, 7), {
+            status: 206, headers: { 'content-length': '1024', 'content-range': `bytes 0-1023/${TEN_MB}` },
+        });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-1023' });
+
+        assert.equal(res.statusCode, 206);
+        assert.deepEqual(fetchedRanges, ['bytes=0-1023'], 'Supabase was asked for the piece, not the file');
+        assert.equal(res.headers['content-range'], `bytes 0-1023/${TEN_MB}`);
+        assert.equal(res.headers['content-length'], '1024');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.equal(res.body().length, 1024);
+    });
+
+    it('resolves an open-ended and a suffix range against the recorded size', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.alloc(10), { status: 206, headers: { 'content-length': '10' } });
+
+        await serve(STORED, 'GET', { range: `bytes=${TEN_MB - 10}-` });
+        await serve(STORED, 'GET', { range: 'bytes=-10' });
+
+        assert.deepEqual(fetchedRanges, [`bytes=${TEN_MB - 10}-${TEN_MB - 1}`, `bytes=${TEN_MB - 10}-${TEN_MB - 1}`]);
+    });
+
+    it('serves the whole object with 200 when Supabase ignores the range, as before', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.from('whole file'), { status: 200, headers: { 'content-length': '10' } });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-3' });
+
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.headers['content-range'], undefined);
+        assert.deepEqual(res.body(), Buffer.from('whole file'));
+    });
+
+    it('answers 416 for a range past the end, without asking Supabase', async () => {
+        storageConfigured();
+
+        const res = await serve(STORED, 'GET', { range: `bytes=${TEN_MB}-` });
+
+        assert.equal(res.statusCode, 416);
+        assert.equal(res.headers['content-range'], `bytes */${TEN_MB}`);
+        assert.deepEqual(fetched, []);
+    });
+
+    it('streams the whole object for a range it will not process (a list of ranges)', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.from('whole file'), { status: 200, headers: { 'content-length': '10' } });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-1,5-6' });
+
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(fetchedRanges, [null], 'no Range sent upstream');
+    });
+
+    it('slices a legacy BYTEA row itself', async () => {
+        const res = await serve(LEGACY, 'GET', { range: 'bytes=0-5' });
+
+        assert.equal(res.statusCode, 206);
+        assert.deepEqual(res.sent, Buffer.from('legacy'));
+        assert.equal(res.headers['content-range'], 'bytes 0-5/17');
+        assert.deepEqual(fetched, []);
+    });
+
+    it('answers 416 for a legacy row asked past its end', async () => {
+        const res = await serve(LEGACY, 'GET', { range: 'bytes=17-' });
+
+        assert.equal(res.statusCode, 416);
+        assert.equal(res.headers['content-range'], 'bytes */17');
+    });
+
+    it('says it takes ranges on a whole-file answer and on HEAD', async () => {
+        storageConfigured();
+        assert.equal((await serve(STORED, 'HEAD')).headers['accept-ranges'], 'bytes');
+        assert.equal((await serve(LEGACY)).headers['accept-ranges'], 'bytes');
     });
 });
