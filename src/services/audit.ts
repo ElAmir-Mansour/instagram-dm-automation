@@ -246,6 +246,20 @@ export const AUDIT_ACTIONS = {
     adsShareSpendChanged: 'ads.share_spend_changed',
     /** The owner downloaded the leads CSV (A10). `detail` holds the row count and the form filter, never an answer, name, email or phone. */
     adsLeadsExported: 'ads.leads_exported',
+    /** The owner started an illustrated explainer (v59). `detail` holds the language, length tier and sound choice, never the topic's words. */
+    explainerCreated: 'explainer.created',
+    /** The owner approved an explainer's script (gate 1): voicing starts. `detail` holds the draft version approved. */
+    explainerApproved: 'explainer.approved',
+    /** The owner approved an explainer's pictures (gate 2): rendering starts. `detail` holds the draft version and the number of scenes. */
+    explainerPicturesApproved: 'explainer.pictures_approved',
+    /** An explainer became scheduled posts (Instagram and Facebook, YouTube, TikTok). `detail` holds the platforms, the time and the group id. */
+    explainerScheduled: 'explainer.scheduled',
+    /** The owner deleted an explainer: its pictures, audio and videos are queued for deletion, except what a platform already holds. */
+    explainerDeleted: 'explainer.deleted',
+    /** A platform admin saved the explainers' image provider (account, token, caps). `detail` names the fields changed, never the token. */
+    explainersProviderUpdated: 'explainers.provider_updated',
+    /** A platform admin switched illustrated explainers on or off for a tenant (`explainers.enabled.<tenant>`). */
+    explainersEnabledChanged: 'explainers.enabled_changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

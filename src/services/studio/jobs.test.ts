@@ -15,7 +15,7 @@ import { invalidateTenantCache } from '../tenant.js';
 import { StudioError } from './common.js';
 import {
     CLAIM_SQL, claimJob, completeJob, enqueueJob, enqueueRender, EXHAUSTED_ERROR, failJob, MAX_ATTEMPTS, MAX_MAC_BRAIN_REFUSALS_PER_CLAIM,
-    parseScanResult, reportProgress, STALE_CLAIM_MINUTES,
+    parseScanResult, reportProgress, STALE_CLAIM_MINUTES, STUDIO_JOB_KINDS,
 } from './jobs.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -87,13 +87,72 @@ describe('claim — the SQL', () => {
         assert.match(CLAIM_SQL, /WHERE creator_id = \$1/);
     });
 
-    it('takes a pending job, or a claimed one gone quiet for 15 minutes with claims left, oldest first', () => {
+    it('takes a pending job that is due, or a claimed one gone quiet for 15 minutes with claims left, oldest first', () => {
         const sql = CLAIM_SQL.replace(/\s+/g, ' ');
-        assert.match(sql, /status = 'pending' OR \(status = 'claimed' AND COALESCE\(heartbeat_at, claimed_at, created_at\) < NOW\(\) - make_interval\(mins => \$2\) AND attempts < \$3\)/);
-        assert.match(sql, /ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END, created_at, id/,
-            'the folder dialog first (someone is at the Mac), renders, infographics and Claude\'s thinks next (someone is at the editor; the Monteur waits on the think), the long transcribe and index backlog last');
+        assert.match(sql, /\(\(status = 'pending' AND not_before <= NOW\(\)\) OR \(status = 'claimed' AND COALESCE\(heartbeat_at, claimed_at, created_at\) < NOW\(\) - make_interval\(mins => \$2\) AND attempts < \$3\)\)/);
+        assert.match(sql, /ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1 WHEN 'explainer_write' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'explainer_voice' THEN 2 WHEN 'explainer_render' THEN 2 WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 WHEN 'explainer_draw' THEN 3 ELSE 4 END, created_at, id/,
+            'the folder dialog first (someone is at the Mac), renders, infographics, Claude\'s thinks and an explainer\'s script next (someone is waiting at the screen; the Monteur waits on the think), the long transcribe and index backlog last');
         assert.match(sql, /attempts = j\.attempts \+ 1/);
         assert.match(sql, /heartbeat_at = NOW\(\)/);
+    });
+});
+
+describe('claim — not_before (v59)', () => {
+    // Whether a row is due is decided by Postgres, so the text of the statement is what is under test here: the fake pool cannot evaluate it.
+    // jobs.sql.test.ts runs this same statement on a real PostgreSQL, against fixture rows, when a local database is named.
+    const sql = CLAIM_SQL.replace(/\s+/g, ' ');
+
+    /** The rank each kind is claimed at, read out of the statement's CASE; a kind it does not list is the ELSE. */
+    function rankOf(kind: string): number {
+        const ranks = new Map([...sql.matchAll(/WHEN '(\w+)' THEN (\d)/g)].map((m) => [m[1]!, Number(m[2])]));
+        return ranks.get(kind) ?? Number(/ELSE (\d) END/.exec(sql)![1]);
+    }
+
+    it('claims a pending job only once its not_before has passed: one with a future not_before is skipped, and one that is due is taken', () => {
+        // The pending branch is exactly this and nothing more: a due job is claimable at once, a delayed one is not.
+        assert.match(sql, /\(status = 'pending' AND not_before <= NOW\(\)\)/);
+        assert.doesNotMatch(sql, /status = 'pending' OR/, 'no way to a pending job that skips the clock');
+    });
+
+    it('reclaims a stale claim whatever its not_before says: that clock is for jobs nobody has started', () => {
+        const stale = /\(status = 'claimed' AND .*? attempts < \$3\)/.exec(sql);
+        assert.ok(stale, 'the stale branch is found');
+        assert.doesNotMatch(stale![0], /not_before/);
+    });
+
+    it('reads not_before in that one place only: the order, the update and the returned columns do not', () => {
+        assert.equal(sql.match(/not_before/g)?.length, 1);
+        assert.doesNotMatch(/RETURNING .*/.exec(sql)![0], /not_before/);
+    });
+
+    it('leaves the rank of every existing kind where it was, and ranks the explainer kinds: write 1, voice 2, render 2, draw 3', () => {
+        const before: [string, number][] = [
+            ['pick_folder', 0], ['render_carousel', 1], ['monteur_think', 1], ['render_infographic', 1], ['ads_think', 1], ['monteur_render', 2],
+            ['scan_library', 3], ['monteur_scan', 3], ['index_lesson', 4], ['monteur_transcribe', 4],
+        ];
+        for (const [kind, rank] of before) assert.equal(rankOf(kind), rank, kind);
+        assert.deepEqual(['explainer_write', 'explainer_voice', 'explainer_render', 'explainer_draw'].map(rankOf), [1, 2, 2, 3]);
+    });
+
+    it('ranks every kind the queue knows, so none falls to the backlog by being left out of the CASE by mistake', () => {
+        for (const kind of STUDIO_JOB_KINDS) {
+            const listed = new RegExp(`WHEN '${kind}' THEN`).test(sql);
+            if (!listed) assert.ok(['index_lesson', 'monteur_transcribe'].includes(kind), `${kind} is in the ELSE: the backlog`);
+        }
+    });
+
+    it('is asked for the explainer kinds like any other: the kinds filter reaches the statement', async () => {
+        routes.push([/^WITH picked AS/, () => ({ rows: [{ id: JOB, kind: 'explainer_voice', payload: { explainer_id: 'e' }, attempts: 1 }] })]);
+        assert.equal((await claimJob(TENANT, ['explainer_voice', 'explainer_draw']))?.kind, 'explainer_voice');
+        assert.deepEqual(ran(/^WITH picked AS/)[0]!.params[3], ['explainer_voice', 'explainer_draw']);
+    });
+});
+
+describe('STUDIO_JOB_KINDS', () => {
+    it('holds the four explainer kinds beside the others, each once', () => {
+        for (const kind of ['explainer_write', 'explainer_voice', 'explainer_draw', 'explainer_render']) assert.ok(STUDIO_JOB_KINDS.includes(kind as never), kind);
+        assert.equal(new Set(STUDIO_JOB_KINDS).size, STUDIO_JOB_KINDS.length);
+        assert.equal(STUDIO_JOB_KINDS.length, 14);
     });
 });
 
@@ -208,6 +267,28 @@ describe('the Mac is the owner’s: Claude’s work reaches a worker only for th
         assert.equal(failures().length, 0);
     });
 
+    const explainer = (id: string, kind: string) => ({ id, kind, payload: { explainer_id: 'e' } });
+
+    it('fails an explainer’s script for a tenant that is not on the list, with the reason: it is Claude’s work', async () => {
+        pending = [explainer(JOB, 'explainer_write')];
+        assert.equal(await claimJob(NEW_TENANT), null);
+        assert.deepEqual(failures().map((f) => f.params), [[JOB, NEEDS_API_BRAIN_MESSAGE]]);
+    });
+
+    it('hands that tenant the other three explainer jobs, which use no Claude: the switch keeps them the owner’s', async () => {
+        for (const [i, kind] of (['explainer_voice', 'explainer_draw', 'explainer_render'] as const).entries()) {
+            pending = [explainer(`5${i}555555-5555-4555-8555-555555555555`, kind)];
+            assert.equal((await claimJob(NEW_TENANT))?.kind, kind, kind);
+        }
+        assert.equal(failures().length, 0);
+    });
+
+    it('hands the owner his explainer’s script, with nothing configured', async () => {
+        pending = [explainer(JOB, 'explainer_write')];
+        assert.equal((await claimJob(TENANT))?.id, JOB);
+        assert.equal(failures().length, 0);
+    });
+
     it('a saved list adds a tenant: it is handed its think, the owner his own, and a third is failed', async () => {
         saved = JSON.stringify([NEW_TENANT]);
         pending = [think(JOB)];
@@ -302,6 +383,18 @@ describe('enqueueJob — the net under every caller of Claude’s work', () => {
         await enqueueJob(pool, NEW_TENANT, 'monteur_render', { clipId: 'c' });
         await enqueueJob(pool, NEW_TENANT, 'scan_library', {});
         assert.equal(inserted().length, 3);
+    });
+
+    it('refuses an explainer’s script for a tenant that is not on the list, with nothing inserted, and queues the other three explainer kinds', async () => {
+        await assert.rejects(enqueueJob(pool, NEW_TENANT, 'explainer_write', { explainer_id: 'e' }), refused);
+        assert.equal(inserted().length, 0);
+        for (const kind of ['explainer_voice', 'explainer_draw', 'explainer_render'] as const) await enqueueJob(pool, NEW_TENANT, kind, { explainer_id: 'e' });
+        assert.equal(inserted().length, 3);
+    });
+
+    it('queues the owner’s explainer script', async () => {
+        await enqueueJob(pool, TENANT, 'explainer_write', { explainer_id: 'e' });
+        assert.equal(inserted().length, 1);
     });
 
     it('queues the owner’s, and a listed tenant’s: the list adds to the owner, never replaces him', async () => {
@@ -565,5 +658,59 @@ describe('enqueueRender', () => {
         const order = statements.map((s) => s.sql);
         assert.ok(order.findIndex((s) => /^UPDATE studio_jobs/.test(s)) < order.findIndex((s) => /^INSERT INTO studio_jobs/.test(s)),
             'superseding after the insert would fail the new job too');
+    });
+});
+
+// ─── The explainer kinds (v59) ──────────────────────────────────────────────────────────────────
+
+describe('the explainer kinds are handed to explainers/apply.ts, which in E1 only logs', () => {
+    const EXPLAINER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const KINDS = ['explainer_write', 'explainer_voice', 'explainer_draw', 'explainer_render'] as const;
+    let events: { level: string; event: string; fields: Record<string, unknown> }[] = [];
+    let restoreSink: (() => void) | undefined;
+
+    beforeEach(() => {
+        events = [];
+        const previous = setLogSink((level, line) => { const { ts: _ts, level: _level, event, ...fields } = JSON.parse(line); events.push({ level, event, fields }); });
+        restoreSink = () => setLogSink(previous);
+    });
+    afterEach(() => restoreSink?.());
+
+    const unhandled = () => events.filter((e) => e.event === 'explainer.result_unhandled');
+    /** Anything that would be an explainer being changed. */
+    const explainerWrites = () => ran(/explainers|explainer_scenes|image_allowance/);
+
+    for (const kind of KINDS) {
+        it(`${kind}: a result is logged and dropped, the job is marked done, and no explainer table is touched`, async () => {
+            lockReturns({ id: JOB, kind, status: 'claimed', payload: { explainer_id: EXPLAINER } });
+            assert.equal(await completeJob(TENANT, JOB, { state: 'done' }), 'dropped');
+            const [done] = ran(/SET status = 'done'/);
+            assert.deepEqual(JSON.parse(done!.params[1]), { dropped: 'not_implemented' });
+            assert.deepEqual(unhandled().map((e) => [e.level, e.fields]), [['warn', { job_id: JOB, kind, creator_id: TENANT, phase: 'result' }]]);
+            assert.equal(explainerWrites().length, 0);
+        });
+
+        it(`${kind}: a failed job is failed, logged, and leaves every explainer table alone`, async () => {
+            lockReturns({ id: JOB, kind, status: 'claimed', payload: { explainer_id: EXPLAINER } });
+            await failJob(TENANT, JOB, 'The Mac is offline.');
+            assert.deepEqual(ran(/^UPDATE studio_jobs SET status = 'failed'/)[0]!.params, [JOB, 'The Mac is offline.']);
+            assert.deepEqual(unhandled().map((e) => e.fields.phase), ['failure']);
+            assert.equal(explainerWrites().length, 0);
+        });
+    }
+
+    it('a job that went quiet a third time is failed through the same door', async () => {
+        routes.push([/SET status = 'failed', error = \$4/, () => ({
+            rows: [{ id: JOB, creator_id: TENANT, kind: 'explainer_draw', status: 'failed', payload: { explainer_id: EXPLAINER } }],
+        })]);
+        await claimJob(TENANT);
+        assert.deepEqual(unhandled().map((e) => [e.fields.kind, e.fields.phase]), [['explainer_draw', 'failure']]);
+        assert.equal(explainerWrites().length, 0);
+    });
+
+    it('a kind it does not know is still refused: the explainer branch is not a catch-all', async () => {
+        lockReturns({ id: JOB, kind: 'explainer_dance', status: 'claimed', payload: {} });
+        await assert.rejects(completeJob(TENANT, JOB, {}), isStudioError(409));
+        assert.equal(unhandled().length, 0);
     });
 });

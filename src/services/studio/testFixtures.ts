@@ -12,7 +12,9 @@ import type { ReelEvidenceSet } from '../monteur/reelEvidence.js';
 import type { PickedClip, TranscriptLine } from '../monteur/transcript.js';
 import { OWNER_REFERENCE_EXAMPLES } from './exampleFixtures.js';
 import type { GenSource, LessonRow, Moment } from './generate.js';
-import { DEFAULT_PALETTE, defaultInfographicConfig, defaultMonteurConfig, defaultStudioSettings, type StudioSettings } from './settingsTypes.js';
+import {
+    DEFAULT_PALETTE, defaultExplainerConfig, defaultInfographicConfig, defaultMonteurConfig, defaultStudioSettings, type StudioSettings,
+} from './settingsTypes.js';
 
 /** STUDIO.md §8, verbatim, with its two topical lines as the contract writes them. */
 export const SECTION_8_DM = `هلا {username} 👋
@@ -90,6 +92,7 @@ export const ELAMIR_SETTINGS: StudioSettings = {
     examples: OWNER_REFERENCE_EXAMPLES(),
     monteur: { ...defaultMonteurConfig(), post_at: ['19:00'] },
     infographic: defaultInfographicConfig(),
+    explainer: defaultExplainerConfig(),
 };
 
 /** A neutral English tenant: the defaults plus a product. */
@@ -266,6 +269,19 @@ export const ELAMIR_SEED_SETTINGS: StudioSettings = {
         theme: 'dark',
         language: 'ar',
         platforms: ['instagram', 'facebook', 'youtube'],
+    },
+    // The look and sound of illustrated explainers (v59): the neutral defaults, with no character and no music yet.
+    explainer: {
+        style: 'warm hand-painted gouache illustration, soft paper texture, beige, terracotta and olive palette, thin ink outlines, simple shapes',
+        characters: [],
+        voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' },
+        voice_style: 'a calm, warm documentary narrator; clear, unhurried, curious',
+        pace: { ar: 2.1, en: 2.5 },
+        writer: 'claude_mac',
+        writer_fallback: true,
+        title_color: '#FFD43B',
+        defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
+        music: [],
     },
 };
 

@@ -136,6 +136,21 @@ export const STUDIO_SETTINGS = {
         language: 'ar',
         platforms: ['instagram', 'facebook', 'youtube'],
     },
+    // The look and sound of illustrated explainers (v59): the neutral defaults, `defaultExplainerConfig()` in
+    // src/services/studio/settingsTypes.ts (golden.test.ts holds the two together). The character and the music
+    // library are the owner's to approve and upload from Settings, so both start empty.
+    explainer: {
+        style: 'warm hand-painted gouache illustration, soft paper texture, beige, terracotta and olive palette, thin ink outlines, simple shapes',
+        characters: [],
+        voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' },
+        voice_style: 'a calm, warm documentary narrator; clear, unhurried, curious',
+        pace: { ar: 2.1, en: 2.5 },
+        writer: 'claude_mac',
+        writer_fallback: true,
+        title_color: '#FFD43B',
+        defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
+        music: [],
+    },
 };
 
 /**
@@ -192,12 +207,13 @@ export async function seedTenant(pool, creatorId, { force = false } = {}) {
     }
     const s = STUDIO_SETTINGS;
     await pool.query(
-        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
+        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, NOW())
          ON CONFLICT (creator_id) DO UPDATE
             SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                 cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
+                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, explainer = EXCLUDED.explainer,
+                updated_at = NOW()`,
         [
             creatorId,
             JSON.stringify(s.brand), JSON.stringify(s.voice), JSON.stringify(s.product),
@@ -205,6 +221,7 @@ export async function seedTenant(pool, creatorId, { force = false } = {}) {
             s.examples === null ? null : JSON.stringify(s.examples),
             JSON.stringify(s.monteur),
             JSON.stringify(s.infographic),
+            JSON.stringify(s.explainer),
         ]
     );
     return { status: 'seeded', message: `Seeded Studio settings for ${creator.rows[0].name ?? creatorId}.` };

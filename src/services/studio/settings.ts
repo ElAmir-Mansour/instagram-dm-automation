@@ -1,6 +1,7 @@
 /**
  * Per-tenant Studio settings (STUDIO.md §10): brand kit, voice, product, CTAs, posting times,
- * library folder, few-shot examples, the Monteur (MONTEUR.md §1) and the infographics' brand (v31).
+ * library folder, few-shot examples, the Monteur (MONTEUR.md §1), the infographics' brand (v31) and the look
+ * and sound of illustrated explainers (v59).
  *
  * The Studio is a feature for any tenant, so none of this is in code or prompts. A tenant with
  * no row gets `defaultStudioSettings()`, which is deliberately neutral: English, generic copy,
@@ -12,14 +13,19 @@
  * A tenant with a stored profile reads them from it: `getStudioSettings` is the stored row with those fields
  * replaced (`studioView`), and `updateStudioSettings` routes a change to one of them into `saveProfile`, which
  * mirrors it back into the row. A tenant without a stored profile reads and writes its row exactly as before.
+ * The explainer section is NOT one of them: it is read and written as stored.
  */
 import { isDeepStrictEqual } from 'node:util';
 import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
 import type { CreatorProfile } from '../profile/types.js';
-import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
-import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, withTransaction } from './common.js';
+import type {
+    ExplainerLanguage, ExplainerSoundMode, ExplainerWriter, InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode,
+    MonteurSource, MonteurStyle,
+} from './settingsTypes.js';
+import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, UUID_PATTERN, withTransaction } from './common.js';
 import { defaultStudioSettings, mergeSettings, overDefaults, readStudioSettings, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
+import { findFemaleSubject, LENGTH_TIERS } from '../explainers/spec.js';
 import { assertMacBrainAllowed, assertNotMacBrainTenant } from '../macBrain.js';
 import { clearProfileCache } from '../profile/cache.js';
 import {
@@ -42,6 +48,23 @@ export const MONTEUR_STYLES: readonly MonteurStyle[] = ['classic', 'paper'];
 export const INFOGRAPHIC_SOCIALS: readonly InfographicSocial[] = ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'];
 export const INFOGRAPHIC_THEMES: readonly InfographicTheme[] = ['dark', 'light'];
 export const INFOGRAPHIC_PLATFORMS: readonly InfographicPlatform[] = ['instagram', 'facebook', 'youtube'];
+/** Gemini's prebuilt voices the narrator of an explainer may be (research.md R3). A voice outside the list would fail at the voice step, a day later. */
+const GEMINI_VOICES = ['Charon', 'Sadaltager', 'Schedar', 'Gacrux', 'Sulafat', 'Achernar', 'Vindemiatrix', 'Rasalgethi'] as const;
+/** The narrators of each language. Arabic also has the native Modern Standard Arabic voice the 2026-10-19 promos used. */
+export const EXPLAINER_VOICES: Readonly<Record<ExplainerLanguage, readonly string[]>> = {
+    ar: ['ar-001-commercial-3', ...GEMINI_VOICES],
+    en: [...GEMINI_VOICES],
+};
+export const EXPLAINER_LANGUAGES: readonly ExplainerLanguage[] = ['ar', 'en'];
+export const EXPLAINER_SOUND_MODES: readonly ExplainerSoundMode[] = ['music', 'sfx'];
+/** Claude on the owner's Mac, or Gemini on the server (research.md R2b). */
+export const EXPLAINER_WRITERS: readonly ExplainerWriter[] = ['claude_mac', 'gemini'];
+export const MAX_EXPLAINER_CHARACTERS = 6;
+export const MAX_EXPLAINER_TRACKS = 30;
+/** What a scene's brief names a character by, and what a track is chosen by: short, lower case, nothing that needs escaping. */
+const EXPLAINER_KEY = /^[a-z0-9][a-z0-9_-]{0,29}$/;
+/** A reference picture or a music track is one of our uploads, written as the path or with our address in front of it. */
+const EXPLAINER_UPLOAD = /^(?:https:\/\/[^\s/]+)?\/api\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.[a-z0-9]{2,5})?$/i;
 /** The portrait is one of our own uploads: the worker fetches it while rendering. */
 const UPLOAD_URL = /^https:\/\/[^\s/]+\/api\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jpg)?$/i;
 /** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
@@ -105,7 +128,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         }
     };
 
-    const { brand, voice, product, cta, schedule, library, examples, monteur, infographic } = s;
+    const { brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer } = s;
     text(brand?.name, 'brand.name', 80, true);
     text(brand?.signature?.latin, 'brand.signature.latin', 40);
     text(brand?.signature?.local, 'brand.signature.local', 40);
@@ -238,6 +261,91 @@ export function settingsProblems(s: StudioSettings): string[] {
             if (new Set(infographic.platforms).size !== infographic.platforms.length) problems.push('infographic.platforms lists a platform twice');
         }
     }
+
+    // The look and sound of illustrated explainers (v59). A settings object from before the section existed (the seed script's) has none, and reads as
+    // the defaults, which are valid: so `undefined` is not a problem here, and anything else must be a whole, valid section.
+    if (explainer !== undefined) {
+        if (!isPlainObject(explainer)) {
+            problems.push('explainer must be an object');
+        } else {
+            text(explainer.style, 'explainer.style', 600);
+            text(explainer.voice_style, 'explainer.voice_style', 300);
+            oneOf(explainer.voices?.ar, 'explainer.voices.ar', EXPLAINER_VOICES.ar);
+            oneOf(explainer.voices?.en, 'explainer.voices.en', EXPLAINER_VOICES.en);
+            between(explainer.pace?.ar, 'explainer.pace.ar', 1, 4, false);
+            between(explainer.pace?.en, 'explainer.pace.en', 1, 4, false);
+            oneOf(explainer.writer, 'explainer.writer', EXPLAINER_WRITERS);
+            if (typeof explainer.writer_fallback !== 'boolean') problems.push('explainer.writer_fallback must be true or false');
+            colour(explainer.title_color, 'explainer.title_color');
+            const defaults = explainer.defaults;
+            if (!isPlainObject(defaults)) {
+                problems.push('explainer.defaults must be an object');
+            } else {
+                oneOf(defaults.sound_mode, 'explainer.defaults.sound_mode', EXPLAINER_SOUND_MODES);
+                if (typeof defaults.subtitles !== 'boolean') problems.push('explainer.defaults.subtitles must be true or false');
+                oneOf(defaults.language, 'explainer.defaults.language', EXPLAINER_LANGUAGES);
+                oneOf(defaults.length_tier, 'explainer.defaults.length_tier', LENGTH_TIERS);
+            }
+
+            /** A picture or a track is one of our uploads, and its URL names the same upload as its id. */
+            const upload = (id: unknown, url: unknown, path: string, idField: string, urlField: string): void => {
+                const idOk = typeof id === 'string' && UUID_PATTERN.test(id);
+                if (!idOk) problems.push(`${path}.${idField} must be the id of one of your uploads`);
+                const named = typeof url === 'string' ? EXPLAINER_UPLOAD.exec(url) : null;
+                if (!named) problems.push(`${path}.${urlField} must be one of your uploads (…/api/uploads/<id>)`);
+                else if (idOk && named[1]!.toLowerCase() !== (id as string).toLowerCase()) problems.push(`${path}.${urlField} is not the upload ${path}.${idField} names`);
+            };
+            /** A key is what a brief or a choice names the entry by: short, lower case and unique within its list. */
+            const key = (value: unknown, path: string, seen: Set<string>): void => {
+                if (typeof value !== 'string' || !EXPLAINER_KEY.test(value)) problems.push(`${path}.key must be 1 to 30 lower-case letters, digits, - or _`);
+                else if (seen.has(value)) problems.push(`${path}.key "${value}" is used twice`);
+                else seen.add(value);
+            };
+
+            const characterKeys = new Set<string>();
+            list(explainer.characters, 'explainer.characters', MAX_EXPLAINER_CHARACTERS, (c, p) => {
+                if (!isPlainObject(c)) {
+                    problems.push(`${p} must be an object`);
+                    return;
+                }
+                key(c.key, p, characterKeys);
+                text(c.name, `${p}.name`, 30, true);
+                text(c.description, `${p}.description`, 400, true);
+                // Explainers never draw a woman or a girl: refused here, when the character is saved, and again before anything is sent to the image provider.
+                for (const field of ['name', 'description'] as const) {
+                    const woman = typeof c[field] === 'string' ? findFemaleSubject(c[field] as string) : null;
+                    if (woman) problems.push(`${p}.${field} mentions «${woman}»: Explainers never draw women or girls`);
+                }
+                // The approved picture is all or nothing: approving it sets the three together, and clearing it clears them.
+                const approval = [c.ref_media_id, c.ref_url, c.approved_at];
+                const unset = approval.filter((v) => v === null).length;
+                if (unset !== 0 && unset !== approval.length) {
+                    problems.push(`${p}: ref_media_id, ref_url and approved_at are all set together, or all null`);
+                } else if (unset === 0) {
+                    upload(c.ref_media_id, c.ref_url, p, 'ref_media_id', 'ref_url');
+                    if (typeof c.approved_at !== 'string' || Number.isNaN(Date.parse(c.approved_at))) problems.push(`${p}.approved_at must be a date and time`);
+                }
+            });
+
+            const trackKeys = new Set<string>();
+            list(explainer.music, 'explainer.music', MAX_EXPLAINER_TRACKS, (t, p) => {
+                if (!isPlainObject(t)) {
+                    problems.push(`${p} must be an object`);
+                    return;
+                }
+                key(t.key, p, trackKeys);
+                text(t.title, `${p}.title`, 120, true);
+                text(t.artist, `${p}.artist`, 120);
+                text(t.license, `${p}.license`, 120, true);
+                text(t.credit, `${p}.credit`, 300);
+                upload(t.media_id, t.url, p, 'media_id', 'url');
+                if (typeof t.credit_required !== 'boolean') problems.push(`${p}.credit_required must be true or false`);
+                else if (t.credit_required && (typeof t.credit !== 'string' || !t.credit.trim())) {
+                    problems.push(`${p}.credit is required when the licence requires credit: it goes in every caption`);
+                }
+            });
+        }
+    }
     return problems;
 }
 
@@ -359,12 +467,13 @@ async function applyStudioPatch(
     }
 
     await exec.query(
-        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
+        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, NOW())
          ON CONFLICT (creator_id) DO UPDATE
             SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                 cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
+                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, explainer = EXCLUDED.explainer,
+                updated_at = NOW()`,
         [
             creatorId,
             JSON.stringify(next.brand), JSON.stringify(next.voice), JSON.stringify(next.product),
@@ -373,6 +482,7 @@ async function applyStudioPatch(
             next.examples === null ? null : JSON.stringify(next.examples),
             JSON.stringify(next.monteur),
             JSON.stringify(next.infographic),
+            JSON.stringify(next.explainer),
         ]
     );
     // The row is written whole first, so the mirror in `saveProfile` reads this very row (FOR UPDATE, in this
