@@ -25,6 +25,7 @@ import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import { queueAdvance } from '../ads/proposals/advance.js';
+import { applyExplainerFailure, applyExplainerResult, isExplainerJobKind } from '../explainers/apply.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
@@ -64,7 +65,7 @@ export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
 /** Every job kind, for a claim that asks for some of them only. */
 export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
     'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
-    'monteur_think', 'render_infographic', 'ads_think',
+    'monteur_think', 'render_infographic', 'ads_think', 'explainer_write', 'explainer_voice', 'explainer_draw', 'explainer_render',
 ];
 
 export type StudioJobView = Pick<
@@ -80,7 +81,7 @@ type LockedJob = Pick<StudioJobRow, 'id' | 'creator_id' | 'kind' | 'status' | 'p
 
 /**
  * Every job is queued here but a `monteur_think` (think.ts has its own idempotent insert). Claude's work on
- * the Mac (macBrain.ts: a think, an infographic with `write`) is refused for any tenant but the owner and those
+ * the Mac (macBrain.ts: a think, an infographic with `write`, an explainer's script) is refused for any tenant but the owner and those
  * the operator added, whoever is asking: the callers check first and fail fast, this is the net under all of them.
  */
 export async function enqueueJob(
@@ -231,9 +232,17 @@ export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, so
  *   1  render_carousel     someone is waiting at the editor
  *   1  monteur_think       Claude on the Mac: a minute, and the Monteur's next step waits for it
  *   1  ads_think           Claude on the Mac drafting an ad proposal: the owner is looking at a "drafting" card
+ *   1  explainer_write     Claude on the Mac writing an explainer's script: the owner is looking at a "writing" card
  *   2  monteur_render      a reel for the review queue, often right after an edit
+ *   2  explainer_voice, explainer_render   the narration voiced and timed, the two videos rendered: the owner is waiting on each step
  *   3  scan_library, monteur_scan   quick folder listings that queue the real work
+ *   3  explainer_draw      the drawing loop: it ends when the day's allowance does, and does not hold up the steps above
  *   4  index_lesson, monteur_transcribe   minutes each: the backlog that must not hold the rest
+ *
+ * A pending job is claimable only once its `not_before` has passed (v59). That column defaults to the moment the job was queued, so every job
+ * that never sets one is claimable at once, as it always was; a paused drawing queues its next `explainer_draw` for the hour the image
+ * allowance resets, and the claim skips it until then. A `claimed` job gone stale is reclaimed whatever its `not_before` says: that clock is for
+ * jobs nobody has started.
  *
  * SKIP LOCKED makes two claimers split the work rather than queue behind each other's lock,
  * and the lock itself is what stops them both taking the same row: the UPDATE runs on the row
@@ -245,12 +254,13 @@ export const CLAIM_SQL = `
           FROM studio_jobs
          WHERE creator_id = $1
            AND ($4::text[] IS NULL OR kind = ANY($4::text[]))
-           AND (status = 'pending'
+           AND ((status = 'pending' AND not_before <= NOW())
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1 WHEN 'monteur_render' THEN 2
-                            WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1
+                            WHEN 'explainer_write' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'explainer_voice' THEN 2 WHEN 'explainer_render' THEN 2
+                            WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 WHEN 'explainer_draw' THEN 3 ELSE 4 END,
                   created_at, id
          LIMIT 1
            FOR UPDATE SKIP LOCKED
@@ -429,6 +439,11 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
             proposalId = payloadId(job, 'proposalId');
         } else if (job.kind === 'render_infographic') {
             const applied = await applyInfographicRender(client, job, result);
+            stored = applied.stored;
+            outcome = applied.outcome;
+        } else if (isExplainerJobKind(job.kind)) {
+            // An illustrated explainer's step (v59, explainers/apply.ts). E1 only logs it and drops the result: nothing queues these yet.
+            const applied = await applyExplainerResult(client, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, result);
             stored = applied.stored;
             outcome = applied.outcome;
         } else {
@@ -1025,7 +1040,7 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
  * that is no longer the draft's (or clip's) latest leaves it alone: the newer one is still on its
  * way, and a scheduled one is past rendering. A failed `pick_folder` or `monteur_scan` is only a
  * failed job: neither has a row of its own. Nor is a failed `monteur_think`: it is one try, and the
- * sweep decides what comes next (think.ts).
+ * sweep decides what comes next (think.ts). An explainer's job is handed to explainers/apply.ts.
  */
 async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<void> {
     if (job.kind === 'index_lesson') {
@@ -1076,6 +1091,9 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
               WHERE id = $1 AND creator_id = $2 AND job_id = $4 AND status IN ('writing', 'rendering')`,
             [id, job.creator_id, error, job.id]
         );
+    } else if (isExplainerJobKind(job.kind)) {
+        // The explainer goes failed at the step this job was for (explainers/apply.ts). E1 only logs it: nothing queues these yet.
+        await applyExplainerFailure(exec, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, error);
     }
 }
 

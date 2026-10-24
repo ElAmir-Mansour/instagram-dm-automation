@@ -115,7 +115,7 @@ describe('getStudioSettings with a stored profile', () => {
         store(OWNER, richProfile());
         await getStudioSettings(OWNER);
         assert.deepEqual(sql(), [
-            'SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = $1',
+            'SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings WHERE creator_id = $1',
             'SELECT profile, version, activated_at FROM creator_profiles WHERE creator_id = $1',
         ]);
     });

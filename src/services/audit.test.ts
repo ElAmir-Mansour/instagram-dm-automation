@@ -174,6 +174,18 @@ describe('isAuditAction', () => {
         }
     });
 
+    it('knows the seven actions of illustrated explainers (v59), under the names the audit trail will show', () => {
+        const names = [
+            AUDIT_ACTIONS.explainerCreated, AUDIT_ACTIONS.explainerApproved, AUDIT_ACTIONS.explainerPicturesApproved, AUDIT_ACTIONS.explainerScheduled,
+            AUDIT_ACTIONS.explainerDeleted, AUDIT_ACTIONS.explainersProviderUpdated, AUDIT_ACTIONS.explainersEnabledChanged,
+        ];
+        assert.deepEqual(names, [
+            'explainer.created', 'explainer.approved', 'explainer.pictures_approved', 'explainer.scheduled', 'explainer.deleted',
+            'explainers.provider_updated', 'explainers.enabled_changed',
+        ]);
+        for (const name of names) assert.equal(isAuditAction(name), true, name);
+    });
+
     it('rejects an unknown filter rather than returning an empty list', () => {
         // An operator filtering on a typo should be told, not shown "no results" — which
         // reads as "nothing has happened", the opposite of the truth.

@@ -9,6 +9,9 @@
  *     (src/services/studio/infographics.ts);
  *   - `ads_think`, an ad proposal Claude drafts for the owner (Ads A7, src/services/ads/proposals/service.ts). Every other tenant's
  *     proposals go to the providers layer on their own key (`ads_draft` / `ads_review`), so this guard is the net, not the router.
+ *   - `explainer_write`, the researched script of an illustrated explainer (v59, src/services/explainers/). The other three explainer jobs
+ *     (voice, draw, render) use no Claude, so they are not Mac-brain work; the per-tenant switch (`explainers/switch.ts`), which only the
+ *     owner can have on, keeps them his in this version.
  *
  * Anthropic's terms forbid routing other people's work through a personal Pro or Max plan. So before a second
  * tenant exists, the server refuses that work for everyone but the owner and those the operator added, in code, not by
@@ -152,11 +155,11 @@ export async function assertNotMacBrainTenant(creatorId: string, status = 409): 
 }
 
 /**
- * Whether a Studio job is Claude work on the Mac: a think, an ad proposal (`ads_think`), or an infographic with `write` in its payload
- * (the key being there at all is enough: the worker's `write` is Claude's, whatever it holds).
+ * Whether a Studio job is Claude work on the Mac: a think, an ad proposal (`ads_think`), an explainer's script (`explainer_write`, whatever its
+ * payload), or an infographic with `write` in its payload (the key being there at all is enough: the worker's `write` is Claude's, whatever it holds).
  */
 export function isMacBrainJob(kind: StudioJobKind, payload: unknown): boolean {
-    if (kind === 'monteur_think' || kind === 'ads_think') return true;
+    if (kind === 'monteur_think' || kind === 'ads_think' || kind === 'explainer_write') return true;
     return kind === 'render_infographic' && isPlainObject(payload) && 'write' in payload;
 }
 
