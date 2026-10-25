@@ -97,6 +97,9 @@ const App = {
         // The Studio's third tab (#/infographics): animated comparisons in the creator's own
         // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4. Studio's item is current here too.
         infographics: { src: 'infographics', page: () => InfographicsPage, navAs: 'studio' },
+        // The Studio's fourth tab (#/explainers): researched, narrated, illustrated videos (v59). The owner's alone, behind the platform admin's switch.
+        // It owns its own stylesheet (css/pages/explainers.css) and its own Settings view (`?tab=settings`); Studio's item is current here too.
+        explainers: { src: 'explainers', page: () => ExplainersPage, navAs: 'studio', css: true },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -186,7 +189,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.74',
+    ASSET_VERSION: '12.75',
 
     _modules: Object.create(null),
 

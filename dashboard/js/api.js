@@ -618,6 +618,67 @@ const API = {
         method: 'POST', body: JSON.stringify(data || {}),
     }),
     deleteInfographic: (id) => API.request(`/studio/infographics/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // ─── Illustrated explainers (v59, src/services/explainers/; the contract is docs/specs/003-illustrated-explainers/contracts/http-api.md) ───
+    // Owner only, behind the platform admin's switch: while it is off every route here answers 404 EXPLAINERS_DISABLED. Their settings are the
+    // `explainer` section of PUT /studio/settings, above; the provider and the switch are the /admin/explainers routes, further down.
+    /** `{ items: ExplainerSummary[] }`, newest first. */
+    getExplainers: () => API.request('/studio/explainers'),
+    /** `{ topic, language?, length_tier?, sound_mode?, music_track_id?, subtitles?, notes?, source_links?: string[] }` -> 201 `Explainer`, `writing`. */
+    createExplainer: (data) => API.request('/studio/explainers', { method: 'POST', body: JSON.stringify(data) }),
+    /** `Explainer`, with its `scenes`, `job: { status, progress }` and `allowance`. */
+    getExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}`),
+    /** Any of `{ title, draft: { captions, first_comment, replies, sources }, scenes: SceneEdit[], sound_mode, music_track_id, subtitles }` -> `Explainer`. `scenes` is the whole ordered list. */
+    updateExplainer: (id, data) => API.request(`/studio/explainers/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    /** `{ note }` -> `Explainer`, `writing` again (the previous draft stays visible until the new one lands). */
+    rewriteExplainer: (id, data) => API.request(`/studio/explainers/${encodeURIComponent(id)}/rewrite`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** Gate 1. `{ version }` is the `draft_version` that was read: another number is a 409. -> `Explainer`, `voicing`. */
+    approveExplainer: (id, version) => API.request(`/studio/explainers/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', body: JSON.stringify({ version }),
+    }),
+    /** Voices the narration again, once it was edited after the voice was made. -> `Explainer`, `voicing`. */
+    revoiceExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}/revoice`, { method: 'POST' }),
+    /** `{ note? }` -> `{ scene, allowance }`: draws now, in one request (up to 30 s). 429 `EXPLAINER_ALLOWANCE_PAUSED` (`retryAt`), 422 `EXPLAINER_PROMPT_REFUSED`, 409 `EXPLAINER_NEEDS_REFERENCE`. */
+    drawExplainerScene: (id, position, data) => API.request(`/studio/explainers/${encodeURIComponent(id)}/scenes/${encodeURIComponent(position)}/draw`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** `{ index }` (into the scene's `pictures`) -> `{ scene }`: that picture becomes the chosen one. */
+    pickExplainerPicture: (id, position, data) => API.request(`/studio/explainers/${encodeURIComponent(id)}/scenes/${encodeURIComponent(position)}/pick`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** Queues unattended drawing of every scene still to draw (a loop on the Mac) -> `Explainer`. */
+    drawExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}/draw`, { method: 'POST' }),
+    /** Gate 2 -> `Explainer`, `rendering`. 409 while a scene has no picture or the audio is out of date. */
+    approveExplainerPictures: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}/approve-pictures`, { method: 'POST' }),
+    /** A new render (the previous files stay until it succeeds) -> `Explainer`, `rendering`. */
+    renderExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}/render`, { method: 'POST' }),
+    /** `{ when: 'next' | 'now' | ISO-8601 }` -> `Explainer`, `scheduled`, with `schedule.row_ids`. */
+    scheduleExplainer: (id, data) => API.request(`/studio/explainers/${encodeURIComponent(id)}/schedule`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** Runs the step that failed again -> `Explainer`. */
+    retryExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+    deleteExplainer: (id) => API.request(`/studio/explainers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /** `{ provider, day, used_units, pictures, cap, est_left, paused_until }`: what today's free allowance has paid for. */
+    getExplainerAllowance: () => API.request('/studio/explainers/allowance'),
+    /** `{ description }` -> `{ candidates: [{ media_id, url }] }`: four 448 px pictures of a character (they count against the allowance). */
+    createExplainerCandidates: (data) => API.request('/studio/explainers/characters/candidates', {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** `{ purpose: 'music' | 'reference', mime, size }` -> `{ upload_url, media_id, url }`: the browser PUTs the file to `upload_url` itself (never through this app: Vercel takes 4.5 MB). */
+    signExplainerUpload: (data) => API.request('/studio/explainers/uploads/sign', { method: 'POST', body: JSON.stringify(data) }),
+    // Platform admin only (Settings -> Platform -> Explainers).
+    /** `{ enabled: { <tenantId>: boolean }, provider: { provider, account_id, token_last4, model, daily_cap, units_per_picture } }`. The token is never sent back, only its last four. */
+    getAdminExplainers: () => API.request('/admin/explainers'),
+    /** `{ account_id, token?, daily_cap?, units_per_picture? }` -> the same as the read. A token left out stays as it is. */
+    saveAdminExplainersProvider: (data) => API.request('/admin/explainers/provider', { method: 'PUT', body: JSON.stringify(data) }),
+    /** `{ tenant_id, enabled }` -> the same as the read. Switching a workspace other than the owner's on is a 409 `EXPLAINERS_OWNER_ONLY`. */
+    setAdminExplainersEnabled: (data) => API.request('/admin/explainers/enabled', { method: 'PUT', body: JSON.stringify(data) }),
+    /** Draws one 256 px test picture (it counts against the allowance) -> `{ ok, ms, error? }`. */
+    testAdminExplainersProvider: () => API.request('/admin/explainers/provider/test', { method: 'POST' }),
     // ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────
     // Session + canOperate, tenant-scoped. Anything the API could not measure comes back
     // null, never 0, and the page shows it as missing rather than as a number.

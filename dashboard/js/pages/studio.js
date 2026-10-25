@@ -396,7 +396,7 @@ const StudioPage = {
         }
     },
 
-    /** Carousels | Monteur | Infographics | Settings — navigation, so links with aria-current. The Monteur and Infographics are pages of their own. */
+    /** Carousels | Monteur | Infographics | Explainers | Settings — navigation, so links with aria-current. The Monteur, Infographics and Explainers are pages of their own. */
     tabsMarkup(active) {
         // Quiet segments, not blue buttons: the page's one primary is the step's own.
         const tab = (key, href, icon, label) => html`
@@ -410,6 +410,7 @@ const StudioPage = {
                 ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                 ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
                 ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
+                ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
                 ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
             </nav>
         `;

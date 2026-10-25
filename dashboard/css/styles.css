@@ -4271,7 +4271,9 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     .slide-card-actions { inline-size: 100%; }
     .shot-field { flex-direction: column; }
     .shot-thumb { inline-size: 100%; }
-    .studio-tabs { inline-size: 100%; }
+    /* Five tabs no longer fit one row on a phone: they wrap onto a second row, each stretching to fill it, so none is clipped off the edge. */
+    .studio-tabs { inline-size: 100%; flex-wrap: wrap; }
+    .studio-tabs .btn { flex: 1 1 auto; justify-content: center; }
     .studio-step-label { display: none; }
     .studio-step.is-current .studio-step-label { display: inline; }
     .studio-lessons { max-block-size: 18rem; }

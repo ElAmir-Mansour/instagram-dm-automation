@@ -101,6 +101,7 @@ const SettingsPage = {
         Object.freeze({ id: 'meta-app', group: 'platform', who: 'admin', dom: 'settings-meta-app', platform: true, details: true }),
         Object.freeze({ id: 'tiktok-app', group: 'platform', who: 'admin', dom: 'settings-tiktok-app', platform: true, details: true }),
         Object.freeze({ id: 'youtube-app', group: 'platform', who: 'admin', dom: 'settings-youtube-app', platform: true, details: true }),
+        Object.freeze({ id: 'explainers', group: 'platform', who: 'admin', dom: 'settings-explainers', platform: true }),
         Object.freeze({ id: 'storage', group: 'platform', who: 'admin', dom: 'settings-media', platform: true }),
         Object.freeze({ id: 'site', group: 'platform', who: 'admin', dom: 'settings-site', platform: true }),
         Object.freeze({ id: 'onboarding', group: 'platform', who: 'admin', dom: 'settings-onboarding', platform: true }),
@@ -208,6 +209,8 @@ const SettingsPage = {
             notify: null, notifyError: null,
             youtube: null, youtubeError: null, youtubeApp: null, youtubeAppError: null,
             onboarding: null, onboardingError: null,
+            // Explainers (v59): the platform admin's switch and the picture provider. A 404 here is a server that does not have the routes yet.
+            explainers: null, explainersError: null,
             // Instagram & Facebook (P28), with the module that draws the card (loaded on first use, and shared with the wizard).
             meta: null, metaError: null, metaApp: null, metaAppError: null,
             // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses
@@ -221,7 +224,7 @@ const SettingsPage = {
             // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad] = await Promise.allSettled([
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
@@ -251,6 +254,7 @@ const SettingsPage = {
                 }
                 return settings;
             }) : Promise.resolve(null),
+            App.isAdmin() ? API.getAdminExplainers() : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -279,6 +283,7 @@ const SettingsPage = {
         if (st.status === 'fulfilled') ctx.site = st.value; else ctx.siteError = st.reason;
         if (nt.status === 'fulfilled') ctx.notify = nt.value; else ctx.notifyError = nt.reason;
         if (ob.status === 'fulfilled') ctx.onboarding = ob.value; else ctx.onboardingError = ob.reason;
+        if (ex.status === 'fulfilled') ctx.explainers = ex.value; else ctx.explainersError = ex.reason;
         return ctx;
     },
 
@@ -385,6 +390,7 @@ const SettingsPage = {
             case 'meta-app': return this.metaAppSection(ctx);
             case 'tiktok-app': return this.tiktokAppSection(ctx);
             case 'youtube-app': return this.youtubeAppSection(ctx);
+            case 'explainers': return this.explainersSection(ctx);
             case 'storage': return this.mediaStorageSection(ctx.media, ctx.mediaError, ctx.cleanup);
             case 'site': return this.siteSection(ctx.site, ctx.siteError);
             case 'onboarding': return this.onboardingSection(ctx.onboarding, ctx.onboardingError);
@@ -1189,6 +1195,100 @@ const SettingsPage = {
 
     youtubeAppSection(ctx) {
         return this.appCard('settings-youtube-app-card', this.youtubeAppBlock(ctx.youtubeApp, ctx.youtubeAppError, !!(ctx.youtube && ctx.youtube.appConfigured)));
+    },
+
+    // ─── Explainers (v59): the platform admin's switch and the picture provider ───
+    /** The workspace the switch is for: the one this session acts as. (In this version only the platform owner's can be switched on.) */
+    explainersTenantId() {
+        return App.session && App.session.tenantId ? String(App.session.tenantId) : '';
+    },
+
+    /**
+     * The card under Settings → Platform → Explainers: whether Explainers are on for the workspace, and the Cloudflare account that draws the
+     * pictures. The token is write-only: the server answers with its last four characters and nothing more, and the field is never filled.
+     */
+    explainersSection(ctx) {
+        const ex = ctx.explainers;
+        let body = '';
+        if (ctx.explainersError) {
+            body = html`${UI.errorBox(ctx.explainersError)}
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}`;
+        } else if (ex && typeof ex === 'object') {
+            body = html`${this.explainersSwitch(ex)}${this.explainersProviderForm(ex)}`;
+        }
+        if (!body) return '';
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.explainers.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.explainers.intro')} ${UI.helpLink('explainers#settings', t('explainers.help.settings'))}</p>
+                    ${body}
+                </div>
+            </section>
+        `;
+    },
+
+    explainersSwitch(ex) {
+        const tenantId = this.explainersTenantId();
+        const on = !!(tenantId && ex.enabled && typeof ex.enabled === 'object' && ex.enabled[tenantId] === true);
+        return html`
+            <div class="settings-block mbe-4">
+                <label class="check-row" for="explainers-on">
+                    <input type="checkbox" id="explainers-on" data-change="settings:toggleExplainers" aria-describedby="explainers-on-hint"
+                           ${on ? html.raw('checked') : ''}${tenantId ? '' : html.raw(' disabled')}>
+                    <span class="check-label">${t('settings.explainers.switch')}</span>
+                </label>
+                <p class="form-hint" id="explainers-on-hint">${t('settings.explainers.switchHint')}</p>
+            </div>
+        `;
+    },
+
+    explainersProviderForm(ex) {
+        const p = ex.provider && typeof ex.provider === 'object' ? ex.provider : {};
+        const last4 = typeof p.token_last4 === 'string' ? p.token_last4.slice(-4) : '';
+        const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? String(Number(v)) : '');
+        return html`
+            <form id="explainers-provider-form" data-submit="settings:saveExplainers">
+                <p class="form-hint mbe-3">${t('settings.explainers.setup')}</p>
+                <div class="form-group">
+                    <label class="form-label" for="explainers-account-id">${t('settings.explainers.accountId')}</label>
+                    <input class="field field-mono" id="explainers-account-id" name="account_id" type="text" dir="ltr"
+                           autocomplete="off" spellcheck="false" autocapitalize="off" value="${p.account_id || ''}">
+                </div>
+                <div class="form-group">
+                    <!-- Never prefilled: the token is never sent back, only its last four characters. Blank means "keep what is saved". -->
+                    <label class="form-label" for="explainers-token">${t('settings.explainers.token')}</label>
+                    <input class="field field-mono" id="explainers-token" name="token" type="password" dir="ltr"
+                           autocomplete="new-password" spellcheck="false" autocapitalize="off" aria-describedby="explainers-token-state">
+                    <p class="form-hint" id="explainers-token-state">${last4
+                        ? this.ltrIn('settings.explainers.tokenSaved', { mask: `••••${last4}` }, 'mask')
+                        : t('settings.explainers.tokenNone')}</p>
+                    <p class="form-hint">${t('settings.explainers.tokenHint')}</p>
+                </div>
+                <div class="row row--wrap gap-3">
+                    <div class="form-group">
+                        <label class="form-label" for="explainers-daily-cap">${t('settings.explainers.dailyCap')}</label>
+                        <input class="field" id="explainers-daily-cap" name="daily_cap" type="number" min="1" max="1000" step="1" inputmode="numeric" dir="ltr"
+                               value="${num(p.daily_cap)}" aria-describedby="explainers-daily-cap-hint">
+                        <p class="form-hint" id="explainers-daily-cap-hint">${t('settings.explainers.dailyCapHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="explainers-units">${t('settings.explainers.units')}</label>
+                        <input class="field" id="explainers-units" name="units_per_picture" type="number" min="1" max="10000" step="1" inputmode="numeric" dir="ltr"
+                               value="${num(p.units_per_picture)}" aria-describedby="explainers-units-hint">
+                        <p class="form-hint" id="explainers-units-hint">${t('settings.explainers.unitsHint')}</p>
+                    </div>
+                </div>
+                ${p.model ? html`<p class="form-hint">${this.ltrIn('settings.explainers.model', { model: String(p.model) }, 'model')}</p>` : ''}
+                <p class="form-hint text-warning">${t('settings.explainers.freeNote')}</p>
+                <div class="form-actions">
+                    ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.explainers.save'), id: 'explainers-submit' })}
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'wand-sparkles', label: t('settings.explainers.test'), action: 'settings:testExplainers', id: 'explainers-test' })}
+                </div>
+                <p class="form-hint">${t('settings.explainers.testHint')}</p>
+                <p class="form-hint" id="explainers-test-result" role="status" aria-live="polite"></p>
+            </form>
+        `;
     },
 
     /** What a platform admin sees on a connection card whose provider app is not set up yet: the sentence, and the way to the app's own card. */
@@ -3863,6 +3963,81 @@ const SettingsPage = {
     },
 
     /**
+     * Explainers: the provider's account, token and caps. A blank token means "keep it" (it is never sent back, so the field is always
+     * blank on load), and a failure is read as its sentence, never as the server's raw text.
+     */
+    async saveExplainers(form, event) {
+        event.preventDefault();
+        const val = (name) => String((form.elements[name] && form.elements[name].value) || '').trim();
+        const account = val('account_id');
+        if (!account) {
+            UI.toast(t('settings.explainers.accountMissing'), 'error');
+            if (form.elements.account_id && typeof form.elements.account_id.focus === 'function') form.elements.account_id.focus();
+            return;
+        }
+        const payload = { account_id: account };
+        const token = val('token');
+        if (token) payload.token = token;
+        for (const name of ['daily_cap', 'units_per_picture']) {
+            if (val(name) !== '' && Number.isFinite(Number(val(name)))) payload[name] = Math.round(Number(val(name)));
+        }
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveAdminExplainersProvider(payload);
+            UI.toast(t('settings.explainers.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(UI.errorLine(err), 'error');
+        }
+    },
+
+    /** Draws one 256 px test picture with what is saved, and says how it went where the button is. */
+    async testExplainers(btn) {
+        const out = document.getElementById('explainers-test-result');
+        const say = (text, ok) => {
+            if (!out) return;
+            out.textContent = text;
+            out.className = `form-hint ${ok ? 'text-success' : 'text-warning'}`;
+        };
+        const restore = UI.actionBusy(btn, t('settings.explainers.testing'));
+        if (!restore) return;
+        try {
+            const res = await API.testAdminExplainersProvider();
+            if (res && res.ok) {
+                say(t('settings.explainers.testOk', { ms: UI.formatNumber(Number(res.ms) || 0) }), true);
+            } else {
+                const said = UI.errorText(UI.failureError(res && res.error)).sentence;
+                say(t('settings.explainers.testFail', { error: said }), false);
+            }
+        } catch (err) {
+            say(t('settings.explainers.testFail', { error: UI.errorLine(err) }), false);
+        } finally {
+            restore();
+        }
+    },
+
+    /** The switch applies the moment it is touched (it is not in the form), and goes back to what it was when the server refuses. */
+    async toggleExplainers(box) {
+        const tenantId = this.explainersTenantId();
+        if (!box || !tenantId) return;
+        const on = box.checked;
+        box.disabled = true;
+        try {
+            await API.setAdminExplainersEnabled({ tenant_id: tenantId, enabled: on });
+            UI.toast(t(on ? 'settings.explainers.switchedOn' : 'settings.explainers.switchedOff'), 'success');
+        } catch (err) {
+            box.checked = !on;
+            UI.toast(UI.errorLine(err), 'error');
+        } finally {
+            box.disabled = false;
+        }
+    },
+
+    /**
      * Both token forms were unguarded: submit twice on a cold serverless start
      * and the second POST overwrote the first with the same credential — or,
      * worse, raced the extend endpoint. `UI.formBusy` disables the button and
@@ -3974,6 +4149,9 @@ UI.registerActions('settings', {
     connectYouTube: (el) => SettingsPage.connectYouTube(el),
     disconnectYouTube: (el) => SettingsPage.disconnectYouTube(el),
     saveYouTubeApp: (el, e) => SettingsPage.saveYouTubeApp(el, e),
+    saveExplainers: (el, e) => SettingsPage.saveExplainers(el, e),
+    testExplainers: (el) => SettingsPage.testExplainers(el),
+    toggleExplainers: (el) => SettingsPage.toggleExplainers(el),
     readYouTubeJson: (el) => SettingsPage.readYouTubeJson(el),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
     toggleMediaCleanup: (el) => SettingsPage.toggleMediaCleanup(el),

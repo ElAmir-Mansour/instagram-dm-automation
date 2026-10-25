@@ -3809,6 +3809,426 @@ const HelpContent = {
                 },
             ],
         },
+        // ─── 11b. Illustrated explainers ─────────────────────────────────────
+        {
+            slug: 'explainers',
+            group: 'studio',
+            icon: 'lightbulb',
+            title: { ar: 'الشروحات المصوّرة', en: 'Illustrated explainers' },
+            summary: {
+                ar: 'من موضوع إلى فيديو منشور: النص والصوت والصور والفيديو والنشر، والاعتمادان، والحصص المجانية، وقواعد المحتوى، وما يُفعل حين تتوقف خطوة.',
+                en: 'From a topic to a posted video: the script, the voice, the pictures, the video and publishing, the two approvals, the free allowances, the content rules and what to do when a step stops.',
+            },
+            related: ['worker', 'studio-settings', 'troubleshooting'],
+            sections: [
+                {
+                    id: 'flow',
+                    title: { ar: 'المراحل والبوابتان', en: 'The flow, and the two gates' },
+                    body: {
+                        ar: [
+                            'الشرح المصوّر فيديو بتعليق صوتي وصور ثابتة، لكل مشهد صورة وتسمية قصيرة عليها. تعطي الموضوع، فيبحث فيه Claude ويكتب النص، وتعتمده أنت، ثم تُرسم الصور، وتعتمدها، ثم يُجهَّز الفيديو، ثم تجدوله.',
+                            { ol: [
+                                '**النص:** يبحث Claude على جهازك الماك بالبحث في الويب، ويكتب جملة واحدة لكل مشهد، مع وصف صورة كل مشهد وتسميته، والأوصاف، والتعليق الأول بالمصادر، والردود المتوقعة. تعدّله وتعتمده: هذه البوابة الأولى.',
+                                '**الصوت:** يقرأ Gemini النص المعتمد على جهازك الماك، ويُضبط توقيت كل مشهد على التسجيل.',
+                                '**الصور:** صورة لكل مشهد بالأسلوب والشخصية المتكررة اللذين اخترتهما. تعيد رسم ما لا يعجبك، ثم تعتمد الصور: هذه البوابة الثانية.',
+                                '**الفيديو:** يجهّز جهازك الماك فيديو عموديًا 9:16 وفيديو أفقيًا 16:9 وغلافًا، بموسيقى أو بمؤثرات صوتية فقط.',
+                                '**النشر:** تنشره الجدولة، أو تنسخ ما تحتاجه إلى لينكدإن بنفسك.',
+                            ] },
+                            { note: 'لا يُسجَّل صوت ولا تُرسم صورة قبل أن تعتمد النص، ولا يُجهَّز فيديو قبل أن تعتمد الصور، ولا يُنشر شيء قبل أن تضغط **جدولة**.' },
+                            { tip: 'الشروحات المصوّرة لمساحة مالك المنصة، ويشغّلها مسؤول المنصة. إن قالت الصفحة إنها متوقفة ففي [[explainers#troubleshooting]] ما يلزم.' },
+                        ],
+                        en: [
+                            'An illustrated explainer is a narrated video made of still pictures, one per scene, with a short label on each. You give a topic. Claude researches it and writes the script, you approve it, the pictures are drawn, you approve those, the videos are rendered, and then you schedule it.',
+                            { ol: [
+                                '**Script:** Claude, on your Mac, researches with web search and writes one sentence per scene, with each scene’s picture brief and label, the captions, the first comment with the sources and the likely replies. You edit it and approve it: the first gate.',
+                                '**Voice:** Gemini reads the approved script on your Mac, and every scene is timed to the audio.',
+                                '**Pictures:** one picture per scene, in the style and with the recurring character you chose. You redraw any you don’t like, then approve them: the second gate.',
+                                '**Video:** your Mac renders a vertical 9:16 video, a horizontal 16:9 video and a cover, with music or with sound effects only.',
+                                '**Publish:** Schedule posts it, or you copy what you need to LinkedIn yourself.',
+                            ] },
+                            { note: 'Nothing is voiced or drawn until you approve the script, nothing is rendered until you approve the pictures, and nothing is posted until you press **Schedule**.' },
+                            { tip: 'Explainers are for the platform owner’s workspace, and the platform administrator switches them on. If the page says they are switched off, [[explainers#troubleshooting]] has the way out.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'start',
+                    title: { ar: 'بدء شرح جديد', en: 'Starting an explainer' },
+                    body: {
+                        ar: [
+                            'افتح **الاستوديو** ← **الشروحات المصوّرة**، واملأ النموذج في الأعلى:',
+                            { dl: [
+                                ['الموضوع', 'من 3 إلى 300 حرف. اكتبه كسؤال أو عنوان واضح.'],
+                                ['اللغة', 'العربية الفصحى أو الإنجليزية. النص العربي فصحى دائمًا، لا لهجة.'],
+                                ['المدة', 'من 60 إلى 90 ثانية (10 إلى 30 مشهدًا)، أو من 3 إلى 5 دقائق (30 إلى 90 مشهدًا)، أو من 10 إلى 15 دقيقة (120 إلى 300 مشهد). الشرح الطويل يستغرق رسمه أيامًا على الحصة المجانية: [[explainers#allowance]].'],
+                                ['الصوت', '**موسيقى في الخلفية** (مقطع من مكتبتك تحت الصوت، واختيارها يُظهر قائمة المقاطع) أو **المؤثرات الصوتية فقط** (صوت خافت عند كل قطع وكل تسمية، بلا موسيقى). التفاصيل في [[explainers#music]].'],
+                                ['أظهر النص المكتوب على الشاشة', 'مفعّل افتراضيًا، لأن كثيرين يشاهدون بلا صوت.'],
+                                ['روابط المصادر', 'حتى 10 روابط، رابط في كل سطر. يقرؤها الكاتب أولًا.'],
+                                ['ملاحظات للكاتب', 'ما يجب تغطيته وإلى ماذا يُشار، حتى 2000 حرف.'],
+                            ] },
+                            'اضغط **ابدأ**، فيظهر الشرح بحالة **قيد الكتابة**.',
+                            { tip: 'ابدأ بمدة 60 إلى 90 ثانية: هي أسرع ما يُراجع، وتتسع لها حصة يوم واحد.' },
+                        ],
+                        en: [
+                            'Open **Studio** → **Explainers** and fill in the form at the top:',
+                            { dl: [
+                                ['Topic', '3 to 300 characters. Write it as a question or a clear title.'],
+                                ['Language', 'Arabic or English. Arabic is always Modern Standard Arabic, never dialect.'],
+                                ['Length', '60–90 seconds (10 to 30 scenes), 3–5 minutes (30 to 90 scenes) or 10–15 minutes (120 to 300 scenes). A long one takes several days to draw on the free allowance: [[explainers#allowance]].'],
+                                ['Sound', '**Background music** (a track from your library under the voice; choosing it shows the track picker) or **Sound effects only** (a soft sound on each cut and each label, and no music). Details in [[explainers#music]].'],
+                                ['Show subtitles', 'On by default, because many people watch without sound.'],
+                                ['Source links', 'Up to 10 links, one per line. The writer reads them first.'],
+                                ['Notes for the writer', 'What to cover and what to point to, up to 2,000 characters.'],
+                            ] },
+                            'Press **Start**. The explainer appears with the status **Writing**.',
+                            { tip: 'Start with 60–90 seconds. It is the quickest to check, and one day’s allowance covers it.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'script',
+                    title: { ar: 'الخطوة 1: النص', en: 'Step 1: the script' },
+                    body: {
+                        ar: [
+                            'الكتابة تستغرق دقائق، وقد تصل إلى 20 دقيقة لأن الكاتب يبحث أولًا. يمكنك مغادرة الصفحة، فالعمل يستمر. يكتب Claude على جهازك الماك افتراضيًا، ويكتب Gemini حين يتعذّر ذلك على الماك أو حين تختاره من الإعدادات. وتعرض الخطوة من كتب هذه المسودة.',
+                            'كل مشهد جملة واحدة، وفيه:',
+                            { dl: [
+                                ['النص المعروض', 'الجملة كما تظهر في الفيديو والنص المكتوب.'],
+                                ['النص المنطوق', 'ما يقوله الصوت. تُكتب المصطلحات الإنجليزية كما ينبغي أن ينطقها الصوت.'],
+                                ['التسمية', 'بطاقة قصيرة على الصورة: حتى 4 كلمات أو رقم مثل سنة. يرسمها التطبيق، ولا يرسمها نموذج الصور أبدًا.'],
+                                ['وصف الصورة (بالإنجليزية)', 'من في الصورة، ووضعيته وحركته، والمكان، وما تشير إليه التسمية.'],
+                                ['الشخصيات', 'الشخصيات المتكررة التي تظهر في المشهد، حتى أربع.'],
+                                ['الصورة نفسها كالمشهد السابق', 'يستعيد المشهد صورة سابقه بدل رسم صورة جديدة.'],
+                            ] },
+                            'بأزرار كل مشهد تنقله إلى الأعلى أو الأسفل، وتضيف مشهدًا بعده، وتحذفه. وتحت العنوان يظهر تقدير المدة: عدد الكلمات المنطوقة مقسومًا على سرعة المعلّق، مقابل المدة المستهدفة. وإن خرج النص عنها، أو عن العدد المعتاد للمشاهد، أو لم يذكر مصادر كافية، ظهر تنبيه. ويمكنك الاعتماد رغم التنبيه.',
+                            'وتحت المشاهد: عنوان الفيديو (70 حرفًا على الأكثر)، والوصف لكل منصة، والتعليق الأول بالمصادر، و5 ردود متوقعة على الأقل، والمصادر.',
+                            { ul: [
+                                '**أعد الكتابة بملاحظة:** يكتب الكاتب مسودة جديدة بناءً على ملاحظتك («بداية أقصر، وأضف نتيجة 2020»). تبقى المسودة الحالية ظاهرة حتى تصل الجديدة، وتُستبدل تعديلاتك غير المحفوظة.',
+                                '**اعتمد النص:** يحفظ تعديلاتك أولًا ثم يبدأ تسجيل الصوت. هذه البوابة الأولى. وبعدها يعني تعديل النص المنطوق أو المعروض تسجيل الصوت من جديد.',
+                            ] },
+                            { note: 'يجب أن ينتهي المشهد الأخير بسؤال حقيقي موجّه إلى المشاهد. أما طلب التعليق بكلمة أو التفاعل بإشارة فيُرفض لأنه استدراج للتفاعل: [[explainers#rules]].' },
+                        ],
+                        en: [
+                            'Writing takes a few minutes, up to 20, because the writer researches first. You can leave the page: the work carries on. Claude on your Mac writes by default, and Gemini writes when the Mac cannot or when you chose it in the settings. The step says who wrote the draft you are looking at.',
+                            'Each scene is one sentence, and it holds:',
+                            { dl: [
+                                ['On-screen text', 'The sentence as it appears in the video and in the subtitles.'],
+                                ['Spoken text', 'What the voice says. English terms are spelled the way the voice should say them.'],
+                                ['Label', 'A short tag on the picture: up to 4 words, or a number such as a year. The app draws it; the image model never does.'],
+                                ['Picture brief (English)', 'Who is in the picture, their pose and action, the setting, and what the label points to.'],
+                                ['Characters', 'The recurring characters in the scene, up to four.'],
+                                ['Same picture as the previous scene', 'The scene reuses its predecessor’s picture instead of drawing a new one.'],
+                            ] },
+                            'Each scene has buttons to move it up or down, add a scene after it, and remove it. Above the scenes the length estimate shows the spoken words divided by the narrator’s pace, against the target. If the script falls outside it, or outside the usual number of scenes, or cites too few sources, a warning appears. You can still approve over a warning.',
+                            'Below the scenes: the video title (at most 70 characters), a caption for each platform, the first comment with the sources, at least 5 likely replies, and the sources.',
+                            { ul: [
+                                '**Rewrite with a note:** the writer writes a new draft from your note (“a shorter hook, and add the 2020 result”). The current draft stays visible until the new one arrives, and your unsaved edits are replaced.',
+                                '**Approve the script:** saves your edits first, then starts the voice. This is the first gate. After it, changing the spoken or on-screen text means voicing again.',
+                            ] },
+                            { note: 'The last scene must end with a genuine question to the viewer. Asking people to comment a word or to react is refused as engagement bait: [[explainers#rules]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'voice',
+                    title: { ar: 'الخطوة 2: الصوت', en: 'Step 2: the voice' },
+                    body: {
+                        ar: [
+                            'بعد الاعتماد يقرأ Gemini النص على جهازك الماك. يستغرق النص القصير بضع دقائق، والنص الطويل يُسجَّل على أجزاء تُضمّ في تسجيل واحد بصوت واحد. ثم يُضبط توقيت كل مشهد على التسجيل بحيث يقع القطع عند أول كلمة منه.',
+                            'في الخطوة مشغّل للتسجيل، وقائمة «وقت كل مشهد» بزر تشغيل لكل مشهد.',
+                            { ul: [
+                                '**راجع التوقيت:** تظهر حين تعذّرت مطابقة بعض الكلمات مع التسجيل، فتتبع القطعات هناك عدد الكلمات. استمع كاملًا، وإن جاء قطع مبكرًا أو متأخرًا فعدّل ذلك المشهد وسجّل الصوت من جديد.',
+                                '**سجّل الصوت من جديد:** يظهر حين تعدّل النص المنطوق أو المعروض بعد التسجيل، لأن التسجيل وتوقيتاته لم يعودا مطابقين. أما التسميات وأوصاف الصور والصور نفسها فلا تحتاج إلى تسجيل جديد.',
+                            ] },
+                            'إن بلغ مزوّد الصوت حدّه اليومي المجاني فاقرأ [[explainers#troubleshooting]].',
+                        ],
+                        en: [
+                            'After approval, Gemini reads the script on your Mac. A short script takes a few minutes, and a long one is voiced in parts that are joined into one recording in one voice. Then every scene is timed to the audio, so the cut lands on its first spoken word.',
+                            'The step has a player for the recording, and a list called “Time of each scene” with a play button for each scene.',
+                            { ul: [
+                                '**Check the timing:** appears when some words could not be matched to the audio, so the cuts there follow word counts instead. Listen through. If a cut lands early or late, edit that scene and voice it again.',
+                                '**Voice it again:** appears when you edit the spoken or the on-screen text after the voice was made, because the audio and its timings no longer match. Labels, picture briefs and the pictures themselves never need a new voice.',
+                            ] },
+                            'If the voice provider’s free daily limit is reached, read [[explainers#troubleshooting]].',
+                        ],
+                    },
+                },
+                {
+                    id: 'pictures',
+                    title: { ar: 'الخطوة 3: الصور', en: 'Step 3: the pictures' },
+                    body: {
+                        ar: [
+                            'بعد الصوت يبدأ الرسم وحده، مشهدًا بعد مشهد، وتقرأ تقدمه: «رُسمت 7 من 20». لكل مشهد صورته ونصه وتسميته.',
+                            { ul: [
+                                '**أعد الرسم:** مع ملاحظة اختيارية («يحمل كتابًا»). يتغير ذلك المشهد وحده، وتبقى آخر ثلاث صور له: اضغط إحداها لتستخدمها بدل الحالية.',
+                                '**ارسم كل الصور** أو **تابع الرسم:** حين يتوقف الرسم، بسبب نفاد الحصة أو أخطاء متتالية، يعيد بدأه لما بقي.',
+                                'المشهد الذي اخترت له **الصورة نفسها كالمشهد السابق** يُنسخ ولا يُرسم.',
+                                '**اعتمد الصور:** هذه البوابة الثانية. يُفعَّل الزر حين يكون لكل مشهد صورة والتسجيل مطابقًا للنص، ويبدأ بعده التجهيز.',
+                            ] },
+                            'تحقق من كل صورة: لا نص داخلها، ولا امرأة ولا فتاة، والشخصية المتكررة تُعرف بسهولة. وكل إعادة رسم تستهلك صورة من حصة اليوم، فأعد رسم القليل الخاطئ فقط.',
+                            { tip: 'إن توقف الرسم عند «بانتظار حصة الغد»، فتقدمك محفوظ ويتابع وحده بعد تجدد الحصة. التفاصيل في [[explainers#allowance]].' },
+                        ],
+                        en: [
+                            'After the voice, drawing starts by itself, one scene at a time, and you can read its progress: “7 of 20 drawn”. Each scene shows its picture, its text and its label.',
+                            { ul: [
+                                '**Redraw:** with an optional note (“he is holding a book”). Only that scene changes, and its last three pictures stay: press one to use it instead of the current one.',
+                                '**Draw all pictures** or **Continue drawing:** when drawing has stopped, because the allowance ran out or after repeated failures, this starts it again for what is left.',
+                                'A scene set to **Same picture as the previous scene** is copied, never drawn.',
+                                '**Approve the pictures:** the second gate. The button is on once every scene has a picture and the audio matches the text, and rendering starts after it.',
+                            ] },
+                            'Check each picture: no text in it, no woman or girl, and the recurring character easy to recognise. Every redraw spends one picture of today’s allowance, so redraw only the few that are wrong.',
+                            { tip: 'If drawing stops at “Waiting for tomorrow’s allowance”, your progress is kept and it carries on by itself once the allowance renews. Details in [[explainers#allowance]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'video',
+                    title: { ar: 'الخطوة 4: الفيديو', en: 'Step 4: the video' },
+                    body: {
+                        ar: [
+                            'يجهّز جهازك الماك ثلاثة ملفات، ويستغرق الشرح القصير بضع دقائق:',
+                            { ul: [
+                                'فيديو **عمودي 9:16**: العنوان في الأعلى، والصورة 16:9 في الوسط، والتسمية على الصورة، والنص المكتوب تحتها إن كان مفعّلًا.',
+                                'فيديو **أفقي 16:9**: الصورة بملء الإطار مع التسمية والنص المكتوب.',
+                                '**الغلاف**: صورة ثابتة للنشر.',
+                            ] },
+                            'يقع كل قطع على بداية كلام مشهده. شغّل الفيديوين وراجعهما، و**نزّل** ما تحتاجه.',
+                            { dl: [
+                                ['الموسيقى', 'يُسمع المقطع تحت الصوت ويخفت حين يتكلم المعلّق، مع تدرّج في أول الفيديو وآخره. وإن كان ترخيصه يشترط الإسناد أُضيف سطر الإسناد إلى كل وصف.'],
+                                ['المؤثرات الصوتية فقط', 'صوت خافت عند كل قطع وكل تسمية، أخفض من الصوت، بلا موسيقى.'],
+                                ['هذا الفيديو أقدم من تعديلاتك', 'يظهر حين تعدّل بعد التجهيز. التعديل لا يدخل الفيديو إلا بتجهيز جديد.'],
+                            ] },
+                            'تحت المشغّلين تغيّر الصوت والنص المكتوب ثم تضغط **جهّز الفيديو مجددًا**. تبقى الملفات السابقة حتى ينجح التجهيز الجديد، فلا تضيع نسخة جيدة بسبب محاولة فاشلة.',
+                        ],
+                        en: [
+                            'Your Mac renders three files, and a short explainer takes a few minutes:',
+                            { ul: [
+                                'A video, **Vertical 9:16**: the title at the top, the 16:9 picture in the middle, the label on the picture, and the subtitles below it when they are on.',
+                                'A video, **Horizontal 16:9**: the picture full frame, with the label and the subtitles.',
+                                'The **Cover**: a still image for posting.',
+                            ] },
+                            'Every cut lands on the first word of its scene. Play both videos, review them, and **Download** what you need.',
+                            { dl: [
+                                ['Music', 'The track plays under the voice and is lowered while the narrator speaks, with a fade at the start and the end. If its licence asks for credit, the credit line is added to every caption.'],
+                                ['Sound effects only', 'A soft sound on each cut and each label, quieter than the voice, and no music.'],
+                                ['This render is older than your edits', 'Appears when you edit after rendering. An edit reaches the video only with a new render.'],
+                            ] },
+                            'Under the players you change the sound and the subtitles and press **Render again**. The previous files stay until the new render succeeds, so a good copy is never lost to a failed attempt.',
+                        ],
+                    },
+                },
+                {
+                    id: 'publish',
+                    title: { ar: 'الخطوة 5: النشر', en: 'Step 5: publish' },
+                    body: {
+                        ar: [
+                            'اضغط **جدولة**، واختر أقرب موعد نشر متاح، أو الآن، أو وقتًا تحدده بتوقيت مساحتك. وهذا ما يُنشر وأين، في مجموعة واحدة:',
+                            { dl: [
+                                ['إنستغرام وفيسبوك', 'الفيديو العمودي مع غلافه.'],
+                                ['يوتيوب', 'الفيديو الأفقي مع عنوان يوتيوب ووصفه إن زادت المدة على 3 دقائق، وإلا فالفيديو العمودي بصيغة Shorts.'],
+                                ['تيك توك', 'مسودة في صندوق تيك توك الوارد، تنشرها من تطبيق تيك توك.'],
+                                ['لينكدإن', 'ليس تلقائيًا: استخدم [[explainers#linkedin]].'],
+                            ] },
+                            'لكل منصة وصفها الخاص، وتعدّله في خطوة النص. وإن كان مقطع الموسيقى يشترط الإسناد أُضيف سطره إلى كل وصف تلقائيًا.',
+                            'بعد الجدولة تعرض الخطوة حالة كل منشور ورابطه حين يُنشر، وفي صفحة **الجدولة** تجد كل شيء.',
+                            { note: 'تُسجَّل الجدولة على الملفات كما هي لحظة الضغط. إن عدّلت بعدها فجهّز فيديو جديدًا قبل الجدولة التالية.' },
+                        ],
+                        en: [
+                            'Press **Schedule** and choose the next free slot, now, or a time you pick in your workspace’s time zone. This is what is posted, and where, as one group:',
+                            { dl: [
+                                ['Instagram and Facebook', 'The vertical video with its cover.'],
+                                ['YouTube', 'The horizontal video with the YouTube title and description when it runs longer than 3 minutes, otherwise the vertical video as a Short.'],
+                                ['TikTok', 'A draft in your TikTok inbox, which you post from the TikTok app.'],
+                                ['LinkedIn', 'Not automatic: use [[explainers#linkedin]].'],
+                            ] },
+                            'Each platform has its own caption, and you edit it in the script step. If the music track asks for credit, its line is added to every caption automatically.',
+                            'After scheduling, the step shows each post’s status and its link once it is published, and the **Scheduler** page holds everything.',
+                            { note: 'Scheduling takes the files as they are when you press the button. If you edit afterwards, render again before you schedule again.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'linkedin',
+                    title: { ar: 'حزمة لينكدإن', en: 'The LinkedIn kit' },
+                    body: {
+                        ar: [
+                            'يحذف لينكدإن الأسطر الفارغة حين تلصق نصًا، فيتلاصق كلامك. تحوّل الحزمة كل سطر فارغ إلى سطر فيه حرف واحد غير مرئي (U+2800)، فيبقى التباعد كما كتبته.',
+                            { ol: [
+                                'افتح خطوة **النشر**. الحزمة هناك منذ أول مسودة، قبل أن يجهز الفيديو.',
+                                'اضغط **انسخ الوصف** والصقه في منشور لينكدإن. وهو وصف إنستغرام وفيسبوك، مع سطر الإسناد إن لزم.',
+                                'انشر المنشور، ثم اضغط **انسخ التعليق الأول** والصقه تعليقًا تحته. فهو يذكر المصادر.',
+                            ] },
+                            'ارفع الفيديو إلى لينكدإن بنفسك: نزّله من خطوة الفيديو.',
+                        ],
+                        en: [
+                            'LinkedIn removes empty lines when you paste text, so your paragraphs run together. The kit turns every blank line into a line holding one invisible character (U+2800), so the spacing stays as you wrote it.',
+                            { ol: [
+                                'Open the **Publish** step. The kit is there from the first draft, before the video is ready.',
+                                'Press **Copy the caption** and paste it into a LinkedIn post. It is the Instagram and Facebook caption, with the credit line when one is needed.',
+                                'Publish the post, then press **Copy the first comment** and paste it as a comment under it. It lists the sources.',
+                            ] },
+                            'Upload the video to LinkedIn yourself: download it from the Video step.',
+                        ],
+                    },
+                },
+                {
+                    id: 'settings',
+                    title: { ar: 'الإعدادات', en: 'Settings' },
+                    body: {
+                        ar: [
+                            'افتح **الاستوديو** ← **الشروحات المصوّرة** ← **المظهر والإعدادات**. تضبطها مرة واحدة فيستخدمها كل شرح جديد.',
+                            { dl: [
+                                ['الأسلوب الفني', 'بالإنجليزية: يقرؤه نموذج الصور أولًا. صف الطلاء والورق وألوان اللوحة.'],
+                                ['المعلّق للعربية وللإنجليزية', 'صوت Gemini لكل لغة، وطريقة إلقائه تُرسل بجانب النص لا داخله.'],
+                                ['لون العنوان', 'لون العنوان أعلى الفيديو العمودي.'],
+                                ['ما يبدأ به كل شرح جديد', 'اللغة والمدة والصوت والنص المكتوب الافتراضية.'],
+                                ['سرعة الإلقاء (متقدم)', 'عدد الكلمات في الثانية لتقدير المدة. لا تغيّره إلا إن كانت التقديرات خاطئة دائمًا.'],
+                                ['من يكتب النص', '**Claude على جهازي الماك** أو **Gemini**، مع خيار أن يكتب Gemini إن تعذّرت الكتابة على الماك.'],
+                            ] },
+                            'في **الشخصيات** تضيف حتى 6 شخصيات، لكل منها اسم ومعرّف ووصف بالإنجليزية. اضغط **ولّد 4** لترى أربعة مرشحين بحجم 448 بكسل، تستهلك نحو أربع صور من حصة اليوم، واعتمد أحدها صورةً مرجعية، أو **ارفع صورة**: تُصغَّر في متصفحك إلى 448 بكسل على الأكثر. ولا امرأة ولا فتاة أبدًا: يُرفض الوصف الذي يذكرهما.',
+                            'مكتبة الموسيقى في [[explainers#music]].',
+                            'وبطاقة مسؤول المنصة في **الإعدادات** ← **المنصة** ← **الشروحات المصوّرة**: تشغّل الشروحات لمساحتك، وتدخل Account ID ورمز Workers AI (يُحفظ مشفّرًا ولا يُعرض منه إلا آخر أربعة أحرف)، وتضبط الحد اليومي والوحدات لكل صورة، وتضغط **اختبر** لترسم صورة تجريبية. ومن أين تأتي بهذه القيم: في لوحة Cloudflare افتح AI ← Workers AI ← Use REST API وانسخ Account ID، ثم أنشئ رمزًا من «Create a Workers AI API Token».',
+                        ],
+                        en: [
+                            'Open **Studio** → **Explainers** → **Look and settings**. You set these once and every new explainer uses them.',
+                            { dl: [
+                                ['Art style', 'In English: the image model reads it first. Describe the paint, the paper and the palette.'],
+                                ['Narrator for Arabic and for English', 'A Gemini voice for each language. How it speaks is sent beside the text, never in it.'],
+                                ['Title colour', 'The colour of the title at the top of the vertical video.'],
+                                ['What a new explainer starts with', 'The default language, length, sound and subtitles.'],
+                                ['Speaking pace (advanced)', 'Words per second, for the length estimate. Change it only if the estimates are always off.'],
+                                ['Who writes the script', '**Claude on my Mac** or **Gemini**, with a switch that lets Gemini write when the Mac cannot.'],
+                            ] },
+                            'In **Characters** you add up to 6, each with a name, a key and a description in English. Press **Generate 4** to see four candidates at 448 px, which use about four pictures of today’s allowance, and approve one as the reference picture, or **Upload a picture**: it is resized in your browser to at most 448 px. Never a woman or a girl: a description that names one is refused.',
+                            'The music library is in [[explainers#music]].',
+                            'The platform administrator’s card is in **Settings** → **Platform** → **Explainers**: switch Explainers on for your workspace, enter the Cloudflare Account ID and the Workers AI token (stored encrypted, and only its last four characters are ever shown), set the daily cap and the units per picture, and press **Test** to draw a test picture. To find these: in the Cloudflare dashboard open AI → Workers AI → Use REST API and copy the Account ID, then create a token with “Create a Workers AI API Token”.',
+                        ],
+                    },
+                },
+                {
+                    id: 'allowance',
+                    title: { ar: 'الحصص المجانية، والتوقف المؤقت، وقاعدة صفر دولار', en: 'The free allowances, pauses and the $0 rule' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['الصور', 'تمنح Cloudflare Workers AI نحو 10,000 وحدة مجانية كل يوم، وتكلّف الصورة بمرجع واحد نحو 110 وحدات، فيُرسم نحو 90 صورة في اليوم. والحد اليومي في بطاقة المسؤول (80 افتراضيًا) يوقف الرسم قبل نفاد الحصة.'],
+                                ['شرح 60 إلى 90 ثانية', 'نحو 20 صورة، أي يوم واحد.'],
+                                ['شرح 10 إلى 15 دقيقة', 'من 150 إلى 250 مشهدًا تقريبًا، أي يومان أو ثلاثة.'],
+                                ['الصوت', 'نسخة Gemini المجانية، وحدّها اليومي غير معلن. يُرسل طلب واحد للشرح القصير.'],
+                            ] },
+                            'إن بلغ الرسم الحصة أو الحد اليومي توقف، وكتبت الصفحة «بانتظار حصة الغد (رُسمت n من m)». يبقى ما رُسم، ويتابع الرسم وحده بعد تجدد الحصة عند منتصف الليل بتوقيت UTC بزيادة 5 دقائق. ولا يُحتسب عليك شيء.',
+                            { warn: 'قاعدة صفر دولار: ابقَ على خطة Workers Free. على هذه الخطة يفشل الطلب بعد انتهاء الحصة بدل أن يُحاسَب عليه. وإن نقلت حسابك إلى خطة مدفوعة فقد تحاسبك Cloudflare، والشروحات لا تغيّر الخطة نيابةً عنك.' },
+                            { tip: 'كل إعادة رسم، وكل مرشحي الشخصية الأربعة، تُحسب من الحصة. افحص الصور مرة واحدة وأعد رسم القليل منها فقط.' },
+                        ],
+                        en: [
+                            { dl: [
+                                ['Pictures', 'Cloudflare Workers AI gives about 10,000 free units a day, and a picture with one reference costs about 110, so about 90 pictures a day. The daily cap on the administrator’s card (80 by default) stops drawing before the allowance runs out.'],
+                                ['A 60–90 second explainer', 'About 20 pictures: one day.'],
+                                ['A 10–15 minute explainer', 'Roughly 150 to 250 scenes: two or three days.'],
+                                ['Voice', 'Gemini’s free tier, whose daily limit is not published. A short explainer sends one request.'],
+                            ] },
+                            'When drawing reaches the allowance or the daily cap it pauses, and the page says “Waiting for tomorrow’s allowance (n of m drawn)”. What was drawn is kept, and drawing carries on by itself once the allowance renews at midnight UTC plus 5 minutes. Nothing is charged.',
+                            { warn: 'The $0 rule: stay on the Workers Free plan. On it, a request past the allowance fails instead of being billed. If you move the account to a paid plan, Cloudflare may charge you, and Explainers never changes the plan for you.' },
+                            { tip: 'Every redraw, and the four candidates of a character, count against the allowance. Check the pictures once and redraw only the few that are wrong.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'rules',
+                    title: { ar: 'قواعد المحتوى', en: 'The content rules' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['مصادر حقيقية', 'يبحث الكاتب قبل أن يكتب، ويفضّل المصادر الأولى: الأوراق العلمية والوثائق الرسمية. يُذكر كل مصدر بعنوانه ومؤلفيه أو ناشره وسنته ورابطه، وتستند كل جملة تذكر معلومة إلى أحدها، ويذكرها التعليق الأول. وإن عندك مصدر أفضل فأضف رابطه واطلب إعادة الكتابة.'],
+                                ['لا امرأة ولا فتاة في الصور', 'يُطلب هذا من الكاتب، ويُفحص كل وصف صورة ووصف شخصية على قائمة ألفاظ بالعربية والإنجليزية قبل أن يُرسل أي شيء إلى مزوّد الصور، ويُرفض برسالة إن طابقها. واعتمادك للصور هو الفحص الأخير.'],
+                                ['نص أصلي', 'كل شرح يُبحث لموضوعه ويمر باعتمادين منك. ويوتيوب لا يموّل المحتوى المنتج بالجملة من قوالب مكررة، فعدّل النص حتى يقول ما تقف خلفه.'],
+                                ['سؤال ختامي حقيقي', 'يسأل المشهد الأخير المشاهد سؤالًا صادقًا. أما «علّق بكلمة» أو «اكتب 1» أو «تفاعل بإشارة» فاستدراج للتفاعل، يُرفض ويخفض ميتا ظهوره.'],
+                                ['لا نص داخل الصور', 'يضيف التطبيق التسميات والنص المكتوب بلغة الفيديو.'],
+                            ] },
+                        ],
+                        en: [
+                            { dl: [
+                                ['Real sources', 'The writer researches before it writes, and prefers primary sources: papers and official documentation. Every source is listed with its title, authors or publisher, year and link, each factual sentence rests on one of them, and the first comment lists them. If you have a better source, add its link and ask for a rewrite.'],
+                                ['No women or girls in the pictures', 'The writer is told, and every picture brief and character description is checked against a list of terms in Arabic and English before anything is sent to the image provider, and refused with a message if one matches. Your approval of the pictures is the last check.'],
+                                ['Original scripts', 'Each explainer is researched for its own topic and passes two approvals from you. YouTube does not monetise mass-produced template content, so edit the script until it says something you would stand behind.'],
+                                ['A genuine closing question', 'The last scene asks the viewer a sincere question. “Comment a word”, “type 1” or “react with an emoji” is engagement bait: it is refused, and Meta demotes it.'],
+                                ['No text inside pictures', 'The app adds the labels and the subtitles, in the video’s language.'],
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'music',
+                    title: { ar: 'تراخيص الموسيقى', en: 'Music licences' },
+                    body: {
+                        ar: [
+                            'مكتبة الموسيقى تبدأ فارغة عمدًا، لأن ترخيص كل مقطع عليك أنت أن تقرره. أضف فقط مقاطع يحق لك استخدامها على كل منصة تنشر عليها. تجدها في **الاستوديو** ← **الشروحات المصوّرة** ← **المظهر والإعدادات** ← **مكتبة الموسيقى**.',
+                            'لكل مقطع عنوان وفنان وترخيص وسطر إسناد، وخيار **الترخيص يشترط الإسناد**. إن فعّلته أُضيف سطر الإسناد إلى كل وصف تلقائيًا، ولا يُحفظ مقطع يشترط الإسناد بلا سطر.',
+                            { dl: [
+                                ['Pixabay Music', 'لا يشترط إسنادًا، لكن تجنّب المقاطع التي عليها أيقونة الدرع الخاصة بـ Content ID.'],
+                                ['incompetech (كيفن ماكلاود)', 'ترخيص CC BY 4.0: الإسناد مطلوب، ففعّل الخيار والصق سطر الإسناد.'],
+                                ['Free Music Archive', 'استخدم CC BY أو CC0 فقط، ولا تستخدم أبدًا ما فيه NC أو ND أو SA.'],
+                                ['مكتبة صوت يوتيوب', 'لليوتيوب وحده، فلا تصلح لفيسبوك ولا إنستغرام ولا تيك توك.'],
+                            ] },
+                            'أما **المؤثرات الصوتية فقط** فتأتي من مجموعة مجانية (CC0)، ولا تحتاج إلى ترخيص منك.',
+                            { warn: 'إن لم تكن متأكدًا من الترخيص فاختر **المؤثرات الصوتية فقط**.' },
+                        ],
+                        en: [
+                            'The music library starts empty on purpose, because the licence of a track is yours to state. Add only tracks you have the right to use on every platform you post to. You find it in **Studio** → **Explainers** → **Look and settings** → **Music library**.',
+                            'Each track has a title, an artist, a licence, a credit line and the option **The licence requires credit**. Switch it on and the credit line is added to every caption automatically; a track that requires credit can’t be saved without one.',
+                            { dl: [
+                                ['Pixabay Music', 'No attribution needed, but avoid tracks marked with the Content ID shield icon.'],
+                                ['incompetech (Kevin MacLeod)', 'CC BY 4.0: credit is required, so switch the option on and paste the credit line.'],
+                                ['Free Music Archive', 'Use CC BY or CC0 only, and never anything marked NC, ND or SA.'],
+                                ['YouTube Audio Library', 'For YouTube only, so it does not suit Facebook, Instagram or TikTok.'],
+                            ] },
+                            '**Sound effects only** uses a free (CC0) set of effects, and needs no licence from you.',
+                            { warn: 'If you are not sure of a licence, choose **Sound effects only**.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'حين تتوقف خطوة', en: 'When something stops' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['تقول الصفحة «بانتظار جهازك الماك»', ['الماك غير متصل أو عامل الاستوديو غير شغّال عليه. تتابع الخطوة وحدها حين يعود، ولا يضيع شيء. اقرأ [[worker]] لتشغيله.']],
+                                ['Claude على جهازي الماك مسجَّل الخروج', [
+                                    'افتح الطرفية على الماك، وشغّل Claude Code، واكتب:',
+                                    { code: '/login', caption: 'وسجّل الدخول' },
+                                    'وإن كان خيار «إن تعذّرت الكتابة على جهازي الماك فليكتب Gemini» مفعّلًا (وهو الافتراضي) كتب Gemini النص بعد 10 دقائق بلا التقاط للمهمة أو عند خطأ تسجيل الدخول، ويظهر على المسودة «كتبه Gemini». وإن كان موقوفًا انتظر الشرح الماك.',
+                                ]],
+                                ['بلغ مزوّد الصوت حدّه اليومي', ['لنسخة Gemini المجانية حدّ يومي غير معلن. تظهر «بلغ مزوّد الصوت حدّه اليومي المجاني». اضغط **أعد المحاولة** غدًا. ولا يُستخدم مزوّد مدفوع.']],
+                                ['الرسم متوقف عند «بانتظار حصة الغد»', ['نفدت الحصة المجانية أو بلغت الحد اليومي. يبقى ما رُسم ويتابع الرسم وحده بعد التجدد: [[explainers#allowance]]. ولا شيء عليك فعله.']],
+                                ['رُفضت صورة أو وصف', ['يذكر وصف الصورة أو وصف الشخصية امرأة أو فتاة، ولا يُرسل شيء إلى مزوّد الصور حينها. عدّل الوصف في خطوة النص أو في إعدادات الشخصيات، ثم **أعد الرسم**.']],
+                                ['ظهرت «راجع التوقيت»', ['تعذّرت مطابقة بعض الكلمات مع التسجيل، فاعتمدت قطعاتها على عدد الكلمات. استمع إلى التسجيل، وعدّل المشهد الذي جاء قطعه مبكرًا أو متأخرًا، ثم **سجّل الصوت من جديد**.']],
+                                ['توقف التجهيز وطلب مقطعًا آخر', ['حُذف مقطع الموسيقى الذي اخترته من المكتبة. اختر مقطعًا آخر أو **المؤثرات الصوتية فقط** تحت المشغّلين، ثم **أعد المحاولة**.']],
+                                ['تقول الصفحة إن الشروحات متوقفة في هذه المساحة', ['يشغّلها مسؤول المنصة من **الإعدادات** ← **المنصة** ← **الشروحات المصوّرة**. ولا تُشغَّل في هذا الإصدار إلا لمساحة مالك المنصة.']],
+                                ['النص بلا مصادر كافية', ['أضف روابط المصادر في صندوق «روابط المصادر» أو في مصادر النص، ثم **أعد الكتابة بملاحظة**.']],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['The page says “Waiting for your Mac”', ['The Mac is offline or the Studio worker isn’t running on it. The step carries on by itself when it is back, and nothing is lost. Read [[worker]] to start it.']],
+                                ['Claude on my Mac is signed out', [
+                                    'Open Terminal on the Mac, start Claude Code and type:',
+                                    { code: '/login', caption: 'and sign in' },
+                                    'If the switch “If my Mac can’t write, let Gemini write it” is on (the default), Gemini writes the script after 10 minutes with the job unclaimed, or on a sign-in error, and the draft says “Written by Gemini”. With it off, the explainer waits for the Mac.',
+                                ]],
+                                ['The voice provider’s daily limit is reached', ['Gemini’s free tier has a daily limit that is not published. The page says “The voice provider’s free daily limit is reached”. Press **Try again** tomorrow. No paid provider is ever used.']],
+                                ['Drawing is stopped at “Waiting for tomorrow’s allowance”', ['The free allowance or the daily cap is used up. What was drawn is kept, and drawing carries on by itself after the renewal: [[explainers#allowance]]. There is nothing for you to do.']],
+                                ['A picture or a description was refused', ['The picture brief or the character description names a woman or a girl, and nothing is sent to the image provider then. Edit the description in the script step or in the characters settings, then **Redraw**.']],
+                                ['“Check the timing” appeared', ['Some words could not be matched to the audio, so their cuts follow word counts. Listen through, edit the scene whose cut is early or late, then **Voice it again**.']],
+                                ['The render stopped and asked for another track', ['The music track you chose was removed from the library. Choose another track, or **Sound effects only**, under the players, then **Try again**.']],
+                                ['The page says Explainers are switched off for this workspace', ['The platform administrator switches them on, in **Settings** → **Platform** → **Explainers**. In this version they can only be on for the platform owner’s workspace.']],
+                                ['The script has too few sources', ['Add source links in “Source links”, or in the script’s sources, then **Rewrite with a note**.']],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
         // ─── 12. AI usage and costs ──────────────────────────────────────────
         {
             slug: 'ai-usage',

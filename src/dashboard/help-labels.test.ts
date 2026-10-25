@@ -36,6 +36,7 @@ const STRINGS = vm.runInContext('I18N.strings', ctx) as Record<Lang, Record<stri
 const CONTENT = vm.runInContext(`${readFileSync('dashboard/js/help-content.js', 'utf8')}\n;HelpContent`, ctx, { filename: 'help-content.js' }) as Json;
 
 /** Deliberate non-UI emphasis, per language: the bold text (as `clean` leaves it) → why. */
+// «Gemini» left both lists on 2026-10-25: the Explainers settings name the writer «Gemini» (explainers.writerSetting.gemini), so it is an interface string.
 const NOT_UI: Record<Lang, Record<string, string>> = {
     ar: {
         'ردود الكلمات المفتاحية': 'feature name leading a list item',
@@ -72,7 +73,6 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'ffmpeg': 'a program the worker needs',
         'لقطة': 'emphasis',
         'خاصاً': 'emphasis: the TikTok account setting',
-        'Gemini': 'a product name',
         'المفتاح المجاني حدوده ضيقة': 'quota fact leading a list item',
         'Verify and save': 'a control in Meta’s dashboard',
         'System users': 'a control in Meta’s dashboard',
@@ -127,7 +127,6 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'ffmpeg': 'a program the worker needs',
         'moments': 'emphasis',
         'private': 'emphasis: the TikTok account setting',
-        'Gemini': 'a product name',
         'A free key has tight limits': 'quota fact leading a list item',
         'Verify and save': 'a control in Meta’s dashboard',
         'System users': 'a control in Meta’s dashboard',
