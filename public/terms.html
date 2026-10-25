@@ -62,20 +62,22 @@
           disconnect() src/services/tiktokConnections.ts:376-393;
           deleteConnectionByOpenId() :401-406, via applyWebhookEvent()
           src/services/tiktokPublish.ts:656-660
-    WhatsApp — ADDED 2026-10-19 against the shipped pipeline, not the plan (the full list, with file:line and the parts that are
-    worded conditionally, is the WhatsApp block in public/privacy.html). Sections 2, 3, 4, 6 and 7 claim:
-      the assistant answers messages to the connected number, and its first reply to a person says it is automated
-          answerWhatsApp(), src/webhook/whatsappAnswer.ts:187; the disclosure, :205
+    WhatsApp — ADDED 2026-10-19, re-verified 2026-10-25 (the full list, with file:line, is the WhatsApp block in public/privacy.html).
+    Sections 2, 3, 4, 6 and 7 claim:
+      the assistant answers messages to the connected number, as the owner sets it up, and its first reply to a person says it is automated
+          answerWhatsApp(), src/webhook/whatsappAnswer.ts:222; the disclosure, :240 and src/services/dmSales/turn.ts:276-283
       replies come from Groq, Anthropic or OpenAI only, never Gemini
-          PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp, src/services/aiProviders/purposes.ts:70; src/services/dmSales/turn.ts:37
+          PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp, src/services/aiProviders/purposes.ts:74-76; src/services/dmSales/turn.ts:408-420
       a person on request: the model's wants_human intent forces a hand-off that pauses the assistant
-          src/services/dmSales/coerce.ts:137; turn.ts:224
+          src/services/dmSales/coerce.ts:137; turn.ts:223-252
       «إيقاف» / "stop" ends the replies and the follow-ups
-          prefilter.ts:126, :208; dmSales/store.ts:181; dmSales/followup.ts:148
-      connected with a token Meta issues, stored encrypted; Disconnect unsubscribes the app, wipes the token and switches the agent off
-          src/routes/whatsapp.ts:8; src/services/whatsappConnections.ts:314
+          matchStopMessage(), src/services/consent.ts:265; optOutWhatsAppContact(), src/webhook/whatsappOptOut.ts:96-132; withdrawAll(),
+          consent.ts:178 (opted_out_at, the pause, the follow-ups cancelled)
+      connected with a token Meta issues, stored encrypted; Disconnect unsubscribes the app from the WhatsApp Business account (best
+      effort: a token Meta refuses cannot unsubscribe), wipes the token and switches the agent off
+          src/routes/whatsapp.ts:360-400; src/services/whatsappConnections.ts:314, :366-375 (revokeConnection())
       Meta's terms for the WhatsApp Business Platform and the WhatsApp Business Messaging Policy apply to the owner's number
-          (the URLs are those in research/02-policy-pricing.md "Sources"; business.whatsapp.com/policy redirects to whatsappbusiness.com/policy)
+          (the three URLs were opened on 2026-10-25; business.whatsapp.com/policy answers 301 to whatsappbusiness.com/policy)
 
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
     1. Contact email: the contact email in Settings → Public site — section 12, both languages.
@@ -1238,7 +1240,8 @@
                     </li>
                     <li>
                         <strong>واتساب:</strong> افصله من <strong>الإعدادات</strong> في لوحة التحكم، فيُلغي التطبيق
-                        اشتراكه في رقمك لدى ميتا ويمحو الرمز المخزَّن ويوقف المساعد؛ أو ألغِ الرمز لدى ميتا، فيتوقّف
+                        اشتراكه في حسابك على واتساب للأعمال لدى ميتا (إن كانت ميتا لا تزال تقبل الرمز) ويمحو الرمز المخزَّن
+                        ويوقف المساعد؛ أو ألغِ الرمز لدى ميتا، فيتوقّف
                         عن العمل.
                     </li>
                     <li>
@@ -1569,8 +1572,8 @@
                     </li>
                     <li>
                         <strong>WhatsApp:</strong> disconnect it from <strong>Settings</strong> in the dashboard, which
-                        unsubscribes the app from your number at Meta, deletes the stored token and switches the assistant
-                        off; or revoke the token at Meta, after which it stops working.
+                        unsubscribes the app from your WhatsApp Business account at Meta (if Meta still accepts the token),
+                        deletes the stored token and switches the assistant off; or revoke the token at Meta, after which it stops working.
                     </li>
                     <li>
                         <strong>Instagram and Facebook:</strong> remove the app from Business

@@ -23,12 +23,14 @@
  *   - WhatsApp is a channel: what is collected (the WhatsApp name, the phone number or the Meta user ID, the text, the files), "less may be stored,
  *     never more", Meta's WhatsApp Cloud API as a processor that keeps a message for up to 30 days;
  *   - the AI providers: replies come from Groq, Anthropic or OpenAI ONLY and never Google, because their terms say they do not train on what they are
- *     sent (the page's list is compared with `NO_TRAINING_PROVIDERS` in code, so it cannot drift); a voice note is transcribed by Groq or OpenAI;
- *   - Resend and Telegram carry the owner's alerts, which include an excerpt of what the person wrote;
- *   - opt-out by writing «إيقاف» / "stop", a person on request, deletion (private files included) and what deletion cannot reach.
+ *     sent (the page's list is compared with `NO_TRAINING_PROVIDERS` in code, so it cannot drift); a voice note is transcribed by Groq ALONE today,
+ *     because the only caller never allows the paid provider (a test reads `ALLOW_PAID_TRANSCRIPTION`, so naming OpenAI again is forced, not forgotten);
+ *   - the operator's alerts (section 3's) apply on WhatsApp too, naming the person by their WhatsApp name;
+ *   - opt-out by writing «إيقاف» / "stop" (the code's own matcher is asked), a person on request, deletion (private files included), what
+ *     deletion cannot reach, and the one thing a deletion KEEPS: the record of a request to stop (a test reads erasure.ts and the v50 schema).
  *
- * The voice-note and file sentences are worded conditionally on purpose: nothing in the pipeline calls the transcriber or the media saver yet (the
- * block at the top of public/privacy.html says so), and these pins hold either way. When the integration lands, read them again.
+ * Re-verified on 2026-10-25 against the wired pipeline: files are saved and voice notes transcribed for the people stored in full (the block at the
+ * top of public/privacy.html cites each step), and the page says "may" and "can" where who is stored in full or answered is the owner's setting.
  *
  * The pages' bodies are otherwise untouched by this change, so the existing checks on them (publicPagesFiles, publicPagesChrome,
  * landingTruth's owner rules) are what say the rest is still true.
@@ -39,6 +41,7 @@ import { describe, it } from 'node:test';
 import { NO_TRAINING_PROVIDERS, PURPOSE_PROVIDER_ALLOWLIST } from './aiProviders/purposes.js';
 import { PRIVATE_MEDIA_ORPHAN_DAYS } from './retention.js';
 import { TRANSCRIBE_PROVIDERS } from './transcribe.js';
+import { matchStopMessage } from './consent.js';
 import { buildNoticeText, excerpt, noticeWho, TELEGRAM_API } from './notify.js';
 import { emailSubject, RESEND_API } from './notifyEmail.js';
 
@@ -259,14 +262,14 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
         assert.ok(en.includes('in sales mode, when the assistant hands your conversation to a person (for example because you asked for one, asked for a refund or complained) or has just sent you the link after you asked to buy, asked the price or asked whether it suits you'));
         assert.ok(en.includes('This happens only for conversations with his own account, and only if he has switched the alerts on.'));
         assert.ok(en.includes('The alert is a Telegram message and/or an email sent through Resend (section 5).'));
-        assert.ok(en.includes('It names you by your username, or, if we have none, by the last four characters of your account ID, and quotes up to 200 characters of the last message you wrote, with any link in it replaced by “[link]”.'));
+        assert.ok(en.includes('It names you by your username (on WhatsApp, your WhatsApp name), or, if we have none, by the last four characters of your account ID, and quotes up to 200 characters of the last message you wrote, with any link in it replaced by “[link]”.'));
         assert.ok(en.includes('It also says why a person is needed, how long Meta\'s reply window has left, and links to the conversation in the dashboard.'));
         const ar = section3.ar;
         assert.ok(ar.includes('قد يُنبَّه مُشغّل الأداة (القسم 9) إذا تعذّرت كتابة ردّ على رسالتك (عطل تقني)'));
         assert.ok(ar.includes('وكذلك في وضع المبيعات حين يحوّل المساعد محادثتك إلى شخص (كأن تطلب التحدّث إلى شخص أو استرجاع مالك أو تشتكي)، أو حين يرسل إليك الرابط بعد أن سألت عن الشراء أو عن السعر أو عن مناسبته لك.'));
         assert.ok(ar.includes('ولا يحدث ذلك إلا في المحادثات مع حسابه هو، وإلا إن فعّل التنبيهات.'));
         assert.ok(ar.includes('والتنبيه رسالة على تيليجرام و/أو بريد إلكتروني يُرسَل عبر Resend (القسم 5).'));
-        assert.ok(ar.includes('يُذكر فيه اسم المستخدم الخاص بك، أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم مستخدم لك، وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتُستبدَل الروابط فيها بـ«[link]».'));
+        assert.ok(ar.includes('يُذكر فيه اسم المستخدم الخاص بك (وعلى واتساب اسمك على واتساب)، أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم لك، وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتُستبدَل الروابط فيها بـ«[link]».'));
         assert.ok(ar.includes('ويُذكر فيه أيضاً سبب الحاجة إلى شخص، والوقت الباقي من نافذة الردّ لدى ميتا، ورابط إلى المحادثة في لوحة التحكم.'));
         // Every Latin word in the Arabic paragraph sits in its own <bdi>, or the punctuation around it reorders.
         const arRaw = between(privacy.ar, '<h2 id="gemini-ar">', '<h2 id="retention-ar">');
@@ -291,10 +294,10 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
             for (const attrs of anchors.slice(-2)) assert.match(attrs, /target="_blank" rel="noopener noreferrer"/, lang);
         }
         const en = words(services.en);
-        assert.ok(en.includes('Resend — sends the alert emails, when they are switched on: the alerts about a conversation that needs a person, described in section 3, which carry your username (or the last four characters of your account ID) and up to 200 characters of your last message, and the ads alerts in section 1.'));
+        assert.ok(en.includes('Resend — sends the alert emails, when they are switched on: the alerts about a conversation that needs a person, described in section 3, which carry your username or your WhatsApp name (or the last four characters of your account ID) and up to 200 characters of your last message, and the ads alerts in section 1.'));
         assert.ok(en.includes('Telegram — delivers the same alerts as Telegram messages, to the chat set in Settings, when they are switched on.'));
         const ar = words(services.ar);
-        assert.ok(ar.includes('Resend — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة: تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.'));
+        assert.ok(ar.includes('Resend — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة: تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك أو اسمك على واتساب (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.'));
         assert.ok(ar.includes('تيليجرام (Telegram) — يوصل التنبيهات نفسها رسائلَ إلى محادثة تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة.'));
         for (const latin of ['Resend', 'Telegram']) assert.ok(services.ar.includes(`<bdi lang="en" dir="ltr">${latin}</bdi>`), latin);
     });
@@ -322,10 +325,10 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
             assert.ok(ai > 0 && ai < alerts && alerts < logs, lang);
         }
         const en = words(section5.en);
-        assert.ok(en.includes('an alert sent to him by Telegram and/or by email through Resend may have carried your username (or the last four characters of your account ID) and up to 200 characters of your last message (section 3 of the privacy policy)'));
+        assert.ok(en.includes('an alert sent to him by Telegram and/or by email through Resend may have carried your username or WhatsApp name (or the last four characters of your account ID) and up to 200 characters of your last message (section 3 of the privacy policy)'));
         assert.ok(en.includes('Those copies are in his Telegram chat and mailbox, and Telegram\'s and Resend\'s copies are governed by their own policies; deleting your data here does not reach them.'));
         const ar = words(section5.ar);
-        assert.ok(ar.includes('فقد يكون تنبيهٌ أُرسل إليه على تيليجرام و/أو بالبريد الإلكتروني عبر Resend قد ذكر اسم المستخدم الخاص بك (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها (القسم 3 من سياسة الخصوصية)'));
+        assert.ok(ar.includes('فقد يكون تنبيهٌ أُرسل إليه على تيليجرام و/أو بالبريد الإلكتروني عبر Resend قد ذكر اسم المستخدم الخاص بك أو اسمك على واتساب (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها (القسم 3 من سياسة الخصوصية)'));
         assert.ok(ar.includes('وحذف بياناتك هنا لا يصل إليها.'));
     });
 
@@ -336,6 +339,9 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
         assert.equal(excerpt('see https://example.com/page now'), 'see [link] now');
         assert.equal(noticeWho({ lang: 'en', username: null, senderId: '17841400000001234', platform: 'instagram' }), 'Instagram user …1234');
         assert.equal(noticeWho({ lang: 'en', username: 'someone', senderId: '17841400000001234', platform: 'instagram' }), '@someone');
+        // WhatsApp: the profile name (handoff.ts passes it as `username`), never an @; with none, the last four characters of the BSUID.
+        assert.equal(noticeWho({ lang: 'en', username: 'Karim', senderId: 'US.13491208655302741918', platform: 'whatsapp' }), 'Karim');
+        assert.equal(noticeWho({ lang: 'en', username: null, senderId: 'US.13491208655302741918', platform: 'whatsapp' }), 'WhatsApp user …1918');
         const notice = {
             kind: 'handoff' as const, reason: 'wants_human', lang: 'en' as const, username: 'someone', senderId: '17841400000001234',
             lastMessage: 'x'.repeat(250), windowMs: null, link: null, platform: 'instagram',
@@ -411,18 +417,24 @@ describe('/privacy — WhatsApp is named as a channel, in both languages (FR-028
     it('says what Meta delivers with a message and what is stored about the person, voice notes and images included', () => {
         const en = words(waSection.en);
         assert.ok(en.includes('the name on your WhatsApp profile'));
-        assert.ok(en.includes('an identifier Meta gives this business for you (a business-scoped user ID)'));
+        assert.ok(en.includes('the identifiers Meta gives this business for you (business-scoped user IDs)'), 'a parent BSUID too, when the business is enrolled');
         assert.ok(en.includes('your phone number if Meta shares it with us'));
-        assert.ok(en.includes('Stored about you: your WhatsApp name, your phone number if it came, your Meta user ID'));
+        assert.ok(en.includes('Stored about you: your WhatsApp name, your phone number if it came, your Meta user IDs'));
+        assert.ok(en.includes('and the automated assistant may answer them, as section 3 describes'), 'only the people the owner set it up for are answered');
+        assert.ok(en.includes('It contains all of the above, and anything else the message carried, such as a location or a contact card you shared, so it is a second copy of it.'));
+        assert.ok(en.includes('download the file itself from Meta (a voice note, photo, video or document, not a sticker)'));
         assert.ok(en.includes('The text of your message as you wrote it'));
         assert.ok(en.includes('The verbatim event Meta sent us, in full.'));
         assert.ok(en.includes('If your message is a voice note, photo, video, sticker or document'));
         assert.ok(en.includes('keep a private copy of it with the conversation: in a non-public storage area at Supabase, never served from a public address'));
         const ar = words(waSection.ar);
         assert.ok(ar.includes('اسمك في ملفك على واتساب'));
-        assert.ok(ar.includes('معرّف مستخدم واتساب الخاص بالنشاط'));
+        assert.ok(ar.includes('معرّفات مستخدم واتساب الخاصة بالنشاط'));
         assert.ok(ar.includes('ورقم هاتفك إن شاركته ميتا معنا'));
-        assert.ok(ar.includes('يُخزَّن عنك: اسمك على واتساب، ورقم هاتفك إن وصل، ومعرّفك عند ميتا'));
+        assert.ok(ar.includes('يُخزَّن عنك: اسمك على واتساب، ورقم هاتفك إن وصل، ومعرّفاتك عند ميتا'));
+        assert.ok(ar.includes('وقد يردّ عليها المساعد الآلي كما يوضّح القسم 3'));
+        assert.ok(ar.includes('يحتوي على ما سبق كلّه، وعلى أي شيء آخر حملته الرسالة، كموقع أو بطاقة جهة اتصال شاركتَها، فهو نسخة ثانية منه.'));
+        assert.ok(ar.includes('(المقطع الصوتي أو الصورة أو الفيديو أو المستند، لا الملصق)'));
         assert.ok(ar.includes('نصّ رسالتك كما كتبته'));
         assert.ok(ar.includes('الحدث الأصلي كما ورد من ميتا، حرفياً وبالكامل.'));
         assert.ok(ar.includes('إن كانت رسالتك مقطعاً صوتياً أو صورة أو فيديو أو ملصقاً أو مستنداً'));
@@ -434,6 +446,9 @@ describe('/privacy — WhatsApp is named as a channel, in both languages (FR-028
         assert.ok(words(waSection.en).includes('but never more.'));
         assert.ok(words(waSection.ar).includes('وقد يُخزَّن أقلّ من ذلك بحسب ما ضبطه صاحب الحساب لمساعد واتساب'));
         assert.ok(words(waSection.ar).includes('لكن لا يُخزَّن أكثر من ذلك أبداً.'));
+        // A stranger's thread keeps how it began (entry_source is metadata, recorded for everyone), so the example says so.
+        assert.ok(words(waSection.en).includes('only that a message arrived, when, of what type, how the conversation began, and the sender\'s Meta user ID'));
+        assert.ok(words(waSection.ar).includes('أن رسالة وصلت ووقتها ونوعها وكيف بدأت المحادثة ومعرّف مرسلها عند ميتا'));
     });
 
     it('no longer says a phone number is never received: on Instagram and Facebook it is not, on WhatsApp it is', () => {
@@ -445,26 +460,29 @@ describe('/privacy — WhatsApp is named as a channel, in both languages (FR-028
         assert.ok(ar.includes('ولا يصلنا رقم هاتفك من إنستجرام أو فيسبوك؛ أمّا على واتساب فرقمك جزء ممّا تسلّمه ميتا إلينا'));
     });
 
-    it('says who reads it and what the owner alert carries, and that the same alert exists for Instagram and Facebook', () => {
+    it('says who reads it, and that section 3\'s alerts apply, with a WhatsApp name and a reply that could not be sent', () => {
         const en = words(waSection.en);
         assert.ok(en.includes('The account owner reads the conversation in the inbox of their dashboard and can reply to it by hand.'));
-        assert.ok(en.includes('an alert may reach them by email or on Telegram, if they switched that on'));
-        assert.ok(en.includes('an excerpt of the last thing you wrote (up to 200 characters, with links replaced by “[link]”)'));
-        assert.ok(en.includes('Similar alerts exist for direct messages on Instagram and Facebook. They travel through Resend and Telegram (section 5).'));
+        assert.ok(en.includes('The alerts section 3 describes apply here too (on WhatsApp the assistant always works as in sales mode), and also when a reply to you could not be sent'));
+        assert.ok(en.includes('they name you by your WhatsApp name or username (or the last four characters of your ID if there is neither) and quote up to 200 characters of the last thing you wrote, with links replaced by “[link]”. They travel through Telegram and Resend (section 5).'));
         const ar = words(waSection.ar);
         assert.ok(ar.includes('يقرأ صاحب الحساب المحادثة في صندوق رسائله بلوحة التحكم، ويستطيع الردّ عليها بنفسه.'));
-        assert.ok(ar.includes('قد تصله رسالة تنبيه على بريده الإلكتروني أو على تيليجرام، إن فعّل ذلك'));
-        assert.ok(ar.includes('ومقتطف من آخر ما كتبتَه (حتى 200 حرف'));
-        assert.ok(ar.includes('وتنبيهات مماثلة تُرسَل عن الرسائل الخاصة على إنستجرام وفيسبوك. وتمرّ عبر Resend وTelegram (القسم 5).'));
+        assert.ok(ar.includes('وتسري هنا التنبيهات الموصوفة في القسم 3 (فالمساعد على واتساب يعمل دائماً كما في وضع المبيعات)، وكذلك حين يتعذّر إرسال ردّ إليك'));
+        assert.ok(ar.includes('يُذكر فيها اسمك على واتساب أو اسم المستخدم (أو آخر أربعة أحرف من معرّفك إن لم يكن لك أيٌّ منهما)، وما يصل إلى 200 حرف من آخر ما كتبتَه، وتُستبدَل الروابط فيه بـ«[link]». وتمرّ عبر تيليجرام وResend (القسم 5).'));
+        // The old paragraph's "the account owner may be alerted": it is the operator, and only for his own account (section 3).
+        assert.equal(en.includes('an alert may reach them by email or on Telegram'), false);
     });
 
-    it('says how to stop the messages: «إيقاف» or "stop" on its own, one confirming line, no more replies, no follow-ups', () => {
+    it('says how to stop the messages: «إيقاف» or "stop" on its own, which the code\'s matcher takes; no more replies or follow-ups; a confirmation only when the assistant is answering', () => {
         const en = words(waSection.en);
         assert.ok(en.includes('To stop the messages: write «إيقاف» or “stop” on its own in a message.'));
-        assert.ok(en.includes('one line confirming that no more messages will come, stops replying in that conversation, and sends you no follow-ups after that.'));
+        assert.ok(en.includes('The assistant then stops replying in that conversation and sends you no follow-ups, and, if it is the one answering you at the time, confirms this once, in one line. Your request is recorded (section 4).'));
         const ar = words(waSection.ar);
         assert.ok(ar.includes('لإيقاف الرسائل: اكتب «إيقاف» أو stop وحدها في رسالة.'));
-        assert.ok(ar.includes('بسطر واحد يؤكّد أن لا رسائل أخرى، ويتوقّف عن الردّ في هذه المحادثة، ولا يرسل لك متابعات بعد ذلك.'));
+        assert.ok(ar.includes('عندها يتوقّف المساعد عن الردّ في هذه المحادثة ولا يرسل لك متابعات بعد ذلك، ويؤكّد ذلك مرة واحدة بسطر واحد إن كان هو من يردّ عليك حينها. ويُسجَّل طلبك هذا (القسم 4).'));
+        // The words the page tells people to write are the matcher's own, and so is «توقف», which section 1's ads text tells them to write.
+        for (const phrase of ['إيقاف', 'stop', 'توقف', 'STOP']) assert.ok(matchStopMessage(phrase), phrase);
+        assert.equal(matchStopMessage('please stop by tomorrow'), null, 'a sentence is not a stop');
     });
 
     it('lists the short-link counting without repeating the Instagram list item the other checks locate by its words', () => {
@@ -513,32 +531,40 @@ describe('/privacy — the AI providers that may read WhatsApp messages, and the
 
     it('says what is sent: up to twelve messages with their direction, notes on the conversation, and no name, number, ID or conversation ID', () => {
         const en = words(geminiSection.en);
-        assert.ok(en.includes('the text of your message and up to the last twelve messages in the thread, with the direction of each, and notes about the conversation itself; your WhatsApp name, your phone number, your ID and the conversation ID are not sent.'));
+        assert.ok(en.includes('What is sent is the text of your message and up to the last twelve messages in the thread, with the direction of each, and notes about the conversation itself (such as whether you have already been sent a link, or which button you tapped); your WhatsApp name, your phone number, your ID and the conversation ID are not sent.'));
+        assert.equal(en.includes('What is sent is what the previous paragraph describes'), false, 'the previous paragraph names a comment keyword and an ad, which WhatsApp does not send');
         const ar = words(geminiSection.ar);
-        assert.ok(ar.includes('نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة، مع اتجاه كل رسالة، وملاحظات عن المحادثة نفسها'));
+        assert.ok(ar.includes('وما يُرسَل هو نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة، مع اتجاه كل رسالة، وملاحظات عن المحادثة نفسها (كأن يُذكر هل أُرسل إليك رابط من قبل، أو أيّ زرّ ضغطت)'));
         assert.ok(ar.includes('ولا يُرسَل اسمك على واتساب ولا رقم هاتفك ولا معرّفك ولا معرّف المحادثة.'));
     });
 
-    it('says a voice note is turned into text by Groq or OpenAI only, which is the code\'s transcription allow-list', () => {
+    it('says a voice note is turned into text by Groq alone, which is what the code does: OpenAI is on the allow-list but its only caller never allows it', () => {
+        // The allow-list is Groq, then OpenAI; OpenAI is the paid one and is used only when the caller allows paid AI, and the one caller does not.
         assert.deepEqual([...TRANSCRIBE_PROVIDERS], ['groq', 'openai']);
+        const caller = read('src/webhook/whatsappMediaInput.ts');
+        assert.ok(caller.includes('const ALLOW_PAID_TRANSCRIPTION = false;'), 'when this flips, the page must name OpenAI again (sections 3 and 5, /data-deletion section 5)');
+        assert.ok(caller.includes('allowPaid: ALLOW_PAID_TRANSCRIPTION'));
         const en = words(geminiSection.en);
-        assert.ok(en.includes('Voice notes: when a voice note is turned into text so that it can be answered, the audio is sent to Groq (its Whisper speech model), or to OpenAI if the operator has allowed paid services; it is sent to no one else.'));
+        assert.ok(en.includes('Voice notes: when a voice note is turned into text so that it can be answered, the audio is sent to Groq (its Whisper speech model) and to no one else.'));
         assert.ok(en.includes('The text it produces is treated as if you had typed it.'));
         const ar = words(geminiSection.ar);
-        assert.ok(ar.includes('المقاطع الصوتية: حين يُحوَّل مقطع صوتي إلى نصّ ليُجاب عنه، يُرسَل الصوت إلى Groq (نموذج Whisper للتعرّف على الكلام)، أو إلى OpenAI إن سمح المُشغّل بالخدمات المدفوعة؛ ولا يُرسَل إلى أي جهة أخرى.'));
+        assert.ok(ar.includes('المقاطع الصوتية: حين يُحوَّل مقطع صوتي إلى نصّ ليُجاب عنه، يُرسَل الصوت إلى Groq (نموذج Whisper للتعرّف على الكلام)، ولا يُرسَل إلى أي جهة أخرى.'));
+        // The old wording paired the two for transcription ("Groq or OpenAI"); the replies' three are always "Groq, Anthropic or OpenAI".
+        for (const doc of [privacy.en, deletion.en]) assert.equal(words(doc).includes('Groq or OpenAI'), false, 'no sentence still says OpenAI transcribes');
+        for (const doc of [privacy.ar, deletion.ar]) assert.equal(words(doc).includes('Groq أو OpenAI'), false, 'no sentence still says OpenAI transcribes');
     });
 
-    it('says a person is available on request, and that the first reply says it is automated', () => {
-        assert.ok(words(geminiSection.en).includes('If you ask for a person, the assistant is built to stop replying and hand the conversation to the account owner.'));
-        assert.ok(words(geminiSection.ar).includes('وإن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم على أن يتوقّف عن الردّ وتُحوَّل المحادثة إلى صاحب الحساب.'));
+    it('says a person is available on request, in sales mode and on WhatsApp only (the default Gemini path has no hand-off), and that the first reply says it is automated', () => {
+        assert.ok(words(geminiSection.en).includes('In sales mode and on WhatsApp, if you ask for a person, the assistant is built to stop replying and hand the conversation to the account owner.'));
+        assert.ok(words(geminiSection.ar).includes('وفي وضع المبيعات وعلى واتساب، إن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم على أن يتوقّف عن الردّ وتُحوَّل المحادثة إلى صاحب الحساب.'));
         assert.ok(words(geminiSection.en).includes('the first message in a thread — and another one after a long gap — tells you that you are talking to an automated service'));
     });
 
     it('repeats the rule in the sub-processor block, with no link of its own and no provider promised as live', () => {
         const en = words(block.en);
-        assert.ok(en.includes('WhatsApp messages: only Groq, Anthropic or OpenAI writes their replies, and only Groq or OpenAI turns their voice notes into text (section 3); nothing from them reaches Google, OpenRouter or a service at an address the operator enters.'));
+        assert.ok(en.includes('WhatsApp messages: only Groq, Anthropic or OpenAI writes their replies, and only Groq turns their voice notes into text (section 3); nothing from them reaches Google, OpenRouter or a service at an address the operator enters.'));
         const ar = words(block.ar);
-        assert.ok(ar.includes('رسائل واتساب: لا يكتب ردودَها إلا Groq أو Anthropic أو OpenAI، ولا يحوّل مقاطعها الصوتية إلى نصّ إلا Groq أو OpenAI (القسم 3)'));
+        assert.ok(ar.includes('رسائل واتساب: لا يكتب ردودَها إلا Groq أو Anthropic أو OpenAI، ولا يحوّل مقاطعها الصوتية إلى نصّ إلا Groq (القسم 3)'));
         assert.ok(ar.includes('ولا يصل شيء منها إلى جوجل ولا إلى OpenRouter ولا إلى خدمة بعنوان يضيفه المُشغّل.'));
     });
 });
@@ -617,9 +643,20 @@ describe('/privacy — Meta as WhatsApp processor, Resend and Telegram for the o
         assert.ok(security.ar.includes('والملفات الواردة من واتساب، إن حُفظت، ليست مشفّرة من طرف إلى طرف كذلك.'));
     });
 
-    it('lists WhatsApp among the purposes: answering the person, and alerting the owner when a conversation needs them', () => {
-        assert.ok(words(privacy.en).includes('To answer you if you message a WhatsApp number the account owner connected, and to alert the account owner when a conversation needs them.'));
-        assert.ok(words(privacy.ar).includes('الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب، وتنبيه صاحب الحساب حين تحتاج محادثة إليه.'));
+    it('lists WhatsApp among the purposes (answering the person; the alert is section 3\'s own purpose, listed once)', () => {
+        assert.ok(words(privacy.en).includes('To answer you if you message a WhatsApp number the account owner connected.'));
+        assert.ok(words(privacy.ar).includes('الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب.'));
+        assert.ok(words(privacy.en).includes('To alert the operator of the tool when a conversation with his own account needs a person (section 3).'));
+    });
+
+    it('says in section 4 that a request to stop is kept, also after a deletion, which is what the schema and the erasure route do', () => {
+        // contact_consents.conversation_id is SET NULL on delete ("must not ... delete the evidence"), and the erasure route never touches the table.
+        assert.match(read('src/config/migration_v50_whatsapp.sql'), /conversation_id UUID REFERENCES conversations\(id\) ON DELETE SET NULL/);
+        assert.equal(read('src/services/erasure.ts').includes('contact_consents'), false, 'if erasure starts deleting the stop record, change section 4 and /data-deletion section 2');
+        const en = words(retentionSection.en);
+        assert.ok(en.includes('WhatsApp — a request to stop: if you asked to stop the messages (section 1), the record of it — your Meta user ID, the words you wrote and when — is kept with no automatic expiry, and is not deleted when your conversation is, so that your request keeps being honoured.'));
+        const ar = words(retentionSection.ar);
+        assert.ok(ar.includes('واتساب — طلب إيقاف الرسائل: إن طلبتَ إيقاف الرسائل (القسم 1)، يبقى سجلّ ذلك — معرّفك عند ميتا والكلمات التي كتبتَها ووقتها — بلا مدة انتهاء تلقائية، ولا يُحذف حين تُحذف محادثتك، كي يظلّ طلبك نافذاً.'));
     });
 });
 
@@ -639,10 +676,12 @@ describe('/data-deletion — WhatsApp: how to ask, what is deleted, what deletio
     it('lists what is stored about a WhatsApp contact, and that less may be stored, never more', () => {
         const en = words(s1.en);
         assert.ok(en.includes('If you sent a message on WhatsApp: the text of your messages as you wrote them and of the replies sent to you, your name on your WhatsApp profile, your phone number if it reached us'));
-        assert.ok(en.includes('the verbatim event received from Meta — a second copy of all of that — and whatever was kept of your voice notes, photos and files. Less than this may be stored, never more.'));
+        assert.ok(en.includes('your Meta user IDs and your WhatsApp username if you have one'));
+        assert.ok(en.includes('the verbatim event received from Meta — a second copy of all of that — whatever was kept of your voice notes, photos and files, and, if you asked to stop the messages, a record of that request. Less than this may be stored, never more.'));
         const ar = words(s1.ar);
         assert.ok(ar.includes('إن أرسلتَ رسالة على واتساب: نصّ رسائلك كما كتبتها ونصّ الردود التي أُرسلت إليك، واسمك في ملفك على واتساب، ورقم هاتفك إن وصل إلينا'));
-        assert.ok(ar.includes('وما حُفظ من مقاطعك الصوتية وصورك وملفاتك. وقد يكون المخزَّن أقلّ من ذلك، ولا يكون أكثر.'));
+        assert.ok(ar.includes('ومعرّفاتك عند ميتا واسم المستخدم على واتساب إن وُجد'));
+        assert.ok(ar.includes('وما حُفظ من مقاطعك الصوتية وصورك وملفاتك، وسجلّ طلبك إيقاف الرسائل إن طلبتَ ذلك. وقد يكون المخزَّن أقلّ من ذلك، ولا يكون أكثر.'));
     });
 
     it('says how a WhatsApp user asks: by email or by writing to the same number, with the phone number or username, looked up by hand', () => {
@@ -666,6 +705,11 @@ describe('/data-deletion — WhatsApp: how to ask, what is deleted, what deletio
         assert.ok(ar.includes('وما حُفظ من ملفاتك — مقاطع صوتية وصور وغيرها — ويُزال الملف نفسه من مساحة التخزين في التنظيف اليومي التالي.'));
     });
 
+    it('says the one thing a WhatsApp deletion keeps: the record of a request to stop', () => {
+        assert.ok(words(s2.en).includes('What is not deleted is the record of your request to stop the messages, if you made one (your Meta user ID, the words you wrote and when): it is kept so that your request keeps being honoured.'));
+        assert.ok(words(s2.ar).includes('ولا يُحذف سجلّ طلبك إيقاف الرسائل، إن طلبتَ ذلك (معرّفك عند ميتا والكلمات التي كتبتَها ووقتها): يبقى كي يظلّ طلبك نافذاً.'));
+    });
+
     it('says what is deleted without asking (an unreferenced file after the code\'s number of days) and what stays until asked', () => {
         assert.ok(words(s3.en).includes(`A file sent on WhatsApp, if a copy of it was kept and no message points to it, is deleted ${PRIVATE_MEDIA_ORPHAN_DAYS} days after it was saved.`));
         assert.ok(words(s3.ar).includes(`يُحذف بعد ${PRIVATE_MEDIA_ORPHAN_DAYS} يوماً من حفظه`));
@@ -677,13 +721,13 @@ describe('/data-deletion — WhatsApp: how to ask, what is deleted, what deletio
         const en = words(s5.en);
         assert.ok(en.includes('Meta (WhatsApp): your messages already exist in the WhatsApp app on your phone; that copy is yours.'));
         assert.ok(en.includes("Meta's documentation says it keeps a message for at most 30 days; that copy is Meta's, and we neither own nor control it."));
-        assert.ok(en.includes('AI providers — WhatsApp: if you messaged a WhatsApp number, the text of your message and up to the last twelve messages of your conversation reached Groq, Anthropic or OpenAI so that it could write the reply, and did not reach Google.'));
-        assert.ok(en.includes('If you sent a voice note, it may have reached Groq or OpenAI to be turned into text.'));
+        assert.ok(en.includes('AI providers — WhatsApp: if the assistant answered your WhatsApp messages, the text of your message and up to the last twelve messages of your conversation reached Groq, Anthropic or OpenAI so that it could write the reply, and did not reach Google.'));
+        assert.ok(en.includes('If you sent a voice note, it may have reached Groq to be turned into text.'));
         const ar = words(s5.ar);
         assert.ok(ar.includes('ميتا (واتساب): رسائلك موجودة أصلاً في تطبيق واتساب لديك، وتلك نسختك.'));
         assert.ok(ar.includes('يُحتفَظ بها لديها مدة أقصاها 30 يوماً'));
-        assert.ok(ar.includes('مزوّدو الذكاء الاصطناعي — واتساب: إن راسلتَ رقماً على واتساب، فقد وصل نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من محادثتك إلى Groq أو Anthropic أو OpenAI ليكتب الردّ، ولم يصل إلى جوجل.'));
-        assert.ok(ar.includes('فقد يكون وصل إلى Groq أو OpenAI ليُحوَّل إلى نصّ'));
+        assert.ok(ar.includes('مزوّدو الذكاء الاصطناعي — واتساب: إن ردّ المساعد على رسائلك على واتساب، فقد وصل نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من محادثتك إلى Groq أو Anthropic أو OpenAI ليكتب الردّ، ولم يصل إلى جوجل.'));
+        assert.ok(ar.includes('فقد يكون وصل إلى Groq ليُحوَّل إلى نصّ'));
     });
 
     it('keeps the new bullets between Google\'s and the logs', () => {
@@ -759,7 +803,7 @@ describe('/terms — WhatsApp: Meta\'s terms apply, the assistant is automated, 
     it('adds WhatsApp to the trademarks and to how to disconnect it', () => {
         assert.ok(words(platforms.en).includes('Instagram, Facebook, WhatsApp, TikTok and YouTube are trademarks of their respective owners.'));
         assert.ok(words(platforms.ar).includes('إنستجرام وفيسبوك وواتساب وتيك توك ويوتيوب علامات تجارية مملوكة لأصحابها.'));
-        assert.ok(words(disconnecting.en).includes('WhatsApp: disconnect it from Settings in the dashboard, which unsubscribes the app from your number at Meta, deletes the stored token and switches the assistant off; or revoke the token at Meta, after which it stops working.'));
-        assert.ok(words(disconnecting.ar).includes('واتساب: افصله من الإعدادات في لوحة التحكم، فيُلغي التطبيق اشتراكه في رقمك لدى ميتا ويمحو الرمز المخزَّن ويوقف المساعد؛ أو ألغِ الرمز لدى ميتا، فيتوقّف عن العمل.'));
+        assert.ok(words(disconnecting.en).includes('WhatsApp: disconnect it from Settings in the dashboard, which unsubscribes the app from your WhatsApp Business account at Meta (if Meta still accepts the token), deletes the stored token and switches the assistant off; or revoke the token at Meta, after which it stops working.'));
+        assert.ok(words(disconnecting.ar).includes('واتساب: افصله من الإعدادات في لوحة التحكم، فيُلغي التطبيق اشتراكه في حسابك على واتساب للأعمال لدى ميتا (إن كانت ميتا لا تزال تقبل الرمز) ويمحو الرمز المخزَّن ويوقف المساعد؛ أو ألغِ الرمز لدى ميتا، فيتوقّف عن العمل.'));
     });
 });

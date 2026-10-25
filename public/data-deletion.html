@@ -99,17 +99,18 @@
       idea and product facts (src/services/studio/prompts.ts:149-212,
       generate.ts:242-262).
 
-  WHATSAPP (2026-10-19) — sections 1 to 5. A WhatsApp contact is erased by the same route as an Instagram one, keyed on the WhatsApp user id
-  (the instagram_user_id column) or a username: resolveErasureTarget(), src/services/erasure.ts:88. executeErasure(), :515-558, deletes the
-  messages (the raw event included), the conversation (the phone, profile name, WhatsApp username and entry source live on that row), the
-  tracked links sent in it and their clicks (the schema's cascade, :551-558), and FIRST the contact's private files: eraseCustomerMedia(),
-  :478, whose docblock (:462-477) says the Storage object goes with the next daily sweep. NO ROUTE SEARCHES BY PHONE: the page asks for the phone
-  number or WhatsApp username because the operator maps it to the user id by hand (conversations.wa_phone / wa_username). Not reached by
-  erasure, and section 5 says so: failed `jobs` rows (item 3 above), the alert emails and Telegram messages (they sit at Resend, at
-  Telegram and in the owner's mailbox and chat), Meta's copy (at most 30 days, per Meta's data-privacy page), and the AI providers' copies
-  (Groq, Anthropic, OpenAI; a voice note: Groq or OpenAI). A file no message names is deleted after 30 days without any request:
-  PRIVATE_MEDIA_ORPHAN_DAYS, src/services/retention.ts:506; pruneOrphanedPrivateMedia(), :536. Voice notes and files are worded "if a copy
-  was kept" because nothing in the pipeline saves or transcribes them yet: see the WhatsApp block in public/privacy.html.
+  WHATSAPP (2026-10-19, re-verified 2026-10-25) — sections 1 to 5. A WhatsApp contact is erased by the same route as an Instagram one,
+  keyed on the BSUID (the instagram_user_id column) or conversations.username: resolveErasureTarget(), src/services/erasure.ts:97-125.
+  executeErasure(), :536-622, deletes FIRST the contact's private files (eraseCustomerMedia(), :499-523; the Storage object goes with the
+  next daily sweep), then the messages (the raw event included), the conversation (the phone, profile name, WhatsApp username and entry
+  source live on that row) with the tracked links sent in it and their clicks (the schema's cascade), interactions, dm_send_log and
+  ads_leads. NO ROUTE SEARCHES BY PHONE OR BY WHATSAPP USERNAME (conversations.wa_phone / wa_username): the page asks for one because
+  the operator maps it to the BSUID by hand. Not reached by the route: failed `jobs` rows (item 3 above, cleared by hand), and THE STOP
+  RECORD, which section 2 says is kept: contact_consents keeps the BSUID, the wording and the time, its conversation_id is SET NULL on
+  delete (migration_v50_whatsapp.sql:125-126) and nothing deletes the row. Beyond deletion, and section 5 says so: the alerts in the
+  operator's Telegram chat and mailbox and at Telegram and Resend, Meta's copy (at most 30 days, per Meta's data-privacy page), and the
+  AI providers' copies (Groq, Anthropic, OpenAI; a voice note: Groq only today, see /privacy's WhatsApp block). A file no message names is
+  deleted after 30 days without any request: PRIVATE_MEDIA_ORPHAN_DAYS, src/services/retention.ts:570; pruneOrphanedPrivateMedia(), :600.
 
   OWNER ALERTS (added 2026-10-25) — section 5's "Alerts to the operator". When a
   conversation with the platform owner's own account needs a person, he may be
@@ -1049,9 +1050,10 @@
                     </li>
                     <li>
                         <strong>إن أرسلتَ رسالة على واتساب:</strong> نصّ رسائلك كما كتبتها ونصّ الردود التي أُرسلت إليك،
-                        واسمك في ملفك على واتساب، ورقم هاتفك إن وصل إلينا، ومعرّفك عند ميتا واسم المستخدم على واتساب إن
+                        واسمك في ملفك على واتساب، ورقم هاتفك إن وصل إلينا، ومعرّفاتك عند ميتا واسم المستخدم على واتساب إن
                         وُجد، وكيف بدأت المحادثة، والحدث الأصلي كما ورد من ميتا حرفياً — وهو نسخة ثانية من ذلك كله — وما
-                        حُفظ من مقاطعك الصوتية وصورك وملفاتك. وقد يكون المخزَّن أقلّ من ذلك، ولا يكون أكثر. التفاصيل في
+                        حُفظ من مقاطعك الصوتية وصورك وملفاتك، وسجلّ طلبك إيقاف الرسائل إن طلبتَ ذلك. وقد يكون المخزَّن أقلّ
+                        من ذلك، ولا يكون أكثر. التفاصيل في
                         القسم 1 من <a href="/privacy">سياسة الخصوصية</a>.
                     </li>
                     <li>
@@ -1110,7 +1112,8 @@
                     وحين تُحذف محادثتك على واتساب يُحذف معها: كل رسائلها بنصّها وحدثها الأصلي كما ورد من ميتا، وما
                     خُزّن عنك فيها (اسمك على واتساب، ورقم هاتفك، ومعرّفك، واسم المستخدم، وكيف بدأت المحادثة)،
                     والروابط القصيرة التي أُرسلت فيها ونقراتها، وما حُفظ من ملفاتك — مقاطع صوتية وصور وغيرها —
-                    ويُزال الملف نفسه من مساحة التخزين في التنظيف اليومي التالي.
+                    ويُزال الملف نفسه من مساحة التخزين في التنظيف اليومي التالي. ولا يُحذف سجلّ طلبك إيقاف الرسائل، إن
+                    طلبتَ ذلك (معرّفك عند ميتا والكلمات التي كتبتَها ووقتها): يبقى كي يظلّ طلبك نافذاً.
                 </p>
 
                 <h2>3. ما يُحذف دون أن تطلب</h2>
@@ -1182,16 +1185,16 @@
                         إنستجرام أو فيسبوك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
                     </li>
                     <li>
-                        <strong>مزوّدو الذكاء الاصطناعي — واتساب:</strong> إن راسلتَ رقماً على واتساب، فقد وصل نصّ رسالتك وما
+                        <strong>مزوّدو الذكاء الاصطناعي — واتساب:</strong> إن ردّ المساعد على رسائلك على واتساب، فقد وصل نصّ رسالتك وما
                         يصل إلى آخر اثنتي عشرة رسالة من محادثتك إلى <bdi lang="en" dir="ltr">Groq</bdi> أو
                         <bdi lang="en" dir="ltr">Anthropic</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi> ليكتب الردّ، ولم
-                        يصل إلى جوجل. وإن أرسلتَ مقطعاً صوتياً فقد يكون وصل إلى <bdi lang="en" dir="ltr">Groq</bdi> أو
-                        <bdi lang="en" dir="ltr">OpenAI</bdi> ليُحوَّل إلى نصّ. ونسخة كل منهم تخضع لسياسته، ولا نستطيع
+                        يصل إلى جوجل. وإن أرسلتَ مقطعاً صوتياً فقد يكون وصل إلى <bdi lang="en" dir="ltr">Groq</bdi>
+                        ليُحوَّل إلى نصّ. ونسخة كل منهم تخضع لسياسته، ولا نستطيع
                         حذفها نيابةً عنك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
                     </li>
                     <li>
                         <strong>تنبيهات المُشغّل:</strong> إن احتاجت محادثةٌ مع حساب مُشغّل الأداة نفسه إلى شخص، فقد يكون تنبيهٌ أُرسل
-                        إليه على تيليجرام و/أو بالبريد الإلكتروني عبر <bdi lang="en" dir="ltr">Resend</bdi> قد ذكر اسم المستخدم الخاص بك
+                        إليه على تيليجرام و/أو بالبريد الإلكتروني عبر <bdi lang="en" dir="ltr">Resend</bdi> قد ذكر اسم المستخدم الخاص بك أو اسمك على واتساب
                         (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها (القسم 3 من
                         <a href="/privacy">سياسة الخصوصية</a>). تلك النسخ في محادثة تيليجرام وصندوق البريد الخاصّين به، ونسختا تيليجرام
                         و<bdi lang="en" dir="ltr">Resend</bdi> تخضعان لسياستيهما؛ وحذف بياناتك هنا لا يصل إليها.
@@ -1361,9 +1364,10 @@
                     <li>
                         <strong>If you sent a message on WhatsApp:</strong> the text of your messages as you wrote them and
                         of the replies sent to you, your name on your WhatsApp profile, your phone number if it reached us,
-                        your Meta user ID and your WhatsApp username if you have one, how the conversation began, the
-                        verbatim event received from Meta — a second copy of all of that — and whatever was kept of your
-                        voice notes, photos and files. Less than this may be stored, never more. The detail is in section 1
+                        your Meta user IDs and your WhatsApp username if you have one, how the conversation began, the
+                        verbatim event received from Meta — a second copy of all of that — whatever was kept of your
+                        voice notes, photos and files, and, if you asked to stop the messages, a record of that request.
+                        Less than this may be stored, never more. The detail is in section 1
                         of the <a href="/privacy">privacy policy</a>.
                     </li>
                     <li>
@@ -1429,7 +1433,9 @@
                     the verbatim event received from Meta, what was stored about you in it (your WhatsApp name, your
                     phone number, your ID, your username, how the conversation began), the short links sent in it and
                     their clicks, and whatever was kept of your files — voice notes, photos and the rest — with the file
-                    itself removed from storage at the next daily clean-up.
+                    itself removed from storage at the next daily clean-up. What is not deleted is the record of your
+                    request to stop the messages, if you made one (your Meta user ID, the words you wrote and when): it is
+                    kept so that your request keeps being honoured.
                 </p>
 
                 <h2>3. What is deleted without asking</h2>
@@ -1505,17 +1511,17 @@
                         section 5 of the <a href="/privacy">privacy policy</a>.
                     </li>
                     <li>
-                        <strong>AI providers — WhatsApp:</strong> if you messaged a WhatsApp number, the text of your message
+                        <strong>AI providers — WhatsApp:</strong> if the assistant answered your WhatsApp messages, the text of your message
                         and up to the last twelve messages of your conversation reached Groq, Anthropic or OpenAI so that it
-                        could write the reply, and did not reach Google. If you sent a voice note, it may have reached Groq or
-                        OpenAI to be turned into text. Each provider's copy is governed by its own policy and we cannot delete
+                        could write the reply, and did not reach Google. If you sent a voice note, it may have reached Groq to be
+                        turned into text. Each provider's copy is governed by its own policy and we cannot delete
                         it on your behalf. The list, and what is sent, is in section 5 of the
                         <a href="/privacy">privacy policy</a>.
                     </li>
                     <li>
                         <strong>Alerts to the operator:</strong> if a conversation with the operator's own account needed a
                         person, an alert sent to him by Telegram and/or by email through Resend may have carried your
-                        username (or the last four characters of your account ID) and up to 200 characters of your last
+                        username or WhatsApp name (or the last four characters of your account ID) and up to 200 characters of your last
                         message (section 3 of the <a href="/privacy">privacy policy</a>). Those copies are in his Telegram
                         chat and mailbox, and Telegram's and Resend's copies are governed by their own policies; deleting
                         your data here does not reach them.

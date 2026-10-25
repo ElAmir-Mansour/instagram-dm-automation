@@ -211,61 +211,76 @@
       src/services/ads/notify.ts, which renders only the ad account, amounts and
       Meta's status, and it stays true. The new paragraph says the two differ.
 
-  WHATSAPP — ADDED 2026-10-19, STACKED ON THE DM-PROVIDER TEXT ABOVE (docs/specs/001-whatsapp-agent: FR-028, FR-029, FR-018, research R4,
-  R12). Section 1's "When you send a message on WhatsApp" (id whatsapp-ar / whatsapp-en: the anchor the go-live gate, T061, can look
-  for) and the WhatsApp lines in sections 2, 3, 4, 5, 6 and 7 claim the following. What Meta says is cited to Meta, not to code.
-    · WhatsApp arrives as `object: 'whatsapp'` through the same webhook and is stored by handleWhatsAppInbound(),
-      src/webhook/whatsappInbound.ts:466;
-    · what is stored for a contact: the conversation (WhatsApp user id in the instagram_user_id column, phone, username, parent id,
-      profile name, entry source) whatsappInbound.ts:268-290; entrySourceOf() = ad id, click id, headline, src/webhook/whatsapp.ts:315;
-      the message (text, which holds a caption or a tapped button's title; payload = the button's id; message_type; the raw event)
-      whatsappInbound.ts:297-303; replies are stored as outbound rows with their text;
-    · "LESS, NEVER MORE": only a sender on the owner's test list is stored in full; anyone else is the user id, the time and the message type
-      (whatsappInbound.ts:24-28, :284-287, :299-301), and the queue row's payload is cut to ids, type and time when the job ends
-      (:457-476; redactedInboundPayload(), src/webhook/whatsappRedact.ts:38). The page says "less may be stored, never more" without naming
-      the criterion, so it stays true when the go-live gate (T061) changes who is stored in full. THAT CHANGE MUST RE-READ THIS PARAGRAPH;
-    · the raw event is cleared after RAW_PAYLOAD_RETENTION_DAYS (30 on this page, see OWNER item 3): pruneRawPayloads(),
-      src/services/retention.ts:105, one UPDATE on messages for every platform; done queue rows go after 7 days (DONE_JOB_RETENTION_DAYS,
-      retention.ts:49); failed rows stay (section 4's older text);
-    · replies come from Groq, Anthropic or OpenAI only, never Google, never OpenRouter or a custom address: NO_TRAINING_PROVIDERS and
-      PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp, src/services/aiProviders/purposes.ts:63, :70. A turn that has a transport asks for purpose
-      `dm_whatsapp` (src/services/dmSales/turn.ts:449) and never falls back to Gemini (turn.ts:37, :403);
-    · "do not train" is the rule those three were put on the list for (purposes.ts:58-62; research R4: Groq's services agreement,
-      Anthropic's API default, OpenAI's API terms). The page states it as OUR rule and points to their policies; it does not speak for them;
-    · what goes to the provider: up to 12 messages, text and direction only, the tapped button's code, and the conversation's facts, and no
-      name, phone or id: SALES_HISTORY_WINDOW, turn.ts:77; loadHistory() selects direction, text, sender, payload (dmSales/store.ts:120);
-      salesTurns(), dmSales/history.ts:114; salesFactsBlock(), dmSales/prompt.ts:163;
-    · a provider that cannot answer hands the conversation to a person, with no Gemini: turn.ts:401-413, whatsappAnswer.ts:16;
-    · VOICE NOTES AND FILES ARE WORDED CONDITIONALLY ON PURPOSE. transcribeAudio() (src/services/transcribe.ts:38-45, :128) and
-      saveInboundMedia() (src/services/whatsappMedia.ts:135) exist and enforce the rules the page states (Groq, or OpenAI when paid AI is
-      allowed; a private copy: whatsappMedia.ts:178, storage.ts:30-47). BUT AS OF 2026-10-19 NOTHING IN THE PIPELINE CALLS EITHER (only
-      their tests do; the inbound handler marks media and voice notes `unsupported_type`, whatsappInbound.ts:145). So the page says what
-      is done "when" a voice note is turned into text, and what the tool "can" keep of a file. WHEN THE INTEGRATION LANDS, CHECK THESE
-      SENTENCES AGAINST IT;
-    · customer files: kept while a message names them and deleted with the conversation (erasure.ts:478, :548); one no message names is deleted
-      after 30 days (PRIVATE_MEDIA_ORPHAN_DAYS, retention.ts:506; pruneOrphanedPrivateMedia(), :536); private bucket `media-private`, never
-      the public route (storage.ts:30-47);
-    · owner alerts: Telegram and/or an email through Resend, when the owner switched them on and a conversation needs him or a lead got its
-      link. The alert carries the name (WhatsApp profile name, else username, else the last 4 of the id), the last thing the person wrote
-      cut to 200 characters with links replaced, the window state and the inbox link: notifyOwner(), dmSales/handoff.ts:123-180;
-      buildNoticeText(), notify.ts:362; noticeWho(), :354; excerpt(), :251; emailBody(), notifyEmail.ts:367; Resend: notifyEmail.ts:44;
-      Telegram: notify.ts:23. The same alert exists for Instagram and Facebook DMs, so the page says so;
-    · opting out: «إيقاف» / "stop" as the WHOLE message (alone or with a please) is read by the sales turn's prefilter before any model
-      (prefilter.ts:126, :208; turn.ts:346). The assistant answers with one line saying no more messages (turn.ts:569; kits.ts:375),
-      pauses the conversation and stamps opted_out_at (dmSales/store.ts:181; turn.ts:224), and follow-ups check opted_out_at
-      (dmSales/followup.ts:148). consent.ts's matchStopMessage() and withdrawAll() are NOT called by the pipeline yet ("Nothing imports
-      this module yet"), so the page promises no consent record;
-    · a person on request: the model's wants_human intent is forced into a hand-off (dmSales/coerce.ts:137) that pauses the bot
-      (turn.ts:224); the first reply says it is automated (whatsappAnswer.ts:205; kits.ts:229, :587);
-    · deletion is carried out by hand through the erasure route. It matches the WhatsApp user id (the instagram_user_id column) or a username
-      (resolveErasureTarget(), erasure.ts:88) and deletes the messages with their raw events, the conversation (phone, name, username, entry
-      source), its tracked links and clicks, and the contact's private files (executeErasure(), erasure.ts:515-558; eraseCustomerMedia(), :478).
-      The Storage object goes with the next daily sweep (eraseCustomerMedia()'s docblock, erasure.ts:462-477). No route searches by phone: the operator finds the
-      user id from the phone or username by hand, which is why the deletion page asks for one;
+  WHATSAPP — ADDED 2026-10-19, RE-VERIFIED 2026-10-25 AGAINST THE WIRED PIPELINE (docs/specs/001-whatsapp-agent: FR-028, FR-029,
+  FR-018, research R4, R12). Section 1's "When you send a message on WhatsApp" (id whatsapp-ar / whatsapp-en: the anchor the go-live
+  gate, T061, can look for) and the WhatsApp lines in sections 2, 3, 4, 5, 6 and 7 claim the following. What Meta says is cited to Meta.
+    · WhatsApp arrives as `object: 'whatsapp'` through the same webhook; the dm.process job ends in handleWhatsAppInbound(),
+      src/webhook/whatsappInbound.ts:656-667 (storeInbound(), :369-521);
+    · what Meta delivers: the BSUID, the phone when Meta shares it (not for a username user it has had no recent contact with), the
+      profile name and username, a parent BSUID when the business is enrolled for one (whoSent(), src/webhook/whatsapp.ts:275-288; hence
+      "identifiers", plural), and a Click to WhatsApp referral's ad id, click id and headline (entrySourceOf(), :315-326);
+    · stored for a LISTED TEST SENDER, the only person stored in full today: the conversation's BSUID (the instagram_user_id column),
+      wa_phone, wa_username, wa_parent_user_id, profile_name, entry_source and last_inbound_at (the upsert, whatsappInbound.ts:390-413);
+      the message's text (a caption, a tapped button's title, later a voice note's transcript), payload (the button's id), message_type,
+      wamid and raw_payload = the whole change, which also holds a shared location or contact card (the claim, :420-426);
+    · "LESS, NEVER MORE": anyone else is a metadata-only thread and row (the BSUID, entry_source, the times, message_type, the wamid; text
+      '', no payload, no raw event: :375, :407-410, :422-424, and the file's header). entry_source is recorded for strangers too (header,
+      "Where a thread came from"), hence "how the conversation began" in the example. The page does not name the criterion, so it stays
+      true when the go-live gate (T061) changes who is stored in full or answered; THAT CHANGE MUST RE-READ THIS PARAGRAPH and section 1's
+      "may answer";
+    · the queue row's payload is cut to ids, type, time and the BSUID when the job ends (redactedInboundPayload(),
+      src/webhook/whatsappRedact.ts:38), and on the failure that ENDS a stranger's job too (src/jobs/runner.ts:134-138); a tester's
+      failed row keeps its event, hence section 4's "may";
+    · files: a tester's voice note, photo, video or document (never a sticker: fileOf(), whatsappInbound.ts:172-176) is downloaded and
+      saved PRIVATELY, in every mode, on an active connection (:486-488; saveInboundFile(), src/webhook/whatsappMediaInput.ts:111-147;
+      saveInboundMedia(), src/services/whatsappMedia.ts): the private bucket `media-private`, or private bytes, never the public route
+      (src/services/storage.ts:28-44; migration_v51_private_media.sql). A stranger's file is never downloaded;
+    · voice notes: transcribed only when the agent will answer (whatsappInbound.ts:492-502), and by GROQ ONLY today:
+      TRANSCRIBE_PROVIDERS is groq, openai (src/services/transcribe.ts:38), but OpenAI is the paid one (:45) and the only caller passes
+      allowPaid = ALLOW_PAID_TRANSCRIPTION = false (whatsappMediaInput.ts:62, :243). WHEN THAT FLIPS, NAME OPENAI AGAIN in sections 3
+      and 5 and in /data-deletion section 5 (a test reads the constant). The transcript becomes the row's text (:250);
+    · replies come from Groq, Anthropic or OpenAI only: NO_TRAINING_PROVIDERS and PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp,
+      src/services/aiProviders/purposes.ts:68, :74-76, enforced by pickRoute() (src/services/aiProviders/route.ts:66-83). A turn with a
+      transport asks for `dm_whatsapp` (src/services/dmSales/turn.ts:454-457) and NEVER falls back to Gemini (:408-420). WhatsApp is
+      always answered by the sales turn, whatever the Instagram sales_mode (src/webhook/whatsappAnswer.ts, header), hence "always works
+      as in sales mode";
+    · "do not train" is the rule those three were put on the list for (purposes.ts:62-67; research R4). The page states it as OUR rule
+      and points to their policies; it does not speak for them;
+    · what goes to the provider: up to 12 messages, text and direction, the tapped button's code, and the conversation's facts (stage,
+      link sent, the button's meaning, the channel; no comment keyword and no ad context on WhatsApp: turn.ts:369-401), and no name,
+      phone or id: SALES_HISTORY_WINDOW, turn.ts:78; salesTurns(), dmSales/history.ts:114; salesFactsBlock(), dmSales/prompt.ts:163-176;
+    · a person on request: wants_human is forced into a hand-off (dmSales/coerce.ts:137) that pauses the bot (turn.ts:223-252). Instagram
+      and Messenger do this in sales mode only (the Gemini reply schema has no hand-off: dmResponseSchema(), src/services/ai.ts:254),
+      hence "In sales mode and on WhatsApp" in section 3's disclosure paragraph;
+    · the first reply says it is automated: the turn's disclosure (turn.ts:276-283), needed per whatsappAnswer.ts:240;
+    · alerts: the ones section 3 describes, through the same notifyOwner() (the sales turn's hand-offs and hot leads, turn.ts:248-252),
+      plus a reply that could not be SENT (the window closed, the free replies used up, a refused connection, a failure: handOver(),
+      whatsappAnswer.ts:189-200). A WhatsApp contact is named by profile name, else WhatsApp username, else the last 4 of the BSUID
+      (dmSales/handoff.ts:176; noticeWho(), src/services/notify.ts:354-359). Not to be confused with the WhatsApp ACCOUNT alerts
+      (src/services/whatsappNotify.ts, header), which name the number and never a customer;
+    · opting out: a WHOLE message that is a stop phrase (STOP_PHRASES, src/services/consent.ts:238: «إيقاف», «توقف», "stop",
+      "unsubscribe" and a few more; matchStopMessage(), :265) from a listed tester, in every mode, is decided by optOutWhatsAppContact()
+      (src/webhook/whatsappOptOut.ts:96-132), called at whatsappInbound.ts:478-481 and :499-501: withdrawAll() (consent.ts:178) writes
+      three `withdrawn` contact_consents rows (the BSUID, the wording, the time), stamps opted_out_at, pauses the bot, closes the stage
+      and cancels pending follow-ups, in one transaction; ONE confirmation (confirmationText(), :288) goes only for a first stop and only
+      when the agent may speak (`confirm`), hence "if it is the one answering you at the time";
+    · the stop record is KEPT: contact_consents.conversation_id is ON DELETE SET NULL, "must not ... delete the evidence"
+      (migration_v50_whatsapp.sql:125-126), and nothing in src/ deletes a contact_consents row: the erasure route does not
+      (src/services/erasure.ts:536-622; consent.ts's header, which says the erasure flow removes it, is NOT what the code does). Hence
+      section 4's bullet and /data-deletion's exception; a test reads erasure.ts;
+    · customer files: kept while a message names them and deleted with the conversation (eraseCustomerMedia(), erasure.ts:499-523; the
+      Storage object by the next daily sweep); one no message names is deleted after 30 days (PRIVATE_MEDIA_ORPHAN_DAYS,
+      src/services/retention.ts:570; pruneOrphanedPrivateMedia(), :600);
+    · the raw event is cleared after RAW_PAYLOAD_RETENTION_DAYS for every platform (pruneRawPayloads(), retention.ts:107; OWNER item 3);
+      done queue rows go after 7 days (DONE_JOB_RETENTION_DAYS, retention.ts:51);
+    · deletion is by hand through the erasure route: resolveErasureTarget() (erasure.ts:97-125) matches the BSUID or
+      conversations.username, NOT wa_phone or wa_username, so the operator maps a phone or a WhatsApp username to the BSUID by hand (which
+      is why the deletion page asks for one); executeErasure() deletes the private files, the messages, the conversation (with its tracked
+      links and their clicks, by cascade), interactions, dm_send_log and ads_leads;
     · the WhatsApp token is stored enc:v1, AES-256-GCM (src/services/whatsappConnections.ts:314);
-    · from Meta's documentation, read 2026-10-19 (developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security):
-      Meta acts as data processor / service provider for the Cloud API, a message has a maximum retention of 30 days, and the Cloud API
-      manages the encryption keys on the business's behalf. Not checkable from code; re-read the page when Meta revises it.
+    · from Meta's documentation, re-read 2026-10-25 (developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security):
+      Meta acts as data processor / service provider for the Cloud API, a message is kept for at most 30 days, and the Cloud API manages
+      the encryption keys on the business's behalf. Not checkable from code; re-read the page when Meta revises it.
 
   META ADS (BOOST) — ADDED 2026-10-22 WITH PR #225 (migration v52). Section 1
   "When the account owner boosts a post" and the ads lines in sections 2, 4,
@@ -1426,15 +1441,15 @@
                 <h3 id="whatsapp-ar">عندما ترسل رسالة على واتساب</h3>
                 <p>
                     إن ربط صاحب الحساب رقماً على واتساب للأعمال، فرسائلك إليه تصل عبر
-                    <bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi> من ميتا، ويردّ عليها المساعد الآلي كما يوضّح
-                    القسم 3. تُسلّم ميتا إلينا الرسالة ومعها ما يخصّك: اسمك في ملفك على واتساب، ومعرّفاً تمنحه لك ميتا
-                    عند هذا النشاط (معرّف مستخدم واتساب الخاص بالنشاط)، ورقم هاتفك إن شاركته ميتا معنا — وقد لا
+                    <bdi lang="en" dir="ltr">WhatsApp Cloud API</bdi> من ميتا، وقد يردّ عليها المساعد الآلي كما يوضّح
+                    القسم 3. تُسلّم ميتا إلينا الرسالة ومعها ما يخصّك: اسمك في ملفك على واتساب، والمعرّفات التي تمنحها لك
+                    ميتا عند هذا النشاط (معرّفات مستخدم واتساب الخاصة بالنشاط)، ورقم هاتفك إن شاركته ميتا معنا — وقد لا
                     تفعل إن كنت تستخدم اسم مستخدم على واتساب — واسم المستخدم هذا إن وُجد. وإن بدأتَ المحادثة من إعلان
                     «انقر للمراسلة عبر واتساب»، فيصلنا معها معرّف الإعلان ومعرّف النقرة وعنوان الإعلان.
                 </p>
                 <ul>
                     <li>
-                        <strong>يُخزَّن عنك:</strong> اسمك على واتساب، ورقم هاتفك إن وصل، ومعرّفك عند ميتا، واسم
+                        <strong>يُخزَّن عنك:</strong> اسمك على واتساب، ورقم هاتفك إن وصل، ومعرّفاتك عند ميتا، واسم
                         المستخدم على واتساب إن وُجد، وكيف بدأت المحادثة (من إعلان مثلاً)، ووقت آخر رسالة منك.
                     </li>
                     <li>
@@ -1443,13 +1458,13 @@
                         بنصّها.
                     </li>
                     <li>
-                        <strong>الحدث الأصلي كما ورد من ميتا</strong>، حرفياً وبالكامل. يحتوي على ما سبق كلّه، فهو نسخة
-                        ثانية منه. مدة الاحتفاظ به في القسم 4.
+                        <strong>الحدث الأصلي كما ورد من ميتا</strong>، حرفياً وبالكامل. يحتوي على ما سبق كلّه، وعلى أي شيء آخر
+                        حملته الرسالة، كموقع أو بطاقة جهة اتصال شاركتَها، فهو نسخة ثانية منه. مدة الاحتفاظ به في القسم 4.
                     </li>
                     <li>
                         <strong>إن كانت رسالتك مقطعاً صوتياً أو صورة أو فيديو أو ملصقاً أو مستنداً</strong>، نخزّن نوعها
                         والمعرّف الذي تمنحه لها ميتا، داخل الحدث الأصلي أعلاه. ويمكن للأداة أن تنزّل الملف نفسه من ميتا
-                        وتحفظ منه نسخة خاصة مع المحادثة: في مساحة تخزين غير علنية لدى
+                        (المقطع الصوتي أو الصورة أو الفيديو أو المستند، لا الملصق) وتحفظ منه نسخة خاصة مع المحادثة: في مساحة تخزين غير علنية لدى
                         <bdi lang="en" dir="ltr">Supabase</bdi>، لا يُقدَّم الملف من أي عنوان علني. أمّا المقطع الصوتي فيُحوَّل
                         إلى نصّ كما يوضّح القسم 3.
                     </li>
@@ -1460,20 +1475,19 @@
                 </ul>
                 <p>
                     وقد يُخزَّن أقلّ من ذلك بحسب ما ضبطه صاحب الحساب لمساعد واتساب — كأن يُحفَظ فقط أن رسالة وصلت
-                    ووقتها ونوعها ومعرّف مرسلها عند ميتا، بلا نصّ ولا اسم ولا رقم — لكن لا يُخزَّن أكثر من ذلك أبداً.
+                    ووقتها ونوعها وكيف بدأت المحادثة ومعرّف مرسلها عند ميتا، بلا نصّ ولا اسم ولا رقم — لكن لا يُخزَّن أكثر من ذلك أبداً.
                 </p>
                 <p>
-                    يقرأ صاحب الحساب المحادثة في صندوق رسائله بلوحة التحكم، ويستطيع الردّ عليها بنفسه. وحين تحتاج
-                    محادثة إليه، قد تصله رسالة تنبيه على بريده الإلكتروني أو على تيليجرام، إن فعّل ذلك: فيها اسمك على
-                    واتساب أو اسم المستخدم (أو آخر أربعة أحرف من معرّفك إن لم يكن لك أيٌّ منهما)، ومقتطف من آخر ما كتبتَه (حتى 200 حرف،
-                    وتُستبدَل الروابط فيه بـ«[link]»)، ورابط إلى المحادثة. وتنبيهات مماثلة تُرسَل عن الرسائل الخاصة على
-                    إنستجرام وفيسبوك. وتمرّ عبر <bdi lang="en" dir="ltr">Resend</bdi> و<bdi lang="en" dir="ltr">Telegram</bdi>
-                    (القسم 5).
+                    يقرأ صاحب الحساب المحادثة في صندوق رسائله بلوحة التحكم، ويستطيع الردّ عليها بنفسه. وتسري هنا
+                    التنبيهات الموصوفة في القسم 3 (فالمساعد على واتساب يعمل دائماً كما في وضع المبيعات)، وكذلك حين يتعذّر
+                    إرسال ردّ إليك: يُذكر فيها اسمك على واتساب أو اسم المستخدم (أو آخر أربعة أحرف من معرّفك إن لم يكن لك
+                    أيٌّ منهما)، وما يصل إلى 200 حرف من آخر ما كتبتَه، وتُستبدَل الروابط فيه بـ«<bdi lang="en" dir="ltr">[link]</bdi>».
+                    وتمرّ عبر تيليجرام و<bdi lang="en" dir="ltr">Resend</bdi> (القسم 5).
                 </p>
                 <p>
                     <strong>لإيقاف الرسائل:</strong> اكتب «إيقاف» أو <bdi lang="en" dir="ltr">stop</bdi> وحدها في
-                    رسالة. يردّ المساعد بسطر واحد يؤكّد أن لا رسائل أخرى، ويتوقّف عن الردّ في هذه المحادثة، ولا
-                    يرسل لك متابعات بعد ذلك.
+                    رسالة. عندها يتوقّف المساعد عن الردّ في هذه المحادثة ولا يرسل لك متابعات بعد ذلك، ويؤكّد ذلك مرة
+                    واحدة بسطر واحد إن كان هو من يردّ عليك حينها. ويُسجَّل طلبك هذا (القسم 4).
                 </p>
 
                 <h3>عندما يربط صاحب الحساب تيك توك</h3>
@@ -1780,7 +1794,7 @@
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
                     <li>تنبيه مُشغّل الأداة حين تحتاج محادثةٌ مع حسابه هو إلى شخص (القسم 3).</li>
-                    <li>الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب، وتنبيه صاحب الحساب حين تحتاج محادثة إليه.</li>
+                    <li>الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب.</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
                     <li>ترويج المنشورات التي يختارها صاحب الحساب بإعلانات في حسابه الإعلاني لدى ميتا، ضمن الحدود التي وضعها، وإظهار ما أنفقه كل ترويج ونتائجه.</li>
@@ -1818,29 +1832,29 @@
                     <bdi lang="en" dir="ltr">OpenAI</bdi> فقط — وهي الجهات التي نقصر عليها رسائل واتساب لأن شروط
                     واجهاتها البرمجية تنصّ على ألّا تدرّب نماذجها على ما يُرسَل إليها (سياساتها في القسم 5) — ولا تُرسَل
                     رسائل واتساب إلى جوجل ولا إلى <bdi lang="en" dir="ltr">OpenRouter</bdi> ولا إلى خدمة بعنوان يضيفه
-                    المُشغّل، ولو فُعِّلت. وما يُرسَل هو ما وُصف في الفقرة السابقة: نصّ رسالتك وما يصل إلى آخر اثنتي
-                    عشرة رسالة من المحادثة، مع اتجاه كل رسالة، وملاحظات عن المحادثة نفسها؛
+                    المُشغّل، ولو فُعِّلت. وما يُرسَل هو نصّ رسالتك وما يصل إلى آخر اثنتي
+                    عشرة رسالة من المحادثة، مع اتجاه كل رسالة، وملاحظات عن المحادثة نفسها (كأن يُذكر هل أُرسل إليك رابط
+                    من قبل، أو أيّ زرّ ضغطت)؛
                     <strong>ولا يُرسَل اسمك على واتساب ولا رقم هاتفك ولا معرّفك ولا معرّف المحادثة.</strong> وإن تعذّر على
                     المزوّد الردّ، لا يكتب «جيميناي» الردّ بدلاً منه، بل تُحوَّل المحادثة إلى صاحب الحساب.
                 </p>
                 <p>
                     <strong>المقاطع الصوتية:</strong> حين يُحوَّل مقطع صوتي إلى نصّ ليُجاب عنه، يُرسَل الصوت إلى
                     <bdi lang="en" dir="ltr">Groq</bdi> (نموذج <bdi lang="en" dir="ltr">Whisper</bdi> للتعرّف على الكلام)،
-                    أو إلى <bdi lang="en" dir="ltr">OpenAI</bdi> إن سمح المُشغّل بالخدمات المدفوعة؛ ولا يُرسَل إلى أي جهة
-                    أخرى. ويُعامَل النصّ الناتج كأنك كتبتَه.
+                    ولا يُرسَل إلى أي جهة أخرى. ويُعامَل النصّ الناتج كأنك كتبتَه.
                 </p>
                 <p>
                     وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
-                    بأنك تتحدّث إلى خدمة آلية. وإن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم على أن يتوقّف عن الردّ
-                    وتُحوَّل المحادثة إلى صاحب الحساب.
+                    بأنك تتحدّث إلى خدمة آلية. وفي وضع المبيعات وعلى واتساب، إن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم
+                    على أن يتوقّف عن الردّ وتُحوَّل المحادثة إلى صاحب الحساب.
                 </p>
                 <p>
                     <strong>حين تحتاج محادثتك إلى شخص:</strong> قد يُنبَّه مُشغّل الأداة (القسم 9) إذا تعذّرت كتابة ردّ على
                     رسالتك (عطل تقني)، وكذلك في وضع المبيعات حين يحوّل المساعد محادثتك إلى شخص (كأن تطلب التحدّث إلى شخص
                     أو استرجاع مالك أو تشتكي)، أو حين يرسل إليك الرابط بعد أن سألت عن الشراء أو عن السعر أو عن مناسبته لك.
                     ولا يحدث ذلك إلا في المحادثات مع حسابه هو، وإلا إن فعّل التنبيهات. والتنبيه رسالة على تيليجرام و/أو بريد
-                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). <strong>يُذكر فيه اسم المستخدم الخاص بك،
-                    أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم مستخدم لك، وما يصل إلى 200 حرف من آخر رسالة
+                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). <strong>يُذكر فيه اسم المستخدم الخاص بك
+                    (وعلى واتساب اسمك على واتساب)، أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم لك، وما يصل إلى 200 حرف من آخر رسالة
                     كتبتَها</strong>، وتُستبدَل الروابط فيها بـ«<bdi lang="en" dir="ltr">[link]</bdi>». ويُذكر فيه أيضاً سبب
                     الحاجة إلى شخص، والوقت الباقي من نافذة الردّ لدى ميتا، ورابط إلى المحادثة في لوحة التحكم. وهذه التنبيهات
                     غير تنبيهات الإعلانات الموصوفة في القسم 1، التي لا تحتوي شيئاً عنك.
@@ -1870,6 +1884,11 @@
                         <strong>واتساب — الملفات:</strong> الملف الذي تُرسله، إن حُفظت منه نسخة، يبقى ما دامت رسالة في المحادثة
                         تشير إليه، ويُحذف مع المحادثة. وملف لا تشير إليه أي رسالة يُحذف بعد 30 يوماً من حفظه. أمّا نسخة ميتا
                         فتخضع لمدتها (القسم 5).
+                    </li>
+                    <li>
+                        <strong>واتساب — طلب إيقاف الرسائل:</strong> إن طلبتَ إيقاف الرسائل (القسم 1)، يبقى سجلّ ذلك — معرّفك
+                        عند ميتا والكلمات التي كتبتَها ووقتها — بلا مدة انتهاء تلقائية، ولا يُحذف حين تُحذف محادثتك، كي يظلّ
+                        طلبك نافذاً.
                     </li>
                     <li>
                         <strong>نصوص الرسائل والمحادثات وسجلّ التفاعلات:</strong> تبقى بلا مدة
@@ -1982,8 +2001,8 @@
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Resend</bdi></strong> — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة:
-                        تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك (أو آخر أربعة أحرف
-                        من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.
+                        تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك أو اسمك على واتساب (أو آخر
+                        أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.
                         <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Resend</bdi></a>.
                     </li>
                     <li>
@@ -2037,7 +2056,7 @@
                 <p>
                     <strong>رسائل واتساب:</strong> لا يكتب ردودَها إلا <bdi lang="en" dir="ltr">Groq</bdi> أو
                     <bdi lang="en" dir="ltr">Anthropic</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi>، ولا يحوّل مقاطعها
-                    الصوتية إلى نصّ إلا <bdi lang="en" dir="ltr">Groq</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi>
+                    الصوتية إلى نصّ إلا <bdi lang="en" dir="ltr">Groq</bdi>
                     (القسم 3)؛ ولا يصل شيء منها إلى جوجل ولا إلى <bdi lang="en" dir="ltr">OpenRouter</bdi> ولا إلى خدمة
                     بعنوان يضيفه المُشغّل.
                 </p>
@@ -2267,9 +2286,9 @@
                 <h3 id="whatsapp-en">When you send a message on WhatsApp</h3>
                 <p>
                     If the account owner has connected a WhatsApp Business number, your messages to it arrive through
-                    Meta's <span class="code">WhatsApp Cloud API</span>, and the automated assistant answers them as
+                    Meta's <span class="code">WhatsApp Cloud API</span>, and the automated assistant may answer them, as
                     section 3 describes. Meta delivers the message to us together with what identifies you: the name on
-                    your WhatsApp profile, an identifier Meta gives this business for you (a business-scoped user ID),
+                    your WhatsApp profile, the identifiers Meta gives this business for you (business-scoped user IDs),
                     your phone number if Meta shares it with us — it may not, if you use a WhatsApp username — and that
                     username, if you have one. If you started the conversation from a Click to WhatsApp ad, the ad's ID,
                     click ID and headline come with it.
@@ -2277,7 +2296,7 @@
                 <ul>
                     <li>
                         <strong>Stored about you:</strong> your WhatsApp name, your phone number if it came, your Meta
-                        user ID, your WhatsApp username if you have one, how the conversation began (from an ad, for
+                        user IDs, your WhatsApp username if you have one, how the conversation began (from an ad, for
                         example), and when you last wrote.
                     </li>
                     <li>
@@ -2286,13 +2305,14 @@
                         Meta's message ID. Replies sent to you are stored the same way, with their text.
                     </li>
                     <li>
-                        <strong>The verbatim event Meta sent us</strong>, in full. It contains all of the above, so it
-                        is a second copy of it. Its retention is in section 4.
+                        <strong>The verbatim event Meta sent us</strong>, in full. It contains all of the above, and anything
+                        else the message carried, such as a location or a contact card you shared, so it is a second copy of it. Its retention is in section 4.
                     </li>
                     <li>
                         <strong>If your message is a voice note, photo, video, sticker or document</strong>, we store
                         what kind it was and the identifier Meta gives it, inside the event above. The tool can also
-                        download the file itself from Meta and keep a private copy of it with the conversation: in a
+                        download the file itself from Meta (a voice note, photo, video or document, not a sticker) and keep a
+                        private copy of it with the conversation: in a
                         non-public storage area at Supabase, never served from a public address. A voice note is turned
                         into text as section 3 describes.
                     </li>
@@ -2304,21 +2324,21 @@
                 </ul>
                 <p>
                     Less than this may be stored, depending on how the account owner has set the WhatsApp assistant
-                    up — for example, only that a message arrived, when, of what type, and the sender's Meta user ID,
+                    up — for example, only that a message arrived, when, of what type, how the conversation began, and the
+                    sender's Meta user ID,
                     with no text, name or number — but never more.
                 </p>
                 <p>
                     The account owner reads the conversation in the inbox of their dashboard and can reply to it by
-                    hand. When a conversation needs the owner, an alert may reach them by email or on Telegram, if they
-                    switched that on: it carries your WhatsApp name or username (or the last four characters of your ID if there
-                    is neither), an excerpt of the last thing you wrote (up to 200 characters, with links replaced by
-                    “[link]”), and a link to the conversation. Similar alerts exist for direct messages on Instagram and
-                    Facebook. They travel through Resend and Telegram (section 5).
+                    hand. The alerts section 3 describes apply here too (on WhatsApp the assistant always works as in sales
+                    mode), and also when a reply to you could not be sent: they name you by your WhatsApp name or username
+                    (or the last four characters of your ID if there is neither) and quote up to 200 characters of the last
+                    thing you wrote, with links replaced by “[link]”. They travel through Telegram and Resend (section 5).
                 </p>
                 <p>
                     <strong>To stop the messages:</strong> write «إيقاف» or “stop” on its own in a message. The
-                    assistant answers with one line confirming that no more messages will come, stops replying in that
-                    conversation, and sends you no follow-ups after that.
+                    assistant then stops replying in that conversation and sends you no follow-ups, and, if it is the one
+                    answering you at the time, confirms this once, in one line. Your request is recorded (section 4).
                 </p>
 
                 <h3>When the account owner connects TikTok</h3>
@@ -2651,7 +2671,7 @@
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
                     <li>To alert the operator of the tool when a conversation with his own account needs a person (section 3).</li>
-                    <li>To answer you if you message a WhatsApp number the account owner connected, and to alert the account owner when a conversation needs them.</li>
+                    <li>To answer you if you message a WhatsApp number the account owner connected.</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
                     <li>To boost the posts the account owner chooses with ads in their own Meta ad account, within the limits they set, and to show what each boost spent and achieved.</li>
@@ -2691,22 +2711,23 @@
                     Groq, Anthropic or OpenAI — the providers WhatsApp messages are limited to because the terms of
                     their APIs say they do not train their models on what is sent to them (their policies are linked in
                     section 5) — and WhatsApp messages are not sent to Google, to OpenRouter, or to a service at an
-                    address the operator enters, even if one is switched on. What is sent is what the previous
-                    paragraph describes: the text of your message and up to the last twelve messages in the thread,
-                    with the direction of each, and notes about the conversation itself;
+                    address the operator enters, even if one is switched on. What is sent is the text of your
+                    message and up to the last twelve messages in the thread, with the direction of each, and notes
+                    about the conversation itself (such as whether you have already been sent a link, or which button you
+                    tapped);
                     <strong>your WhatsApp name, your phone number, your ID and the conversation ID are not sent.</strong>
                     If the provider cannot answer, Gemini does not write the reply instead; the conversation is handed
                     to the account owner.
                 </p>
                 <p>
                     <strong>Voice notes:</strong> when a voice note is turned into text so that it can be answered, the
-                    audio is sent to Groq (its Whisper speech model), or to OpenAI if the operator has allowed paid
-                    services; it is sent to no one else. The text it produces is treated as if you had typed it.
+                    audio is sent to Groq (its Whisper speech model) and to no one else. The text it produces is treated as if you had typed it.
                 </p>
                 <p>
                     As Meta's policy requires, the first message in a thread — and another one
-                    after a long gap — tells you that you are talking to an automated service. If you ask for a person,
-                    the assistant is built to stop replying and hand the conversation to the account owner.
+                    after a long gap — tells you that you are talking to an automated service. In sales mode and on
+                    WhatsApp, if you ask for a person, the assistant is built to stop replying and hand the conversation
+                    to the account owner.
                 </p>
                 <p>
                     <strong>When your conversation needs a person:</strong> the operator of the tool (section 9) may be
@@ -2715,8 +2736,8 @@
                     for a refund or complained) or has just sent you the link after you asked to buy, asked the price or
                     asked whether it suits you. This happens only for conversations with his own account, and only if he
                     has switched the alerts on. The alert is a Telegram message and/or an email sent through Resend
-                    (section 5). <strong>It names you by your username, or, if we have none, by the last four characters
-                    of your account ID, and quotes up to 200 characters of the last message you wrote</strong>, with any
+                    (section 5). <strong>It names you by your username (on WhatsApp, your WhatsApp name), or, if we have none,
+                    by the last four characters of your account ID, and quotes up to 200 characters of the last message you wrote</strong>, with any
                     link in it replaced by “[link]”. It also says why a person is needed, how long Meta's reply window
                     has left, and links to the conversation in the dashboard. These alerts are not the ads alerts in
                     section 1, which contain nothing about you.
@@ -2748,6 +2769,11 @@
                         <strong>WhatsApp — files:</strong> a file you send, if a copy of it was kept, stays as long as a message in the
                         conversation points to it, and is deleted with the conversation. A file that no message points to is deleted 30
                         days after it was saved. Meta's own copy follows Meta's period (section 5).
+                    </li>
+                    <li>
+                        <strong>WhatsApp — a request to stop:</strong> if you asked to stop the messages (section 1), the record
+                        of it — your Meta user ID, the words you wrote and when — is kept with no automatic expiry, and is not
+                        deleted when your conversation is, so that your request keeps being honoured.
                     </li>
                     <li>
                         <strong>Message text, conversations, and the interaction log:</strong>
@@ -2870,8 +2896,8 @@
                     </li>
                     <li>
                         <strong>Resend</strong> — sends the alert emails, when they are switched on: the alerts about a
-                        conversation that needs a person, described in section 3, which carry your username (or the last
-                        four characters of your account ID) and up to 200 characters of your last message, and the ads
+                        conversation that needs a person, described in section 3, which carry your username or your WhatsApp name (or
+                        the last four characters of your account ID) and up to 200 characters of your last message, and the ads
                         alerts in section 1.
                         <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Resend's privacy policy</a>.
                     </li>
@@ -2928,7 +2954,7 @@
                 </p>
                 <p>
                     <strong>WhatsApp messages:</strong> only Groq, Anthropic or OpenAI writes their replies, and only Groq
-                    or OpenAI turns their voice notes into text (section 3); nothing from them reaches Google, OpenRouter
+                    turns their voice notes into text (section 3); nothing from them reaches Google, OpenRouter
                     or a service at an address the operator enters.
                 </p>
 
