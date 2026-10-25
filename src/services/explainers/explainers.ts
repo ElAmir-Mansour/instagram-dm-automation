@@ -149,7 +149,8 @@ function draftInputOf(row: Pick<ExplainerRow, 'title' | 'draft'>, scenes: readon
     };
 }
 
-const sceneView = (s: ExplainerSceneRow): SceneView => ({
+/** A scene as the dashboard reads it: no ids, no counters, no tenant. */
+export const presentScene = (s: ExplainerSceneRow): SceneView => ({
     position: s.position, narration: s.narration, spoken: s.spoken, label: s.label, brief: s.brief, characters: s.characters, continues: s.continues, start_s: s.start_s, end_s: s.end_s,
     picture: s.picture, pictures: s.pictures, draw_status: s.draw_status, draw_error: s.draw_error, draw_note: s.draw_note,
 });
@@ -166,7 +167,7 @@ export function presentExplainer(
         failed_step: row.failed_step, error: row.error, sound_mode: row.sound_mode, music_track_id: row.music_track_id, subtitles: row.subtitles, notes: row.notes,
         source_links: row.source_links, draft: row.draft, draft_version: row.draft_version, audio: row.audio, audio_stale: isAudioStale(row), render: row.render,
         render_stale: row.render !== null && (row.render.version !== row.draft_version || row.render.sound_mode !== row.sound_mode), schedule: row.schedule,
-        draw_paused_until: row.draw_paused_until, scenes: scenes.map(sceneView), problems,
+        draw_paused_until: row.draw_paused_until, scenes: scenes.map(presentScene), problems,
         job: row.job_id && row.job_status ? { status: row.job_status, progress: row.job_progress, not_before: row.job_not_before } : null,
         worker: extras.worker ?? null, allowance: extras.allowance ?? null,
     };

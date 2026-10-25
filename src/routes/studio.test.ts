@@ -25,6 +25,8 @@ import { completeJob } from '../services/studio/jobs.js';
 import { CLOSING_QUESTION, validWriterOutput } from '../services/explainers/testFixtures.js';
 import { explainerSettings, installWorld, type World } from '../services/explainers/testDb.js';
 import { setRunDeps, setRunLauncher } from '../services/explainers/writing.js';
+import { ExplainerError } from '../services/explainers/errors.js';
+import { setPictureDeps } from '../services/explainers/scenes.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -857,6 +859,7 @@ describe('Explainers routes', () => {
     afterEach(() => {
         world.restore();
         restoreRun?.();
+        setPictureDeps(null);
     });
 
     const on = () => world.appSettings.set(ENABLED, 'true');
@@ -875,9 +878,14 @@ describe('Explainers routes', () => {
             ['POST', `/explainers/${EXPLAINER_ID}/rewrite`, { note: 'shorter' }], ['POST', `/explainers/${EXPLAINER_ID}/approve`, { version: 1 }], ['POST', `/explainers/${EXPLAINER_ID}/revoice`],
             ['POST', `/explainers/${EXPLAINER_ID}/draw`], ['POST', `/explainers/${EXPLAINER_ID}/approve-pictures`], ['POST', `/explainers/${EXPLAINER_ID}/render`],
             ['POST', `/explainers/${EXPLAINER_ID}/schedule`, { when: 'now' }], ['POST', `/explainers/${EXPLAINER_ID}/retry`], ['DELETE', `/explainers/${EXPLAINER_ID}`],
+            ['GET', '/explainers/allowance'], ['POST', '/explainers/characters/candidates', { description: 'a curious young man' }],
+            ['POST', '/explainers/uploads/sign', { purpose: 'music', mime: 'audio/mpeg', size: 1000 }],
+            ['POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, { note: 'smiling' }], ['POST', `/explainers/${EXPLAINER_ID}/scenes/0/pick`, { index: 0 }],
         ];
 
         it('every dashboard route answers 404 EXPLAINERS_DISABLED while it is off, with the shared envelope, and does not touch the explainers’ tables', async () => {
+            // The owner: the upload signer is owner-only, and that guard is the router's, so it runs before the switch is read.
+            role = 'owner';
             for (const [method, path, body] of ROUTES) {
                 const res = await api(method, path, body);
                 assert.equal(res.status, 404, `${method} ${path}`);
@@ -1057,12 +1065,35 @@ describe('Explainers routes', () => {
             assert.equal(view.audio.version, 1);
             assert.equal(view.audio_stale, false);
 
-            // 5. The pictures are drawn (the pictures service writes them), and the drawing ends.
-            for (const scene of world.sceneRows(id)) Object.assign(scene, { draw_status: 'done', picture: { media_id: uploadId(20 + scene.position), url: `/api/uploads/${uploadId(20 + scene.position)}`, seed: scene.position, provider: 'cloudflare', model: 'flux', prompt_hash: 'h', at: '2026-10-25T09:00:00Z' } });
+            // 5. The Mac's loop draws one scene per call of draw-next (the pictures service writes each picture, here a stand-in that does), and the call that finds
+            //    nothing left moves the explainer to review. The worker's own `complete` then ends its job, and the job stops being the explainer's.
             const draw = claim('explainer_draw');
-            await completeJob(TENANT_A, draw.id, { state: 'done' });
+            setPictureDeps({
+                drawNext: async ({ explainerId }) => {
+                    const scene = world.sceneRows(explainerId).find((sc) => sc.draw_status === 'pending');
+                    if (!scene) return { state: 'done' };
+                    Object.assign(scene, { draw_status: 'done', picture: { media_id: uploadId(20 + scene.position), url: `/api/uploads/${uploadId(20 + scene.position)}`, seed: scene.position, provider: 'cloudflare', model: 'flux', prompt_hash: 'h', at: '2026-10-25T09:00:00Z' } });
+                    return { state: 'drawn', position: scene.position, remaining: world.sceneRows(explainerId).filter((sc) => sc.draw_status === 'pending').length };
+                },
+            });
+            const answers: string[] = [];
+            for (let step = 0; step < 20; step++) {
+                const res = await fetch(`${exBase}/api/studio/worker/explainers/${id}/draw-next`, {
+                    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN_A}` }, body: JSON.stringify({ job_id: draw.id }),
+                });
+                assert.equal(res.status, 200);
+                const answer = await res.json() as { state: string };
+                answers.push(answer.state);
+                if (answer.state === 'done') break;
+            }
+            assert.deepEqual(answers, [...Array.from({ length: 12 }, () => 'drawn'), 'done']);
+            view = (await api('GET', `/explainers/${id}`)).body;
+            assert.equal(view.status, 'review', 'the last step moved it, before the worker said anything');
+            assert.equal(view.job.status, 'claimed', 'the job is still the worker’s until it completes it');
+            assert.equal(await completeJob(TENANT_A, draw.id, { state: 'done' }), 'applied');
             view = (await api('GET', `/explainers/${id}`)).body;
             assert.equal(view.status, 'review');
+            assert.equal(view.job, null, 'its result cleared the job');
 
             // 6. The owner approves the pictures: the render is queued.
             view = (await api('POST', `/explainers/${id}/approve-pictures`)).body;
@@ -1092,6 +1123,271 @@ describe('Explainers routes', () => {
             assert.equal(deleted.status, 204);
             assert.equal(world.explainers.size, 0);
             assert.equal(world.audit.at(-1)!.action, 'explainer.deleted');
+        });
+    });
+
+    describe('the picture routes', () => {
+        beforeEach(on);
+        const ALLOWANCE = { provider: 'cloudflare', day: '2026-10-25', used_units: 220, pictures: 2, cap: 80, est_left: 78, paused_until: null };
+        const PICTURE = (n: number) => ({ media_id: uploadId(n), url: `/api/uploads/${uploadId(n)}`, seed: n, provider: 'cloudflare', model: 'flux', prompt_hash: 'h', at: '2026-10-25T09:00:00Z' });
+        const reviewing = () => {
+            world.addExplainer({ id: EXPLAINER_ID, status: 'review' });
+            world.addScenes(3, (i) => ({ picture: PICTURE(10 + i), pictures: [PICTURE(30 + i)], draw_status: 'done' }), EXPLAINER_ID);
+        };
+        const workerCall = (path: string, body: unknown, token: string | null = TOKEN_A) => fetch(`${exBase}/api/studio${path}`, {
+            method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body),
+        });
+
+        describe('GET /explainers/allowance', () => {
+            it('is what the pictures service says, and is not read as an explainer whose id is "allowance"', async () => {
+                setPictureDeps({ allowanceStatus: async () => ALLOWANCE });
+                const res = await api('GET', '/explainers/allowance');
+                assert.equal(res.status, 200);
+                assert.deepEqual(res.body, ALLOWANCE);
+                assert.deepEqual(explainerStatements().map((s) => s.sql), [], 'no explainer was looked up');
+            });
+
+            it('is null when no image provider is set up, as a 200: there is nothing to count, and nothing went wrong', async () => {
+                setPictureDeps({ allowanceStatus: async () => null });
+                const res = await api('GET', '/explainers/allowance');
+                assert.equal(res.status, 200);
+                assert.equal(res.body, null);
+            });
+        });
+
+        describe('GET /explainers/:id carries the allowance', () => {
+            it('as `allowance`, from the pictures service', async () => {
+                reviewing();
+                setPictureDeps({ allowanceStatus: async () => ALLOWANCE });
+                const res = await api('GET', `/explainers/${EXPLAINER_ID}`);
+                assert.equal(res.status, 200);
+                assert.deepEqual(res.body.allowance, ALLOWANCE);
+            });
+
+            it('as null when the pictures service cannot say: reading an explainer never fails because the allowance could not be read', async () => {
+                reviewing();
+                setPictureDeps({ allowanceStatus: async () => { throw new Error('connection terminated'); } });
+                const res = await api('GET', `/explainers/${EXPLAINER_ID}`);
+                assert.equal(res.status, 200);
+                assert.equal(res.body.allowance, null);
+                assert.equal(res.body.status, 'review');
+            });
+        });
+
+        describe('POST /explainers/:id/scenes/:position/draw', () => {
+            it('is `{ scene, allowance }`, with the owner’s note handed to the pictures service', async () => {
+                reviewing();
+                const asked: unknown[] = [];
+                setPictureDeps({ drawScene: async (args) => { asked.push(args); return { scene: world.sceneRows(EXPLAINER_ID)[args.position]!, allowance: ALLOWANCE }; } });
+                const res = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/1/draw`, { note: 'he is holding a book, smiling' });
+                assert.equal(res.status, 200);
+                assert.deepEqual(Object.keys(res.body).sort(), ['allowance', 'scene']);
+                assert.equal(res.body.scene.position, 1);
+                assert.equal('creator_id' in res.body.scene, false);
+                assert.deepEqual(res.body.allowance, ALLOWANCE);
+                assert.deepEqual(asked, [{ creatorId: TENANT_A, explainerId: EXPLAINER_ID, position: 1, note: 'he is holding a book, smiling' }]);
+            });
+
+            it('a paused allowance is 429 EXPLAINER_ALLOWANCE_PAUSED with `retryAt` in the body and Retry-After in the headers', async () => {
+                reviewing();
+                const retryAt = new Date(Date.now() + 3 * 3_600_000).toISOString();
+                setPictureDeps({ drawScene: async () => { throw new ExplainerError('EXPLAINER_ALLOWANCE_PAUSED', 'Drawing is paused until the allowance resets.', { retryAt }); } });
+                const res = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, {});
+                assert.equal(res.status, 429);
+                assert.equal(res.body.code, 'EXPLAINER_ALLOWANCE_PAUSED');
+                assert.equal(res.body.retryAt, retryAt);
+                assert.deepEqual(res.body.params, { retryAt });
+                assert.equal(res.body.error, 'Drawing is paused until the allowance resets.');
+                assert.ok(Number(res.headers.get('retry-after')) >= 10_000, `Retry-After is seconds until then (${res.headers.get('retry-after')})`);
+            });
+
+            it('a refused picture is 422 EXPLAINER_PROMPT_REFUSED in the shared envelope, and a provider that failed is 502', async () => {
+                reviewing();
+                setPictureDeps({ drawScene: async () => { throw new ExplainerError('EXPLAINER_PROMPT_REFUSED', 'The redraw note names a woman.'); } });
+                const refused = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, { note: 'x' });
+                assert.equal(refused.status, 422);
+                assert.deepEqual(refused.body, { error: 'The redraw note names a woman.', message: 'The redraw note names a woman.', code: 'EXPLAINER_PROMPT_REFUSED', params: {} });
+                setPictureDeps({ drawScene: async () => { throw new ExplainerError('EXPLAINER_PROVIDER_ERROR', 'The image provider is busy: try again in a few minutes.'); } });
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, {})).status, 502);
+            });
+
+            it('is 409 EXPLAINER_BAD_STATE before the narration is voiced, and the pictures service is not asked', async () => {
+                world.addExplainer({ id: EXPLAINER_ID, status: 'draft' });
+                let called = 0;
+                setPictureDeps({ drawScene: async () => { called++; throw new Error('not expected'); } });
+                const res = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, {});
+                assert.equal(res.status, 409);
+                assert.equal(res.body.code, 'EXPLAINER_BAD_STATE');
+                assert.deepEqual(res.body.params, { status: 'draft', to: 'drawn' });
+                assert.equal(called, 0);
+            });
+
+            it('is 404 for an explainer that is not there, a scene that cannot be, and 400 for a note that is not text', async () => {
+                reviewing();
+                setPictureDeps({ drawScene: async () => { throw new Error('not expected'); } });
+                assert.equal((await api('POST', `/explainers/33333333-3333-4333-8333-333333333333/scenes/0/draw`, {})).body.code, 'EXPLAINER_NOT_FOUND');
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/-1/draw`, {})).body.code, 'EXPLAINER_NOT_FOUND');
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/first/draw`, {})).body.code, 'EXPLAINER_NOT_FOUND');
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/draw`, { note: 5 })).status, 400);
+            });
+        });
+
+        describe('POST /explainers/:id/scenes/:position/pick', () => {
+            it('is `{ scene }`, with the index handed to the pictures service', async () => {
+                reviewing();
+                const asked: unknown[] = [];
+                setPictureDeps({ pickPicture: async (args) => { asked.push(args); return { scene: world.sceneRows(EXPLAINER_ID)[args.position]! }; } });
+                const res = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/2/pick`, { index: 0 });
+                assert.equal(res.status, 200);
+                assert.deepEqual(Object.keys(res.body), ['scene']);
+                assert.equal(res.body.scene.position, 2);
+                assert.deepEqual(asked, [{ creatorId: TENANT_A, explainerId: EXPLAINER_ID, position: 2, index: 0 }]);
+            });
+
+            it('is 400 for an index that is not a whole number, and 409 while the explainer is rendering', async () => {
+                reviewing();
+                setPictureDeps({ pickPicture: async () => { throw new Error('not expected'); } });
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/pick`, { index: 'first' })).status, 400);
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/pick`, {})).status, 400);
+                world.explainer(EXPLAINER_ID).status = 'rendering';
+                const res = await api('POST', `/explainers/${EXPLAINER_ID}/scenes/0/pick`, { index: 0 });
+                assert.equal(res.status, 409);
+                assert.equal(res.body.code, 'EXPLAINER_BAD_STATE');
+            });
+        });
+
+        describe('POST /explainers/characters/candidates', () => {
+            it('is `{ candidates }` for the tenant’s own look', async () => {
+                const asked: unknown[] = [];
+                setPictureDeps({ drawCandidates: async (args) => { asked.push(args); return { candidates: [{ media_id: uploadId(1), url: `/api/uploads/${uploadId(1)}` }] }; } });
+                const res = await api('POST', '/explainers/characters/candidates', { description: 'a curious young man in a green sweater' });
+                assert.equal(res.status, 200);
+                assert.deepEqual(res.body, { candidates: [{ media_id: uploadId(1), url: `/api/uploads/${uploadId(1)}` }] });
+                assert.deepEqual(asked, [{ creatorId: TENANT_A, description: 'a curious young man in a green sweater' }]);
+            });
+
+            it('a refused description is 422 and a paused allowance is 429 with `retryAt`; a description that is not text is 400', async () => {
+                setPictureDeps({ drawCandidates: async () => { throw new ExplainerError('EXPLAINER_PROMPT_REFUSED', 'The character description names a woman.'); } });
+                assert.equal((await api('POST', '/explainers/characters/candidates', { description: 'x' })).status, 422);
+                const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+                setPictureDeps({ drawCandidates: async () => { throw new ExplainerError('EXPLAINER_ALLOWANCE_PAUSED', 'Drawing is paused.', { retryAt }); } });
+                const paused = await api('POST', '/explainers/characters/candidates', { description: 'x' });
+                assert.equal(paused.status, 429);
+                assert.equal(paused.body.retryAt, retryAt);
+                assert.equal((await api('POST', '/explainers/characters/candidates', { description: 5 })).status, 400);
+            });
+        });
+
+        describe('POST /explainers/uploads/sign', () => {
+            let previousStore: MediaStore | null;
+            let previousFetch: ReturnType<typeof setStorageFetch> = null;
+            let signed: string[];
+            beforeEach(() => {
+                signed = [];
+                previousFetch = setStorageFetch(async (input) => {
+                    signed.push(input);
+                    return new Response(JSON.stringify({ url: `${new URL(input).pathname.replace('/storage/v1', '')}?token=signed-token-123` }), { status: 200, headers: { 'content-type': 'application/json' } });
+                });
+                previousStore = setMediaStore(new SupabaseStorageMediaStore({ url: 'https://abcd1234.supabase.co', key: 'sb_secret_0123456789abcdefghijKLMNOP', source: { url: 'database', key: 'database' } }));
+                world.db.routes.unshift([/^INSERT INTO media_uploads/, () => ({ rows: [], rowCount: 1 })]);
+            });
+            afterEach(() => {
+                setStorageFetch(previousFetch);
+                setMediaStore(previousStore);
+            });
+
+            it('is owner only: an operator, who may do everything else here, is refused with 403 before anything is signed or written', async () => {
+                role = 'operator';
+                const res = await api('POST', '/explainers/uploads/sign', { purpose: 'music', mime: 'audio/mpeg', size: 3_000_000 });
+                assert.equal(res.status, 403);
+                assert.equal(res.body.code, 'INSUFFICIENT_TENANT_ROLE');
+                assert.deepEqual(signed, []);
+                assert.equal(world.ran(/^INSERT INTO media_uploads/).length, 0);
+            });
+
+            it('signs a track for the owner: 201 with the URL to PUT to, and the address the settings keep, on the public base', async () => {
+                role = 'owner';
+                const res = await api('POST', '/explainers/uploads/sign', { purpose: 'music', mime: 'audio/mpeg', size: 3_000_000 });
+                assert.equal(res.status, 201);
+                assert.deepEqual(Object.keys(res.body).sort(), ['media_id', 'upload_url', 'url']);
+                assert.match(res.body.upload_url, /token=signed-token-123/);
+                assert.equal(res.body.url, `${BASE}/api/uploads/${res.body.media_id}`);
+                assert.equal(world.ran(/^INSERT INTO media_uploads/).length, 1);
+                assert.equal(world.ran(/^INSERT INTO media_uploads/)[0]!.params[0], res.body.media_id);
+                assert.equal(world.ran(/^INSERT INTO media_uploads/)[0]!.params[1], TENANT_A);
+            });
+
+            it('refuses a type the purpose does not take and a file over 25MB with every problem at once, and signs nothing', async () => {
+                role = 'owner';
+                const res = await api('POST', '/explainers/uploads/sign', { purpose: 'reference', mime: 'audio/mpeg', size: 30 * 1024 * 1024 });
+                assert.equal(res.status, 400);
+                assert.equal(res.body.problems.length, 2);
+                assert.deepEqual(signed, []);
+                assert.equal((await api('POST', '/explainers/uploads/sign', {})).status, 400);
+                assert.equal((await api('POST', '/explainers/uploads/sign')).status, 400);
+            });
+        });
+
+        describe('POST /api/studio/worker/explainers/:id/draw-next', () => {
+            const drawing = () => {
+                const job = world.addJob({ kind: 'explainer_draw', status: 'claimed', payload: { explainer_id: EXPLAINER_ID } });
+                world.addExplainer({ id: EXPLAINER_ID, status: 'drawing', job_id: job.id });
+                world.addScenes(3, undefined, EXPLAINER_ID);
+                return job;
+            };
+
+            it('needs the worker’s bearer token: without one, or with another tenant’s, it never reaches the explainer', async () => {
+                const job = drawing();
+                let called = 0;
+                setPictureDeps({ drawNext: async () => { called++; return { state: 'done' }; } });
+                assert.equal((await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id }, null)).status, 401);
+                assert.equal((await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id }, 'not-a-token')).status, 401);
+                // Worker B belongs to another tenant: the explainer is not its tenant's, so it does not exist for it.
+                const other = await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id }, TOKEN_B);
+                assert.equal(other.status, 404);
+                assert.equal((await other.json() as { code: string }).code, 'EXPLAINER_NOT_FOUND');
+                assert.equal(called, 0);
+            });
+
+            it('draws one step and answers what the pictures service answered', async () => {
+                const job = drawing();
+                setPictureDeps({ drawNext: async () => ({ state: 'drawn', position: 0, remaining: 2 }) });
+                const res = await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id });
+                assert.equal(res.status, 200);
+                assert.deepEqual(await res.json(), { state: 'drawn', position: 0, remaining: 2 });
+                setPictureDeps({ drawNext: async () => ({ state: 'paused', until: '2026-10-26T00:05:00.000Z' }) });
+                assert.deepEqual(await (await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id })).json(), { state: 'paused', until: '2026-10-26T00:05:00.000Z' });
+            });
+
+            it('is 409 unless the job is the explainer’s own current drawing job, in the shared envelope, and the allowance is not touched', async () => {
+                drawing();
+                let called = 0;
+                setPictureDeps({ drawNext: async () => { called++; return { state: 'done' }; } });
+                const stale = await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: '77777777-7777-4777-8777-777777777777' });
+                assert.equal(stale.status, 409);
+                const body = await stale.json() as { code: string; params: unknown; error: string; message: string };
+                assert.equal(body.code, 'EXPLAINER_BAD_STATE');
+                assert.deepEqual(body.params, { status: 'drawing', to: 'draw' });
+                assert.equal(body.message, body.error);
+                assert.equal((await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, {})).status, 400);
+                assert.equal(called, 0);
+            });
+
+            it('the last step moves the explainer to review, and the owner reads it so', async () => {
+                const job = drawing();
+                setPictureDeps({ drawNext: async () => ({ state: 'done' }) });
+                assert.deepEqual(await (await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id })).json(), { state: 'done' });
+                const view = (await api('GET', `/explainers/${EXPLAINER_ID}`)).body;
+                assert.equal(view.status, 'review');
+            });
+
+            it('works with the switch off: a drawing already under way is finished, and nothing new can be started (every dashboard route is 404)', async () => {
+                const job = drawing();
+                world.appSettings.delete(ENABLED);
+                setPictureDeps({ drawNext: async () => ({ state: 'drawn', position: 1, remaining: 1 }) });
+                assert.equal((await workerCall(`/worker/explainers/${EXPLAINER_ID}/draw-next`, { job_id: job.id })).status, 200);
+                assert.equal((await api('POST', `/explainers/${EXPLAINER_ID}/draw`)).status, 404);
+            });
         });
     });
 

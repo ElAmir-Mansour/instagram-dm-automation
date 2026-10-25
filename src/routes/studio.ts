@@ -31,6 +31,7 @@ import {
     approveExplainer, approvePictures, createExplainer, deleteExplainer, editExplainer, getExplainer, listExplainers, renderExplainer, retryExplainer, revoiceExplainer,
     rewriteExplainer, startDraw,
 } from '../services/explainers/explainers.js';
+import { characterCandidates, currentAllowance, drawNextStep, drawOneScene, pickOneScene } from '../services/explainers/scenes.js';
 import { scheduleExplainer } from '../services/explainers/schedule.js';
 import { isExplainersEnabled } from '../services/explainers/switch.js';
 import { afterJobFailed } from '../services/explainers/writing.js';
@@ -38,7 +39,7 @@ import { assertAgentReady, ProfileIncomplete, profileIncompleteBody } from '../s
 import { refreshLessons } from '../services/monteur/analyst.js';
 import { approveClip, patchClip, rejectClip, rerenderClip } from '../services/monteur/clips.js';
 import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
-import { signWorkerUpload } from '../services/monteur/uploads.js';
+import { signExplainerUpload, signWorkerUpload } from '../services/monteur/uploads.js';
 import { getMonteurView, presentLessons, retrySource } from '../services/monteur/view.js';
 import { clipText, isPlainObject, requireId, STUDIO_MIGRATION_HINT, StudioError } from '../services/studio/common.js';
 import {
@@ -261,6 +262,12 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
 // A rendered reel: tens of MB, straight to Supabase Storage through a signed URL (MONTEUR.md §4).
 studioWorkerRouter.post('/worker/uploads/sign', handle('monteur.sign_failed', 'Failed to sign the upload.', async (req, res) => {
     res.status(201).json(await signWorkerUpload(workerTenant(res), req.body, () => getPublicBaseUrl(requestOrigin(req))));
+}));
+
+// One step of an explainer's unattended drawing, for the Mac's `explainer_draw` job (explainers/scenes.ts): the picture is drawn here, with this tenant's allowance and
+// the image provider's credentials, never on the Mac. Refused unless `job_id` is the explainer's own current drawing job and a worker has claimed it.
+studioWorkerRouter.post('/worker/explainers/:id/draw-next', handle('studio.explainer_draw_next_failed', 'Failed to draw the next picture.', async (req, res) => {
+    res.json(await drawNextStep(workerTenant(res), req.params.id, req.body));
 }));
 
 // ─── Operator ───────────────────────────────────────────────────────────────────────────
@@ -555,8 +562,26 @@ studioRouter.post('/explainers', explainerRoute('studio.explainer_create_failed'
     res.status(201).json(explainer);
 }));
 
+// The literal paths come before `/explainers/:id`: `GET /explainers/allowance` would otherwise be an explainer whose id is "allowance".
+
+/** Today's free image allowance: `{ provider, day, used_units, pictures, cap, est_left, paused_until }`, or `null` when no image provider is set up. */
+studioRouter.get('/explainers/allowance', explainerRoute('studio.explainer_allowance_failed', 'Failed to read the image allowance.', async (_req, res) => {
+    res.json(await currentAllowance());
+}));
+
+/** Four 448 px pictures of a character, to choose its reference from. They count against the allowance. */
+studioRouter.post('/explainers/characters/candidates', explainerRoute('studio.explainer_candidates_failed', 'Failed to draw the candidates.', async (req, res) => {
+    res.json(await characterCandidates(getTenantId(req), req.body));
+}));
+
+/** A music track or a character's reference picture, from the owner's browser straight to Storage. Owner only: adding to the library is not something an operator does. */
+studioRouter.post('/explainers/uploads/sign', canAdminister, explainerRoute('studio.explainer_upload_sign_failed', 'Failed to sign the upload.', async (req, res) => {
+    const asked = isPlainObject(req.body) ? req.body : {};
+    res.status(201).json(await signExplainerUpload(getTenantId(req), { purpose: asked.purpose, mime: asked.mime, size: asked.size }, () => getPublicBaseUrl(requestOrigin(req))));
+}));
+
 studioRouter.get('/explainers/:id', explainerRoute('studio.explainer_failed', 'Failed to read the explainer.', async (req, res) => {
-    res.json(await getExplainer(getTenantId(req), req.params.id));
+    res.json(await getExplainer(getTenantId(req), req.params.id, { allowance: currentAllowance }));
 }));
 
 studioRouter.patch('/explainers/:id', explainerRoute('studio.explainer_patch_failed', 'Failed to save the explainer.', async (req, res) => {
@@ -579,6 +604,16 @@ studioRouter.post('/explainers/:id/revoice', explainerRoute('studio.explainer_re
 
 studioRouter.post('/explainers/:id/draw', explainerRoute('studio.explainer_draw_failed', 'Failed to start the drawing.', async (req, res) => {
     res.json(await startDraw(getTenantId(req), req.params.id));
+}));
+
+/** Draw or redraw one scene now, with the owner's note: `{ scene, allowance }`. Synchronous: the provider answers in under 30 seconds. */
+studioRouter.post('/explainers/:id/scenes/:position/draw', explainerRoute('studio.explainer_scene_draw_failed', 'Failed to draw the picture.', async (req, res) => {
+    res.json(await drawOneScene(getTenantId(req), req.params.id, req.params.position, req.body));
+}));
+
+/** Go back to one of a scene's earlier pictures: `{ scene }`. Nothing is drawn and nothing is spent. */
+studioRouter.post('/explainers/:id/scenes/:position/pick', explainerRoute('studio.explainer_scene_pick_failed', 'Failed to choose the picture.', async (req, res) => {
+    res.json(await pickOneScene(getTenantId(req), req.params.id, req.params.position, req.body));
 }));
 
 studioRouter.post('/explainers/:id/approve-pictures', explainerRoute('studio.explainer_pictures_failed', 'Failed to approve the pictures.', async (req, res) => {

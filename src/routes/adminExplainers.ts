@@ -14,14 +14,14 @@
  *
  * Refusals of the feature (`ExplainerError`) are answered with their status in the app's usual envelope: `error` is the English sentence, as it
  * has always been (a client that reads `error` as a string keeps working), with `message`, `code` and `params` beside it (src/services/errorCodes.ts,
- * "THE SHAPE"). The explainer codes are not in `ERROR_CODES` yet, so this builds the envelope itself instead of calling `sendError`, which would throw
- * on a code it does not know.
+ * "THE SHAPE"), through `sendError` like every other route: the explainer codes are in `ERROR_CODES` now.
  */
 import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { queryRows } from '../db/query.js';
 import { TENANT_SETTING_PREFIXES } from '../services/appSettings.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { sendError } from '../services/errorCodes.js';
 import { ExplainerError } from '../services/explainers/errors.js';
 import { markExhausted, refundAllowance, reserveAllowance } from '../services/explainers/pictures/allowance.js';
 import { TEST_PROMPT, TEST_SIZE } from '../services/explainers/pictures/prompt.js';
@@ -49,11 +49,6 @@ adminExplainersRouter.use((req: Request, res: Response, next: NextFunction) => {
 /** What the schema being behind the code looks like here: `image_allowance` (and the other v59 tables) are missing. */
 const V59_HINT = 'The database is missing migration v59 (src/config/migration_v59_explainers.sql). Apply it with `npm run migrate`, then reload.';
 
-/** The envelope of a refusal of the feature: see the top of the file. */
-function explainerErrorBody(err: ExplainerError) {
-    return { error: err.message, message: err.message, code: err.code, params: err.params ?? {} };
-}
-
 /** Every route's error handling, once: a refusal of the feature is its own answer, a schema behind the code says which migration, anything else is a 500. */
 function handle(event: string, fallback: string, fn: (req: Request, res: Response) => Promise<void>) {
     return async (req: Request, res: Response): Promise<void> => {
@@ -61,7 +56,7 @@ function handle(event: string, fallback: string, fn: (req: Request, res: Respons
             await fn(req, res);
         } catch (err) {
             if (err instanceof ExplainerError) {
-                res.status(err.status).json(explainerErrorBody(err));
+                sendError(res, err.status, err.code, err.params, err.message, err.extra);
                 return;
             }
             log('error', event, describeError(err));

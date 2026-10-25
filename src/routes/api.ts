@@ -1059,7 +1059,8 @@ router.get('/cron/publish', async (req, res) => {
         const sweep = await runRetentionSweep();
         if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
             || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining
-            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0) {
+            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0
+            || sweep.allowanceRowsDeleted > 0) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -1205,10 +1206,14 @@ const ALLOWED_MIME_TYPES = new Set([
 
 /**
  * What /uploads/:id serves as itself: every type /upload stores, plus the infographic's GIF, which
- * only the Studio worker uploads (v31). /upload itself still refuses a GIF: no platform the
- * scheduler posts to takes one.
+ * only the Studio worker uploads (v31), and the sound of an illustrated explainer (v59): the voiced narration
+ * (an m4a, `audio/mp4`) and the owner's music tracks (`audio/mpeg`, `audio/mp4`, `audio/wav`). /upload itself
+ * still refuses all of them: no platform the scheduler posts to takes a GIF or a bare sound file. Served as
+ * themselves, the dashboard's player can play the narration and a track's preview, and a player asks for pieces
+ * (Range), which this route answers with 206 for every type alike. Audio is not a type a browser runs as script,
+ * so naming it is no more dangerous than naming the images above.
  */
-const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif']);
+export const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

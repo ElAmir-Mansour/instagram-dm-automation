@@ -26,6 +26,7 @@
  * value (90) is in ARCHITECTURE.md rather than hardcoded here. Set it and the next cron run
  * begins clearing.
  */
+import { pool } from '../config/db.js';
 import { queryCount, queryOne } from '../db/query.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
 import { getJobQueue } from '../jobs/queue.js';
@@ -33,6 +34,7 @@ import { log } from '../utils/log.js';
 import { isMissingTable } from './health.js';
 import { removeQueuedMediaObjects } from './storage.js';
 import { pruneOnboardingData, type OnboardingPruneResult } from './onboardingRetention.js';
+import { sweepAllowance } from './explainers/pictures/allowance.js';
 
 /** Floor on the configurable window. Below this, debugging a live webhook issue is hopeless. */
 export const MIN_RETENTION_DAYS = 7;
@@ -691,6 +693,8 @@ export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
     pruneOnboarding: pruneOnboardingData,
     pruneLinkClicks,
     prunePrivateMedia: pruneOrphanedPrivateMedia,
+    // The image provider's allowance rows past 90 days (illustrated explainers, T054): the allowance module's own DELETE, on the pool.
+    pruneAllowance: () => sweepAllowance(pool),
 };
 
 /**

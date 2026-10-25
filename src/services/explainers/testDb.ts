@@ -219,6 +219,13 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
             applySets(row, /^UPDATE explainers SET (.+) WHERE id = \$1 AND creator_id = \$2 RETURNING \*$/.exec(sql)![1]!, p);
             return { rows: [row] };
         }],
+        [/^UPDATE explainers SET draw_paused_until = NULL, error = NULL, updated_at = NOW\(\) WHERE id = \$1 AND creator_id = \$2 AND status = 'drawing' AND job_id = \$3 AND \(draw_paused_until IS NOT NULL OR error IS NOT NULL\)$/, (p) => {
+            const row = world.explainers.get(p[0]);
+            if (!row || row.creator_id !== p[1] || row.status !== 'drawing' || row.job_id !== p[2] || (row.draw_paused_until === null && row.error === null)) return { rows: [], rowCount: 0 };
+            Object.assign(row, { draw_paused_until: null, error: null });
+            touch(row);
+            return { rows: [], rowCount: 1 };
+        }],
         [/^DELETE FROM explainers WHERE id = \$1 AND creator_id = \$2$/, (p) => {
             const row = world.explainers.get(p[0]);
             if (!row || row.creator_id !== p[1]) return { rows: [], rowCount: 0 };
@@ -299,6 +306,10 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         [/^SELECT status, not_before FROM studio_jobs WHERE id = \$1 AND creator_id = \$2 AND kind = 'explainer_draw'$/, (p) => {
             const job = world.jobs.find((j) => j.id === p[0] && j.creator_id === p[1] && j.kind === 'explainer_draw');
             return { rows: job ? [{ status: job.status, not_before: job.not_before }] : [] };
+        }],
+        [/^SELECT kind, status FROM studio_jobs WHERE id = \$1 AND creator_id = \$2$/, (p) => {
+            const job = world.jobs.find((j) => j.id === p[0] && j.creator_id === p[1]);
+            return { rows: job ? [{ kind: job.kind, status: job.status }] : [] };
         }],
         [/^SELECT id, kind, status, payload, created_at, heartbeat_at FROM studio_jobs WHERE id = \$1 AND creator_id = \$2$/, (p) => {
             const job = world.jobs.find((j) => j.id === p[0] && j.creator_id === p[1]);
