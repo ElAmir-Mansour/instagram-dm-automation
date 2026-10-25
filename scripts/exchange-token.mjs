@@ -12,9 +12,12 @@
  * Requires .env file with META_APP_SECRET set.
  */
 
+import { graphVersion } from './lib/graph.mjs';
+
 const APP_ID = process.env.META_APP_ID;
 const APP_SECRET = process.env.META_APP_SECRET;
-const API_VERSION = 'v21.0';
+// The app's own Graph version, or META_API_VERSION: the token is exchanged through the version production uses.
+const API_VERSION = graphVersion();
 
 if (!APP_SECRET) {
     console.error('\n❌ META_APP_SECRET not found. Run with: node --env-file=.env scripts/exchange-token.mjs <TOKEN>\n');
