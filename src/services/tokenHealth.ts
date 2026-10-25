@@ -400,8 +400,8 @@ export async function recheckTenantToken(creatorId: string): Promise<TokenRechec
 
     log('info', 'token.rechecked', {
         creator_id: creatorId,
-        token_status: status,
-        token_type: inspection.type,
+        status,
+        type: inspection.type,
         missing_scopes: inspection.missingScopes.length,
     });
 

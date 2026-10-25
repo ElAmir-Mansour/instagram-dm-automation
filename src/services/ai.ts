@@ -625,19 +625,19 @@ export async function generateAiResponse(
         const response = await postToGemini(url, payload, gemini.key, modelName);
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-        // Token counts are the product's dominant marginal cost and the only way to see it
-        // is to record them per call. Arabic runs ~2-2.5x more tokens per character than
-        // English, and the system prompt plus the whole knowledge base is resent every time,
-        // so `prompt_tokens` here is mostly the static prefix — which is precisely the number
-        // that tells you whether context caching is worth turning on.
+        // Token counts are the product's dominant marginal cost and the only way to see it is to record them per call. Arabic
+        // runs ~2-2.5x more tokens per character than English, and the system prompt plus the whole knowledge base is resent
+        // every time, so `usage_in` is mostly the static prefix: the number that says whether context caching is worth it.
+        // Named `usage_*` like the providers layer's `ai.call`, never `*_tokens`: the logger blanks a field whose name says
+        // token (REDACT_KEY, utils/log.ts), and these printed `[redacted]` until 2026-10-25.
         const usage = response.data?.usageMetadata;
         if (usage) {
             log('info', 'ai.usage', {
                 model: modelName,
-                prompt_tokens: usage.promptTokenCount,
-                output_tokens: usage.candidatesTokenCount,
-                total_tokens: usage.totalTokenCount,
-                cached_tokens: usage.cachedContentTokenCount ?? 0,
+                usage_in: usage.promptTokenCount,
+                usage_out: usage.candidatesTokenCount,
+                usage_total: usage.totalTokenCount,
+                usage_cache_read: usage.cachedContentTokenCount ?? 0,
                 history_turns: contents.length,
             });
         }

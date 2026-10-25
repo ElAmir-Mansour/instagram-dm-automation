@@ -113,7 +113,7 @@ metaPublicRouter.get('/callback', async (req, res) => {
         // The browser that started the flow holds the same value. A state lifted from a log or a referrer and completed
         // elsewhere fails here, before it is spent, so the attempt cannot burn the legitimate one.
         if (!cookie || cookie !== state) {
-            log('warn', 'meta.oauth_state_mismatch', { has_cookie: Boolean(cookie) });
+            log('warn', 'meta.oauth_state_mismatch', { browser_state: cookie ? 'different' : 'missing' });
             backTo(res, null, 'error', { reason: 'state_mismatch' });
             return;
         }
