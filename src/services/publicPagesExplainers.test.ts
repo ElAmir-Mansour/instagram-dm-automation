@@ -38,11 +38,13 @@ describe('/privacy — illustrated explainers', () => {
         const en = words(part('en', '<h3 id="explainers-en">', '<h2 id="purposes-en">'));
         assert.match(en, /They use only the owner's own material: no comment, message, contact or form answer/);
         for (const name of ['Claude', 'Anthropic', 'Gemini', 'Google Search', 'Cloudflare Workers AI']) assert.ok(en.includes(name), name);
-        assert.match(en, /No photo of a real person is sent/);
+        assert.match(en, /the reference pictures the owner chose for their recurring cartoon characters are sent to Cloudflare Workers AI/);
+        assert.doesNotMatch(en, /No photo of a real person/, 'the owner may upload any picture as a reference: the page does not promise what the code does not hold');
         const ar = words(part('ar', '<h3 id="explainers-ar">', '<h2 id="purposes-ar">'));
         assert.match(ar, /ولا تُستخدم فيها إلا مواد صاحب المنصة نفسه/);
         for (const name of ['Claude', 'Anthropic', 'Gemini', 'Cloudflare Workers AI']) assert.ok(ar.includes(name), name);
-        assert.match(ar, /ولا تُرسَل أي صورة فوتوغرافية لشخص حقيقي/);
+        assert.match(ar, /والصور المرجعية التي اختارها صاحب المنصة لشخصياته الكرتونية المتكررة/);
+        assert.doesNotMatch(ar, /صورة فوتوغرافية لشخص حقيقي/);
     });
 
     it("names Cloudflare among the services of section 5, with its policy, and grows Google's line, not the AI providers' six", () => {

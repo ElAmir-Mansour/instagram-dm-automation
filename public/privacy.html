@@ -239,8 +239,8 @@
       (aicourse-captions scripts/studio/explainerWrite.mjs, the research variant of scripts/monteur/think.mjs); fallback → Gemini with
       google_search grounding (src/services/explainers/writerGemini.ts) when the Mac is offline or signed out, or the owner picks it;
     · VOICE: each scene's spoken text → Gemini TTS (gemini-3.8-flash-tts, worker scripts/studio/tts.mjs), free tier;
-    · PICTURES: scene briefs (English) + the character reference drawings → Cloudflare Workers AI (src/services/explainers/pictures/);
-      the women guard refuses before any call; no photo of a real person is a reference;
+    · PICTURES: scene briefs (English) + the characters' reference pictures (candidates drawn by the same service, or a picture the
+      owner uploads) → Cloudflare Workers AI (src/services/explainers/pictures/); the women guard refuses before any call;
     · NEVER: conversations, messages, contacts, lead answers: no explainer code path reads them;
     · RETENTION: pictures, references and tracks while referenced; audio and MP4s until 30 days after the last scheduled post (kept
       while unscheduled); deleting an explainer removes its files (src/services/retention.ts).
@@ -1571,9 +1571,8 @@
                         والنص هو نص فيديو سيُنشر علناً.
                     </li>
                     <li>
-                        <strong>الصور:</strong> يُرسَل وصفٌ قصير بالإنجليزية لصورة كل مشهد، والرسوم المرجعية لشخصيات صاحب المنصة
-                        الكرتونية المتكررة، إلى <bdi lang="en" dir="ltr">Cloudflare Workers AI</bdi> التي ترسم الصور. ولا تُرسَل أي صورة
-                        فوتوغرافية لشخص حقيقي.
+                        <strong>الصور:</strong> يُرسَل وصفٌ قصير بالإنجليزية لصورة كل مشهد، والصور المرجعية التي اختارها صاحب المنصة
+                        لشخصياته الكرتونية المتكررة، إلى <bdi lang="en" dir="ltr">Cloudflare Workers AI</bdi> التي ترسم الصور.
                     </li>
                     <li>
                         <strong>ما يُخزَّن:</strong> الموضوع والنص والأوصاف والمصادر والصور والتسجيل الصوتي والفيديوهات النهائية، مع حساب
@@ -1673,7 +1672,7 @@
                         وتُحذف كلها إن طلبت الحذف (القسم 6).
                     </li>
                     <li>
-                        <strong>فيديوهات الشرح المصوّرة</strong> — تبقى الصور ورسوم الشخصيات والمقاطع الموسيقية ما دام فيديو شرحٍ أو
+                        <strong>فيديوهات الشرح المصوّرة</strong> — تبقى الصور وصور الشخصيات المرجعية والمقاطع الموسيقية ما دام فيديو شرحٍ أو
                         الإعدادات تستخدمها. ويبقى التسجيل الصوتي والفيديوهات النهائية حتى 30 يوماً بعد آخر منشور مجدول لذلك الفيديو، وما
                         دام لم يُجدول بعد. وحذف فيديو الشرح يحذف ملفاته.
                     </li>
@@ -1712,7 +1711,7 @@
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Cloudflare</bdi></strong> (<bdi lang="en" dir="ltr">Workers AI</bdi>) — لفيديوهات
-                        الشرح المصوّرة لصاحب المنصة فقط: تتلقّى الوصف القصير لكل صورة والرسوم المرجعية لشخصياته الكرتونية، وترسم الصور
+                        الشرح المصوّرة لصاحب المنصة فقط: تتلقّى الوصف القصير لكل صورة والصور المرجعية لشخصياته الكرتونية، وترسم الصور
                         (القسم 1).
                         <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Cloudflare</bdi></a>.
                     </li>
@@ -2299,9 +2298,8 @@
                         the script is the text of a video that will be published.
                     </li>
                     <li>
-                        <strong>Pictures:</strong> each scene's short picture description, in English, and the reference drawings of the
-                        owner's recurring cartoon characters are sent to Cloudflare Workers AI, which draws the pictures. No photo of a
-                        real person is sent.
+                        <strong>Pictures:</strong> each scene's short picture description, in English, and the reference pictures the
+                        owner chose for their recurring cartoon characters are sent to Cloudflare Workers AI, which draws the pictures.
                     </li>
                     <li>
                         <strong>Stored:</strong> the topic, script, captions, sources, pictures, narration and finished videos are stored
@@ -2410,7 +2408,7 @@
                         the ad) with no data about you. All of it is deleted if you ask (section 6).
                     </li>
                     <li>
-                        <strong>Illustrated explainers</strong> — the pictures, the character drawings and the music tracks are kept while
+                        <strong>Illustrated explainers</strong> — the pictures, the characters' reference pictures and the music tracks are kept while
                         an explainer or the settings use them. The narration and the finished videos are kept until 30 days after the
                         explainer's last scheduled post, and while it has none. Deleting an explainer deletes its files.
                     </li>
@@ -2452,7 +2450,7 @@
                     </li>
                     <li>
                         <strong>Cloudflare</strong> (Workers AI) — only for the platform owner's illustrated explainers: it receives each
-                        picture's short description and the reference drawings of the owner's cartoon characters, and draws the pictures
+                        picture's short description and the reference pictures of the owner's cartoon characters, and draws the pictures
                         (section 1).
                         <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's privacy policy</a>.
                     </li>
