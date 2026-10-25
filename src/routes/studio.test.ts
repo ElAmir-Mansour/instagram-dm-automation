@@ -21,6 +21,10 @@ import { invalidateTenantCache } from '../services/tenant.js';
 import { setGeneration } from '../services/studio/drafts.js';
 import { NEEDS_AI_PROVIDER_MESSAGE } from '../services/studio/tenantAi.js';
 import { hashWorkerToken, mintWorkerToken } from '../services/studio/worker.js';
+import { completeJob } from '../services/studio/jobs.js';
+import { CLOSING_QUESTION, validWriterOutput } from '../services/explainers/testFixtures.js';
+import { explainerSettings, installWorld, type World } from '../services/explainers/testWorld.js';
+import { setRunDeps, setRunLauncher } from '../services/explainers/writing.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -420,7 +424,7 @@ describe('operator routes', () => {
         assert.deepEqual(res.body, {
             worker: { online: false, lastSeen: null, name: null },
             lessons: { total: 34, indexed: 30, indexing: 0, failed: 0 },
-            jobs: { pending: 2, claimed: 0 },
+            jobs: { pending: 2, claimed: 0, waiting: 0 },
             tiktok: { audited: false, queued: 0 },
         });
         for (const s of statements.filter((s) => /creator_id = \$1/.test(s.sql))) assert.equal(s.params[0], TENANT_A);
@@ -801,5 +805,336 @@ describe('the Studio and the Monteur refuse with a code', () => {
         const res = await call('post', '/monteur/clips/:id/rerender', { params: { id: 'nope' } });
         assert.equal(res.body.code, undefined);
         assert.equal(res.body.params, undefined);
+    });
+});
+
+
+// ─── Illustrated explainers (v59, src/services/explainers/): the routes of contracts/http-api.md ─────────────────────────────────────────────
+
+describe('Explainers routes', () => {
+    const EXPLAINER_ID = '22222222-2222-4222-8222-222222222222';
+    const ENABLED = `explainers.enabled.${TENANT_A}`;
+    const KARIM = { key: 'karim', name: 'Karim', description: 'a curious young man', ref_media_id: null, ref_url: null, approved_at: null };
+    const upload = (n: number) => `${BASE}/api/uploads/${String(n).padStart(2, '0').repeat(4)}-1111-4111-8111-111111111111`;
+    const uploadId = (n: number) => `${String(n).padStart(2, '0').repeat(4)}-1111-4111-8111-111111111111`;
+
+    let world: World;
+    let exServer: Server;
+    let exBase: string;
+    let role: 'owner' | 'operator' | 'viewer' = 'operator';
+    let launched: Promise<void>[] = [];
+    let restoreRun: (() => void) | undefined;
+
+    before(async () => {
+        const app = express();
+        app.use(express.json({ limit: '15mb' }));
+        // Mounted ABOVE the session stand-in, as api.ts mounts it: the worker carries a token and no session.
+        app.use('/api/studio', studioWorkerRouter);
+        app.use((req, _res, next) => {
+            req.session = { userId: 'u-1', role: 'user', tenantId: TENANT_A } as never;
+            req.tenantRole = role;
+            next();
+        });
+        app.use('/api/studio', studioRouter);
+        await new Promise<void>((resolve) => { exServer = app.listen(0, '127.0.0.1', () => resolve()); });
+        exBase = `http://127.0.0.1:${(exServer.address() as AddressInfo).port}`;
+    });
+    after(async () => {
+        await new Promise<void>((resolve) => exServer.close(() => resolve()));
+    });
+    beforeEach(() => {
+        role = 'operator';
+        world = installWorld({ tenant: TENANT_A });
+        // The routes read the real clock (the lazy check asks how old a Gemini run's heartbeat is), so the database's NOW() is the real now too.
+        world.now = new Date();
+        world.settingsRow = explainerSettings({ characters: [KARIM] });
+        world.db.routes.unshift([/^UPDATE studio_workers w SET last_seen_at/, (p) => ({ rows: WORKERS[p[0]] ? [WORKERS[p[0]]] : [] })]);
+        launched = [];
+        const previous = setRunLauncher((work) => { launched.push(work); });
+        const previousDeps = setRunDeps({ write: async () => { throw new Error('no Gemini in this test'); } });
+        restoreRun = () => { setRunLauncher(previous); setRunDeps(previousDeps); };
+    });
+    afterEach(() => {
+        world.restore();
+        restoreRun?.();
+    });
+
+    const on = () => world.appSettings.set(ENABLED, 'true');
+    async function api(method: string, path: string, body?: unknown) {
+        const res = await fetch(`${exBase}/api/studio${path}`, {
+            method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        const text = await res.text();
+        return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null };
+    }
+    const explainerStatements = () => world.db.statements.filter((s) => /\bexplainers?\b|studio_jobs/.test(s.sql) && !/app_settings/.test(s.sql));
+
+    describe('the switch', () => {
+        const ROUTES: [string, string, unknown?][] = [
+            ['GET', '/explainers'], ['POST', '/explainers', { topic: 'Why AI answers with confidence' }], ['GET', `/explainers/${EXPLAINER_ID}`], ['PATCH', `/explainers/${EXPLAINER_ID}`, { subtitles: false }],
+            ['POST', `/explainers/${EXPLAINER_ID}/rewrite`, { note: 'shorter' }], ['POST', `/explainers/${EXPLAINER_ID}/approve`, { version: 1 }], ['POST', `/explainers/${EXPLAINER_ID}/revoice`],
+            ['POST', `/explainers/${EXPLAINER_ID}/draw`], ['POST', `/explainers/${EXPLAINER_ID}/approve-pictures`], ['POST', `/explainers/${EXPLAINER_ID}/render`],
+            ['POST', `/explainers/${EXPLAINER_ID}/schedule`, { when: 'now' }], ['POST', `/explainers/${EXPLAINER_ID}/retry`], ['DELETE', `/explainers/${EXPLAINER_ID}`],
+        ];
+
+        it('every dashboard route answers 404 EXPLAINERS_DISABLED while it is off, with the shared envelope, and does not touch the explainers’ tables', async () => {
+            for (const [method, path, body] of ROUTES) {
+                const res = await api(method, path, body);
+                assert.equal(res.status, 404, `${method} ${path}`);
+                assert.equal(res.body.code, 'EXPLAINERS_DISABLED', `${method} ${path}`);
+                assert.equal(res.body.error, 'Explainers are not switched on for this account.');
+                assert.equal(res.body.message, res.body.error);
+                assert.deepEqual(res.body.params, {});
+            }
+            assert.deepEqual(explainerStatements().map((s) => s.sql), [], 'nothing of the feature was read or written');
+            assert.equal(world.jobs.length, 0);
+        });
+
+        it('is read for this tenant: another tenant’s switch does not turn it on, and only the value "true" does', async () => {
+            world.appSettings.set(`explainers.enabled.${'77777777-7777-4777-8777-777777777777'}`, 'true');
+            assert.equal((await api('GET', '/explainers')).status, 404);
+            for (const value of ['yes', 'TRUE', '1', 'on', '{"enabled":true}']) {
+                world.appSettings.set(ENABLED, value);
+                assert.equal((await api('GET', '/explainers')).status, 404, value);
+            }
+            world.appSettings.set(ENABLED, 'true');
+            assert.equal((await api('GET', '/explainers')).status, 200);
+        });
+
+        it('the switch comes before everything else: a malformed id is a 404 for the switch first, and a body that would be refused is not read', async () => {
+            const res = await api('GET', '/explainers/not-an-id');
+            assert.equal(res.body.code, 'EXPLAINERS_DISABLED');
+            assert.equal((await api('POST', '/explainers', { topic: '' })).body.code, 'EXPLAINERS_DISABLED');
+        });
+
+        it('a read the database cannot answer is a failure, not "not available": the switch’s error is not turned into a 404', async () => {
+            world.db.routes.unshift([/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, () => { throw new Error('connection terminated'); }]);
+            const res = await api('GET', '/explainers');
+            assert.equal(res.status, 500);
+            assert.equal(res.body.error, 'Failed to list the explainers.');
+        });
+    });
+
+    describe('the role', () => {
+        it('needs the operator role: a viewer is refused with 403 before the switch is read, an operator and an owner are let in', async () => {
+            on();
+            role = 'viewer';
+            const refused = await api('GET', '/explainers');
+            assert.equal(refused.status, 403);
+            assert.equal(refused.body.code, 'INSUFFICIENT_TENANT_ROLE');
+            assert.equal((await api('POST', '/explainers', { topic: 'Why AI answers with confidence' })).status, 403);
+            assert.equal(world.explainers.size, 0);
+            assert.ok(!world.db.statements.some((s) => /app_settings/.test(s.sql)), 'the guard is the router’s: it ran first');
+            role = 'operator';
+            assert.equal((await api('GET', '/explainers')).status, 200);
+            role = 'owner';
+            assert.equal((await api('GET', '/explainers')).status, 200);
+        });
+    });
+
+    describe('the shapes', () => {
+        beforeEach(on);
+
+        it('POST /explainers is 201 with the explainer, queues the Mac’s job, and leaves an audit row that holds no word of the topic', async () => {
+            const res = await api('POST', '/explainers', { topic: 'Why AI answers with confidence', language: 'en', notes: 'a private note', source_links: ['https://arxiv.org/abs/2005.11401'] });
+            assert.equal(res.status, 201);
+            assert.equal(res.body.status, 'writing');
+            assert.equal(res.body.topic, 'Why AI answers with confidence');
+            assert.equal(res.body.job.status, 'pending');
+            assert.equal(world.jobsOf('explainer_write').length, 1);
+            assert.equal(world.audit.length, 1);
+            assert.deepEqual(world.audit[0], {
+                actor_email: null, action: 'explainer.created', target_type: 'explainer', target_id: res.body.id, detail: { language: 'en', length_tier: 'short', sound_mode: 'sfx' },
+            });
+            assert.ok(!JSON.stringify(world.audit).includes('Why AI answers'));
+            assert.ok(!JSON.stringify(world.audit).includes('a private note'));
+        });
+
+        it('GET /explainers is { items }, newest first', async () => {
+            await api('POST', '/explainers', { topic: 'The first explainer topic' });
+            const res = await api('GET', '/explainers');
+            assert.equal(res.status, 200);
+            assert.deepEqual(Object.keys(res.body), ['items']);
+            assert.equal(res.body.items.length, 1);
+            assert.equal(res.body.items[0].topic, 'The first explainer topic');
+        });
+
+        it('a refused body is the shared envelope with the list of problems at the top level', async () => {
+            const res = await api('POST', '/explainers', { topic: 'ab', language: 'fr' });
+            assert.equal(res.status, 400);
+            assert.equal(typeof res.body.error, 'string');
+            assert.equal(res.body.problems.length, 2);
+        });
+
+        it('a malformed id and one that is not there are the same 404 EXPLAINER_NOT_FOUND, in the shared envelope', async () => {
+            for (const id of ['not-an-id', '33333333-3333-4333-8333-333333333333']) {
+                const res = await api('GET', `/explainers/${id}`);
+                assert.equal(res.status, 404, id);
+                assert.deepEqual(res.body, { error: 'No such explainer.', message: 'No such explainer.', code: 'EXPLAINER_NOT_FOUND', params: {} });
+            }
+            assert.equal((await api('DELETE', '/explainers/not-an-id')).body.code, 'EXPLAINER_NOT_FOUND');
+        });
+
+        it('a script that breaks a rule is 422 EXPLAINER_DRAFT_REFUSED, with every finding, the sentences, and how many, and nothing is stored', async () => {
+            const out = validWriterOutput(12);
+            world.addExplainer({ id: EXPLAINER_ID, status: 'draft', title: out.title, draft_version: 1, language: 'en', draft: { writer: 'claude_mac', captions: out.captions, first_comment: out.first_comment, replies: out.replies, sources: out.sources, est_seconds: 70, warnings: [] } });
+            world.addScenes(12, (i) => ({ narration: out.scenes[i]!.narration, spoken: out.scenes[i]!.spoken, label: out.scenes[i]!.label, brief: out.scenes[i]!.brief, characters: out.scenes[i]!.characters }), EXPLAINER_ID);
+            const scenes = world.sceneRows(EXPLAINER_ID).map((s) => ({ narration: s.narration, spoken: s.spoken, label: s.label, brief: s.brief, characters: s.characters, continues: s.continues }));
+            scenes[11]!.narration = 'Type 1 if you agree';
+            scenes[11]!.spoken = 'Type 1 if you agree';
+            const res = await api('PATCH', `/explainers/${EXPLAINER_ID}`, { scenes });
+            assert.equal(res.status, 422);
+            assert.equal(res.body.code, 'EXPLAINER_DRAFT_REFUSED');
+            assert.deepEqual(res.body.params, { found: 2 });
+            assert.deepEqual(res.body.findings.map((f: { code: string }) => f.code), ['closing_question', 'engagement_bait']);
+            assert.equal(res.body.problems.length, 2);
+            assert.equal(res.body.error, '2 problems with this script.');
+            assert.equal(world.sceneRows(EXPLAINER_ID)[11]!.narration, CLOSING_QUESTION);
+        });
+
+        it('a move the status machine does not allow is 409 EXPLAINER_BAD_STATE', async () => {
+            world.addExplainer({ id: EXPLAINER_ID, status: 'writing' });
+            const res = await api('POST', `/explainers/${EXPLAINER_ID}/approve`, { version: 0 });
+            assert.equal(res.status, 409);
+            assert.equal(res.body.code, 'EXPLAINER_BAD_STATE');
+            assert.deepEqual(res.body.params, { status: 'writing', to: 'be approved' });
+        });
+
+        it('approving a script that changed since it was read is 409 CHANGED_MEANWHILE', async () => {
+            const out = validWriterOutput(12);
+            world.addExplainer({ id: EXPLAINER_ID, status: 'draft', title: out.title, draft_version: 4, draft: { writer: 'claude_mac', captions: out.captions, first_comment: '', replies: [], sources: out.sources, est_seconds: 70, warnings: [] } });
+            world.addScenes(12, undefined, EXPLAINER_ID);
+            const res = await api('POST', `/explainers/${EXPLAINER_ID}/approve`, { version: 3 });
+            assert.equal(res.status, 409);
+            assert.equal(res.body.code, 'CHANGED_MEANWHILE');
+        });
+
+        it('a time that is not one is 400 INVALID_SCHEDULE_TIME', async () => {
+            world.addExplainer({ id: EXPLAINER_ID, status: 'ready' });
+            const res = await api('POST', `/explainers/${EXPLAINER_ID}/schedule`, { when: 'tomorrow-ish' });
+            assert.equal(res.status, 400);
+            assert.equal(res.body.code, 'INVALID_SCHEDULE_TIME');
+        });
+    });
+
+    describe('the whole way, through the routes: create, draft, approve, voice, draw, approve the pictures, render, schedule, delete', () => {
+        beforeEach(on);
+
+        it('walks an explainer from a topic to its posts, with the worker’s results landing between the owner’s steps, and leaves the audit trail of the gates', async () => {
+            // 1. A topic.
+            const created = await api('POST', '/explainers', { topic: 'Why AI answers with confidence', language: 'en', sound_mode: 'sfx' });
+            assert.equal(created.status, 201);
+            const id = created.body.id as string;
+            const claim = (kind: string) => { const job = world.jobsOf(kind as never).at(-1)!; job.status = 'claimed'; return job; };
+
+            // 2. The Mac writes it (the worker's `complete`): a draft.
+            const write = claim('explainer_write');
+            assert.equal(await completeJob(TENANT_A, write.id, { written: validWriterOutput(12), model: 'claude-opus-5-5', research_rounds: 3 }), 'applied');
+            let view = (await api('GET', `/explainers/${id}`)).body;
+            assert.equal(view.status, 'draft');
+            assert.equal(view.scenes.length, 12);
+            assert.equal(view.draft.writer, 'claude_mac');
+            assert.deepEqual(view.problems, []);
+
+            // 3. The owner edits a label and approves the script he read.
+            const scenes = view.scenes.map((sc: any) => ({ narration: sc.narration, spoken: sc.spoken, label: sc.label, brief: sc.brief, characters: sc.characters, continues: sc.continues }));
+            scenes[0].label = 'edited';
+            view = (await api('PATCH', `/explainers/${id}`, { scenes })).body;
+            assert.equal(view.scenes[0].label, 'edited');
+            assert.equal(view.draft_version, 1, 'a label never needs a new voice');
+            view = (await api('POST', `/explainers/${id}/approve`, { version: view.draft_version })).body;
+            assert.equal(view.status, 'voicing');
+
+            // 4. The Mac voices it.
+            const voice = claim('explainer_voice');
+            for (const n of [1, 2, 3, 4]) world.uploads.set(uploadId(n), { id: uploadId(n), creator_id: TENANT_A, mime_type: n === 1 ? 'audio/mp4' : n === 4 ? 'image/jpeg' : 'video/mp4', storage_path: null });
+            await completeJob(TENANT_A, voice.id, {
+                audio: { url: upload(1), duration: 72, voice: 'Sadaltager', fallback: false }, version: 1, words: {},
+                scenes: Array.from({ length: 12 }, (_, i) => ({ position: i, start: i * 6, end: i * 6 + 6 })),
+            });
+            view = (await api('GET', `/explainers/${id}`)).body;
+            assert.equal(view.status, 'drawing');
+            assert.equal(view.audio.version, 1);
+            assert.equal(view.audio_stale, false);
+
+            // 5. The pictures are drawn (the pictures service writes them), and the drawing ends.
+            for (const scene of world.sceneRows(id)) Object.assign(scene, { draw_status: 'done', picture: { media_id: uploadId(20 + scene.position), url: `/api/uploads/${uploadId(20 + scene.position)}`, seed: scene.position, provider: 'cloudflare', model: 'flux', prompt_hash: 'h', at: '2026-10-25T09:00:00Z' } });
+            const draw = claim('explainer_draw');
+            await completeJob(TENANT_A, draw.id, { state: 'done' });
+            view = (await api('GET', `/explainers/${id}`)).body;
+            assert.equal(view.status, 'review');
+
+            // 6. The owner approves the pictures: the render is queued.
+            view = (await api('POST', `/explainers/${id}/approve-pictures`)).body;
+            assert.equal(view.status, 'rendering');
+            const render = claim('explainer_render');
+            await completeJob(TENANT_A, render.id, { vertical_url: upload(2), horizontal_url: upload(3), cover_url: upload(4), duration: 72, version: 1, sound_mode: 'sfx' });
+            view = (await api('GET', `/explainers/${id}`)).body;
+            assert.equal(view.status, 'ready');
+            assert.equal(view.render.vertical_url, upload(2));
+            assert.equal(view.render_stale, false);
+
+            // 7. Schedule: now.
+            view = (await api('POST', `/explainers/${id}/schedule`, { when: 'now' })).body;
+            assert.equal(view.status, 'scheduled');
+            assert.deepEqual(world.posts.map((p) => p.platform), ['both', 'tiktok'], 'the neutral brand posts to Instagram and Facebook; TikTok is always an inbox draft');
+            assert.equal(view.schedule.row_ids.length, 2);
+
+            // 8. The trail the gates leave.
+            assert.deepEqual(world.audit.map((a) => a.action), ['explainer.created', 'explainer.approved', 'explainer.pictures_approved', 'explainer.scheduled']);
+            assert.deepEqual(world.audit[1]!.detail, { version: 1, scenes: 12 });
+            assert.deepEqual(world.audit[3]!.detail.platforms, ['both', 'tiktok']);
+            assert.ok(!JSON.stringify(world.audit).includes('Why AI answers'), 'no word of the topic, ever');
+
+            // 9. Deleted: the files of the render stay with the posts that name them.
+            world.keptUploads.add(uploadId(2));
+            const deleted = await api('DELETE', `/explainers/${id}`);
+            assert.equal(deleted.status, 204);
+            assert.equal(world.explainers.size, 0);
+            assert.equal(world.audit.at(-1)!.action, 'explainer.deleted');
+        });
+    });
+
+    describe('POST /worker/jobs/:id/fail: a write that failed because the Mac is signed out', () => {
+        beforeEach(on);
+        const SIGNED_OUT = 'claude answered with an error: Failed to authenticate: OAuth session expired and could not be refreshed';
+
+        it('is answered at once: the failure is recorded as any is, and then Gemini takes the work over, and a run starts', async () => {
+            // Gemini is "writing" until the test lets it go: a run that fails at once would already be the next failure by the time it is read.
+            let release!: () => void;
+            const gate = new Promise<void>((resolve) => { release = resolve; });
+            setRunDeps({ write: async () => { await gate; throw new Error('stop: this test only looks at the takeover'); } });
+            const created = await api('POST', '/explainers', { topic: 'Why AI answers with confidence', language: 'en' });
+            const mac = world.jobsOf('explainer_write')[0]!;
+            mac.status = 'claimed';
+            const res = await fetch(`${exBase}/api/studio/worker/jobs/${mac.id}/fail`, {
+                method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN_A}` }, body: JSON.stringify({ error: SIGNED_OUT }),
+            });
+            assert.equal(res.status, 204);
+            const view = (await api('GET', `/explainers/${created.body.id}`)).body;
+            assert.equal(view.status, 'writing', 'Gemini is writing it now');
+            assert.match(view.error, /Claude on the Mac is signed out, so Gemini is writing it/);
+            const gemini = world.jobsOf('explainer_write').find((j) => j.payload.writer === 'gemini')!;
+            assert.equal(gemini.status, 'claimed');
+            assert.equal(view.job.status, 'claimed');
+            assert.equal(launched.length, 1, 'one run, started after the response to the worker’s report was decided');
+            release();
+            await launched[0];
+        });
+
+        it('with the fallback off the failure stays what it is, with its reason, and nothing runs', async () => {
+            world.settingsRow = explainerSettings({ characters: [KARIM], writer_fallback: false });
+            const created = await api('POST', '/explainers', { topic: 'Why AI answers with confidence', language: 'en' });
+            const mac = world.jobsOf('explainer_write')[0]!;
+            mac.status = 'claimed';
+            await fetch(`${exBase}/api/studio/worker/jobs/${mac.id}/fail`, {
+                method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN_A}` }, body: JSON.stringify({ error: SIGNED_OUT }),
+            });
+            const view = (await api('GET', `/explainers/${created.body.id}`)).body;
+            assert.equal(view.status, 'failed');
+            assert.equal(view.failed_step, 'write');
+            assert.equal(view.error, SIGNED_OUT);
+            assert.equal(launched.length, 0);
+        });
     });
 });

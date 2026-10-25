@@ -45,6 +45,8 @@ export interface World {
     uploads: Map<string, FakeUpload>;
     /** The `scheduled_posts` rows `insertVideoPost` wrote, as the statement returns them. */
     posts: Record<string, any>[];
+    /** The `audit_log` rows written, with `detail` parsed. */
+    audit: { actor_email: string | null; action: string; target_type: string | null; target_id: string | null; detail: Record<string, unknown> }[];
     /** `media_uploads` ids that `deleteUnreferencedUploads` was asked to delete, per call. */
     deletedUploads: string[][];
     /** The ids a `scheduled_posts` row (or anything else the real statement guards on) still names: never deleted. */
@@ -85,6 +87,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         scenes: [] as ExplainerSceneRow[],
         jobs: [] as FakeJob[],
         posts: [] as Record<string, any>[],
+        audit: [] as World['audit'],
         uploads: new Map<string, FakeUpload>(),
         deletedUploads: [] as string[][],
         keptUploads: new Set<string>(),
@@ -338,6 +341,12 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
             };
             world.posts.push(post);
             return { rows: [post] };
+        }],
+
+        // the audit log
+        [/^INSERT INTO audit_log \(actor_user_id, actor_email, action, target_type, target_id, detail\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6::jsonb\) RETURNING id$/, (p) => {
+            world.audit.push({ actor_email: p[1], action: p[2], target_type: p[3], target_id: p[4], detail: JSON.parse(p[5]) });
+            return { rows: [{ id: `audit-${world.audit.length}` }] };
         }],
 
         // media_uploads
