@@ -164,8 +164,8 @@ function load(lang: 'ar' | 'en' = 'ar', hash = '#/help', extra: string[] = []): 
 const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 const REQUIRED = [
-    'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'growth', 'seo', 'tiktok', 'whatsapp', 'ads', 'studio', 'worker',
-    'library', 'create', 'studio-schedule', 'studio-settings', 'explainers', 'ai-usage', 'troubleshooting', 'faq',
+    'getting-started', 'onboarding', 'connect-meta', 'campaigns', 'dm-assistant', 'scheduling', 'growth', 'seo', 'tiktok', 'youtube', 'whatsapp', 'ads',
+    'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'ai-usage', 'troubleshooting', 'faq',
 ];
 
 const ARABIC = /[\u0600-\u06FF]/g;
@@ -404,7 +404,7 @@ describe('Help Center — deep links', () => {
 });
 
 describe('Help Center — every article in both languages', () => {
-    it('has the nineteen articles the Help Center promises, each slug once', () => {
+    it('has the twenty-four articles the Help Center promises, each slug once', () => {
         const s = load();
         const slugs = Array.from(s.content.articles, (a) => String(a.slug));
         assert.deepEqual(slugs, REQUIRED);
@@ -573,6 +573,40 @@ describe('Help Center — contextual links', () => {
         ]) {
             assert.ok(found.includes(want), `${want} (found: ${found.join(', ')})`);
         }
+    });
+
+    it('puts a link in each place the newer articles were written for', () => {
+        const found = targets().map((x) => `${x.file.replace(/^.*\/js\//, '')} → ${x.slug}${x.section ? `#${x.section}` : ''}`);
+        for (const want of [
+            'pages/monteur.js → monteur',
+            'pages/infographics.js → infographics',
+            'pages/settings.js → youtube',
+            'pages/ai_settings.js → dm-assistant',
+            'pages/ai_settings.js → ai-usage',
+            'pages/ice_breakers.js → dm-assistant#ice-breakers',
+            'pages/whatsapp_card.js → whatsapp',
+            'pages/meta_connect.js → connect-meta',
+            'pages/overview.js → getting-started',
+            'pages/ai_providers.js → ai-usage',
+            'pages/invite_card.js → onboarding#invite',
+            'pages/welcome.js → onboarding#after',
+        ]) {
+            assert.ok(found.includes(want), `${want} (found: ${found.join(', ')})`);
+        }
+    });
+
+    it('keeps Help out of the public invite page and the setup steps: a setup that is not finished is sent back to the wizard from #/help', () => {
+        // The invite page renders before there is a session (`#invite-screen`, a sibling of the login screen), so an article could not open from it.
+        assert.equal(/UI\.helpLink\(/.test(readFileSync('dashboard/js/pages/invite.js', 'utf8')), false, 'the invite page links nowhere in Help');
+        // `App.navigate` sends an owner whose setup is not completed to the wizard for EVERY page, Help included, so a link on an early step is dead.
+        const app = readFileSync('dashboard/js/app.js', 'utf8');
+        assert.match(app, /if \(this\.mustOnboard\(\)\) \{\s*await this\.showWelcome\(\);\s*return;\s*\}/, 'the navigate gate');
+        const welcome = readFileSync('dashboard/js/pages/welcome.js', 'utf8');
+        assert.deepEqual([...welcome.matchAll(/UI\.helpLink\(\s*'([^']+)'/g)].map((m) => m[1]), ['onboarding#after'], 'the wizard links to Help once, from its last screen');
+        // That screen paints its list only after `enterDone` has completed the setup (while it does, the card says it is finishing).
+        const done = welcome.slice(welcome.indexOf('doneFields(state) {'), welcome.indexOf('// ─── The seam'));
+        assert.ok(done.includes("UI.helpLink('onboarding#after'"), 'and it is inside the last screen');
+        assert.match(welcome, /const finished = await API\.completeOnboarding\(\);[\s\S]*?onb\.status = 'completed';[\s\S]*?this\.state\.finishing = false;/, 'which is shown after completing');
     });
 
     it('renders them where they belong: the worker pill, the library, More options, TikTok, the composer, campaigns', () => {

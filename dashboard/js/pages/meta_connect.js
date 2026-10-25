@@ -326,6 +326,7 @@ const MetaConnect = {
             <section class="section" id="settings-meta">
                 <h2 class="section-title">${t('meta.title')}</h2>
                 <div class="settings-card surface">
+                    <p class="form-hint mbe-3">${UI.helpLink('connect-meta', t('help.link.connectMeta'))}</p>
                     ${body}
                     ${ctx.isAdmin ? this.appBlock(ctx.app, ctx.appError) : ''}
                 </div>

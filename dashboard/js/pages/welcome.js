@@ -925,6 +925,7 @@ const WelcomePage = {
                     </li>
                 ` : ''}
             </ul>
+            <p class="form-hint">${UI.helpLink('onboarding#after', t('help.link.onboardingAfter'), { newTab: true })}</p>
 
             <section class="welcome-rules" aria-labelledby="welcome-rules-title">
                 <div class="welcome-rules-head">

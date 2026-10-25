@@ -1050,6 +1050,7 @@ const WhatsAppCard = {
         return html`
             <h2 class="section-title">${t('wa.title')}</h2>
             <div class="settings-card surface">
+                <p class="form-hint mbe-3">${UI.helpLink('whatsapp', t('help.link.whatsapp'))}</p>
                 ${live ? '' : html`<p class="form-hint mbe-4">${this.ltrIn('wa.intro', { page: 'API Setup' }, 'page')}</p>`}
                 ${live ? this.connectedBlock() : ''}
                 ${!live || this.needsReconnect() ? this.connectBlock() : ''}

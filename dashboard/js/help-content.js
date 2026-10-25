@@ -59,7 +59,7 @@ const HelpContent = {
                 ar: 'وش يسوّي لك أوتوريبلاي برو، وكيف تجهّز حسابك في أول عشر دقائق.',
                 en: 'What AutoReply Pro does for you, and how to set up your account in the first ten minutes.',
             },
-            related: ['connect-meta', 'campaigns', 'studio'],
+            related: ['onboarding', 'connect-meta', 'campaigns', 'dm-assistant', 'studio'],
             sections: [
                 {
                     id: 'what',
@@ -190,7 +190,7 @@ const HelpContent = {
                 ar: 'الرابط اللي يوصلك، وخطوات الإعداد بالترتيب (عنك، وأسلوبك، وهويتك، وحساباتك، والعيّنات)، وزر «عبّئها عني»، وايش يجهز لما تخلص.',
                 en: 'The link you receive, the setup steps in order (about you, your voice, your look, accounts, samples), the Fill it for me button, and what is ready when you finish.',
             },
-            related: ['getting-started', 'connect-meta', 'campaigns'],
+            related: ['getting-started', 'connect-meta', 'campaigns', 'dm-assistant'],
             sections: [
                 {
                     id: 'what',
@@ -562,7 +562,7 @@ const HelpContent = {
                 ar: 'كيف تُطابَق الكلمة، والرد العلني، وكيف تكتب رسالة خاصة تجيب نتيجة.',
                 en: 'How keywords are matched, the public reply, and how to write a DM that gets results.',
             },
-            related: ['connect-meta', 'troubleshooting', 'create'],
+            related: ['connect-meta', 'dm-assistant', 'troubleshooting', 'create'],
             sections: [
                 {
                     id: 'how',
@@ -712,6 +712,320 @@ const HelpContent = {
                                 'One DM per person every 24 hours, even if they comment the keyword five times.',
                                 'At most 180 DMs an hour per account, safely under Meta’s own ceiling. If a post goes viral, the overflow is recorded as **Failed**, with the reason, in the **Activity Log**.',
                                 'Your own comments on your own posts never trigger a campaign, so the system doesn’t answer itself.',
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 3b. The DM assistant ────────────────────────────────────────────
+        {
+            slug: 'dm-assistant',
+            group: 'meta',
+            icon: 'message-square',
+            title: { ar: 'مساعد الرسائل: الرد على الخاص تلقائياً', en: 'The DM assistant: answering your direct messages' },
+            summary: {
+                ar: 'كيف يرد المساعد على رسائل متابعيك: تشغيله، والتعليمات وقاعدة المعرفة، ومحرّك الردّ، وردود المبيعات والمتابعة وتجربة الصياغة، وأسئلة البداية في إنستجرام، وتجربته قبل ما تعتمد عليه.',
+                en: 'How the assistant answers your followers’ messages: switching it on, its instructions and knowledge base, the reply engine, sales replies, the follow-up and the wording experiment, Instagram ice breakers, and testing it before you rely on it.',
+            },
+            related: ['campaigns', 'connect-meta', 'ai-usage', 'troubleshooting'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'وش يسوّي مساعد الرسائل؟', en: 'What the DM assistant does' },
+                    body: {
+                        ar: [
+                            'مساعد الرسائل يرد على الرسائل الخاصة اللي تجيك في إنستجرام وماسنجر. الحملات ([[campaigns]]) تشتغل على التعليقات، وهذا يشتغل على رسالة بدأها الشخص بنفسه.',
+                            { dl: [
+                                ['من يكتب الرد', 'نموذج ذكاء اصطناعي. يقرأ آخر 8 رسائل من المحادثة (و12 في ردود المبيعات)، ويكتب مما كتبته في التعليمات وقاعدة المعرفة: [[dm-assistant#voice]].'],
+                                ['وش يشوف المتابع', 'في أول رد من المحادثة، وبعده كل ما مرّ أكثر من 7 أيام على آخر مرة، سطر قصير قبل الرد يقول إنه رد آلي من المساعد الذكي.'],
+                                ['صورة أو ملاحظة صوتية أو ريل مشارك', 'ما يقدر يفتحها، فيرسل سطراً ثابتاً واحداً يطلب فيه السؤال مكتوباً، ويشكر من ذكرك في ستوري. والملصق ما يرد عليه بشي.'],
+                                ['لما تردّ أنت بيدك', 'يوقف المساعد في تلك المحادثة وحدها: [[dm-assistant#troubleshooting]].'],
+                            ] },
+                        ],
+                        en: [
+                            'The DM assistant answers the direct messages people send you on Instagram and Messenger. Campaigns ([[campaigns]]) work on comments; the assistant works on a message the person started themselves.',
+                            { dl: [
+                                ['Who writes the reply', 'An AI model. It reads the last 8 messages of the conversation (12 for sales replies) and writes from what you put in your instructions and knowledge base: [[dm-assistant#voice]].'],
+                                ['What the follower sees', 'In the first reply of a conversation, and again once the last one is more than 7 days old, a short line in front of the reply saying it is an automated reply from the AI assistant.'],
+                                ['A photo, a voice note or a shared reel', 'It cannot open these, so it sends one fixed line asking for the question in words, and thanks anyone who mentions you in a story. A sticker gets no answer.'],
+                                ['When you reply by hand', 'The assistant pauses in that conversation only: [[dm-assistant#troubleshooting]].'],
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'switch',
+                    title: { ar: 'تشغيله لأول مرة', en: 'Switching it on' },
+                    body: {
+                        ar: [
+                            'افتح **مساعد الرسائل**، وفعّل **تشغيل الردّ الآلي**، واكتب **الشخصية والتعليمات**، ثم اضغط **احفظ التغييرات**. لا يرد المساعد على أحد قبل أول حفظ، ولا طول ما المفتاح مطفأ. والمساحة اللي ينشئها لك مسؤول المنصة تبدأ ومساعدها مطفأ، وله شخصية مبدئية جاهزة تعدّلها.',
+                            { dl: [
+                                ['**بضعة تفاصيل أولًا**', 'في مساحة جاءت من رابط دعوة ([[onboarding]]) تظهر هذي النافذة أول ما تشغّل المساعد، وتسألك **متى يسلّمك الوكيل المحادثة؟** و**ما يقوله عند التسليم**. اكتبهما واضغط **احفظ وتابع**. وما تسألك عن شي حفظته قبل. وإن كنت مشغّلاً مو مالكاً يطلع لك تنبيه إن صاحب الحساب وحده يقدر يملأها.'],
+                                ['من يقدر يغيّر؟', 'المالك والمشغّل يغيّران ويجرّبان. ودور «مُطّلع» يقرأ الإعدادات بس: الصناديق مقفلة والأزرار معطّلة.'],
+                                ['**تغييرات غير محفوظة**', 'تظهر جنب **احفظ التغييرات** ما دام فيه شي ما انحفظ، والصفحة تسألك قبل ما تغادرها.'],
+                            ] },
+                        ],
+                        en: [
+                            'Open **DM assistant**, switch on **Turn on auto-replies**, write **Voice and instructions**, and press **Save changes**. The assistant answers nobody before the first save, or while the switch is off. A workspace the platform administrator creates for you starts with the assistant switched off and a starter persona ready for you to edit.',
+                            { dl: [
+                                ['**A few details first**', 'In a workspace that came from an invite link ([[onboarding]]) this window appears the first time you switch the assistant on. It asks **When should the agent hand a chat to you?** and **What it says when it hands over**. Fill both in and press **Save and continue**. It never asks again about something you saved. If you are an Operator rather than the owner, you get a notice that only the account owner can fill it in.'],
+                                ['Who can change it', 'Owners and Operators can change the settings and run tests. A Viewer can read them: the boxes are locked and the buttons are off.'],
+                                ['**Unsaved changes**', 'Shown next to **Save changes** while anything is unsaved, and the page asks before you leave it.'],
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'voice',
+                    title: { ar: 'الشخصية وقاعدة المعرفة', en: 'Instructions and knowledge base' },
+                    body: {
+                        ar: [
+                            'صندوقان تكتب فيهما، والمساعد يقرأهما قبل كل رد:',
+                            { dl: [
+                                ['**الشخصية والتعليمات**', 'من هو الوكيل، وكيف يتكلم، وبأي شي يلتزم. لازم تكتب فيه شي عشان تحفظ، وبجانبه علامة **العربية موصى بها**.'],
+                                ['**قاعدة المعرفة والأسئلة الشائعة**', 'الروابط وأسماء المنتجات والأسعار وإجابات الأسئلة المتكررة.'],
+                            ] },
+                            'الرد يجي نصاً عادياً، أو أزرار سريعة (عنوان الزر 20 حرفاً على الأكثر)، أو بطاقات (عنوان البطاقة 80 حرفاً). وإذا طلب أحد عروضك أو طرق التواصل معك، يُطلب من المساعد يعرضها بأزرار أو بطاقات بدل سرد الروابط.',
+                            { tip: 'التعليمات وقاعدة المعرفة نفسها تُرسل للنموذج مهما كان **محرّك الردّ**، وفي ردود المبيعات أيضاً. جرّب كل تعديل في **اختبار الوكيل** قبل ما تحفظ: [[dm-assistant#sandbox]].' },
+                        ],
+                        en: [
+                            'Two boxes you write in, and the assistant reads both before every reply:',
+                            { dl: [
+                                ['**Voice and instructions**', 'Who the agent is, how it speaks and what it must stick to. It cannot be saved empty, and next to it you see **Arabic recommended**.'],
+                                ['**Knowledge base and FAQs**', 'Links, product names, pricing and answers to the questions people keep asking.'],
+                            ] },
+                            'A reply comes as plain text, as quick-reply buttons (a button title is at most 20 characters) or as cards (a card title is at most 80). When someone asks for your offers or how to reach you, the assistant is told to present them as buttons or cards instead of listing links.',
+                            { tip: 'The same instructions and knowledge base go to the model whichever **Reply engine** is chosen, and for sales replies too. Try each change in the **Agent sandbox** before you save: [[dm-assistant#sandbox]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'engine',
+                    title: { ar: 'محرّك الردّ والنموذج', en: 'The reply engine and the model' },
+                    body: {
+                        ar: [
+                            '**محرّك الردّ** يحدد من يكتب الردود:',
+                            { dl: [
+                                ['**Gemini (الحالي)**', 'الطريقة المعتادة، بنموذج Gemini اللي تختاره في **النموذج**. و**درجة الإبداع** من 0 (ثابت ومتوقع) إلى 1 (متنوّع).'],
+                                ['**مزوّدو الذكاء الاصطناعي**', 'يكتب الرد مزوّد أعدّه مسؤول المنصة في **التشغيل** ← **مزوّدو الذكاء الاصطناعي**، في مسار «الردّ على الرسائل الخاصة»، وحدوده وميزانيته من هناك. وعندها **النموذج** و**درجة الإبداع** يخصّان الرجوع إلى Gemini بس.'],
+                            ] },
+                            'لو اخترت المزوّدين يظهر **الرجوع إلى Gemini**، وهو مفعّل من الأصل: إن فشل المزوّد (ما في مفتاح، أو انقطاع، أو انتهت المهلة، أو خلصت الميزانية) يجاوب Gemini مرة واحدة بدله. ولو أوقفته، أو فشل Gemini كمان، يوصل الشخص سطر واحد يقول إن رسالته صارت عند شخص يتابعها (سطر التسليم اللي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز لو ما كتبت)، وتظهر المحادثة **بانتظارك** في **الرسائل**، ويظل المساعد شغّالاً لرسالته الجاية.',
+                            { note: 'حدود Gemini، وخصوصية الخطة المجانية، شرحها في [[ai-usage]].' },
+                        ],
+                        en: [
+                            'The **Reply engine** decides who writes the replies:',
+                            { dl: [
+                                ['**Gemini (current)**', 'The usual way, with the Gemini model you choose in **Model**. **Temperature** runs from 0 (steady and predictable) to 1 (varied).'],
+                                ['**AI providers**', 'A provider the platform administrator set up in **Operations** → **AI providers**, on the “Direct-message replies” route, writes the reply, and its limits and budget come from there. **Model** and **Temperature** then apply to the fallback to Gemini only.'],
+                            ] },
+                            'When you choose AI providers, **Fall back to Gemini** appears, switched on from the start: if the provider fails (no key, an outage, a timeout or a spent budget), Gemini answers once in its place. If you switch it off, or Gemini fails too, the person gets one line saying a person has their message (the hand-over line you wrote in **What it says when it hands over**, or a ready-made one if you did not), the conversation shows **Needs you** in the **Inbox**, and the assistant stays on for their next message.',
+                            { note: 'Gemini’s limits, and the privacy of the free plan, are explained in [[ai-usage]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'sandbox',
+                    title: { ar: 'اختبار الوكيل', en: 'Testing before you rely on it' },
+                    body: {
+                        ar: [
+                            'جرّب المساعد قبل ما يرد على أحد: اكتب رسالة كأنك متابع واقرأ الرد. الاختبار يشتغل على اللي في الصفحة الآن حتى قبل الحفظ: نص **الشخصية والتعليمات** وقاعدة المعرفة، و**النموذج** و**درجة الإبداع**، و**محرّك الردّ** و**الرجوع إلى Gemini**.',
+                            { ul: [
+                                'ما يرسل شي إلى إنستجرام، ولا يغيّر شي من إعداداتك المحفوظة.',
+                                'يشتغل حتى لو **تشغيل الردّ الآلي** مطفأ.',
+                                'يجرّب الردود العادية بس. مساعد المبيعات ما يظهر هنا: جرّبه من حساب ثاني بوضع **تجريبية (المرسلون أدناه فقط)**: [[dm-assistant#sales]].',
+                                'تحت الرد سطر يقول من كتبه: Gemini، أو المزوّدون، أو أن المزوّد فشل (مع السبب) وأجاب Gemini بدله.',
+                                'كل رسالة تجريبية طلب حقيقي للنموذج، فتدخل في الحصة: [[ai-usage#save]].',
+                                'دور «مُطّلع» ما يقدر يجرّب.',
+                            ] },
+                        ],
+                        en: [
+                            'Try the assistant before it answers anyone: type a message as a follower would and read the reply. The test runs what is on the page now, even before you save: the text of **Voice and instructions** and the knowledge base, **Model** and **Temperature**, **Reply engine** and **Fall back to Gemini**. It is the **Agent sandbox**.',
+                            { ul: [
+                                'It sends nothing to Instagram and changes none of your saved settings.',
+                                'It works even while **Turn on auto-replies** is off.',
+                                'It tries the plain replies only. The sales assistant is not shown here: try it from a second account with **Sales replies** on **Test (only the senders below)**: [[dm-assistant#sales]].',
+                                'A line under the reply says who wrote it: Gemini, the AI providers, or that the provider failed (with the reason) and Gemini answered in its place.',
+                                'Every test message is a real request to the model, so it counts against your quota: [[ai-usage#save]].',
+                                'A Viewer cannot run a test.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'sales',
+                    title: { ar: 'ردود المبيعات', en: 'Sales replies' },
+                    body: {
+                        ar: [
+                            'طريقة ثانية للرد مبنية على البيع: يسأل المساعد عن هدف الشخص (حتى سؤالين)، ثم يرشّح العرض اللي يناسبه ويرسل رابطه. يكتب من التعليمات وقاعدة المعرفة ومن عروضك المحفوظة في ملفك: الاسم والرابط والسعر وتفاصيل البيع (لمن هو، والأسئلة، والاعتراضات، والإثباتات). والكود هو اللي يقرر مرحلة المحادثة، والنموذج يقترح بس.',
+                            '**ردود المبيعات** لها ثلاث حالات، وكل مساعد يبدأ بالأولى:',
+                            { dl: [
+                                ['**متوقفة (الردود كما هي اليوم)**', 'ما يتغيّر شي.'],
+                                ['**تجريبية (المرسلون أدناه فقط)**', 'مساعد المبيعات يرد على المكتوبين في **مرسلو الاختبار** وحدهم، وغيرهم يأخذون الردود المعتادة.'],
+                                ['**مفعّلة (للجميع)**', 'يرد على الجميع.'],
+                            ] },
+                            '**مرسلو الاختبار**: معرّفات أرقام فقط (من 5 إلى 32 رقماً)، واحد في كل سطر أو مفصولة بفواصل، وحتى 20. المعرّف يظهر في **الرسائل** داخل المحادثة نفسها بعد «المعرّف:»، فابعث لحسابك رسالة من حساب ثاني وانسخه.',
+                            { dl: [
+                                ['الرابط', 'النموذج ما يكتب روابط. الخادم يضيف رابط العرض بنفسه بعد النص: رابط تتبّع على عنوان منصتك يحوّل لصفحة عرضك ويعدّ الضغطات.'],
+                                ['السعر', 'ما يذكر سعراً إلا لعرض له سعر مكتوب مع تاريخ **السعر ساري حتى** لم يمضِ، وإلا يقول إن السعر الحالي في الصفحة. وأي خصم أو كوبون أو «مجاني» أو رقم ما في بياناتك لا يُقال: يُحذف الرد ويُسأل النموذج مرة ثانية، وإن أعاد المخالفة يتحوّل الرد إلى سطر آمن وتتسلّم المحادثة أنت.'],
+                                ['متى تتحوّل لك', 'طلب استرجاع أو شكوى (يُقرآن قبل أن يراهما النموذج)، أو طلب التحدث مع شخص، أو سؤال ما يُجاب بدون اختراع رقم. تظهر المحادثة **بانتظارك**، ويستلم الشخص سطر التسليم (اللي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز لو ما كتبت)، ويقف المساعد فيها لين تعيده من مفتاح المحادثة في **الرسائل**.'],
+                                ['من يطلب التوقف', 'مثل «لا تراسلني»: يُقال له مرة وحدة ثم يسكت المساعد، ولا يرشّح له شي إلا إذا قال هو إنه يريد الشراء.'],
+                                ['الإهانة', 'ترد عليها جملة هادئة واحدة، والثانية توقف المساعد في تلك المحادثة.'],
+                                ['حلقة ردود', 'إذا وصلت ردود المساعد على محادثة واحدة 15 رداً في ساعة، يوقف نفسه ويحوّلها لك.'],
+                            ] },
+                            { note: 'التنبيه على تيليجرام أو البريد عند التسليم يضبطه مسؤول المنصة، ويشمل اليوم محادثات حساب مالك المنصة نفسه. في أي مساحة ثانية الإشارة هي **بانتظارك** في **الرسائل**. وعروضك وتفاصيل البيع في ملف مساحتك: مسؤول المنصة يقدر يعبّيها لك من **افتح الملف** في صفحة مساحتك.' },
+                            'وتتابع النتيجة في **قمع المبيعات** أعلى **الرسائل**: كم محادثة وصلت لكل خطوة.',
+                        ],
+                        en: [
+                            'A second way of replying, built for selling: the assistant asks what the person is after (up to two questions), then recommends the offer that fits and sends its link. It writes from the instructions, the knowledge base and your offers saved in your profile: name, link, price and sales details (who it is for, questions, objections and proof). The code decides which stage a conversation is in; the model only proposes.',
+                            '**Sales replies** has three states, and every assistant starts on the first:',
+                            { dl: [
+                                ['**Off (replies as they are today)**', 'Nothing changes.'],
+                                ['**Test (only the senders below)**', 'The sales assistant answers only the people listed in **Test senders**, and everyone else gets the usual replies.'],
+                                ['**On (everyone)**', 'It answers everyone.'],
+                            ] },
+                            '**Test senders** takes IDs, which are numbers only (5 to 32 digits), one per line or separated by commas, up to 20. An ID shows in the **Inbox**, inside the conversation itself, after “ID:”, so message your account from a second account and copy it.',
+                            { dl: [
+                                ['The link', 'The model never writes a link. The server adds the offer’s link itself after the text: a tracking link on your platform’s address that sends people to your offer’s page and counts the taps.'],
+                                ['The price', 'It states a price only for an offer that has a price written down and a date in **The price is valid until** that has not passed; otherwise it says the current price is on the page. Any discount, coupon, “free” or number that is not in your data is not said: the reply is dropped and the model is asked once more, and if it repeats the mistake the reply becomes a safe line and you take over the conversation.'],
+                                ['When it comes to you', 'A refund request or a complaint (read before the model sees them), a request to talk to a person, or a question it cannot answer without inventing a number. The conversation shows **Needs you**, the person gets the hand-over line (the one you wrote in **What it says when it hands over**, or a ready-made one if you did not), and the assistant stops there until you switch it back on with the conversation’s switch in the **Inbox**.'],
+                                ['Someone asks it to stop', 'Something like “don’t message me”: they are told once and then the assistant goes quiet, and it recommends nothing again unless they say they want to buy.'],
+                                ['An insult', 'It gets one calm sentence back, and a second one stops the assistant in that conversation.'],
+                                ['A loop of replies', 'Once the assistant has sent 15 replies to one conversation within an hour, it stops itself and hands it to you.'],
+                            ] },
+                            { note: 'The Telegram or email alert for a hand-over is set up by the platform administrator, and today it covers the conversations of the platform owner’s own account. In any other workspace the signal is **Needs you** in the **Inbox**. Your offers and their sales details live in your workspace’s profile: the platform administrator can fill them in for you from **Open the profile** on your workspace’s page.' },
+                            'You follow the results in **Sales funnel**, at the top of the **Inbox**: how many conversations reached each step.',
+                        ],
+                    },
+                },
+                {
+                    id: 'followup',
+                    title: { ar: 'المتابعة بعد الرابط', en: 'The follow-up after the link' },
+                    body: {
+                        ar: [
+                            'بعد ما يرسل مساعد المبيعات رابطاً، تنزل متابعة واحدة قصيرة وبلا إلحاح بعد 4 ساعات (الافتراضي). وتنرسل بشروط كلها لازم تتحقق وقت إرسالها:',
+                            { ul: [
+                                'الشخص ما رد، وما فتح الرابط (ضغطة شخص، مو معاينة الرابط)، وما طلب التوقف.',
+                                'ما تسلّم أحد المحادثة، والمساعد غير موقوف فيها.',
+                                'نافذة الرد في ميتا، وهي 24 ساعة من آخر رسالة منه، ما زالت مفتوحة: المساعد لا يرسل بعد مرور 23 ساعة.',
+                                'وما يُرسل إلا واحدة لكل محادثة، مهما أرسل المساعد من روابط.',
+                            ] },
+                            'المدة في **المتابعة بعد الرابط (بالدقائق)**: من 0 إلى 1320 دقيقة (22 ساعة)، والافتراضي 240، والصفر يوقف المتابعة. هذا الحقل يظهر لمسؤول المنصة وحده لأنه إعداد واحد لكل المساحات على المنصة، ويظهر لما **ردود المبيعات** ليست متوقفة.',
+                        ],
+                        en: [
+                            'After the sales assistant has sent a link, one short, pressure-free nudge goes out 4 hours later (the default). It is sent only if all of these still hold when it is due:',
+                            { ul: [
+                                'The person has not replied, has not opened the link (a person’s tap, not a link preview) and has not asked to stop.',
+                                'Nobody has taken over the conversation, and the assistant is not paused in it.',
+                                'Meta’s reply window, 24 hours from their last message, is still open: the assistant never sends after 23 hours.',
+                                'And only one is ever sent per conversation, however many links the assistant sent.',
+                            ] },
+                            'The delay is **Follow-up after the link (minutes)**: from 0 to 1,320 minutes (22 hours), 240 by default, and 0 turns follow-ups off. Only the platform administrator sees this field, because it is one setting for every workspace on the platform, and it shows while **Sales replies** is not off.',
+                        ],
+                    },
+                },
+                {
+                    id: 'variants',
+                    title: { ar: 'تجربة الصياغة (A/B)', en: 'The wording experiment (A/B)' },
+                    body: {
+                        ar: [
+                            'تجربة تقارن بين طريقتين أو ثلاث في افتتاح المحادثة وفي عرض الرابط. تفعّلها بمفتاح **تشغيل التجربة** تحت **تجربة الصياغة (A/B)**، وتضيف الصيغ بـ **إضافة صيغة**. لكل صيغة:',
+                            { dl: [
+                                ['**الاسم**', 'يظهر في المقارنة، حتى 40 حرفاً.'],
+                                ['**نسبة المحادثات الجديدة**', 'رقم من 0 إلى 100، نسبةً إلى بقية الصيغ. والصفر يوقف إرسال محادثات جديدة إليها.'],
+                                ['**كيف يفتتح الردّ الأول**', 'توجيه بكلماتك لأسلوب أول رد، حتى 300 حرف.'],
+                                ['**كيف يعرض الرابط**', 'توجيه لصياغة عرض الرابط، حتى 300 حرف.'],
+                            ] },
+                            { ul: [
+                                'كل محادثة جديدة تأخذ صيغة وحدة للأبد، بالصدفة حسب النسب. ومحادثة بدأت قبل التجربة، أو ردّ عليها المساعد قبلها، ما تدخل فيها.',
+                                'الصياغة فقط: بلا روابط وبلا أرقام (يرفضها الحفظ)، والمساعد يقول ما تقوله عروضك بس. وإن تركت خانتي صيغة فاضيتين فردودها كما هي اليوم، وتصير صيغة المقارنة.',
+                                'لتشغيلها لازم صيغتان على الأقل بنسبة فوق الصفر. والصيغة المحفوظة ما تنحذف: توقفها بنسبة 0 وتحتفظ بمحادثاتها.',
+                                'ما يشارك إلا اللي يجاوب عنه مساعد المبيعات.',
+                            ] },
+                            'النتيجة في **الرسائل** ← **قمع المبيعات** ← **تجربة الصياغة**: أعداد ونسب بس. والنسب ما تظهر قبل ما تصل الصيغة إلى 30 محادثة، وما يُجرى اختبار دلالة إحصائية، فالفرق بين صيغتين مو دليل إن وحدة أحسن.',
+                        ],
+                        en: [
+                            'An experiment that compares two or three ways of opening the conversation and of offering the link. Switch it on with **Run the experiment** under **Wording experiment (A/B)**, and add the variants with **Add a variant**. Each variant has:',
+                            { dl: [
+                                ['**Name**', 'Shown in the comparison, up to 40 characters.'],
+                                ['**Share of new conversations**', 'A number from 0 to 100, relative to the other variants. 0 stops new conversations from going to it.'],
+                                ['**How to open the first reply**', 'Guidance in your own words for the style of the first reply, up to 300 characters.'],
+                                ['**How to offer the link**', 'Guidance for how the link is offered, up to 300 characters.'],
+                            ] },
+                            { ul: [
+                                'Each new conversation is given one variant for good, by chance in the shares you set. A conversation that began before the experiment, or that the assistant had already answered, takes no part.',
+                                'It is wording only: no links and no numbers (saving refuses them), and the assistant still says only what your offers say. A variant whose two boxes are empty keeps today’s replies, which makes it the comparison.',
+                                'To run it you need at least two variants with a share above 0. A saved variant cannot be removed: set it to 0 and it keeps its conversations.',
+                                'Only the conversations the sales assistant answers take part.',
+                            ] },
+                            'The result is in **Inbox** → **Sales funnel** → **Wording experiment**: counts and rates only. Rates do not appear until a variant has 30 conversations, and no significance test is run, so a gap between two variants is not proof that one works better.',
+                        ],
+                    },
+                },
+                {
+                    id: 'ice-breakers',
+                    title: { ar: 'أسئلة البداية في إنستجرام', en: 'Instagram ice breakers' },
+                    body: {
+                        ar: [
+                            'أسئلة البداية أزرار تظهر للشخص لما يفتح محادثة جديدة معك في إنستجرام: يضغط على سؤال، فيصلك كرسالة منه ويجاوب عليها المساعد. وتقدر تضيف معها قائمة ثابتة تبقى في المحادثة. تلقاها في **الإعدادات** ← **الرسائل والتنبيهات** ← **أسئلة البداية في إنستجرام**، ولمالك الحساب وحده، وبعد ربط إنستجرام: [[connect-meta]].',
+                            { ol: [
+                                'اكتب حتى 4 أسئلة، وطول كل سؤال 80 حرفاً على الأكثر. ما عندك أفكار؟ اضغط **استخدم الأسئلة المقترحة**. وتضيف سؤالاً بـ **أضف سؤالاً**.',
+                                'لكل سؤال اختر **ما الذي يسأل عنه** عشان يعرف المساعد كيف يجاوب: **ما الذي يتضمنه**، **لمن يناسب**، **السعر**، **يطلب الرابط**، **دعم أو مشكلة**، **التحدث مع شخص**، أو **شيء آخر**.',
+                                'اختياري: **القائمة الثابتة (اختيارية)**، حتى 5 عناصر، وعنوان كل عنصر 30 حرفاً على الأكثر. العنصر إما **زر رد** (يرسل رسالة يجاوب عليها المساعد) أو **رابط** يفتح صفحة ويب، ولازم يبدأ بـ https. وتضيف عنصراً بـ **أضف عنصراً للقائمة**.',
+                                'اضغط **احفظ المسودة**. هذا يحفظها عندنا بس، ولا يرسل شيئاً إلى إنستجرام.',
+                                'اضغط **انشر على إنستجرام** ووافق. يتغيّر فوراً ما يراه كل من يفتح محادثة مع حسابك، وتشوف تحت ما يحتويه إنستجرام فعلاً. الزر مطفأ ما دام فيه تغييرات ما انحفظت.',
+                            ] },
+                            { dl: [
+                                ['**اقرأ من إنستجرام**', 'يعرض ما في حسابك الآن، ولا يغيّر شيئاً.'],
+                                ['**احذف من إنستجرام**', 'يحذف الأسئلة والقائمة من حسابك، وتبقى مسودتك هنا.'],
+                                ['الحالة', 'فوق الأزرار: **لم يُنشر بعد**، أو **منشور ويطابق هذه المسودة**، أو **عُدّل بعد النشر**.'],
+                            ] },
+                            'الضغطة تصل كرسالة نصها السؤال نفسه. فإن كانت **ردود المبيعات** متوقفة يجاوب المساعد كأن الشخص كتبها، وإن كانت مفعّلة يعرف المساعد من **ما الذي يسأل عنه** وش يقصد الشخص. ولازم المساعد يكون شغّالاً ليجاوب.',
+                            { note: 'إنستجرام يعرضها في تطبيق الجوال لا على الكمبيوتر، والمحادثات المفتوحة قد تحتاج تحديث الصندوق حتى يظهر التغيير. ويسمح بـ 10 تغييرات للملف كل 10 دقائق.' },
+                        ],
+                        en: [
+                            'Ice breakers are buttons a person sees when they open a new chat with you on Instagram: they tap a question, it reaches you as their message, and the assistant answers it. You can add a persistent menu that stays in the chat. Find them in **Settings** → **Messages & alerts** → **Instagram ice breakers**, for the account owner only, once Instagram is connected: [[connect-meta]].',
+                            { ol: [
+                                'Write up to 4 questions, each at most 80 characters. No ideas? Press **Use the suggested questions**. Add one with **Add a question**.',
+                                'For each question pick **What it asks**, so the assistant knows how to answer: **What is included**, **Who it is for**, **The price**, **Asks for the link**, **Support or a problem**, **Talk to a person**, or **Something else**.',
+                                'Optional: **Persistent menu (optional)**, up to 5 items, each title at most 30 characters. An item is either a **Reply button** (sends a message the assistant answers) or a **Link** that opens a web page, which must start with https. Add one with **Add a menu item**.',
+                                'Press **Save draft**. This saves it with us only, and sends nothing to Instagram.',
+                                'Press **Publish to Instagram** and confirm. What everyone sees when they open a chat with your account changes at once, and below you see what Instagram now holds. The button stays off while anything is unsaved.',
+                            ] },
+                            { dl: [
+                                ['**Read from Instagram**', 'Shows what your account holds now, and changes nothing.'],
+                                ['**Remove from Instagram**', 'Deletes the questions and the menu from your account, and keeps your draft here.'],
+                                ['The status', 'Above the buttons: **Not published yet**, **Published, and it matches this draft**, or **Edited since it was published**.'],
+                            ] },
+                            'A tap arrives as a message whose text is the question itself. With **Sales replies** off the assistant answers it as if the person had typed it; with sales replies on, **What it asks** tells the assistant what the person means. The assistant has to be switched on to answer.',
+                            { note: 'Instagram shows them in its mobile app, not on desktop, and chats that are already open may need an inbox refresh to show a change. Instagram allows 10 profile changes every 10 minutes.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'لو ما اشتغل', en: 'When something is not working' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['الوكيل ما يرد على أحد', ['تأكد أن **تشغيل الردّ الآلي** مفعّل، وأنك ضغطت **احفظ التغييرات** مرة على الأقل.', 'وتأكد أن المحادثة نفسها مو موقوفة: **الردّ الآلي متوقف** في **الرسائل**. أي رد منك بيدك يوقفه فيها، وتسليم المحادثة لك يوقفه كذلك.', 'وتأكد من ربط إنستجرام وفيسبوك: [[connect-meta]]. ولو خلصت حصة Gemini: [[ai-usage#quotas]].']],
+                                ['الشخص استلم سطراً يقول إن رسالته عند شخص يتابعها', ['المساعد ما قدر يكتب رداً: فشل المزوّد ولا كان فيه رجوع إلى Gemini، أو فشل Gemini كمان. تظهر المحادثة **بانتظارك** في **الرسائل**.', 'رُدّ عليها بيدك. والمساعد يظل شغّالاً لرسالته الجاية.']],
+                                ['مساعد المبيعات ما يرد على حسابي التجريبي', 'تأكد أن **ردود المبيعات** على **تجريبية (المرسلون أدناه فقط)** أو **مفعّلة (للجميع)**، وأن المعرّف مكتوب في **مرسلو الاختبار** كما هو، أرقام فقط. ولازم الحساب يكون راسلك قبل عشان تظهر له محادثة وتشوف معرّفه: [[dm-assistant#sales]].'],
+                                ['ما يذكر السعر', 'لازم يكون السعر مكتوباً في العرض مع تاريخ **السعر ساري حتى** لم يمضِ، وإلا يقول إن السعر الحالي في الصفحة: [[dm-assistant#sales]].'],
+                                ['صورة أو ملاحظة صوتية ما انردّ عليها', 'هذا المتوقع: يرسل سطراً ثابتاً يطلب السؤال مكتوباً، والملصق ما يرد عليه: [[dm-assistant#what]].'],
+                                ['سؤال البداية ما يظهر في إنستجرام', 'تأكد أن الحالة تقول **منشور ويطابق هذه المسودة**، واضغط **اقرأ من إنستجرام** لترى ما يحتويه حسابك. وتذكّر أنه يظهر في تطبيق الجوال بس. ولو رفض إنستجرام النشر تظهر رسالته في الصفحة: [[dm-assistant#ice-breakers]].'],
+                                ['الاختبار يقول إن Gemini أجاب وأنا اخترت المزوّدين', 'السطر تحت الرد يعطيك السبب: المزوّد فشل، وأجاب Gemini بدله لأن **الرجوع إلى Gemini** مفعّل. اطلب من مسؤول المنصة مراجعة المزوّد في **التشغيل**: [[dm-assistant#engine]].'],
+                            ] },
+                        ],
+                        en: [
+                            { dl: [
+                                ['The agent is not answering anyone', ['Check that **Turn on auto-replies** is on and that you pressed **Save changes** at least once.', 'Check that the conversation itself is not paused: **AI paused** in the **Inbox**. A manual reply from you pauses it there, and so does handing the conversation to you.', 'Check that Instagram and Facebook are connected: [[connect-meta]]. And if your Gemini quota ran out: [[ai-usage#quotas]].']],
+                                ['The person got a line saying a person has their message', ['The assistant could not write a reply: the provider failed and there was no fall back to Gemini, or Gemini failed too. The conversation shows **Needs you** in the **Inbox**.', 'Answer it by hand. The assistant stays on for their next message.']],
+                                ['The sales assistant does not answer my test account', 'Check that **Sales replies** is on **Test (only the senders below)** or **On (everyone)**, and that the ID is in **Test senders** exactly as it is, numbers only. The account must have messaged you before, so a conversation exists and you can see its ID: [[dm-assistant#sales]].'],
+                                ['It never states the price', 'The price has to be written on the offer, with a date in **The price is valid until** that has not passed; otherwise it says the current price is on the page: [[dm-assistant#sales]].'],
+                                ['A photo or a voice note got no answer', 'That is expected: it sends one fixed line asking for the question in words, and a sticker gets nothing: [[dm-assistant#what]].'],
+                                ['An ice breaker does not show on Instagram', 'Check that the status says **Published, and it matches this draft**, and press **Read from Instagram** to see what your account holds. Remember it shows in the mobile app only. If Instagram refuses a publish, its message appears on the page: [[dm-assistant#ice-breakers]].'],
+                                ['The test says Gemini answered, but I chose AI providers', 'The line under the reply gives the reason: the provider failed, and Gemini answered in its place because **Fall back to Gemini** is on. Ask the platform administrator to check the provider in **Operations**: [[dm-assistant#engine]].'],
                             ] },
                         ],
                     },
@@ -1214,7 +1528,7 @@ const HelpContent = {
                 ar: 'كيف تربط تيك توك، وليش المنشورات تنزل «أنا فقط» لين يعتمد تيك توك التطبيق، وكيف تخليها عامة.',
                 en: 'How to connect TikTok, why posts go up as “Only me” until TikTok approves the app, and how to make them public.',
             },
-            related: ['studio-schedule', 'scheduling', 'troubleshooting', 'whatsapp'],
+            related: ['studio-schedule', 'scheduling', 'youtube', 'troubleshooting', 'whatsapp'],
             sections: [
                 {
                     id: 'connect',
@@ -3109,10 +3423,10 @@ const HelpContent = {
                         ar: [
                             'أربعة قوالب جاهزة تبدأ منها بدل أن تكتب القاعدة من الصفر. يمكنك تعديل أرقامها قبل الحفظ.',
                             { dl: [
-                                ['تكلفة المحادثة مرتفعة: إيقاف', 'تنظر إلى الإعلانات. إذا زادت تكلفة المحادثة في آخر ثلاثة أيام على الحد الذي تضعه أنت، وبعد أن يبلغ الإعلان 500 ظهور، أوقفته وأرسلت تنبيهاً. استخدمها حين تريد ألا يستمر إعلان في استهلاك المال دون محادثات.'],
-                                ['الإنفاق سريع: تنبيه', 'تنظر إلى المجموعات الإعلانية. إذا تجاوزت وتيرة الإنفاق اليوم 1.5 مرة، أرسلت تنبيهاً ولم تغيّر شيئاً. استخدمها حين تريد أن تعرف فقط أن ميزانية اليوم تنفد مبكراً.'],
-                                ['التكرار فوق 3: خفض الميزانية 20%', 'تنظر إلى الحملات. إذا زاد التكرار اليوم على 3، وبعد 1000 ظهور، خفضت الميزانية اليومية للحملة بنسبة 20% وأرسلت تنبيهاً. استخدمها حين يملّ الجمهور من رؤية الإعلان نفسه. ولا تعمل إلا على حملة لها ميزانية يومية خاصة بها.'],
-                                ['إعلان مرفوض: تنبيه', 'تنظر إلى الإعلانات. إذا رفضت ميتا إعلاناً أو وجدت فيه مشكلة أرسلت تنبيهاً. استخدمها دائماً تقريباً، فهي لا تغيّر شيئاً.'],
+                                ['**تكلفة المحادثة مرتفعة ← إيقاف**', 'تنظر إلى الإعلانات. إذا زادت تكلفة المحادثة في آخر ثلاثة أيام على الحد الذي تضعه أنت، وبعد أن يبلغ الإعلان 500 ظهور، أوقفته وأرسلت تنبيهاً. استخدمها حين تريد ألا يستمر إعلان في استهلاك المال دون محادثات.'],
+                                ['**الإنفاق سريع جدًا ← نبّهني**', 'تنظر إلى المجموعات الإعلانية. إذا تجاوزت وتيرة الإنفاق اليوم 1.5 مرة، أرسلت تنبيهاً ولم تغيّر شيئاً. استخدمها حين تريد أن تعرف فقط أن ميزانية اليوم تنفد مبكراً.'],
+                                ['**التكرار فوق 3 ← خفّض الميزانية 20%**', 'تنظر إلى الحملات. إذا زاد التكرار اليوم على 3، وبعد 1000 ظهور، خفضت الميزانية اليومية للحملة بنسبة 20% وأرسلت تنبيهاً. استخدمها حين يملّ الجمهور من رؤية الإعلان نفسه. ولا تعمل إلا على حملة لها ميزانية يومية خاصة بها.'],
+                                ['**إعلان مرفوض ← نبّهني**', 'تنظر إلى الإعلانات. إذا رفضت ميتا إعلاناً أو وجدت فيه مشكلة أرسلت تنبيهاً. استخدمها دائماً تقريباً، فهي لا تغيّر شيئاً.'],
                             ] },
                             'أمثلة بأرقام:',
                             { ul: [
@@ -3126,10 +3440,10 @@ const HelpContent = {
                         en: [
                             'Four ready-made templates to start from, instead of writing a rule from scratch. You can change their numbers before you save.',
                             { dl: [
-                                ['Cost per conversation too high: pause', 'Looks at ads. If the cost per conversation over the last 3 days is above the limit you set, and the ad has reached 500 impressions, it pauses the ad and notifies you. Use it when you do not want an ad to keep spending without conversations.'],
-                                ['Spending too fast: notify', 'Looks at ad sets. If today’s spending pace goes above 1.5, it notifies you and changes nothing. Use it when you just want to know that today’s budget is running out early.'],
-                                ['Frequency over 3: lower budget 20%', 'Looks at campaigns. If today’s frequency is above 3, after 1,000 impressions, it lowers the campaign’s daily budget by 20% and notifies you. Use it when your audience is getting tired of seeing the same ad. It only works on a campaign that holds its own daily budget.'],
-                                ['Ad rejected: notify', 'Looks at ads. If Meta disapproves an ad or finds a problem with it, it notifies you. Almost always worth having, since it changes nothing.'],
+                                ['**Cost per conversation too high → pause**', 'Looks at ads. If the cost per conversation over the last 3 days is above the limit you set, and the ad has reached 500 impressions, it pauses the ad and notifies you. Use it when you do not want an ad to keep spending without conversations.'],
+                                ['**Spending too fast → tell me**', 'Looks at ad sets. If today’s spending pace goes above 1.5, it notifies you and changes nothing. Use it when you just want to know that today’s budget is running out early.'],
+                                ['**Frequency over 3 → lower the budget 20%**', 'Looks at campaigns. If today’s frequency is above 3, after 1,000 impressions, it lowers the campaign’s daily budget by 20% and notifies you. Use it when your audience is getting tired of seeing the same ad. It only works on a campaign that holds its own daily budget.'],
+                                ['**Ad rejected → tell me**', 'Looks at ads. If Meta disapproves an ad or finds a problem with it, it notifies you. Almost always worth having, since it changes nothing.'],
                             ] },
                             'Examples with numbers:',
                             { ul: [
@@ -3308,7 +3622,7 @@ const HelpContent = {
                 ar: 'من درس مصوّر إلى كاروسيل مجدول في ثلاث خطوات، ومين يسوّي وش.',
                 en: 'From a recorded lesson to a scheduled carousel in three steps, and who does what.',
             },
-            related: ['worker', 'create', 'studio-schedule'],
+            related: ['worker', 'create', 'studio-schedule', 'monteur', 'infographics'],
             sections: [
                 {
                     id: 'what',
@@ -4373,7 +4687,7 @@ const HelpContent = {
                         ar: [
                             'مع **مجلدي** اضغط **اختر المجلد** جنب **المجلد**. تنفتح نافذة اختيار مجلد على جهازك الماك، اللي يشغّل العامل. اختر المجلد من هناك ويتعبّى مساره هنا. النافذة تنتظرك 5 دقائق. ولو ما انختار شي، اضغط الزر مرة ثانية أو اكتب المسار كاملاً بنفسك، مثل `/Users/you/Videos/Reels`.',
                             { ul: [
-                                'لو الماك مطفّي أو نايم، تنفتح النافذة لما يرجع متصلاً، والصفحة تقول لك كذا وهي تنتظر.',
+                                'لو الماك مطفّي أو نايم، تنفتح النافذة لما يرجع متصلاً، والصفحة تقول لك كذا وهي تنتظر. ولو مرّت 10 دقائق قبل ما يرجع، تقول لك الصفحة إن أحداً ما كان ينتظر النافذة، فاضغط **اختر المجلد** مرة ثانية.',
                                 'يُقرأ المستوى الأول من المجلد بس، فالفيديوهات داخل المجلدات الفرعية ما تُؤخذ. والملف ما يُؤخذ إلا بعد ما يمر عليه دقيقة في المجلد، عشان ما يُقرأ فيديو لسا ينسخ.',
                                 'الملفات اللي تُؤخذ `.mp4` و`.mov` و`.m4v` و`.mkv` و`.webm`، الأقدم أولاً، لين **فيديوهات في كل تشغيل** (من 1 إلى 10) في كل تشغيل.',
                                 'ومع **مكتبة الكورس** ما في مجلد تختاره: المونتير ياخذ دروس مكتبة الاستوديو واحداً واحداً بترتيب الدروس، وكل درس مرة وحدة. ولما يصير لكل الدروس ريلز، يقول لك **شغّل الآن** كذا ويطلب منك تفحص المكتبة في الاستوديو أول: [[library]].',
@@ -4382,7 +4696,7 @@ const HelpContent = {
                         en: [
                             'With **My folder**, press **Choose folder** next to **Folder**. A folder window opens on your Mac, the one that runs the worker. Pick the folder there and its path fills in here. The window waits for you for 5 minutes. If nothing is chosen in that time, press the button again, or type the full path yourself, for example `/Users/you/Videos/Reels`.',
                             { ul: [
-                                'If the Mac is off or asleep, the window opens when it is back online. The page says so while it waits.',
+                                'If the Mac is off or asleep, the window opens when it is back online. The page says so while it waits. If 10 minutes pass before it is back, the page tells you nobody was waiting for the window any more, and you press **Choose folder** again.',
                                 'Only the top level of the folder is read, so videos inside sub-folders are not taken. A file is taken once it has been in the folder for a minute, so a video that is still being copied is not read half way.',
                                 'The files taken are `.mp4`, `.mov`, `.m4v`, `.mkv` and `.webm`, oldest first, up to **Videos per run** (1 to 10) each run.',
                                 'With **The course library** there is no folder to choose: the Monteur takes the lessons of your Studio library one by one, in lesson order, each only once. When every lesson already has its reels, **Run now** says so and asks you to scan the library in the Studio first: [[library]].',
@@ -5276,27 +5590,29 @@ const HelpContent = {
                 ar: 'وين يستخدم أوتوريبلاي برو Gemini، وحدود الاستخدام، وليش تفعيل الفوترة يفرق.',
                 en: 'Where AutoReply Pro uses Gemini, the usage limits, and why turning on billing matters.',
             },
-            related: ['troubleshooting', 'worker', 'create'],
+            related: ['dm-assistant', 'troubleshooting', 'worker', 'create'],
             sections: [
                 {
                     id: 'where',
                     title: { ar: 'وين يُستخدم الذكاء الاصطناعي؟', en: 'Where AI is used' },
                     body: {
                         ar: [
-                            'كل الذكاء الاصطناعي في المنتج من **Gemini** من Google، في ثلاثة أماكن:',
+                            'الذكاء الاصطناعي الأساسي في المنتج هو **Gemini** من Google، في ثلاثة أماكن:',
                             { dl: [
                                 ['ردود الرسائل', 'الوكيل الذكي يرد على الرسائل الخاصة بالنموذج اللي تختاره في **مساعد الرسائل** ← **النموذج**.'],
                                 ['كتابة الكاروسيل', '**أنشئ الكاروسيل** و**أعد الكتابة بالذكاء الاصطناعي** و**اكتبه من جديد** و**خطّط أسبوعي**، وكلها على الخادم.'],
                                 ['فهرسة الدروس', 'على العامل في جهازك، بمفتاح Gemini اللي في ملف إعداداته.'],
                             ] },
+                            { note: 'فيه استثناءات. ردود الرسائل تقدر تكتبها بمزوّد ثاني من **محرّك الردّ**: [[dm-assistant#engine]]. والمونتير والإنفوجرافيك مو دائماً من Gemini: بحسب مساحتك يكتبهما Claude على الماك، أو مزوّد أعدّه مسؤول المنصة: [[monteur#settings]] و[[infographics#who]]. وحدود Gemini وفوترته في هذه الصفحة تخص ما يكتبه Gemini بس.' },
                         ],
                         en: [
-                            'All the AI in the product is Google’s **Gemini**, used in three places:',
+                            'The product’s main AI is Google’s **Gemini**, used in three places:',
                             { dl: [
                                 ['DM replies', 'The AI agent answers DMs with the model you choose in **DM assistant** → **Model**.'],
                                 ['Writing carousels', '**Generate carousel**, **Rewrite with AI**, **Write it again** and **Plan my week**, all on the server.'],
                                 ['Indexing lessons', 'On the worker on your computer, with the Gemini key in its config file.'],
                             ] },
+                            { note: 'There are exceptions. DM replies can be written by another provider, through **Reply engine**: [[dm-assistant#engine]]. And the Monteur and infographics are not always Gemini: depending on your workspace they are written by Claude on the Mac, or by a provider the platform administrator set up: [[monteur#settings]] and [[infographics#who]]. The Gemini limits and billing on this page apply to what Gemini writes.' },
                         ],
                     },
                 },
@@ -5388,7 +5704,7 @@ const HelpContent = {
                 ar: 'المشكلة وحلها: العامل، والفهرسة، والكتابة، والرسم، والنشر، وتيك توك، والرسائل.',
                 en: 'Symptom and fix: the worker, indexing, writing, rendering, publishing, TikTok and DMs.',
             },
-            related: ['faq', 'worker', 'campaigns'],
+            related: ['faq', 'worker', 'campaigns', 'dm-assistant'],
             sections: [
                 {
                     id: 'worker',
@@ -5670,14 +5986,14 @@ const HelpContent = {
                     body: {
                         ar: [
                             { qa: [
-                                ['وش الذكاء اللي يستخدمه؟', 'Gemini من Google، للرسائل والكاروسيل والفهرسة: [[ai-usage#where]].'],
+                                ['وش الذكاء اللي يستخدمه؟', 'Gemini من Google أساساً، للرسائل والكاروسيل والفهرسة. وللرسائل والمونتير والإنفوجرافيك خيارات ثانية بحسب مساحتك: [[ai-usage#where]].'],
                                 ['ممكن يخترع معلومات؟', 'الكاروسيل ينكتب من ملاحظات الدرس و**حقائق** المنتج بس، والوكيل من تعليماتك وقاعدة المعرفة. ومع هذا، راجع دائماً قبل ما تنشر.'],
                                 ['فيه حد للاستخدام؟', 'إيه، حدود Google على مفتاحك: [[ai-usage#quotas]].'],
                             ] },
                         ],
                         en: [
                             { qa: [
-                                ['Which AI does it use?', 'Google’s Gemini, for DMs, carousels and indexing: [[ai-usage#where]].'],
+                                ['Which AI does it use?', 'Mostly Google’s Gemini, for DMs, carousels and indexing. DM replies, the Monteur and infographics have other options, depending on your workspace: [[ai-usage#where]].'],
                                 ['Can it make things up?', 'Carousels are written only from the lesson notes and your product **Facts**, and the agent from your instructions and knowledge base. Still, always review before you post.'],
                                 ['Is there a usage limit?', 'Yes, Google’s limits on your key: [[ai-usage#quotas]].'],
                             ] },

@@ -199,7 +199,7 @@ const AiSettingsPage = {
                         <i data-lucide="bot" aria-hidden="true"></i>
                         <h3 aria-level="2">${t('ai.configTitle')}</h3>
                     </div>
-                    <p class="form-hint mbe-3">${UI.helpLink('ai-usage', t('help.link.aiUsage'), { newTab: true })}</p>
+                    <p class="form-hint mbe-3">${UI.helpLink('dm-assistant', t('help.link.dmAssistant'), { newTab: true })} · ${UI.helpLink('ai-usage', t('help.link.aiUsage'), { newTab: true })}</p>
                     ${editable ? '' : html`<p class="form-hint mbe-3" id="ai-readonly-note" role="note"><i data-lucide="eye" aria-hidden="true"></i> ${t('ai.readOnly')}</p>`}
                     <div id="ai-settings-error"></div>
                     <form id="ai-settings-form" data-submit="ai:saveSettings"

@@ -209,7 +209,7 @@ const InfographicsPage = {
         const option = (value, label, selected) => html`<option value="${value}" ${selected ? html.raw('selected') : ''}>${label}</option>`;
         return html`
             <h2 class="section-title" id="ig-new-title"><i data-lucide="sparkles" aria-hidden="true"></i> ${t('infographics.new.title')}</h2>
-            <p class="form-hint">${t('infographics.new.hint')}</p>
+            <p class="form-hint">${t('infographics.new.hint')} ${UI.helpLink('infographics', t('help.link.infographics'))}</p>
             <form id="ig-new-form" data-submit="infographics:create" novalidate>
                 <div class="form-group">
                     <label class="form-label" for="ig-topic">${t('infographics.new.topic')}</label>
