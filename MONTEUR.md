@@ -43,7 +43,7 @@ type MonteurConfig = {
                              // 'youtube' adds a Shorts sibling row on approve (src/services/monteur/clips.ts)
   post_at: string[];         // 1–4 'HH:MM' posting slots in schedule.timezone, default ['19:00']
   min_seconds: number;       // 10–60, default 20
-  max_seconds: number;       // 15–90 and > min_seconds, default 45
+  max_seconds: number;       // 15–180 and > min_seconds, default 45
 };
 ```
 

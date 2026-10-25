@@ -230,6 +230,7 @@ const HelpPage = {
         if (typeof block === 'string') return this.plain(block);
         if (!block || typeof block !== 'object') return '';
         if (Array.isArray(block)) return block.map((b) => this.blockText(b)).join(' · ');
+        if (typeof block.h === 'string') return this.plain(block.h);
         if (Array.isArray(block.ul)) return block.ul.map((i) => this.plain(i)).join(' · ');
         if (Array.isArray(block.ol)) return block.ol.map((i) => this.plain(i)).join(' · ');
         if (typeof block.code === 'string') return `${this.plain(block.caption || '')} ${block.code}`.trim();
@@ -609,6 +610,9 @@ const HelpPage = {
         if (typeof block === 'string') return html`<p>${this.inline(block)}</p>`;
         if (!block || typeof block !== 'object') return '';
         if (Array.isArray(block)) return block.map((b) => this.blockMarkup(b));
+        // A sub-heading inside a section: the section's own title is the <h3>, so this is the <h4> under it, in the style the
+        // "Related" and "Popular" headings already use. Escaped like every other text block (inline() escapes before any markup).
+        if (typeof block.h === 'string') return html`<h4 class="help-subhead">${this.inline(block.h)}</h4>`;
         if (Array.isArray(block.ul)) return html`<ul class="help-ul">${block.ul.map((i) => html`<li>${this.inline(i)}</li>`)}</ul>`;
         if (Array.isArray(block.ol)) return html`<ol class="help-ol">${block.ol.map((i) => html`<li>${this.inline(i)}</li>`)}</ol>`;
         if (typeof block.code === 'string') {
