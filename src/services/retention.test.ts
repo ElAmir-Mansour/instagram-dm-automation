@@ -13,6 +13,7 @@ import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import { MEDIA_BUCKET, PRIVATE_MEDIA_BUCKET, setStorageFetch } from './supabaseStorage.js';
 import {
+    DEFAULT_RETENTION_DEPS,
     EXPLAINER_FILES_GRACE_DAYS,
     JOB_PRUNE_BATCH_SIZE,
     MAX_SWEEP_PASSES,
@@ -219,6 +220,34 @@ describe('runRetentionSweep', () => {
         }
     });
 
+    describe('the real sweep carries the allowance sweep in its default dependencies (T054)', () => {
+        const originalQuery = pool.query;
+        let statements: string[] = [];
+        beforeEach(() => {
+            statements = [];
+            (pool as unknown as { query: unknown }).query = async (sql: string) => { statements.push(sql.replace(/\s+/g, ' ').trim()); return { rows: [], rowCount: 4 }; };
+        });
+        afterEach(() => { (pool as unknown as { query: unknown }).query = originalQuery; });
+
+        it('is there, and deletes the allowance rows older than 90 days on the pool, counting what it deleted', async () => {
+            assert.equal(typeof DEFAULT_RETENTION_DEPS.pruneAllowance, 'function');
+            assert.equal(await DEFAULT_RETENTION_DEPS.pruneAllowance!(), 4);
+            assert.deepEqual(statements, ["DELETE FROM image_allowance WHERE day < (NOW() AT TIME ZONE 'UTC')::date - 90"]);
+        });
+
+        it('is run by the sweep, once, and its count is in the result', async () => {
+            const result = await runRetentionSweep({
+                pruneRaw: async () => ({ cleared: 0, skipped: false }),
+                pruneJobs: async () => ({ deleted: 0 }),
+                pruneMedia: async () => ({ deleted: 0 as const, skipped: false as const }),
+                removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
+                pruneAllowance: DEFAULT_RETENTION_DEPS.pruneAllowance,
+            });
+            assert.equal(result.allowanceRowsDeleted, 4);
+            assert.equal(statements.filter((sql) => /image_allowance/.test(sql)).length, 1);
+        });
+    });
+
     it('gives up after the pass cap rather than running until the invocation dies', async () => {
         // An endless supply of full batches. The cap is what stops a sweep from eating the
         // cron invocation that has scheduled posts to publish after it.
@@ -418,6 +447,35 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         // A track is the owner's file and no post names it; a reference picture is sent with every draw that names its character.
         const clause = await keepClause();
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM studio_settings st WHERE \(COALESCE\(\(st\.explainer->'characters'\)::text, ''\) \|\| ' ' \|\| COALESCE\(\(st\.explainer->'music'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    describe('each kind of explainer file is named by the guard that keeps it (v59): a sweep deletes none of them while the explainer or its settings name it', () => {
+        // The files are named only inside JSON, so the guard reads that JSON. One test per kind, so that a guard that loses one of them is the test that says which.
+        // (The statements were also run against a real Postgres, with a row of every kind: see the PR.)
+        const KINDS: [string, RegExp][] = [
+            ['a scene\u2019s chosen picture (`picture.media_id`)', /FROM explainer_scenes es WHERE \(COALESCE\(es\.picture::text, ''\)/],
+            ['a scene\u2019s earlier pictures (`pictures[].media_id`)', /\|\| ' ' \|\| es\.pictures::text\) LIKE '%' \|\| m\.id::text \|\| '%'/],
+            ['a character\u2019s approved reference picture (`explainer.characters[].ref_media_id`)', /COALESCE\(\(st\.explainer->'characters'\)::text, ''\)/],
+            ['a music track of the library (`explainer.music[].media_id`)', /COALESCE\(\(st\.explainer->'music'\)::text, ''\)/],
+            ['the voiceover, by its id and by its address (`audio.media_id`, `audio.url`)', /COALESCE\(e\.audio->>'media_id', ''\) \|\| ' ' \|\| COALESCE\(e\.audio->>'url', ''\)/],
+            ['the vertical video (`render.vertical_url`)', /COALESCE\(e\.render->>'vertical_url', ''\)/],
+            ['the horizontal video (`render.horizontal_url`)', /COALESCE\(e\.render->>'horizontal_url', ''\)/],
+            ['the cover (`render.cover_url`)', /COALESCE\(e\.render->>'cover_url', ''\)/],
+        ];
+        for (const [what, pattern] of KINDS) {
+            it(`keeps ${what}`, async () => {
+                assert.match(await keepClause(), pattern);
+            });
+        }
+
+        it('keeps the voiceover and the videos by the explainer’s state, not by the settings or the scenes: the three guards are three separate EXISTS', async () => {
+            const clause = await keepClause();
+            const explainerGuard = clause.slice(clause.indexOf('FROM explainers e'), clause.indexOf('FROM studio_settings st'));
+            assert.match(explainerGuard, /e\.audio/);
+            assert.doesNotMatch(explainerGuard, /es\.|st\./, 'the explainer guard reads only the explainer');
+            const settingsGuard = clause.slice(clause.indexOf('FROM studio_settings st'));
+            assert.doesNotMatch(settingsGuard, /e\.render|e\.audio/, 'and the settings guard only the settings');
+        });
     });
 
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
