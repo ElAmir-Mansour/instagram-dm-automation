@@ -158,6 +158,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and every push to `ma
 | `check:contrast` | Token colours keep WCAG AA contrast |
 | `check:i18n` | Every English string has an Arabic one |
 | `check:voice` | The words the product never says do not appear in dashboard or public text |
+| `check:docs` | Every repo path, `path:line` and relative link in a tracked doc exists (`scripts/check-doc-refs.mjs`). When code moves, `npm run docs:reanchor` moves the line anchors that point at it and lists the ones whose code is gone |
 
 **Deploys:** every merge to `main` deploys production through Vercel's Git integration. There is no manual deploy step. Each pull request gets a preview deployment. `vercel rollback` goes back ([`RUNBOOK.md`](RUNBOOK.md) §9).
 

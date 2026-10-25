@@ -13,6 +13,8 @@ erasure (`RUNBOOK.md` §7, `src/services/erasure.ts`), and ice breakers and the 
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
 stale the function name still finds it. If the two disagree, the function name is right.
+`npm run check:docs` (in CI) fails on a cited file or line that no longer exists, and
+`npm run docs:reanchor` moves an anchor to where its line of code went (run it on a clean tree, then review the diff).
 
 **Read the orderings as load-bearing.** Several steps here are in an order that looks wrong
 until you know why: the 200 to Meta goes out *before* the work, `markHandled` is the *last*
