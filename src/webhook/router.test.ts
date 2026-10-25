@@ -277,6 +277,7 @@ function recordingQueue(behaviour: 'ok' | 'dedupe' | 'throw' = 'ok'): JobQueue &
         async complete() {},
         async fail() {},
         async reapStale() { return 0; },
+        async releaseUnrun() { return 0; },
         async pruneCompleted() { return 0; },
     };
 }

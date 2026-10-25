@@ -21,7 +21,7 @@
  */
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import { log } from '../utils/log.js';
-import { isJobKind, type EnqueueInput, type Job, type JobKind, type JobQueue, type PayloadRedaction } from './types.js';
+import { isJobKind, type EnqueueInput, type Job, type JobClaim, type JobKind, type JobQueue, type PayloadRedaction } from './types.js';
 
 /** Shape the claim query returns, before it is narrowed to `Job`. */
 interface JobDbRow {
@@ -234,6 +234,43 @@ export class PostgresJobQueue implements JobQueue {
             log('warn', 'job.reaped', { requeued, abandoned });
         }
         return requeued + abandoned;
+    }
+
+    /**
+     * Give claimed jobs back unrun.
+     *
+     * A claim takes a whole batch in one statement: every row becomes `running` with an attempt counted, whether or not the drain gets
+     * to it. When the drain's time budget runs out partway, the rest of the batch is `running` and nothing is going to start it, so it
+     * waits for `reapStale` (`CLAIM_VISIBILITY_SECONDS`, five minutes) and, if that claim was on the job's LAST attempt, is failed
+     * "[abandoned …]" without ever having run. The inline drain claims three at a time, so one slow DM held the other two back by
+     * about five minutes.
+     *
+     * It is the reaper's requeue plus a refund: the job never ran, so the attempt the claim counted did not happen. `GREATEST` keeps
+     * a row that somehow reads 0 from going negative. `run_after` and `last_error` are left alone: it is not a failure and it keeps
+     * its place in the line, due now and claimable by the very next drain.
+     *
+     * The CLAIM is what is matched, not just the row: `(id, attempts)` against the pairs the caller was handed, and `status =
+     * 'running'`. The reaper frees a stale claim without touching `attempts` and the next claim counts one more, so a job that was
+     * reaped and then claimed by another drain while this one was busy is on a later attempt than the caller holds, and is left to
+     * that drain. An id and `status` alone would put that live claim back in the queue for a third drain to run too, which is a
+     * duplicate DM to a real person. A row that finished, failed or was reaped and not yet claimed again does not match either. One
+     * UPDATE does the whole batch, and it returns how many rows it really moved: fewer than were asked for means some were no longer
+     * this caller's claim.
+     */
+    async releaseUnrun(claims: readonly JobClaim[]): Promise<number> {
+        if (claims.length === 0) return 0;
+
+        // Two parallel arrays, one position per claim; `unnest` zips them back into (id, attempts) pairs.
+        return queryCount(
+            `UPDATE jobs
+                SET status = 'pending',
+                    claimed_at = NULL,
+                    attempts = GREATEST(attempts - 1, 0),
+                    updated_at = NOW()
+              WHERE (id, attempts) IN (SELECT * FROM unnest($1::uuid[], $2::int[]))
+                AND status = 'running'`,
+            [claims.map((claim) => claim.id), claims.map((claim) => claim.attempts)]
+        );
     }
 
     /**

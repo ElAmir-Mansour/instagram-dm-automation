@@ -129,6 +129,7 @@ describe('acknowledgeThenRun: the order', () => {
             claim: async () => { claims++; return []; },
             complete: async () => {},
             fail: async () => {},
+            releaseUnrun: async () => 0,
             pruneCompleted: async () => 0,
         };
         const previous = setJobQueue(queue);

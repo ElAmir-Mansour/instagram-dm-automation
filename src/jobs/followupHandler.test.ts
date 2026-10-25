@@ -69,6 +69,7 @@ async function drained(conv: Row, send?: () => Promise<unknown>, attempts = 1): 
         async complete(id) { completed.push(id); },
         async fail(id, error, retryInSeconds) { failed.push({ id, error, retryInSeconds }); },
         async reapStale() { return 0; },
+        async releaseUnrun() { return 0; },
         async pruneCompleted() { return 0; },
     };
     const originalQuery = pool.query;

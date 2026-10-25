@@ -42,25 +42,25 @@ optionally a public reply.
 
 ### 1.1 — `POST /webhook` receives the delivery
 
-**`src/index.ts:174`** — `app.post('/webhook', ...)`. The single entry point for both event
-types. Body parsing happens earlier, at **`src/index.ts:48`**, where `bodyParser.json`'s
+**`src/index.ts:363`** — `app.post('/webhook', ...)`. The single entry point for both event
+types. Body parsing happens earlier, at **`src/index.ts:56`**, where `bodyParser.json`'s
 `verify` hook stashes the raw bytes on `req.rawBody` — the signature is over the exact bytes
 Meta sent, so a re-serialised body would never verify.
 
 ### 1.2 — HMAC verification, against two secrets
 
-**`src/index.ts:176`** calls `verifyMetaSignature(req, req.rawBody)`, defined at
-**`src/utils/signature.ts:22`**.
+**`src/index.ts:365`** calls `verifyMetaSignature(req, req.rawBody)`, defined at
+**`src/utils/signature.ts:24`**.
 
 It rejects before hashing anything when the raw body is not a Buffer
-(**`src/utils/signature.ts:27`** — a non-JSON content type never fires the `verify` hook, and
+(**`src/utils/signature.ts:29`** — a non-JSON content type never fires the `verify` hook, and
 feeding `undefined` to `hmac.update()` throws a `TypeError` that Meta reads as a 500 and
 answers with a redelivery storm), when the `x-hub-signature-256` header is missing or
-misprefixed (**:30**), and when the hex decodes to the wrong length (**:35** — otherwise
+misprefixed (**:32**), and when the hex decodes to the wrong length (**:37** — otherwise
 `timingSafeEqual` throws rather than returning false).
 
-The actual check is at **`src/utils/signature.ts:37`**: `appSecrets().some(...)`, comparing
-with `crypto.timingSafeEqual`. `appSecrets()` (**`src/utils/signature.ts:44`**) returns
+The actual check is at **`src/utils/signature.ts:39`**: `appSecrets().some(...)`, comparing
+with `crypto.timingSafeEqual`. `appSecrets()` (**`src/utils/signature.ts:46`**) returns
 `[META_APP_SECRET, INSTAGRAM_APP_SECRET]` with the unset ones filtered out. A payload is
 genuine if it matches **either**.
 
@@ -72,11 +72,20 @@ genuine if it matches **either**.
 > costs nothing and the setup has changed before — but do not start a "comments never arrive"
 > investigation by suspecting it.
 
-On failure: **`src/index.ts:185`** logs `webhook.signature_rejected` with `secrets_tried`, then
-403. That log line exists because the 403 happens before anything touches the database, so
-"signature rejected" and "nobody messaged us" are otherwise byte-identical. The `probe` field
-distinguishes `scripts/diagnose.mjs --probe-signature` proving the guard still holds from a
-real rejection; it is a label only (**`src/utils/probe.ts`**) and grants nothing.
+On failure: **`src/index.ts:371`** calls `logSignatureRejection` (**`src/utils/signature.ts:78`**),
+which logs `webhook.signature_rejected` with `app_keys_tried` (how many app secrets the signature
+was checked against) and `instagram_app_configured`, then **`:372`** answers 403. That log line
+exists because the 403 happens before anything touches the database, so "signature rejected" and
+"nobody messaged us" are otherwise byte-identical. The `probe` field distinguishes
+`scripts/diagnose.mjs --probe-signature` proving the guard still holds from a real rejection; it
+is a label only (**`src/utils/probe.ts`**) and grants nothing.
+
+> **Why those two names.** The logger blanks any field whose *name* contains `secret`, `token`,
+> `signature` and the like (**`src/utils/log.ts:52`**). The line used to carry `secrets_tried` and
+> `instagram_secret_set`, and both printed `"[redacted]"`: the one line that says which secrets
+> were tried said nothing. `signature.test.ts` sends the line through the real `log`, so a name the
+> redactor would catch fails there. `meta.deauthorize_rejected` counts the same list under the same
+> name (`app_keys_tried`, **`src/routes/meta.ts:175`**).
 
 ### 1.3 — Body shape and `object` dispatch
 
@@ -2156,20 +2165,45 @@ ways — a Meta error body can be long and this column is read in a dashboard li
 
 ### 5.5 — The drain loop and its budget
 
-**`src/jobs/runner.ts:129`** — `drainJobs`. Loop while `claimed < maxJobs`:
+**`src/jobs/runner.ts:187`** — `drainJobs`. Loop while `claimed < maxJobs`:
 
-1. **Budget check before claiming** (**:144-147**) → `budgetExhausted`, break.
-2. Claim `min(batchSize, maxJobs - claimed)` (**:151**). A claim failure logs and breaks
-   (**:152-155**).
-3. Empty batch → break (**:157**).
-4. Run each job, **re-checking the budget inside the batch** (**:166-169**) — a batch of five DM
-   jobs is potentially 40 seconds of Gemini, and the budget has to be able to stop it partway.
+1. **Budget check before claiming** (**:202-205**) → `budgetExhausted`, break.
+2. Claim `min(batchSize, maxJobs - claimed)` (**:209**). A claim failure logs and breaks
+   (**:210-213**).
+3. Empty batch → break (**:215**).
+4. Run each job (**:217**), **re-checking the budget inside the batch** (**:224-230**) — a batch of
+   five DM jobs is potentially 40 seconds of Gemini, and the budget has to be able to stop it
+   partway.
+5. **Hand back what the loop did not reach** (**:228**, `handBackUnrun`, **:167**). The claim took
+   the whole batch in one statement (`status = 'running'`, `attempts + 1`,
+   **`src/jobs/queue.ts:126-128`**), so when the budget stops the loop partway, the jobs after the
+   last one it ran are `running` with an attempt counted, and nothing is going to start them.
+   `queue.releaseUnrun(claims)` (**`src/jobs/queue.ts:260`**) is handed each job's id **and the
+   attempt number its claim gave it** (`claim` returns the row with it already counted), and
+   returns them to `pending` in one UPDATE: `claimed_at = NULL`,
+   `attempts = GREATEST(attempts - 1, 0)`, matched on
+   `WHERE (id, attempts) IN (SELECT * FROM unnest($1::uuid[], $2::int[])) AND status = 'running'`.
+   Only the claim this drain made matches. A job that finished or failed meanwhile is left alone,
+   and so is one the reaper freed and **another drain has claimed since**: the reaper does not touch
+   `attempts` and the next claim counts one more, so that row is on a later attempt than this drain
+   holds, it is running over there, and putting it back would let a third drain run it too.
+   `run_after` and `last_error` are untouched, so a released job keeps its place in the line and the
+   next drain's claim takes it. It logs `job.released` (`released`, `unrun`, `job_ids`; `released`
+   is lower than `unrun` when a row was no longer that claim). If the release itself fails it logs
+   `job.release_failed` (`error`) and the drain ends normally: those jobs wait for `reapStale`
+   (300 s), as every one of them used to. Nothing is released when the budget ends on the last job
+   of a batch, or when the queue empties first.
 
 > **Why a budget at all.** A serverless invocation has a wall clock, and a drain that starts a
 > 30-second Gemini call with 4 seconds left produces exactly the failure the queue was built to
 > prevent — work abandoned mid-flight. So the loop stops rather than starting work it probably
-> cannot finish. Anything left is still `pending`; the next drain takes it
-> (**`src/jobs/runner.ts:9-13`**).
+> cannot finish. What it never claimed is still `pending`; what it claimed and did not reach is
+> handed back to `pending` as it stops (step 5); the next drain takes either
+> (**`src/jobs/runner.ts:9-16`**).
+>
+> That second kind used to be left `running`. The inline drain claims three at a time, so one slow
+> DM held the other two back until the 300 s reaper freed them, and a job claimed on its last
+> attempt was failed `[abandoned …]` by that reaper without ever having run.
 
 Two wirings (**`src/jobs/drain.ts`**):
 
@@ -2204,6 +2238,10 @@ genuinely different:
 
 Either logs `job.reaped` with both counts (**:209-211**). Mirrors the scheduled-post reaper in
 `api.ts` ([3.5](#35--daily-maintenance-only-on-the-daily-cron)).
+
+A drain that merely ran out of budget no longer leaves claims for either branch: it hands the jobs
+it did not reach back itself, attempt refunded ([5.5](#55--the-drain-loop-and-its-budget), step 5).
+What the reaper still catches is a claim whose drain was frozen or killed before it could.
 
 The window has to exceed the longest a single job can legitimately take — a Gemini call up to its
 30 s timeout plus a Meta send with retries. Five minutes is generous on purpose: **reaping a job
@@ -3898,7 +3936,7 @@ error, and several write **no row at all**.
 
 | Flow | Stops at | Log line | Row written? |
 |---|---|---|---|
-| 1 | bad signature — **`index.ts:185`** | `webhook.signature_rejected` | no (403 precedes the DB) |
+| 1 | bad signature — **`index.ts:365`** | `webhook.signature_rejected` (`app_keys_tried`, `instagram_app_configured`, `probe`) | no (403 precedes the DB) |
 | 1 | unknown `field` — **`comments.ts:95`** | `comment.unhandled_field` | no |
 | 1 | own comment — **`comments.ts:196`**, **`:212`** | `comment.skipped_self_authored` / `_page_owner` | no |
 | 1 | no creator for `entry.id` — **`comments.ts:205`** | `comment.no_creator` | no |
@@ -3935,7 +3973,7 @@ error, and several write **no row at all**.
 | 4 | the Overview's profile card cannot be read — **`routes/profile.ts:83`** | `profile.progress_failed` (`error`) | no (the region stays empty) |
 | 4 | a draft or invite event that could not be written — **`onboardingEvents.ts:92`** | `onboarding.event_failed` (`warn`) | no (the draft or the link still worked) |
 | 4 | the daily sweep forgets old events, long-expired invites and a draft's fetched text — **`onboardingRetention.ts:81`** | `retention.onboarding_pruned` (`info`) | rows deleted, or `sources` set to NULL; the draft row stays |
-| 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
+| 5 | budget spent — **`runner.ts:202`**, **`:224`** | `job.drain_complete` (`budgetExhausted: true`); `job.released` when a batch had jobs left | jobs never claimed stay `pending`; the batch's unreached jobs go back to `pending` with their attempt given back, unless the reaper has already freed one and another drain claimed it (that claim is left alone). If the write fails: `job.release_failed`, and they wait for the 300 s reaper |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |

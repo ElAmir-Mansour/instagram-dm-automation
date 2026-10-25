@@ -10,7 +10,10 @@
  * a wall clock, and a drain that starts a 30-second Gemini call with 4 seconds left produces
  * exactly the failure the queue was built to prevent — work abandoned mid-flight. So the loop
  * checks the budget before claiming the next job, and stops rather than starting work it
- * probably cannot finish. Anything left is still `pending`; the next drain takes it.
+ * probably cannot finish. What it never claimed is still `pending`. What it had already claimed
+ * but not reached (a claim takes a whole batch, and the budget can end partway through one) is
+ * handed back to `pending` as it stops, with the attempt given back, rather than left `running`
+ * for the reaper to free five minutes later. Either way the next drain takes it.
  */
 import { withProfileCache } from '../services/profile/cache.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
@@ -146,6 +149,36 @@ async function runInScope(
 }
 
 /**
+ * Give back the jobs a drain claimed and then did not reach, because its budget ran out partway through the batch.
+ *
+ * `claim` takes the whole batch in one statement, so these are `running` with an attempt counted although nothing ever started them,
+ * and only the reaper would free them, `CLAIM_VISIBILITY_SECONDS` later. The inline drain claims three at a time, so one slow DM
+ * used to hold the other two back by about five minutes, and a job claimed on its last attempt was failed "[abandoned …]" for a run
+ * it never had. Handed back, they are `pending` now, due and claimable by the very next drain, with the attempt refunded.
+ *
+ * Each is handed back as the claim THIS drain made: its id and the attempt number that claim gave it (`claim` returns the row with
+ * it already counted). A job the reaper freed and another drain claimed meanwhile is on a later attempt, so it is not handed back
+ * from under that drain.
+ *
+ * Never throws, for the reason `drainJobs` never does: this runs on the way out of a drain that has already spent its time. A
+ * failed release only leaves the jobs where they were, waiting for the reaper, which is what happened to every one of them before
+ * this existed, so it says so and carries on.
+ */
+async function handBackUnrun(queue: JobQueue, jobs: Job[]): Promise<void> {
+    if (jobs.length === 0) return;
+
+    const jobIds = jobs.map((job) => job.id);
+    try {
+        // `released` can be lower than `unrun`: a row that is no longer this claim (it finished, or the reaper freed it and another
+        // drain took it) is left as it is.
+        const released = await queue.releaseUnrun(jobs.map(({ id, attempts }) => ({ id, attempts })));
+        log('info', 'job.released', { released, unrun: jobIds.length, job_ids: jobIds });
+    } catch (err) {
+        log('error', 'job.release_failed', { unrun: jobIds.length, job_ids: jobIds, ...describeError(err) });
+    }
+}
+
+/**
  * Drain until the queue is empty, the budget is spent, or `maxJobs` is reached.
  *
  * Never throws: a drain is called from a webhook that has already answered Meta and from a
@@ -181,7 +214,7 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
 
         if (batch.length === 0) break;
 
-        for (const job of batch) {
+        for (const [index, job] of batch.entries()) {
             result.claimed++;
             if (await runOne(job, handlers, queue, random)) result.succeeded++;
             else result.failed++;
@@ -190,6 +223,9 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
             // of Gemini, and the budget has to be able to stop it partway.
             if (now() - startedAt >= budgetMs) {
                 result.budgetExhausted = true;
+                // The jobs after this one were claimed with it, in the same statement, and nothing is going to start them:
+                // hand them back now instead of leaving them `running` for the reaper (see `handBackUnrun`).
+                await handBackUnrun(queue, batch.slice(index + 1));
                 break;
             }
         }
