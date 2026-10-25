@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Eleven flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Thirteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -30,7 +30,8 @@ bug it was written to fix.
 [9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait) ·
 [10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5) ·
 [11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard) ·
-[12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3)
+[12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3) ·
+[13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule)
 
 ---
 
@@ -2455,10 +2456,12 @@ a scheduled row carries them in `scheduled_posts.platform_options` until it publ
 
 ## 7. Claude on the Mac → who may ask
 
-Two kinds of Studio work are answered by Claude Code on the **owner's Mac, on his personal Claude plan**: a
-`monteur_think` (`monteur.brain: 'claude_mac'`) and a `render_infographic` whose payload has `write`. Anthropic's
-terms forbid routing anyone else's work through that plan, so the server refuses it for every tenant the Mac is not
-for (G1, `src/services/macBrain.ts`).
+Three kinds of Studio work are answered by Claude Code on the **owner's Mac, on his personal Claude plan**: a
+`monteur_think` (`monteur.brain: 'claude_mac'`), a `render_infographic` whose payload has `write`, and an `explainer_write`
+(an illustrated explainer's researched script, [§13](#13-explainers-topic--script--voice--pictures--render--schedule)); a fourth,
+`ads_think`, is §7.5. Anthropic's terms forbid routing anyone else's work through that plan, so the server refuses it for every
+tenant the Mac is not for (G1, `src/services/macBrain.ts`). Of an explainer's four jobs only the write is Claude's: the voice, the
+drawing and the render use no Claude, and the per-tenant switch keeps all four the owner's ([13.1](#131--the-switch-and-who-may-ask)).
 
 **The owner is always allowed; the list adds tenants.** The owner is the first creator ever made
 (`getPlatformOwnerId`, `tenant.ts`: `ORDER BY created_at, id`, **no `is_active` filter**, cached 30 s), so
@@ -2477,12 +2480,13 @@ envelope: `error` stays the English string, `code` and `params` are what the das
    **only for the owner and the listed tenants**; any other tenant's is written on the server (7.1), so these two no longer
    answer a tenant 409. A row with no spec yet is a rewrite whatever the body says. A render alone (an edit, a copy, the
    other theme, the second half of "both themes") asks Claude nothing and is never refused.
-3. **The net:** `enqueueJob` (**`studio/jobs.ts:88`**) refuses any `monteur_think` or `render_infographic` with
-   `write` whoever calls it. A tenant's server-written infographic queues a `render_infographic` with a `spec` and **no
-   `write`**, so the net does not touch it.
+3. **The net:** `enqueueJob` (**`studio/jobs.ts:87`**) refuses any `monteur_think`, `explainer_write` or `render_infographic` with
+   `write` whoever calls it (`isMacBrainJob`, **`macBrain.ts:161`**; an `ads_think` too, §7.5). A tenant's server-written infographic
+   queues a `render_infographic` with a `spec` and **no `write`**, so the net does not touch it. Nor does it touch an explainer
+   Gemini writes: that job is inserted by the server, already claimed (`insertServerWriteJob`, [13.3](#133--who-writes-queuewrite)).
 4. **The claim:** a job already queued (before the guard, or for a tenant since taken off the list) is **failed with
    the same reason instead of being handed to the worker**, in the claim that found it, and the claim goes on to the
-   next job (`claimJob`, **`jobs.ts:300`**, at most 50 refusals per poll). Its infographic goes `failed` with the
+   next job (`claimJob`, **`jobs.ts:311`**, at most 50 refusals per poll). Its infographic goes `failed` with the
    message; a failed think is one try, and `think()` refuses before another is queued. If the allow-list **cannot be
    read** after the claim, the job is **released** (`RELEASE_CLAIM_SQL`: `pending`, attempt unspent) before the error
    goes on, so it is neither handed out unchecked nor left `claimed` for 15 minutes.
@@ -2495,7 +2499,8 @@ envelope: `error` stays the English string, `code` and `params` are what the das
 
 > **Fails closed, but never against the owner.** The list is read on every call. A read that errors throws; it is
 > never a yes. A saved value that is not a list of UUIDs is logged (`studio.mac_brain_setting_unreadable`) and
-> ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer.
+> ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer. An explainer's
+> script has no road through it: Explainers are switched on for the owner alone ([13.1](#131--the-switch-and-who-may-ask)).
 
 ### 7.1 The other half: a tenant's AI work on the AI providers layer (P32)
 
@@ -3693,6 +3698,199 @@ What the Results tab (`#/ads_results`), Growth's paid card and the Results scree
    Results screen (`#/analytics`) adds one row per running or spending ad, labelled "Ad", under the DM campaigns; a failure there hides the rows silently.
    Every spend figure says it excludes tax. **No sales-based figure exists anywhere** (`src/dashboard/no-roas.test.ts`): sales happen on another website (for the owner, Udemy).
 
+## 13. Explainers: topic → script → voice → pictures → render → schedule
+
+An owner gives a topic and the app makes a narrated video of it: one still picture per sentence, a recurring cartoon character, a short label on some pictures, a 9:16 video, a 16:9 video and a cover, then posts. **Claude on the owner's Mac** researches the topic on the web and writes the script; the Mac voices it; **the server draws the pictures**, from a free daily allowance; the Mac renders; Schedule writes `scheduled_posts` rows that the usual sweeps publish ([flow 3](#3-scheduled-post--publish), [flow 6](#6-tiktok-post--inbox--published)). It is **owner-only and dark by default** ([13.1](#131--the-switch-and-who-may-ask)), and two steps are the owner's: he approves the script before anything is voiced (gate 1) and the pictures before anything is rendered (gate 2). The contract (tables, payloads, settings, routes) is STUDIO.md §11.
+
+Code: `src/services/explainers/` (`explainers.ts` the lifecycle the routes call, `state.ts` the status machine, `apply.ts` what a job's result does, `writing.ts` and `writerGemini.ts` who writes, `scenes.ts` and `pictures/` the drawing, `schedule.ts` the posts, `spec.ts` the rules a script is held to, `payloads.ts` the Mac jobs' payloads), the routes in `src/routes/studio.ts` and `src/routes/adminExplainers.ts`, and migration v59 (`src/config/migration_v59_explainers.sql`). The Mac's half is the other repo's: aicourse-captions `scripts/studio/explainerWrite.mjs`, `explainerVoice.mjs` (with `tts.mjs`), `explainerDraw.mjs`, `explainerRender.mjs` (with `audioMix.mjs`) and the compositions in `src/illustrated/`.
+
+```
+writing ─writer result→ draft ─approve (gate 1)→ voicing ─voice result→ drawing ─no scene left to draw→ review
+   ↑                      │                                                                               │
+   └──── rewrite ─────────┘                                                                approve pictures (gate 2)
+                                                                                                          ↓
+                                              scheduled ←─ schedule ─ ready ←─ render result ─ rendering
+                                                                       │  ↑
+                                                                       └──┘ render again
+ any running step ─its job fails or is refused→ failed (failed_step, error) ─retry→ the state that step runs in
+ a narration edit after voicing makes the audio stale: drawing, review or ready may then go back to voicing (re-voice)
+```
+
+**`transitionExplainer`** (**`src/services/explainers/state.ts:117`**) is the only code that writes `explainers.status`. It locks the row (**:124-126**), requires the row to be in one of the states the *caller's* action is for **and** the move to be in the table (`canMove`, **:68**, checked at **:131**; otherwise 409 `EXPLAINER_BAD_STATE` and nothing is written), and clears `failed_step` and `error` when it moves on unless the move writes new ones (**:144-147**), so a failure or a pause note never outlives the state it was about.
+
+> **One rule runs through every hop: a job's result is applied only if the job is `explainers.job_id`.**
+> A step that queues a job writes `job_id` in the same transaction as its move, on the explainer's row lock (the header of **`src/services/explainers/explainers.ts:16-18`**), and `lockCurrent` (**`src/services/explainers/apply.ts:77`**) re-reads the row under the same lock when a result arrives. So a rewrite, a re-voice, a restart of the drawing, a re-render and a delete never meet the old job's answer half-applied: it finds another `job_id`, or no row, and is dropped. The drop is logged and the owner is told nothing ([13.6](#136--applying-a-draft)). It is the rule an infographic's render follows too (`applyInfographicRender`, **`src/services/studio/jobs.ts:1124`**), and it is why a takeover by Gemini ([13.5](#135--gemini-steps-in-and-when-it-never-does)) only has to change one column.
+
+### 13.1 — The switch, and who may ask
+
+Every dashboard route of the feature is wrapped in `explainerRoute` (**`src/routes/studio.ts:543`**). It asks `isExplainersEnabled(getTenantId(req))` first (**`studio.ts:545`**; defined at **`src/services/explainers/switch.ts:28`**: the app setting `explainers.enabled.<tenant id>` is the value `true` and nothing else) and answers **404 `EXPLAINERS_DISABLED`** without it. The role comes from the router's own guard, operator and up (`studioRouter.use(canOperate)`, **`studio.ts:280`**); only `POST /explainers/uploads/sign` (a music track, a character's reference picture) is owner-only (**`studio.ts:578`**). The switch is read inside the handler, not in a middleware, so a test that takes a handler off the router runs it too (**`studio.ts:539-540`**).
+
+The switch can be turned **on for the platform owner only**. `setExplainersEnabled` (**`switch.ts:37`**) is the one writer of the key and refuses any other tenant with 409 `EXPLAINERS_OWNER_ONLY` (**`switch.ts:40-41`**: the owner is `getPlatformOwnerId()`, and with no owner nobody can be switched on). Turning one **off** is never refused. Its route is `PUT /api/admin/explainers/enabled` (**`src/routes/adminExplainers.ts:142`**), platform admin only, 404 for anyone else (**`adminExplainers.ts:41`**).
+
+**The worker's `draw-next` route is not behind the switch.** A worker token reaches it (`requireWorker`, **`studio.ts:178`**) and it refuses by its `job_id` instead ([13.10](#1310--drawing-the-servers-loop-and-the-allowance)).
+
+### 13.2 — Create: `POST /api/studio/explainers`
+
+**`src/routes/studio.ts:559`** → `createExplainer` (**`src/services/explainers/explainers.ts:332`**). `parseCreate` (**`explainers.ts:298`**) is the whole validation, every problem at once as a 400 with `problems`: a topic of 3 to 300 characters, `notes` of at most 2,000, at most ten distinct http(s) `source_links`, and `language`, `length_tier`, `sound_mode` and `subtitles`, each defaulting to the tenant's `studio_settings.explainer.defaults` (**:304-311**); a `music_track_id` must name a track in the library (it is ignored for sound effects).
+
+Then **one transaction** (**`explainers.ts:335-347`**): the `writing` row (**:336-341**), `queueWrite` ([13.3](#133--who-writes-queuewrite); **:343**), and `job_id` pointed at the job it queued (**:344**). When the writer is Gemini the run is started **after the commit** (`startGeminiRun`, **:349**): the run reads the row, which a transaction still open would hide. The audit row `explainer.created` names the language, the tier and the sound, never the topic (**`studio.ts:561`**).
+
+### 13.3 — Who writes: `queueWrite`
+
+`queueWrite` (**`src/services/explainers/writing.ts:94`**) reads `settings.explainer.writer` (**`writing.ts:97`**): `claude_mac`, the default, or `gemini`.
+
+- **Claude on the Mac** (**`writing.ts:99-100`**). `writePayload` (**`src/services/explainers/payloads.ts:57`**) builds the job's `write` section, `{ model: THINK_MODEL, system, user, schema }` (**`payloads.ts:67`**), from `buildWriterInputs(…, 'research')` (**`src/services/explainers/prompt.ts:305`**), and `enqueueJob(…, 'explainer_write', payload)` (**`src/services/studio/jobs.ts:87`**) queues it. `explainer_write` is Mac-brain work whatever its payload (**`src/services/macBrain.ts:161-162`**, [flow 7](#7-claude-on-the-mac--who-may-ask)), so `enqueueJob` refuses it for a tenant the Mac is not for (**`jobs.ts:90`**) and `claimJob` checks again (**`jobs.ts:321`**).
+- **Gemini** (**`writing.ts:98`**). `insertServerWriteJob` (**`writing.ts:72`**) writes the job already `claimed`, by the server, with `payload.writer = 'gemini'` and all three attempts spent (**`writing.ts:73-79`**). The Mac's claim takes a `claimed` job only when its heartbeat is stale **and** it has fewer than three attempts (**`jobs.ts:267-269`**), so it can never take a Gemini run back. No Claude is involved, so none of this is Mac-brain work.
+
+### 13.4 — The Mac's write
+
+The worker's poll (`POST /api/studio/worker/claim`, **`src/routes/studio.ts:193`**) hands the job out through `CLAIM_SQL` (**`src/services/studio/jobs.ts:260`**): rank 1, with `monteur_think` (**`jobs.ts:270-271`**), and only once its `not_before` has passed (**`jobs.ts:266`**; a job that sets none is due the moment it is queued). `explainerWriteJob` (aicourse-captions `scripts/studio/explainerWrite.mjs`) runs the app's prompts through the claude CLI on the owner's plan with **WebSearch and WebFetch only**, checks the answer against its own copy of the schema (`explainerSchema.json`), and gives a draft that does not fit **one repair**, with no web this time. The result is `{ written, model, usage?, research_rounds? }`. `research_rounds` is how many rounds of web reading the first call made: **0 means the script was written from memory** ([13.6](#136--applying-a-draft)).
+
+### 13.5 — Gemini steps in, and when it never does
+
+Gemini on the server writes in **three cases and no others** (the header of **`src/services/explainers/writing.ts:1-22`**):
+
+1. **The owner chose it** (`explainer.writer = 'gemini'`). Not a takeover: `queueWrite` made Gemini's job at the start ([13.3](#133--who-writes-queuewrite)) and the Mac is never asked.
+2. **The Mac is signed out.** Its write fails, `applyExplainerFailure` ([13.6](#136--applying-a-draft)) sends the explainer to `failed` at `write` as it does any failure, and the error is the claude CLI's own words. `isSignInFailure` (**`writing.ts:59`**) recognises them (**`writing.ts:227`**): whole sign-in messages only, such as "Failed to authenticate" or "OAuth session expired" (**`writing.ts:50-57`**). A rate limit, a spent weekly allowance and a failed page are failures of their own and are not this.
+3. **The Mac did not pick the job up in ten minutes and is off or asleep** (**`writing.ts:215-224`**). The job is still `pending`, is not Gemini's own and is `UNCLAIMED_MINUTES` = 10 old (**`writing.ts:38`**, **`:217`**), and `workerSummary` says no live worker of the tenant was heard from in the last 90 seconds (**`writing.ts:221-222`**; the window is `WORKER_ONLINE_WINDOW_MS`, **`src/services/studio/worker.ts:21`**, the dashboard's own definition of "the Mac is up").
+
+**A Mac that is up and busy is never taken over.** It runs two jobs at a time, so with both slots on a long render a script waits far past ten minutes while the Mac heartbeats; Gemini taking over would turn a short wait into a failure (a free key cannot ground its research, below). `takeoverReason` returns null (**`writing.ts:222`**), and the explainer says what the wait is instead: `BUSY_MAC_NOTE` (**`src/services/explainers/explainers.ts:123`**), shown by `busyMacNote` (**`explainers.ts:167`**) once the job has waited `BUSY_AFTER_SECONDS` = 60 (**`explainers.ts:125`**). And `explainer.writer_fallback = false` means never: `takeOverWrite` returns null at once (**`writing.ts:241`**), and the explainer waits for the Mac or fails with its reason.
+
+**Who looks.** `reconcileWriting` (**`writing.ts:282`**) is the one check. It never throws and does nothing unless the explainer is `writing`, or `failed` at `write` with a sign-in message (**`writing.ts:286-288`**). It is called from three places: `GET /explainers/:id`, before the row is read (`getExplainer`, **`explainers.ts:221-223`**); right after a worker reports a failure (`afterJobFailed`, **`writing.ts:300`**, called from **`studio.ts:228`**), so a signed-out Mac is answered at once; and the daily cron's `sweepWriting` ([13.16](#1316--the-daily-crons-parts)).
+
+**The row lock and the idempotency.** `takeOverWrite` (**`writing.ts:238`**) is one transaction on the **locked** explainer row (`lockExplainer`, **`writing.ts:243`**), and the reason is decided on the locked row (**`writing.ts:245`**). It closes the Mac's job so the Mac can never claim it later (`status = 'failed'` where it is still `pending`, **`writing.ts:249-253`**), writes Gemini's job (**`writing.ts:254`**) and points `explainers.job_id` at it, moving a `failed` row back to `writing` with the reason as its note (**`writing.ts:256-257`**). Two looks at once take turns on the lock, and the second finds the work already taken (a `writing` explainer whose job is Gemini's, or one that is no longer `failed`) and returns null, so one run starts. A late answer from the closed Mac job would be dropped anyway: only `explainers.job_id`'s result is applied. The run is started after the commit (`startGeminiRun`, **`writing.ts:188`**, under `waitUntil`).
+
+**The run** (`runGeminiWrite`, **`writing.ts:132`**) reads the rows and gives up quietly when the row is gone, its `job_id` is another's, or it is no longer `writing` (`explainer.gemini_run_skipped`, **`writing.ts:143-146`**). Then `writeWithGemini` (**`src/services/explainers/writerGemini.ts:501`**) makes two calls with the platform's key and the Studio's model chain, a 400, 404, 429, 500 or 503 handing the call to the next model (**`writerGemini.ts:46`**):
+
+1. **Research**, with Google Search grounding (`tools: [{ google_search: {} }]`, **`writerGemini.ts:372`**). The notes are in English; the sources are the grounding chunks, each Google redirect followed once to the page it leads to (`groundedSources`, **`writerGemini.ts:269`**), plus the creator's own links; `[n]` markers go where `groundingSupports` say a source backs the text (`annotateNotes`, **`writerGemini.ts:317`**).
+2. **Write**, from the notes alone, with Claude's system prompt in `notes` mode (**`writerGemini.ts:523-533`**), a JSON `responseSchema` and one repair round (**`writerGemini.ts:545-558`**).
+
+What the app does that the model is not trusted with (`onlyListedSources`, **`writerGemini.ts:441`**, called at **`writerGemini.ts:563`**): a source whose address is not in the numbered list is dropped, the sources no scene cites are dropped and the scenes' `source_ids` renumbered, the first comment is rebuilt from the sources that are left, and any address in a caption that is not one of them is removed. The answer ends the way the Mac's does: `completeJob` with `{ written, model }` (**`writing.ts:160`**), or `failJob` with the reason (**`writing.ts:157`**).
+
+**Gemini's research refused on a free key.** Google Search grounding is not offered on the free tier for Gemini 3 models, so every model refuses the research call and the run fails **saying so** instead of writing from memory. `callModels` ends in "Gemini refused the research call on every model it tried" (**`writerGemini.ts:166`**), and `writeWithGemini` appends `GROUNDING_HINT` (**`writerGemini.ts:474`**, appended at **`writerGemini.ts:511-514`**): sign the Mac's Claude Code in, or use a paid-tier key. The explainer is `failed` at `write` with that sentence and **has no draft**. (Logged: `explainer.gemini_request_refused` for each model, **`writerGemini.ts:158`**, then `explainer.gemini_run_failed`, **`writing.ts:156`**.)
+
+**A Gemini run that dies** (the function is killed) leaves a `claimed` job whose heartbeat goes stale. The next look fails it (`reapStalledRun`, **`writing.ts:267-275`**, after `STALLED_RUN_MINUTES` = 5, **`writing.ts:40`**) with "Press Retry", and **never starts a second run by itself**: each run spends two of the free tier's few requests a day. If nobody looks, the Mac's next claim fails it after 15 minutes instead (`failExhaustedClaims`, **`jobs.ts:348`**, because all three attempts are spent), in the worker's wording (`EXHAUSTED_ERROR`, **`jobs.ts:52`**).
+
+### 13.6 — Applying a draft
+
+The result comes back as `POST /worker/jobs/:id/complete` (**`src/routes/studio.ts:216`**) → `completeJob` (**`src/services/studio/jobs.ts:411`**), which locks the job row (**`jobs.ts:414`**) so a delivery retried after a timeout applies once, and hands an explainer kind to `applyExplainerResult` (**`jobs.ts:453-455`**) → `applyWrite` (**`src/services/explainers/apply.ts:111`**), inside that transaction:
+
+1. **The answer must be the schema's.** `parseWriterOutput` (**`apply.ts:113`**), with the schema the app ships (`writerSchema.json`): an answer that is not is a 400 that lists the problems (up to twenty), nothing is stored and the job stays claimed for the worker to report.
+2. **Is it still this job's?** `lockCurrent` (**`apply.ts:77-84`**) locks the explainer and answers `dropped` with `no_explainer`, `gone` or `superseded` unless `row.job_id === job.id` (**`apply.ts:82`**). The explainer must also still be `writing` (**`apply.ts:119`**). A dropped result is logged (`explainer.result_dropped`, **`apply.ts:86-89`**), the job is marked `done` with `{ dropped: reason }`, and **nothing else changes**: an older write, a rewrite asked for meanwhile and a deleted explainer all end here, and the owner sees nothing.
+3. **What the script breaks.** Characters the settings do not have are removed from each scene (**`apply.ts:121-128`**), then `checkDraft` runs (**`apply.ts:131`**, **`src/services/explainers/spec.ts:338`**). Its **problems** (a closing line that is not a question, engagement bait, a woman or a girl in a picture brief, a field past its limit) are not stored: they are computed again on every read (`presentExplainer`, **`explainers.ts:179`**) and **block approval**. Its **warnings** (scene count, length, too few sources) are stored with the draft and never block.
+4. **`research_limited`.** A script the Mac's writer wrote after **0** rounds of web reading gets one more warning, `research_limited` (**`apply.ts:132-134`**; the message, **`apply.ts:108`**): written from memory, check every fact and source before approving. A missing count is *unknown*, not 0 (an older worker; **`apply.ts:102-105`**), and Gemini's run is never flagged, since it has its grounding (`rounds` is null for it, **`apply.ts:132`**). The owner may approve over it, as over every warning.
+5. `replaceScenes` (**`apply.ts:141`**; **`src/services/explainers/store.ts:51`**, one statement for up to 300 rows), then `writing → draft` with the title, the draft, `draft_version + 1` and `job_id` cleared (**`apply.ts:142`**).
+
+A job that **fails** takes the other door: `failJob` → `applyFailure` (**`jobs.ts:1109-1111`**) → `applyExplainerFailure` (**`apply.ts:420`**), which applies the same `lockCurrent` test (**`apply.ts:421-430`**; a failure of a job that is no longer the explainer's is `explainer.failure_ignored` and moves nothing) and otherwise moves the explainer to `failed` at the step that job was for, with the worker's own words as `error` (**`apply.ts:450`**).
+
+### 13.7 — Edit and rewrite
+
+`PATCH /explainers/:id` → `editExplainer` (**`src/services/explainers/explainers.ts:523`**). A save **may not add a problem** to the script: `checkDraft` is run before and after, and a problem that is new is a 422 `EXPLAINER_DRAFT_REFUSED` with every finding and nothing stored (**`explainers.ts:552-554`**). A problem the draft already had stays listed and a save that does not touch it goes through; only approving needs the script clean. `assertEditable` (**`explainers.ts:491`**) refuses what the running step reads (the script while `writing`, the narration while `voicing`, the title, the labels and the sound while `rendering`, anything once `scheduled`), and the scene list cannot grow or shrink once the narration is voiced (**`explainers.ts:508-512`**): a picture and a time belong to a scene's place in the list. A change to a scene's `narration` or `spoken` adds one to `draft_version` (**`explainers.ts:565`**), which is what makes the voiced audio **stale** (`isAudioStale`, **`src/services/explainers/state.ts:76`**: `audio.version !== draft_version`). Labels, briefs, characters and pictures never do.
+
+`POST /explainers/:id/rewrite { note }` → `rewriteExplainer` (**`explainers.ts:582`**): only from `draft` (**`explainers.ts:590`**); it queues a new write whose prompt carries the note and the previous draft (**`explainers.ts:592`**) and moves `draft → writing` with `rewrite_note` and the new `job_id` (**`explainers.ts:593`**). The old draft stays on the screen until the new one lands.
+
+### 13.8 — Approve the script (gate 1)
+
+`POST /explainers/:id/approve { version }` (**`src/routes/studio.ts:595`**) → `approveExplainer` (**`src/services/explainers/explainers.ts:604`**), one transaction on the locked row (**`explainers.ts:610`**):
+
+1. `version` is required (**`explainers.ts:607`**) and must be the `draft_version` the owner read; any other number is **409 `CHANGED_MEANWHILE`**, "the script changed since you opened it" (**`explainers.ts:612-614`**).
+2. Only a `draft` can be approved (**`explainers.ts:611`**).
+3. The script must have **no problem left** (`checkDraft`, **`explainers.ts:616`**) and a title (**`explainers.ts:618`**), else 422 `EXPLAINER_DRAFT_REFUSED` with every finding (**`explainers.ts:619`**). Warnings, `research_limited` included, never block.
+4. `explainer_voice` is queued (**`explainers.ts:620`**) with `voicePayload`, which carries `version: row.draft_version` (**`payloads.ts:78`**), the owner's voice and style, the spoken lines and `chunk_seconds_max` 180 (**`payloads.ts:18`**). A job nobody has claimed is superseded (`supersede`, **`explainers.ts:621`**, defined **`explainers.ts:233`**) and the explainer moves `draft → voicing` with the new `job_id` (**`explainers.ts:622`**). The audit row `explainer.approved` is written by the route (**`studio.ts:597`**).
+
+### 13.9 — Voice, and its version check
+
+`explainerVoiceJob` (aicourse-captions `scripts/studio/explainerVoice.mjs`, with `tts.mjs`): Gemini speaks the script in parts cut at scene boundaries (one request per part: the free tier counts requests, not seconds), whisper.cpp times every scene and every word, the script's own words are put on the times it heard, and the `.m4a` goes up through a signed upload (`audio/mp4` is one of the types `POST /worker/uploads/sign` takes, **`src/services/monteur/uploads.ts:28`**). The result is `{ audio: { url, duration, voice, fallback }, version, scenes: [{ position, start, end }], words }`.
+
+`applyVoice` (**`src/services/explainers/apply.ts:237`**):
+
+1. `lockCurrent` (**`apply.ts:239`**) and status `voicing` (**`apply.ts:242`**), else the result is dropped as in [13.6](#136--applying-a-draft).
+2. `parseVoiceResult` (**`apply.ts:177`**, called at **`apply.ts:245`**) holds the result to the explainer's own scenes: every one, in order, `end` after `start`, no overlap past 0.05 s, the last ending within 0.5 s of the audio (**`apply.ts:194-207`**). One that is not is a 400, and the job stays claimed.
+3. **The version check** (**`apply.ts:246`**): `voice.version !== row.draft_version` means the narration moved on while it was being voiced. The audio is **not stored**: the explainer goes `failed` at `voice` with "the narration changed while it was being voiced" (**`apply.ts:250-252`**) and the result is dropped (`stale_version`, **`apply.ts:253`**). An edit of the narration is refused while voicing ([13.7](#137--edit-and-rewrite)), so this is a guard and not a flow.
+4. `checkFiles` (**`apply.ts:256`**): the audio is an upload of this tenant, of type `audio/mp4`. Its URL is **rebuilt on our own address** from its id (**`apply.ts:258-260`**), never the string the worker sent.
+5. The scene times are written in one statement (**`apply.ts:265-270`**), the previous audio's file is deleted unless it is the same upload (**`apply.ts:275`**), `explainer_draw` is queued (**`apply.ts:273`**) and the explainer moves `voicing → drawing` with the audio, the words and `job_id` = the draw job (**`apply.ts:274`**).
+
+**A voice that runs into Gemini's free allowance is not a failure.** The worker's error starts with `VOICE_LIMIT:`, and `applyExplainerFailure` (**`apply.ts:420`**, **`apply.ts:433-447`**) queues `explainer_voice` again with a `not_before`: the minute's limit after the wait it names (at least a minute), the day's at midnight Pacific plus five minutes (`voiceRetryAt`, **`apply.ts:406`**; `nextGeminiQuotaReset`, **`src/services/explainers/time.ts:18`**), up to three times (`MAX_VOICE_LIMIT_RETRIES`, **`apply.ts:399`**). The explainer stays `voicing`, with the reason and the time as its note (**`apply.ts:443-444`**).
+
+**Re-voice.** After the narration changed, `POST /explainers/:id/revoice` (`revoiceExplainer`, **`explainers.ts:629`**) voices it again, from `drawing`, `review` or `ready` (**`explainers.ts:634`**) and only while the audio is stale (**`explainers.ts:635`**). It comes back through `drawing` (nothing is pending, so the loop ends at once) to `review`, and a render made before the edit is flagged stale ([13.12](#1312--render)).
+
+### 13.10 — Drawing: the server's loop and the allowance
+
+The pictures are drawn **on the server**, never on the Mac: the image provider's credentials and the allowance live here. The Mac's `explainer_draw` job is only a loop (`explainerDrawJob`, aicourse-captions `scripts/studio/explainerDraw.mjs`) that keeps calling one route, because the Mac is the one thing that runs all day and the app has no cron finer than once a day:
+
+```
+POST /api/studio/worker/explainers/:id/draw-next { job_id }        src/routes/studio.ts:269
+  → { state: 'drawn', position, remaining } | { state: 'done' } | { state: 'paused', until } | { state: 'failed', position, error }
+```
+
+1. **The job-id check** (`drawNextStep`, **`src/services/explainers/scenes.ts:152`**). The `job_id` must be the explainer's own current job (**`scenes.ts:157`**), that job must be an `explainer_draw` that a worker has **claimed**, and the explainer must be `drawing` (**`scenes.ts:158`**). Anything else is **409 `EXPLAINER_BAD_STATE`** (**`scenes.ts:160`**, logged `explainer.draw_next_refused`, **`scenes.ts:159`**) before a unit is reserved: a stale loop, another explainer's job, a job nobody started and a finished one cannot spend the allowance. The check only reads and holds no lock across the drawing.
+2. **Which scene.** `drawNext` (**`src/services/explainers/pictures/draw.ts:497`**) takes the pending scene with the lowest position (`PEEK_NEXT_SQL`, **`draw.ts:86`**) and answers `done` when none is pending (**`draw.ts:502`**). With no image provider saved it is 409 `EXPLAINER_NO_PROVIDER` (**`draw.ts:508-509`**). It goes round at most five times when it keeps losing a claim to another caller (**`draw.ts:66`**, **`draw.ts:499`**).
+3. **A scene that `continues` is never drawn** (unless it is the first scene, which has nothing before it and is drawn like any other). `copyContinuing` (**`draw.ts:455`**, called at **`draw.ts:506`**) takes the chosen picture of the scene before, in one transaction, with no provider and no allowance. Whenever a scene's chosen picture changes (a draw, a redraw, a pick) the run of scenes after it that continue gets the new one in the same transaction (`propagate`, **`draw.ts:268`**). A scene whose predecessor has no picture is marked failed with that reason and healed when the predecessor is drawn (**`draw.ts:462-466`**). The render finds a scene's picture the same way (`pictureOf`, **`payloads.ts:97`**).
+4. **Claim → reserve → provider → store** (`drawWithProvider`, **`draw.ts:339`**), holding nothing across the call out:
+   1. What can be refused for free comes first: the words (a brief, a note or a character description that names a woman or a girl is 422 `EXPLAINER_PROMPT_REFUSED`, `buildScenePrompt`, **`draw.ts:351`**) and the characters' reference pictures (each under 512×512, `loadReferences`, **`draw.ts:352`**). A refusal here claims nothing; the scene is marked failed with the reason (**`draw.ts:342-356`**, **`draw.ts:522-525`**).
+   2. **One short transaction** (**`draw.ts:361-374`**): the scene is claimed with an UPDATE that re-checks it is still pending (`CLAIM_UNATTENDED_SQL`, **`draw.ts:91`**: two callers cannot draw one scene), its prompt is built from the row as the claim found it, and **the allowance is reserved** (`reserveAllowance`, **`draw.ts:372`**). A refusal rolls the claim back with it.
+   3. **The provider is called outside any transaction**, holding no pooled client and no row lock (**`draw.ts:391`**). "Used up" (`ALLOWANCE_EXHAUSTED`) keeps the units, marks the day exhausted and puts the scene back to `pending` (**`draw.ts:399-403`**); any other failure gives the units back and marks the scene failed with the reason (**`draw.ts:405-407`**).
+   4. The file goes into the media store (**`draw.ts:413`**); only then does **one short transaction** write the result (`storePicture`, **`draw.ts:288`**): the chosen picture, the three pictures before it as history, the scenes that continue it, and the deletion of the files that dropped out (**`draw.ts:296-303`**). A crash between the steps leaves the scene `drawing`; after two minutes it is pending again (`STALE_DRAWING_SECONDS`, **`draw.ts:58`**).
+5. **The allowance** (`src/services/explainers/pictures/allowance.ts`). `RESERVE_SQL` (**`allowance.ts:90`**) is one statement that adds the units to today's row (platform-wide, per UTC day) and refuses, in the same statement, when they would pass `daily_cap × units_per_picture` or when the provider already said the day is used up; yesterday's exhaustion is looked at first, because it still pauses the first minutes of today (**`allowance.ts:141-145`**). A refusal is 429 `EXPLAINER_ALLOWANCE_PAUSED` with `retryAt` (`pausedError`, **`allowance.ts:123`**). The count is the app's own estimate, since Cloudflare cannot be asked what is left: 80 pictures a day at 110 estimated units each by default (**`src/services/explainers/pictures/provider.ts:32-33`**). Drawing resumes at the next **00:05 UTC** (`resumeAt`, **`allowance.ts:78`**: the next midnight plus `PAUSE_MARGIN_MS`, **`allowance.ts:32`**).
+6. **After the answer** (**`scenes.ts:165-166`**). `done` → `moveToReview` (**`scenes.ts:171`**): one transaction that re-checks the explainer is still `drawing` **and** still this job's (**`scenes.ts:174`**) and moves it `drawing → review` (**`scenes.ts:176`**). `drawn` → `clearPauseNote` (**`scenes.ts:182`**), so an earlier "waiting for the allowance" note stops being true. `paused` and `failed` write nothing here.
+
+> **Why the provider is called outside any transaction.** A draw takes up to 30 seconds, and held inside a transaction it would keep a pooled connection and the scene's row lock for that long. So the claim and the reservation are one short transaction, the call runs holding neither, and the result is a second short transaction that reads the scene again under its lock, so that the history is made from what the scene holds *now* and not from what it held at the claim (**`src/services/explainers/pictures/draw.ts:10-16`**, **`draw.ts:288-305`**).
+
+**Paused → the next `explainer_draw`.** The route writes nothing on `paused`: the worker completes the job with `{ state: 'paused', until }` and `applyDraw` (**`apply.ts:294`**, the `paused` branch **`apply.ts:319-326`**) queues the next round. `resumeAt(until, now)` (**`apply.ts:286`**: the instant the worker said, if it is between a minute and two days away, else the next UTC midnight plus five minutes) goes in as `notBefore` (`enqueueJob`, **`jobs.ts:93-99`**, which writes `studio_jobs.not_before`). `CLAIM_SQL` takes a `pending` job only when `not_before <= NOW()` (**`jobs.ts:266`**), so the Mac's polls skip it until then, and `jobCounts` reports it as `waiting`, not as the Mac's backlog (**`jobs.ts:1193`**). The explainer stays `drawing`, with `job_id` the waiting job, `draw_paused_until` and a note that says when drawing continues (**`apply.ts:323`**). **There is nothing for the owner to press.** If he does, `POST /explainers/:id/draw` (`startDraw`, **`explainers.ts:654`**) replaces a waiting job with one that goes now (if the allowance is still spent it pauses again), makes the failed scenes pending (**`explainers.ts:668-673`**) and leaves a job that is already running alone (**`explainers.ts:665`**).
+
+**`done` does not mean every scene has a picture.** A scene that failed is not pending, so `drawNext` answers `done` and the explainer reaches `review` with it still `failed`, its reason in `draw_error`. The owner redraws it there by hand (`POST …/scenes/:position/draw`, `drawScene`, **`draw.ts:544`**: a synchronous draw with an optional note) or goes back to an earlier picture (`pickPicture`, **`draw.ts:581`**); pictures can be touched in `drawing`, `review`, `ready`, `scheduled` and a `failed` drawing, never while `rendering` (`picturesEditable`, **`scenes.ts:67`**). Three scenes failing **in a row** make the worker give up with `{ state: 'failed' }`; `applyDraw` then keeps the explainer `drawing` with the last reason, clears the job and the pause (**`apply.ts:328-333`**), and nothing retries by itself: the owner redraws, or presses Continue (`startDraw`).
+
+### 13.11 — Approve the pictures (gate 2)
+
+`POST /explainers/:id/approve-pictures` (**`src/routes/studio.ts:619`**) → `approvePictures` (**`src/services/explainers/explainers.ts:705`**): only from `review` (**`explainers.ts:710`**), then `queueRender` (**`explainers.ts:691`**), which builds the payload **first**. `renderPayload` (**`src/services/explainers/payloads.ts:143`**) calls `renderReadiness` (**`payloads.ts:117`**), the one list of what a render needs, in the order a person fixes it: voiced audio that is not stale (409 `EXPLAINER_AUDIO_STALE`, **`payloads.ts:121-123`**), a track in the library when the sound is music (409 `EXPLAINER_NO_TRACK`, **`payloads.ts:125-127`**), and a picture for every scene, `continues` counted (409 `EXPLAINER_PICTURES_MISSING` with the `positions`, **`payloads.ts:128-134`**). Only then is `explainer_render` queued (**`explainers.ts:694`**), a job nobody has claimed superseded (**`explainers.ts:695`**) and the explainer moved `review → rendering` (**`explainers.ts:697`**). The previous render, if there is one, stays on the row until the new one lands. The audit row `explainer.pictures_approved` is written by the route (**`studio.ts:621`**).
+
+A render of a `ready` explainer (a label, a picture or the sound changed) is the same function from `ready` (`renderExplainer`, **`explainers.ts:717`**).
+
+### 13.12 — Render
+
+`explainerRenderJob` (aicourse-captions `scripts/studio/explainerRender.mjs`, `audioMix.mjs`, the compositions in `src/illustrated/`): Remotion renders `IllustratedVertical` (1080×1920) and `IllustratedHorizontal` (1920×1080) **muted**, and the `IllustratedCover` still; ffmpeg puts the voice and the chosen sound under each video. **Music** is the owner's track at −20 dB, faded in and out and ducked by the narration (sidechain compression); **sound effects only** is a soft whoosh at every cut and a pop after every label. Both are loudness-normalised to −14 LUFS, and both videos and the cover go up through signed uploads.
+
+`applyRender` (**`src/services/explainers/apply.ts:338`**): the three URLs must be this app's upload URLs (**`apply.ts:342-346`**). `lockCurrent` (**`apply.ts:353`**), and a result that is no longer current has its three files **deleted**, since nothing will ever name them (**`apply.ts:354-359`**). The explainer must be `rendering` (**`apply.ts:362`**). `checkFiles` (**`apply.ts:364`**) wants two `video/mp4` and one `image/jpeg`, of this tenant, there in Storage. The URLs are rebuilt on our address (**`apply.ts:365-371`**), `rendering → ready` writes `render` and clears `job_id` (**`apply.ts:373`**), and the previous render's files go unless a post names them (**`apply.ts:375`**). A result whose `version` is not the explainer's `draft_version` is **still stored, and said**: `render_stale` in the view (**`explainers.ts:186`**) and a `warn` log (**`apply.ts:376-377`**), "the render is older than your edits". Schedule refuses it ([13.13](#1313--schedule)).
+
+### 13.13 — Schedule
+
+`POST /explainers/:id/schedule { when? }` (**`src/routes/studio.ts:629`**) → `scheduleExplainer` (**`src/services/explainers/schedule.ts:99`**). It is how an infographic is scheduled, through the same `insertVideoPost` (**`src/services/monteur/clips.ts:360`**) the Monteur's approve writes rows with, so the usual sweeps publish what it makes.
+
+1. `when` is `next` (the default), `now` or a date and time; anything else is 400 `INVALID_SCHEDULE_TIME` (`parseWhen`, **`schedule.ts:72-78`**).
+2. One transaction, under the tenant's **publishing lock** (`lockTenantPublishing`, **`schedule.ts:107`**: the one the Monteur's approve and the infographics take, so two schedules cannot take one slot) and the locked explainer row (**`schedule.ts:108`**).
+3. **What may be scheduled** (`readyToPost`, **`schedule.ts:81-93`**): a `ready` explainer with a render (**`schedule.ts:82`**); not one rendered before the latest edits, since `render.version !== draft_version`, or another `sound_mode`, is 409 `EXPLAINER_RENDER_STALE` (**`schedule.ts:85-87`**); and when the sound is music its track must still be in the library, 409 `EXPLAINER_NO_TRACK` (**`schedule.ts:89-91`**), because the credit line cannot be written without it.
+4. **The time** (**`schedule.ts:114-121`**): now, the time given, or the next free slot (`nextFreeSlots`, **`schedule.ts:118`**: the Monteur's `post_at` slots in the tenant's zone, thirty ahead; none free is 409 `NO_FREE_SLOT`).
+5. **The platforms.** Instagram, Facebook and YouTube follow `studio_settings.infographic.platforms`, the one setting that already says where this owner's videos go (**`schedule.ts:103-104`**); **TikTok is always made**, since it is an inbox draft the owner posts by hand anyway. One `group_id` ties the rows together (**`schedule.ts:123`**) and each platform has its own caption.
+   - **Instagram and Facebook:** one row, `both` or the one that is on (`metaPlatformFor`, **`src/services/monteur/clips.ts:348`**), with the **vertical** video, the cover and `captions.meta` (**`schedule.ts:131-135`**).
+   - **YouTube** (**`schedule.ts:136-144`**): a render of at most **180 seconds** (`YOUTUBE_SHORT_MAX_SECONDS`, **`schedule.ts:39`**) goes as the vertical video, a Short, with the cover. A **longer** one goes as the **horizontal** video, with no cover of ours (the cover is a vertical frame; YouTube picks its own), and its row carries **`shorts: false`** (**`schedule.ts:142`**), so no `#Shorts` is added to its title or description (`metadataFor`, **`src/services/youtubePublish.ts:104-105`**; `shortTitle` and `shortDescription` with `tagAsShort` false, **`src/services/youtube.ts:288`**, **`:311`**). Its options are `{ title, language }` and its caption is `captions.youtube`.
+   - **TikTok:** the vertical video as an **inbox draft** (`validateTikTokInboxOptions`, **`schedule.ts:145-149`**), with `captions.tiktok`.
+
+   A platform that is not connected is **not checked** here: its row fails in Posts, saying so, and does not keep the others off (**`schedule.ts:137`**).
+6. **The credit line.** When the track the sound used requires credit (`credit_required`), its `credit` goes at the **end of every caption** (`withCredit`, **`schedule.ts:57`**, applied at **`schedule.ts:126-130`**). The credit goes in whole: when body and credit do not fit a platform's limit (2,200 characters; 5,000 for a YouTube description) the **body** is cut at a word and ends in an ellipsis, never the credit, and the outcome lists which captions were `trimmed`.
+7. `ready → scheduled`, with `{ scheduled_time, group_id, row_ids }` (**`schedule.ts:151-152`**). The audit row `explainer.scheduled` names the platforms, the time and the group (**`studio.ts:631`**).
+
+### 13.14 — Retry and delete
+
+`POST /explainers/:id/retry` → `retryExplainer` (**`src/services/explainers/explainers.ts:731`**): only a `failed` explainer (**`explainers.ts:737`**), and it runs the failed step again from the state that step runs in (`RETRY_STATUS`, **`src/services/explainers/state.ts:35`**): `write` → `writing` (a fresh write, by whichever writer the settings name now), `voice` → `voicing`, `draw` → `drawing` (failed and half-drawn scenes made pending again, **`explainers.ts:751-754`**), `render` → `rendering`, and a failed `schedule` → `ready`, where Schedule is pressed again (scheduling is one request, not a job). A step can fail only from the state it runs in (`STEP_OF`, **`state.ts:40`**), which keeps a retry from jumping a gate the owner has not passed.
+
+`DELETE /explainers/:id` → `deleteExplainer` (**`explainers.ts:790`**): the job nobody has claimed is failed (`supersede`), the row goes (its scenes with it, `ON DELETE CASCADE`), and every file it held (the scenes' pictures and their history, the audio, the two videos and the cover: `filesOf`, **`explainers.ts:775`**) is deleted **unless a `scheduled_posts` row names it** (`deleteUnreferencedUploads`, **`src/services/studio/jobs.ts:750`**): a file already handed to a platform is the post's now. A job that is already running finishes, and its result is dropped (`gone`).
+
+### 13.15 — Retention
+
+A file an explainer names is not swept by age. `KEPT_BY_EXPLAINERS_SQL` (**`src/services/retention.ts:428`**) is three guards ANDed into the media prune's candidate query (**`retention.ts:452`**):
+
+- **A scene's pictures** (the chosen one and the three before it) for as long as the **scene exists** (**`retention.ts:431-434`**).
+- **An explainer's voiceover, two videos and cover**: without limit while it is anything but `scheduled` (a `ready` one is waiting for Schedule, and no post names its files yet), and once `scheduled` until **30 days after its posting time** (`EXPLAINER_FILES_GRACE_DAYS`, **`retention.ts:408`**; **`retention.ts:435-444`**), the owner's window to download the MP4 for the networks the app does not post to. A time that cannot be read keeps the files.
+- **The characters' reference pictures and the music tracks** while `studio_settings.explainer` names them (**`retention.ts:445-449`**).
+
+After that they go like any posted file: the posts' own guard (`NAMED_BY_POST`, **`retention.ts:300`**) keeps them for as long as a post may still fetch them. The guards read the JSON as text, so an id anywhere in it keeps its file, which can only make the sweep delete fewer. A picture the owner drew and dropped, or a candidate no character was saved with, is named by nothing and goes by age. A database without v59 runs the prune without the three guards, which the migration made together (**`retention.ts:494-499`**).
+
+The image allowance's own rows are swept too. `sweepAllowance` (**`src/services/explainers/pictures/allowance.ts:212`**) deletes `image_allowance` rows older than 90 days (**`allowance.ts:34`**), from `runRetentionSweep` once per run (`pruneAllowance`, **`retention.ts:697`**, **`retention.ts:744-750`**). That call never throws into the cron: a database without v59 has no table and reads as nothing (**`retention.ts:748`**).
+
+### 13.16 — The daily cron's parts
+
+`GET /api/cron/publish` (**`src/routes/api.ts:1022`**, [3.5](#35--daily-maintenance-only-on-the-daily-cron)) does two things for explainers, both fail-soft. `runRetentionSweep()` (**`api.ts:1059`**) ends with `sweepAllowance` ([13.15](#1315--retention)). `sweepWriting()` (**`api.ts:1162`**, **`src/services/explainers/writing.ts:314`**) looks at up to 25 explainers that are `writing`, or `failed` at `write`, oldest first, and runs `reconcileWriting` on each: the backstop for the lazy check, for a dashboard nobody opens. A script the Mac never claimed in ten minutes while it was off, or whose write failed with a sign-in error, is handed to Gemini here; the run starts under `waitUntil` and finishes after the response. It logs only when it started something (`cron.explainers_writing`), and a database behind v59 is not an error (**`api.ts:1165`**). **Nothing else of an explainer is scheduled:** the Mac's own polling moves its jobs, and the drain ([flow 5](#5-job-lifecycle)) knows nothing of them.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -3743,7 +3941,7 @@ error, and several write **no row at all**.
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
 | 6 | the profile scope is on but TikTok refuses the profile fields, or v44 is not applied — `completeConnection` | `tiktok.profile_info_failed` / `tiktok.profile_save_failed` (`warn`) | yes: the connection, its name and avatar; **no profile** |
-| 7 | a think, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
+| 7 | a think, an `explainer_write`, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:311`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
 | 7 | a tenant's AI call the layer cannot answer (no provider key, a budget spent, the provider down) — `generate`, **`tenantAi.ts:50`** | `ai.call_refused` / `ai.call_failed` (`warn`), an `ai_usage` row with the outcome | an infographic: no row, no job (409 / 429 / 503 / 502); a Monteur call: the attempt fails with the layer's words (Editor: the reel goes on without edits); a Studio draft: `failed` with them. **Never the Mac, never Gemini** |
 | 7 | the owner (or a listed tenant) with `monteur.brain: 'api'` stored — **`brain.ts:20`** | *(none)* | no: the call is the Mac's, as `claude_mac` is |
 | 8 | a callback with no cookie, or one that does not equal `state` — **`meta.ts:114`** | `meta.oauth_state_mismatch` | no (before the DB) |
@@ -3829,5 +4027,19 @@ error, and several write **no row at all**.
 | 7.5 | the Mac is asleep or its worker stopped | none until the sweep | the proposal stays `drafting`; the daily cron fails it after 24 h |
 | 7.5 | a review found nothing worth changing — `advanceProposal` | `ads.proposal_nothing_to_propose` | the `drafting` row is deleted |
 | 7.5 | a tenant with ads on but < 3 days of results, or no AI for it — `runDailyReview` | `ads.daily_review` (`queued: 0`) | no |
+| 13 | **explainers are off for the tenant** — **`routes/studio.ts:545`** | *(none: the answer is 404 `EXPLAINERS_DISABLED`)* | no: every `/api/studio/explainers` route answers it; the worker's `draw-next` is not behind the switch (**`routes/studio.ts:269`**) |
+| 13 | **a result of a job that is no longer the explainer's** (a rewrite, a re-voice, a new drawing or a new render replaced it; the explainer was deleted or moved on) — **`explainers/apply.ts:77-89`** | `explainer.result_dropped` (`info`, with `reason`) | **no**: the job ends `done` with `{ dropped }`; a dropped render's three files are deleted (**`explainers/apply.ts:354-359`**) |
+| 13 | the failure of such a job — **`explainers/apply.ts:421-430`** | `explainer.failure_ignored` (`info`) | no: a job that is no longer the explainer's cannot fail it |
+| 13 | **a `draw-next` with the wrong `job_id`**, a job that is not a claimed `explainer_draw`, or an explainer that is not `drawing` — **`explainers/scenes.ts:158`** | `explainer.draw_next_refused` (`warn`) | no: **409 `EXPLAINER_BAD_STATE`**, nothing drawn and no unit reserved; the Mac's loop stops with the 409's words and reports its job failed |
+| 13 | **drawing paused**: the provider says the day's free allocation is used up, or the owner's daily cap is reached — **`explainers/pictures/allowance.ts:137`**, **`explainers/pictures/draw.ts:378`**, **`:399-403`** | `explainer.allowance_exhausted` (`warn`, the provider's own refusal only) | the scene back to `pending`; the explainer stays `drawing` with `draw_paused_until` and a note; the next `explainer_draw` is queued with `not_before` at the next 00:05 UTC: **nothing to press** |
+| 13 | **a busy Mac is never taken over** — **`explainers/writing.ts:222`** | *(none)* | no change: the write job stays `pending`; after 60 s the explainer's job line says the Mac is busy (`BUSY_MAC_NOTE`) |
+| 13 | the owner turned `writer_fallback` off — **`explainers/writing.ts:241`** | *(none)* | no: the explainer waits for the Mac, or fails with its reason |
+| 13 | **Gemini's research refused on a free key** (no Google Search grounding on Gemini 3's free tier) — **`explainers/writerGemini.ts:511-514`** | `explainer.gemini_request_refused` for each model, `explainer.gemini_run_failed` (`warn`) | yes: the job and the explainer `failed` at `write`, with `GROUNDING_HINT` in `error`; **no draft** |
+| 13 | a Gemini run that died — **`explainers/writing.ts:267-275`** | `explainer.gemini_run_stalled` (`warn`) | yes, when the next look finds it 5 minutes stale: the job `failed` ("Press Retry"); never run again by itself |
+| 13 | a script written with no web read (`research_rounds` 0) — **`explainers/apply.ts:132-134`** | `explainer.draft_written` (its `warnings` hold `research_limited`) | yes: a normal draft with the `research_limited` warning; approving it is allowed |
+| 13 | a voice that runs into Gemini's free allowance — **`explainers/apply.ts:433-447`** | `explainer.voice_limit_requeued` (`info`) | the explainer stays `voicing` with a `VOICE_LIMIT:` note; `explainer_voice` is queued with `not_before`, up to three times, then `failed` |
+| 13 | **a drawing that ends `done` with a scene that failed** — **`explainers/pictures/draw.ts:83`**, **`:502`** | `explainer.pictures_ready` | `review` is reached with a scene that has no picture; Approve pictures answers 409 `EXPLAINER_PICTURES_MISSING` with its position |
+| 13 | three scenes fail in a row (the Mac's loop gives up) — **`explainers/apply.ts:328-333`** | `explainer.draw_failed` (`warn`) | the explainer stays `drawing` with the last reason and no job; nothing retries by itself |
+| 13 | the daily look at the writing, on a database behind v59 — **`routes/api.ts:1165`** | *(none)* | no |
 
 `RUNBOOK.md` works these backwards from the symptom.
