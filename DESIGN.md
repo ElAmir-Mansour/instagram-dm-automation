@@ -141,7 +141,7 @@ One token: the ink of the Rows pattern «سطور» (§4, Rows). It is texture, 
 ### The logo mark: Kufi «رد»
 Two tokens, per theme: the tile and the glyph. The dashboard's mark (`.logo-mark`, `.login-mark`) and the inline marks on the
 public pages paint them, through `.mark-tile` and `.mark-glyph`, and nothing else does. Dark UI is the Cardamom colourway and
-light UI the Ink colourway (IDENTITY.md §2). The icons are **not** painted from these: the favicon, the apple-touch icon and
+light UI the Ink colourway (the identity notes, §2; kept outside this repo). The icons are **not** painted from these: the favicon, the apple-touch icon and
 the manifest's PNGs are the Cardamom files at every size (§4, Mark).
 
 | token | dark | light | role |
@@ -437,7 +437,7 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 **Kufi «رد»**, the Arabic word for "reply", on a square-Kufi grid: every stroke and gap is one module, and the only diagonal is
 the ر's 45° tail, the answer going out. Chosen 2026-10-13, in service since the B5 switch. Lucide's `zap` on the blue `#0071E3`
 tile, which it replaced, is gone from every page, and `design-md.test.ts` fails if either comes back. The drawing, its cuts, its
-colourways and its Never list are IDENTITY.md §2 (the kit is `docs/brand/mark/final/`, local only); the five kit files the build
+colourways and its Never list are in the brand identity notes (§2; kept outside this repo, as is the kit's source folder); the five kit files the build
 needs are committed in `scripts/brand-icons/`, pinned by hash.
 
 ```svg
@@ -614,7 +614,9 @@ is wrong; extend the scale.
 **Widths**
 - Designed: 375 · 390 · 768 · 1024 · 1280 · 1440.
 - 320 may wrap but never scroll sideways (`scrollWidth === clientWidth`).
-- Breakpoints in use: 30rem, 40rem, 48rem, 52rem, 62rem. Reuse them; don't invent new ones.
+- Breakpoints in use: the public pages use 30rem, 40rem, 48rem, 52rem and 62rem (and the landing's top bar 37rem, below);
+  the dashboard uses px: 400, 480, 560, 768, 860 and 1100px in `styles.css`, plus 640, 760 and 900px in `css/pages/`.
+  Reuse them; don't invent new ones.
 
 **Navigation and layout**
 - The top bar fits in one row at 375 in both languages (365/375 measured), so **no new nav items**. New
@@ -639,13 +641,13 @@ is wrong; extend the scale.
 - For public pages, read the claim ledger in landing.html's header comment.
 - For copy, check the truth table below.
 
-### Truth table (2026-10-13)
+### Truth table (2026-10-25)
 | state | what |
 |---|---|
-| Live | Comment→DM campaigns on IG/FB (DM, an optional public reply, and a best-effort like). Scheduling to IG/FB (a queue, not minute-exact). TikTok to drafts (Direct Post is "Only me" until TikTok's audit). YouTube Shorts upload (public uploads on). Carousel Studio and the Monteur (a Mac worker; Monteur review mode by default). Growth (insights need Meta permissions). Multi-account with roles, activity log, CSV export. |
-| Owner-only | Infographics (Claude on the owner's Mac). |
-| Parked | AI DM replies. Treat the inbox send path the same; don't claim either. |
-| Planned | Invite-link onboarding (~5 min); voice registers (فصحى/خليجي/مصري/شامي/English); the AI providers layer (any provider's key); Facebook Login for Business; Monteur and Infographics for clients (M8). |
+| Live | Comment→DM campaigns on IG/FB (DM, an optional public reply, and a best-effort like). Scheduling to IG/FB (a queue, not minute-exact). TikTok to drafts (Direct Post is "Only me" until TikTok's audit). YouTube Shorts upload (public uploads on). Carousel Studio and the Monteur (a Mac worker; Monteur review mode by default). Growth (insights need Meta permissions). Multi-account with roles, activity log, CSV export. AI DM replies on Instagram and Facebook (since 2026-10-13; the landing page says so only in its platform strip, `src/services/landingTruth.test.ts`). Invite links and the setup wizard for new accounts; voice registers (فصحى، خليجي، مصري، شامي); the AI providers layer (any provider's key). |
+| Owner-only | Infographics and illustrated explainers (Claude on the owner's Mac). The Ads Manager (switched on per account by the platform admin). |
+| Built, off by default | Connect with Facebook (Login for Business). The DM sales mode. The WhatsApp agent beyond its test senders (refused until the privacy pages name WhatsApp). Don't claim these as available. |
+| Planned | Monteur and Infographics for clients (M8). |
 | Not planned | Self-serve signup, online payment. |
 
 ### Asking for UI
@@ -684,7 +686,8 @@ the same paragraph as the feature.
 ### Before the PR
 Run:
 
-`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:voice && npm run check:icons && npm run check:icon-subset && BASE_REF=origin/main npm run check:assets`
+`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:voice && npm run check:icons && npm run check:icon-subset && npm run check:hero3d && npm run check:font && npm run check:og && npm run check:brand-icons && BASE_REF=origin/main npm run check:assets`
+(every `check:*` step in `.github/workflows/ci.yml`)
 
 Any change under `dashboard/` bumps `?v=` and `ASSET_VERSION` together, and the same `?v=` on every page in
 `SHARED_ASSET_PAGES`.

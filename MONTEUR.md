@@ -2,7 +2,7 @@
 
 Three parts are built in parallel against this document: **A** the app backend, **B** the dashboard and
 **C** the worker plus Remotion. Each part owns only its own files and reports any deviation back. The
-background is in `docs/MONTEUR_PLAN.md`. This file is the part that binds.
+background is in the v0 plan (kept outside this repo). This file is the part that binds.
 
 ```
 Dashboard #/monteur ──session──▶ /api/studio/monteur/*           ◀──worker token── Mac worker (aicourse-captions)
@@ -28,15 +28,19 @@ type MonteurConfig = {
                              // or the course library's next lessons (`course_lessons`), which needs no folder
   mode: 'review' | 'auto';   // default 'review'. 'auto': the drain approves each rendered reel itself, through
                              // Approve (§6, "Auto mode"); a refused one stays in review with the reason
-  brain: 'gemini' | 'claude_mac';  // default 'gemini'. 'claude_mac': the pick, the Marketer, the Editor and the
-                             // Analyst are Claude's, on the Mac worker with the owner's plan, never Gemini (§6.3)
+  brain: 'gemini' | 'claude_mac' | 'api';  // default 'gemini'. 'claude_mac': the pick, the Marketer, the Editor and the
+                             // Analyst are Claude's, on the Mac worker with the owner's plan, never Gemini (§6.3).
+                             // 'api': the AI providers layer on the operator's key (purpose tenant_monteur_think), for
+                             // tenants the Mac is not for; new tenants start on it, and a tenant the Mac works for
+                             // runs on the Mac whatever is stored (effectiveBrain, src/services/monteur/brain.ts)
   style: 'classic' | 'paper';  // default 'classic'. How the worker draws the edits, sent as brand.style (§6.2)
   human: boolean;            // default true. The Editor's human touches: cuts, doodles, highlights, transitions (§6.2)
   folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars; needed only for 'folder'
   run_at: string;            // 'HH:MM' in schedule.timezone, default '07:00'
   videos_per_run: number;    // 1–10, default 1: new videos taken per run, oldest first
-  reels_per_video: number;   // 1–5, default 1
-  platforms: ('instagram' | 'facebook' | 'tiktok')[];  // ≥ 1, default all three
+  reels_per_video: number;   // 1–5, default 1; a ceiling: one reel per started 10 minutes of video (pick.ts)
+  platforms: ('instagram' | 'facebook' | 'tiktok' | 'youtube')[];  // ≥ 1, default instagram, facebook, tiktok;
+                             // 'youtube' adds a Shorts sibling row on approve (src/services/monteur/clips.ts)
   post_at: string[];         // 1–4 'HH:MM' posting slots in schedule.timezone, default ['19:00']
   min_seconds: number;       // 10–60, default 20
   max_seconds: number;       // 15–90 and > min_seconds, default 45
@@ -218,7 +222,8 @@ render. A failed `pick_folder` is only a failed job.
 
 ## 4. Worker API additions (`studioWorkerRouter`, worker token)
 
-**`POST /api/studio/worker/uploads/sign`** `{ filename, mime_type: 'video/mp4' | 'image/jpeg', size_bytes }`
+**`POST /api/studio/worker/uploads/sign`** `{ filename, mime_type: 'video/mp4' | 'image/jpeg' | 'image/gif' | 'audio/mp4', size_bytes }`
+(`SIGNED_UPLOAD_TYPES` in `src/services/monteur/uploads.ts`; the GIF and audio types serve the infographics and the explainers)
 → `{ id, url, upload: { method: 'PUT', url, headers } }`
 
 The app:
@@ -246,6 +251,7 @@ accepts only upload URLs of its own tenant.
 | PATCH `/api/studio/monteur/clips/:id` | `{ title?, copy?: Partial<ClipCopy> }` | `ClipView` (below) |
 | POST `/api/studio/monteur/clips/:id/approve` | `{ scheduled_time?: ISO }` | `{ clip: ClipView, scheduled_time, campaign: { id, keyword, trigger_keyword, created } \| null }` (below) |
 | POST `/api/studio/monteur/clips/:id/reject` | | `ClipView` |
+| POST `/api/studio/monteur/clips/:id/rerender` | | `ClipView`: renders a FAILED reel again (409 for any other status) |
 | POST `/api/studio/monteur/lessons/refresh` | | `LessonsView`: runs the Analyst now |
 
 **Retry** a failed source:
@@ -352,7 +358,8 @@ integers and `score` is 0–10. Line numbers are used rather than times because 
 - `start` = the first word's t0 − 0.15. `end` = the last word's t1 + 0.3.
 - Drop a clip outside `[min_seconds, max_seconds]`.
 - Drop overlaps, keeping the higher score.
-- Keep the top `reels_per_video` with a score of at least 5.
+- Keep the top N with a score of at least 5, where N is one per started 10 minutes of the video, at most
+  `reels_per_video` (`reelsForLength`, `MINUTES_PER_REEL = 10` in `src/services/monteur/pick.ts`).
 - `hook` = the text of `start_line`.
 - No clips left → the source becomes `no_clips`.
 
@@ -441,7 +448,7 @@ See §6.2. It never holds a reel back.
   ما قلت، يعني، بس, or ف followed by لما, اذا or هذا.
 - **Dedupe:** drop a clip whose text overlaps 0.6 or more with a clip that is rendering, in review or scheduled, or
   one made in the last 90 days.
-- **Stored on `clip_drafts`,** as part of v24, which isn't deployed yet: `topic`, `hook_type` and `scores jsonb`.
+- **Stored on `clip_drafts`,** as part of v24: `topic`, `hook_type` and `scores jsonb`.
 
 ### Marketer
 **Per clip:** `{ first_line, body, ask_line, tiktok_body, hashtags, keyword_candidates, variants, question, pitch,
@@ -716,7 +723,7 @@ The latest `done` row feeds both prompts in §6.
 - `dashboard/js/pages/monteur.js` (new), mounted at `#/monteur`: a "Monteur" tab in the Studio tab bar plus a
   sidebar entry
 - `dashboard/js/{app,i18n,help-content}.js` and `dashboard/css/*`
-- `dashboard/index.html`: cache version **8.1** in both places (CLAUDE.md)
+- `dashboard/index.html`: the cache version (then 8.1) bumped in both places
 - `src/dashboard/*.test.ts`
 
 What the page has:
@@ -741,7 +748,7 @@ What the page has:
 The live launchd worker runs from the main checkout and must not change until the merge.
 
 ## 10. Not in v1
-- A TikTok-only render (TikTok gets the same video; its caption carries «رابطه في البايو»).
+
+(Built since: a TikTok copy with its own CTA, `tiktok_video_url`, and YouTube as a platform.)
 - The cold open and face tracking.
-- YouTube.
 - Several workers per tenant with different folders. One worker per tenant is assumed, as for the library.

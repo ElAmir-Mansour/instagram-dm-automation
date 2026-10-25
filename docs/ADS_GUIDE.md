@@ -2,7 +2,7 @@
 
 Covers the Meta ads module (Marketing API) of AutoReply Pro, phases A1–A12 (all shipped 2026-10-22). The in-app version of the
 connection steps and the money rule is the Help Center article `#/help/ads` (Arabic and English); this file is the
-operator's copy and may be more technical. The spec lives in `docs/specs/002-meta-ads-manager/` (local, not public).
+operator's copy and may be more technical. The design spec is kept outside this public repo.
 
 ---
 
@@ -22,8 +22,10 @@ Tests (A12). Managed clients (A11) use the same screens with their own token and
 - **Alerts** to the tenant's own Telegram chat and/or email when the guard pauses spending, a payment fails, the account
   is disabled, or the token dies.
 - **A daily account health check**: account status, funding status, spend cap, amount spent, token validity.
-- **Per tenant, own token.** Each tenant pastes a system-user token from its own Meta business. Facebook Connect is an
-  optional second source for the owner only. Ads run on the Limited access tier (no App Review needed for assets the token's
+- **Per tenant, own token.** Each tenant pastes a system-user token from its own Meta business. Where the platform has set up
+  Facebook Connect with the ads scopes, the card leads with **Connect ads with one click** and puts the pasted token under
+  **Advanced: paste a system-user token**; a Connect token never carries `pages_manage_ads` (Facebook Login asks only for
+  `ads_read`, `ads_management` and `business_management`), so the system-user token stays the reliable one for ads. Ads run on the Limited access tier (no App Review needed for assets the token's
   business owns).
 - **Feature switch:** ads are off for a tenant until the platform admin enables it (`POST /api/admin/ads/tenants/:id/enabled`;
   a tenant that is not the platform owner needs a ceiling first, `.../ceiling`). When off, every `/api/ads/*` route answers
@@ -110,18 +112,28 @@ to the platform admin's channel while `ads.copy_admin` is on. The deployment's T
 reused; only the recipient is per tenant. Rows are deduplicated on `(tenant, kind, object_key, day)` in `ads_alerts`, so one
 alert per kind and object per day. `ads_alerts` rows are kept one year.
 
-| Kind | Raised when |
-|---|---|
-| `cap_paused` | the guard paused campaigns at the cap (also writes an audit row). **Cannot be switched off** |
-| `payment` | a payment problem found by the daily check (unsettled account, failed funding) |
-| `account_disabled` | the daily check finds the account disabled or closed |
-| `token_dead` | Meta answered `190` or `102`; the tenant's queue stops and `token.health` becomes `dead`. **Cannot be switched off** |
-| `token_expiring` | a token with an end date (Connect) is within 14 days of it |
-| `guard_blind` | no successful guard check for 2 hours (dead token, throttling, Meta error). **Cannot be switched off** |
-| `version_mismatch` | the `facebook-api-version` response header differs from `ads.api_version` |
+| Kind | On the card as | Raised when |
+|---|---|---|
+| `cap_paused` | Campaigns paused because the cap was reached | the guard paused campaigns at the cap (also writes an audit row). **Cannot be switched off** |
+| `payment` | Payment problems | the daily check finds a payment problem (unsettled account, failed funding) |
+| `account_disabled` | The ad account was disabled | the daily check finds the account disabled or closed |
+| `ad_rejected` | An ad was rejected | Meta rejected an ad (seen by the sync) |
+| `ad_issues` | An ad has issues | Meta reports issues on an ad (seen by the sync) |
+| `token_dead` | The ads access stopped working | Meta answered `190` or `102`; the tenant's queue stops and `token.health` becomes `dead`. **Cannot be switched off** |
+| `token_expiring` | The ads access is about to expire | a token with an end date (Connect) is within 14 days of it |
+| `guard_blind` | Spending is not being watched | no successful guard check for 2 hours (dead token, throttling, Meta error). **Cannot be switched off** |
+| `version_mismatch` | Meta changed the API version it answers on | the `facebook-api-version` response header differs from `ads.api_version` |
+| `business_ai` | Meta Business AI took over a conversation | Meta refused a reply because its Business AI holds the Instagram thread (100 / 2534037; see "Ads and the DM assistant" below) |
+| `window_error` | Meta refused a reply outside the window | a reply in the longer click-to-message window was refused, and that window was switched off for the platform |
+| `proposal_ready` | Claude proposed changes to your running ads | the daily review (A7) produced proposals |
+| `rule_acted` | A rule paused, lowered, proposed or told you something | one of your rules (A9) acted |
+| `rule_blind` | A rule has not watched your ads for 24 hours | a rule could not run for a day |
 
-Tenant side: **Settings → Meta ads (Boost) → Alert recipients** has the chat id, email, language, one toggle per kind and
-**Send test message** (`POST /api/ads/settings/alerts` with `test: true`). To find a Telegram chat id: press Start on the
+Fourteen kinds are on the card (`SHOWN_ALERT_KINDS`, `src/services/ads/settings.ts`); a fifteenth, `lead_received`, belongs to
+lead ads (A10). The three marked above cannot be switched off (`REQUIRED_ALERT_KINDS`).
+
+Tenant side: **Settings → Connections → Meta ads (Boost) → Alert recipients** has the chat id, email, language, one toggle per kind and
+**Send a test** (`POST /api/ads/settings/alerts` with `test: true`). To find a Telegram chat id: press Start on the
 alerts account, then message `@userinfobot`, which replies with the Id.
 
 An alert holds the kind of problem, the ad account and amounts (spend, cap). Never customer data or card data. This is what
@@ -156,7 +168,7 @@ No payment method blocks Activate (the app cannot add one). A prepay account spe
 
 ## Campaigns and queued changes
 
-**What the screens read.** The Ads screen has three tabs, **Overview**, **Campaigns** and **Results** (below). All read the app's **stored copy** of the ad
+**What the screens read.** The Ads screen's reading tabs, **Overview**, **Campaigns** and **Results** (below), All read the app's **stored copy** of the ad
 account (`ads_objects`, `ads_insights_daily`), never Meta live, so viewing costs none of Meta's 60 points per 5 minutes:
 
 | What | Refreshed | From |
@@ -245,6 +257,26 @@ Scheduler (Posts) screen's **Boost** button → goal **Send messages** (the "qui
    (they carry the ad's id in `conversations.entry_source`), and the Ads screen counts those conversations per ad.
    Do **not** activate while the warning stands unless you want unanswered chats.
 
+### Ads and the DM assistant (A3)
+
+How a click-to-message ad reaches the DM assistant, and the two switches under **Conversations from ads** (Settings → Connections →
+Meta ads; both off by default, `src/services/ads/switches.ts`):
+
+- **Where the ad id arrives.** Instagram sends it on the first message; Messenger on the greeting or ice-breaker tap of a NEW
+  thread, and on an EXISTING thread only as a separate `referral` event, which needs the Page field `messaging_referrals`. A Page
+  connected before A3 gets that field on its next Facebook reconnect. The first ad a person came from is kept
+  (`conversations.entry_source`); later taps go to `ad_touches` (the newest 10).
+- **Give the assistant the ad's context** (`ads.bot_context.<tenant>`): the assistant is told which ad the person came from, the
+  offer it is about and the question they tapped. Off, the prompt is exactly as without ads.
+- **Reply window for ad conversations** → **Use the longer window on Instagram / Messenger** (`ads.extended_window.<tenant>`): replies are allowed for 7 days less an hour from the
+  ad click on those threads. Turn it on only after a real day-2 reply has been accepted; a refusal (10/2018278 or 551) turns it
+  off for that platform by itself and raises `window_error`.
+- **Meta Business AI** (error 100 / 2534037): Meta's own AI holds the Instagram thread and every reply from the assistant is
+  refused. Nothing is retried; the conversation is marked `business_ai_owns_thread` and one `business_ai` alert goes out. The fix
+  is in Meta Business Suite → Business AI → "Take control of conversations with your Business AI".
+
+The Help Center has the same in Help → Ads (message-ads-inbox, bot-and-ads, reply-window, business-ai).
+
 ### Checklist before you press Activate
 
 - [ ] Review showed no block; every warning was read, and you agree with each.
@@ -294,7 +326,7 @@ is its quick mode; both end in the same `CampaignSpec` and the same server funct
 
 | Step | What you choose | Rules the builder keeps |
 |---|---|---|
-| 1. Goal | Messages, Visits to a link, Engagement, Reach (Leads is shown locked until A10) | Only what the goal allows is offered later |
+| 1. Goal | Messages, Visits to a link, Engagement, Reach, and Leads (offered, but locked for a workspace until the platform admin records its legal sign-off, A10) | Only what the goal allows is offered later |
 | 2. Destination | Messages: Instagram / Messenger / WhatsApp. Link: one of your offers (tracked) or another https address | A free address is warned: its clicks are not counted |
 | 3. Creative | A published post, or an image / video from your computer, with an optional 9:16 version (link ads) | Engagement and Reach use a post; a Facebook post is refused for message and link ads; a video needs a cover |
 | 4. Text | Main text (the feed shows 125 characters, then "more"), headline, button; a message ad's greeting and quick questions | The policy check runs 400 ms after you stop typing |
@@ -673,8 +705,8 @@ monthly cap are visible only if the client turns on "Share spend" (`ads.share_sp
 - **Rate-limited (`RATE_LIMITED`, `retryAt`):** Meta allows about 60 points per 5 minutes on the Limited tier (read = 1, write = 3).
   Throttle codes (`17/2446079`, `613/*` except `613/1487632`, `80000`, `80003`, `80004`, `80014`, `4/1504022`, `4/1504039`) are
   never retried: the pacer records `blocked_until` and waits. Look for `ads.throttled` in the logs.
-- **"Spending is not being watched" banner / `guard_blind`:** the hourly guard (`enforceMonthlyCaps`, run inside
-  `/api/jobs/drain`) has had no successful check for 2 hours. Causes: dead token, throttling, Meta outage. It writes
+- **"Spending is not being watched" banner / `guard_blind`:** the guard (`runGuard`, `src/services/ads/guard.ts`, run inside
+  every `/api/jobs/drain`) has had no successful check for 2 hours. Causes: dead token, throttling, Meta outage. It writes
   `ads.cap_checked` only after a successful check. `GET /api/ads/overview` → `guard: { lastCheckedAt, blind }`.
 - **`EDIT_LIMIT`:** 4 budget changes per hour per ad set (`613/1487632`) or 10 spend-cap changes per day (`17/1885172`); `retryAt` says when.
 - **`10/1341012`:** the system user lacks the Page assignment: assign the Page in step 3.
