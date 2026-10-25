@@ -321,11 +321,14 @@ stored connection — account id, name, avatar and both tokens (`disconnect`,
 permissions" in TikTok) does the same through the `authorization.removed` webhook
 (`src/services/tiktokPublish.ts:656-660`).
 
-> **The confirm dialog says scheduled TikTok posts "won't be sent until you reconnect". The code is
-> stricter:** posts not yet due stay `PENDING`, but any post that comes due while disconnected is
-> claimed and **FAILS** with "TikTok is not connected for this account — connect it in Settings."
-> (`src/services/tiktokConnections.ts:36-41`, `:306`). After reconnecting, retry those with
-> **Publish now**.
+> **What happens to scheduled TikTok posts:** posts not yet due stay `PENDING` and wait, but any post
+> that comes due while disconnected is claimed and **FAILS** with "TikTok is not connected for this
+> account — connect it in Settings." (`TikTokNotConnectedError` and `getAccessToken` in
+> `src/services/tiktokConnections.ts`, caught by `publishTikTokPost` in `src/services/tiktokPublish.ts`).
+> After reconnecting, retry those with **Publish now**. The confirm dialog and the Help Center
+> (`tiktok#connect`) say exactly this since 2026-10-25 (the dialog used to promise "won't be sent until
+> you reconnect"), and `tiktokPublish.test.ts` proves it. A connection that **Needs reconnecting** does
+> the same to a post that comes due (§8.2).
 
 ---
 
