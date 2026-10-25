@@ -21,8 +21,12 @@
  * `canLeave()` is true only while the working copy equals what was saved, so the router's leave guard and the shared `beforeunload` ask the question.
  *
  * ─── What the server decides, and what this page only mirrors ───────────────
- * The limits and the warnings below (scene counts, the length estimate, the label's four words) are copies of src/services/explainers/spec.ts so
- * the owner sees them while typing. The server checks every one again and its refusal is shown as the server worded it (`errors.<CODE>`).
+ * The server answers what it knows: `est_seconds`, `draft.warnings` and `problems` of the saved script, `render_stale`, `audio_stale`, `progress`, `worker`,
+ * `allowance`, `job`. While nothing unsaved is in the fields the page shows those; it never works them out. What may be done in a state follows the
+ * server's own rules: a script is edited in `EDITABLE` states, scenes are added, removed or moved only before the voice (`canRestructure`), a picture is drawn,
+ * redrawn or chosen in `picturesEditable` states, Rewrite is for a draft, Continue for a drawing one. The limits and the warnings further down (scene counts,
+ * the length estimate, the label's four words) are copies of src/services/explainers/spec.ts for the owner's UNSAVED edits only, so the page can answer while
+ * they type; Save asks the server, which refuses a save that adds a problem (422 `EXPLAINER_DRAFT_REFUSED`, with every finding) and says so in `errors.<CODE>`.
  */
 const ExplainersPage = {
     POLL_MS: 5000,
@@ -38,28 +42,38 @@ const ExplainersPage = {
     OPEN: ['writing', 'voicing', 'drawing', 'rendering'],
     /** The step of the page a failed step belongs to. */
     FAILED_STEP: { write: 'script', voice: 'voice', draw: 'pictures', render: 'video', schedule: 'publish' },
-    /** Statuses in which the script, the pictures and the sound can be edited: not while a step that reads them is running. */
-    EDITABLE: ['draft', 'drawing', 'review', 'ready', 'scheduled', 'failed'],
+    /**
+     * Statuses in which the script and the sound can be edited: not while a step that reads them is running, and not once it is scheduled (the server
+     * refuses an edit of a scheduled explainer: `assertEditable` in explainers.ts). The pictures have their own rule, `picturesEditable`.
+     */
+    EDITABLE: ['draft', 'drawing', 'review', 'ready', 'failed'],
+    /** Statuses in which a scene's picture can be drawn, redrawn or chosen by hand (`picturesEditable` in scenes.ts); `failed` too, when it was the drawing that failed. */
+    PICTURES_EDITABLE: ['drawing', 'review', 'ready', 'scheduled'],
     ID_RE: /^[A-Za-z0-9_-]{1,64}$/,
 
     TOPIC_MIN: 3,
     TOPIC_MAX: 300,
     NOTES_MAX: 2000,
     LINKS_MAX: 10,
-    REWRITE_NOTE_MAX: 1000,
+    REWRITE_NOTE_MAX: 2000,
     DRAW_NOTE_MAX: 300,
     /** Copies of `LIMITS` in src/services/explainers/spec.ts. */
     LIMITS: { title: 70, narration: 300, spoken: 400, brief: 500, label: 40, labelWords: 4, characters: 4 },
     SCENES_MAX: 300,
+    /** What an edit may hold (`parseEdit` in explainers.ts); a longer text is refused by the server with the field named. */
+    EDIT_MAX: { captionMeta: 2200, captionYoutubeTitle: 100, captionYoutubeDescription: 5000, captionTikTok: 2200, firstComment: 1500, replyQ: 300, replyA: 600, sourceTitle: 300, sourceBy: 300, sourceYear: 10, sourceUrl: 500 },
+    REPLIES_MAX: 10,
+    SOURCES_MAX: 20,
     SCENE_BOUNDS: { short: { min: 10, max: 30 }, medium: { min: 30, max: 90 }, long: { min: 120, max: 300 } },
     /** The seconds a script's estimate is held to (spec.ts `DURATION_RANGE_S`): a little wider than the tier it is named for. */
     DURATION_RANGE: { short: { min: 55, max: 95 }, medium: { min: 170, max: 310 }, long: { min: 570, max: 930 } },
     MIN_SOURCES_SHORT: 3,
-    MIN_REPLIES: 5,
-    /** Words a second the narrator speaks (`DEFAULT_EXPLAINER_PACE`); the settings can override it. */
-    PACE: { ar: 2.1, en: 2.5 },
+    /** Words a second the narrator speaks (`DEFAULT_EXPLAINER_PACE`, Arabic measured at 1.8 on 2026-10-25); the settings can override it. */
+    PACE: { ar: 1.8, en: 2.5 },
     /** The vertical video is posted as a Short up to this long; a longer one goes to YouTube as the horizontal video (FR-027). */
     SHORT_SECONDS: 180,
+    /** What the server says in a pending write's progress while the Mac is up and busy (`BUSY_MAC_NOTE` in src/services/explainers/explainers.ts). */
+    BUSY_MAC_NOTE: 'Waiting for your Mac: it is busy with another job',
 
     /** `EXPLAINER_VOICES` in src/services/studio/settings.ts: a voice outside the list fails at the voice step, a day later. */
     GEMINI_VOICES: ['Charon', 'Sadaltager', 'Schedar', 'Gacrux', 'Sulafat', 'Achernar', 'Vindemiatrix', 'Rasalgethi'],
@@ -82,7 +96,7 @@ const ExplainersPage = {
         characters: [],
         voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' },
         voice_style: '',
-        pace: { ar: 2.1, en: 2.5 },
+        pace: { ar: 1.8, en: 2.5 },
         writer: 'claude_mac',
         writer_fallback: true,
         title_color: '#FFD43B',
@@ -103,6 +117,8 @@ const ExplainersPage = {
     worker: null,
     /** The scheduled posts of this explainer's `schedule.row_ids`, read from the Scheduler's list: `{ id, platform, status, … }`. */
     rows: [],
+    /** `infographic.platforms` of the settings: Instagram, Facebook and YouTube follow it, as the server's Schedule reads it; null until the settings were read. */
+    platforms: null,
     rowsError: null,
     rowsLoaded: false,
     /** The script as the owner is editing it (see the header): null until the script step was opened for this explainer. */
@@ -112,8 +128,11 @@ const ExplainersPage = {
     notes: Object.create(null),
     /** The four candidates generated for a character, by character index. */
     candidates: Object.create(null),
-    /** The allowance meter on the settings view (GET /explainers/allowance). */
-    allowance: null,
+    /**
+     * The allowance meter on the settings view (GET /explainers/allowance): the answer, `null` when no image provider is set up (the server's
+     * own answer, a JSON null), or `undefined` while it was not read or the read failed.
+     */
+    allowance: undefined,
     /** Where the open view was painted (`location.hash`), to put the address back when the owner declines to leave unsaved edits. */
     _painted: '',
     _bodySig: '',
@@ -145,6 +164,7 @@ const ExplainersPage = {
         this.step = 'script';
         this.cfg = null;
         this.cfgError = null;
+        this.platforms = null;
         this.worker = null;
         this.rows = [];
         this.rowsError = null;
@@ -153,7 +173,7 @@ const ExplainersPage = {
         this.workBase = '';
         this.notes = Object.create(null);
         this.candidates = Object.create(null);
-        this.allowance = null;
+        this.allowance = undefined;
         this._bodySig = '';
         this._painted = '';
     },
@@ -387,10 +407,18 @@ const ExplainersPage = {
         return '';
     },
 
-    /** What an open step is doing, in words: waiting for the Mac, its own progress line, or the step's name. */
+    /**
+     * What an open step is doing, in words: the time it waits for, the Mac that is away or busy, its own progress line, or the step's name.
+     * A write that waits on a Mac that is up (it runs two jobs at a time, and a long render can hold both) carries the server's `BUSY_MAC_NOTE` as its
+     * progress: it is not an error and not a reason to worry, and it is said in the interface language.
+     */
     progressText(item) {
         const job = item && item.job;
         if (job && job.status === 'pending') {
+            // Asked for later (a voice that waits for the allowance to reset, a drawing round): it waits for a time, not for the Mac.
+            const until = job.not_before ? Date.parse(job.not_before) : Number.NaN;
+            if (Number.isFinite(until) && until > Date.now()) return t('explainers.progress.until', { when: this.lri(UI.formatDateTime(job.not_before, { zone: true })) });
+            if (job.progress && String(job.progress).trim() === this.BUSY_MAC_NOTE) return t('explainers.progress.busy');
             return this.worker && !this.worker.online ? t('explainers.progress.waitingOffline') : t('explainers.progress.waiting');
         }
         if (item && item.status === 'drawing' && item.draw_paused_until) return t('explainers.progress.paused');
@@ -445,6 +473,10 @@ const ExplainersPage = {
             source_links: Array.isArray(d.source_links) ? d.source_links.map((l) => (l && typeof l === 'object' ? String(l.url || '') : String(l || ''))).filter(Boolean) : [],
             draft_version: Number.isFinite(Number(d.draft_version)) ? Number(d.draft_version) : 0,
             audio_stale: d.audio_stale === true,
+            // Computed by the server from what it holds: the render was made for another version of the narration or another sound.
+            render_stale: d.render_stale === true,
+            // What the saved script breaks and must be fixed before it can be approved: `{ code, message, scene?, field? }`, `scene` 0-based.
+            problems: (Array.isArray(d.problems) ? d.problems : []).filter((f) => f && typeof f === 'object' && typeof f.code === 'string'),
             scenes,
             allowance: d.allowance && typeof d.allowance === 'object' ? d.allowance : null,
             job: d.job && typeof d.job === 'object' ? d.job : null,
@@ -490,6 +522,7 @@ const ExplainersPage = {
             const s = result.value && result.value.settings;
             this.cfg = this.normalizeConfig(s && s.explainer);
             this.cfgError = null;
+            this.platforms = s && s.infographic && Array.isArray(s.infographic.platforms) ? s.infographic.platforms.filter((x) => typeof x === 'string') : null;
             // Every time on this page is the tenant's: tell the shared zone what the settings carry (as the Monteur does).
             if (s && s.schedule && s.schedule.timezone) UI.setZone(s.schedule.timezone);
         } else if (result) {
@@ -502,24 +535,20 @@ const ExplainersPage = {
         if (result && result.status === 'fulfilled' && result.value && result.value.worker) this.worker = result.value.worker;
     },
 
+    /** Every Explainers route answers 404 `EXPLAINERS_DISABLED` while the platform admin's switch is off for this workspace. */
     isDisabled(err) {
         return !!err && err.code === 'EXPLAINERS_DISABLED';
     },
 
-    /** A 404 that names no error is a server that does not have these routes yet (the dashboard can deploy before the backend). */
-    notDeployed(err) {
-        return !!err && err.status === 404 && !err.code;
-    },
-
-    disabledMarkup(err) {
-        const missing = this.notDeployed(err);
-        const target = this.isAdmin() && !missing && typeof App !== 'undefined' && typeof App.route === 'function'
+    /** The sentence is the server's (`errors.EXPLAINERS_DISABLED`); the platform admin is also shown where the switch is. */
+    disabledMarkup() {
+        const target = this.isAdmin() && typeof App !== 'undefined' && typeof App.route === 'function'
             ? { action: { label: t('explainers.disabled.open'), href: App.route('settings', { s: 'platform', card: 'explainers' }), icon: 'settings' } }
             : undefined;
         return html`<div class="surface pad-5">${Admin.emptyState(
             'lock',
-            missing ? t('explainers.notDeployed.title') : t('explainers.disabled.title'),
-            missing ? t('explainers.notDeployed.body') : (this.isAdmin() ? t('explainers.disabled.bodyAdmin') : t('explainers.disabled.body')),
+            t('errors.EXPLAINERS_DISABLED'),
+            this.isAdmin() ? t('explainers.disabled.bodyAdmin') : t('errors.EXPLAINERS_DISABLED.next'),
             target,
         )}</div>`;
     },
@@ -593,9 +622,8 @@ const ExplainersPage = {
         if (!this.alive(seq)) return;
         if (this.kind === 'detail') {
             const id = this.id;
-            const [one, status] = await Promise.allSettled([API.getExplainer(id), API.getStudioStatus()]);
+            const [one] = await Promise.allSettled([API.getExplainer(id)]);
             if (!this.alive(seq) || id !== this.id) return;
-            this.acceptWorker(status);
             if (one.status === 'fulfilled') this.applyDetail(one.value, { poll: true });
             if (this.detail && this.detail.schedule && this.rowsOpen()) await this.loadRows(seq);
             if (!this.alive(seq)) return;
@@ -617,8 +645,8 @@ const ExplainersPage = {
         if (!this.alive(seq)) return;
         gate.done();
         const failed = list.status === 'rejected' ? list.reason : null;
-        if (failed && (this.isDisabled(failed) || this.notDeployed(failed))) {
-            container.innerHTML = esc(html`${this.toolbarMarkup('videos')}${this.disabledMarkup(failed)}`);
+        if (failed && this.isDisabled(failed)) {
+            container.innerHTML = esc(html`${this.toolbarMarkup('videos')}${this.disabledMarkup()}`);
             UI.icons(container);
             return;
         }
@@ -693,7 +721,7 @@ const ExplainersPage = {
                         ${length ? html`<span class="badge badge-neutral">${UI.ltr(length)}</span>` : ''}
                     </div>
                     ${open ? html`<p class="ex-progress" role="status"><span class="spinner" aria-hidden="true"></span> <span dir="auto">${this.progressText(item)}</span></p>` : ''}
-                    ${item.status === 'failed' && item.error ? html`<div class="ex-error">${this.failureHtml(item.error)}</div>` : ''}
+                    ${item.status === 'failed' ? html`<p class="form-hint ex-error">${t('explainers.list.failedHint')}</p>` : ''}
                     <div class="ex-actions">
                         <a class="btn btn-secondary btn-sm" href="${detailHref}"><i data-lucide="${item.status === 'draft' ? 'pencil' : 'eye'}" aria-hidden="true"></i> ${t(item.status === 'draft' ? 'explainers.action.review' : 'explainers.action.open')}</a>
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', ariaLabel: t('explainers.action.delete'), action: 'explainers:removeFromList', data: { id: item.id } })}
@@ -704,15 +732,36 @@ const ExplainersPage = {
     },
 
     /**
-     * A stored failure as a sentence. The Mac's voice limit and a signed-out Claude are the two the owner can do something about, so they
-     * are said plainly; any other text goes through `UI.failureError` (technical text is never the sentence, it is behind "Details").
+     * The notes the server keeps on an explainer while Gemini writes in the Mac's place (`takeoverReason` in writing.ts), by their exact text: they are said
+     * in the interface language. Any other note is shown as the server worded it.
+     */
+    TAKEOVER_NOTES: {
+        unclaimed: 'The Mac did not pick this up in 10 minutes and is off or asleep, so Gemini is writing it.',
+        signed_out: 'Claude on the Mac is signed out, so Gemini is writing it. Sign in again on the Mac to have Claude write.',
+    },
+
+    /**
+     * What the Claude CLI says when it is signed out, as the server reads it (`SIGN_IN_FAILURES` in writing.ts: whole sign-in messages, on purpose, so that a
+     * script about OAuth that failed is not taken for one). The server then hands the work to Gemini, unless the owner turned that off.
+     */
+    SIGN_IN_FAILURES: [/failed to authenticate/i, /oauth (?:session|token) (?:has )?expired/i, /\bnot logged in\b/i, /please run \/login/i, /invalid api key\s*[·\-–—]\s*please run/i, /\bauthentication_error\b/i],
+
+    isSignInFailure(text) {
+        const raw = String(text == null ? '' : text);
+        return this.SIGN_IN_FAILURES.some((pattern) => pattern.test(raw));
+    },
+
+    /**
+     * A stored failure or note as a sentence. A voice waiting for Gemini's free allowance (a note that starts with `VOICE_LIMIT:`, which apply.ts keeps) is the
+     * server's `errors.EXPLAINER_VOICE_LIMIT`; a signed-out Claude is the other thing the owner can do something about; any other text goes through
+     * `UI.failureError` (technical text is never the sentence, it is behind "Details").
      */
     failureHtml(text) {
         const raw = String(text == null ? '' : text).trim();
-        if (/\bVOICE_LIMIT\b/.test(raw)) {
-            return html`<div class="error-text"><strong class="error-sentence" dir="auto">${t('explainers.failed.voiceLimit')}</strong>${UI.errorDetails({ message: raw })}</div>`;
-        }
-        if (/failed to authenticate|not logged in|\boauth\b|\bsign[- ]?in\b|\/login\b/i.test(raw)) {
+        if (raw.startsWith('VOICE_LIMIT:')) return UI.errorHtml({ code: 'EXPLAINER_VOICE_LIMIT', message: raw });
+        const takeover = Object.keys(this.TAKEOVER_NOTES).find((key) => this.TAKEOVER_NOTES[key] === raw);
+        if (takeover) return html`<p dir="auto">${t(`explainers.note.gemini_${takeover}`)}</p>`;
+        if (this.isSignInFailure(raw)) {
             return html`<div class="error-text"><strong class="error-sentence" dir="auto">${t('explainers.failed.macSignedOut')}</strong><span class="error-next" dir="auto">${t('explainers.failed.macSignedOutNext')}</span>${UI.errorDetails({ message: raw })}</div>`;
         }
         return UI.errorHtml(UI.failureError(raw));
@@ -825,21 +874,42 @@ const ExplainersPage = {
         UI.icons(box);
     },
 
-    /** A refused request's sentence, with the server's problem list when it sent one (strings, or findings with a `code` and a `message`). */
+    /**
+     * A refused request's sentence, with the list the server sent beside it: a refused script's `findings` (each with a `code`, so each is said in the
+     * interface language), else the `problems` of a request that did not pass its checks (the server's own sentences).
+     */
     errorMarkup(err) {
-        const raw = err && err.body && (Array.isArray(err.body.problems) ? err.body.problems : (Array.isArray(err.body.findings) ? err.body.findings : []));
-        const problems = (raw || []).map((p) => this.findingText(p)).filter(Boolean);
+        const body = err && err.body ? err.body : null;
+        const raw = body && Array.isArray(body.findings) && body.findings.length ? body.findings : (body && Array.isArray(body.problems) ? body.problems : []);
+        const problems = raw.map((p) => this.findingText(p)).filter(Boolean);
         return html`${UI.errorBox(err)}
             ${problems.length ? html`<ul class="ig-problems">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}`;
     },
 
-    /** A finding (`{ code, message, scene?, field? }`) as a line: its own sentence when the catalogue has one, else the server's. */
+    /** The label of a field a finding names (`field` of a `DraftFinding`), as the editor shows it. */
+    FIELD_LABELS: {
+        title: 'explainers.script.videoTitle', narration: 'explainers.scene.narration', spoken: 'explainers.scene.spoken', brief: 'explainers.scene.brief',
+        label: 'explainers.scene.label', characters: 'explainers.scene.characters', 'captions.meta': 'explainers.script.captionMeta',
+        'captions.youtube.title': 'explainers.script.captionYoutubeTitle', 'captions.youtube.description': 'explainers.script.captionYoutubeDescription',
+        'captions.tiktok': 'explainers.script.captionTikTok', first_comment: 'explainers.script.firstComment',
+    },
+
+    /**
+     * A finding (`{ code, message, scene?, field? }`, `scene` 0-based) as a line, by its code: the server writes `message` in English "for the owner and the
+     * logs" and leaves the interface language to the dashboard. A code or a field this page has no sentence for is shown as the server worded it.
+     */
     findingText(finding) {
         if (typeof finding === 'string') return finding;
         if (!finding || typeof finding !== 'object') return '';
         const code = typeof finding.code === 'string' ? finding.code : '';
         const key = code ? `explainers.finding.${code}` : '';
-        const said = key ? t(key) : '';
+        const field = typeof finding.field === 'string' && this.FIELD_LABELS[finding.field] ? t(this.FIELD_LABELS[finding.field]) : '';
+        const limit = typeof finding.field === 'string' && Object.prototype.hasOwnProperty.call(this.LIMITS, finding.field) ? this.LIMITS[finding.field] : undefined;
+        const needsField = code === 'field_empty' || code === 'field_too_long';
+        const needsLimit = code === 'field_too_long';
+        const said = key && !(needsField && !field) && !(needsLimit && !limit)
+            ? t(key, { field, max: UI.formatNumber(limit || this.SCENES_MAX), words: UI.formatNumber(this.LIMITS.labelWords), chars: UI.formatNumber(this.LIMITS.label) })
+            : '';
         const text = said && said !== key ? said : String(finding.message || '');
         return Number.isInteger(finding.scene) ? t('explainers.finding.scene', { n: UI.formatNumber(finding.scene + 1), text }) : text;
     },
@@ -848,7 +918,7 @@ const ExplainersPage = {
     async renderDetail(container, seq, want) {
         const id = want.id;
         const gate = Motion.beginLoad(container, () => html`${Motion.cardGrid(1, 4)}${Motion.busy()}`);
-        const [one, settings, status] = await Promise.allSettled([API.getExplainer(id), API.getStudioSettings(), API.getStudioStatus()]);
+        const [one, settings] = await Promise.allSettled([API.getExplainer(id), API.getStudioSettings()]);
         if (!this.alive(seq)) return;
         gate.done();
         if (this.id !== id) {
@@ -868,7 +938,6 @@ const ExplainersPage = {
             return;
         }
         this.acceptSettings(settings);
-        this.acceptWorker(status);
         this.detail = null;
         if (!this.applyDetail(one.value, { first: true, step: want.step })) {
             container.innerHTML = esc(html`${this.toolbarMarkup('videos')}<div class="surface pad-5">${UI.errorBox(new Error(t('error.unexpected')))}</div>`);
@@ -890,7 +959,7 @@ const ExplainersPage = {
     },
 
     detailErrorMarkup(err) {
-        if (this.isDisabled(err) || this.notDeployed(err)) return this.disabledMarkup(err);
+        if (this.isDisabled(err)) return this.disabledMarkup();
         if (err && err.code === 'EXPLAINER_NOT_FOUND') {
             return html`<div class="surface pad-5">${Admin.emptyState('search-x', t('explainers.notFound.title'), t('explainers.notFound.body'), { action: { label: t('explainers.back'), href: '#/explainers', icon: 'arrow-left' } })}</div>`;
         }
@@ -905,6 +974,8 @@ const ExplainersPage = {
         if (!d.id || (this.id && d.id !== this.id)) return false;
         const before = this.detail;
         this.detail = d;
+        // Whether the Mac is there comes with the explainer; an answer that carries none (an action's) leaves what was known.
+        if (d.worker && typeof d.worker === 'object') this.worker = d.worker;
         // What is typed in the editor is read first: a poll must never find the working copy behind the fields.
         this.captureEditor();
         // A script the server moved on from (another version): edits that were never saved stay and follow the version; an untouched copy is
@@ -963,6 +1034,25 @@ const ExplainersPage = {
 
     isEditable() {
         return !!this.detail && this.EDITABLE.includes(this.detail.status);
+    },
+
+    /**
+     * Whether a scene's picture can be drawn, redrawn or chosen by hand now: from the voice until it is posted, and not while it renders (the renderer
+     * has been handed its pictures). Anything else is a 409 from the server, so the controls are not offered.
+     */
+    picturesEditable(d) {
+        const x = d || this.detail;
+        return !!x && (this.PICTURES_EDITABLE.includes(x.status) || (x.status === 'failed' && x.failed_step === 'draw'));
+    },
+
+    /**
+     * Whether scenes can be added, removed or moved: only before the narration is voiced (`assertEditable` in explainers.ts). After it, a picture and a time
+     * belong to a scene's place in the list, so the server takes each scene's text in place and nothing else: moving a scene would move its words and leave
+     * its picture and its time behind.
+     */
+    canRestructure() {
+        const d = this.detail;
+        return !!d && this.isEditable() && !d.audio && d.scenes.every((s) => !s.picture && s.start_s === null);
     },
 
     syncAddress() {
@@ -1035,7 +1125,7 @@ const ExplainersPage = {
         const d = this.detail;
         if (!d) return '';
         const job = d.job ? `${d.job.status || ''}~${d.job.progress || ''}` : '';
-        const base = [this.step, d.status, d.draft_version, d.audio_stale ? 1 : 0, d.failed_step || '', this.worker && this.worker.online ? 1 : 0];
+        const base = [this.step, d.status, d.draft_version, d.audio_stale ? 1 : 0, d.render_stale ? 1 : 0, d.failed_step || '', this.worker && this.worker.online ? 1 : 0];
         switch (this.step) {
             case 'script':
                 return [...base, this.isEditable() ? 'e' : 'r', d.scenes.length ? 's' : '', d.status === 'writing' ? job : ''].join('|');
@@ -1139,14 +1229,17 @@ const ExplainersPage = {
         }
         if (d.audio_stale && this.step !== 'script' && ['drawing', 'review', 'ready'].includes(d.status)) {
             out.push(this.callout('history', html`
-                <p class="studio-callout-title">${t('explainers.stale.title')}</p>
-                <p>${t('explainers.stale.body')}</p>
+                <p class="studio-callout-title">${t('errors.EXPLAINER_AUDIO_STALE')}</p>
+                <p>${t('errors.EXPLAINER_AUDIO_STALE.next')}</p>
                 <div class="row row--wrap gap-2">
                     ${UI.button({ variant: 'primary', size: 'sm', icon: 'refresh-cw', label: t('explainers.action.revoice'), action: 'explainers:revoice', id: 'ex-revoice' })}
                 </div>`, 'warning'));
         }
-        if (d.render && d.render.version !== undefined && Number(d.render.version) !== d.draft_version && ['ready', 'scheduled'].includes(d.status) && this.step === 'video') {
-            out.push(this.callout('history', html`<p>${t('explainers.render.older')}</p>`, 'warning'));
+        // The server says whether the render was made for another narration or another sound (`render_stale`): the video is not the script's, and it is not scheduled.
+        if (d.render_stale && d.status === 'ready' && (this.step === 'video' || this.step === 'publish')) {
+            // Making it again is on the video step: from publishing, one press takes the owner there.
+            out.push(this.callout('history', html`<p class="studio-callout-title">${t('errors.EXPLAINER_RENDER_STALE')}</p><p>${t('errors.EXPLAINER_RENDER_STALE.next')}</p>
+                ${this.step === 'publish' ? html`<div class="row row--wrap gap-2"><a class="btn btn-secondary btn-sm" href="${this.address({ id: d.id, step: 'video' })}" data-action="explainers:goStep" data-step="video">${t('explainers.stale.goToVideo')}</a></div>` : ''}`, 'warning'));
         }
         return html`${out}`;
     },
@@ -1225,20 +1318,21 @@ const ExplainersPage = {
                     <p class="form-hint">${t('explainers.script.videoTitleHint', { max: this.LIMITS.title })}</p>
                 </div>
                 <h4 class="ex-sub">${t('explainers.script.scenes')}</h4>
+                ${!ro && !this.canRestructure() ? html`<p class="form-hint">${t('explainers.scene.fixedAfterVoice')}</p>` : ''}
                 <ol class="ex-scenes" id="ex-scenes">${this.scenesMarkup(w.scenes, ro)}</ol>
-                ${ro ? '' : html`<div class="ex-actions" id="ex-scene-add">${UI.button({ size: 'sm', icon: 'plus', label: t('explainers.scene.addEnd'), action: 'explainers:sceneAdd', data: { i: w.scenes.length - 1 }, id: 'ex-scene-add-btn' })}</div>`}
+                ${ro || !this.canRestructure() ? '' : html`<div class="ex-actions" id="ex-scene-add">${UI.button({ size: 'sm', icon: 'plus', label: t('explainers.scene.addEnd'), action: 'explainers:sceneAdd', data: { i: w.scenes.length - 1 }, id: 'ex-scene-add-btn' })}</div>`}
                 <details class="ex-more" open>
                     <summary>${t('explainers.script.captions')}<i data-lucide="chevron-down" aria-hidden="true"></i></summary>
                     <p class="form-hint">${t('explainers.script.captionsHint')}</p>
-                    ${this.textField('ex-f-cap-meta', 'caption-meta', t('explainers.script.captionMeta'), w.captions.meta, 2200, ro, { area: true, rows: 5 })}
-                    ${this.textField('ex-f-cap-yt-title', 'caption-yt-title', t('explainers.script.captionYoutubeTitle'), w.captions.youtube.title, 100, ro)}
-                    ${this.textField('ex-f-cap-yt-desc', 'caption-yt-description', t('explainers.script.captionYoutubeDescription'), w.captions.youtube.description, 5000, ro, { area: true, rows: 5 })}
-                    ${this.textField('ex-f-cap-tiktok', 'caption-tiktok', t('explainers.script.captionTikTok'), w.captions.tiktok, 2200, ro, { area: true, rows: 3 })}
-                    ${this.textField('ex-f-first', 'first-comment', t('explainers.script.firstComment'), w.first_comment, 2200, ro, { area: true, rows: 4, hint: t('explainers.script.firstCommentHint') })}
+                    ${this.textField('ex-f-cap-meta', 'caption-meta', t('explainers.script.captionMeta'), w.captions.meta, this.EDIT_MAX.captionMeta, ro, { area: true, rows: 5 })}
+                    ${this.textField('ex-f-cap-yt-title', 'caption-yt-title', t('explainers.script.captionYoutubeTitle'), w.captions.youtube.title, this.EDIT_MAX.captionYoutubeTitle, ro)}
+                    ${this.textField('ex-f-cap-yt-desc', 'caption-yt-description', t('explainers.script.captionYoutubeDescription'), w.captions.youtube.description, this.EDIT_MAX.captionYoutubeDescription, ro, { area: true, rows: 5 })}
+                    ${this.textField('ex-f-cap-tiktok', 'caption-tiktok', t('explainers.script.captionTikTok'), w.captions.tiktok, this.EDIT_MAX.captionTikTok, ro, { area: true, rows: 3 })}
+                    ${this.textField('ex-f-first', 'first-comment', t('explainers.script.firstComment'), w.first_comment, this.EDIT_MAX.firstComment, ro, { area: true, rows: 4, hint: t('explainers.script.firstCommentHint') })}
                 </details>
                 <details class="ex-more">
                     <summary>${t('explainers.script.replies')}<i data-lucide="chevron-down" aria-hidden="true"></i></summary>
-                    <p class="form-hint">${t('explainers.script.repliesHint', { min: this.MIN_REPLIES })}</p>
+                    <p class="form-hint">${t('explainers.script.repliesHint', { max: this.REPLIES_MAX })}</p>
                     <ol class="ex-list-edit" id="ex-replies">${this.repliesMarkup(w.replies, ro)}</ol>
                     ${ro ? '' : UI.button({ size: 'sm', icon: 'plus', label: t('explainers.reply.add'), action: 'explainers:replyAdd', id: 'ex-reply-add' })}
                 </details>
@@ -1251,7 +1345,7 @@ const ExplainersPage = {
                 <div id="ex-script-error"></div>
                 ${ro ? '' : html`<div class="ex-actions ex-actions-main">
                     ${UI.button({ variant: 'secondary', type: 'submit', icon: 'save', label: t('explainers.script.save'), id: 'ex-save' })}
-                    ${UI.button({ variant: 'ghost', icon: 'refresh-cw', label: t('explainers.script.rewrite'), action: 'explainers:openRewrite', id: 'ex-rewrite' })}
+                    ${d.status === 'draft' ? UI.button({ variant: 'ghost', icon: 'refresh-cw', label: t('explainers.script.rewrite'), action: 'explainers:openRewrite', id: 'ex-rewrite' }) : ''}
                     ${d.status === 'draft' ? UI.button({ variant: 'primary', icon: 'check', label: t('explainers.script.approve'), action: 'explainers:approve', id: 'ex-approve' }) : ''}
                 </div>`}
             </form>
@@ -1286,12 +1380,13 @@ const ExplainersPage = {
         const names = Object.fromEntries((this.cfg ? this.cfg.characters : []).map((c) => [c.key, c.name]));
         const timing = s.start_s !== null && s.end_s !== null
             ? html`<span class="ex-scene-time">${UI.ltr(`${this.clock(s.start_s)}–${this.clock(s.end_s)}`)}</span>` : '';
+        const tools = !ro && this.canRestructure();
         return html`
             <li class="ex-scene" data-scene-row="${i}">
                 <div class="ex-scene-head">
                     <h4 class="ex-scene-n">${t('explainers.scene.n', { n: UI.formatNumber(n) })}</h4>
                     ${timing}
-                    ${ro ? '' : html`<span class="ex-scene-tools">
+                    ${!tools ? '' : html`<span class="ex-scene-tools">
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'arrow-up', ariaLabel: t('explainers.scene.up', { n: UI.formatNumber(n) }), action: 'explainers:sceneUp', data: { i }, disabled: i === 0, id: `${id}-up` })}
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'arrow-down', ariaLabel: t('explainers.scene.down', { n: UI.formatNumber(n) }), action: 'explainers:sceneDown', data: { i }, disabled: i === count - 1, id: `${id}-down` })}
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'plus', ariaLabel: t('explainers.scene.addAfter', { n: UI.formatNumber(n) }), action: 'explainers:sceneAdd', data: { i }, id: `${id}-add` })}
@@ -1335,11 +1430,11 @@ const ExplainersPage = {
             <li class="ex-pair" data-reply-row="${i}">
                 <div class="form-group">
                     <label class="form-label" for="ex-r-${i}-q">${t('explainers.reply.q', { n: UI.formatNumber(i + 1) })}</label>
-                    <textarea class="field field-textarea" id="ex-r-${i}-q" data-field="q" rows="2" maxlength="600" dir="auto"${lock}>${r.q}</textarea>
+                    <textarea class="field field-textarea" id="ex-r-${i}-q" data-field="q" rows="2" maxlength="${this.EDIT_MAX.replyQ}" dir="auto"${lock}>${r.q}</textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="ex-r-${i}-a">${t('explainers.reply.a', { n: UI.formatNumber(i + 1) })}</label>
-                    <textarea class="field field-textarea" id="ex-r-${i}-a" data-field="a" rows="3" maxlength="1500" dir="auto"${lock}>${r.a}</textarea>
+                    <textarea class="field field-textarea" id="ex-r-${i}-a" data-field="a" rows="3" maxlength="${this.EDIT_MAX.replyA}" dir="auto"${lock}>${r.a}</textarea>
                 </div>
                 ${ro ? '' : UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('explainers.reply.remove'), action: 'explainers:replyRemove', data: { i }, id: `ex-r-${i}-remove` })}
             </li>`)}`;
@@ -1353,20 +1448,20 @@ const ExplainersPage = {
                 <div class="ex-row">
                     <div class="form-group">
                         <label class="form-label" for="ex-src-${i}-title">${t('explainers.source.title')}</label>
-                        <input class="field" id="ex-src-${i}-title" data-field="title" maxlength="300" dir="auto" value="${s.title}"${lock}>
+                        <input class="field" id="ex-src-${i}-title" data-field="title" maxlength="${this.EDIT_MAX.sourceTitle}" dir="auto" value="${s.title}"${lock}>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="ex-src-${i}-by">${t('explainers.source.by')}</label>
-                        <input class="field" id="ex-src-${i}-by" data-field="by" maxlength="300" dir="auto" value="${s.by}"${lock}>
+                        <input class="field" id="ex-src-${i}-by" data-field="by" maxlength="${this.EDIT_MAX.sourceBy}" dir="auto" value="${s.by}"${lock}>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="ex-src-${i}-year">${t('explainers.source.year')}</label>
-                        <input class="field" id="ex-src-${i}-year" data-field="year" maxlength="10" dir="ltr" value="${s.year}"${lock}>
+                        <input class="field" id="ex-src-${i}-year" data-field="year" maxlength="${this.EDIT_MAX.sourceYear}" dir="ltr" value="${s.year}"${lock}>
                     </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="ex-src-${i}-url">${t('explainers.source.url')}</label>
-                    <input class="field field-mono" id="ex-src-${i}-url" data-field="url" maxlength="2000" dir="ltr" spellcheck="false" value="${s.url}"${lock}>
+                    <input class="field field-mono" id="ex-src-${i}-url" data-field="url" maxlength="${this.EDIT_MAX.sourceUrl}" dir="ltr" spellcheck="false" value="${s.url}"${lock}>
                 </div>
                 ${ro ? '' : UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('explainers.source.remove'), action: 'explainers:sourceRemove', data: { i }, id: `ex-src-${i}-remove` })}
             </li>`)}`;
@@ -1460,26 +1555,59 @@ const ExplainersPage = {
         }
     },
 
-    /** The length of the script against the target, with its warnings, from the fields as they stand. */
+    /**
+     * The length of the script against the target, and what the checks say about it.
+     *
+     * Saved (nothing unsaved in the fields): the server's own answer about the script it holds. `est_seconds` and `warnings` are stored with the draft, and
+     * `problems` is what the script breaks right now: what a save may not add and what Approve refuses (`checkDraft` in spec.ts). Unsaved edits: the
+     * estimate and the warnings follow the fields as they are typed, by the same rules as far as this page mirrors them (`scriptWarnings`), and Save asks
+     * the server, which refuses a save that adds a problem and says which.
+     */
     estimateMarkup(scenes, sources) {
         const d = this.detail;
+        const dirty = this.editorDirty();
         const pace = this.cfg && this.cfg.pace ? this.cfg.pace[d.language] : undefined;
-        const est = this.estimateSeconds(scenes, d.language, pace);
+        const stored = d.draft && d.draft.est_seconds !== null && d.draft.est_seconds !== undefined && Number.isFinite(Number(d.draft.est_seconds)) ? Number(d.draft.est_seconds) : null;
+        const est = !dirty && stored !== null ? stored : this.estimateSeconds(scenes, d.language, pace);
         const range = this.DURATION_RANGE[d.length_tier];
-        const warnings = this.scriptWarnings(scenes, sources, d.length_tier, d.language, pace);
+        const warnings = dirty
+            ? [...this.scriptWarnings(scenes, sources, d.length_tier, d.language, pace), ...this.savedWarnings(d, est).filter((w) => w.code === 'research_limited')]
+            : this.savedWarnings(d, est);
+        const warningLines = warnings.map((w) => html`<li><i data-lucide="alert-circle" aria-hidden="true"></i> ${this.warningText(w)}</li>`);
+        // What Approve will refuse. Only a draft is waiting for approval; after it, the script was clean and a save cannot make it otherwise.
+        const problemLines = !dirty && d.status === 'draft'
+            ? d.problems.map((f) => html`<li><i data-lucide="alert-triangle" aria-hidden="true"></i> <span dir="auto">${this.findingText(f)}</span></li>`)
+            : [];
         const last = scenes.length ? scenes[scenes.length - 1] : null;
-        const lines = warnings.map((w) => {
-            const params = { n: UI.formatNumber(w.n || 0), min: UI.formatNumber(w.min || 0), max: UI.formatNumber(w.max || 0), est: this.lri(this.clock(w.est || 0)), tier: this.tierLabel(d.length_tier) };
-            return html`<li><i data-lucide="alert-circle" aria-hidden="true"></i> ${t(`explainers.warning.${w.code}`, params)}</li>`;
-        });
-        if (last && !this.endsWithQuestion(last.narration)) {
-            lines.push(html`<li><i data-lucide="alert-circle" aria-hidden="true"></i> ${t('explainers.warning.closing_question')}</li>`);
+        if (dirty && last && !this.endsWithQuestion(last.narration)) {
+            warningLines.push(html`<li><i data-lucide="alert-circle" aria-hidden="true"></i> ${t('explainers.warning.closing_question')}</li>`);
         }
         return html`
             <p class="ex-estimate-line"><i data-lucide="clock" aria-hidden="true"></i>
                 ${t('explainers.script.estimate', { est: this.lri(this.clock(est)), target: this.lri(`${this.clock(range.min)}–${this.clock(range.max)}`), n: UI.formatNumber(scenes.length) })}</p>
-            ${lines.length ? html`<ul class="ig-problems" aria-label="${t('explainers.script.warnings')}">${lines}</ul>` : ''}
+            ${problemLines.length ? html`<p class="ex-find-title">${t('explainers.script.problems')}</p><ul class="ig-problems" aria-label="${t('explainers.script.problems')}">${problemLines}</ul>` : ''}
+            ${warningLines.length ? html`<p class="ex-find-title">${t('explainers.script.warnings')}</p><ul class="ig-problems" aria-label="${t('explainers.script.warnings')}">${warningLines}</ul>` : ''}
+            ${dirty ? html`<p class="form-hint">${t('explainers.script.saveToCheck')}</p>` : ''}
         `;
+    },
+
+    /** The warnings the server stored with the draft, with the numbers their sentence needs, taken from the script as it stands. */
+    savedWarnings(d, est) {
+        const list = d.draft && Array.isArray(d.draft.warnings) ? d.draft.warnings : [];
+        const bounds = this.SCENE_BOUNDS[d.length_tier] || this.SCENE_BOUNDS.short;
+        const cited = d.draft && Array.isArray(d.draft.sources) ? d.draft.sources.length : 0;
+        return list.filter((w) => w && typeof w === 'object' && typeof w.code === 'string').map((w) => ({
+            code: w.code, message: typeof w.message === 'string' ? w.message : '',
+            n: w.code === 'few_sources' ? cited : d.scenes.length, min: w.code === 'few_sources' ? this.MIN_SOURCES_SHORT : bounds.min, max: bounds.max, est,
+        }));
+    },
+
+    /** A warning as a sentence in the interface language, by its code; the server's own words for a code this page has no sentence for. */
+    warningText(w) {
+        const key = `explainers.warning.${w.code}`;
+        const params = { n: UI.formatNumber(w.n || 0), min: UI.formatNumber(w.min || 0), max: UI.formatNumber(w.max || 0), est: this.lri(this.clock(w.est || 0)), tier: this.tierLabel(this.detail ? this.detail.length_tier : 'short') };
+        const said = t(key, params);
+        return said !== key ? said : String(w.message || '');
     },
 
     /** A value isolated as left-to-right text inside a sentence (a time, a range): it survives an Arabic sentence in order. */
@@ -1511,7 +1639,7 @@ const ExplainersPage = {
     /** Change the scene list: read the fields first so nothing typed is lost, change the copy, repaint the list. */
     editScenes(change, focusId) {
         this.captureEditor();
-        if (!this.work || !this.isEditable()) return;
+        if (!this.work || !this.canRestructure()) return;
         change(this.work.scenes);
         this.paintScenes(focusId);
     },
@@ -1587,7 +1715,7 @@ const ExplainersPage = {
                 <p class="form-hint">${t('explainers.voice.meta', { voice: a.voice || '—', length: this.lri(this.clock(a.duration)) })}</p>
             </div>
             ${a.fallback ? this.callout('alert-triangle', html`<p class="studio-callout-title">${t('explainers.voice.checkTiming.title')}</p><p>${t('explainers.voice.checkTiming.body')}</p>`, 'warning') : ''}
-            ${d.audio_stale && !['drawing', 'review', 'ready'].includes(d.status) ? html`<p class="form-hint">${t('explainers.stale.body')}</p>` : ''}
+            ${d.audio_stale && !['drawing', 'review', 'ready'].includes(d.status) ? html`<p class="form-hint">${t('errors.EXPLAINER_AUDIO_STALE')} ${t('errors.EXPLAINER_AUDIO_STALE.next')}</p>` : ''}
             <h4 class="ex-sub">${t('explainers.voice.times')}</h4>
             ${timed.length ? html`<ol class="ex-timing">${timed.map((s) => html`
                 <li class="ex-time">
@@ -1621,6 +1749,7 @@ const ExplainersPage = {
         return html`
             ${this.stepHead('explainers.pictures.title', help)}
             <div id="ex-pic-summary">${this.picSummaryMarkup()}</div>
+            ${d.status === 'rendering' ? html`<p class="form-hint">${t('explainers.pictures.lockedRendering')}</p>` : ''}
             <ol class="ex-pics" id="ex-pics">${d.scenes.map((s) => this.sceneCardMarkup(s))}</ol>
             <div id="ex-pic-approve">${this.picApproveMarkup()}</div>
         `;
@@ -1629,8 +1758,10 @@ const ExplainersPage = {
     picSummaryMarkup() {
         const d = this.detail;
         const own = this.drawable(d);
-        const total = own.length;
-        const drawn = own.filter((s) => s.picture).length;
+        // While it draws, the server counts them (`progress`, the same numbers as the list's card); at any other time the scenes that hold a picture are counted here.
+        const said = d.progress && typeof d.progress === 'object' && Number.isFinite(Number(d.progress.done)) && Number.isFinite(Number(d.progress.total)) ? d.progress : null;
+        const total = said ? Number(said.total) : own.length;
+        const drawn = said ? Number(said.done) : own.filter((s) => s.picture).length;
         const remaining = total - drawn;
         const paused = d.status === 'drawing' && d.draw_paused_until;
         const running = this.drawingNow(d);
@@ -1640,7 +1771,8 @@ const ExplainersPage = {
         const left = a && Number.isFinite(Number(a.est_left)) ? Math.max(0, Math.round(Number(a.est_left))) : null;
         // The allowance itself can be paused (the cap is reached, or the provider says today's free allocation is used up): a redraw is refused until then.
         const allowanceUntil = a && a.paused_until && new Date(a.paused_until).getTime() > Date.now() ? a.paused_until : null;
-        const canDraw = remaining > 0 && !running && ['drawing', 'review'].includes(d.status);
+        // Continue is the server's `startDraw`: it answers a drawing explainer only.
+        const canDraw = remaining > 0 && !running && d.status === 'drawing';
         return html`
             <div class="ex-pic-summary">
                 <p class="ex-pic-count">${t('explainers.pictures.progress', { n: UI.formatNumber(drawn), m: UI.formatNumber(total) })}</p>
@@ -1674,7 +1806,7 @@ const ExplainersPage = {
                     ${s.label ? html`<p class="ex-pic-label"><span class="ex-tag" dir="auto">${s.label}</span></p>` : ''}
                     ${s.continues
                         ? html`<p class="form-hint">${t('explainers.pictures.continues')}</p>`
-                        : html`<div class="ex-pic-controls">
+                        : !this.picturesEditable() ? '' : html`<div class="ex-pic-controls">
                             <input class="field" type="text" id="ex-note-${i}" maxlength="${this.DRAW_NOTE_MAX}" dir="auto" autocomplete="off"
                                    data-input="explainers:noteInput" data-scene="${i}"
                                    aria-label="${t('explainers.pictures.noteLabel', { n })}" placeholder="${t('explainers.pictures.notePlaceholder')}">
@@ -1700,7 +1832,7 @@ const ExplainersPage = {
         }
         // `picture` is the one in use and `pictures` the EARLIER ones (the last three, newest first: draw.ts keeps them so). The strip shows the one in
         // use, then each earlier one as a button; a press names its index in `pictures`, and the server swaps it with the one in use.
-        const earlier = s.pictures.map((p, k) => ({ k, thumb: safeUrl(p.url) })).filter((x) => x.thumb);
+        const earlier = this.picturesEditable() ? s.pictures.map((p, k) => ({ k, thumb: safeUrl(p.url) })).filter((x) => x.thumb) : [];
         const history = earlier.length ? html`
             <div class="ex-history" role="group" aria-label="${t('explainers.pictures.history', { n })}">
                 ${url ? html`<span class="ex-hist is-current" role="img" aria-label="${t('explainers.pictures.pickCurrent')}"><img src="${url}" alt="" loading="lazy" width="96" height="54"></span>` : ''}
@@ -1720,13 +1852,22 @@ const ExplainersPage = {
         const d = this.detail;
         if (!['drawing', 'review'].includes(d.status)) return '';
         const missing = this.drawable(d).filter((s) => !s.picture).length;
-        let blocked = '';
-        if (d.status !== 'review') blocked = 'explainers.pictures.blockedDrawing';
-        else if (missing > 0) blocked = 'explainers.pictures.blockedMissing';
-        else if (d.audio_stale) blocked = 'explainers.pictures.blockedStale';
+        // What stops the render, in the server's words (`renderReadiness` in payloads.ts): the audio out of date, a scene with no picture.
+        let hint = t('explainers.pictures.approveHint');
+        let blocked = false;
+        if (d.status !== 'review') {
+            hint = t('explainers.pictures.blockedDrawing');
+            blocked = true;
+        } else if (missing > 0) {
+            hint = `${t('errors.EXPLAINER_PICTURES_MISSING', { missing: UI.formatNumber(missing) })} ${t('errors.EXPLAINER_PICTURES_MISSING.next')}`;
+            blocked = true;
+        } else if (d.audio_stale) {
+            hint = `${t('errors.EXPLAINER_AUDIO_STALE')} ${t('errors.EXPLAINER_AUDIO_STALE.next')}`;
+            blocked = true;
+        }
         return html`<div class="ex-approve">
-            <p class="form-hint" id="ex-approve-hint">${blocked ? t(blocked, { n: UI.formatNumber(missing) }) : t('explainers.pictures.approveHint')}</p>
-            ${UI.button({ variant: 'primary', icon: 'check', label: t('explainers.pictures.approve'), action: 'explainers:approvePictures', id: 'ex-approve-pictures', disabled: !!blocked })}
+            <p class="form-hint" id="ex-approve-hint">${hint}</p>
+            ${UI.button({ variant: 'primary', icon: 'check', label: t('explainers.pictures.approve'), action: 'explainers:approvePictures', id: 'ex-approve-pictures', disabled: blocked })}
         </div>`;
     },
 
@@ -1819,16 +1960,25 @@ const ExplainersPage = {
         return this.linkedinText(credit ? `${caps.meta}\n\n${credit}` : caps.meta);
     },
 
-    /** The platforms and what each gets: the same rule the server's Schedule applies (FR-027). */
+    /**
+     * The platforms and what each gets, as the server's Schedule makes them (schedule.ts): Instagram and Facebook as one row, and YouTube, when the brand's
+     * platforms (`infographic.platforms`, in the settings) include them; TikTok always, as an inbox draft. YouTube gets the horizontal video over three minutes
+     * and the vertical one as a Short otherwise. LinkedIn is never a post: the kit below is for it.
+     */
     planMarkup() {
         const d = this.detail;
         const seconds = d.render && Number(d.render.duration) > 0 ? Number(d.render.duration) : (d.audio ? Number(d.audio.duration) : 0);
         const longVideo = seconds > this.SHORT_SECONDS;
+        const platforms = this.platforms;
+        const ig = !platforms || platforms.includes('instagram');
+        const fb = !platforms || platforms.includes('facebook');
+        const meta = ig && fb ? 'both' : ig ? 'instagram' : fb ? 'facebook' : '';
+        const youtube = !!platforms && platforms.includes('youtube');
         // Not `icon` as a parameter name: scripts/build-icons.mjs reads the matching argument of every same-named call in the dashboard as an icon.
         const plan = (glyph, name, what) => html`<li><i data-lucide="${glyph}" aria-hidden="true"></i><span><strong>${name}</strong> ${what}</span></li>`;
         return html`<ul class="ex-plan">
-            ${plan('instagram', t('explainers.platform.instagramFacebook'), t('explainers.plan.meta'))}
-            ${plan('youtube', t('explainers.platform.youtube'), t(longVideo ? 'explainers.plan.youtubeLong' : 'explainers.plan.youtubeShort'))}
+            ${meta ? plan('instagram', t(`explainers.rowPlatform.${meta}`), t('explainers.plan.meta')) : ''}
+            ${youtube ? plan('youtube', t('explainers.platform.youtube'), t(longVideo ? 'explainers.plan.youtubeLong' : 'explainers.plan.youtubeShort')) : ''}
             ${plan('music', t('explainers.platform.tiktok'), t('explainers.plan.tiktok'))}
             ${plan('share-2', t('explainers.platform.linkedin'), t('explainers.plan.linkedin'))}
         </ul>`;
@@ -1848,7 +1998,7 @@ const ExplainersPage = {
         return html`
             ${this.stepHead('explainers.publish.title', help)}
             ${this.editorDirty() ? html`<p class="form-hint text-warning">${t('explainers.publish.unsaved')}</p>` : ''}
-            ${d.status === 'scheduled' || d.schedule ? this.scheduledMarkup() : (d.status === 'ready' ? this.scheduleFormMarkup() : this.callout('hourglass', html`<p>${t('explainers.publish.notReady')}</p>`))}
+            ${d.status === 'scheduled' || d.schedule ? this.scheduledMarkup() : (d.status === 'ready' && !d.render_stale ? this.scheduleFormMarkup() : (d.status === 'ready' ? '' : this.callout('hourglass', html`<p>${t('explainers.publish.notReady')}</p>`)))}
             <h4 class="ex-sub">${t('explainers.publish.where')}</h4>
             ${this.planMarkup()}
             <h4 class="ex-sub">${t('explainers.publish.captions')}</h4>
@@ -1964,17 +2114,17 @@ const ExplainersPage = {
     // ─── The settings view ───────────────────────────────────────────────────
     async renderSettings(container, seq) {
         const gate = Motion.beginLoad(container, () => html`${Motion.cardGrid(2, 4)}${Motion.busy()}`);
-        const [settings, allowance, status] = await Promise.allSettled([API.getStudioSettings(), API.getExplainerAllowance(), API.getStudioStatus()]);
+        const [settings, allowance] = await Promise.allSettled([API.getStudioSettings(), API.getExplainerAllowance()]);
         if (!this.alive(seq)) return;
         gate.done();
-        if (allowance.status === 'rejected' && (this.isDisabled(allowance.reason) || this.notDeployed(allowance.reason))) {
-            container.innerHTML = esc(html`${this.toolbarMarkup('settings')}${this.disabledMarkup(allowance.reason)}`);
+        if (allowance.status === 'rejected' && this.isDisabled(allowance.reason)) {
+            container.innerHTML = esc(html`${this.toolbarMarkup('settings')}${this.disabledMarkup()}`);
             UI.icons(container);
             return;
         }
         this.acceptSettings(settings);
-        this.allowance = allowance.status === 'fulfilled' ? allowance.value : null;
-        this.acceptWorker(status);
+        // `null` is the server's answer when no image provider is set up; `undefined` is a read that failed (nothing is claimed then).
+        this.allowance = allowance.status === 'fulfilled' ? allowance.value : undefined;
         this.candidates = Object.create(null);
         container.innerHTML = esc(html`
             ${this.toolbarMarkup('settings')}
@@ -2124,6 +2274,7 @@ const ExplainersPage = {
             <section class="surface pad-5 ex-set" id="ex-card-characters" aria-labelledby="ex-chars-title">
                 <h2 class="section-title" id="ex-chars-title">${t('explainers.characters.title')}</h2>
                 <p class="form-hint">${t('explainers.characters.hint')}</p>
+                ${a === null ? html`<p class="form-hint text-warning" role="status">${t('errors.EXPLAINER_NO_PROVIDER')} ${t('errors.EXPLAINER_NO_PROVIDER.next')}</p>` : ''}
                 ${a && Number(a.cap) > 0 ? html`<p class="form-hint ex-allowance">${t('explainers.allowance.line', { used: UI.formatNumber(Number(a.pictures) || 0), cap: UI.formatNumber(Number(a.cap)), left: UI.formatNumber(Math.max(0, Math.round(Number(a.est_left) || 0))) })}</p>` : ''}
                 <form id="ex-characters-form" data-submit="explainers:saveCharacters" novalidate>
                     ${list.length ? list.map((c, i) => this.characterMarkup(c, i)) : html`<p class="form-hint">${t('explainers.characters.none')}</p>`}
@@ -2629,7 +2780,13 @@ UI.registerActions('explainers', {
     },
 
     replyAdd() {
-        ExplainersPage.editList('replies', (list) => { list.push({ q: '', a: '' }); });
+        const P = ExplainersPage;
+        P.captureEditor();
+        if (P.work && P.work.replies.length >= P.REPLIES_MAX) {
+            UI.toast(t('explainers.reply.tooMany', { max: P.REPLIES_MAX }), 'warning');
+            return;
+        }
+        P.editList('replies', (list) => { list.push({ q: '', a: '' }); });
     },
 
     replyRemove(el) {
@@ -2638,7 +2795,13 @@ UI.registerActions('explainers', {
     },
 
     sourceAdd() {
-        ExplainersPage.editList('sources', (list) => { list.push({ title: '', by: '', year: '', url: '' }); });
+        const P = ExplainersPage;
+        P.captureEditor();
+        if (P.work && P.work.sources.length >= P.SOURCES_MAX) {
+            UI.toast(t('explainers.source.tooMany', { max: P.SOURCES_MAX }), 'warning');
+            return;
+        }
+        P.editList('sources', (list) => { list.push({ title: '', by: '', year: '', url: '' }); });
     },
 
     sourceRemove(el) {
@@ -2706,11 +2869,22 @@ UI.registerActions('explainers', {
             confirmIcon: 'check',
             tone: 'primary',
             onConfirm: async () => {
-                // What was typed is saved first, and the version the approval names is the one that save answered with.
-                const current = P.editorDirty() ? await P.saveWork() : P.detail;
-                const res = await API.approveExplainer(current.id, current.draft_version);
-                P.afterAction(res);
-                UI.toast(t('explainers.approve.started'));
+                try {
+                    // What was typed is saved first, and the version the approval names is the one that save answered with.
+                    const current = P.editorDirty() ? await P.saveWork() : P.detail;
+                    const res = await API.approveExplainer(current.id, current.draft_version);
+                    P.afterAction(res);
+                    UI.toast(t('explainers.approve.started'));
+                } catch (err) {
+                    // The dialog has room for one sentence; the list of what to fix belongs beside the scenes it is about, in the script.
+                    if (err && err.code === 'EXPLAINER_DRAFT_REFUSED') {
+                        P.showError('ex-script-error', err);
+                        return;
+                    }
+                    // Another writer (the Gemini fallback, another tab) replaced the script while this one was open: show what is there now.
+                    if (err && err.code === 'CHANGED_MEANWHILE') P.refreshQuietly();
+                    throw err;
+                }
             },
         });
     },
@@ -2764,6 +2938,8 @@ UI.registerActions('explainers', {
             P.refreshQuietly();
         } catch (err) {
             UI.toast(UI.errorLine(err), 'error');
+            // The allowance is paused (429): the explainer's own answer carries the time it resumes, which the meter then says.
+            if (err && err.code === 'EXPLAINER_ALLOWANCE_PAUSED') P.refreshQuietly();
         } finally {
             restore();
         }

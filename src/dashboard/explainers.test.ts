@@ -167,18 +167,24 @@ describe('Explainers: a tab of the Studio, with its own stylesheet', () => {
         assert.equal(w.calls.length, 0);
     });
 
-    it('says a switch that is off in words, and sends the platform admin to the card; a server without the routes says so too', async () => {
+    it('says a switch that is off in the server’s words, and sends the platform admin to the card', async () => {
+        // 404 `EXPLAINERS_DISABLED`: the sentence and its next step are E2b's (`errors.EXPLAINERS_DISABLED`), not this page's own copy.
         const off = Object.assign(new Error('off'), { status: 404, code: 'EXPLAINERS_DISABLED' });
         const member = world({ api: { getExplainers: async () => { throw off; } } });
         await member.P.render();
-        assert.match(String(member.container.innerHTML), new RegExp(member.t('explainers.disabled.title')));
+        const memberPage = text(member.container.innerHTML);
+        assert.ok(memberPage.includes(member.t('errors.EXPLAINERS_DISABLED')), 'the server’s sentence');
+        assert.ok(memberPage.includes(member.t('errors.EXPLAINERS_DISABLED.next')), 'and its next step: ask the platform admin');
         assert.equal(String(member.container.innerHTML).includes('card=explainers'), false, 'a member is not sent to a card they cannot open');
         const admin = world({ admin: true, api: { getExplainers: async () => { throw off; } } });
         await admin.P.render();
         assert.match(String(admin.container.innerHTML), /#\/settings\?s=platform&amp;card=explainers/);
-        const missing = world({ api: { getExplainers: async () => { throw Object.assign(new Error('Not Found'), { status: 404 }); } } });
-        await missing.P.render();
-        assert.match(String(missing.container.innerHTML), new RegExp(missing.t('explainers.notDeployed.title')));
+        assert.ok(text(admin.container.innerHTML).includes(admin.t('explainers.disabled.bodyAdmin')), 'the admin is told where the switch is');
+        // A 404 that names no code is not the switch: the routes exist now, so it is an error like any other, with Retry.
+        const other = world({ api: { getExplainers: async () => { throw Object.assign(new Error('Not Found'), { status: 404 }); } } });
+        await other.P.render();
+        assert.equal(text(other.container.innerHTML).includes(other.t('errors.EXPLAINERS_DISABLED')), false);
+        assert.match(String(other.container.innerHTML), /class="inline-error"/);
     });
 });
 
@@ -213,17 +219,32 @@ describe('Explainers: the list', () => {
         assert.equal(P.progressLabel({ done: 3, total: 20 }), t('explainers.progress.drawn', { n: '3', m: '20' }));
     });
 
-    it('a failed card shows the sentence and keeps a technical error behind Details, never as the sentence', () => {
+    it('a failed card says where to read why (the list carries no reason), and a stored failure is a sentence with a technical error behind Details', () => {
         const { P, t } = world();
+        // The server's list row is `{ id, status, title, topic, language, length_tier, est_seconds, progress, updated_at, thumb_url }`: no `error`, no `failed_step`.
+        const card = String(P.cardMarkup({ id: 'f', status: 'failed', title: 'x', topic: 'x', language: 'ar', length_tier: 'short', est_seconds: null, progress: null, updated_at: '2026-10-25T10:00:00Z', thumb_url: null }));
+        assert.ok(text(card).includes(t('explainers.list.failedHint')), 'it says it stopped and where to see why');
+        assert.equal(card.includes('error-sentence'), false, 'and invents no reason');
+        // In the detail, the reason is stored on the explainer, and is shown as a sentence.
         const raw = 'storage answered HTTP 503: {"error":{"code":503}}';
-        const card = String(P.cardMarkup({ id: 'f', status: 'failed', title: 'x', error: raw }));
-        assert.match(card, /class="error-sentence"[^>]*>[^<]*this step/i, 'the generic sentence');
-        assert.equal(/<strong class="error-sentence"[^>]*>[^<]*HTTP/.test(card), false);
-        assert.ok(card.includes('error-details'));
-        const limit = String(P.failureHtml('VOICE_LIMIT: retry in 24h'));
-        assert.ok(limit.includes(t('explainers.failed.voiceLimit')));
+        const html = String(P.failureHtml(raw));
+        assert.match(html, /class="error-sentence"[^>]*>[^<]*this step/i, 'the generic sentence');
+        assert.equal(/<strong class="error-sentence"[^>]*>[^<]*HTTP/.test(html), false);
+        assert.ok(html.includes('error-details'));
+        // The voice waiting for Gemini's allowance is recognised by its prefix, and said in the server's own sentence (`errors.EXPLAINER_VOICE_LIMIT`).
+        const limit = text(P.failureHtml('VOICE_LIMIT: voice limit reached, trying again at 2026-10-26T08:05:00.000Z.'));
+        assert.ok(limit.includes(t('errors.EXPLAINER_VOICE_LIMIT')) && limit.includes(t('errors.EXPLAINER_VOICE_LIMIT.next')));
+        assert.equal(String(P.failureHtml('The draft says VOICE_LIMIT: as an example')).includes(t('errors.EXPLAINER_VOICE_LIMIT')), false, 'only a note that starts with it');
+        // A signed-out Claude: the server's own list of what that looks like, and nothing looser.
         const signedOut = String(P.failureHtml('Failed to authenticate. OAuth session expired'));
         assert.ok(signedOut.includes(t('explainers.failed.macSignedOut')) && signedOut.includes(t('explainers.failed.macSignedOutNext')));
+        for (const sentence of ['claude answered with an error: Failed to authenticate: OAuth session expired and could not be refreshed', 'Not logged in · Please run /login', 'authentication_error']) {
+            assert.equal(P.isSignInFailure(sentence), true, sentence);
+        }
+        for (const other of ['A draft about OAuth failed to parse', 'Please sign in to the other app', 'HTTP 401 from the page it read', 'rate limit reached']) {
+            assert.equal(P.isSignInFailure(other), false, other);
+            assert.equal(String(P.failureHtml(other)).includes(t('explainers.failed.macSignedOut')), false, `${other}: not said to be a signed-out Mac`);
+        }
     });
 
     it('paints the new form and the list from the server, and says when there is nothing yet', async () => {
@@ -379,7 +400,8 @@ describe('Explainers: the script step', () => {
         const { P } = world();
         assert.equal(P.countWords('  one two — three  ؟ '), 3, 'a dash or a lone mark is not a word');
         assert.equal(P.countWords('هل تعلم أن RAG مفيد؟'), 5);
-        assert.equal(P.estimateSeconds([{ spoken: 'a b c d e f g h i j k l m n o p q r s t u' }], 'ar'), 10, '21 words at 2.1 a second');
+        assert.equal(P.estimateSeconds([{ spoken: 'a b c d e f g h i j k l m n o p q r s t u' }], 'ar'), 11.7, '21 words at 1.8 a second: the Arabic pace measured on 2026-10-25');
+        assert.deepEqual(plain(P.PACE), { ar: 1.8, en: 2.5 }, 'the server’s DEFAULT_EXPLAINER_PACE');
         assert.equal(P.estimateSeconds([{ spoken: 'a b c d e' }], 'en'), 2, '5 words at 2.5 a second');
         assert.equal(P.estimateSeconds([{ spoken: 'a b c d e' }], 'en', 0), 2, 'a pace that cannot be one is the default');
         assert.equal(P.estimateSeconds([], 'ar'), 0);
@@ -390,18 +412,18 @@ describe('Explainers: the script step', () => {
         const scenes = (n: number, words = 7): Json[] => Array.from({ length: n }, () => ({ spoken: Array.from({ length: words }, () => 'w').join(' ') }));
         const codes = (list: Json[]): string[] => Array.from(list, (x) => String(x.code));
         const sources = [{ title: 'a' }, { title: 'b' }, { title: 'c' }];
-        // short: 10-30 scenes, 55-95 s; at 2.1 w/s a 7-word scene is 3.33 s
-        assert.deepEqual(codes(P.scriptWarnings(scenes(20), sources, 'short', 'ar')), [], '20 scenes, 66.7 s');
-        assert.deepEqual(codes(P.scriptWarnings(scenes(9), sources, 'short', 'ar')), ['scene_count', 'duration_short'], '9 scenes: too few, and 30 s');
-        assert.deepEqual(codes(P.scriptWarnings(scenes(31), sources, 'short', 'ar')), ['scene_count', 'duration_long'], '31 scenes, 103 s');
-        assert.deepEqual(codes(P.scriptWarnings(scenes(10), sources, 'short', 'ar')), ['duration_short'], '10 scenes is in range; 33 s is not');
+        // short: 10-30 scenes, 55-95 s; at 1.8 w/s a 7-word scene is 3.89 s
+        assert.deepEqual(codes(P.scriptWarnings(scenes(20), sources, 'short', 'ar')), [], '20 scenes, 77.8 s');
+        assert.deepEqual(codes(P.scriptWarnings(scenes(9), sources, 'short', 'ar')), ['scene_count', 'duration_short'], '9 scenes: too few, and 35 s');
+        assert.deepEqual(codes(P.scriptWarnings(scenes(31), sources, 'short', 'ar')), ['scene_count', 'duration_long'], '31 scenes, 120.6 s');
+        assert.deepEqual(codes(P.scriptWarnings(scenes(10), sources, 'short', 'ar')), ['duration_short'], '10 scenes is in range; 38.9 s is not');
         assert.deepEqual(plain(P.DURATION_RANGE), { short: { min: 55, max: 95 }, medium: { min: 170, max: 310 }, long: { min: 570, max: 930 } });
         assert.deepEqual(plain(P.SCENE_BOUNDS), { short: { min: 10, max: 30 }, medium: { min: 30, max: 90 }, long: { min: 120, max: 300 } });
         // sources: none is a warning for every length, and too few is a warning for short only
         assert.ok(codes(P.scriptWarnings(scenes(20), [], 'short', 'ar')).includes('needs_sources'));
         assert.deepEqual(codes(P.scriptWarnings(scenes(60, 8), [], 'medium', 'ar')), ['needs_sources']);
         assert.deepEqual(codes(P.scriptWarnings(scenes(20), [{ title: 'a' }], 'short', 'ar')), ['few_sources']);
-        assert.deepEqual(codes(P.scriptWarnings(scenes(60, 8), [{ title: 'a' }], 'medium', 'ar')), [], '60 scenes of 8 words: 229 s, inside 170-310');
+        assert.deepEqual(codes(P.scriptWarnings(scenes(60, 8), [{ title: 'a' }], 'medium', 'ar')), [], '60 scenes of 8 words: 267 s, inside 170-310');
         assert.equal(codes(P.scriptWarnings(scenes(20), [{ title: '' }, { url: '' }], 'short', 'ar')).includes('needs_sources'), true, 'an empty source is not a source');
     });
 
@@ -432,18 +454,59 @@ describe('Explainers: the script step', () => {
         for (const control of ['sceneUp', 'sceneDown', 'sceneAdd', 'sceneRemove']) assert.ok(markup.includes(`data-action="explainers:${control}"`), control);
     });
 
-    it('shows the estimate against the target and each warning, live from what is in the fields', () => {
+    it('shows the server’s answer about the saved script: its estimate, its stored warnings by code, and what Approve will refuse', () => {
         const w = world({ lang: 'en' });
-        open(w, { language: 'en', length_tier: 'short' });
+        open(w, {
+            language: 'en', length_tier: 'short',
+            draft: { ...explainer().draft, est_seconds: 70, warnings: [
+                { code: 'scene_count', message: 'This script has 3 scenes; a 60-90 second explainer usually has 10-30.' },
+                { code: 'few_sources', message: 'Only 1 source is listed; a 60-90 second explainer should cite at least 3.' },
+                { code: 'research_limited', message: 'The writer did not read any web page for this script: it was written from memory.' },
+                { code: 'a_new_code', message: 'A warning this page has no sentence for.' },
+            ] },
+            problems: [
+                { code: 'field_too_long', scene: 2, field: 'spoken', message: 'Scene 3: the spoken is 450 characters; the limit is 400.' },
+                { code: 'closing_question', scene: 2, field: 'narration', message: 'The last scene must ask the viewer a genuine question, ending in ? or ؟.' },
+                { code: 'field_empty', field: 'title', message: 'The title is empty.' },
+            ],
+        });
         w.P.ensureWork();
         const est = text(w.P.estimateMarkup(w.P.work.scenes, w.P.work.sources));
-        assert.match(est, /About .* spoken; the target is .*0:55.*1:35.*Scenes: 3\./);
+        assert.match(est, /About .*1:10.* spoken; the target is .*0:55.*1:35.*Scenes: 3\./, 'the stored estimate, 70 s');
         assert.match(est, /Scenes in this script: 3\. For 60–90 seconds it is usually 10 to 30/);
-        assert.match(est, /shorter than the 60–90 seconds you chose/);
         assert.match(est, /Sources listed: 1\. A short explainer should cite at least 3/, 'a count is never put in front of a noun, so one source reads correctly');
-        assert.equal(/closing/i.test(est), false, 'the last scene ends with a question');
+        assert.match(est, /did not read any web page for this script, so its facts and sources are unchecked/, 'the flag the writer’s answer carries is shown');
+        assert.ok(est.includes('A warning this page has no sentence for.'), 'a code it does not know is shown as the server worded it');
+        assert.ok(est.includes('To fix before approving'));
+        assert.ok(est.includes('Scene 3: Longer than 400 characters: Spoken text.'), 'a finding by its code, its 0-based scene shown as 3, its field by the editor’s label');
+        assert.ok(est.includes('Scene 3: The last scene must ask the viewer a genuine question.'));
+        assert.ok(est.includes('Empty field: Video title.'), 'a finding with no scene has no scene prefix');
+        assert.equal(est.includes('Save to check'), false, 'nothing is unsaved');
+        // Only a draft is waiting for approval: once voiced, the script was clean, and the list of what to fix is not shown.
+        const voiced = world({ lang: 'en' });
+        open(voiced, { status: 'drawing', problems: [{ code: 'field_empty', field: 'title', message: 'The title is empty.' }] });
+        voiced.P.ensureWork();
+        assert.equal(text(voiced.P.estimateMarkup(voiced.P.work.scenes, voiced.P.work.sources)).includes('To fix before approving'), false);
+    });
+
+    it('while the fields hold unsaved edits, the estimate and the warnings follow what is typed, and the page says the server has not checked it yet', () => {
+        const w = world({ lang: 'en' });
+        open(w, {
+            language: 'en', length_tier: 'short',
+            draft: { ...explainer().draft, est_seconds: 70, warnings: [{ code: 'research_limited', message: 'The writer did not read any web page for this script.' }] },
+            problems: [{ code: 'closing_question', scene: 2, field: 'narration', message: 'x' }],
+        });
+        w.P.ensureWork();
         w.P.work.scenes[2].narration = 'Comment YES.';
-        assert.match(text(w.P.estimateMarkup(w.P.work.scenes, w.P.work.sources)), /should end with a genuine question/);
+        w.P.work.scenes[0].spoken = 'one two three four five six seven eight nine ten';
+        assert.equal(w.P.editorDirty(), true);
+        const est = text(w.P.estimateMarkup(w.P.work.scenes, w.P.work.sources));
+        assert.equal(est.includes('1:10'), false, 'not the stored estimate: the fields were edited');
+        assert.match(est, /shorter than the 60–90 seconds you chose/, 'the mirror of the server’s warnings, from the fields');
+        assert.match(est, /should end with a genuine question/, 'the closing question, as the owner types it');
+        assert.match(est, /did not read any web page for this script, so its facts and sources are unchecked/, 'how it was written does not change by typing');
+        assert.ok(est.includes(w.t('explainers.script.saveToCheck')));
+        assert.equal(est.includes('To fix before approving'), false, 'the server’s list is about the saved script, not these fields');
     });
 
     it('is read-only while a step that reads the script is running: no Save, no Approve, fields locked', () => {
@@ -686,7 +749,8 @@ describe('Explainers: the voice step', () => {
         open(w, voiced({ audio: { ...voiced().audio, fallback: true }, audio_stale: true }), 'voice');
         assert.ok(String(w.P.voiceMarkup()).includes(w.t('explainers.voice.checkTiming.title')));
         const notice = String(w.P.noticesMarkup());
-        assert.ok(notice.includes(w.t('explainers.stale.title')));
+        assert.ok(notice.includes(w.t('errors.EXPLAINER_AUDIO_STALE')), 'the server’s sentence for a narration that changed after it was voiced');
+        assert.ok(notice.includes(w.t('errors.EXPLAINER_AUDIO_STALE.next')));
         assert.match(notice, /data-action="explainers:revoice"/);
         w.P.step = 'script';
         assert.equal(String(w.P.noticesMarkup()).includes('explainers:revoice'), false, 'on the script step the hint is in the editor, not a button');
@@ -897,13 +961,30 @@ describe('Explainers: the video step', () => {
         assert.match(markup, /id="ex-sound-form" data-submit="explainers:rerender"/, 'Render again, with the Sound choice');
     });
 
-    it('says "render is older than your edits" when the narration moved on, and only then', () => {
+    it('says the video was made before the latest edits when the server says so (`render_stale`), and only then', () => {
+        const stale = world();
+        open(stale, { status: 'ready', render: render({ version: 2 }), draft_version: 3, render_stale: true }, 'video');
+        const notice = String(stale.P.noticesMarkup());
+        assert.ok(notice.includes(stale.t('errors.EXPLAINER_RENDER_STALE')) && notice.includes(stale.t('errors.EXPLAINER_RENDER_STALE.next')), 'in the server’s words');
+        // The page does not work it out for itself: a render whose version differs, with no flag from the server, is not called stale.
+        const guess = world();
+        open(guess, { status: 'ready', render: render({ version: 2 }), draft_version: 3, render_stale: false }, 'video');
+        assert.equal(String(guess.P.noticesMarkup()).includes(guess.t('errors.EXPLAINER_RENDER_STALE')), false);
+        const fresh = world();
+        open(fresh, { status: 'ready', render: render(), draft_version: 3 }, 'video');
+        assert.equal(String(fresh.P.noticesMarkup()).includes(fresh.t('errors.EXPLAINER_RENDER_STALE')), false);
+    });
+
+    it('does not offer Schedule for a video the server calls stale, and says what to do instead', () => {
         const w = world();
-        open(w, { status: 'ready', render: render({ version: 2 }), draft_version: 3 }, 'video');
-        assert.ok(String(w.P.noticesMarkup()).includes(w.t('explainers.render.older')));
-        const same = world();
-        open(same, { status: 'ready', render: render(), draft_version: 3 }, 'video');
-        assert.equal(String(same.P.noticesMarkup()).includes(same.t('explainers.render.older')), false);
+        open(w, { status: 'ready', render: render({ version: 2 }), draft_version: 3, render_stale: true }, 'publish');
+        const markup = String(w.P.publishMarkup());
+        assert.equal(markup.includes('id="ex-schedule-form"'), false, 'Schedule would be refused with 409 EXPLAINER_RENDER_STALE');
+        assert.ok(String(w.P.noticesMarkup()).includes(w.t('errors.EXPLAINER_RENDER_STALE.next')), 'make it again, then schedule it');
+        assert.match(String(w.P.noticesMarkup()), /data-action="explainers:goStep" data-step="video">Go to the video</, 'and one press takes the owner to where it is made again');
+        const fresh = world();
+        open(fresh, { status: 'ready', render: render() }, 'publish');
+        assert.match(String(fresh.P.publishMarkup()), /id="ex-schedule-form"/);
     });
 
     it('keeps the previous files visible while a new render runs, and offers no re-render once scheduled', () => {
@@ -1005,12 +1086,38 @@ describe('Explainers: publish and the LinkedIn kit', () => {
 
     it('sends the YouTube video by the rule: the horizontal one over 3 minutes, the vertical one as a Short otherwise', () => {
         const long = world();
+        long.P.platforms = ['instagram', 'facebook', 'youtube'];
         open(long, { status: 'ready', render: { vertical_url: '/v', horizontal_url: '/h', cover_url: '/c', duration: 181, sound_mode: 'sfx', version: 3, job_id: 'j' } }, 'publish');
         assert.ok(text(long.P.planMarkup()).includes(long.t('explainers.plan.youtubeLong')));
         const short = world();
+        short.P.platforms = ['instagram', 'facebook', 'youtube'];
         open(short, { status: 'ready', render: { vertical_url: '/v', horizontal_url: '/h', cover_url: '/c', duration: 180, sound_mode: 'sfx', version: 3, job_id: 'j' } }, 'publish');
         assert.ok(text(short.P.planMarkup()).includes(short.t('explainers.plan.youtubeShort')));
         assert.ok(text(short.P.planMarkup()).includes(short.t('explainers.plan.tiktok')));
+    });
+
+    it('lists the platforms Schedule will really post to: Instagram, Facebook and YouTube follow the brand’s settings, TikTok is always made, LinkedIn never', async () => {
+        const plan = (platforms: string[] | null): string => {
+            const w = world({ lang: 'en' });
+            w.P.platforms = platforms;
+            open(w, { status: 'ready', render: { vertical_url: '/v', horizontal_url: '/h', cover_url: '/c', duration: 82, sound_mode: 'sfx', version: 3, job_id: 'j' } }, 'publish');
+            return text(w.P.planMarkup());
+        };
+        // The default `infographic.platforms` is Instagram and Facebook: no YouTube row until the owner ticks it.
+        const byDefault = plan(['instagram', 'facebook']);
+        assert.ok(byDefault.includes('Instagram and Facebook'));
+        assert.equal(byDefault.includes('YouTube'), false, 'YouTube is not posted unless the brand says so');
+        assert.ok(byDefault.includes('TikTok') && byDefault.includes('LinkedIn'));
+        const all = plan(['instagram', 'facebook', 'youtube']);
+        assert.ok(all.includes('YouTube'));
+        assert.ok(plan(['instagram']).includes('Instagram the vertical video'), 'one Meta platform is named alone');
+        assert.equal(plan(['youtube']).includes('Instagram'), false, 'no Meta platform: no Meta row');
+        // The settings answer feeds it.
+        const w = world();
+        w.P.acceptSettings({ status: 'fulfilled', value: { settings: { explainer: CONFIG, schedule: { timezone: 'Asia/Dubai' }, infographic: { platforms: ['facebook', 'youtube', 'tiktok'] } } } });
+        assert.deepEqual(plain(w.P.platforms), ['facebook', 'youtube', 'tiktok']);
+        w.P.acceptSettings({ status: 'fulfilled', value: { settings: { explainer: CONFIG } } });
+        assert.equal(w.P.platforms, null, 'a settings answer without them leaves the plan unknown, not empty');
     });
 
     it('Schedule sends next, now, or an instant read in the tenant’s zone, and refuses a time that is missing', async () => {
@@ -1141,8 +1248,290 @@ describe('Explainers: live updates', () => {
         open(w, { status: 'failed', failed_step: 'voice', error: 'VOICE_LIMIT: retry in 24h' });
         const notice = text(w.P.noticesMarkup());
         assert.ok(notice.includes('It stopped while voicing'));
-        assert.ok(notice.includes(w.t('explainers.failed.voiceLimit')));
+        assert.ok(notice.includes(w.t('errors.EXPLAINER_VOICE_LIMIT')), 'the server’s sentence for the voice allowance');
         assert.match(String(w.P.noticesMarkup()), /href="#\/help\/explainers#troubleshooting"/);
+    });
+});
+
+// ─── What the server decides: read from its answers, not guessed ────────────────────────────────────
+
+describe('Explainers: what the server decides', () => {
+    // Reconciled with src/routes/studio.ts and src/services/explainers/ (explainers.ts, scenes.ts, spec.ts, schedule.ts): the page shows these answers and
+    // offers only what the server accepts, instead of guessing.
+    const AUDIO = { url: '/api/uploads/a1', media_id: 'a1', duration: 12, voice: 'v', version: 3, words_version: 3, fallback: false };
+    const voicedScenes = (): Json[] => [
+        scene(0, { start_s: 0, end_s: 4, picture: picture(1), pictures: [picture(4)], draw_status: 'done' }),
+        scene(1, { start_s: 4, end_s: 8, picture: picture(2), draw_status: 'done' }),
+        scene(2, { start_s: 8, end_s: 12, picture: picture(3), draw_status: 'done' }),
+    ];
+    const button = (dataset: Json = {}): Json => ({ disabled: false, getAttribute: () => null, setAttribute() {}, removeAttribute() {}, style: {}, innerHTML: '', textContent: 'x', offsetWidth: 0, dataset });
+
+    it('a scheduled explainer is read-only: the server refuses an edit of it (409), so the page does not offer one', () => {
+        const scheduled = world();
+        open(scheduled, { status: 'scheduled', schedule: { scheduled_time: '2026-10-26T15:00:00Z', group_id: 'g', row_ids: ['p1'] }, audio: AUDIO, scenes: voicedScenes() }, 'script');
+        assert.equal(scheduled.P.isEditable(), false);
+        const markup = String(scheduled.P.scriptMarkup());
+        assert.equal(markup.includes('id="ex-save"'), false);
+        assert.match(markup, /data-field="narration"[^>]*readonly/);
+        for (const status of ['draft', 'drawing', 'review', 'ready', 'failed']) {
+            const w = world();
+            open(w, { status });
+            assert.equal(w.P.isEditable(), true, `${status} can be edited`);
+        }
+    });
+
+    it('scenes can be added, removed or moved only before the narration is voiced: after it a scene’s picture and time belong to its place', () => {
+        const before = world({ lang: 'en' });
+        open(before, { status: 'draft' });
+        assert.equal(before.P.canRestructure(), true);
+        const open1 = String(before.P.scriptMarkup());
+        for (const control of ['sceneUp', 'sceneDown', 'sceneAdd', 'sceneRemove']) assert.ok(open1.includes(`data-action="explainers:${control}"`), control);
+        assert.equal(open1.includes(before.t('explainers.scene.fixedAfterVoice')), false);
+
+        const after = world({ lang: 'en' });
+        open(after, { status: 'drawing', audio: AUDIO, scenes: voicedScenes() }, 'script');
+        assert.equal(after.P.canRestructure(), false);
+        const locked = String(after.P.scriptMarkup());
+        for (const control of ['sceneUp', 'sceneDown', 'sceneAdd', 'sceneRemove']) assert.equal(locked.includes(`data-action="explainers:${control}"`), false, `${control} is not offered`);
+        assert.equal(locked.includes('id="ex-scene-add-btn"'), false);
+        assert.ok(locked.includes(after.t('explainers.scene.fixedAfterVoice')), 'and the page says why');
+        assert.match(locked, /data-field="narration" rows="2" maxlength="300"/, 'the text of each scene is still edited in place');
+        // A picture or a time on any scene is enough: a draft with a scene already timed is not restructured either.
+        const timed = world();
+        open(timed, { status: 'draft', scenes: [scene(0, { start_s: 0, end_s: 3 }), scene(1)] });
+        assert.equal(timed.P.canRestructure(), false);
+        // The actions refuse as the server would.
+        after.P.ensureWork();
+        action(after, 'sceneRemove', { dataset: { i: '0' } });
+        action(after, 'sceneAdd', { dataset: { i: '0' } });
+        action(after, 'sceneDown', { dataset: { i: '0' } });
+        assert.equal(after.P.work.scenes.length, 3);
+        assert.equal(after.P.work.scenes[0].narration, 'Sentence 0.', 'nothing moved');
+    });
+
+    it('holds the fields to the limits of an edit, and refuses the 11th reply and the 21st source', () => {
+        const w = world({ lang: 'en' });
+        open(w, { status: 'draft' });
+        const markup = String(w.P.scriptMarkup());
+        assert.match(markup, /data-field="first-comment" rows="4" maxlength="1500"/);
+        assert.match(markup, /data-field="q" rows="2" maxlength="300"/);
+        assert.match(markup, /data-field="a" rows="3" maxlength="600"/);
+        assert.match(markup, /data-field="url" maxlength="500"/);
+        w.P.ensureWork();
+        w.P.work.replies = Array.from({ length: 10 }, () => ({ q: 'q', a: 'a' }));
+        action(w, 'replyAdd');
+        assert.equal(w.P.work.replies.length, 10);
+        assert.match(w.toasts[0]!.message, /At most 10 likely objections/);
+        w.P.work.sources = Array.from({ length: 20 }, () => ({ title: 't', by: '', year: '', url: '' }));
+        action(w, 'sourceAdd');
+        assert.equal(w.P.work.sources.length, 20);
+        assert.match(w.toasts[1]!.message, /At most 20 sources/);
+        assert.ok(w.t('explainers.script.repliesHint', { max: 10 }).startsWith('Up to 10'));
+    });
+
+    it('says each finding by its code, with its 0-based scene shown as a number and its field by the editor’s own label, in both languages', () => {
+        const en = world({ lang: 'en' });
+        const say = (f: Json): string => en.P.findingText(f);
+        assert.equal(say({ code: 'field_empty', scene: 0, field: 'brief', message: 'x' }), 'Scene 1: Empty field: Picture brief (English).');
+        assert.equal(say({ code: 'field_too_long', scene: 4, field: 'narration', message: 'x' }), 'Scene 5: Longer than 300 characters: On-screen text.');
+        assert.equal(say({ code: 'field_too_long', field: 'title', message: 'x' }), 'Longer than 70 characters: Video title.');
+        assert.equal(say({ code: 'label_too_long', scene: 1, field: 'label', message: 'x' }), 'Scene 2: The label is longer than 4 words or 40 characters: it has to fit on a tag.');
+        assert.equal(say({ code: 'too_many_characters', scene: 1, field: 'characters', message: 'x' }), 'Scene 2: A scene can draw at most 4 characters together.');
+        assert.equal(say({ code: 'too_many_scenes', message: 'x' }), 'The script has more than 300 scenes.');
+        assert.equal(say({ code: 'closing_question', scene: 9, field: 'narration', message: 'x' }), 'Scene 10: The last scene must ask the viewer a genuine question.');
+        assert.equal(say({ code: 'female_subject', scene: 0, field: 'brief', message: 'x' }), 'Scene 1: A picture brief names a woman or a girl. Explainers never draw them.');
+        // What the page has no sentence for is shown as the server worded it.
+        assert.equal(say({ code: 'field_empty', field: 'something_new', message: 'The something_new is empty.' }), 'The something_new is empty.');
+        assert.equal(say({ code: 'a_new_rule', scene: 2, message: 'A rule this page does not know.' }), 'Scene 3: A rule this page does not know.');
+        assert.equal(say('A plain sentence'), 'A plain sentence');
+        const ar = world({ lang: 'ar' });
+        const arabic = ar.P.findingText({ code: 'field_empty', scene: 0, field: 'spoken', message: 'x' });
+        assert.ok(arabic.includes('حقل فارغ: النص المنطوق.') && arabic.startsWith('المشهد'), arabic);
+        // A refusal's list: `findings` (each with a code) win over `problems` (the same sentences, in English).
+        const err = Object.assign(new Error('The script has problems to fix first: 1.'), {
+            code: 'EXPLAINER_DRAFT_REFUSED', params: { found: 1 }, body: { findings: [{ code: 'field_empty', scene: 0, field: 'brief', message: 'x' }], problems: ['Scene 1: the brief is empty.'] },
+        });
+        const box = text(en.P.errorMarkup(err));
+        assert.ok(box.includes('Scene 1: Empty field: Picture brief (English).') && !box.includes('the brief is empty'));
+        assert.ok(box.includes(en.t('errors.EXPLAINER_DRAFT_REFUSED', { found: 1 })), 'above the list, the server’s own sentence');
+    });
+
+    it('a refused approval lists what to fix beside the script, not in the dialog; a script that changed meanwhile is read again', async () => {
+        const findings = [{ code: 'closing_question', scene: 2, field: 'narration', message: 'x' }, { code: 'field_empty', field: 'title', message: 'The title is empty.' }];
+        const refused = Object.assign(new Error('2 problems with this script.'), { status: 422, code: 'EXPLAINER_DRAFT_REFUSED', params: { found: 2 }, body: { findings, problems: ['x', 'The title is empty.'] } });
+        const w = world({ lang: 'en', api: { approveExplainer: async () => { throw refused; } } });
+        open(w, { status: 'draft' });
+        w.h.el('ex-script-error');
+        action(w, 'approve');
+        assert.equal(w.confirms.length, 1);
+        await w.confirms[0]!.onConfirm();
+        const box = text(w.h.el('ex-script-error').innerHTML);
+        assert.ok(box.includes('Scene 3: The last scene must ask the viewer a genuine question.') && box.includes('Empty field: Video title.'));
+        assert.equal(w.P.detail.status, 'draft', 'nothing moved');
+
+        const changed = Object.assign(new Error('The script changed since you opened it. Read it again, then approve.'), { status: 409, code: 'CHANGED_MEANWHILE' });
+        const w2 = world({ api: { approveExplainer: async () => { throw changed; }, getExplainer: async () => explainer({ draft_version: 4, title: 'Written meanwhile' }) } });
+        open(w2, { status: 'draft' });
+        action(w2, 'approve');
+        await assert.rejects(() => Promise.resolve(w2.confirms[0]!.onConfirm()), (e: Json) => e.code === 'CHANGED_MEANWHILE');
+        await settle();
+        assert.equal(called(w2, 'getExplainer').length, 1, 'the page looks at what is there now');
+        assert.equal(w2.P.detail.draft_version, 4);
+    });
+
+    it('a scene’s picture can be drawn, redrawn or chosen from the voice until the post, and not while the video renders', () => {
+        const withPictures = (over: Json): Json => ({ audio: AUDIO, scenes: voicedScenes(), ...over });
+        const controls = (over: Json): { redraw: boolean; pick: boolean; locked: boolean } => {
+            const w = world({ lang: 'en' });
+            open(w, withPictures(over), 'pictures');
+            const markup = String(w.P.picturesMarkup());
+            return { redraw: markup.includes('data-action="explainers:redraw"'), pick: markup.includes('data-action="explainers:pick"'), locked: markup.includes(w.t('explainers.pictures.lockedRendering')) };
+        };
+        for (const status of ['drawing', 'review', 'ready', 'scheduled']) assert.deepEqual(controls({ status }), { redraw: true, pick: true, locked: false }, status);
+        assert.deepEqual(controls({ status: 'failed', failed_step: 'draw' }), { redraw: true, pick: true, locked: false }, 'a failed drawing is where the owner fixes a scene by hand');
+        assert.deepEqual(controls({ status: 'rendering' }), { redraw: false, pick: false, locked: true }, 'the renderer has the pictures: the server answers 409, and the page says why');
+        assert.deepEqual(controls({ status: 'failed', failed_step: 'render' }), { redraw: false, pick: false, locked: false });
+        assert.deepEqual(controls({ status: 'voicing' }), { redraw: false, pick: false, locked: false });
+    });
+
+    it('says the notes the server keeps while Gemini writes in the Mac’s place in the interface language, and shows any other note as the server worded it', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const w = world({ lang });
+            const unclaimed = text(w.P.failureHtml('The Mac did not pick this up in 10 minutes and is off or asleep, so Gemini is writing it.'));
+            const signedOut = text(w.P.failureHtml('Claude on the Mac is signed out, so Gemini is writing it. Sign in again on the Mac to have Claude write.'));
+            assert.equal(unclaimed, w.t('explainers.note.gemini_unclaimed'), lang);
+            assert.equal(signedOut, w.t('explainers.note.gemini_signed_out'), lang);
+        }
+        const w = world({ lang: 'en' });
+        assert.ok(text(w.P.failureHtml('Some other note the server kept.')).includes('Some other note the server kept.'));
+        // while it writes, the note is on the explainer and shown beside the step
+        open(w, { status: 'writing', draft: null, scenes: [], error: 'Claude on the Mac is signed out, so Gemini is writing it. Sign in again on the Mac to have Claude write.', job: { status: 'running', progress: 'Gemini is writing it', not_before: null } });
+        assert.ok(text(w.P.noticesMarkup()).includes(w.t('explainers.note.gemini_signed_out')));
+    });
+
+    it('while it draws, the count of pictures is the server’s own `progress`, the same as the list’s card; otherwise it counts the scenes that hold one', () => {
+        const scenes = [
+            scene(0, { picture: picture(1), draw_status: 'done' }), scene(1, { continues: true, picture: picture(1), draw_status: 'done' }),
+            scene(2, { picture: picture(2), draw_status: 'done' }), scene(3, { draw_status: 'pending' }),
+        ];
+        const drawing = world({ lang: 'en' });
+        open(drawing, { status: 'drawing', progress: { done: 3, total: 4 }, scenes, job: { status: 'running', progress: null, not_before: null } }, 'pictures');
+        assert.ok(text(drawing.P.picSummaryMarkup()).includes('3 of 4 drawn'));
+        assert.ok(text(drawing.P.cardMarkup({ id: 'a', status: 'drawing', progress: { done: 3, total: 4 }, title: 't', topic: 't', language: 'ar', length_tier: 'short' })).includes('3 of 4 drawn'), 'the list says the same');
+        const review = world({ lang: 'en' });
+        open(review, { status: 'review', progress: null, scenes }, 'pictures');
+        assert.ok(text(review.P.picSummaryMarkup()).includes('2 of 3 drawn'), 'a scene that continues is copied, not drawn: three scenes of their own, two drawn');
+    });
+
+    it('Rewrite with a note is offered to a draft only: the server rewrites nothing else (409 EXPLAINER_BAD_STATE)', () => {
+        const draft = world();
+        open(draft, { status: 'draft' });
+        assert.match(String(draft.P.scriptMarkup()), /id="ex-rewrite"/);
+        for (const status of ['drawing', 'review', 'ready', 'failed']) {
+            const w = world();
+            open(w, { status, audio: AUDIO, scenes: voicedScenes() });
+            assert.equal(String(w.P.scriptMarkup()).includes('id="ex-rewrite"'), false, `${status}: no rewrite`);
+        }
+    });
+
+    it('Continue drawing exists only while the explainer is drawing (the server’s startDraw answers nothing else)', () => {
+        const rest = [scene(0, { picture: picture(1), draw_status: 'done' }), scene(1, { draw_status: 'pending' })];
+        const drawing = world();
+        open(drawing, { status: 'drawing', scenes: rest, job: { status: 'done', progress: null, not_before: null } }, 'pictures');
+        assert.match(String(drawing.P.picSummaryMarkup()), /data-action="explainers:drawAll"/);
+        const review = world();
+        open(review, { status: 'review', scenes: rest }, 'pictures');
+        assert.equal(String(review.P.picSummaryMarkup()).includes('explainers:drawAll'), false);
+    });
+
+    it('says why Approve pictures is off in the server’s own sentences: what is missing, or a voice out of date', () => {
+        const missing = world({ lang: 'en' });
+        open(missing, { status: 'review', scenes: [scene(0, { picture: picture(1), draw_status: 'done' }), scene(1), scene(2)] }, 'pictures');
+        const hint = text(missing.P.picApproveMarkup());
+        assert.ok(hint.includes('Some scenes have no picture yet (2).') && hint.includes('Draw the missing pictures, then approve again.'));
+        assert.match(String(missing.P.picApproveMarkup()), /id="ex-approve-pictures"[^>]*disabled/);
+        const stale = world({ lang: 'en' });
+        open(stale, { status: 'review', audio_stale: true, scenes: voicedScenes(), audio: AUDIO }, 'pictures');
+        const staleHint = text(stale.P.picApproveMarkup());
+        assert.ok(staleHint.includes('The narration changed after it was voiced.') && staleHint.includes('Voice it again, then approve the pictures or make the video.'));
+        const ready = world({ lang: 'en' });
+        open(ready, { status: 'review', scenes: voicedScenes(), audio: AUDIO }, 'pictures');
+        assert.equal(/id="ex-approve-pictures"[^>]*disabled/.test(String(ready.P.picApproveMarkup())), false);
+        const ar = world({ lang: 'ar' });
+        open(ar, { status: 'review', scenes: [scene(0), scene(1)] }, 'pictures');
+        assert.ok(text(ar.P.picApproveMarkup()).includes('بعض المشاهد بلا صورة بعد (2).'));
+    });
+
+    it('whether the Mac is there comes with the explainer: the detail asks nothing else, and the list still reads the status', async () => {
+        const detail = world({ lang: 'en', hash: `#/explainers?id=${ID}`, api: {
+            getExplainer: async () => explainer({ status: 'writing', worker: { online: false, lastSeen: null, name: 'Mac' }, job: { status: 'pending', progress: null, not_before: null } }),
+        } });
+        await detail.P.render();
+        assert.equal(called(detail, 'getStudioStatus').length, 0, 'the explainer’s own answer says it');
+        assert.equal(detail.P.worker.online, false);
+        assert.ok(text(detail.container.innerHTML).includes(detail.t('explainers.worker.offline')), 'and the notice that nothing moves is drawn');
+        // An answer that carries no worker (an action's) leaves what was known.
+        detail.P.applyDetail(explainer({ status: 'writing', worker: null, job: { status: 'pending', progress: null, not_before: null } }));
+        assert.equal(detail.P.worker.online, false);
+        const list = world({ api: { getExplainers: async () => ({ items: [] }), getStudioStatus: async () => ({ worker: { online: true } }) } });
+        await list.P.render();
+        assert.equal(called(list, 'getStudioStatus').length, 1, 'a list row has no worker: it reads the status once');
+    });
+
+    it('says what a waiting job waits for: a time, a Mac that is busy (the server’s note, in the interface language), or a Mac that is away', () => {
+        const BUSY = 'Waiting for your Mac: it is busy with another job';
+        for (const [lang, said] of [['en', 'Waiting for your Mac: it is busy with another job'], ['ar', 'بانتظار جهازك الماك: فهو مشغول بمهمة أخرى']] as const) {
+            const w = world({ lang });
+            assert.equal(w.P.progressText({ status: 'writing', job: { status: 'pending', progress: BUSY, not_before: null } }), said, lang);
+        }
+        const w = world({ lang: 'en' });
+        w.P.worker = { online: true };
+        const later = new Date(Date.now() + 3 * 3600 * 1000).toISOString();
+        assert.match(w.P.progressText({ status: 'voicing', job: { status: 'pending', progress: null, not_before: later } }), /^Waiting until /, 'a voice that waits for its allowance to reset waits for a time, not for the Mac');
+        assert.equal(w.P.progressText({ status: 'voicing', job: { status: 'pending', progress: null, not_before: '2020-01-01T00:00:00Z' } }), w.t('explainers.progress.waiting'), 'a time that has passed is not a wait');
+        w.P.worker = { online: false };
+        assert.equal(w.P.progressText({ status: 'writing', job: { status: 'pending', progress: null, not_before: null } }), w.t('explainers.progress.waitingOffline'));
+        assert.equal(w.P.progressText({ status: 'writing', job: { status: 'running', progress: 'Gemini is writing it', not_before: null } }), 'Gemini is writing it', 'a running job’s own line');
+    });
+
+    it('a redraw refused because the allowance is used up asks again, so the meter says until when', async () => {
+        const later = new Date(Date.now() + 5 * 3600 * 1000).toISOString();
+        const refusal = Object.assign(new Error('Drawing is paused'), { status: 429, code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: later }, body: { retryAt: later } });
+        const w = world({ lang: 'en', api: {
+            drawExplainerScene: async () => { throw refusal; },
+            getExplainer: async () => explainer({ status: 'review', scenes: voicedScenes(), audio: AUDIO, allowance: { provider: 'cloudflare', day: '2026-10-25', used_units: 8800, pictures: 80, cap: 80, est_left: 0, paused_until: later } }),
+        } });
+        open(w, { status: 'review', scenes: voicedScenes(), audio: AUDIO, allowance: { pictures: 79, cap: 80, est_left: 1, paused_until: null } }, 'pictures');
+        await action(w, 'redraw', button({ scene: '0' }));
+        await settle();
+        assert.equal(w.toasts[0]!.message, `${w.t('errors.EXPLAINER_ALLOWANCE_PAUSED')} ${w.t('errors.EXPLAINER_ALLOWANCE_PAUSED.next')}`);
+        assert.equal(called(w, 'getExplainer').length, 1);
+        assert.match(text(w.P.picSummaryMarkup()), /Drawing is paused until .*: today’s allowance is used up\./);
+    });
+
+    it('says there is no image provider when the allowance answers JSON null, and claims nothing when it could not be read', async () => {
+        const card = (allowance: unknown): string => {
+            const w = world({ lang: 'en' });
+            w.P.cfg = w.P.normalizeConfig(CONFIG);
+            w.P.allowance = allowance;
+            return text(w.P.charactersMarkup());
+        };
+        const none = card(null);
+        assert.ok(none.includes('No image provider is set up, so no picture can be drawn.') && none.includes('The platform admin adds the provider’s account and token in the Explainers settings.'));
+        assert.equal(card(undefined).includes('No image provider'), false, 'a failed read says nothing about the provider');
+        const used = card({ provider: 'cloudflare', day: '2026-10-25', used_units: 2530, pictures: 23, cap: 80, est_left: 57, paused_until: null });
+        assert.equal(used.includes('No image provider'), false);
+        assert.ok(used.includes('Today’s free allowance: 23 of 80 pictures used, about 57 left.'));
+        // The read itself: `null` is kept as null, a failure is undefined, and the switch being off is the switch's panel.
+        const read = world({ hash: '#/explainers?tab=settings', api: { getExplainerAllowance: async () => null } });
+        await read.P.render();
+        assert.equal(read.P.allowance, null);
+        const failed = world({ hash: '#/explainers?tab=settings', api: { getExplainerAllowance: async () => { throw new Error('HTTP 500'); } } });
+        await failed.P.render();
+        assert.equal(failed.P.allowance, undefined);
+        const off = world({ lang: 'en', hash: '#/explainers?tab=settings', api: { getExplainerAllowance: async () => { throw Object.assign(new Error('off'), { status: 404, code: 'EXPLAINERS_DISABLED' }); } } });
+        await off.P.render();
+        assert.ok(text(off.container.innerHTML).includes(off.t('errors.EXPLAINERS_DISABLED')));
     });
 });
 
@@ -1438,13 +1827,12 @@ describe('Settings → Platform → Explainers (the platform admin’s card)', (
         assert.match(ar.toasts[0]!.message, /معرّف الحساب أحرف لاتينية وأرقام فقط، من 8 إلى 64 خانة/);
     });
 
-    it('a refused save is read through the shared error text: the catalogue’s sentence when there is one, never the raw server text', async () => {
+    it('a refused save is read through the shared error text: the server’s sentence and its next step, never the raw server text', async () => {
         const w = settingsWorld({ api: { saveAdminExplainersProvider: async () => { throw Object.assign(new Error('HTTP 502 {"error":"x"}'), { status: 502, code: 'EXPLAINER_PROVIDER_ERROR' }); } } });
-        // `errors.EXPLAINER_PROVIDER_ERROR` is the routes' PR's to add; what matters here is that the card asks for it instead of printing `err.message`.
-        Object.assign(w.h.run<Record<string, Record<string, string>>>('I18N.strings').en!, { 'errors.EXPLAINER_PROVIDER_ERROR': 'The image provider did not answer.' });
         await sact(w, 'saveExplainers', providerForm(), event());
         assert.equal(w.toasts[0]!.type, 'error');
-        assert.equal(w.toasts[0]!.message, 'The image provider did not answer.');
+        assert.equal(w.toasts[0]!.message, `${w.t('errors.EXPLAINER_PROVIDER_ERROR')} ${w.t('errors.EXPLAINER_PROVIDER_ERROR.next')}`);
+        assert.equal(w.toasts[0]!.message.includes('HTTP 502'), false);
     });
 
     it('a refusal of the fields lists every problem the server found, and one problem is its own sentence', async () => {
@@ -1458,19 +1846,23 @@ describe('Settings → Platform → Explainers (the platform admin’s card)', (
         assert.equal(one.toasts[0]!.message, three[2]);
     });
 
-    it('reads the flat error envelope of the admin routes: the code and the retry time reach the sentence', async () => {
-        // `{ error, message, code, params }` (flat, as the app has always answered): api.js lifts `code` and `params` onto the error, and
-        // UI.errorText turns them into the interface language once `errors.<CODE>` exists; until then the server's own sentence is shown.
+    it('reads the flat error envelope of the routes: the code and the retry time reach the sentence', () => {
+        // `{ error, message, code, params }`, flat, as the app has always answered; a 429 also carries `retryAt` beside them and a `Retry-After` header.
         const h = loadDashboard({ lang: 'en', files: ['dashboard/js/api.js'] });
         const API = h.run<Json>('API');
-        const body = { error: 'Drawing is paused.', message: 'Drawing is paused.', code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: '2026-10-26T00:00:00.000Z' } };
+        const body = { error: 'Drawing is paused.', message: 'Drawing is paused.', code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: '2026-10-26T00:00:00.000Z' }, retryAt: '2026-10-26T00:00:00.000Z' };
         const read = API.readError(body);
         assert.deepEqual(plain({ message: read.message, code: read.code, params: read.params }), { message: 'Drawing is paused.', code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: '2026-10-26T00:00:00.000Z' } });
+        assert.equal(read.flat.retryAt, '2026-10-26T00:00:00.000Z', 'the top-level field stays on the body');
         const err = Object.assign(new Error(read.message), { status: 429, code: read.code, params: read.params });
-        assert.equal(h.UI.errorLine(err), 'Drawing is paused.', 'no sentence of its own yet: the server’s is shown');
-        // and the day `errors.EXPLAINER_ALLOWANCE_PAUSED` exists, the same error reads as that sentence, with the retry time in it
-        Object.assign(h.run<Record<string, Record<string, string>>>('I18N.strings').en!, { 'errors.EXPLAINER_ALLOWANCE_PAUSED': 'Drawing resumes at {retryAt}.' });
-        assert.match(h.UI.errorLine(err), /^Drawing resumes at .*2026-10-26T00:00:00\.000Z.*\.$/);
+        assert.equal(h.UI.errorLine(err), `${h.t('errors.EXPLAINER_ALLOWANCE_PAUSED')} ${h.t('errors.EXPLAINER_ALLOWANCE_PAUSED.next')}`, 'the catalogue’s sentence replaces the server’s English');
+        // Every code the Explainers routes send has its sentence and next step in both languages.
+        const codes = ['EXPLAINERS_DISABLED', 'EXPLAINER_NOT_FOUND', 'EXPLAINER_BAD_STATE', 'EXPLAINER_PROMPT_REFUSED', 'EXPLAINER_NO_PROVIDER', 'EXPLAINER_ALLOWANCE_PAUSED', 'EXPLAINER_PROVIDER_ERROR',
+            'EXPLAINER_NO_TRACK', 'EXPLAINER_NEEDS_REFERENCE', 'EXPLAINERS_OWNER_ONLY', 'EXPLAINER_DRAFT_REFUSED', 'EXPLAINER_AUDIO_STALE', 'EXPLAINER_PICTURES_MISSING', 'EXPLAINER_RENDER_STALE', 'EXPLAINER_VOICE_LIMIT'];
+        for (const lang of ['en', 'ar'] as const) {
+            const strings = loadDashboard({ lang }).run<Record<string, Record<string, string>>>('I18N.strings')[lang]!;
+            for (const code of codes) assert.ok(strings[`errors.${code}`] && strings[`errors.${code}.next`], `${lang}: errors.${code}`);
+        }
     });
 
     it('the Test button draws one picture and says how it went in words', async () => {

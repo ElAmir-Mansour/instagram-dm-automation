@@ -3900,13 +3900,13 @@ const HelpContent = {
                                 ['الشخصيات', 'الشخصيات المتكررة التي تظهر في المشهد، حتى أربع.'],
                                 ['الصورة نفسها كالمشهد السابق', 'يستعيد المشهد صورة سابقه بدل رسم صورة جديدة.'],
                             ] },
-                            'بأزرار كل مشهد تنقله إلى الأعلى أو الأسفل، وتضيف مشهدًا بعده، وتحذفه. وتحت العنوان يظهر تقدير المدة: عدد الكلمات المنطوقة مقسومًا على سرعة المعلّق، مقابل المدة المستهدفة. وإن خرج النص عنها، أو عن العدد المعتاد للمشاهد، أو لم يذكر مصادر كافية، ظهر تنبيه. ويمكنك الاعتماد رغم التنبيه.',
-                            'وتحت المشاهد: عنوان الفيديو (70 حرفًا على الأكثر)، والوصف لكل منصة، والتعليق الأول بالمصادر، و5 ردود متوقعة على الأقل، والمصادر.',
+                            'بأزرار كل مشهد تنقله إلى الأعلى أو الأسفل، وتضيف مشهدًا بعده، وتحذفه، وذلك قبل تسجيل الصوت فقط: بعده يصبح لكل مشهد مكانه وصورته وتوقيته، فتعدّل نصوص المشاهد في أماكنها، أو تطلب إعادة كتابة. وتحت العنوان يظهر تقدير المدة: عدد الكلمات المنطوقة مقسومًا على سرعة المعلّق، مقابل المدة المستهدفة. وإن خرج النص عنها، أو عن العدد المعتاد للمشاهد، أو لم يذكر مصادر كافية، ظهر تنبيه. ويمكنك الاعتماد رغم التنبيه.',
+                            'وتحت المشاهد: عنوان الفيديو (70 حرفًا على الأكثر)، والوصف لكل منصة، والتعليق الأول بالمصادر، وحتى 10 ردود متوقعة (يكتب الكاتب 5 فأكثر)، والمصادر.',
                             { ul: [
-                                '**أعد الكتابة بملاحظة:** يكتب الكاتب مسودة جديدة بناءً على ملاحظتك («بداية أقصر، وأضف نتيجة 2020»). تبقى المسودة الحالية ظاهرة حتى تصل الجديدة، وتُستبدل تعديلاتك غير المحفوظة.',
+                                '**أعد الكتابة بملاحظة:** يكتب الكاتب مسودة جديدة بناءً على ملاحظتك («بداية أقصر، وأضف نتيجة 2020»). تبقى المسودة الحالية ظاهرة حتى تصل الجديدة، وتُستبدل تعديلاتك غير المحفوظة. ويتاح ذلك قبل الاعتماد فقط.',
                                 '**اعتمد النص:** يحفظ تعديلاتك أولًا ثم يبدأ تسجيل الصوت. هذه البوابة الأولى. وبعدها يعني تعديل النص المنطوق أو المعروض تسجيل الصوت من جديد.',
                             ] },
-                            { note: 'يجب أن ينتهي المشهد الأخير بسؤال حقيقي موجّه إلى المشاهد. أما طلب التعليق بكلمة أو التفاعل بإشارة فيُرفض لأنه استدراج للتفاعل: [[explainers#rules]].' },
+                            { note: 'يجب أن ينتهي المشهد الأخير بسؤال حقيقي موجّه إلى المشاهد. أما طلب التعليق بكلمة أو التفاعل بإشارة فيُرفض لأنه استدراج للتفاعل: [[explainers#rules]]. ولا يقبل الحفظ تعديلًا يضيف مشكلة من هذا النوع، بل يسرد لك المشكلات كلها لتصلحها دفعة واحدة، والنص الذي فيه مشكلة لا يُعتمد حتى تُصلح. أما التنبيهات فيمكنك الاعتماد رغمها.' },
                         ],
                         en: [
                             'Writing takes a few minutes, up to 20, because the writer researches first. You can leave the page: the work carries on. Claude on your Mac writes by default, and Gemini writes when the Mac cannot or when you chose it in the settings. The step says who wrote the draft you are looking at.',
@@ -3919,13 +3919,13 @@ const HelpContent = {
                                 ['Characters', 'The recurring characters in the scene, up to four.'],
                                 ['Same picture as the previous scene', 'The scene reuses its predecessor’s picture instead of drawing a new one.'],
                             ] },
-                            'Each scene has buttons to move it up or down, add a scene after it, and remove it. Above the scenes the length estimate shows the spoken words divided by the narrator’s pace, against the target. If the script falls outside it, or outside the usual number of scenes, or cites too few sources, a warning appears. You can still approve over a warning.',
-                            'Below the scenes: the video title (at most 70 characters), a caption for each platform, the first comment with the sources, at least 5 likely replies, and the sources.',
+                            'Each scene has buttons to move it up or down, add a scene after it, and remove it, until the voice is made only: after it a scene keeps its place, its picture and its time, so you edit the text of the scenes where they are, or ask for a rewrite. Above the scenes the length estimate shows the spoken words divided by the narrator’s pace, against the target. If the script falls outside it, or outside the usual number of scenes, or cites too few sources, a warning appears. You can still approve over a warning.',
+                            'Below the scenes: the video title (at most 70 characters), a caption for each platform, the first comment with the sources, up to 10 likely replies (the writer gives 5 or more), and the sources.',
                             { ul: [
-                                '**Rewrite with a note:** the writer writes a new draft from your note (“a shorter hook, and add the 2020 result”). The current draft stays visible until the new one arrives, and your unsaved edits are replaced.',
+                                '**Rewrite with a note:** the writer writes a new draft from your note (“a shorter hook, and add the 2020 result”). The current draft stays visible until the new one arrives, and your unsaved edits are replaced. It is offered before you approve only.',
                                 '**Approve the script:** saves your edits first, then starts the voice. This is the first gate. After it, changing the spoken or on-screen text means voicing again.',
                             ] },
-                            { note: 'The last scene must end with a genuine question to the viewer. Asking people to comment a word or to react is refused as engagement bait: [[explainers#rules]].' },
+                            { note: 'The last scene must end with a genuine question to the viewer. Asking people to comment a word or to react is refused as engagement bait: [[explainers#rules]]. A save never adds a problem of that kind: it lists every problem so you fix them in one pass, and a script that has one cannot be approved until it is fixed. Warnings you can approve over.' },
                         ],
                     },
                 },
@@ -3965,7 +3965,7 @@ const HelpContent = {
                                 'المشهد الذي اخترت له **الصورة نفسها كالمشهد السابق** يُنسخ ولا يُرسم.',
                                 '**اعتمد الصور:** هذه البوابة الثانية. يُفعَّل الزر حين يكون لكل مشهد صورة والتسجيل مطابقًا للنص، ويبدأ بعده التجهيز.',
                             ] },
-                            'تحقق من كل صورة: لا نص داخلها، ولا امرأة ولا فتاة، والشخصية المتكررة تُعرف بسهولة. وكل إعادة رسم تستهلك صورة من حصة اليوم، فأعد رسم القليل الخاطئ فقط.',
+                            'تحقق من كل صورة: لا نص داخلها، ولا امرأة ولا فتاة، والشخصية المتكررة تُعرف بسهولة. وكل إعادة رسم تستهلك صورة من حصة اليوم، فأعد رسم القليل الخاطئ فقط. ويمكنك إعادة الرسم من حين تظهر الصور حتى نشر الفيديو، عدا أثناء تجهيز الفيديو.',
                             { tip: 'إن توقف الرسم عند «بانتظار حصة الغد»، فتقدمك محفوظ ويتابع وحده بعد تجدد الحصة. التفاصيل في [[explainers#allowance]].' },
                         ],
                         en: [
@@ -3976,7 +3976,7 @@ const HelpContent = {
                                 'A scene set to **Same picture as the previous scene** is copied, never drawn.',
                                 '**Approve the pictures:** the second gate. The button is on once every scene has a picture and the audio matches the text, and rendering starts after it.',
                             ] },
-                            'Check each picture: no text in it, no woman or girl, and the recurring character easy to recognise. Every redraw spends one picture of today’s allowance, so redraw only the few that are wrong.',
+                            'Check each picture: no text in it, no woman or girl, and the recurring character easy to recognise. Every redraw spends one picture of today’s allowance, so redraw only the few that are wrong. You can redraw from the moment the pictures exist until the video is posted, except while the video is rendering.',
                             { tip: 'If drawing stops at “Waiting for tomorrow’s allowance”, your progress is kept and it carries on by itself once the allowance renews. Details in [[explainers#allowance]].' },
                         ],
                     },
@@ -3996,7 +3996,7 @@ const HelpContent = {
                             { dl: [
                                 ['الموسيقى', 'يُسمع المقطع تحت الصوت ويخفت حين يتكلم المعلّق، مع تدرّج في أول الفيديو وآخره. وإن كان ترخيصه يشترط الإسناد أُضيف سطر الإسناد إلى كل وصف.'],
                                 ['المؤثرات الصوتية فقط', 'صوت خافت عند كل قطع وكل تسمية، أخفض من الصوت، بلا موسيقى.'],
-                                ['هذا الفيديو أقدم من تعديلاتك', 'يظهر حين تعدّل بعد التجهيز. التعديل لا يدخل الفيديو إلا بتجهيز جديد.'],
+                                ['صُنع الفيديو قبل آخر تعديلاتك', 'يظهر حين تغيّر النص المنطوق أو الصوت بعد التجهيز، ولا تُجدول الجدولة فيديو كهذا. أما تسمية أو صورة جديدة فلا تدخل الفيديو أيضًا إلا بتجهيز جديد.'],
                             ] },
                             'تحت المشغّلين تغيّر الصوت والنص المكتوب ثم تضغط **جهّز الفيديو مجددًا**. تبقى الملفات السابقة حتى ينجح التجهيز الجديد، فلا تضيع نسخة جيدة بسبب محاولة فاشلة.',
                         ],
@@ -4011,7 +4011,7 @@ const HelpContent = {
                             { dl: [
                                 ['Music', 'The track plays under the voice and is lowered while the narrator speaks, with a fade at the start and the end. If its licence asks for credit, the credit line is added to every caption.'],
                                 ['Sound effects only', 'A soft sound on each cut and each label, quieter than the voice, and no music.'],
-                                ['This render is older than your edits', 'Appears when you edit after rendering. An edit reaches the video only with a new render.'],
+                                ['The video was made before your latest edits', 'Appears when you change the narration or the sound after rendering, and Schedule will not post a video like that. A new label or picture also reaches the video only with a new render.'],
                             ] },
                             'Under the players you change the sound and the subtitles and press **Render again**. The previous files stay until the new render succeeds, so a good copy is never lost to a failed attempt.',
                         ],
@@ -4022,7 +4022,7 @@ const HelpContent = {
                     title: { ar: 'الخطوة 5: النشر', en: 'Step 5: publish' },
                     body: {
                         ar: [
-                            'اضغط **جدولة**، واختر أقرب موعد نشر متاح، أو الآن، أو وقتًا تحدده بتوقيت مساحتك. وهذا ما يُنشر وأين، في مجموعة واحدة:',
+                            'اضغط **جدولة**، واختر أقرب موعد نشر متاح، أو الآن، أو وقتًا تحدده بتوقيت مساحتك. وهذا ما يُنشر وأين، في مجموعة واحدة. إنستغرام وفيسبوك ويوتيوب تتبع المنصات المحددة في **تنشر الجدولة ملف MP4 على** في إعدادات علامة الإنفوجرافيك، وتيك توك يُجهَّز دائمًا:',
                             { dl: [
                                 ['إنستغرام وفيسبوك', 'الفيديو العمودي مع غلافه.'],
                                 ['يوتيوب', 'الفيديو الأفقي مع عنوان يوتيوب ووصفه إن زادت المدة على 3 دقائق، وإلا فالفيديو العمودي بصيغة Shorts.'],
@@ -4034,7 +4034,7 @@ const HelpContent = {
                             { note: 'تُسجَّل الجدولة على الملفات كما هي لحظة الضغط. إن عدّلت بعدها فجهّز فيديو جديدًا قبل الجدولة التالية.' },
                         ],
                         en: [
-                            'Press **Schedule** and choose the next free slot, now, or a time you pick in your workspace’s time zone. This is what is posted, and where, as one group:',
+                            'Press **Schedule** and choose the next free slot, now, or a time you pick in your workspace’s time zone. This is what is posted, and where, as one group. Instagram, Facebook and YouTube follow the platforms set under **Schedule posts the MP4 to** in the Infographics brand settings, and TikTok is always made:',
                             { dl: [
                                 ['Instagram and Facebook', 'The vertical video with its cover.'],
                                 ['YouTube', 'The horizontal video with the YouTube title and description when it runs longer than 3 minutes, otherwise the vertical video as a Short.'],
