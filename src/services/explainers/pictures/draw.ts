@@ -533,7 +533,7 @@ export async function drawNext(args: { creatorId: string; explainerId: string })
 // ─── The owner's draw ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Draw or redraw one scene now (`POST /explainers/:id/scenes/:position/draw`, synchronous, at most the provider's 30 s). `note` is the owner's
+ * Draw or redraw one scene now (`POST /explainers/:id/scenes/:position/draw`, synchronous, at most the provider's 55 s). `note` is the owner's
  * redraw note: it goes into the prompt for this drawing and replaces the last one on the scene. The scene's earlier chosen picture goes to the
  * history; a draw that fails leaves the scene's picture as it was.
  *

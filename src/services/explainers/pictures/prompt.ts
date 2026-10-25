@@ -3,11 +3,13 @@
  * spec FR-013, FR-014, FR-018). Pure: no database, no clock, no network, so the same scene always gives the same prompt and the guard can be
  * tested on its own.
  *
- * ORDER (T038): the style, then each character named by the index of the reference picture it is sent as ("Image 0 shows the recurring
- * character: …"), then the brief, then the owner's note for this drawing, then the rules every picture carries. The model reads the references
- * as images 0..3 in the order they are attached, and `draw.ts` attaches them in the order of the characters listed here.
+ * ORDER (T038): the style, then each character named by its key and by the index of the reference picture it is sent as ("Image 0 is karim, a
+ * recurring character: …"), then the brief, then the owner's note for this drawing, then the rules every picture carries (with "each named
+ * character appears exactly once" when there are two or more). The model reads the references as images 0..3 in the order they are attached,
+ * and `draw.ts` attaches them in the order of the characters listed here. The key is the word the brief uses, which is what ties "robot points
+ * at…" to image 1.
  *
- * THE PEOPLE RULE IS POSITIVE. The fixed text says "every person in the picture is a man or a boy", not "no women or girls": a diffusion prompt
+ * THE PEOPLE RULE IS POSITIVE. The fixed text says "every human in the picture is a man or a boy", not "no women or girls": a diffusion prompt
  * that names what it must not draw can prime the model with it (the owner's lead, 2026-10-25). The words "woman" and "girl" therefore never
  * appear in a prompt we write. What keeps them out of the picture is on our side of the provider: this guard refuses a brief, a note or a
  * character description that names one (`EXPLAINER_PROMPT_REFUSED`, before any allowance is reserved and before any call), the writer is told the
@@ -91,10 +93,15 @@ export function refuseNote(note: string | null | undefined): string | null {
 
 /** What every scene picture carries. The people rule says what IS drawn; see the top of the file. */
 const SCENE_RULES = 'Composition: a wide 16:9 picture. Keep the top quarter of the picture calm and empty. '
-    + 'No text, letters, numbers or signage anywhere. Every person in the picture is a man or a boy. No real people\'s faces.';
+    + 'No text, letters, numbers or signage anywhere. Every human in the picture is a man or a boy. No real people\'s faces.';
+/**
+ * Said when a scene has two characters or more. The pilot's first drawing (2026-10-25) drew Karim twice and left the robot out in two of the four
+ * scenes that had both: each character appears once, and each looks like its own reference and no other.
+ */
+const MANY_CHARACTERS_RULE = 'Each named character appears exactly once, looking like its own image and not like the other characters.';
 
 const CANDIDATE_RULES = 'Composition: a square picture with the whole figure visible and some space around it. '
-    + 'No text, letters, numbers or signage. Every person in the picture is a man or a boy. No real people\'s faces.';
+    + 'No text, letters, numbers or signage. Every human in the picture is a man or a boy. No real people\'s faces.';
 
 /**
  * The prompt for one scene. Refuses (422 `EXPLAINER_PROMPT_REFUSED`) a scene with no brief, a note over 300 characters, and any brief, note or
@@ -110,16 +117,19 @@ export function buildScenePrompt(input: ScenePromptInput): string {
     const lines: string[] = [];
     const style = clean(input.style);
     if (style) lines.push(`Style: ${style}`);
+    // Each reference is named by the KEY the brief uses ("karim", "robot"), so a brief that says "robot points at…" is tied to image 1 and not left
+    // for the model to guess (it drew two Karims and no robot when the images had no names, 2026-10-25).
     input.characters.forEach((character, index) => {
         const description = clean(character.description).replace(/[.\s]+$/, '');
+        const name = clean(character.key) || `the character in image ${index}`;
         lines.push(
-            `Image ${index} shows the recurring character: ${description}. `
-            + `Keep this character exactly as in image ${index}: the same face, hair, clothes and proportions.`
+            `Image ${index} is ${name}, a recurring character: ${description}. `
+            + `Keep ${name} exactly as in image ${index}: the same face, hair, clothes and proportions.`
         );
     });
     lines.push(`Scene: ${brief}`);
     if (note) lines.push(`Change for this drawing: ${note}`);
-    lines.push(SCENE_RULES);
+    lines.push(input.characters.length > 1 ? `${SCENE_RULES} ${MANY_CHARACTERS_RULE}` : SCENE_RULES);
     return lines.join('\n');
 }
 

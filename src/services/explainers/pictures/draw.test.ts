@@ -398,8 +398,9 @@ describe('drawNext — what the provider is asked, and what is kept', () => {
         assert.equal(request!.references![0]!.mime, 'image/jpeg');
         assert.deepEqual(Buffer.from(request!.references![1]!.data), pngHeader(448, 448), 'image 1 is Karim’s');
         assert.equal(request!.references![1]!.mime, 'image/png');
-        assert.match(request!.prompt, /Image 0 shows the recurring character: an old man with a white beard/);
-        assert.match(request!.prompt, /Image 1 shows the recurring character: a curious young man/);
+        assert.match(request!.prompt, /Image 0 is samir, a recurring character: an old man with a white beard/);
+        assert.match(request!.prompt, /Image 1 is karim, a recurring character: a curious young man/);
+        assert.match(request!.prompt, /Each named character appears exactly once/);
         assert.deepEqual(h.store.gets, [REF_SAMIR, REF_KARIM]);
     });
 
