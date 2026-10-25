@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
     checkDraft, countWords, DEFAULT_PACE, DURATION_RANGE_S, endsWithQuestion, engagementBait, estimateSeconds, FEMALE_TERMS, findFemaleSubject,
-    LIMITS, MAX_SCENES, SCENE_BOUNDS, type DraftFinding, type DraftInput, type DraftScene,
+    LIMITS, MAX_SCENES, PICTURE_SECONDS, PICTURE_WARN_SECONDS, pictureHolds, SCENE_BOUNDS, type DraftFinding, type DraftInput, type DraftScene,
 } from './spec.js';
 
 type Tier = keyof typeof SCENE_BOUNDS;
@@ -167,6 +167,86 @@ describe('the target range of a length tier', () => {
     it('is only ever a warning: the owner can still approve', () => {
         const check = checkDraft(draftOfWords(12, 400), ctxFor('short', 'en', 1));
         assert.ok(codes(check.warnings).includes('duration_long'));
+        assert.deepEqual(check.problems, []);
+    });
+});
+
+// ─── How long each picture stays ───────────────────────────────────────────────────────────────
+
+/** A draft whose scenes say `counts[i]` words each (at a pace of 1 that is seconds), the last still a question; `continued` keep the previous picture. */
+function paced(counts: readonly number[], continued: readonly number[] = []): TestDraft {
+    const d = draft(counts.length);
+    d.scenes = d.scenes.map((s, i) => ({ ...s, spoken: words(counts[i]!), continues: continued.includes(i) }));
+    return d;
+}
+
+const PACING = ['slow_opening', 'scene_long', 'scene_short'];
+/** The pacing warnings of a short draft; `pace` null is the language's default. */
+const pacing = (d: TestDraft, language: 'ar' | 'en' = 'en', pace: number | null = 1): DraftFinding[] =>
+    checkDraft(d, ctxFor('short', language, pace ?? undefined)).warnings.filter((w) => PACING.includes(w.code));
+
+describe('how long each picture stays', () => {
+    it('is written for 3.5 to 6.5 s, about 4.5, the first within 4; warned over 7 s, under 2 s, and a first one over 4.5 s', () => {
+        assert.deepEqual(PICTURE_SECONDS, { min: 3.5, aim: 4.5, max: 6.5, first: 4 });
+        assert.deepEqual(PICTURE_WARN_SECONDS, { short: 2, long: 7, first: 4.5 });
+    });
+
+    it('a picture is a scene and the scenes after it that keep it, as the renderer holds them', () => {
+        const holds = pictureHolds([{ spoken: words(4) }, { spoken: words(6) }, { spoken: words(3), continues: true }, { spoken: words(5) }], 'en', 1);
+        assert.deepEqual(holds, [{ scene: 0, seconds: 4 }, { scene: 1, seconds: 9 }, { scene: 3, seconds: 5 }]);
+        assert.deepEqual(pictureHolds([{ spoken: words(4), continues: true }], 'en', 1), [{ scene: 0, seconds: 4 }], 'a first scene has nothing to keep');
+    });
+
+    it('a first picture over 4.5 s is a slow opening, said once, at scene 0', () => {
+        assert.deepEqual(pacing(paced([4, 5, 5, 5])), [], '4 s');
+        const slow = pacing(paced([5, 5, 5, 5]));
+        assert.deepEqual(codes(slow), ['slow_opening']);
+        assert.equal(slow[0]!.scene, 0);
+        assert.match(slow[0]!.message, /about 5 s/);
+        assert.deepEqual(codes(pacing(paced([9, 5, 5]))), ['slow_opening'], 'a first picture over 7 s is not also too long');
+    });
+
+    it('a later picture over 7 s is too long, its scenes named by number; 7 s is not', () => {
+        assert.deepEqual(pacing(paced([4, 7, 6, 7])), []);
+        const long = pacing(paced([4, 8, 6, 9]));
+        assert.deepEqual(codes(long), ['scene_long']);
+        assert.match(long[0]!.message, /scenes 2, 4: split each of those sentences in two/);
+        assert.match(pacing(paced([4, 8, 6, 5]))[0]!.message, /scene 2: split that sentence in two/);
+    });
+
+    it('two sentences that keep one picture are one picture: 4 + 4 s held is too long', () => {
+        const kept = pacing(paced([4, 4, 4, 5], [2]));
+        assert.deepEqual(codes(kept), ['scene_long']);
+        assert.match(kept[0]!.message, /scene 2: /);
+    });
+
+    it('a picture under 2 s is too fast; a scene with no spoken words is a problem of its own, not a fast picture', () => {
+        const fast = pacing(paced([4, 1, 5, 1]));
+        assert.deepEqual(codes(fast), ['scene_short']);
+        assert.match(fast[0]!.message, /scenes 2, 4: join each of those sentences to the one next to it/);
+        assert.deepEqual(pacing(paced([4, 2, 5])), [], '2 s');
+        const empty = paced([4, 0, 5]);
+        assert.deepEqual(pacing(empty), []);
+        assert.ok(codes(checkDraft(empty, ctxFor('short', 'en', 1)).problems).includes('field_empty'));
+    });
+
+    it('reads the pace from the settings: the same words are quicker pictures at a faster narrator', () => {
+        const d = paced([9, 16, 12]);
+        assert.deepEqual(codes(pacing(d)), ['slow_opening', 'scene_long'], 'at 1 word a second');
+        assert.deepEqual(pacing(d, 'en', 2.5), [], 'at 2.5: 3.6, 6.4 and 4.8 s');
+    });
+
+    it('the RAG pilot’s sentence lengths, at the Arabic pace, are warned: its first picture, and scenes 2, 4 and 14', () => {
+        const pilot = paced([10, 16, 10, 16, 12, 12, 10, 11, 10, 11, 11, 11, 12, 13, 11]);
+        const found = pacing(pilot, 'ar', null);
+        assert.deepEqual(codes(found), ['slow_opening', 'scene_long']);
+        assert.match(found[0]!.message, /about 5\.6 s/);
+        assert.match(found[1]!.message, /scenes 2, 4, 14:/);
+    });
+
+    it('is only ever a warning: the owner can still approve', () => {
+        const check = checkDraft(paced([12, 16, 1]), ctxFor('short', 'en', 1));
+        assert.deepEqual(codes(check.warnings.filter((w) => PACING.includes(w.code))), ['slow_opening', 'scene_long', 'scene_short']);
         assert.deepEqual(check.problems, []);
     });
 });
@@ -489,11 +569,15 @@ describe('the no-women guard', () => {
 
 describe('checkDraft', () => {
     it('finds nothing wrong with a draft that follows every rule', () => {
-        // 12 scenes, 86 spoken words: at a pace of one word a second that is 86 s, inside the 55-95 s of a short explainer.
-        const check = checkDraft(draft(12), ctxFor('short', 'en', 1));
+        // 12 scenes, 80 spoken words: at a pace of one word a second that is 80 s, inside the 55-95 s of a short explainer; a hook of 4 words
+        // (its picture changes at 4 s), ten sentences of 7 and a closing question of 6.
+        const d = draft(12);
+        d.scenes[0] = scene({ narration: 'Models make things up.', spoken: 'Models make things up.' });
+        d.scenes[11] = scene({ narration: 'Would you trust an unsourced answer?', spoken: 'Would you trust an unsourced answer?', source_ids: [] });
+        const check = checkDraft(d, ctxFor('short', 'en', 1));
         assert.deepEqual(check.problems, []);
         assert.deepEqual(check.warnings, []);
-        assert.equal(check.est_seconds, 86);
+        assert.equal(check.est_seconds, 80);
     });
 
     it('and the same words at the real English pace are 34.4 s, which a short explainer is warned about', () => {

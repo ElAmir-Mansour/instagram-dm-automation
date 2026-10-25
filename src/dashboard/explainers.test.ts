@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { checkDraft, PICTURE_WARN_SECONDS } from '../services/explainers/spec.js';
 import { loadDashboard, settle, type Dashboard, type Json } from './_harness.js';
 
 const ID = 'e1';
@@ -425,6 +426,44 @@ describe('Explainers: the script step', () => {
         assert.deepEqual(codes(P.scriptWarnings(scenes(20), [{ title: 'a' }], 'short', 'ar')), ['few_sources']);
         assert.deepEqual(codes(P.scriptWarnings(scenes(60, 8), [{ title: 'a' }], 'medium', 'ar')), [], '60 scenes of 8 words: 267 s, inside 170-310');
         assert.equal(codes(P.scriptWarnings(scenes(20), [{ title: '' }, { url: '' }], 'short', 'ar')).includes('needs_sources'), true, 'an empty source is not a source');
+    });
+
+    it('warns about how long each picture stays, as the server does: a slow first picture, then long and fast ones by scene number', () => {
+        const { P } = world();
+        const said = (counts: readonly number[], kept: readonly number[] = []): Json[] =>
+            counts.map((n, i) => ({ spoken: Array.from({ length: n }, () => 'w').join(' '), continues: kept.includes(i) }));
+        const codes = (list: Json[]): string[] => Array.from(list, (x) => String(x.code));
+        assert.deepEqual(plain(P.PICTURE_WARN), PICTURE_WARN_SECONDS, 'the server’s PICTURE_WARN_SECONDS');
+        // At 1.8 words a second: 7 words is 3.9 s, 9 is 5 s, 13 is 7.2 s and 3 is 1.7 s.
+        assert.deepEqual(plain(P.pacingWarnings(said([7, 9, 9, 9]), 'ar')), []);
+        assert.deepEqual(plain(P.pacingWarnings(said([9, 9, 13, 9, 3, 13]), 'ar')), [
+            { code: 'slow_opening', secs: 5 }, { code: 'scene_long', scenes: [3, 6] }, { code: 'scene_short', scenes: [5] },
+        ]);
+        assert.deepEqual(plain(P.pacingWarnings(said([7, 7, 7, 9], [2]), 'ar')), [{ code: 'scene_long', scenes: [2] }], 'a kept picture is one picture: 3.9 + 3.9 s');
+        assert.deepEqual(plain(P.pacingWarnings(said([7, 0, 9]), 'ar')), [], 'no spoken words is a problem of its own, not a fast picture');
+        assert.deepEqual(plain(P.pacingWarnings(said([16, 16, 2]), 'ar', 4)), [{ code: 'scene_short', scenes: [3] }], 'the settings’ pace: at 4 words a second that is 4, 4 and 0.5 s');
+        // The same codes as checkDraft on the server, for the same scenes at the same pace.
+        assert.deepEqual(plain(P.pacingWarnings(said([16, 5, 5]), 'ar', 1)), [{ code: 'slow_opening', secs: 16 }], 'a long first picture is a slow opening only');
+        for (const sample of [[9, 9, 13, 9, 3, 13], [7, 9, 9, 9], [16, 16, 2], [4, 12, 1], [16, 5, 5]]) {
+            for (const pace of [undefined, 1, 2.5]) {
+                const scenes = said(sample).map((s) => ({ narration: 'x', label: '', brief: 'b', characters: [], spoken: String(s.spoken), continues: s.continues === true }));
+                const server = checkDraft({ scenes }, { tier: 'short', language: 'ar', ...(pace === undefined ? {} : { pace }) })
+                    .warnings.filter((w) => ['slow_opening', 'scene_long', 'scene_short'].includes(w.code)).map((w) => w.code);
+                assert.deepEqual(codes(P.pacingWarnings(said(sample), 'ar', pace)), server, `${sample.join(',')} at ${pace ?? 'the default pace'}`);
+            }
+        }
+        // In the script's list, between the length and the sources, as the server orders them.
+        const sources = [{ title: 'a' }, { title: 'b' }, { title: 'c' }];
+        assert.deepEqual(codes(P.scriptWarnings(said([9, ...Array.from({ length: 19 }, () => 7)]), sources, 'short', 'ar')), ['slow_opening'], '20 scenes, 78.9 s');
+        assert.deepEqual(codes(P.scriptWarnings(said([13, 13, 13]), [], 'short', 'ar')), ['scene_count', 'duration_short', 'slow_opening', 'scene_long', 'needs_sources']);
+        // A warning the server stored gets its numbers from the script as it stands, like the others.
+        const stored = P.savedWarnings({ draft: { warnings: [{ code: 'scene_long', message: 'm' }, { code: 'slow_opening', message: 'm' }], sources: [] }, scenes: said([9, 16, 7]), length_tier: 'short', language: 'ar' }, 30);
+        assert.deepEqual(Array.from(stored, (w: Json) => [w.code, plain(w.scenes ?? null), w.secs ?? null]), [['scene_long', [2], null], ['slow_opening', null, 5]]);
+        // Said with the scene numbers, in the interface's language.
+        assert.match(P.warningText({ code: 'scene_long', scenes: [3, 6] }), /Scenes to split, where one picture stays more than 7 seconds: 3, 6\./);
+        assert.match(P.warningText({ code: 'scene_short', scenes: [5] }), /under 2 seconds: 5\./);
+        assert.match(P.warningText({ code: 'slow_opening', secs: 5.6 }), /The first picture stays about ⁦0:06⁩\./);
+        assert.match(world({ lang: 'ar' }).P.warningText({ code: 'scene_long', scenes: [3, 6] }), /تبقى أكثر من 7 ثوانٍ: 3، 6\./);
     });
 
     it('a closing question ends in ? or ؟, with closing quotes and brackets allowed', () => {
