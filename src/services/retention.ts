@@ -256,6 +256,10 @@ export async function pruneLinkClicks(now: number = Date.now()): Promise<{ delet
  * the operator's Approve) or scheduled (its post fetches them). A rejected or failed reel's files
  * are not kept (MONTEUR.md §2).
  *
+ * The explainers' (v59, `KEPT_BY_EXPLAINERS_SQL`): a scene's pictures for as long as the scene exists, the voiceover and the two videos
+ * and the cover of an explainer for as long as it is not scheduled, and until 30 days after its posting time once it is (FR-031), and the
+ * characters' reference pictures and the music tracks while the settings name them.
+ *
  * These tables arrive with migrations v21 and v24, so this statement fails until both are
  * applied. It fails safe: a failed prune deletes nothing and is logged as
  * `retention.media_prune_failed`.
@@ -395,18 +399,68 @@ const KEPT_BY_PROFILE_SQL = `
                                   LIKE '%' || m.id::text || '%'
                        )`;
 
-export const MEDIA_CANDIDATES_SQL = MEDIA_CANDIDATES_BASE_SQL + KEPT_BY_PROFILE_SQL;
+/**
+ * How long an explainer's voiceover and videos outlive its posting time (FR-031: "kept until 30 days after the last posting"). The
+ * month is the owner's window to download the MP4 for the networks the app does not post to, and to post it again.
+ */
+export const EXPLAINER_FILES_GRACE_DAYS = 30;
 
-/** The candidate query without the guards a database behind the code cannot run: no `creator_profiles` (v33), no `is_private` (v51). */
-function candidatesSql(guards: { profile: boolean; publicOnly: boolean }): string {
+/**
+ * What the illustrated explainers (v59) keep alive. Three guards, ANDed with the rest:
+ *
+ *   - `explainer_scenes`: the chosen picture and the last three, for as long as the scene exists, whatever the explainer's status. The
+ *     rows go with their explainer (ON DELETE CASCADE), and then nothing names the pictures any more.
+ *   - `explainers`: the voiceover, the vertical and horizontal videos and the cover. While the explainer is anything but `scheduled` they
+ *     are kept without a limit: a `ready` explainer is waiting for Schedule, and no post names its files until then. Once it is
+ *     `scheduled` they are kept until `EXPLAINER_FILES_GRACE_DAYS` after the time it was scheduled for, then go like any posted file (the
+ *     posts' own guard, above, keeps them for as long as a post may still fetch them). A scheduled row whose time cannot be read keeps
+ *     its files: when the answer is unknown, the sweep deletes nothing.
+ *   - `studio_settings.explainer`: the characters' approved reference pictures and the music library's tracks. A track is the owner's
+ *     file and is named by no post at all.
+ *
+ * Read as text, like the rest: an upload's id anywhere in the JSON is a reason to keep it, and that can only make the sweep delete fewer
+ * files. A picture the owner drew and dropped, or a candidate no character was ever saved with, is named by nothing, and goes by age.
+ *
+ * All three arrive with migration v59 in one transaction, so a database without it has none of them (`withOptionalGuards`).
+ */
+const KEPT_BY_EXPLAINERS_SQL = `
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM explainer_scenes es
+                            WHERE (COALESCE(es.picture::text, '') || ' ' || es.pictures::text)
+                                  LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM explainers e
+                            WHERE (e.status <> 'scheduled'
+                                   OR COALESCE((e.schedule->>'scheduled_time')::timestamptz + INTERVAL '${EXPLAINER_FILES_GRACE_DAYS} days' > NOW(), TRUE))
+                              AND (COALESCE(e.audio->>'media_id', '') || ' ' || COALESCE(e.audio->>'url', '')
+                                   || ' ' || COALESCE(e.render->>'vertical_url', '') || ' ' || COALESCE(e.render->>'horizontal_url', '')
+                                   || ' ' || COALESCE(e.render->>'cover_url', ''))
+                                  LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM studio_settings st
+                            WHERE (COALESCE((st.explainer->'characters')::text, '') || ' ' || COALESCE((st.explainer->'music')::text, ''))
+                                  LIKE '%' || m.id::text || '%'
+                       )`;
+
+export const MEDIA_CANDIDATES_SQL = MEDIA_CANDIDATES_BASE_SQL + KEPT_BY_PROFILE_SQL + KEPT_BY_EXPLAINERS_SQL;
+
+/** The candidate query without the guards a database behind the code cannot run: no `creator_profiles` (v33), no explainers (v59), no `is_private` (v51). */
+function candidatesSql(guards: { profile: boolean; explainers: boolean; publicOnly: boolean }): string {
     return MEDIA_CANDIDATES_HEAD_SQL
         + (guards.publicOnly ? PUBLIC_ONLY_SQL : '')
         + MEDIA_CANDIDATES_GUARDS_SQL
-        + (guards.profile ? KEPT_BY_PROFILE_SQL : '');
+        + (guards.profile ? KEPT_BY_PROFILE_SQL : '')
+        + (guards.explainers ? KEPT_BY_EXPLAINERS_SQL : '');
 }
 
 /** Logged once per process: the daily sweep and the clean-up screen both come here. */
 let profileTableWarned = false;
+let explainerTablesWarned = false;
 
 /** `undefined_column` for this column: a database that has not had the migration that adds it. */
 function isMissingColumn(err: unknown, column: string): boolean {
@@ -419,11 +473,12 @@ function isMissingColumn(err: unknown, column: string): boolean {
  * the query would fail whole, so the media sweep would stop until `npm run migrate` ran. With no table no profile
  * names a file, so the clause is vacuous and the query runs again without it: what it deletes is what it deleted
  * before the clause existed. The same for a database behind v51: with no `is_private` column no file is private, so the
- * "not private" line is vacuous and the query runs again without it. Any other failure, about any other table or column,
- * is still the caller's.
+ * "not private" line is vacuous and the query runs again without it. The same for a database behind v59: with no explainer tables
+ * (or no `studio_settings.explainer`) no explainer names a file, and the three explainer guards go together, as the migration made them.
+ * Any other failure, about any other table or column, is still the caller's.
  */
 async function withOptionalGuards<T>(run: (candidatesSql: string) => Promise<T>): Promise<T> {
-    const guards = { profile: true, publicOnly: true };
+    const guards = { profile: true, explainers: true, publicOnly: true };
     for (;;) {
         try {
             return await run(candidatesSql(guards));
@@ -434,6 +489,12 @@ async function withOptionalGuards<T>(run: (candidatesSql: string) => Promise<T>)
                     profileTableWarned = true;
                     log('warn', 'retention.profile_table_missing', { fix: 'npm run migrate (migration_v33_creator_profiles.sql)' });
                 }
+            } else if (guards.explainers && (isMissingTable(err, 'explainer_scenes') || isMissingTable(err, 'explainers') || isMissingColumn(err, 'explainer'))) {
+                guards.explainers = false;
+                if (!explainerTablesWarned) {
+                    explainerTablesWarned = true;
+                    log('warn', 'retention.explainer_tables_missing', { fix: 'npm run migrate (migration_v59_explainers.sql)' });
+                }
             } else if (guards.publicOnly && isMissingColumn(err, 'is_private')) {
                 guards.publicOnly = false;
             } else {
@@ -443,9 +504,10 @@ async function withOptionalGuards<T>(run: (candidatesSql: string) => Promise<T>)
     }
 }
 
-/** Test hook: forget that the missing-v33 warning was logged. */
+/** Test hook: forget that the missing-v33 and missing-v59 warnings were logged. */
 export function resetProfileTableWarning(): void {
     profileTableWarned = false;
+    explainerTablesWarned = false;
 }
 
 export type MediaPruneOutcome =
@@ -598,6 +660,8 @@ export interface RetentionSweepResult {
     linkClicksDeleted: number;
     /** Customer files (private uploads) no message named for `PRIVATE_MEDIA_ORPHAN_DAYS`. Once per sweep, in batches. */
     privateMediaDeleted: number;
+    /** Rows of the image provider's daily allowance older than 90 days (illustrated explainers, v59). Once per sweep. */
+    allowanceRowsDeleted: number;
 }
 
 /** Injected only so the loop's termination rules can be exercised without a database. */
@@ -612,6 +676,11 @@ export interface RetentionSweepDeps {
     pruneLinkClicks?: typeof pruneLinkClicks;
     /** Optional for the same reason; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
     prunePrivateMedia?: typeof pruneOrphanedPrivateMedia;
+    /**
+     * Deletes the image provider's allowance rows older than 90 days (explainers' `sweepAllowance`, T054) and says how many went. Optional for
+     * the same reason. It may throw: a database without v59 has no `image_allowance`, and the sweep must still reach the publishes.
+     */
+    pruneAllowance?: () => Promise<number>;
 }
 
 export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
@@ -638,7 +707,7 @@ export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETEN
     const result: RetentionSweepResult = {
         rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, mediaObjectsRemoved: 0, passes: 0, moreRemaining: false,
         onboarding: { eventsDeleted: 0, invitesDeleted: 0, draftSourcesCleared: 0, moreRemaining: false },
-        linkClicksDeleted: 0, privateMediaDeleted: 0,
+        linkClicksDeleted: 0, privateMediaDeleted: 0, allowanceRowsDeleted: 0,
     };
 
     await sweepPasses(deps, result);
@@ -665,6 +734,16 @@ export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETEN
 
     // Tracked-link clicks (S7), once. It cannot throw (`pruneLinkClicks` logs and returns what it deleted), and a database without v38 reads as nothing.
     if (deps.pruneLinkClicks) result.linkClicksDeleted = (await deps.pruneLinkClicks()).deleted;
+
+    // The image provider's daily allowance rows past 90 days (T054), once. The allowance module owns the DELETE; what is guarded here is
+    // that nothing it throws (no table before v59, a dropped connection) reaches the cron: it is logged, read as zero, and the next daily run tries again.
+    if (deps.pruneAllowance) {
+        try {
+            result.allowanceRowsDeleted = await deps.pruneAllowance();
+        } catch (err) {
+            if (!isMissingTable(err, 'image_allowance')) log('error', 'retention.allowance_sweep_failed', { message: (err as Error)?.message });
+        }
+    }
     return result;
 }
 
