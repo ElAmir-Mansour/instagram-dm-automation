@@ -110,14 +110,14 @@ describe('countWords', () => {
 });
 
 describe('the duration estimate: spoken words ÷ pace', () => {
-    it('is 2.1 words a second for Arabic and 2.5 for English', () => {
-        assert.deepEqual(DEFAULT_PACE, { ar: 2.1, en: 2.5 });
-        assert.equal(estimateSeconds([{ spoken: words(126) }], 'ar'), 60);
+    it('is 1.8 words a second for Arabic (measured 2026-10-25: 11 words in 6.3 s of speech) and 2.5 for English', () => {
+        assert.deepEqual(DEFAULT_PACE, { ar: 1.8, en: 2.5 });
+        assert.equal(estimateSeconds([{ spoken: words(108) }], 'ar'), 60);
         assert.equal(estimateSeconds([{ spoken: words(100) }], 'en'), 40);
     });
 
     it('adds up the scenes, and reads the spoken form: that is what the narrator says', () => {
-        assert.equal(estimateSeconds([{ spoken: words(63) }, { spoken: words(63) }], 'ar'), 60);
+        assert.equal(estimateSeconds([{ spoken: words(54) }, { spoken: words(54) }], 'ar'), 60);
         assert.equal(estimateSeconds([], 'ar'), 0);
     });
 
@@ -129,14 +129,14 @@ describe('the duration estimate: spoken words ÷ pace', () => {
     });
 
     it('is rounded to a tenth of a second', () => {
-        assert.equal(estimateSeconds([{ spoken: words(100) }], 'ar'), 47.6);
+        assert.equal(estimateSeconds([{ spoken: words(100) }], 'ar'), 55.6);
     });
 
     it('is what a draft check reports', () => {
         const d = draftOfWords(12, 100);
         assert.equal(checkDraft(d, ctxFor('short', 'en')).est_seconds, 40);
         assert.equal(checkDraft(d, ctxFor('short', 'en', 1)).est_seconds, 100);
-        assert.equal(checkDraft(d, ctxFor('short', 'ar')).est_seconds, 47.6);
+        assert.equal(checkDraft(d, ctxFor('short', 'ar')).est_seconds, 55.6);
     });
 });
 

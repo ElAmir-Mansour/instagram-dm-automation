@@ -288,7 +288,11 @@ export interface DraftInput {
 export type DraftProblemCode =
     | 'no_scenes' | 'too_many_scenes' | 'field_empty' | 'field_too_long' | 'label_too_long' | 'too_many_characters' | 'bad_source_id'
     | 'closing_question' | 'engagement_bait' | 'female_subject';
-export type DraftWarningCode = 'scene_count' | 'duration_short' | 'duration_long' | 'needs_sources' | 'few_sources';
+/**
+ * `research_limited` is not found by `checkDraft` (it reads a draft, not how it was written): the writer's result carries `research_rounds`, and a script
+ * written with 0 web reads is flagged by whoever applies it (apply.ts). The owner may still approve over it, as over every warning.
+ */
+export type DraftWarningCode = 'scene_count' | 'duration_short' | 'duration_long' | 'needs_sources' | 'few_sources' | 'research_limited';
 
 export interface DraftFinding {
     code: DraftProblemCode | DraftWarningCode;
