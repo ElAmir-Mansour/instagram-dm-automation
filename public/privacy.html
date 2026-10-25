@@ -231,6 +231,20 @@
       the op ends); the audience row keeps only {columns, rows_sent, matched_estimate}. The raw text is never stored or logged;
     · OPT-OUT: the owner records a request (POST /api/ads/audiences/opt-outs) → only sha256(normalised phone or email) in
       contact_consents, plus DELETE <audience>/users ops on the tenant's customer lists at Meta.
+
+  ILLUSTRATED EXPLAINERS — ADDED 2026-10-25 (spec 003-illustrated-explainers, R2b, T069). Section 1 (#explainers-ar /
+  #explainers-en), section 4 (retention) and section 5 (Google's line, Cloudflare's line):
+    · OWNER ONLY: app_settings explainers.enabled.<tenant> (src/services/explainers/switch.ts); only the platform owner can be on;
+    · WRITING: topic, notes, source links → explainer_write, Claude Code on the owner's Mac with WebSearch/WebFetch only
+      (aicourse-captions scripts/studio/explainerWrite.mjs, the research variant of scripts/monteur/think.mjs); fallback → Gemini with
+      google_search grounding (src/services/explainers/writerGemini.ts) when the Mac is offline or signed out, or the owner picks it;
+    · VOICE: each scene's spoken text → Gemini TTS (gemini-3.8-flash-tts, worker scripts/studio/tts.mjs), free tier;
+    · PICTURES: scene briefs (English) + the character reference drawings → Cloudflare Workers AI (src/services/explainers/pictures/);
+      the women guard refuses before any call; no photo of a real person is a reference;
+    · NEVER: conversations, messages, contacts, lead answers: no explainer code path reads them;
+    · RETENTION: pictures, references and tracks while referenced; audio and MP4s until 30 days after the last scheduled post (kept
+      while unscheduled); deleting an explainer removes its files (src/services/retention.ts).
+  If any of these changes, change both languages here and the stamp.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -1136,7 +1150,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 22 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 أكتوبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1535,6 +1549,38 @@
                     </li>
                 </ul>
 
+                <h3 id="explainers-ar">عندما يصنع صاحب المنصة فيديو شرحٍ مصوّراً (الاستوديو)</h3>
+                <p>
+                    فيديوهات الشرح المصوّرة فيديوهاتٌ بصوتٍ وصورٍ مرسومة يصنعها صاحب المنصة عن موضوعاته هو، لحساباته هو.
+                    <strong>ولا تُستخدم فيها إلا مواد صاحب المنصة نفسه: لا يُستخدم فيها أي تعليق أو رسالة أو جهة اتصال أو إجابة نموذج
+                    لأي شخص يراسل أحد الحسابات.</strong> ولا يستخدمها إلا صاحب المنصة.
+                </p>
+                <ul>
+                    <li>
+                        <strong>الكتابة:</strong> يُرسَل الموضوع والملاحظات والروابط التي يقدّمها صاحب المنصة إلى
+                        <bdi lang="en" dir="ltr">Claude</bdi> (من <bdi lang="en" dir="ltr">Anthropic</bdi>) على جهاز صاحب المنصة نفسه،
+                        فيقرأ صفحات ويب عامة ليبحث في الموضوع، ثم يكتب النص والأوصاف وقائمة المصادر. وإن كان ذلك الجهاز غير متصل أو
+                        خرج من حسابه، أو اختار صاحب المنصة ذلك، كتبه <bdi lang="en" dir="ltr">Gemini</bdi> من جوجل بدلاً منه وبحث في
+                        الويب ببحث جوجل، فيصل الموضوع والملاحظات والروابط نفسها إلى جوجل.
+                    </li>
+                    <li>
+                        <strong>الصوت:</strong> يُرسَل نص الفيديو إلى خدمة تحويل النص إلى كلام في <bdi lang="en" dir="ltr">Gemini</bdi>
+                        من جوجل لتقرأه بصوتٍ مسموع. وفي الفئة المجانية من <bdi lang="en" dir="ltr">Gemini</bdi> قد تستخدم جوجل ما
+                        يصلها لتحسين منتجاتها
+                        (<a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">شروط <bdi lang="en" dir="ltr">Gemini API</bdi></a>)،
+                        والنص هو نص فيديو سيُنشر علناً.
+                    </li>
+                    <li>
+                        <strong>الصور:</strong> يُرسَل وصفٌ قصير بالإنجليزية لصورة كل مشهد، والرسوم المرجعية لشخصيات صاحب المنصة
+                        الكرتونية المتكررة، إلى <bdi lang="en" dir="ltr">Cloudflare Workers AI</bdi> التي ترسم الصور. ولا تُرسَل أي صورة
+                        فوتوغرافية لشخص حقيقي.
+                    </li>
+                    <li>
+                        <strong>ما يُخزَّن:</strong> الموضوع والنص والأوصاف والمصادر والصور والتسجيل الصوتي والفيديوهات النهائية، مع حساب
+                        صاحب المنصة، وتُحذف كما يبيّن القسم 4.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
@@ -1626,6 +1672,11 @@
                         صاحب النشاط (من يوم إلى 365 يوماً). ويبقى بعدها سجلّ للعدد فقط (التاريخ والنموذج والإعلان) دون أي بيانات عنك.
                         وتُحذف كلها إن طلبت الحذف (القسم 6).
                     </li>
+                    <li>
+                        <strong>فيديوهات الشرح المصوّرة</strong> — تبقى الصور ورسوم الشخصيات والمقاطع الموسيقية ما دام فيديو شرحٍ أو
+                        الإعدادات تستخدمها. ويبقى التسجيل الصوتي والفيديوهات النهائية حتى 30 يوماً بعد آخر منشور مجدول لذلك الفيديو، وما
+                        دام لم يُجدول بعد. وحذف فيديو الشرح يحذف ملفاته.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
@@ -1655,8 +1706,15 @@
                     </li>
                     <li>
                         <strong>جوجل</strong> — تتلقّى واجهة <bdi lang="en" dir="ltr">Gemini API</bdi> نصوص الرسائل الخاصة كما
-                        هو موضّح في القسم 3.
+                        هو موضّح في القسم 3. وفي فيديوهات الشرح المصوّرة لصاحب المنصة تتلقّى أيضاً النص الذي تقرؤه بصوتٍ مسموع،
+                        والموضوع والملاحظات والروابط إن كتبت هي النص (القسم 1).
                         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
+                    </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Cloudflare</bdi></strong> (<bdi lang="en" dir="ltr">Workers AI</bdi>) — لفيديوهات
+                        الشرح المصوّرة لصاحب المنصة فقط: تتلقّى الوصف القصير لكل صورة والرسوم المرجعية لشخصياته الكرتونية، وترسم الصور
+                        (القسم 1).
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Cloudflare</bdi></a>.
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Supabase</bdi></strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
@@ -1792,7 +1850,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 22 October 2026</p>
+                <p class="stamp">Last updated: 25 October 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
 
@@ -2221,6 +2279,36 @@
                     </li>
                 </ul>
 
+                <h3 id="explainers-en">When the platform owner makes an illustrated explainer (Studio)</h3>
+                <p>
+                    Illustrated explainers are narrated videos with drawn pictures that the platform owner makes about their own topics,
+                    for their own accounts. <strong>They use only the owner's own material: no comment, message, contact or form answer
+                    of anyone who writes to an account is used for them.</strong> Only the platform owner can use them.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Writing:</strong> the topic, notes and links the owner gives are sent to <bdi>Claude</bdi> (Anthropic) on
+                        the owner's own computer, which reads public web pages to research the topic and writes the script, the captions
+                        and the list of sources. If that computer is offline or signed out, or the owner chooses it, Google's Gemini writes
+                        it instead and searches the web with Google Search; the same topic, notes and links then reach Google.
+                    </li>
+                    <li>
+                        <strong>Voice:</strong> the script's text is sent to Google's Gemini text-to-speech to be read aloud. On Gemini's
+                        free tier Google may use what it receives to improve its products
+                        (<a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API terms</a>);
+                        the script is the text of a video that will be published.
+                    </li>
+                    <li>
+                        <strong>Pictures:</strong> each scene's short picture description, in English, and the reference drawings of the
+                        owner's recurring cartoon characters are sent to Cloudflare Workers AI, which draws the pictures. No photo of a
+                        real person is sent.
+                    </li>
+                    <li>
+                        <strong>Stored:</strong> the topic, script, captions, sources, pictures, narration and finished videos are stored
+                        with the owner's account, and deleted as section 4 says.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
@@ -2321,6 +2409,11 @@
                         period the business owner chooses (1 to 365 days). A count-only record then stays (the date, the form,
                         the ad) with no data about you. All of it is deleted if you ask (section 6).
                     </li>
+                    <li>
+                        <strong>Illustrated explainers</strong> — the pictures, the character drawings and the music tracks are kept while
+                        an explainer or the settings use them. The narration and the finished videos are kept until 30 days after the
+                        explainer's last scheduled post, and while it has none. Deleting an explainer deletes its files.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
@@ -2353,8 +2446,15 @@
                     </li>
                     <li>
                         <strong>Google</strong> — the Gemini API receives direct-message text as
-                        described in section 3.
+                        described in section 3. For the platform owner's illustrated explainers it also receives the script to read
+                        aloud, and the topic, notes and links when Gemini writes the script (section 1).
                         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Cloudflare</strong> (Workers AI) — only for the platform owner's illustrated explainers: it receives each
+                        picture's short description and the reference drawings of the owner's cartoon characters, and draws the pictures
+                        (section 1).
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's privacy policy</a>.
                     </li>
                     <li>
                         <strong>Supabase</strong> — hosts the database everything above is
