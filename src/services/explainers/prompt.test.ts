@@ -204,6 +204,7 @@ describe('the system prompt: the notes variant, for a writer that has no web too
         assert.doesNotMatch(notes, /RESEARCH IS MANDATORY/);
         assert.match(notes, /RESEARCH \(already done for you\)/);
         assert.match(notes, /The research notes and the numbered sources below are everything you may rely on/);
+        assert.match(notes, /Put EVERY numbered source in `sources`, in the order of its number, so that source n is `sources\[n\]`/);
         assert.match(notes, /Never add a source and never change an address/);
         assert.match(notes, /when the notes do not back a claim, leave the claim out/);
         assert.match(notes, /You do three jobs in one answer, from the research notes you are given/);

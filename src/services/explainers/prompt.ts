@@ -129,7 +129,7 @@ function researchRules(mode: WriterMode): string[] {
         return [
             'RESEARCH (already done for you)',
             '- The research notes and the numbered sources below are everything you may rely on. Use no fact, number, name, date or address that is not in them, and do not fill a gap from memory: when the notes do not back a claim, leave the claim out.',
-            '- A source is one of the numbered sources, and nothing else. `source_ids` are those numbers (as numbered below), and `sources` lists the ones you cite, each copied exactly from the numbered list: title, authors or publisher, year and address. Never add a source and never change an address.',
+            '- A source is one of the numbered sources, and nothing else. Put EVERY numbered source in `sources`, in the order of its number, so that source n is `sources[n]` (the app drops the ones no scene cites), and give `source_ids` as those numbers, the ones in square brackets in the notes. For each source, copy its address exactly; take its title, its authors or publisher and its year from the notes when they name them, else from the numbered list, else leave them empty. Never add a source and never change an address.',
             `- ${claims}`,
         ];
     }
