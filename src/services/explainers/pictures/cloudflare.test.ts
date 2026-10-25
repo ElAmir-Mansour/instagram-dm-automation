@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { inspect } from 'node:util';
 import { describe, it } from 'node:test';
+import { hangingFetch } from '../../llm/testFetch.js';
 import { CLOUDFLARE_MAX_REFERENCES, CLOUDFLARE_TIMEOUT_MS, CloudflareImageProvider } from './cloudflare.js';
 import { ImageProviderError, type DrawRequest } from './types.js';
 
@@ -115,9 +116,9 @@ describe('CloudflareImageProvider — the request', () => {
     });
 
     it('turns a call that does not answer in time into a PROVIDER_ERROR, through that signal', async () => {
-        const hang = harness((call) => new Promise<Response>((_, reject) => {
-            call.init.signal!.addEventListener('abort', () => reject(call.init.signal!.reason), { once: true });
-        }));
+        // A server that never answers, holding the process open as a real socket does. `AbortSignal.timeout`'s timer does not, and with
+        // nothing else pending Node 22's runner saw an idle event loop and cancelled this test and the 21 after it (CI, 2026-10-25).
+        const hang = harness((call) => hangingFetch(call.url, call.init));
         const err = await rejection(provider(hang.fetchImpl, { timeoutMs: 25 }).draw(REQUEST));
         assert.equal(err.kind, 'PROVIDER_ERROR');
         assert.match(err.message, /did not answer in time/);
