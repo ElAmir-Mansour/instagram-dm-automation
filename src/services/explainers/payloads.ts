@@ -129,7 +129,7 @@ export function renderReadiness(
     if (missing.length) {
         throw new ExplainerError(
             'EXPLAINER_PICTURES_MISSING', `${missing.length} scene${missing.length === 1 ? ' has' : 's have'} no picture yet: ${missing.slice(0, 20).map((p) => p + 1).join(', ')}.`,
-            { count: missing.length }, { positions: missing }
+            { missing: missing.length }, { positions: missing }
         );
     }
     return { audio: row.audio, track };

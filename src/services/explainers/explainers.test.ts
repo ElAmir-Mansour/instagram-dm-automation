@@ -382,7 +382,7 @@ describe('editExplainer: a save may not add a problem', () => {
         assert.equal(err.status, 422);
         assert.deepEqual((err.extra!.findings as { code: string }[]).map((f) => f.code), ['closing_question', 'engagement_bait']);
         assert.deepEqual(err.extra!.problems, (err.extra!.findings as { message: string }[]).map((f) => f.message));
-        assert.deepEqual(err.params, { count: 2 });
+        assert.deepEqual(err.params, { found: 2 });
         assert.equal(world.sceneRows()[11]!.narration, CLOSING_QUESTION, 'nothing was stored');
         assert.equal(world.explainer().draft_version, 1);
     });
@@ -587,7 +587,7 @@ describe('approveExplainer', () => {
     it('refuses a script with a problem left in it, with every finding, so the owner fixes it in one pass', async () => {
         draftExplainer({}, (i) => (i === 3 ? { brief: 'she reads a book' } : i === 11 ? { narration: 'Type 1 if you agree', spoken: 'Type 1 if you agree' } : {}));
         await assert.rejects(approveExplainer(TENANT, EXPLAINER, { version: 1 }), (err: unknown) => refused('EXPLAINER_DRAFT_REFUSED', 422)(err)
-            && (err as ExplainerError).params?.count === 3 && ((err as ExplainerError).extra!.findings as { code: string }[]).map((f) => f.code).join() === 'female_subject,closing_question,engagement_bait');
+            && (err as ExplainerError).params?.found === 3 && ((err as ExplainerError).extra!.findings as { code: string }[]).map((f) => f.code).join() === 'female_subject,closing_question,engagement_bait');
         assert.equal(world.explainer().status, 'draft');
         assert.equal(world.jobsOf('explainer_voice').length, 0);
     });
@@ -767,7 +767,7 @@ describe('approvePictures', () => {
     it('is refused while a scene has no picture: 409 EXPLAINER_PICTURES_MISSING, with the count and which', async () => {
         reviewExplainer({}, (i) => (i === 2 || i === 9 ? { picture: null, draw_status: 'failed' } : {}));
         await assert.rejects(approvePictures(TENANT, EXPLAINER), (err: unknown) => refused('EXPLAINER_PICTURES_MISSING', 409)(err)
-            && (err as ExplainerError).params?.count === 2 && JSON.stringify((err as ExplainerError).extra) === '{"positions":[2,9]}' && /2 scenes have no picture yet: 3, 10/.test((err as Error).message));
+            && (err as ExplainerError).params?.missing === 2 && JSON.stringify((err as ExplainerError).extra) === '{"positions":[2,9]}' && /2 scenes have no picture yet: 3, 10/.test((err as Error).message));
         assert.equal(world.explainer().status, 'review');
         assert.equal(world.jobsOf('explainer_render').length, 0);
     });

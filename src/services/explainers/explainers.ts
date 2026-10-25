@@ -229,7 +229,7 @@ async function loadLocked(exec: Exec, creatorId: string, id: string): Promise<Ex
 /** The refusal of a script that breaks a rule: every finding, so the owner fixes it in one pass. */
 function draftRefused(findings: readonly DraftFinding[]): ExplainerError {
     const message = findings.length === 1 ? findings[0]!.message : `${findings.length} problems with this script.`;
-    return new ExplainerError('EXPLAINER_DRAFT_REFUSED', message, { count: findings.length }, { findings, problems: findings.map((f) => f.message) });
+    return new ExplainerError('EXPLAINER_DRAFT_REFUSED', message, { found: findings.length }, { findings, problems: findings.map((f) => f.message) });
 }
 
 // ─── Create ────────────────────────────────────────────────────────────────────────────────────
