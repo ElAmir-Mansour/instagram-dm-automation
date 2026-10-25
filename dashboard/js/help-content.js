@@ -3907,7 +3907,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             'الكتابة تستغرق دقائق، وقد تصل إلى 20 دقيقة لأن الكاتب يبحث أولًا. يمكنك مغادرة الصفحة، فالعمل يستمر. يكتب Claude على جهازك الماك افتراضيًا، ويكتب Gemini حين يتعذّر ذلك على الماك أو حين تختاره من الإعدادات. وتعرض الخطوة من كتب هذه المسودة.',
-                            'كل مشهد جملة واحدة، وفيه:',
+                            'كل مشهد جملة واحدة وصورة واحدة. تُكتب الجملة لتبقى صورتها على الشاشة نحو 3.5 إلى 6.5 ثانية: وقتًا يكفي لرؤية الصورة وقراءة تسميتها، ولا يطول حتى يفقد الجمهور تركيزه. والجملة الأولى أقصر، لتتغيّر الصورة الأولى خلال 4 ثوانٍ تقريبًا. وفي كل مشهد:',
                             { dl: [
                                 ['النص المعروض', 'الجملة كما تظهر في الفيديو والنص المكتوب.'],
                                 ['النص المنطوق', 'ما يقوله الصوت. تُكتب المصطلحات الإنجليزية كما ينبغي أن ينطقها الصوت.'],
@@ -3916,7 +3916,7 @@ const HelpContent = {
                                 ['الشخصيات', 'الشخصيات المتكررة التي تظهر في المشهد، حتى أربع.'],
                                 ['الصورة نفسها كالمشهد السابق', 'يستعيد المشهد صورة سابقه بدل رسم صورة جديدة.'],
                             ] },
-                            'بأزرار كل مشهد تنقله إلى الأعلى أو الأسفل، وتضيف مشهدًا بعده، وتحذفه، وذلك قبل تسجيل الصوت فقط: بعده يصبح لكل مشهد مكانه وصورته وتوقيته، فتعدّل نصوص المشاهد في أماكنها، أو تطلب إعادة كتابة. وتحت العنوان يظهر تقدير المدة: عدد الكلمات المنطوقة مقسومًا على سرعة المعلّق، مقابل المدة المستهدفة. وإن خرج النص عنها، أو عن العدد المعتاد للمشاهد، أو لم يذكر مصادر كافية، ظهر تنبيه. ويمكنك الاعتماد رغم التنبيه.',
+                            'بأزرار كل مشهد تنقله إلى الأعلى أو الأسفل، وتضيف مشهدًا بعده، وتحذفه، وذلك قبل تسجيل الصوت فقط: بعده يصبح لكل مشهد مكانه وصورته وتوقيته، فتعدّل نصوص المشاهد في أماكنها، أو تطلب إعادة كتابة. وتحت العنوان يظهر تقدير المدة: عدد الكلمات المنطوقة مقسومًا على سرعة المعلّق، مقابل المدة المستهدفة. وإن خرج النص عنها، أو عن العدد المعتاد للمشاهد، أو بقيت صورة أكثر من 7 ثوانٍ أو اختفت في أقل من ثانيتين أو بقيت الصورة الأولى أكثر من 4.5 ثانية، أو لم يذكر مصادر كافية، ظهر تنبيه. ويمكنك الاعتماد رغم التنبيه.',
                             'وتحت المشاهد: عنوان الفيديو (70 حرفًا على الأكثر)، والوصف لكل منصة، والتعليق الأول بالمصادر، وحتى 10 ردود متوقعة (يكتب الكاتب 5 فأكثر)، والمصادر.',
                             { ul: [
                                 '**أعد الكتابة بملاحظة:** يكتب الكاتب مسودة جديدة بناءً على ملاحظتك («بداية أقصر، وأضف نتيجة 2020»). تبقى المسودة الحالية ظاهرة حتى تصل الجديدة، وتُستبدل تعديلاتك غير المحفوظة. ويتاح ذلك قبل الاعتماد فقط.',
@@ -3926,7 +3926,7 @@ const HelpContent = {
                         ],
                         en: [
                             'Writing takes a few minutes, up to 20, because the writer researches first. You can leave the page: the work carries on. Claude on your Mac writes by default, and Gemini writes when the Mac cannot or when you chose it in the settings. The step says who wrote the draft you are looking at.',
-                            'Each scene is one sentence, and it holds:',
+                            'Each scene is one sentence and one picture. The sentence is written to keep its picture on screen about 3.5 to 6.5 seconds: long enough to see it and read its label, short enough to keep people focused. The first sentence is shorter, so the first picture changes within about 4 seconds. Each scene holds:',
                             { dl: [
                                 ['On-screen text', 'The sentence as it appears in the video and in the subtitles.'],
                                 ['Spoken text', 'What the voice says. English terms are spelled the way the voice should say them.'],
@@ -3935,7 +3935,7 @@ const HelpContent = {
                                 ['Characters', 'The recurring characters in the scene, up to four.'],
                                 ['Same picture as the previous scene', 'The scene reuses its predecessor’s picture instead of drawing a new one.'],
                             ] },
-                            'Each scene has buttons to move it up or down, add a scene after it, and remove it, until the voice is made only: after it a scene keeps its place, its picture and its time, so you edit the text of the scenes where they are, or ask for a rewrite. Above the scenes the length estimate shows the spoken words divided by the narrator’s pace, against the target. If the script falls outside it, or outside the usual number of scenes, or cites too few sources, a warning appears. You can still approve over a warning.',
+                            'Each scene has buttons to move it up or down, add a scene after it, and remove it, until the voice is made only: after it a scene keeps its place, its picture and its time, so you edit the text of the scenes where they are, or ask for a rewrite. Above the scenes the length estimate shows the spoken words divided by the narrator’s pace, against the target. If the script falls outside it, or outside the usual number of scenes, or a picture stays more than 7 seconds or goes in under 2, or the first picture stays more than 4.5 seconds, or it cites too few sources, a warning appears. You can still approve over a warning.',
                             'Below the scenes: the video title (at most 70 characters), a caption for each platform, the first comment with the sources, up to 10 likely replies (the writer gives 5 or more), and the sources.',
                             { ul: [
                                 '**Rewrite with a note:** the writer writes a new draft from your note (“a shorter hook, and add the 2020 result”). The current draft stays visible until the new one arrives, and your unsaved edits are replaced. It is offered before you approve only.',

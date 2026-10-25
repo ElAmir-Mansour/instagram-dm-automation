@@ -1,12 +1,15 @@
 # FLOWS.md — every hop, in order
 
-The other documents answer different questions. `README.md` lists the routes, `ARCHITECTURE.md`
+The other documents answer different questions. `README.md` maps the docs and the routers, `ARCHITECTURE.md`
 explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a symptom, and
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
 That is what this is. Thirteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
+
+Walked elsewhere, not here: the Monteur's pipeline (`MONTEUR.md`), the daily growth sync (`GROWTH.md`), data-subject
+erasure (`RUNBOOK.md` §7, `src/services/erasure.ts`), and ice breakers and the persistent menu (`src/routes/iceBreakers.ts`).
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
 stale the function name still finds it. If the two disagree, the function name is right.
@@ -143,6 +146,12 @@ falls through to the legacy inline path (`processWebhookBody`,
 some events run twice; that is deliberately tolerated, because both `interactions.comment_id`
 and `messages.meta_message_id` are UNIQUE, so the second pass claims nothing.
 
+**`WEBHOOK_QUEUE=off` takes the queue out entirely** (**`src/index.ts:418`**; unset by default). Nothing is enqueued, and every
+delivery takes that same legacy path: `processWebhookBody` after the 200, under `waitUntil`, with no job row, no retry and no
+reaper. It is the rollback switch for the durability layer (RUNBOOK §5.4), changed in the Vercel environment with no deploy. The
+price is the failure the queue was built to remove: work the instance is stopped in the middle of is gone, and an empty `jobs`
+table no longer means "no delivery arrived".
+
 ### 1.5 — `drainInline()` picks the job back up
 
 **`src/index.ts:413-416`** — the work `acknowledgeThenRun` starts after the 200 is `drainInline()`,
@@ -269,7 +278,8 @@ ORDER BY (post_id IS NOT NULL) DESC, length(trigger_keyword) DESC, created_at DE
 
 The `ORDER BY` is not cosmetic. Without it Postgres returns heap order, so a global campaign
 could shadow a post-specific one on the same keyword — and which one won could change after a
-`VACUUM`. Most specific first, then longest keyword, then newest.
+`VACUUM`. Most specific first, then the longest trigger list (the length of the whole comma-separated
+`trigger_keyword`, not of its longest entry: `specificityTiers`, **`src/services/matching.ts:43`**), then newest.
 
 **`src/webhook/comments.ts:239`** — `matchCampaign(text, postId, campaigns)`, at
 **`src/services/matching.ts:142`**. It re-sorts defensively with `bySpecificity`
@@ -283,8 +293,9 @@ outranks the second), plus an unsaved draft; it writes nothing.
 
 Per candidate:
 
-- `trigger_keyword` is a **comma-separated list**; any one matching is enough
-  (**`src/services/matching.ts:75-78`**).
+- `trigger_keyword` is a **comma-separated list**, split on the ASCII `,` and on the Arabic `،` an Arabic keyboard
+  types (`triggerKeywords`, **`src/services/matching.ts:78`**); any one matching is enough. An entry that normalises to
+  nothing (a lone tatweel, a bare diacritic) is dropped, because an empty keyword is a substring of everything.
 - Both sides go through `normalizeArabic` (**`src/utils/arabic.ts:5`**): tatweel/kashida stripped
   (**:11** — `تـــم` and `تم` are the same word, and stretched text is everywhere in social
   captions), Alef hamzas collapsed (**:13**), Teh Marbuta → Heh (**:15**), Yeh/Alef Maksura
@@ -414,11 +425,18 @@ On failure (**`src/webhook/comments.ts:310-341`**):
 1. Log `dm.send_failed` (**:311**).
 2. `noteMetaFailure(creator.id, dmError)` (**:315**) — a dead token stops the whole account
    rather than one send, and nothing used to notice it at a call site.
-3. `classifyDmError(dmError)` (**:317**), at **`src/webhook/errors.ts:18`**:
-   - Meta code `10903` → `status: 'USER_BLOCKED_DMS'`, `permanent: true`
-     (**`src/webhook/errors.ts:28-34`**)
+3. `classifyDmError(dmError)` (**:327**), at **`src/webhook/errors.ts:60`**. Every branch but the last is permanent:
+   - Meta code `10903` → `status: 'USER_BLOCKED_DMS'` (**`src/webhook/errors.ts:70`**)
+   - **the comment already had its private reply** (code 10900 on Facebook; code -1 and only the words "already has a
+     reply" on Instagram, usually because the creator messaged the person by hand first) → `FAILED`
+     (**`src/webhook/errors.ts:81`**). Checked before code 100: read as transient, it was retried twice, and on 2026-09-27
+     the last attempt posted the public fallback over a DM that existed.
+   - code `100` ("invalid parameter": Meta won't take a private reply to this comment, typically from a person who can't
+     receive messages from Pages, whom Facebook reports as `can_reply_privately=false`) → `FAILED`
+     (**`src/webhook/errors.ts:93`**). It fails the same way on every retry, and the backoff only delayed the public
+     fallback (§1.18b).
    - code `190` (dead token) or `200` (missing scope) → permanent
-     (**`src/webhook/errors.ts:40`**, plus `isPermanentMetaError` at
+     (**`src/webhook/errors.ts:105`**, plus `isPermanentMetaError` at
      **`src/services/http.ts:81`**, whose `PERMANENT_CODES` is `{190, 200, 10903}` at
      **`src/services/http.ts:25`**)
    - everything else → `FAILED`, `permanent: false`
@@ -457,6 +475,23 @@ if (!classified.permanent && !options.lastAttempt) { … status = 'PENDING' … 
 > three times, before recording a failure for a DM that was largely delivered. The conversation
 > is open and cannot be opened again, so the status is settled here, before anything else has a
 > chance to fail. Written out at **`src/webhook/comments.ts:343-348`**.
+
+### 1.16b — The comment → DM bridge (DM plan S10)
+
+**`src/webhook/comments.ts:399-410`** ("Step 1.25"), right after SENT and best effort: `recordPrivateReplyRecipient`
+(**`src/services/dmSales/bridge.ts:162`**) writes the id the private reply went to (`recipient_id` in Meta's answer) on the
+interaction, with the campaign whose text was sent (migration v41). One UPDATE by primary key, no Graph call; a failure is
+`comment.bridge_failed` (`warn`) and changes nothing else, so the status stays SENT and the steps below still run.
+
+The other half is on the DM path, and only in a **sales** turn: `commentSource` (**`src/services/dmSales/bridge.ts:230`**, called
+from **`src/services/dmSales/turn.ts:370`**) looks for the latest SENT interaction whose `recipient_id` is the DM's sender, within
+7 days (`BRIDGE_WINDOW_DAYS`, Meta's private-reply horizon). A match is stored on `conversations.source_campaign_id`, and the turn
+starts at `recommend` with "they commented «keyword» and were sent the link" among its facts, instead of qualifying from scratch.
+It never throws; anything it cannot read means "no source". With `sales_mode = 'off'` it runs no statement at all.
+
+It rests on one assumption (A1): a private reply's `recipient_id` equals the `sender.id` of the same person's DMs. Until that is seen
+to hold, both sides log the ids side by side (`comment.bridge_recorded`, `dm.bridge_matched`); a `recipient_id` that never turns
+up as a sender is the sign it does not.
 
 ### 1.17 — `[SPLIT]` follow-ups — best effort
 
@@ -878,6 +913,27 @@ in the wording and a running experiment with fewer than two variants that have a
 **Checking it:** `variants.test.ts` (parsing, the hash and its spread over the weights, stickiness), the A/B block of `turn.test.ts` (including that
 `off` never reads it), `dmVariantFunnel.test.ts` (a fixture world counted by hand, and the gate at 29 and 30).
 
+### 2.6g — A tracked link is opened: `GET /r/:code` (DM plan S7)
+
+**`src/routes/links.ts:54`**, public, mounted at `/r` before any auth (**`src/index.ts:202`**). Codes are minted by the sales
+turn's `linkFor` (**`src/services/dmSales/link.ts:28`**; one per conversation and offer, step 7 of §2.6b) and by an ad draft's
+`mintAdLink` (**`src/services/links.ts:176`**; one per ad and offer, §11.3).
+
+1. **A malformed code** (`isLinkCode`, **`src/services/links.ts:43`**) is a 404 without a database read, and an unknown one the
+   same 404 (the site's bilingual page for a browser). A database that cannot be read is a **503** with `Retry-After: 30`: a 404
+   would say the link does not exist.
+2. **A known code is a 302** to `tracked_links.target_url` exactly as stored (`resolve`, **`src/services/links.ts:203`**): no
+   `res.redirect`, which re-encodes, and nothing appended. The target comes from the table and nowhere else, never from the URL,
+   the query string or a header, so this is not an open redirect. Every answer carries `Cache-Control: no-store` and
+   `X-Robots-Tag: noindex`.
+3. **The click is counted after the 302 has gone out**, under `waitUntil`: one `link_clicks` row (`recordClick`,
+   **`src/services/links.ts:287`**) with `ua_class` and `is_prefetch` from `classifyClick` (**`src/services/links.ts:258`**). A HEAD,
+   a speculative-load header, a known preview fetcher, a crawler or a request with no user-agent is a prefetch, not a person; the
+   Instagram and Facebook in-app browsers are people. A failed count is `links.click_not_recorded` and costs the person nothing.
+
+Only `is_prefetch = FALSE` rows are clicks to anything that reads them: the follow-up nudge, which skips a person who clicked
+(§2.6c), the sales funnel (§2.6e) and an ad's `trackedClicks` (§12.4).
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),
@@ -891,8 +947,11 @@ marginal cost of the product and the reason the webhook cannot finish inside Met
 the same `dmSystemInstruction` text, history window and `enforceMetaConstraints`, written through the AI providers layer
 (`generate`, purpose `dm`, system prompt cached, the `dm` route and budgets from Operations). A `providers` failure of any kind (no key,
 no route, 5xx, timeout, a refused budget, an empty answer) is answered by Gemini once when `ai_agents.gemini_fallback` is on, logged
-`dm.engine_fallback`. With the fallback off, or Gemini failing too, the result is a **handoff stub**: `dm.engine_failed`, nothing sent,
-no canned apology, and the pipeline `markHandled`s the message (terminal, not retried; S8's handoff will pick it up). An agent that is
+`dm.engine_fallback`. With the fallback off, or Gemini failing too, the result is `{ kind: 'handoff' }` and `dm.engine_failed`: no
+second try (it would only spend the same budget again), but **not silence either**. The pipeline calls `handOver()`
+(**`src/webhook/messaging.ts:577-578`**), the same `handoffAfterFailure` a reply that fails on its last attempt gets (§2.11): the
+conversation is stamped (the bot stays on), the customer is sent the handoff line once, and the owner is alerted. Then `markHandled`
+(terminal, not retried). An agent that is
 switched off is `null` for either engine, as below. The sandbox runs the engine on screen (`POST /api/settings/ai/test`, `engine` and
 `gemini_fallback` in the body), labels the layer's spend `eval`, and answers 502 with the reason when nothing could answer.
 
@@ -1142,42 +1201,38 @@ otherwise uses frame 0.
 not 201, on failure (**:2044**) — a 201 for a row just marked FAILED read as success to every
 caller.
 
-### 3.2 — Two schedules converge on the same sweep
+### 3.2 — Four callers converge on the same sweep
 
-Nothing in-process publishes on a timer. Two external schedules call in:
+Nothing in-process publishes on a timer. Four callers drain the job queue, and three of them also publish due posts. Checked
+2026-10-25:
 
-| | GitHub Actions | Vercel cron |
-|---|---|---|
-| declared | `.github/workflows/drain.yml:34`, `cron: '*/5 * * * *'` | `vercel.json` `crons`, `"0 0 * * *"` |
-| calls | `GET /api/jobs/drain` (**`src/routes/api.ts:328`**) | `GET /api/cron/publish` (**`src/routes/api.ts:666`**) |
-| auth | `Authorization: Bearer $CRON_SECRET` (**`drain.yml:63`**) | same header, injected by Vercel |
-| also does | `drainWorker()` first (**`api.ts:338`**) | reap, abandon, prune, retention sweep, `drainWorker()` |
+| | Heroku worker | GitHub Actions | Vercel cron | The webhook |
+|---|---|---|---|---|
+| declared | `heroku-worker/worker.mjs:29`: 60 s after the last call ended | `.github/workflows/drain.yml:34`, `cron: '*/5 * * * *'` | `vercel.json` `crons`, `"0 0 * * *"` | every delivery (§1.4) |
+| actually runs | about every 62 s (Vercel's logs) | every 2–4.5 h: GitHub throttles schedules | once a day, 00:00 UTC (a Hobby-plan limit) | after its 200, under `waitUntil` (§1.5) |
+| calls | `GET /api/jobs/drain` (**`src/routes/api.ts:381`**) | the same route, with `curl` | `GET /api/cron/publish` (**`src/routes/api.ts:1022`**) | `drainInline()` (**`src/jobs/drain.ts:38`**), in-process |
+| auth | `Authorization: Bearer $CRON_SECRET` | the same (**`drain.yml:66`**) | the same header, injected by Vercel | none |
+| does | `drainWorker()` (**`api.ts:392`**), then **`publishDuePosts()`** (**`api.ts:406`**), then the sweeps (TikTok, ads, leads, the Monteur) | the same | reap, abandon, prune, retention sweep, then `drainWorker()` (**`api.ts:1071`**) and **`publishDuePosts()`** (**`api.ts:1073`**) | jobs only: 8 s, 3 at a time, no posts |
 
-Both then call **`publishDuePosts()`** — **`src/routes/api.ts:352`** and
-**`src/routes/api.ts:714`**.
+The Heroku worker is what makes the dashboard's minute picker honest: a due post goes out at the next drain, within about a
+minute (probe jobs inserted on 2026-09-22 were claimed after 15, 26 and 61 s; the Posts screen allows five minutes). Without it,
+the GitHub schedule (asked for every 5 minutes, delivered every few hours, **`drain.yml:19-23`**) and the daily cron are all
+that is left. So `PostsPage.FREQUENT_SWEEP` (**`dashboard/js/pages/posts.js:3399`**)
+goes back to `false` if the worker is ever scaled to zero, or the Posts screen promises minutes nobody keeps. The worker is
+also the only caller of `POST /api/onboarding/drafts/sweep` (§9.5). Its state, cost and switch are in `heroku-worker/README.md`.
 
-Once a day is a Vercel Hobby-plan limit, which is why `scheduled_posts.scheduled_time` was
-effectively day-granular despite the dashboard's minute picker. Calling the sweep from the drain
-endpoint too is what closes most of that gap without a paid plan
-(**`src/routes/api.ts:344-348`**). GitHub explicitly does not guarantee schedule punctuality —
-the workflow's own header says so at **`drain.yml:12-23`** — so the honest description is "every
-~5-15 minutes", not "every 5 minutes".
-
-The guard on both endpoints is `requireCronSecret` (**`src/routes/api.ts:256`**): **header
+The guard on both routes is `requireCronSecret` (**`src/routes/api.ts:299`**): **header
 only**, never a `?token=` variant, because a query string ends up in Vercel's access logs for
-their whole retention (**:265**). A missing `CRON_SECRET` is a **500**, not a skip — the earlier
-`if (cronSecret && ...)` form skipped itself entirely when the variable was unset (**:259-263**).
+their whole retention (**:308**). A missing `CRON_SECRET` is a **500**, not a skip (**:302-306**) — the earlier
+`if (cronSecret && ...)` form skipped itself entirely when the variable was unset.
 
-`composeDrainResponse` (**`src/routes/api.ts:293`**) shapes the drain endpoint's answer from two
-independent outcomes: **500 only when both halves failed** (**:299**), otherwise 200 with any
+`composeDrainResponse` (**`src/routes/api.ts:341`**) shapes the drain route's answer from two
+independent outcomes: **500 only when both halves failed** (**:351**), otherwise 200 with any
 failure named in the body. The scheduler's alerting is an assertion on the HTTP status
-(**`drain.yml:74`**), so returning 500 because the publish sweep broke would throw away the fact
+(**`drain.yml:77`**), so returning 500 because the publish sweep broke would throw away the fact
 that the queue drained fine; and a 200 that silently omitted the error would be exactly the
-invisible failure this project keeps being bitten by.
-
-A dormant third caller exists: `heroku-worker/worker.mjs`, a single dependency-free file polling
-the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
-`CLAUDE.md` for its current dyno state.
+invisible failure this project keeps being bitten by. The Monteur's sweep, the last part of the
+drain, is a third outcome that never moves the status.
 
 ### 3.3 — `publishDuePosts()` and the atomic claim
 
@@ -1210,10 +1265,10 @@ the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
 > written as a precaution and became load-bearing the moment a second schedule started calling
 > the same sweep (**`src/routes/api.ts:591-594`**).
 
-3. `publishClaimedPost(post, {...})` (**`src/routes/api.ts:788`**, defined at **:688**), inside a
+3. `publishClaimedPost(post, {...})` (**`src/routes/api.ts:988`**, defined at **`src/routes/api.ts:864`**), inside a
    try that only *logs* — the terminal row write already happened inside the publisher. It
-   dispatches Meta rows to `attemptPublish` and TikTok rows to `publishTikTokPost`
-   ([flow 6](#6-tiktok-post--inbox--published)).
+   dispatches YouTube rows to `publishYouTubePost` ([3.7](#37--youtube-shorts)), TikTok rows to `publishTikTokPost`
+   ([flow 6](#6-tiktok-post--inbox--published)) and everything else to `attemptPublish`.
 
 ### 3.4 — `attemptPublish()` and partial-publish recovery
 
@@ -1291,9 +1346,23 @@ publish, not just this one.
 
 ### 3.4c — `GET /api/uploads/:id`
 
-**`src/routes/api.ts:1007`**. A row with `storage_path` streams the object from Supabase Storage
-(`pipeline(media.body, res)`, **`src/routes/api.ts:1048`**); a legacy row serves `data`. The URL never
+**`src/routes/api.ts:1240`**. A row with `storage_path` streams the object from Supabase Storage
+(`pipeline(media.body, res)`, **`src/routes/api.ts:1305`**); a legacy row serves `data`. The URL never
 changes, which is what TikTok's verified prefix and Meta's stored URLs need.
+
+- **A `Range` request gets a 206 with only that piece** (`Accept-Ranges: bytes`; `parseByteRange`,
+  **`src/utils/byteRange.ts:24`**): `store.open(id, { range })` (**`src/routes/api.ts:1253`**) asks Supabase for the piece
+  alone, and a legacy row answers with a slice of `data` (**`src/routes/api.ts:1289`**). A range past the end is a 416.
+  Before this, `bytes=0-1023` of a 6 MB reel streamed all 6 MB, once per piece. Players and Meta's fetchers ask in pieces,
+  and Vercel's CDN does not answer a ranged request from its cache, so October 2026 burned 18.6 GB of the Hobby plan's 10 GB
+  of Fast Origin Transfer in three days. Test: `curl -H "Range: bytes=0-1023" -D - -o /dev/null <upload url>` must
+  answer `206` with `content-length: 1024`.
+- **A private row is a 404.** A customer's file (a WhatsApp voice note, a receipt: `is_private`, v51, the bucket
+  `media-private`) is "no such upload" to this route; only a caller that passes `privateFor: <its tenant>` reads it
+  (`src/services/storage.ts`).
+- **Types**: what `/api/upload` stores, plus the infographic's GIF and the explainers' audio (`SERVED_MIME_TYPES`,
+  **`src/routes/api.ts:1216`**). Anything else is served as `application/octet-stream`, because this origin also serves the
+  dashboard and an echoed `text/html` would be same-origin script.
 
 ### 3.5 — Daily maintenance, only on the daily cron
 
@@ -1413,6 +1482,40 @@ every TikTok post shares: the pending-draft limit, the token, the scope for its 
 **Retention** — `pruneOrphanedMedia` keeps every upload named in the `media_urls` of a post that
 may yet publish (**`src/services/retention.ts:236`**). `media_url` mirrors only the first slide,
 so matching it alone would delete slides 2..N before they were published.
+
+### 3.7 — YouTube (Shorts)
+
+A YouTube post is its own `scheduled_posts` row (`platform = 'youtube'`, `post_type = 'video'`), a `group_id` sibling of the
+Meta row like TikTok's. The composer accepts one (`unsupportedPlatformCombination`, **`src/routes/api.ts:522`**: a video only),
+but three writers make nearly all of them: the Monteur when `youtube` is in `monteur.platforms`
+(**`src/services/monteur/clips.ts:486`**), and infographics and explainers, which follow `infographic.platforms`
+(**`src/services/studio/infographics.ts:491`**, **`src/services/explainers/schedule.ts:104`**). It rides the same sweep and
+claim as every row (§3.3); `publishClaimedPost` hands it to `publishYouTubePost` (**`src/services/youtubePublish.ts:151`**).
+Synchronous, unlike TikTok: Google answers the upload with the video's id.
+
+1. **Checks:** a tenant, a video, a `media_url`, and a connection that was granted upload (`getAccessToken`,
+   **`src/services/youtubeConnections.ts:236`**). MP4, MOV or WebM only.
+2. **Privacy** (**`src/services/youtubePublish.ts:168`**): with "Upload Shorts as public" off (`youtube.public_uploads`,
+   Settings → Platform → YouTube app) every upload is `private`; with it on, the row's `platform_options.privacy`, public by
+   default (`uploadPrivacy`).
+3. **A resumable upload, never twice.** A row whose `external_publish_id` starts `YTU:` holds the session of an earlier
+   attempt, and `queryUpload` (**`src/services/youtube.ts:417`**) asks Google where it got to before anything is sent.
+   Otherwise `startResumableUpload` (**`src/services/youtube.ts:363`**) opens one, and its URL is saved as `YTU:<session>`
+   **before the first byte** (**`src/services/youtubePublish.ts:186`**). Then at most two `sendBytes` from wherever Google says
+   it is (**`src/services/youtubePublish.ts:194`**).
+4. **Done** → `PUBLISHED`, `published_post_id = 'YT:<video id>'`, `external_publish_id` cleared. `error_log` keeps a note when
+   YouTube kept the upload private or the cover could not be set as the thumbnail (`applyThumbnail`): the Short is up either
+   way. The title is `platform_options.title` or the caption's first line; `#Shorts` is added unless
+   `platform_options.shorts === false` (an explainer's horizontal video over 3 minutes).
+5. **Failure** → `FAILED` with the message, the session kept, so "Publish now" resumes it rather than uploading a second
+   Short. `noteYouTubeFailure` marks the connection when Google refused the grant.
+
+**The daily cron** refreshes every connection (`refreshAllYouTubeConnections`, **`src/routes/api.ts:1094`**; Google refresh
+tokens don't rotate, and `invalid_grant` deletes the tokens, name and picture), then asks YouTube about every published Short
+(`checkYouTubeVisibility`, **`src/routes/api.ts:1099`**, `src/services/youtubeVisibility.ts`): 50 per `videos.list` call, the
+newest 500 per tenant. One that is no longer public when public was asked for, or is gone, gets a dated "Visibility check" note in
+`error_log`, which Posts shows beside "Open on YouTube". Quota: an upload costs 1,600 of the day's 10,000 units and a thumbnail
+50, so about six Shorts a day.
 
 ---
 
@@ -1817,7 +1920,7 @@ puts the one-field form back). The token is never in `localStorage`, only in `se
 After an invite is used, a tenant that has not finished setting up lands in `#/welcome`, and every other route sends them back
 there until they finish. The server half is **`src/services/onboardingWizard.ts`** and **`src/routes/onboarding.ts`**; the
 dashboard half is **`dashboard/js/pages/welcome.js`** and the gate in **`dashboard/js/app.js`**. W0 (choosing a password) is the
-invite page of §4.8, before there is a session; this is W1 to W6 (docs/onboarding/02 §3).
+invite page of §4.8, before there is a session; this is W1 to W6 of the onboarding design.
 
 **The gate: who is sent to the wizard.**
 
@@ -2036,11 +2139,11 @@ production wiring.
 
 ```sql
 INSERT INTO jobs (kind, payload, creator_id, dedupe_key, run_after, max_attempts, request_id, tenant_key)
-VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, COALESCE($8, $3::text))
+VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, $8)
 ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
 RETURNING id
 ```
-(**`src/jobs/queue.ts:45-48`**)
+(**`src/jobs/queue.ts:51-54`**)
 
 - **`ON CONFLICT (dedupe_key)`** drops a second enqueue **whatever the state of the first —
   including `done`**, which is what makes a Meta redelivery a no-op before it costs a Gemini call
@@ -2048,20 +2151,33 @@ RETURNING id
 - `max_attempts` defaults to **3**.
 - `run_after` defaults to `NOW()`; supplying it is what makes the queue a scheduler
   (**`src/jobs/types.ts:92`**).
-- `tenant_key` COALESCEs to `creator_id` **at insert time** (**:46**) so the claim can partition
-  on the bare column and use its index — doing the COALESCE in the claim's `PARTITION BY` would
-  cost a sort on every claim (**`src/jobs/queue.ts:41-44`**).
+- `tenant_key` defaults to `creator_id` **at insert time, in JS** (`input.tenantKey ?? input.creatorId`,
+  **`src/jobs/queue.ts:63`**) so the claim can partition on the bare column and use its index — doing
+  the default in the claim's `PARTITION BY` would cost a sort on every claim (**`src/jobs/queue.ts:41-44`**).
+  Not as `COALESCE($8, $3::text)` in the SQL: reusing `$3` made Postgres deduce it as both uuid and
+  text and reject the statement with 42P08, so **every enqueue failed from 2026-09-21 to 09-27**
+  (**`src/jobs/queue.ts:46-50`**).
 
-Returns `null` on a dedupe (**:66**), logged at `debug` (**:65**).
+Returns `null` on a dedupe (**`src/jobs/queue.ts:72`**), logged at `debug` (**`src/jobs/queue.ts:71`**).
 
 The payload stores the Meta event **verbatim**, not pre-normalised
 (**`src/jobs/types.ts:26-34`**): a bug in the normaliser would otherwise be unrecoverable,
 whereas the raw event means a fixed normaliser can be replayed against jobs that already failed.
 It also keeps the enqueue path free of any logic that could throw before the acknowledgement.
 
-`JobKind` is a closed union — `'comment.process' | 'dm.process' | 'dm.followup'` (**`src/jobs/types.ts`**,
-`JOB_KINDS`; `dm.followup` is not a Meta event, §2.6c) — rather than a free string, because an enqueue for a kind with no handler is a job that fails
-`max_attempts` times and then sits in the table forever.
+`JobKind` is a closed union of six (`JOB_KINDS`, **`src/jobs/types.ts:19`**): `comment.process` and `dm.process` (flows 1
+and 2; a WhatsApp message is a `dm.process` too, §10.2), `dm.followup` (not a Meta event: the sales nudge, §2.6c), `wa.event`
+(a WhatsApp status, account event or preference change, §10.9–10.10), `ads.draft` (an AI ad proposal, §7.5) and `ads.lead` (a
+lead-ads notification, §7.8). A closed union rather than a free string, because an enqueue for a kind with no handler is a job
+that fails `max_attempts` times and then sits in the table forever.
+
+**A handler may cut its job's payload down as the job ends.** It returns `{ redactPayload }` (`JobResult`,
+**`src/jobs/types.ts:219-227`**), which replaces `jobs.payload` in the same UPDATE that marks the job `done` (`complete`,
+**`src/jobs/queue.ts:159`**). A failure that ends the job does the same through `redactOnFailure` (**`src/jobs/redaction.ts:16`**),
+which the runner reads only when no retry follows (**`src/jobs/runner.ts:136`**): a job that will run again keeps the payload its
+next attempt needs. Only WhatsApp uses it today: a message from a sender who is not a tester (§10.5), and the `wa.event` statuses
+and preference changes, which name a customer's phone (**`src/jobs/handlers.ts:51-66`**). Every other job keeps the Meta event
+verbatim until the prune, which deletes `done` rows after 7 days and never deletes a `failed` one (§5.7).
 
 ### 5.2 — The atomic claim, and why not `FOR UPDATE SKIP LOCKED`
 
@@ -2364,11 +2480,12 @@ the audit rejects own-account tools (**`src/services/tiktok.ts:9-14`**).
 
 ### 6.3 — Dispatch
 
-Every publish path — `publishDuePosts` (**`src/routes/api.ts:788`**), create-time `publish_now`
-(**:2236**) and `POST /api/posts/scheduled/:id/publish-now` (**:2445**) — calls
-`publishClaimedPost` (**`src/routes/api.ts:688`**). `platform === 'tiktok'` goes to
-`publishTikTokPost` (**:689-698**); everything else to `attemptPublish`, which now fails closed on
-a non-Meta platform (**:580-582**). An unknown platform used to fall through to a PUBLISHED write
+Every publish path — `publishDuePosts` (**`src/routes/api.ts:988`**), create-time `publish_now`
+(**`src/routes/api.ts:3038`**) and `POST /api/posts/scheduled/:id/publish-now` (**`src/routes/api.ts:3386`**) — calls
+`publishClaimedPost` (**`src/routes/api.ts:864`**). `platform === 'youtube'` goes to `publishYouTubePost`
+(**`src/routes/api.ts:865-876`**, [3.7](#37--youtube-shorts)), `platform === 'tiktok'` to
+`publishTikTokPost` (**`src/routes/api.ts:877-888`**); everything else to `attemptPublish`, which now fails closed on
+a non-Meta platform (**`src/routes/api.ts:711-713`**). An unknown platform used to fall through to a PUBLISHED write
 with an empty id.
 
 ### 6.4 — `publishTikTokPost()`: the upload
@@ -2377,9 +2494,11 @@ with an empty id.
 
 1. `video`, `image` or `carousel`; a video needs `media_url` (**:479-483**). A photo post
    branches off after step 3 — see [3.6](#36--carousels-v20).
-2. **Pending-draft limit** (**:183-186**) — `pendingInboxShares` (**:65**) counts this tenant's
-   `PROCESSING` / `IN_INBOX` rows claimed in the last 24h. At 5 (`MAX_PENDING_INBOX_SHARES`,
-   **:54**) it throws `TikTokInboxFullError`, and the catch puts the row back to **PENDING** with
+2. **Pending-draft limit, inbox mode only** (**`src/services/tiktokPublish.ts:485-490`**) — `pendingInboxShares`
+   (**`src/services/tiktokPublish.ts:190`**) counts this tenant's inbox-mode `PUBLISHING` / `PROCESSING` / `IN_INBOX`
+   rows claimed in the last 24h, this one aside. At 5 (`MAX_PENDING_INBOX_SHARES`,
+   **`src/services/tiktokPublish.ts:173`**) it throws `TikTokInboxFullError`, unless the row already has an
+   `external_publish_id` (a retry of an upload that was made), and the catch puts the row back to **PENDING** with
    the reason in `error_log` (**:259-267**). Held, not failed: the sweep logs
    `cron.publish_held_tiktok_inbox` (**`src/routes/api.ts:796-799`**); publish-now answers 409
    (**`src/routes/api.ts:2452-2455`**).
@@ -2760,7 +2879,7 @@ action, confirmed and money-checked.**
 ## 8. Meta login → a connected Page
 
 A tenant connects its own Facebook Page and Instagram account with Facebook Login for Business instead of the operator
-pasting a token (P26, P27; migration v35; `docs/onboarding/04`). The result is the same row a pasted token fills
+pasting a token (P26, P27; migration v35). The result is the same row a pasted token fills
 (`creators`: the ids, an encrypted PAGE token, the `token_*` columns) plus what v35 added, so everything after the connection
 (§1, §2, §3) is unchanged. **It is off until the operator switches it on** (`meta.login_enabled`), and nothing here touches a tenant
 that is already connected unless its owner asks.
@@ -2803,7 +2922,7 @@ out clears the cookie and redirects to `/dashboard#/settings` or `#/welcome` (th
    - `exchangeCode` (not retried: a code is single-use) then `extendUserToken` (`fb_exchange_token`), then `/me`, `/me/permissions`
      and `/me/accounts?fields=id,name,access_token,tasks,instagram_business_account{id,username}` in parallel. Tokens travel in the
      `Authorization` header; paging follows the cursor, never `paging.next` (a URL with the token in it).
-   - Nothing granted → `not_tester` (the person holds no role on the app: **unverified**, docs/onboarding/04 §4). A core permission
+   - Nothing granted → `not_tester` (the person holds no role on the app: **unverified**). A core permission
      declined (`CORE_SCOPES`) → `permissions_missing`. No Page → `no_pages`.
    - `planPages`: **exactly one usable Page with an Instagram account** (usable = `MANAGE`, or `CREATE_CONTENT` + `MODERATE`) connects
      at once (§8.3). Anything else (two Pages, a Page with no Instagram account, nothing usable, or a reconnect that would **replace**
@@ -2819,7 +2938,9 @@ out clears the cookie and redirects to `/dashboard#/settings` or `#/welcome` (th
 3. `assertPageFree` → `pageIdConflict` (also moved): a Page or Instagram account **another tenant holds** is 409 `page_in_use`
    before Meta is asked to subscribe it. The other tenant is never named. (The unique indexes are the second line: a `23505`
    at the write is the same answer.)
-4. `subscribePage`: `POST /{page}/subscribed_apps` with `subscribed_fields=feed,messages,messaging_postbacks` and the Page token,
+4. `subscribePage` (**`src/services/metaLogin.ts:571`**): `POST /{page}/subscribed_apps` with the Page token and
+   `subscribed_fields` = `WEBHOOK_FIELDS` (`feed`, `messages`, `messaging_postbacks`, `messaging_referrals`;
+   **`src/services/metaLogin.ts:74`**) plus `leadgen` while the tenant has a lead-ads sign-off (`leadgenFieldsFor`, §7.8),
    then `GET` the edge to confirm. A failure is a **warning** (`subscribe_failed` / `subscribe_unconfirmed`); the connection is still saved.
 5. **One `UPDATE`**: ids, encrypted token, `token_*` columns, `meta_user_id`, `meta_page_name`, the verified Instagram username,
    `meta_connected_at`, `meta_webhook_subscribed_at`. Its `WHERE` is `id = $1 AND ($13 OR page_access_token IS NULL)`, so a
@@ -2930,7 +3051,7 @@ transient verdict leaves every row exactly as it was, **the owner's included**. 
 > an operator in between. A state is not a licence to overwrite whatever is there now; the state's own payload says whether the owner
 > asked for a reconnect, and nothing else can.
 
-> **What is unverified (docs/onboarding/04).** That app 847772258381375 is a Business-type app, which Facebook Login for Business
+> **What is unverified.** That app 847772258381375 is a Business-type app, which Facebook Login for Business
 > requires; that a Tester role-holder gets comment webhooks as the owner (an Admin) does; `override_default_response_type`
 > on a manually built dialog; what a non-role-holder sees (the `not_tester` reason is inferred from "nothing granted"). The first real
 > Tester connecting is the test (plan P27, live check).
@@ -3067,11 +3188,12 @@ queued ─claim→ fetching ─sources saved→ drafting ─answers checked→ r
    That request does the steps inside it, up to 270 s. Whether Vercel keeps running it when the browser goes away is not known:
    `onboarding.advance_client_gone` is logged if the client left first, and a later `onboarding.draft_advance` for the same draft says the
    work went on.
-2. **The backstop:** `POST /api/onboarding/drafts/sweep` (**`api.ts:386`**), above authentication with the other scheduler routes, guarded by
-   the **same `requireCronSecret` as `/api/jobs/drain`** (Bearer `CRON_SECRET`, header only, fail closed). `sweepDrafts` (**`drafts.ts:478`**)
+2. **The backstop:** `POST /api/onboarding/drafts/sweep` (**`src/routes/api.ts:483`**), above authentication with the other scheduler routes, guarded by
+   the **same `requireCronSecret` as `/api/jobs/drain`** (Bearer `CRON_SECRET`, header only, fail closed). `sweepDrafts` (**`src/services/onboarding/drafts.ts:525`**)
    takes up to 10 due drafts (`SELECT_DUE_SQL`: active, not held, not in back-off, oldest first), three at a time, each given what is left of
-   280 s, and skips what it has no time for. It is **not part of the drain**: the drain's worker budget is 45 s and `publishDuePosts` runs first.
-3. **`heroku-worker/worker.mjs`** has a second loop (`sweepLoop`, **:115**) calling it about every 60 s, independent of the drain's: neither
+   280 s, and skips what it has no time for. It is **not part of the drain**: a draft takes minutes, and the drain's call is already shared by the
+   queue (45 s), the publishes and the sweeps, so the next drain would wait on a model.
+3. **`heroku-worker/worker.mjs`** has a second loop (`sweepLoop`, **`heroku-worker/worker.mjs:119`**) calling it about every 60 s, independent of the drain's: neither
    waits for the other, and a hung sweep (a model call takes minutes) cannot hold the queue back. It logs only a sweep that found something.
    If the worker is scaled to 0, nothing but a wizard or the operator moves a draft, and nothing ends one that nobody opens.
 
@@ -3709,7 +3831,7 @@ first touch counts: a conversation belongs to the ad that started it. A failure 
 ### 12.5 — Rollout and what can go wrong
 
 `npm run migrate` (v54: `ad_touches`, `no_reply_reason`, the index) **before** the deploy: the DM path writes `ad_touches` and the Inbox reads both columns.
-The two switches ship dark. `docs/specs/002-meta-ads-manager/contracts/webhook-inbound.md` and `research.md` §R10 are the contract; the Help Center article `ads`
+The two switches ship dark. The ads spec's webhook contract and research note R10 (local planning documents, not in this repo) define them; the Help Center article `ads`
 (sections `message-ads-inbox`, `bot-and-ads`, `reply-window`, `business-ai`) is what the owner reads.
 
 ### 12.6 — Results history: the day-by-day joins (A6)
@@ -3777,7 +3899,7 @@ Then **one transaction** (**`explainers.ts:335-347`**): the `writing` row (**:33
 
 `queueWrite` (**`src/services/explainers/writing.ts:94`**) reads `settings.explainer.writer` (**`writing.ts:97`**): `claude_mac`, the default, or `gemini`.
 
-- **Claude on the Mac** (**`writing.ts:99-100`**). `writePayload` (**`src/services/explainers/payloads.ts:57`**) builds the job's `write` section, `{ model: THINK_MODEL, system, user, schema }` (**`payloads.ts:67`**), from `buildWriterInputs(…, 'research')` (**`src/services/explainers/prompt.ts:305`**), and `enqueueJob(…, 'explainer_write', payload)` (**`src/services/studio/jobs.ts:87`**) queues it. `explainer_write` is Mac-brain work whatever its payload (**`src/services/macBrain.ts:161-162`**, [flow 7](#7-claude-on-the-mac--who-may-ask)), so `enqueueJob` refuses it for a tenant the Mac is not for (**`jobs.ts:90`**) and `claimJob` checks again (**`jobs.ts:321`**).
+- **Claude on the Mac** (**`writing.ts:99-100`**). `writePayload` (**`src/services/explainers/payloads.ts:57`**) builds the job's `write` section, `{ model: THINK_MODEL, system, user, schema }` (**`payloads.ts:67`**), from `buildWriterInputs(…, 'research')` (**`src/services/explainers/prompt.ts:312`**), and `enqueueJob(…, 'explainer_write', payload)` (**`src/services/studio/jobs.ts:87`**) queues it. `explainer_write` is Mac-brain work whatever its payload (**`src/services/macBrain.ts:161-162`**, [flow 7](#7-claude-on-the-mac--who-may-ask)), so `enqueueJob` refuses it for a tenant the Mac is not for (**`jobs.ts:90`**) and `claimJob` checks again (**`jobs.ts:321`**).
 - **Gemini** (**`writing.ts:98`**). `insertServerWriteJob` (**`writing.ts:72`**) writes the job already `claimed`, by the server, with `payload.writer = 'gemini'` and all three attempts spent (**`writing.ts:73-79`**). The Mac's claim takes a `claimed` job only when its heartbeat is stale **and** it has fewer than three attempts (**`jobs.ts:267-269`**), so it can never take a Gemini run back. No Claude is involved, so none of this is Mac-brain work.
 
 ### 13.4 — The Mac's write
@@ -3815,7 +3937,7 @@ The result comes back as `POST /worker/jobs/:id/complete` (**`src/routes/studio.
 
 1. **The answer must be the schema's.** `parseWriterOutput` (**`apply.ts:113`**), with the schema the app ships (`writerSchema.json`): an answer that is not is a 400 that lists the problems (up to twenty), nothing is stored and the job stays claimed for the worker to report.
 2. **Is it still this job's?** `lockCurrent` (**`apply.ts:77-84`**) locks the explainer and answers `dropped` with `no_explainer`, `gone` or `superseded` unless `row.job_id === job.id` (**`apply.ts:82`**). The explainer must also still be `writing` (**`apply.ts:119`**). A dropped result is logged (`explainer.result_dropped`, **`apply.ts:86-89`**), the job is marked `done` with `{ dropped: reason }`, and **nothing else changes**: an older write, a rewrite asked for meanwhile and a deleted explainer all end here, and the owner sees nothing.
-3. **What the script breaks.** Characters the settings do not have are removed from each scene (**`apply.ts:121-128`**), then `checkDraft` runs (**`apply.ts:131`**, **`src/services/explainers/spec.ts:338`**). Its **problems** (a closing line that is not a question, engagement bait, a woman or a girl in a picture brief, a field past its limit) are not stored: they are computed again on every read (`presentExplainer`, **`explainers.ts:179`**) and **block approval**. Its **warnings** (scene count, length, too few sources) are stored with the draft and never block.
+3. **What the script breaks.** Characters the settings do not have are removed from each scene (**`apply.ts:121-128`**), then `checkDraft` runs (**`apply.ts:131`**, **`src/services/explainers/spec.ts:373`**). Its **problems** (a closing line that is not a question, engagement bait, a woman or a girl in a picture brief, a field past its limit) are not stored: they are computed again on every read (`presentExplainer`, **`explainers.ts:179`**) and **block approval**. Its **warnings** (scene count, length, how long a picture stays, too few sources) are stored with the draft and never block.
 4. **`research_limited`.** A script the Mac's writer wrote after **0** rounds of web reading gets one more warning, `research_limited` (**`apply.ts:132-134`**; the message, **`apply.ts:108`**): written from memory, check every fact and source before approving. A missing count is *unknown*, not 0 (an older worker; **`apply.ts:102-105`**), and Gemini's run is never flagged, since it has its grounding (`rounds` is null for it, **`apply.ts:132`**). The owner may approve over it, as over every warning.
 5. `replaceScenes` (**`apply.ts:141`**; **`src/services/explainers/store.ts:51`**, one statement for up to 300 rows), then `writing → draft` with the title, the draft, `draft_version + 1` and `job_id` cleared (**`apply.ts:142`**).
 
@@ -3934,11 +4056,15 @@ The image allowance's own rows are swept too. `sweepAllowance` (**`src/services/
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
 error, and several write **no row at all**.
 
+**A `debug` line never prints.** The logger's default level is `info` (`DEFAULT_LEVEL`, **`src/utils/log.ts:36`**), and
+production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)* below leaves no trace at all. Set
+`LOG_LEVEL=debug` on a deployment to see them.
+
 | Flow | Stops at | Log line | Row written? |
 |---|---|---|---|
 | 1 | bad signature — **`index.ts:365`** | `webhook.signature_rejected` (`app_keys_tried`, `instagram_app_configured`, `probe`) | no (403 precedes the DB) |
-| 1 | unknown `field` — **`comments.ts:95`** | `comment.unhandled_field` | no |
-| 1 | own comment — **`comments.ts:196`**, **`:212`** | `comment.skipped_self_authored` / `_page_owner` | no |
+| 1 | unknown `field` — **`src/webhook/comments.ts:87`** | `comment.unhandled_field` *(debug)* | no |
+| 1 | own comment — **`src/webhook/comments.ts:214`**, **`src/webhook/comments.ts:230`** | `comment.skipped_self_authored` / `_page_owner` *(debug)* | no |
 | 1 | no creator for `entry.id` — **`comments.ts:205`** | `comment.no_creator` | no |
 | 1 | a tenant with no Meta token (created by name) — `getCreatorByPageId` skips it | `comment.no_creator` | no |
 | 1 | **no campaign matched** — **`comments.ts:237`** | `comment.no_campaign_match` | **no** |
@@ -3946,10 +4072,11 @@ error, and several write **no row at all**.
 | 1 | 24h recipient cap — **`comments.ts:265`** | `dm.skipped_recipient_cap` | yes, `FAILED` |
 | 1 | quota — **`comments.ts:280`** | `dm.quota_exhausted` | yes, `FAILED` |
 | 2 | filtered at plan time — **`router.ts:88`** | *(none)* | no job at all |
-| 2 | nothing answerable — **`messaging.ts:80`** | `dm.skipped_empty` | no |
+| 2 | nothing answerable — **`src/webhook/messaging.ts:169`** | `dm.skipped_empty` *(debug)* | no |
 | 2 | no creator — **`messaging.ts:257`** | `dm.no_creator` | no |
 | 2 | already handled / live claim — **`messaging.ts:286`** | `dm.duplicate_ignored` | inbound row only |
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
+| 2 | **the send quota refuses the reply on the job's last attempt** (the tenant's hourly DM quota or the app-wide Meta budget) — **`src/webhook/messaging.ts:622-629`**, and the sales turn's at **`src/webhook/messaging.ts:552-558`** | `dm.quota_exhausted` (`error`), once per attempt | inbound row, `handled_at` set; **nothing sent, no handoff line, no outbound row**. Earlier attempts release the claim and retry (~30 s, ~2 min) |
 | 2 | the sender's profile lookup (Instagram only) is refused, throttled, or cannot run on a database without v40 — **`senderProfile.ts`** `refreshSenderProfile` | `dm.profile_failed` (`warn`); a throttled one is silent | no (the reply is unaffected; the attempt is recorded in `conversations.profile_checked_at`) |
 | 2 | a **permanent** Meta refusal of the reply (a blocked recipient, a dead token) — the catch in **`messaging.ts`** (`isPermanentMetaError`) | `dm.pipeline_failed` | inbound row, `handled_at` set; **no outbound row, and nothing in `jobs`** (the job completes `done`): the inbox's "reply failed" chip cannot show it, only the logs can |
 | 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |
@@ -3962,6 +4089,7 @@ error, and several write **no row at all**.
 | 7.8 | `GET /{leadgen_id}` refused (no `leads_retrieval`, Leads Access Manager) — `fetchAndStoreLead` | `ads.lead_read_refused` | no; the job ends `failed` and the catch-up will be refused too |
 | 7.8 | a throttle on the lead read | `ads.throttled` | no, until the 6-hourly catch-up |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
+| 3 | **a due post of an inactive tenant** (`creators.is_active = false`) — `splitDueByTenantActivity`, **`src/routes/api.ts:570`**, in `publishDuePosts` **`src/routes/api.ts:948-953`** | `cron.publish_held_inactive` (`warn`, the count and tenant ids) on every sweep | no: the row stays `PENDING` and goes out on the first sweep after the tenant is switched back on |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |
 | 4 | `/auth/me`'s onboarding cannot be read (a database without v34, a failed query) — **`onboardingWizard.ts:198`** | `onboarding.brief_unreadable` (`warn`) | no (`onboarding: null`: the dashboard gates nothing) |
@@ -3988,7 +4116,7 @@ error, and several write **no row at all**.
 | 8 | Connect with Facebook is off (`meta.login_enabled`) | *(none: `reason=disabled`)* | the state is spent, nothing else |
 | 8 | the webhook could not be subscribed — `subscribePage` | `meta.subscribe_failed` / `_incomplete` / `_unread` (`warn`) | yes: connected, `meta_webhook_subscribed_at` NULL, `warn=` in the redirect |
 | 8 | a pick nobody finishes | *(none)* | `meta_pick` row, payload cleared after 10 min by the next Meta state or the daily cron |
-| 8 | **the test comment never turns green** (W4) — `readCommentCheck` finds no `comment.process` job for the tenant's ids since `meta_connected_at` | *(none: a normal `received: false`)* | no; the page stops asking after 10 minutes and offers "Check again". Means the webhook path is not delivering: for a Tester, the operator connects through Page access (docs/onboarding/04 §1) |
+| 8 | **the test comment never turns green** (W4) — `readCommentCheck` finds no `comment.process` job for the tenant's ids since `meta_connected_at` | *(none: a normal `received: false`)* | no; the page stops asking after 10 minutes and offers "Check again". Means the webhook path is not delivering: for a Tester, the operator connects through Page access |
 | 8 | the daily recheck cannot reach Meta, or Meta's answer is not an inspection — `classifyDebugToken` | `token.recheck_transient` (`warn`) | **no** (not even `token_last_checked_at`); the tenant is first in line tomorrow |
 | 8 | a token that cannot be decrypted (a rotated key) — `recheckOneMetaToken` | `token.recheck_unreadable` (`warn`) | no |
 | 8 | a connection that needs renewing or that Meta rejects — the recheck | `token.reconnect_due` (`warn` / `error`) | yes: the health columns; "reconnect due" on the card and on Overview |

@@ -582,7 +582,10 @@ describe('writeWithGemini: what it refuses to keep', () => {
         assert.equal(result.written.first_comment, '');
         assert.ok(result.written.scenes.every((s) => s.source_ids.length === 0));
         assert.match(g.calls.find((c) => isGemini(c, 'write'))!.body.contents[0].parts[0].text, /NUMBERED SOURCES: none were found/);
-        assert.deepEqual(checkDraft(result.written, { tier: 'short', language: 'en' }).warnings.map((w) => w.code), ['needs_sources']);
+        assert.deepEqual(
+            checkDraft(result.written, { tier: 'short', language: 'en' }).warnings.map((w) => w.code), ['slow_opening', 'needs_sources'],
+            'no source; and the fixture’s first sentence, 12 words at 2.5 a second, holds its picture 4.8 s'
+        );
     });
 
     it('an Arabic script gets an Arabic first comment', async () => {
