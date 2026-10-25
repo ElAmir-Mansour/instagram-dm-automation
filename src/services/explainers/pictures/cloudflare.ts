@@ -4,7 +4,9 @@
  * The call: `POST https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/black-forest-labs/flux-2-klein-4b`, `Authorization: Bearer`
  * the API token, a multipart form with `prompt`, `width`, `height`, `seed` and up to four reference pictures `input_image_0..3` (each smaller than
  * 512×512; the steps are fixed at 4 by the model). The answer is JSON with the picture as base64 in `result.image`. The free allocation is 10,000
- * neurons a day; when it is used up the API answers error code 4006 or HTTP 429, and on the Workers Free plan it never bills: it refuses.
+ * neurons a day; when it is used up the API answers error code 3036, "Account limited" (HTTP 429; 4006 in older answers), and on the Workers Free
+ * plan it never bills: it refuses. A 429 without that code is code 3040, "Out of capacity": Cloudflare is busy for a moment, which a retry
+ * outlives, so it is never read as the day's allowance (Workers AI error table, developers.cloudflare.com/workers-ai/platform/errors, 2026-10-25).
  *
  * Failures are two kinds (`ImageProviderError`): the allowance is used up (the caller pauses drawing until it resets), or anything else (the
  * caller gives the units back and marks the scene). A call that does not answer in 30 seconds is the second kind.
@@ -25,8 +27,10 @@ export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 export const CLOUDFLARE_TIMEOUT_MS = 30_000;
 /** `input_image_0` to `input_image_3`. */
 export const CLOUDFLARE_MAX_REFERENCES = 4;
-/** "you have used up your daily free allocation of 10,000 neurons": Cloudflare's error code for it. */
-const EXHAUSTED_CODE = 4006;
+/** "you have used up your daily free allocation of 10,000 neurons": 3036 in Cloudflare's error table, 4006 in the REST API's older answers. */
+const EXHAUSTED_CODES: ReadonlySet<number> = new Set([3036, 4006]);
+/** Cloudflare's own words for it, whatever the code: an answer that says so is believed. */
+const EXHAUSTED_WORDS = /daily free allocation/i;
 /** The longest piece of Cloudflare's own words that goes into a message the owner reads. */
 const MAX_PROVIDER_WORDS = 300;
 
@@ -137,14 +141,18 @@ export class CloudflareImageProvider implements ImageProvider {
     /** A refusal or a failure Cloudflare answered: the allowance is used up (code 4006, or 429), or any other reason. */
     #failure(status: number, errors: { code?: unknown; message?: unknown }[]): ImageProviderError {
         const code = (value: unknown): number | string | undefined => (typeof value === 'number' || typeof value === 'string' ? value : undefined);
-        const exhaustedAt = errors.find((error) => Number(error?.code) === EXHAUSTED_CODE);
+        const exhaustedAt = errors.find((error) => EXHAUSTED_CODES.has(Number(error?.code)) || EXHAUSTED_WORDS.test(String(error?.message ?? '')));
         const first = errors[0];
         const reported = code((exhaustedAt ?? first)?.code);
         const detail: { status: number; code?: number | string } = reported === undefined ? { status } : { status, code: reported };
         const said = clip(scrub(String((exhaustedAt ?? first)?.message ?? ''), this.#token), MAX_PROVIDER_WORDS);
 
-        if (status === 429 || exhaustedAt) {
+        if (exhaustedAt) {
             return new ImageProviderError('ALLOWANCE_EXHAUSTED', `Cloudflare says the free daily allowance is used up${said ? ` (${said})` : ''}.`, detail);
+        }
+        if (status === 429) {
+            // 3040, "Out of capacity", or a 429 that does not say: busy for a moment, not out of allowance. Drawing is not paused until tomorrow.
+            return new ImageProviderError('PROVIDER_ERROR', `Cloudflare is busy right now${said ? ` (${said})` : ''}; try again in a few minutes.`, detail);
         }
         return new ImageProviderError('PROVIDER_ERROR', said ? `Cloudflare refused the picture: ${said}` : `Cloudflare answered HTTP ${status}.`, detail);
     }

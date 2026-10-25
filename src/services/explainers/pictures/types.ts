@@ -45,7 +45,7 @@ export interface ImageProvider {
 /**
  * Why a draw call failed.
  *
- *   ALLOWANCE_EXHAUSTED   the provider says the free allocation is used up (Cloudflare error 4006 or HTTP 429). Nothing is wrong with the
+ *   ALLOWANCE_EXHAUSTED   the provider says the free allocation is used up (Cloudflare error 3036, or 4006 in older answers; a 429 that is only Cloudflare being busy is a PROVIDER_ERROR). Nothing is wrong with the
  *                         request: drawing pauses until the allocation resets, and the same scene is drawn then.
  *   PROVIDER_ERROR        anything else: a refusal, a bad token, a timeout, an answer that is not a picture. The units are given back and
  *                         the scene is marked with the reason.

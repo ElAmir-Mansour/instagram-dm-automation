@@ -14,7 +14,7 @@
  *      `retryAt`.
  *   2. CALL the provider, outside any transaction.
  *   3. SETTLE after it: a picture came back, nothing to do; an ordinary failure, REFUND the units (`refundAllowance`); the provider says the
- *      allocation is used up (code 4006 or HTTP 429), `markExhausted`, which keeps the units (the estimate was low, and the day is over anyway)
+ *      allocation is used up (code 3036, or 4006 in older answers), `markExhausted`, which keeps the units (the estimate was low, and the day is over anyway)
  *      and pauses drawing until the next 00:00 UTC plus five minutes, when Cloudflare has reset and the margin keeps the first call from racing it.
  *
  * The pause is DERIVED, not stored: `exhausted_at` is the only fact, and "paused until" is the next midnight plus five minutes after it. So an

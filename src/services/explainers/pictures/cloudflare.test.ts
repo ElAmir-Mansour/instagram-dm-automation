@@ -1,7 +1,8 @@
 /**
  * The Cloudflare Workers AI provider (T039, research.md R5): FLUX.2 klein 4B over the REST API, as multipart. `fetch` is injected, so nothing here
  * reaches Cloudflare. What is pinned is the request (where it goes, what it carries, and that the token travels in one header and nowhere else),
- * how the answer becomes a picture, and the two kinds of failure: the allowance is used up (error code 4006 or HTTP 429), or anything else.
+ * how the answer becomes a picture, and the two kinds of failure: the allowance is used up (error code 3036, or 4006 in older answers), or anything
+ * else, a 429 that is only Cloudflare being busy (3040) included.
  */
 import assert from 'node:assert/strict';
 import { inspect } from 'node:util';
@@ -196,11 +197,27 @@ describe('CloudflareImageProvider — the allowance is used up', () => {
         }
     });
 
-    it('maps HTTP 429 to ALLOWANCE_EXHAUSTED, with or without a body', async () => {
-        for (const answer of [() => failure(429, [{ code: 3040, message: 'Too many requests' }]), () => new Response('slow down', { status: 429 })]) {
+    it('maps 3036, Cloudflare\'s "Account limited" (HTTP 429), to ALLOWANCE_EXHAUSTED, as a number or a string', async () => {
+        for (const code of [3036, '3036']) {
+            const answer = () => failure(429, [{ code, message: 'Account limited' }]); // the code alone decides: no words to lean on
             const err = await rejection(provider(harness(answer).fetchImpl).draw(REQUEST));
-            assert.equal(err.kind, 'ALLOWANCE_EXHAUSTED');
+            assert.equal(err.kind, 'ALLOWANCE_EXHAUSTED', String(code));
             assert.equal(err.detail.status, 429);
+            assert.equal(String(err.detail.code), '3036');
+        }
+    });
+
+    it('believes Cloudflare\'s words for it under a code it does not know: "daily free allocation" is ALLOWANCE_EXHAUSTED', async () => {
+        const answer = () => failure(429, [{ code: 3999, message: 'You have used up your Daily Free Allocation of 10,000 neurons' }]);
+        assert.equal((await rejection(provider(harness(answer).fetchImpl).draw(REQUEST))).kind, 'ALLOWANCE_EXHAUSTED');
+    });
+
+    it('takes a 429 without it for Cloudflare being busy, not for the day: 3040 (out of capacity) and a bare 429 are PROVIDER_ERROR, saying try again', async () => {
+        for (const answer of [() => failure(429, [{ code: 3040, message: 'Out of capacity: no more data centers to forward the request to' }]), () => new Response('slow down', { status: 429 })]) {
+            const err = await rejection(provider(harness(answer).fetchImpl).draw(REQUEST));
+            assert.equal(err.kind, 'PROVIDER_ERROR');
+            assert.equal(err.detail.status, 429);
+            assert.match(err.message, /busy right now.*try again in a few minutes/);
         }
     });
 
