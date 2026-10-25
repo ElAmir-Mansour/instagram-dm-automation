@@ -148,7 +148,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
             } else if (part === 'updated_at = NOW()') {
                 touch(row);
             } else {
-                throw new Error(`testWorld: cannot read the SET item "${part}"`);
+                throw new Error(`explainers/testDb: cannot read the SET item "${part}"`);
             }
         }
     }

@@ -387,8 +387,8 @@ describe('the user prompt', () => {
     it('shows the creator’s notes and links only when there are some, links first to be read', () => {
         const plain = writeUserPrompt(request());
         assert.doesNotMatch(plain, /Notes from the creator|Links from the creator/);
-        const full = writeUserPrompt(request({ notes: ' point to the course chapters ', sourceLinks: ['https://arxiv.org/abs/2005.11401', 'https://lmstudio.ai/docs/app/basics/rag'] }));
-        assert.match(full, /Notes from the creator \(follow them\):\npoint to the course chapters/);
+        const full = writeUserPrompt(request({ notes: ' point to the paper chapters ', sourceLinks: ['https://arxiv.org/abs/2005.11401', 'https://lmstudio.ai/docs/app/basics/rag'] }));
+        assert.match(full, /Notes from the creator \(follow them\):\npoint to the paper chapters/);
         assert.match(full, /Links from the creator \(read them first\):\n- https:\/\/arxiv\.org\/abs\/2005\.11401\n- https:\/\/lmstudio\.ai\/docs\/app\/basics\/rag/);
     });
 
@@ -400,9 +400,9 @@ describe('the user prompt', () => {
     });
 
     it('gives the art direction as information, and the words never to use when there are some', () => {
-        const user = writeUserPrompt(request({ avoid: ['كورس', 'free'] }));
+        const user = writeUserPrompt(request({ avoid: ['مجاني', 'free'] }));
         assert.match(user, /Art direction the pictures are drawn in \(for your information; never repeat it in a brief\): warm hand-painted gouache illustration$/m);
-        assert.match(user, /Never use these words or topics: كورس, free\./);
+        assert.match(user, /Never use these words or topics: مجاني, free\./);
         assert.doesNotMatch(writeUserPrompt(request()), /Never use these words/);
     });
 

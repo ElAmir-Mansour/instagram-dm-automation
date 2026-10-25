@@ -11,7 +11,7 @@ import { defaultInfographicConfig, type ExplainerTrack } from '../studio/setting
 import { ExplainerError } from './errors.js';
 import { parseWhen, scheduleExplainer, withCredit, YOUTUBE_SHORT_MAX_SECONDS } from './schedule.js';
 import { EXPLAINER, TENANT, validWriterOutput } from './testFixtures.js';
-import { BASE, explainerSettings, installWorld, type World } from './testWorld.js';
+import { BASE, explainerSettings, installWorld, type World } from './testDb.js';
 
 const id = (n: number) => `${String(n).padStart(2, '0').repeat(4)}-1111-4111-8111-111111111111`;
 const up = (n: number) => `${BASE}/api/uploads/${id(n)}`;
@@ -193,10 +193,10 @@ describe('scheduleExplainer: when', () => {
     });
 
     it('next, which is the default, is the next free posting slot: the Monteur’s post_at, in the tenant’s zone, as infographics take it', async () => {
-        setup({ tz: 'Asia/Riyadh' });
+        setup({ tz: 'Asia/Kuwait' });
         ready();
         const out = await scheduleExplainer(TENANT, EXPLAINER, {}, NOW);
-        assert.equal(out.scheduled_time, '2026-10-25T13:00:00.000Z', 'it is 12:00 in Riyadh now, so 16:00 there, today, is the next slot');
+        assert.equal(out.scheduled_time, '2026-10-25T13:00:00.000Z', 'it is 12:00 in Kuwait now, so 16:00 there, today, is the next slot');
     });
 
     it('a time the owner names is that time, in any form a date takes', async () => {

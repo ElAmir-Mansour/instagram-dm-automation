@@ -1,7 +1,7 @@
 /**
  * What the Studio queue does with an explainer's four job kinds when a job ends (apply.ts, reached through `completeJob` and `failJob`, as the worker's
  * routes reach it): the script written, the narration voiced, the drawing paused, finished or failed, the videos rendered, and each failure. The database is
- * the stateful fake of testWorld.ts: a result lands on rows a test can read back, and a transaction that fails gives its rows back.
+ * the stateful fake of testDb.ts: a result lands on rows a test can read back, and a transaction that fails gives its rows back.
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
@@ -16,7 +16,7 @@ import {
 } from './apply.js';
 import { estimateSeconds } from './spec.js';
 import { EXPLAINER, JOB, SENTENCE, TENANT, validWriterOutput, writerScene } from './testFixtures.js';
-import { BASE, explainerSettings, installWorld, type World } from './testWorld.js';
+import { BASE, explainerSettings, installWorld, type World } from './testDb.js';
 import { presentExplainer } from './explainers.js';
 
 const id = (n: number) => `${String(n).padStart(2, '0').repeat(4)}-1111-4111-8111-111111111111`;

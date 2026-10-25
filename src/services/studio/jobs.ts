@@ -781,7 +781,7 @@ export async function deleteUnreferencedUploads(
  * What the explainer appliers (explainers/apply.ts) need from this file, handed to them because they cannot import it: this file imports them.
  * Function declarations are hoisted, so this object may be built before the functions it names.
  */
-const EXPLAINER_DEPS: ExplainerApplyDeps = { enqueue: enqueueJob, checkFiles: checkRenderFiles, deleteFiles: deleteUnreferencedUploads };
+export const EXPLAINER_DEPS: ExplainerApplyDeps = { enqueue: enqueueJob, checkFiles: checkRenderFiles, deleteFiles: deleteUnreferencedUploads };
 
 /**
  * Land a render on its draft, or drop it.

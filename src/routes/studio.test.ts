@@ -23,7 +23,7 @@ import { NEEDS_AI_PROVIDER_MESSAGE } from '../services/studio/tenantAi.js';
 import { hashWorkerToken, mintWorkerToken } from '../services/studio/worker.js';
 import { completeJob } from '../services/studio/jobs.js';
 import { CLOSING_QUESTION, validWriterOutput } from '../services/explainers/testFixtures.js';
-import { explainerSettings, installWorld, type World } from '../services/explainers/testWorld.js';
+import { explainerSettings, installWorld, type World } from '../services/explainers/testDb.js';
 import { setRunDeps, setRunLauncher } from '../services/explainers/writing.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
 

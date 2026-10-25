@@ -43,7 +43,7 @@ import { runRetentionSweep } from '../services/retention.js';
 import {
     describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
-import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
@@ -104,6 +104,7 @@ import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
 import { sweepLeads } from '../services/ads/leads.js';
 import { runAdsHealth } from '../services/ads/health.js';
+import { sweepWriting } from '../services/explainers/writing.js';
 import { expireProposals } from '../services/ads/proposals/store.js';
 import { runDailyReview } from '../services/ads/proposals/service.js';
 import { drainAdsOps } from '../services/ads/ops.js';
@@ -1151,6 +1152,16 @@ router.get('/cron/publish', async (req, res) => {
             if (daily.daily > 0 || daily.failed > 0) log('info', 'cron.ads_daily_sync', { ...daily });
         } catch (dailyErr) {
             log('error', 'cron.ads_daily_sync_failed', describeError(dailyErr));
+        }
+
+        // Illustrated explainers (src/services/explainers/writing.ts): the backstop for the lazy check on GET /explainers/:id. An explainer whose
+        // script the Mac never claimed in 10 minutes, or whose write failed on a sign-in error, is handed to Gemini here when nobody opens its page.
+        // The run itself is started under waitUntil and finishes after this response; a database behind v59 has nothing to look at. Fail-soft.
+        try {
+            const writing = await sweepWriting();
+            if (writing.started > 0) log('info', 'cron.explainers_writing', { ...writing });
+        } catch (writingErr) {
+            if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
         }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —

@@ -1,6 +1,6 @@
 /**
  * The lifecycle of an illustrated explainer (explainers.ts): create, read, edit, rewrite, approve, voice again, draw, approve the pictures, render, retry and
- * delete, on the stateful fake database of testWorld.ts. Every refusal of the contract (contracts/http-api.md) is here with its code, and every job queued is
+ * delete, on the stateful fake database of testDb.ts. Every refusal of the contract (contracts/http-api.md) is here with its code, and every job queued is
  * checked against the payload of contracts/worker-jobs.md.
  */
 import assert from 'node:assert/strict';
@@ -17,7 +17,7 @@ import {
 import { ExplainerError } from './errors.js';
 import { writerSchema } from './prompt.js';
 import { CLOSING_QUESTION, EXPLAINER, JOB, TENANT, validWriterOutput } from './testFixtures.js';
-import { BASE, explainerSettings, installWorld, type World } from './testWorld.js';
+import { BASE, explainerSettings, installWorld, type World } from './testDb.js';
 import { setRunDeps, setRunLauncher } from './writing.js';
 
 const KARIM = { key: 'karim', name: 'Karim', description: 'a curious young man', ref_media_id: null, ref_url: null, approved_at: null };
@@ -94,11 +94,11 @@ describe('createExplainer', () => {
 
     it('queues the payload of contracts/worker-jobs.md: the inputs, the characters, the art direction, the bounds, and the prompts with the schema', async () => {
         await createExplainer(TENANT, {
-            topic: 'Why AI answers with confidence', language: 'en', length_tier: 'medium', notes: 'point to the course', source_links: ['https://arxiv.org/abs/2005.11401'],
+            topic: 'Why AI answers with confidence', language: 'en', length_tier: 'medium', notes: 'point to the paper', source_links: ['https://arxiv.org/abs/2005.11401'],
         }, NOW);
         const p = world.jobsOf('explainer_write')[0]!.payload;
         assert.equal(p.explainer_id, [...world.explainers.keys()][0]);
-        assert.deepEqual([p.language, p.length_tier, p.topic, p.notes], ['en', 'medium', 'Why AI answers with confidence', 'point to the course']);
+        assert.deepEqual([p.language, p.length_tier, p.topic, p.notes], ['en', 'medium', 'Why AI answers with confidence', 'point to the paper']);
         assert.deepEqual(p.source_links, ['https://arxiv.org/abs/2005.11401']);
         assert.deepEqual(p.characters, [{ key: 'karim', name: 'Karim', description: 'a curious young man' }]);
         assert.match(p.style, /warm hand-painted gouache/);
@@ -729,7 +729,7 @@ function reviewExplainer(over: Partial<ExplainerRow> = {}, sceneOver: (position:
 describe('approvePictures', () => {
     it('renders it: the render job, with the audio, the timed scenes with their labels and pictures, the words, the brand and the sound; the status rendering', async () => {
         world.settingsRow = explainerSettings({ characters: [KARIM], music: [TRACK], title_color: '#FFD43B' });
-        world.settingsRow.infographic = { ...defaultInfographicConfig(), name: { ar: 'السيد', en: 'El Amir' }, handle: '@elamir', site: 'elamirmansour.dev', photo_url: `/api/uploads/${id(8)}` };
+        world.settingsRow.infographic = { ...defaultInfographicConfig(), name: { ar: 'سامي', en: 'Sam Lee' }, handle: '@samlee', site: 'samlee.example', photo_url: `/api/uploads/${id(8)}` };
         reviewExplainer({ language: 'en', sound_mode: 'music', music_track_id: 'calm-01', subtitles: false });
         const view = await approvePictures(TENANT, EXPLAINER);
         assert.equal(view.status, 'rendering');
@@ -744,7 +744,7 @@ describe('approvePictures', () => {
         assert.equal(p.scenes.length, 12);
         assert.deepEqual(p.scenes[1], { position: 1, start: 6, end: 12, label: 'idea 1', picture_url: `${BASE}/api/uploads/${id(21)}` });
         assert.deepEqual(p.words, { '0': [[0, 0.5, 'The']] });
-        assert.deepEqual(p.brand, { name: 'El Amir', handle: '@elamir', site: 'elamirmansour.dev', photo_url: `${BASE}/api/uploads/${id(8)}` });
+        assert.deepEqual(p.brand, { name: 'Sam Lee', handle: '@samlee', site: 'samlee.example', photo_url: `${BASE}/api/uploads/${id(8)}` });
     });
 
     it('sends the Arabic name for an Arabic video, and the other when one is missing', async () => {

@@ -85,7 +85,7 @@ const writeAnswer = (output: unknown) => ({
 });
 
 const REQUEST: WriterRequest = {
-    topic: 'Why AI answers with confidence', notes: 'point to the course', language: 'en', tier: 'short', sourceLinks: [GPT3],
+    topic: 'Why AI answers with confidence', notes: 'point to the paper', language: 'en', tier: 'short', sourceLinks: [GPT3],
     characters: [{ key: 'karim', name: 'Karim', description: 'a curious young man' }], style: 'warm gouache', today: '2026-10-25',
 };
 
@@ -259,9 +259,9 @@ describe('what each call is asked', () => {
     });
 
     it('its user prompt names the topic, the video’s language (the notes stay in English), the creator’s notes and his links', () => {
-        const text = researchUserPrompt({ topic: ' RAG ', notes: ' point to the course ', language: 'ar', sourceLinks: [ARXIV], today: '2026-10-25' });
+        const text = researchUserPrompt({ topic: ' RAG ', notes: ' point to the paper ', language: 'ar', sourceLinks: [ARXIV], today: '2026-10-25' });
         assert.match(text, /^Topic: RAG\nThe video will be in Arabic: write your notes in English anyway\.\nToday: 2026-10-25/);
-        assert.match(text, /Notes from the creator \(follow them\):\npoint to the course/);
+        assert.match(text, /Notes from the creator \(follow them\):\npoint to the paper/);
         assert.match(text, /The creator pointed to these pages\. Search for them[^\n]*:\n- https:\/\/arxiv\.org\/abs\/2005\.11401/);
         assert.doesNotMatch(researchUserPrompt({ topic: 'RAG', notes: null, language: 'en', sourceLinks: [] }), /creator/);
     });

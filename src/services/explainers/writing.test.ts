@@ -12,7 +12,7 @@ import { setLogSink } from '../../utils/log.js';
 import { setWaitUntil } from '../../utils/waitUntil.js';
 import { completeJob, failJob } from '../studio/jobs.js';
 import { EXPLAINER, JOB, TENANT, validWriterOutput } from './testFixtures.js';
-import { explainerSettings, installWorld, type World } from './testWorld.js';
+import { explainerSettings, installWorld, type World } from './testDb.js';
 import { GeminiWriteError, type GeminiWriteArgs, type GeminiWritten } from './writerGemini.js';
 import {
     afterJobFailed, insertServerWriteJob, isSignInFailure, queueWrite, reapStalledRun, reconcileWriting, runGeminiWrite, setRunDeps, setRunLauncher, startGeminiRun, sweepWriting,
@@ -413,11 +413,11 @@ describe('runGeminiWrite', () => {
     };
 
     it('writes from the explainer’s own rows and the settings, and the draft lands as the Mac’s does, marked Gemini’s', async () => {
-        const { run } = gemini({ topic: 'Why AI answers with confidence', notes: 'point to the course', source_links: [{ url: 'https://arxiv.org/abs/2005.11401' }] });
+        const { run } = gemini({ topic: 'Why AI answers with confidence', notes: 'point to the paper', source_links: [{ url: 'https://arxiv.org/abs/2005.11401' }] });
         const asked: GeminiWriteArgs[] = [];
         await runGeminiWrite(run, { write: async (args) => { asked.push(args); await args.onProgress?.('Gemini is researching the topic on the web'); return written(); }, now: () => NOW });
         assert.equal(asked.length, 1);
-        assert.deepEqual([asked[0]!.request.topic, asked[0]!.request.notes, asked[0]!.request.language, asked[0]!.request.tier], ['Why AI answers with confidence', 'point to the course', 'en', 'short']);
+        assert.deepEqual([asked[0]!.request.topic, asked[0]!.request.notes, asked[0]!.request.language, asked[0]!.request.tier], ['Why AI answers with confidence', 'point to the paper', 'en', 'short']);
         assert.deepEqual(asked[0]!.request.sourceLinks, ['https://arxiv.org/abs/2005.11401']);
         assert.deepEqual(asked[0]!.request.characters, [{ key: 'karim', name: 'Karim', description: 'a curious young man' }]);
         assert.equal(asked[0]!.request.today, '2026-10-25');

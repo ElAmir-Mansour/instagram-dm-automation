@@ -6,7 +6,7 @@
  * the schema it ships (`writerSchema.json`), before anything is stored: a worker that is wrong, or a model that drifted, is a refusal here and never half a
  * draft in the database.
  *
- * `schemaProblems` is a small JSON Schema check, a port of the worker's `problemsWith` (aicourse-captions scripts/studio/explainerWrite.mjs) for the same
+ * `schemaProblems` is a small JSON Schema check, a port of the worker's `problemsWith` (the Mac worker's scripts/studio/explainerWrite.mjs) for the same
  * keyword subset, so the two sides say the same things about the same answer. It throws on a keyword it does not know (`assertCheckable`): a check that
  * ignored one would pass what the schema forbids.
  */

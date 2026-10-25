@@ -393,7 +393,7 @@ export async function applyExplainerResult(exec: Exec, job: ExplainerJob, result
     }
 }
 
-/** A voice failure that is the free allowance running out: the worker's `VOICE_LIMIT: …` (aicourse-captions tts.mjs). */
+/** A voice failure that is the free allowance running out: the worker's `VOICE_LIMIT: …` (the Mac worker's tts.mjs). */
 export const VOICE_LIMIT_PREFIX = 'VOICE_LIMIT:';
 /** A voice job asked again after a limit this many times is failed for real: a limit that lasts three days is not "tomorrow". */
 export const MAX_VOICE_LIMIT_RETRIES = 3;
