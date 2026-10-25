@@ -1198,6 +1198,9 @@ const SettingsPage = {
     },
 
     // ─── Explainers (v59): the platform admin's switch and the picture provider ───
+    /** What the server accepts for the provider (src/services/explainers/pictures/provider.ts and cloudflare.ts): the card checks the same, to say so in its own words. */
+    EXPLAINERS_LIMITS: Object.freeze({ ACCOUNT_ID: /^[A-Za-z0-9]{8,64}$/, ACCOUNT_MIN: 8, ACCOUNT_MAX: 64, TOKEN_MIN: 20, TOKEN_MAX: 200, CAP_MAX: 1000, UNITS_MAX: 10000 }),
+
     /** The workspace the switch is for: the one this session acts as. (In this version only the platform owner's can be switched on.) */
     explainersTenantId() {
         return App.session && App.session.tenantId ? String(App.session.tenantId) : '';
@@ -1230,7 +1233,9 @@ const SettingsPage = {
 
     explainersSwitch(ex) {
         const tenantId = this.explainersTenantId();
-        const on = !!(tenantId && ex.enabled && typeof ex.enabled === 'object' && ex.enabled[tenantId] === true);
+        // The server keys the map by tenant id as stored; an id is a UUID, so the match ignores case.
+        const key = tenantId && ex.enabled && typeof ex.enabled === 'object' ? Object.keys(ex.enabled).find((k) => k.toLowerCase() === tenantId.toLowerCase()) : undefined;
+        const on = key !== undefined && ex.enabled[key] === true;
         return html`
             <div class="settings-block mbe-4">
                 <label class="check-row" for="explainers-on">
@@ -1248,7 +1253,7 @@ const SettingsPage = {
         const last4 = typeof p.token_last4 === 'string' ? p.token_last4.slice(-4) : '';
         const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? String(Number(v)) : '');
         return html`
-            <form id="explainers-provider-form" data-submit="settings:saveExplainers">
+            <form id="explainers-provider-form" data-submit="settings:saveExplainers" data-saved="${ex.provider && typeof ex.provider === 'object' ? 'true' : 'false'}" novalidate>
                 <p class="form-hint mbe-3">${t('settings.explainers.setup')}</p>
                 <div class="form-group">
                     <label class="form-label" for="explainers-account-id">${t('settings.explainers.accountId')}</label>
@@ -1268,13 +1273,13 @@ const SettingsPage = {
                 <div class="row row--wrap gap-3">
                     <div class="form-group">
                         <label class="form-label" for="explainers-daily-cap">${t('settings.explainers.dailyCap')}</label>
-                        <input class="field" id="explainers-daily-cap" name="daily_cap" type="number" min="1" max="1000" step="1" inputmode="numeric" dir="ltr"
+                        <input class="field" id="explainers-daily-cap" name="daily_cap" type="number" min="0" max="1000" step="1" inputmode="numeric" dir="ltr"
                                value="${num(p.daily_cap)}" aria-describedby="explainers-daily-cap-hint">
                         <p class="form-hint" id="explainers-daily-cap-hint">${t('settings.explainers.dailyCapHint')}</p>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="explainers-units">${t('settings.explainers.units')}</label>
-                        <input class="field" id="explainers-units" name="units_per_picture" type="number" min="1" max="10000" step="1" inputmode="numeric" dir="ltr"
+                        <input class="field" id="explainers-units" name="units_per_picture" type="number" min="1" max="10000" step="any" inputmode="decimal" dir="ltr"
                                value="${num(p.units_per_picture)}" aria-describedby="explainers-units-hint">
                         <p class="form-hint" id="explainers-units-hint">${t('settings.explainers.unitsHint')}</p>
                     </div>
@@ -3969,17 +3974,35 @@ const SettingsPage = {
     async saveExplainers(form, event) {
         event.preventDefault();
         const val = (name) => String((form.elements[name] && form.elements[name].value) || '').trim();
+        const refuse = (message, field) => {
+            UI.toast(message, 'error');
+            const el = form.elements[field];
+            if (el && typeof el.focus === 'function') el.focus();
+        };
+        // The server's own rules (provider.ts, cloudflare.ts), checked first so a typo is said in the interface language and no request is made.
+        const L = this.EXPLAINERS_LIMITS;
         const account = val('account_id');
-        if (!account) {
-            UI.toast(t('settings.explainers.accountMissing'), 'error');
-            if (form.elements.account_id && typeof form.elements.account_id.focus === 'function') form.elements.account_id.focus();
-            return;
-        }
+        if (!account) return refuse(t('settings.explainers.accountMissing'), 'account_id');
+        if (!L.ACCOUNT_ID.test(account)) return refuse(t('settings.explainers.accountInvalid', { min: UI.formatNumber(L.ACCOUNT_MIN), max: UI.formatNumber(L.ACCOUNT_MAX) }), 'account_id');
         const payload = { account_id: account };
         const token = val('token');
-        if (token) payload.token = token;
-        for (const name of ['daily_cap', 'units_per_picture']) {
-            if (val(name) !== '' && Number.isFinite(Number(val(name)))) payload[name] = Math.round(Number(val(name)));
+        // Nothing saved yet: the first save needs the token. After that a blank one keeps what is stored.
+        if (!token && !(form.dataset && form.dataset.saved === 'true')) return refuse(t('settings.explainers.tokenMissing'), 'token');
+        if (token) {
+            if (/\s/.test(token) || token.length < L.TOKEN_MIN || token.length > L.TOKEN_MAX) {
+                return refuse(t('settings.explainers.tokenInvalid', { min: UI.formatNumber(L.TOKEN_MIN), max: UI.formatNumber(L.TOKEN_MAX) }), 'token');
+            }
+            payload.token = token;
+        }
+        if (val('daily_cap') !== '') {
+            const cap = Number(val('daily_cap'));
+            if (!Number.isInteger(cap) || cap < 0 || cap > L.CAP_MAX) return refuse(t('settings.explainers.capInvalid', { min: UI.formatNumber(0), max: UI.formatNumber(L.CAP_MAX) }), 'daily_cap');
+            payload.daily_cap = cap;
+        }
+        if (val('units_per_picture') !== '') {
+            const units = Number(val('units_per_picture'));
+            if (!Number.isFinite(units) || units <= 0 || units > L.UNITS_MAX) return refuse(t('settings.explainers.unitsInvalid', { max: UI.formatNumber(L.UNITS_MAX) }), 'units_per_picture');
+            payload.units_per_picture = units;
         }
         const focus = UI.captureFocus(document.getElementById('page-container'));
         const restore = UI.formBusy(form, t('common.saving'));
@@ -3991,7 +4014,9 @@ const SettingsPage = {
             UI.restoreFocus(focus);
         } catch (err) {
             restore();
-            UI.toast(UI.errorLine(err), 'error');
+            // A refusal of the fields names every problem it found; its `error` line only counts them ("3 problems with the provider settings.").
+            const problems = err && err.body && Array.isArray(err.body.problems) ? err.body.problems.filter((p) => typeof p === 'string' && p) : [];
+            UI.toast(problems.length > 1 ? problems.join(' ') : UI.errorLine(err), 'error');
         }
     },
 

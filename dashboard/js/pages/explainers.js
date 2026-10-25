@@ -1638,6 +1638,8 @@ const ExplainersPage = {
         const cap = a && Number(a.cap) > 0 ? Number(a.cap) : null;
         const used = a && Number.isFinite(Number(a.pictures)) ? Number(a.pictures) : null;
         const left = a && Number.isFinite(Number(a.est_left)) ? Math.max(0, Math.round(Number(a.est_left))) : null;
+        // The allowance itself can be paused (the cap is reached, or the provider says today's free allocation is used up): a redraw is refused until then.
+        const allowanceUntil = a && a.paused_until && new Date(a.paused_until).getTime() > Date.now() ? a.paused_until : null;
         const canDraw = remaining > 0 && !running && ['drawing', 'review'].includes(d.status);
         return html`
             <div class="ex-pic-summary">
@@ -1649,6 +1651,7 @@ const ExplainersPage = {
                 ${running ? html`<p class="ex-progress" role="status"><span class="spinner" aria-hidden="true"></span> <span dir="auto">${this.progressText(d)}</span></p>` : ''}
                 ${used !== null ? html`<p class="form-hint ex-allowance">${t(cap ? 'explainers.allowance.line' : 'explainers.allowance.lineNoCap', { used: UI.formatNumber(used), cap: UI.formatNumber(cap || 0), left: UI.formatNumber(left === null ? 0 : left) })}
                     ${cap ? html`<progress class="studio-meter" value="${Math.min(used, cap)}" max="${cap}" aria-label="${t('explainers.allowance.label')}"></progress>` : ''}</p>` : ''}
+                ${allowanceUntil && !paused ? html`<p class="form-hint ex-allowance-paused" role="status">${t('explainers.allowance.pausedUntil', { when: this.lri(UI.formatDateTime(allowanceUntil, { zone: true })) })}</p>` : ''}
                 ${canDraw ? html`<div class="ex-actions">${UI.button({ variant: 'primary', icon: 'sparkles', label: t(drawn === 0 ? 'explainers.pictures.drawAll' : 'explainers.pictures.continue'), action: 'explainers:drawAll', id: 'ex-draw-all' })}</div>` : ''}
             </div>
         `;
@@ -1695,14 +1698,14 @@ const ExplainersPage = {
         } else {
             main = html`<div class="ex-pic-empty"><i data-lucide="${s.continues ? 'copy' : 'image'}" aria-hidden="true"></i><span>${t(s.continues ? 'explainers.pictures.continuesEmpty' : 'explainers.pictures.pending')}</span></div>`;
         }
-        const history = s.pictures.length > 1 ? html`
+        // `picture` is the one in use and `pictures` the EARLIER ones (the last three, newest first: draw.ts keeps them so). The strip shows the one in
+        // use, then each earlier one as a button; a press names its index in `pictures`, and the server swaps it with the one in use.
+        const earlier = s.pictures.map((p, k) => ({ k, thumb: safeUrl(p.url) })).filter((x) => x.thumb);
+        const history = earlier.length ? html`
             <div class="ex-history" role="group" aria-label="${t('explainers.pictures.history', { n })}">
-                ${s.pictures.map((p, k) => {
-                    const thumb = safeUrl(p.url);
-                    const current = !!(s.picture && p.media_id === s.picture.media_id);
-                    return thumb ? html`<button type="button" class="ex-hist" data-action="explainers:pick" data-scene="${s.position}" data-index="${k}" aria-pressed="${current ? 'true' : 'false'}"
-                        aria-label="${t(current ? 'explainers.pictures.pickCurrent' : 'explainers.pictures.pick', { k: UI.formatNumber(k + 1) })}"><img src="${thumb}" alt="" loading="lazy" width="96" height="54"></button>` : '';
-                })}
+                ${url ? html`<span class="ex-hist is-current" role="img" aria-label="${t('explainers.pictures.pickCurrent')}"><img src="${url}" alt="" loading="lazy" width="96" height="54"></span>` : ''}
+                ${earlier.map(({ k, thumb }) => html`<button type="button" class="ex-hist" data-action="explainers:pick" data-scene="${s.position}" data-index="${k}"
+                    aria-label="${t('explainers.pictures.pick', { k: UI.formatNumber(k + 1) })}"><img src="${thumb}" alt="" loading="lazy" width="96" height="54"></button>`)}
             </div>` : '';
         return html`${main}${history}${s.draw_note ? html`<p class="form-hint ex-pic-note" dir="auto">${t('explainers.pictures.lastNote', { note: s.draw_note })}</p>` : ''}`;
     },

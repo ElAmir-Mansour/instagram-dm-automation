@@ -112,9 +112,11 @@ a.ex-step-link:hover { background: var(--surface-glass-hover); }
 .ex-pic-failed { color: var(--danger-text); }
 .ex-pic-failed [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .ex-history { display: flex; flex-wrap: wrap; gap: var(--space-2); padding-inline: var(--space-3); }
-.ex-hist { padding: 0; border: 2px solid transparent; border-radius: var(--radius-sm); background: none; cursor: pointer; line-height: 0; overflow: hidden; min-block-size: var(--space-6); }
-.ex-hist img { inline-size: 6rem; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
-.ex-hist[aria-pressed='true'] { border-color: var(--accent); }
+.ex-hist { display: inline-block; padding: 0; border: 2px solid transparent; border-radius: var(--radius-sm); background: none; cursor: pointer; line-height: 0; overflow: hidden; min-block-size: var(--space-6); }
+.ex-hist img { inline-size: 5rem; block-size: auto; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
+.ex-hist:hover { border-color: var(--border-strong); }
+/* The picture in use: marked, and not a button. */
+.ex-hist.is-current, .ex-hist.is-current:hover { border-color: var(--accent); cursor: default; }
 .ex-pic-note { padding-inline: var(--space-3); margin: 0; }
 .ex-pic-body { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
 .ex-pic-n { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }

@@ -330,9 +330,9 @@ describe('Explainers: the new-explainer form', () => {
         w.P.cfg = w.P.normalizeConfig(CONFIG);
         w.h.el('ex-new-error');
         w.P.go = (params: Json) => { w.calls.push({ name: 'go', args: [params] }); };
-        await action(w, 'create', newForm({ topic: '  Why RAG?  ', language: 'en', tier: 'medium', subtitles: false, notes: ' point to the course ', links: 'https://a.example/x\nhttps://a.example/x\n https://b.example/y ' }), event());
+        await action(w, 'create', newForm({ topic: '  Why RAG?  ', language: 'en', tier: 'medium', subtitles: false, notes: ' point to the paper ', links: 'https://a.example/x\nhttps://a.example/x\n https://b.example/y ' }), event());
         assert.deepEqual(plain(called(w, 'createExplainer')[0]!.args[0]), {
-            topic: 'Why RAG?', language: 'en', length_tier: 'medium', sound_mode: 'sfx', subtitles: false, notes: 'point to the course',
+            topic: 'Why RAG?', language: 'en', length_tier: 'medium', sound_mode: 'sfx', subtitles: false, notes: 'point to the paper',
             source_links: ['https://a.example/x', 'https://b.example/y'],
         });
         assert.deepEqual(plain(called(w, 'go')[0]!.args[0]), { id: 'new1' });
@@ -715,9 +715,10 @@ describe('Explainers: the voice step', () => {
 // ─── The pictures ───────────────────────────────────────────────────────────────────────────────────
 
 describe('Explainers: the pictures step', () => {
+    // As the server keeps them (draw.ts): `picture` is the one in use and `pictures` the EARLIER ones, newest first, never the one in use.
     const scenes = (): Json[] => [
-        scene(0, { picture: picture(1), pictures: [picture(1)], draw_status: 'done' }),
-        scene(1, { picture: picture(3), pictures: [picture(3), picture(2)], draw_status: 'done', draw_note: 'he is holding a book' }),
+        scene(0, { picture: picture(1), pictures: [], draw_status: 'done' }),
+        scene(1, { picture: picture(3), pictures: [picture(2), picture(1)], draw_status: 'done', draw_note: 'he is holding a book' }),
         scene(2, { continues: true, picture: picture(3), draw_status: 'done' }),
         scene(3, { draw_status: 'pending' }),
     ];
@@ -729,9 +730,16 @@ describe('Explainers: the pictures step', () => {
         assert.equal((markup.match(/class="ex-pic"/g) ?? []).length, 4);
         assert.match(markup, /src="\/api\/uploads\/m1"[^>]*alt="Scene 1: L0"/);
         assert.match(markup, /class="ex-tag"[^>]*>L1</);
-        assert.equal((markup.match(/data-action="explainers:pick"/g) ?? []).length, 2, 'two pictures in scene 2’s history');
-        assert.match(markup, /data-index="0" aria-pressed="true"/, 'the chosen one is pressed');
-        assert.match(markup, /data-index="1" aria-pressed="false"/);
+        assert.equal((markup.match(/data-action="explainers:pick"/g) ?? []).length, 2, 'two EARLIER pictures in scene 2’s history');
+        assert.equal((markup.match(/class="ex-history"/g) ?? []).length, 1, 'a scene with no earlier picture has no strip: there is nothing to go back to');
+        assert.match(markup, /data-scene="1" data-index="0"[^>]*aria-label="Use earlier picture 1"/, 'the newest earlier picture is number 1, and its index is 0');
+        assert.match(markup, /data-scene="1" data-index="1"[^>]*aria-label="Use earlier picture 2"/);
+        assert.doesNotMatch(markup, /aria-pressed/, 'the picture in use is shown, not offered');
+        assert.match(markup, /<span class="ex-hist is-current" role="img" aria-label="The picture in use"><img src="\/api\/uploads\/m3"/, 'the strip starts with the one in use');
+        assert.equal((markup.match(/class="ex-hist is-current"/g) ?? []).length, 1);
+        const oneEarlier = String(w.P.sceneMediaMarkup(scene(0, { picture: picture(5), pictures: [picture(4)], draw_status: 'done' })));
+        assert.match(oneEarlier, /class="ex-history"/, 'a single earlier picture is already something to go back to');
+        assert.equal((oneEarlier.match(/data-action="explainers:pick"/g) ?? []).length, 1);
         assert.ok(markup.includes('he is holding a book'));
         assert.ok(markup.includes(w.t('explainers.pictures.continues')), 'the continuing scene is copied, not drawn');
         assert.equal((markup.match(/data-action="explainers:redraw"/g) ?? []).length, 3, 'and has no redraw of its own');
@@ -752,6 +760,21 @@ describe('Explainers: the pictures step', () => {
         open(fresh, { status: 'drawing', scenes: [scene(0), scene(1)], job: { status: 'running', progress: 'drawn 0 of 2' } }, 'pictures');
         assert.equal(String(fresh.P.picSummaryMarkup()).includes('explainers:drawAll'), false, 'not while the Mac is drawing');
         assert.ok(String(fresh.P.picSummaryMarkup()).includes('drawn 0 of 2'));
+    });
+
+    it('says when the allowance itself is paused (a redraw is refused until then), and only while that time is ahead', () => {
+        const w = world();
+        const future = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
+        open(w, { status: 'review', scenes: scenes(), allowance: { pictures: 80, cap: 80, est_left: 0, paused_until: future } }, 'pictures');
+        const paused = text(w.P.picSummaryMarkup());
+        assert.match(paused, /Drawing is paused until .*: today’s allowance is used up\./);
+        assert.match(paused, /about 0 left/);
+        const past = world();
+        open(past, { status: 'review', scenes: scenes(), allowance: { pictures: 23, cap: 80, est_left: 57, paused_until: '2020-01-01T00:00:00Z' } }, 'pictures');
+        assert.equal(text(past.P.picSummaryMarkup()).includes('Drawing is paused'), false, 'a time that has passed is not a pause');
+        const none = world();
+        open(none, { status: 'review', scenes: scenes(), allowance: { pictures: 23, cap: 80, est_left: 57, paused_until: null } }, 'pictures');
+        assert.equal(text(none.P.picSummaryMarkup()).includes('Drawing is paused'), false);
     });
 
     it('Approve is for the review: disabled while drawing, with a scene missing, or with the audio out of date', () => {
@@ -778,7 +801,7 @@ describe('Explainers: the pictures step', () => {
     });
 
     it('redraws one scene with its note, only that scene changes, and the note is cleared', async () => {
-        const answer = { scene: scene(3, { picture: picture(9), pictures: [picture(9)], draw_status: 'done', draw_note: 'pointing at books' }), allowance: { pictures: 24, cap: 80, est_left: 56 } };
+        const answer = { scene: scene(3, { picture: picture(9), pictures: [], draw_status: 'done', draw_note: 'pointing at books' }), allowance: { pictures: 24, cap: 80, est_left: 56 } };
         const w = world({ api: { drawExplainerScene: async () => answer, getExplainer: async () => explainer({ status: 'review', scenes: scenes() }) } });
         open(w, { status: 'review', scenes: scenes(), allowance: { pictures: 23, cap: 80, est_left: 57 } }, 'pictures');
         const note: Json = { value: '  pointing at books ' };
@@ -810,15 +833,29 @@ describe('Explainers: the pictures step', () => {
         assert.equal(w.P.detail.scenes[0].picture.media_id, 'm1');
     });
 
-    it('picks one of the last pictures by its index in the scene’s list', async () => {
+    it('picks one of the earlier pictures by its index in the scene’s `pictures`, and the one in use takes its place there', async () => {
+        // Picking the older earlier picture (index 1, m1): the server makes it the chosen one and sets the old chosen one (m3) aside as the newest earlier.
         const w = world({ api: {
-            pickExplainerPicture: async () => ({ scene: scene(1, { picture: picture(2), pictures: [picture(3), picture(2)], draw_status: 'done' }) }),
+            pickExplainerPicture: async () => ({ scene: scene(1, { picture: picture(1), pictures: [picture(3), picture(2)], draw_status: 'done' }) }),
             getExplainer: async () => explainer({ status: 'review' }),
         } });
         open(w, { status: 'review', scenes: scenes() }, 'pictures');
         await action(w, 'pick', { dataset: { scene: '1', index: '1' } });
         assert.deepEqual(plain(called(w, 'pickExplainerPicture')[0]!.args), [ID, 1, { index: 1 }]);
-        assert.equal(w.P.detail.scenes[1].picture.media_id, 'm2');
+        assert.equal(w.P.detail.scenes[1].picture.media_id, 'm1');
+        assert.deepEqual(w.P.detail.scenes[1].pictures.map((p: Json) => p.media_id), ['m3', 'm2'], 'the one that was in use is now the newest earlier picture');
+        const strip = String(w.P.sceneMediaMarkup(w.P.detail.scenes[1]));
+        assert.match(strip, /<span class="ex-hist is-current"[^>]*><img src="\/api\/uploads\/m1"/);
+        assert.equal((strip.match(/data-action="explainers:pick"/g) ?? []).length, 2);
+    });
+
+    it('a refused pick is a sentence and leaves the scene as it was', async () => {
+        const refusal = Object.assign(new Error('Scene 2 has no earlier picture number 3.'), { status: 404, code: 'EXPLAINER_NOT_FOUND' });
+        const w = world({ api: { pickExplainerPicture: async () => { throw refusal; } } });
+        open(w, { status: 'review', scenes: scenes() }, 'pictures');
+        await action(w, 'pick', { dataset: { scene: '1', index: '2' } });
+        assert.equal(w.toasts[0]!.type, 'error');
+        assert.equal(w.P.detail.scenes[1].picture.media_id, 'm3');
     });
 
     it('a repaint of the grid keeps a note that was typed, and a poll patches only the scene whose picture changed', () => {
@@ -836,7 +873,7 @@ describe('Explainers: the pictures step', () => {
         untouched.innerHTML = 'unchanged';
         w.h.el('ex-pic-summary');
         w.h.el('ex-pic-approve');
-        w.P.detail.scenes[3] = { ...w.P.detail.scenes[3], picture: picture(7), pictures: [picture(7)], draw_status: 'done' };
+        w.P.detail.scenes[3] = { ...w.P.detail.scenes[3], picture: picture(7), pictures: [], draw_status: 'done' };
         w.P.patchBody();
         assert.equal(untouched.innerHTML, 'unchanged');
         assert.match(String(stale.innerHTML), /ex-pic-img/);
@@ -1281,7 +1318,10 @@ describe('Explainers: the settings view', () => {
 // ─── The platform admin's card ──────────────────────────────────────────────────────────────────────
 
 describe('Settings → Platform → Explainers (the platform admin’s card)', () => {
-    const provider = { provider: 'cloudflare', account_id: 'acct-123', token_last4: 'abcd', model: '@cf/black-forest-labs/flux-2-klein-4b', daily_cap: 80, units_per_picture: 110 };
+    const ACCOUNT = '0123456789abcdef0123456789abcdef';
+    const TOKEN = 'cf-api-token-0123456789-ABCDEFGHIJ';
+    // The answer of GET /api/admin/explainers (src/routes/adminExplainers.ts): every tenant with its switch, and the provider as the card is shown it.
+    const provider = { provider: 'cloudflare', account_id: ACCOUNT, token_last4: 'abcd', model: '@cf/black-forest-labs/flux-2-klein-4b', daily_cap: 80, units_per_picture: 110 };
     const answer = { enabled: { t1: true }, provider };
 
     function settingsWorld(extra: Json = {}): World & { S: Json } {
@@ -1305,7 +1345,7 @@ describe('Settings → Platform → Explainers (the platform admin’s card)', (
         assert.ok(markup.includes('••••abcd'), 'the mask');
         assert.match(markup, /<input[^>]*id="explainers-token"[^>]*type="password"/);
         assert.doesNotMatch(markup, /id="explainers-token"[^>]*value=/, 'the field is never filled');
-        assert.match(markup, /id="explainers-account-id"[^>]*value="acct-123"/);
+        assert.match(markup, new RegExp(`id="explainers-account-id"[^>]*value="${ACCOUNT}"`));
         assert.match(markup, /name="daily_cap"[^>]*value="80"/);
         assert.match(markup, /name="units_per_picture"[^>]*value="110"/);
         assert.match(markup, /id="explainers-on"[^>]*checked/, 'the switch is on for this workspace');
@@ -1319,6 +1359,15 @@ describe('Settings → Platform → Explainers (the platform admin’s card)', (
         assert.ok(none.includes(w.t('settings.explainers.tokenNone')));
         assert.equal(none.includes('••••'), false);
         assert.doesNotMatch(none, /id="explainers-on"[^>]*checked/, 'off by default');
+    });
+
+    it('finds this workspace’s switch whatever the case of the id the server keyed it by', () => {
+        const w = settingsWorld();
+        assert.match(String(w.S.explainersSection({ explainers: { enabled: { T1: true }, provider }, explainersError: null })), /id="explainers-on"[^>]*checked/);
+        assert.doesNotMatch(String(w.S.explainersSection({ explainers: { enabled: { T1: false, other: true }, provider }, explainersError: null })), /id="explainers-on"[^>]*checked/, 'another tenant’s switch is not this one');
+        assert.doesNotMatch(String(w.S.explainersSection({ explainers: { enabled: {}, provider: null }, explainersError: null })), /id="explainers-on"[^>]*checked/, 'nothing saved yet: off');
+        assert.match(String(w.S.explainersSection({ explainers: { enabled: {}, provider: null }, explainersError: null })), /data-saved="false"/, 'and the form knows the first save needs a token');
+        assert.match(String(w.S.explainersSection({ explainers: answer, explainersError: null })), /data-saved="true"/);
     });
 
     it('says the setup in one line, with the path through Cloudflare and the rule for staying on the free plan', () => {
@@ -1339,23 +1388,89 @@ describe('Settings → Platform → Explainers (the platform admin’s card)', (
         assert.match(markup, /data-action="settings:render"/);
     });
 
+    /** The form as the page reads it: the fields by name, and whether a provider is already saved (`data-saved`). */
+    const providerForm = (over: Record<string, string> = {}, saved = true): Json => {
+        const field = (name: string, value: string): Json => ({ value, focus() { (this as Json).focused = true; } });
+        const values: Record<string, string> = { account_id: ACCOUNT, token: '', daily_cap: '', units_per_picture: '', ...over };
+        return { elements: Object.fromEntries(Object.entries(values).map(([k, v]) => [k, field(k, v)])), dataset: { saved: String(saved) }, querySelector: () => null };
+    };
+
     it('saves the account and the caps, and sends the token only when one was typed', async () => {
         const w = settingsWorld({ api: { saveAdminExplainersProvider: async () => answer } });
-        const form = (token: string): Json => ({ elements: { account_id: { value: '  acct-999 ' }, token: { value: token }, daily_cap: { value: '60' }, units_per_picture: { value: '' } }, querySelector: () => null });
-        await sact(w, 'saveExplainers', form(''), event());
-        assert.deepEqual(plain(called(w, 'saveAdminExplainersProvider')[0]!.args[0]), { account_id: 'acct-999', daily_cap: 60 }, 'a blank token is not sent: it stays as it is');
-        await sact(w, 'saveExplainers', form(' cf-new-token '), event());
-        assert.deepEqual(plain(called(w, 'saveAdminExplainersProvider')[1]!.args[0]), { account_id: 'acct-999', token: 'cf-new-token', daily_cap: 60 });
+        await sact(w, 'saveExplainers', providerForm({ account_id: `  ${ACCOUNT} `, daily_cap: '60' }), event());
+        assert.deepEqual(plain(called(w, 'saveAdminExplainersProvider')[0]!.args[0]), { account_id: ACCOUNT, daily_cap: 60 }, 'a blank token is not sent: it stays as it is');
+        await sact(w, 'saveExplainers', providerForm({ token: ` ${TOKEN} `, daily_cap: '60', units_per_picture: '104.5' }), event());
+        assert.deepEqual(plain(called(w, 'saveAdminExplainersProvider')[1]!.args[0]), { account_id: ACCOUNT, token: TOKEN, daily_cap: 60, units_per_picture: 104.5 }, 'the cost of a picture may have a fraction: the server takes any positive number');
         assert.equal(w.toasts.filter((x) => x.type === 'success').length, 2);
-        const missing = { elements: { account_id: { value: '   ', focus() {} }, token: { value: 'x' }, daily_cap: { value: '' }, units_per_picture: { value: '' } }, querySelector: () => null };
-        await sact(w, 'saveExplainers', missing, event());
-        assert.equal(called(w, 'saveAdminExplainersProvider').length, 2, 'no Account ID: refused before the server');
+        await sact(w, 'saveExplainers', providerForm({ daily_cap: '0' }), event());
+        assert.equal(called(w, 'saveAdminExplainersProvider')[2]!.args[0].daily_cap, 0, 'a cap of 0 is allowed: the server takes 0 to 1,000');
     });
 
-    it('a refused save is read as its sentence in a toast, never the raw server text', async () => {
+    it('checks what the server checks, and says so in its own words before any request is made', async () => {
+        const w = settingsWorld({ api: { saveAdminExplainersProvider: async () => answer } });
+        const refused = async (over: Record<string, string>, saved: boolean, expected: string): Promise<void> => {
+            const before = called(w, 'saveAdminExplainersProvider').length;
+            const toasts = w.toasts.length;
+            const form = providerForm(over, saved);
+            await sact(w, 'saveExplainers', form, event());
+            assert.equal(called(w, 'saveAdminExplainersProvider').length, before, `${JSON.stringify(over)}: refused before the server`);
+            assert.equal(w.toasts[toasts]!.type, 'error');
+            assert.ok(w.toasts[toasts]!.message.includes(expected), `${JSON.stringify(over)} says "${expected}", not "${w.toasts[toasts]!.message}"`);
+        };
+        await refused({ account_id: '   ' }, true, 'Enter the Cloudflare Account ID');
+        await refused({ account_id: 'acct-123' }, true, 'letters and digits only, 8 to 64');
+        await refused({ account_id: 'abc1234' }, true, 'letters and digits only');
+        await refused({ account_id: ACCOUNT, token: '' }, false, 'the first save needs it');
+        await refused({ token: 'short-token' }, true, '20 to 200 characters');
+        await refused({ token: `Bearer ${TOKEN}` }, true, 'without “Bearer”');
+        await refused({ daily_cap: '1001' }, true, 'from 0 to 1,000');
+        await refused({ daily_cap: '12.5' }, true, 'whole number');
+        await refused({ daily_cap: '-1' }, true, 'whole number');
+        await refused({ units_per_picture: '0' }, true, 'positive number, at most 10,000');
+        await refused({ units_per_picture: '10001' }, true, 'at most 10,000');
+        // the first save with everything in place goes through, and a later one may leave the token blank
+        await sact(w, 'saveExplainers', providerForm({ token: TOKEN }, false), event());
+        await sact(w, 'saveExplainers', providerForm({}, true), event());
+        assert.equal(called(w, 'saveAdminExplainersProvider').length, 2);
+        // the same rules in Arabic
+        const ar = settingsWorld({ lang: 'ar' });
+        await sact(ar, 'saveExplainers', providerForm({ account_id: 'acct-1' }), event());
+        assert.match(ar.toasts[0]!.message, /معرّف الحساب أحرف لاتينية وأرقام فقط، من 8 إلى 64 خانة/);
+    });
+
+    it('a refused save is read through the shared error text: the catalogue’s sentence when there is one, never the raw server text', async () => {
         const w = settingsWorld({ api: { saveAdminExplainersProvider: async () => { throw Object.assign(new Error('HTTP 502 {"error":"x"}'), { status: 502, code: 'EXPLAINER_PROVIDER_ERROR' }); } } });
-        await sact(w, 'saveExplainers', { elements: { account_id: { value: 'a' }, token: { value: '' }, daily_cap: { value: '' }, units_per_picture: { value: '' } }, querySelector: () => null }, event());
+        // `errors.EXPLAINER_PROVIDER_ERROR` is the routes' PR's to add; what matters here is that the card asks for it instead of printing `err.message`.
+        Object.assign(w.h.run<Record<string, Record<string, string>>>('I18N.strings').en!, { 'errors.EXPLAINER_PROVIDER_ERROR': 'The image provider did not answer.' });
+        await sact(w, 'saveExplainers', providerForm(), event());
         assert.equal(w.toasts[0]!.type, 'error');
+        assert.equal(w.toasts[0]!.message, 'The image provider did not answer.');
+    });
+
+    it('a refusal of the fields lists every problem the server found, and one problem is its own sentence', async () => {
+        // The envelope of a 400 here (src/routes/adminExplainers.ts): `error` counts the problems, `problems` names them.
+        const three = ['account_id is the Cloudflare account id.', 'token is the Cloudflare API token.', 'daily_cap is the pictures a day.'];
+        const many = settingsWorld({ api: { saveAdminExplainersProvider: async () => { throw Object.assign(new Error('3 problems with the provider settings.'), { status: 400, body: { error: '3 problems with the provider settings.', problems: three } }); } } });
+        await sact(many, 'saveExplainers', providerForm(), event());
+        assert.equal(many.toasts[0]!.message, three.join(' '));
+        const one = settingsWorld({ api: { saveAdminExplainersProvider: async () => { throw Object.assign(new Error(three[2]), { status: 400, body: { error: three[2], problems: [three[2]] } }); } } });
+        await sact(one, 'saveExplainers', providerForm(), event());
+        assert.equal(one.toasts[0]!.message, three[2]);
+    });
+
+    it('reads the flat error envelope of the admin routes: the code and the retry time reach the sentence', async () => {
+        // `{ error, message, code, params }` (flat, as the app has always answered): api.js lifts `code` and `params` onto the error, and
+        // UI.errorText turns them into the interface language once `errors.<CODE>` exists; until then the server's own sentence is shown.
+        const h = loadDashboard({ lang: 'en', files: ['dashboard/js/api.js'] });
+        const API = h.run<Json>('API');
+        const body = { error: 'Drawing is paused.', message: 'Drawing is paused.', code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: '2026-10-26T00:00:00.000Z' } };
+        const read = API.readError(body);
+        assert.deepEqual(plain({ message: read.message, code: read.code, params: read.params }), { message: 'Drawing is paused.', code: 'EXPLAINER_ALLOWANCE_PAUSED', params: { retryAt: '2026-10-26T00:00:00.000Z' } });
+        const err = Object.assign(new Error(read.message), { status: 429, code: read.code, params: read.params });
+        assert.equal(h.UI.errorLine(err), 'Drawing is paused.', 'no sentence of its own yet: the server’s is shown');
+        // and the day `errors.EXPLAINER_ALLOWANCE_PAUSED` exists, the same error reads as that sentence, with the retry time in it
+        Object.assign(h.run<Record<string, Record<string, string>>>('I18N.strings').en!, { 'errors.EXPLAINER_ALLOWANCE_PAUSED': 'Drawing resumes at {retryAt}.' });
+        assert.match(h.UI.errorLine(err), /^Drawing resumes at .*2026-10-26T00:00:00\.000Z.*\.$/);
     });
 
     it('the Test button draws one picture and says how it went in words', async () => {
