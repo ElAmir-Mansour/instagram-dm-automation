@@ -1126,6 +1126,45 @@ describe('Explainers routes', () => {
         });
     });
 
+    describe('GET /explainers/:id while the script waits for the Mac', () => {
+        beforeEach(on);
+        const waiting = (minutes: number) => {
+            const job = world.addJob({ kind: 'explainer_write', status: 'pending', payload: { explainer_id: EXPLAINER_ID }, created_at: new Date(Date.now() - minutes * 60_000) });
+            world.addExplainer({ id: EXPLAINER_ID, status: 'writing', job_id: job.id, title: null, draft: null, draft_version: 0 });
+            return job;
+        };
+
+        it('a Mac that is up and busy keeps its script: the answer says it is waiting for a slot, and Gemini is not started', async () => {
+            const job = waiting(25);
+            world.addWorker({ last_seen_at: new Date(Date.now() - 12_000) });
+            const res = await api('GET', `/explainers/${EXPLAINER_ID}`);
+            assert.equal(res.status, 200);
+            assert.equal(res.body.status, 'writing');
+            assert.equal(res.body.job.status, 'pending');
+            assert.equal(res.body.job.progress, 'Waiting for your Mac: it is busy with another job');
+            assert.equal(res.body.worker.online, true);
+            assert.equal(res.body.error, null);
+            assert.equal(job.status, 'pending');
+            assert.equal(launched.length, 0);
+        });
+
+        it('a Mac that is off or asleep is replaced after ten minutes, as before: Gemini’s job, a run, and Gemini’s line', async () => {
+            let release!: () => void;
+            const gate = new Promise<void>((resolve) => { release = resolve; });
+            setRunDeps({ write: async () => { await gate; throw new Error('stop: this test only looks at the takeover'); } });
+            const job = waiting(25);
+            world.addWorker({ last_seen_at: new Date(Date.now() - 40 * 60_000) });
+            const res = await api('GET', `/explainers/${EXPLAINER_ID}`);
+            assert.equal(res.body.worker.online, false);
+            assert.equal(job.status, 'failed');
+            assert.equal(res.body.job.status, 'claimed');
+            assert.match(res.body.error, /off or asleep, so Gemini is writing it/);
+            assert.equal(launched.length, 1);
+            release();
+            await launched[0];
+        });
+    });
+
     describe('the picture routes', () => {
         beforeEach(on);
         const ALLOWANCE = { provider: 'cloudflare', day: '2026-10-25', used_units: 220, pictures: 2, cap: 80, est_left: 78, paused_until: null };

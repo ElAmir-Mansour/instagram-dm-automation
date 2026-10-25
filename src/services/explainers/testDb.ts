@@ -35,6 +35,16 @@ export interface FakeUpload {
     storage_path: string | null;
 }
 
+/** A `studio_workers` row: the Mac's credential, with when it was last heard from and whether it was revoked. */
+export interface FakeWorker {
+    id: string;
+    creator_id: string;
+    name: string;
+    last_seen_at: Date | null;
+    revoked_at: Date | null;
+    created_at: Date;
+}
+
 export interface World {
     db: FakeDb;
     /** The clock the database's NOW() reads. */
@@ -54,14 +64,17 @@ export interface World {
     /** The stored `studio_settings` row of the tenant (sections only; the rest is the defaults), or null for none. */
     settingsRow: Record<string, unknown> | null;
     appSettings: Map<string, string>;
-    /** The `studio_workers` row the status card reads: when the worker was last seen. */
+    /** The tenant's one live worker, as a date: when it was last seen (null for none). A shorthand for `addWorker({ last_seen_at })`. */
     workerLastSeen: Date | null;
+    /** The `studio_workers` rows, live and revoked: what the status card and the takeover's "is the Mac up" read. */
+    workers: FakeWorker[];
     /** A new job id, or explainer id: UUIDs that count up, so what a test reads is readable. */
     uuid(): string;
     addExplainer(over?: Partial<ExplainerRow>): ExplainerRow;
     /** `n` scenes for an explainer, 0-based, with the fields of `sceneRow` and any override per position. */
     addScenes(n: number, over?: (position: number) => Partial<ExplainerSceneRow>, explainerId?: string): ExplainerSceneRow[];
     addJob(over?: Partial<FakeJob>): FakeJob;
+    addWorker(over?: Partial<FakeWorker>): FakeWorker;
     /** The statements run, as `{ sql, params }`, matching a pattern. */
     ran(pattern: RegExp): { sql: string; params: any[] }[];
     jobsOf(kind: StudioJobKind): FakeJob[];
@@ -94,6 +107,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         settingsRow: null as Record<string, unknown> | null,
         appSettings: new Map<string, string>([['app.public_base_url', BASE]]),
         workerLastSeen: null as Date | null,
+        workers: [] as FakeWorker[],
         uuid: () => `99999999-9999-4999-8999-${String(++counter).padStart(12, '0')}`,
         addExplainer(over: Partial<ExplainerRow> = {}) {
             const row = explainerRow({ creator_id: tenant, id: over.id ?? EXPLAINER, created_at: world.now, updated_at: world.now, ...over });
@@ -104,6 +118,11 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
             const made = Array.from({ length: n }, (_, i) => sceneRow(i, { creator_id: tenant, explainer_id: explainerId, ...over(i) }));
             world.scenes.push(...made);
             return made;
+        },
+        addWorker(over: Partial<FakeWorker> = {}) {
+            const worker: FakeWorker = { id: world.uuid(), creator_id: tenant, name: 'Mac', last_seen_at: world.now, revoked_at: null, created_at: world.now, ...over };
+            world.workers.push(worker);
+            return worker;
         },
         addJob(over: Partial<FakeJob> = {}) {
             const job: FakeJob = {
@@ -178,11 +197,11 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
             const row = world.explainers.get(p[0]);
             return { rows: row && (p[1] === null || row.creator_id === p[1]) ? [row] : [] };
         }],
-        [/^SELECT e\.\*, j\.status AS job_status, j\.progress AS job_progress, j\.not_before AS job_not_before FROM explainers e/, (p) => {
+        [/^SELECT e\.\*, j\.status AS job_status, j\.progress AS job_progress, j\.not_before AS job_not_before, j\.created_at AS job_created_at FROM explainers e/, (p) => {
             const row = world.explainers.get(p[0]);
             if (!row || row.creator_id !== p[1]) return { rows: [] };
             const job = row.job_id ? world.jobs.find((j) => j.id === row.job_id && j.creator_id === row.creator_id) : undefined;
-            return { rows: [{ ...row, job_status: job?.status ?? null, job_progress: job?.progress ?? null, job_not_before: job?.not_before ?? null }] };
+            return { rows: [{ ...row, job_status: job?.status ?? null, job_progress: job?.progress ?? null, job_not_before: job?.not_before ?? null, job_created_at: job?.created_at ?? null }] };
         }],
         [/^SELECT e\.id, e\.status, e\.title, e\.topic, e\.language, e\.length_tier, \(e\.draft->>'est_seconds'\)::float8 AS est_seconds/, (p) => ({
             rows: [...world.explainers.values()].filter((e) => e.creator_id === p[0]).sort((a, b) => +b.created_at - +a.created_at).map((e) => {
@@ -374,7 +393,14 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         // settings
         [/FROM studio_settings WHERE creator_id = \$1/, () => ({ rows: world.settingsRow ? [world.settingsRow] : [] })],
         [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({ rows: world.appSettings.has(p[0]) ? [{ value: world.appSettings.get(p[0]), is_secret: false }] : [] })],
-        [/FROM studio_workers WHERE creator_id = \$1 AND revoked_at IS NULL/, () => ({ rows: world.workerLastSeen ? [{ name: 'Mac', last_seen_at: world.workerLastSeen }] : [] })],
+        // The status card's statement (`workerSummary`), and the takeover's: the most recently seen worker of the tenant that is not revoked. The predicate is in
+        // the pattern, so a statement that stopped excluding the revoked ones is "unexpected" here, not answered.
+        [/^SELECT name, last_seen_at FROM studio_workers WHERE creator_id = \$1 AND revoked_at IS NULL ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1$/, (p) => {
+            const live = world.workers.filter((w) => w.creator_id === p[0] && w.revoked_at === null);
+            if (world.workerLastSeen) live.push({ id: 'shorthand', creator_id: p[0], name: 'Mac', last_seen_at: world.workerLastSeen, revoked_at: null, created_at: world.now });
+            live.sort((a, b) => (+(b.last_seen_at ?? 0) - +(a.last_seen_at ?? 0)) || (+b.created_at - +a.created_at));
+            return { rows: live[0] ? [{ name: live[0].name, last_seen_at: live[0].last_seen_at }] : [] };
+        }],
     ];
     db.routes.push(...routes);
     return world;

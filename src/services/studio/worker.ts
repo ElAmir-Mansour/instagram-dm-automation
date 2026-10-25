@@ -15,7 +15,7 @@
 import crypto from 'crypto';
 import { queryOne, queryRows } from '../../db/query.js';
 import type { StudioWorkerRow } from '../../db/rows.js';
-import { clipText, StudioError } from './common.js';
+import { clipText, type Exec, StudioError } from './common.js';
 
 /** "Online" means an authenticated call within this long. The worker polls every 5–30s. */
 export const WORKER_ONLINE_WINDOW_MS = 90_000;
@@ -143,17 +143,21 @@ export async function revokeWorker(creatorId: string, workerId: string): Promise
     return presentWorker(row);
 }
 
-/** The status card's `worker`: the most recently seen live worker. */
+/**
+ * The status card's `worker`: the most recently seen live worker. `online` is the one definition of "the Mac is up" (a call within `WORKER_ONLINE_WINDOW_MS`,
+ * revoked workers not counted), which the dashboard shows and which an explainer's takeover by Gemini asks (explainers/writing.ts), so the two cannot disagree.
+ * `exec` reads it on a connection the caller already holds (a transaction), instead of taking another from the small pool.
+ */
 export async function workerSummary(
-    creatorId: string, now: number = Date.now()
+    creatorId: string, now: number = Date.now(), exec?: Exec
 ): Promise<{ online: boolean; lastSeen: string | null; name: string | null }> {
-    const row = await queryOne<Pick<StudioWorkerRow, 'name' | 'last_seen_at'>>(
-        `SELECT name, last_seen_at FROM studio_workers
+    const sql = `SELECT name, last_seen_at FROM studio_workers
           WHERE creator_id = $1 AND revoked_at IS NULL
           ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
-          LIMIT 1`,
-        [creatorId]
-    );
+          LIMIT 1`;
+    const row = exec
+        ? (await exec.query<Pick<StudioWorkerRow, 'name' | 'last_seen_at'>>(sql, [creatorId])).rows[0] ?? null
+        : await queryOne<Pick<StudioWorkerRow, 'name' | 'last_seen_at'>>(sql, [creatorId]);
     if (!row) return { online: false, lastSeen: null, name: null };
     return {
         online: isOnline(row.last_seen_at, now),

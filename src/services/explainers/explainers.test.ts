@@ -11,8 +11,8 @@ import { MacBrainRefused } from '../macBrain.js';
 import { StudioError } from '../studio/common.js';
 import { defaultInfographicConfig, type ExplainerTrack } from '../studio/settingsTypes.js';
 import {
-    approveExplainer, approvePictures, createExplainer, deleteExplainer, editExplainer, explainerIdOf, filesOf, getExplainer, listExplainers, presentExplainer,
-    renderExplainer, retryExplainer, revoiceExplainer, rewriteExplainer, startDraw,
+    approveExplainer, approvePictures, BUSY_AFTER_SECONDS, BUSY_MAC_NOTE, createExplainer, deleteExplainer, editExplainer, explainerIdOf, filesOf, getExplainer, listExplainers,
+    presentExplainer, renderExplainer, retryExplainer, revoiceExplainer, rewriteExplainer, startDraw,
 } from './explainers.js';
 import { ExplainerError } from './errors.js';
 import { writerSchema } from './prompt.js';
@@ -262,8 +262,117 @@ describe('getExplainer and listExplainers', () => {
         assert.equal(world.jobs.find((j) => j.id === JOB)!.status, 'failed', 'the Mac’s job is closed');
         assert.equal(launched.length, 1);
         assert.equal(view.job!.status, 'claimed');
-        assert.match(view.error ?? '', /The Mac did not pick this up in 10 minutes, so Gemini is writing it/);
+        assert.match(view.error ?? '', /The Mac did not pick this up in 10 minutes and is off or asleep, so Gemini is writing it/);
         await launched[0];
+    });
+});
+
+// ─── A script that waits for a Mac that is up ──────────────────────────────────────────────────
+
+/**
+ * The Mac runs two jobs at a time, so a script can wait for a slot while the Mac is up. That is said on the explainer (`job.progress`), and it is not a reason
+ * for Gemini to step in (writing.ts, tested there): the owner is told what the wait is instead of seeing a blank line, or a failure on a free Gemini key.
+ */
+describe('a script waiting for a Mac that is up and busy', () => {
+    const seen = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000);
+    /** A writing explainer whose Mac job was queued `minutes` before NOW and has not been claimed. */
+    function waitingFor(minutes: number, jobOver: object = {}, over: Partial<ExplainerRow> = {}) {
+        const job = world.addJob({ id: JOB, kind: 'explainer_write', status: 'pending', payload: { explainer_id: EXPLAINER }, created_at: new Date(NOW - minutes * 60_000), ...jobOver });
+        world.addExplainer({ status: 'writing', job_id: job.id, title: null, draft: null, draft_version: 0, ...over });
+        return job;
+    }
+
+    it('says so: the Mac is up, the job has waited longer than a free Mac would take to poll, so it is waiting for a slot', async () => {
+        waitingFor(4);
+        world.addWorker({ last_seen_at: seen(15) });
+        const view = await getExplainer(TENANT, EXPLAINER, { now: NOW });
+        assert.equal(view.status, 'writing');
+        assert.deepEqual(view.job, { status: 'pending', progress: 'Waiting for your Mac: it is busy with another job', not_before: world.jobs[0]!.not_before });
+        assert.equal(BUSY_MAC_NOTE, 'Waiting for your Mac: it is busy with another job');
+    });
+
+    it('does not hand an hour-old script of a busy Mac to Gemini when the dashboard reads it: no run, the Mac’s job still open, and the line says why it waits', async () => {
+        const job = waitingFor(60);
+        world.addWorker({ last_seen_at: seen(8) });
+        const view = await getExplainer(TENANT, EXPLAINER, { now: NOW });
+        assert.equal(launched.length, 0);
+        assert.equal(job.status, 'pending');
+        assert.equal(view.job!.status, 'pending');
+        assert.equal(view.job!.progress, BUSY_MAC_NOTE);
+        assert.equal(view.error, null, 'a wait is not a note about a takeover');
+        assert.equal(world.jobs.filter((j) => j.payload.writer === 'gemini').length, 0);
+    });
+
+    it('when the same Mac has gone silent, the same read hands the work to Gemini, as before, and the line is Gemini’s', async () => {
+        waitingFor(60);
+        world.addWorker({ last_seen_at: new Date(NOW - 20 * 60_000) });
+        const view = await getExplainer(TENANT, EXPLAINER, { now: NOW });
+        assert.equal(launched.length, 1);
+        assert.equal(view.job!.status, 'claimed');
+        assert.equal(view.job!.progress, 'Gemini is writing it');
+        await launched[0];
+    });
+
+    it('is not said before the job has waited a minute: a free Mac takes it within its poll, and "busy" would be a lie for those seconds', async () => {
+        world.addWorker({ last_seen_at: seen(3) });
+        waitingFor(BUSY_AFTER_SECONDS / 60 - 0.5);
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null);
+        world.jobs.length = 0;
+        world.explainers.clear();
+        waitingFor(BUSY_AFTER_SECONDS / 60);
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, BUSY_MAC_NOTE, 'at a minute exactly');
+    });
+
+    it('is not said when the Mac is not up: the card says offline, and a busy Mac is not what the job is waiting for', async () => {
+        waitingFor(4);
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null, 'no worker');
+        world.addWorker({ last_seen_at: new Date(NOW - 5 * 60_000) });
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null, 'silent for five minutes');
+        world.workers.length = 0;
+        world.addWorker({ last_seen_at: seen(2), revoked_at: new Date(NOW - 1000) });
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null, 'a revoked worker is not a Mac that is up');
+    });
+
+    it('never replaces what the job says itself, and is said of a pending job only: a claimed one has its own progress', async () => {
+        waitingFor(4, { progress: 'queued by hand' });
+        world.addWorker({ last_seen_at: seen(5) });
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, 'queued by hand');
+        world.jobs.length = 0;
+        world.explainers.clear();
+        waitingFor(4, { status: 'claimed', claimed_at: new Date(NOW - 120_000), heartbeat_at: new Date(NOW - 5000), progress: 'reading the first source' });
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, 'reading the first source');
+        world.jobs.length = 0;
+        world.explainers.clear();
+        waitingFor(4, { status: 'claimed', claimed_at: new Date(NOW - 120_000), heartbeat_at: new Date(NOW - 5000), progress: null });
+        assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null, 'a job the Mac holds is not "waiting for a slot"');
+    });
+
+    it('is the writing step’s alone: a voice, a drawing or a render waiting for a busy Mac shows what it showed before', async () => {
+        world.addWorker({ last_seen_at: seen(5) });
+        for (const status of ['voicing', 'drawing', 'rendering'] as const) {
+            world.jobs.length = 0;
+            world.explainers.clear();
+            waitingFor(4, {}, { status, title: 'T' });
+            assert.equal((await getExplainer(TENANT, EXPLAINER, { now: NOW })).job!.progress, null, status);
+        }
+    });
+
+    it('is not said of a job asked for later: that is waiting for a time', () => {
+        const row = { ...world.addExplainer({ status: 'writing', job_id: JOB }), job_status: 'pending', job_progress: null, job_not_before: new Date(NOW + 3_600_000), job_created_at: new Date(NOW - 600_000) };
+        assert.equal(presentExplainer(row, [], { worker: { online: true, lastSeen: new Date(NOW).toISOString(), name: 'Mac' }, now: NOW }).job!.progress, null);
+        row.job_not_before = new Date(NOW - 1000);
+        assert.equal(presentExplainer(row, [], { worker: { online: true, lastSeen: new Date(NOW).toISOString(), name: 'Mac' }, now: NOW }).job!.progress, BUSY_MAC_NOTE);
+    });
+
+    it('needs the worker’s answer: when the status card cannot be read, the view carries no line about a Mac it does not know', () => {
+        const row = { ...world.addExplainer({ status: 'writing', job_id: JOB }), job_status: 'pending', job_progress: null, job_not_before: null, job_created_at: new Date(NOW - 600_000) };
+        assert.equal(presentExplainer(row, [], { now: NOW }).job!.progress, null);
+        assert.equal(presentExplainer(row, [], { worker: null, now: NOW }).job!.progress, null);
+    });
+
+    it('a row without the job’s creation time (an older reader) says nothing rather than guess', () => {
+        const row = { ...world.addExplainer({ status: 'writing', job_id: JOB }), job_status: 'pending', job_progress: null, job_not_before: null };
+        assert.equal(presentExplainer(row, [], { worker: { online: true, lastSeen: null, name: 'Mac' }, now: NOW }).job!.progress, null);
     });
 });
 

@@ -11,6 +11,7 @@ import type { ExplainerRow } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { setWaitUntil } from '../../utils/waitUntil.js';
 import { completeJob, failJob } from '../studio/jobs.js';
+import { WORKER_ONLINE_WINDOW_MS, workerSummary } from '../studio/worker.js';
 import { EXPLAINER, JOB, TENANT, validWriterOutput } from './testFixtures.js';
 import { explainerSettings, installWorld, type World } from './testDb.js';
 import { GeminiWriteError, type GeminiWriteArgs, type GeminiWritten } from './writerGemini.js';
@@ -123,6 +124,154 @@ describe('insertServerWriteJob and queueWrite', () => {
     });
 });
 
+// ─── A Mac that is up is waited for ────────────────────────────────────────────────────────────
+
+/**
+ * The Mac runs two jobs at a time. With both slots on a long render, a script waits well past ten minutes while the Mac is alive and heartbeating (every 20
+ * seconds, per job: `HEARTBEAT_MS` in the worker), and Gemini taking it over would turn a short wait into a failure: a free key cannot ground its research. So
+ * a job that has waited ten minutes is taken over only when the Mac is also off or asleep: the status card's own answer (`workerSummary(...).online`) is false.
+ */
+describe('takeOverWrite: only a Mac that is off or asleep is replaced', () => {
+    const SECONDS = 1000;
+    const seenAgo = (ms: number) => new Date(NOW - ms);
+
+    it('a Mac that is up and busy keeps its script: pending for an hour, with a heartbeat from 20 seconds ago, nothing is closed, written or changed', async () => {
+        const mac = macWriting(60);
+        world.addWorker({ last_seen_at: seenAgo(20 * SECONDS) });
+        assert.equal(await takeOverWrite(TENANT, EXPLAINER, NOW), null);
+        assert.equal(mac.status, 'pending', 'the Mac’s job is still there for it to take when a slot frees');
+        assert.equal(mac.error, null);
+        assert.equal(geminiJobs().length, 0);
+        assert.equal(world.explainer().job_id, mac.id);
+        assert.equal(world.explainer().error, null);
+        assert.equal(world.ran(/^INSERT INTO studio_jobs/).length, 0);
+        assert.equal(world.ran(/^UPDATE studio_jobs/).length, 0);
+    });
+
+    it('is the same through every way the work is looked at: the dashboard’s read, the daily sweep and a worker’s failure report start no run for a busy Mac', async () => {
+        macWriting(45);
+        world.addWorker({ last_seen_at: seenAgo(5 * SECONDS) });
+        assert.equal(await reconcileWriting(TENANT, EXPLAINER, NOW), null);
+        assert.deepEqual(await sweepWriting(25, NOW), { looked: 1, started: 0 });
+        await afterJobFailed(TENANT, JOB, NOW);
+        assert.equal(launched.length, 0);
+        assert.equal(geminiJobs().length, 0);
+    });
+
+    it('silent for ten minutes or more with the job pending ten minutes or more: the Mac is off or asleep, so Gemini takes the work over', async () => {
+        const mac = macWriting(UNCLAIMED_MINUTES);
+        world.addWorker({ last_seen_at: minutesAgo(UNCLAIMED_MINUTES) });
+        const run = await takeOverWrite(TENANT, EXPLAINER, NOW);
+        assert.ok(run);
+        assert.equal(mac.status, 'failed');
+        assert.equal(geminiJobs().length, 1);
+        assert.equal(world.explainer().job_id, run!.jobId);
+    });
+
+    it('a Mac that never registered a worker is off: taken over, as before', async () => {
+        macWriting(30);
+        assert.equal(world.workers.length, 0);
+        assert.ok(await takeOverWrite(TENANT, EXPLAINER, NOW));
+    });
+
+    it('a REVOKED worker does not count as alive, however recently it was heard from: its token is dead, and the job it would take is nobody’s', async () => {
+        const mac = macWriting(30);
+        world.addWorker({ last_seen_at: seenAgo(3 * SECONDS), revoked_at: minutesAgo(1) });
+        const run = await takeOverWrite(TENANT, EXPLAINER, NOW);
+        assert.ok(run, 'a revoked Mac that was just heard from is not a Mac that is up');
+        assert.equal(mac.status, 'failed');
+    });
+
+    it('with several workers, one that is up is enough to wait for; revoked ones and silent ones are not', async () => {
+        // A revoked one just seen, a live one silent for an hour: off.
+        macWriting(30);
+        world.addWorker({ name: 'old Mac', last_seen_at: seenAgo(5 * SECONDS), revoked_at: minutesAgo(2) });
+        world.addWorker({ name: 'Mac mini', last_seen_at: minutesAgo(60) });
+        assert.ok(await takeOverWrite(TENANT, EXPLAINER, NOW));
+
+        // A revoked one silent and a live one just seen: up.
+        world.jobs.length = 0;
+        world.explainers.clear();
+        world.workers.length = 0;
+        macWriting(30);
+        world.addWorker({ name: 'old Mac', last_seen_at: minutesAgo(600), revoked_at: minutesAgo(500) });
+        world.addWorker({ name: 'Mac mini', last_seen_at: seenAgo(10 * SECONDS) });
+        assert.equal(await takeOverWrite(TENANT, EXPLAINER, NOW), null);
+    });
+
+    it('another tenant’s worker is not this tenant’s Mac: the one that is up for somebody else does not keep the work from Gemini', async () => {
+        macWriting(30);
+        world.addWorker({ creator_id: '77777777-7777-4777-8777-777777777777', last_seen_at: seenAgo(2 * SECONDS) });
+        assert.ok(await takeOverWrite(TENANT, EXPLAINER, NOW));
+    });
+
+    it('agrees with the status card at every age: Gemini takes over exactly when the dashboard says the Mac is offline (the same window, the same answer)', async () => {
+        const ages = [0, 20 * SECONDS, 89 * SECONDS, WORKER_ONLINE_WINDOW_MS, WORKER_ONLINE_WINDOW_MS + 1, 3 * 60_000, 9 * 60_000, 10 * 60_000, 25 * 60_000, 3 * 3_600_000];
+        for (const age of ages) {
+            world.jobs.length = 0;
+            world.explainers.clear();
+            world.workers.length = 0;
+            macWriting(30);
+            world.addWorker({ last_seen_at: seenAgo(age) });
+            const online = (await workerSummary(TENANT, NOW)).online;
+            const took = (await takeOverWrite(TENANT, EXPLAINER, NOW)) !== null;
+            assert.equal(took, !online, `last heard from ${age / SECONDS} seconds ago: the card says ${online ? 'online' : 'offline'}`);
+        }
+        // And the window is the dashboard's constant, not a number of this file's.
+        assert.equal(WORKER_ONLINE_WINDOW_MS, 90_000);
+    });
+
+    it('the check is for the Mac’s job only: a Mac that is up but signed out is still replaced, because it answered and said it cannot write', async () => {
+        world.addWorker({ last_seen_at: seenAgo(5 * SECONDS) });
+        world.addExplainer({ status: 'failed', failed_step: 'write', error: SIGNED_OUT, job_id: null });
+        const run = await takeOverWrite(TENANT, EXPLAINER, NOW);
+        assert.ok(run);
+        assert.equal(world.explainer().status, 'writing');
+        assert.equal(geminiJobs().length, 1);
+    });
+
+    it('asks nothing of the workers until the job is old enough: a young job costs the look no read of `studio_workers`', async () => {
+        macWriting(UNCLAIMED_MINUTES - 1);
+        world.db.statements.length = 0;
+        assert.equal(await takeOverWrite(TENANT, EXPLAINER, NOW), null);
+        assert.equal(world.ran(/FROM studio_workers/).length, 0);
+        world.jobs.length = 0;
+        world.explainers.clear();
+        macWriting(30, {}, { status: 'claimed', claimed_at: minutesAgo(25), heartbeat_at: minutesAgo(1) });
+        world.db.statements.length = 0;
+        assert.equal(await takeOverWrite(TENANT, EXPLAINER, NOW), null);
+        assert.equal(world.ran(/FROM studio_workers/).length, 0, 'nor for a job the Mac already holds');
+    });
+
+    it('reads the workers on the takeover’s own connection, inside its transaction, after the lock: no second connection from the small pool', async () => {
+        macWriting(30);
+        // The fake hands the same function to the pool and to a transaction's client, so what goes through the POOL is told apart here.
+        const viaPool: string[] = [];
+        const fake = pool.query;
+        (pool as unknown as { query: unknown }).query = (sql: string, params?: unknown[]) => { viaPool.push(sql.replace(/\s+/g, ' ').trim()); return (fake as (a: string, b?: unknown[]) => unknown).call(pool, sql, params); };
+        world.db.statements.length = 0;
+        await takeOverWrite(TENANT, EXPLAINER, NOW);
+        assert.equal(viaPool.filter((st) => /FROM studio_workers/.test(st)).length, 0, 'the worker read did not take a connection from the pool while the transaction held one');
+        const sql = world.db.statements.map((st) => st.sql);
+        const at = (pattern: RegExp) => sql.findIndex((st) => pattern.test(st));
+        const begin = at(/^BEGIN$/);
+        const lock = at(/^SELECT \* FROM explainers WHERE id = \$1 AND creator_id = \$2 FOR UPDATE$/);
+        const workers = at(/FROM studio_workers/);
+        const close = at(/^UPDATE studio_jobs SET status = 'failed'/);
+        const commit = at(/^COMMIT$/);
+        assert.ok(begin >= 0 && begin < lock && lock < workers && workers < close && close < commit, JSON.stringify({ begin, lock, workers, close, commit }));
+        assert.equal(sql.filter((st) => st === 'BEGIN').length, 1);
+    });
+
+    it('with the fallback off the workers are not even asked: the explainer waits for the Mac whatever it is doing', async () => {
+        world.settingsRow = explainerSettings({ characters: [KARIM], writer_fallback: false });
+        macWriting(90);
+        world.db.statements.length = 0;
+        assert.equal(await takeOverWrite(TENANT, EXPLAINER, NOW), null);
+        assert.equal(world.ran(/FROM studio_workers/).length, 0);
+    });
+});
+
 // ─── The takeover ──────────────────────────────────────────────────────────────────────────────
 
 describe('takeOverWrite: the Mac has not picked the job up', () => {
@@ -130,7 +279,7 @@ describe('takeOverWrite: the Mac has not picked the job up', () => {
         const mac = macWriting(UNCLAIMED_MINUTES + 1);
         const run = await takeOverWrite(TENANT, EXPLAINER, NOW);
         assert.ok(run);
-        assert.deepEqual([mac.status, mac.error], ['failed', `The Mac did not pick this up in ${UNCLAIMED_MINUTES} minutes, so Gemini is writing it.`]);
+        assert.deepEqual([mac.status, mac.error], ['failed', `The Mac did not pick this up in ${UNCLAIMED_MINUTES} minutes and is off or asleep, so Gemini is writing it.`]);
         const [gemini] = geminiJobs();
         assert.equal(run!.jobId, gemini!.id);
         assert.equal(gemini!.status, 'claimed');

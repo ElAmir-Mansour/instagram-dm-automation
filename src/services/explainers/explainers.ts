@@ -114,10 +114,18 @@ export interface ExplainerView extends ExplainerSummary {
     allowance: unknown | null;
 }
 
-type DetailRow = ExplainerRow & { job_status: string | null; job_progress: string | null; job_not_before: Date | string | null };
+type DetailRow = ExplainerRow & { job_status: string | null; job_progress: string | null; job_not_before: Date | string | null; job_created_at?: Date | string | null };
+
+/**
+ * What a script that is waiting for the Mac says while the Mac is up and has not taken it: it is busy with another job (it runs two at a time, and a long render
+ * can hold both). Not an error, and not a reason for Gemini to step in (writing.ts): the owner is told what the wait is.
+ */
+export const BUSY_MAC_NOTE = 'Waiting for your Mac: it is busy with another job';
+/** A Mac that is free takes a job within its slowest poll (30 seconds); a job that has waited a minute is waiting for a slot, not for a poll. */
+export const BUSY_AFTER_SECONDS = 60;
 
 const DETAIL_SQL = `
-    SELECT e.*, j.status AS job_status, j.progress AS job_progress, j.not_before AS job_not_before
+    SELECT e.*, j.status AS job_status, j.progress AS job_progress, j.not_before AS job_not_before, j.created_at AS job_created_at
       FROM explainers e
       LEFT JOIN studio_jobs j ON j.id = e.job_id AND j.creator_id = e.creator_id
      WHERE e.id = $1 AND e.creator_id = $2`;
@@ -155,9 +163,18 @@ export const presentScene = (s: ExplainerSceneRow): SceneView => ({
     picture: s.picture, pictures: s.pictures, draw_status: s.draw_status, draw_error: s.draw_error, draw_note: s.draw_note,
 });
 
-/** The explainer and its scenes as the dashboard reads them. Pure: what is read from elsewhere (the worker, the allowance) is handed in. */
+/** The line for a write job that waits on a Mac that is up: see `BUSY_MAC_NOTE`. Null in every other case (the job's own progress, or none, is shown). */
+function busyMacNote(row: DetailRow, worker: ExplainerView['worker'], now: number): string | null {
+    if (row.status !== 'writing' || row.job_status !== 'pending' || !worker?.online) return null;
+    // Asked for later: waiting for a time, not for the Mac. (A write is never queued that way today, but the rule is the job's.)
+    if (row.job_not_before && new Date(row.job_not_before).getTime() > now) return null;
+    if (!row.job_created_at) return null;
+    return now - new Date(row.job_created_at).getTime() >= BUSY_AFTER_SECONDS * 1000 ? BUSY_MAC_NOTE : null;
+}
+
+/** The explainer and its scenes as the dashboard reads them. Pure: what is read from elsewhere (the worker, the allowance, the clock) is handed in. */
 export function presentExplainer(
-    row: DetailRow, scenes: readonly ExplainerSceneRow[], extras: { worker?: ExplainerView['worker']; allowance?: unknown } = {}
+    row: DetailRow, scenes: readonly ExplainerSceneRow[], extras: { worker?: ExplainerView['worker']; allowance?: unknown; now?: number } = {}
 ): ExplainerView {
     const problems = row.draft ? checkDraft(draftInputOf(row, scenes), { tier: row.length_tier, language: row.language }).problems : [];
     const drawn = scenes.filter((s) => s.draw_status === 'done').length;
@@ -168,13 +185,15 @@ export function presentExplainer(
         source_links: row.source_links, draft: row.draft, draft_version: row.draft_version, audio: row.audio, audio_stale: isAudioStale(row), render: row.render,
         render_stale: row.render !== null && (row.render.version !== row.draft_version || row.render.sound_mode !== row.sound_mode), schedule: row.schedule,
         draw_paused_until: row.draw_paused_until, scenes: scenes.map(presentScene), problems,
-        job: row.job_id && row.job_status ? { status: row.job_status, progress: row.job_progress, not_before: row.job_not_before } : null,
+        job: row.job_id && row.job_status
+            ? { status: row.job_status, progress: row.job_progress ?? busyMacNote(row, extras.worker ?? null, extras.now ?? Date.now()), not_before: row.job_not_before }
+            : null,
         worker: extras.worker ?? null, allowance: extras.allowance ?? null,
     };
 }
 
 /** The explainer and its scenes, read through `exec` (a transaction's client, or the pool). A 404 when it is not this tenant's. */
-export async function loadView(exec: Exec, creatorId: string, id: string, extras: { worker?: ExplainerView['worker']; allowance?: unknown } = {}): Promise<ExplainerView> {
+export async function loadView(exec: Exec, creatorId: string, id: string, extras: { worker?: ExplainerView['worker']; allowance?: unknown; now?: number } = {}): Promise<ExplainerView> {
     const { rows } = await exec.query<DetailRow>(DETAIL_SQL, [id, creatorId]);
     if (!rows[0]) throw notFound();
     return presentExplainer(rows[0], await loadScenes(exec, creatorId, id), extras);
@@ -191,6 +210,8 @@ export function explainerIdOf(raw: unknown): string {
 /** What GET /explainers/:id adds to the row: whether the Mac is there, and the image allowance when the pictures service gives it. */
 export interface ReadExtras {
     allowance?: () => Promise<unknown>;
+    /** The clock the view's "how long has it waited" is read against (tests). */
+    now?: number;
 }
 
 /**
@@ -199,9 +220,9 @@ export interface ReadExtras {
  */
 export async function getExplainer(creatorId: string, rawId: unknown, extras: ReadExtras = {}): Promise<ExplainerView> {
     const id = explainerIdOf(rawId);
-    await reconcileWriting(creatorId, id);
-    const [worker, allowance] = await Promise.all([workerSummary(creatorId).catch(() => null), extras.allowance ? extras.allowance().catch(() => null) : Promise.resolve(null)]);
-    return loadView(pool, creatorId, id, { worker, allowance });
+    await reconcileWriting(creatorId, id, extras.now);
+    const [worker, allowance] = await Promise.all([workerSummary(creatorId, extras.now).catch(() => null), extras.allowance ? extras.allowance().catch(() => null) : Promise.resolve(null)]);
+    return loadView(pool, creatorId, id, { worker, allowance, now: extras.now });
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────────────────────

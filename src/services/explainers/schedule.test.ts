@@ -72,14 +72,37 @@ describe('scheduleExplainer: what is posted where', () => {
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
         const youtube = byPlatform('youtube');
         assert.deepEqual([youtube.media_url, youtube.cover_url], [up(3), null]);
+        assert.deepEqual(youtube.platform_options, { title: 'YT title', language: 'ar', shorts: false }, 'not a Short: YouTube publishing adds no #Shorts to it');
         assert.equal(byPlatform('both').media_url, up(2), 'Instagram and Facebook keep the vertical one');
         assert.equal(byPlatform('tiktok').media_url, up(2));
     });
 
-    it('exactly three minutes is still a Short', async () => {
+    it('exactly three minutes is still a Short, and a Short’s row is tagged as every YouTube row is: it carries no `shorts` option', async () => {
         ready({ render: render({ duration: 180 }) });
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
         assert.equal(byPlatform('youtube').media_url, up(2));
+        assert.deepEqual(byPlatform('youtube').platform_options, { title: 'YT title', language: 'ar' });
+        assert.ok(!('shorts' in byPlatform('youtube').platform_options));
+    });
+
+    it('only the YouTube row of a long video opts out: Instagram, Facebook and TikTok rows are written exactly as they were', async () => {
+        ready({ render: render({ duration: 600 }) });
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        assert.equal(byPlatform('both').platform_options, null);
+        assert.deepEqual(byPlatform('tiktok').platform_options, { mode: 'inbox' });
+        assert.deepEqual(byPlatform('youtube').platform_options.shorts, false);
+    });
+
+    it('the opt-out is by the video, not the explainer: a long one and a short one, scheduled the same way, differ only in that row', async () => {
+        ready({ render: render({ duration: 72 }) });
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        const short = structuredClone(byPlatform('youtube').platform_options);
+        world.posts.length = 0;
+        world.explainer().status = 'ready';
+        world.explainer().schedule = null;
+        world.explainer().render = render({ duration: 301 });
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        assert.deepEqual(byPlatform('youtube').platform_options, { ...short, shorts: false });
     });
 
     it('every row is in one group, and the explainer records the group, the time and the rows', async () => {

@@ -5,8 +5,11 @@
  *   a. the owner chose Gemini in Settings (`explainer.writer = 'gemini'`): the job is Gemini's from the start and the Mac is never asked;
  *   b. the Mac's write fails with a sign-in error ("Failed to authenticate: OAuth session expired…"): the explainer goes `failed`, as any failure does, and the
  *      next look at it (the route that took the failure, the dashboard reading it, the daily cron) takes the work over;
- *   c. the Mac has not picked the job up in ten minutes (it is off, or asleep): the same look takes the work over and closes the Mac's job, so it can never be
- *      claimed later and a late answer from it would be dropped (only the result of `explainers.job_id` is applied).
+ *   c. the Mac has not picked the job up in ten minutes AND is off or asleep (no live worker of the tenant has been heard from within the dashboard's online
+ *      window): the same look takes the work over and closes the Mac's job, so it can never be claimed later and a late answer from it would be dropped (only
+ *      the result of `explainers.job_id` is applied). A Mac that is up and busy is NOT replaced: it runs two jobs at a time, so with both slots on a long
+ *      render a script waits well past ten minutes while the Mac is alive and heartbeating, and Gemini taking it over would turn a short wait into a failure
+ *      (a free key cannot ground its research). That wait is said on the explainer instead (`BUSY_MAC_NOTE`, explainers.ts).
  *
  * `writer_fallback = false` means never: the explainer waits for the Mac, or fails with its reason, and Gemini is only used when the owner chose it.
  *
@@ -25,6 +28,7 @@ import { type Exec, isPlainObject, withTransaction } from '../studio/common.js';
 import { completeJob, enqueueJob, failJob, MAX_ATTEMPTS, reportProgress } from '../studio/jobs.js';
 import { getStudioSettings } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
+import { workerSummary } from '../studio/worker.js';
 import { previousDraftOf, writePayload, writerRequest } from './payloads.js';
 import { transitionExplainer } from './state.js';
 import { loadScenes, lockExplainer, readExplainer, updateExplainerFields } from './store.js';
@@ -211,7 +215,12 @@ async function takeoverReason(exec: Exec, row: ExplainerRow, now: number): Promi
     if (row.status === 'writing' && row.job_id) {
         const job = await lookAtJob(exec, row.creator_id, row.job_id);
         if (job && job.kind === 'explainer_write' && job.status === 'pending' && !isGeminiJob(job) && minutesSince(job.created_at, now) >= UNCLAIMED_MINUTES) {
-            return { why: 'unclaimed', macJobId: job.id, note: `The Mac did not pick this up in ${UNCLAIMED_MINUTES} minutes, so Gemini is writing it.` };
+            // Waiting is not being gone. The Mac is replaced only when it is off or asleep: no live worker of the tenant has been heard from within the online
+            // window, which is `workerSummary`'s answer, the one the dashboard's card gives (a busy Mac still sends a heartbeat every 20 seconds). Read on this
+            // transaction's own connection, and only here: the common look at a job that is not yet old enough asks nothing of the workers.
+            const mac = await workerSummary(row.creator_id, now, exec);
+            if (mac.online) return null;
+            return { why: 'unclaimed', macJobId: job.id, note: `The Mac did not pick this up in ${UNCLAIMED_MINUTES} minutes and is off or asleep, so Gemini is writing it.` };
         }
         return null;
     }
@@ -288,11 +297,11 @@ export async function reconcileWriting(creatorId: string, explainerId: string, n
 }
 
 /** After a worker reported a failure (`POST /worker/jobs/:id/fail`): if it was an explainer's write, look at it now, so a sign-in failure is answered at once. */
-export async function afterJobFailed(creatorId: string, jobId: string): Promise<void> {
+export async function afterJobFailed(creatorId: string, jobId: string, now: number = Date.now()): Promise<void> {
     try {
         const job = await lookAtJob(pool, creatorId, jobId);
         if (!job || job.kind !== 'explainer_write' || !isPlainObject(job.payload) || typeof job.payload.explainer_id !== 'string') return;
-        await reconcileWriting(creatorId, job.payload.explainer_id);
+        await reconcileWriting(creatorId, job.payload.explainer_id, now);
     } catch (err) {
         log('error', 'explainer.after_fail_failed', { job_id: jobId, ...describeError(err) });
     }

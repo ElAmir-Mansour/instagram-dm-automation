@@ -5,7 +5,8 @@
  *   Instagram and Facebook   one row, `both` (or the one that is on): the VERTICAL video with its cover, and `captions.meta`
  *   YouTube                  the HORIZONTAL video when the render is longer than 3 minutes, otherwise the vertical one as a Short; `captions.youtube`
  *                            (its title and description), `{ title, language }`. A long video gets no thumbnail of ours: the cover is a vertical frame, and
- *                            YouTube picks its own for a horizontal video. A Short gets the cover.
+ *                            YouTube picks its own for a horizontal video. A Short gets the cover. A long video is not a Short, so its row says
+ *                            `shorts: false` and no `#Shorts` is added to its title or description; a Short's row is tagged as every YouTube row is.
  *   TikTok                   the vertical video as an inbox draft (`{ mode: 'inbox' }`): the creator posts it from the TikTok app; `captions.tiktok`
  *
  * One `group_id` for all of them, and each platform has its own caption. When the track the sound used requires credit, its credit line goes at the end of every
@@ -137,7 +138,8 @@ export async function scheduleExplainer(creatorId: string, rawId: unknown, body:
             const long = render.duration > YOUTUBE_SHORT_MAX_SECONDS;
             rows.push(await insertVideoPost(client, {
                 creatorId, platform: 'youtube', caption: caption('youtube', captions.youtube.description), mediaUrl: long ? render.horizontal_url : render.vertical_url,
-                coverUrl: long ? null : render.cover_url, when: at, groupId, options: { title: captions.youtube.title.trim() || row.title || row.topic, language: row.language },
+                coverUrl: long ? null : render.cover_url, when: at, groupId,
+                options: { title: captions.youtube.title.trim() || row.title || row.topic, language: row.language, ...(long ? { shorts: false as const } : {}) },
             }));
         }
         const inbox = validateTikTokInboxOptions(null, 'video');
