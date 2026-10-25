@@ -48,8 +48,8 @@ export type LogFields = Record<string, unknown>;
  */
 const contextStorage = new AsyncLocalStorage<LogFields>();
 
-/** Keys whose values never belong in a log line, matched case-insensitively on the key name. */
-const REDACT_KEY = /(token|secret|password|passwd|api[-_]?key|authorization|signature|cookie)/i;
+/** Keys whose values never belong in a log line, matched on the key NAME whatever the value: never name a non-secret like one. */
+export const REDACT_KEY = /(token|secret|password|passwd|api[-_]?key|authorization|signature|cookie)/i;
 const REDACTED = '[redacted]';
 
 /**

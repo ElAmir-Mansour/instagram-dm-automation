@@ -1036,9 +1036,10 @@ not retried. The body is byte-identical on both attempts; the retry is logged `a
 (status/code and attempt only, never the error object). Before this a transient 503 failed the
 job and waited out the runner's backoff plus the worker's next poll (100–175 s).
 
-**Token usage** is logged as `ai.usage` (**`src/services/ai.ts:465-475`**) including
-`cached_tokens`, because `prompt_tokens` is mostly the static prefix and that is precisely the
-number that says whether Gemini context caching is worth turning on.
+**Token usage** is logged as `ai.usage` (**`src/services/ai.ts:635-642`**): `usage_in`, `usage_out`, `usage_total` and
+`usage_cache_read`, because `usage_in` is mostly the static prefix and that is precisely the
+number that says whether Gemini context caching is worth turning on. (Named `usage_*` because the logger blanks any field whose
+name contains "token"; until 2026-10-25 these were `*_tokens` and printed `[redacted]`.)
 
 ### 2.8 — `coerceAiResponse`
 

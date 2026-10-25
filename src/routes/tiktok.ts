@@ -106,7 +106,7 @@ tiktokPublicRouter.get('/callback', async (req, res) => {
         // The browser that started the flow holds the same value. A state lifted from a log or a
         // referrer and completed elsewhere fails here, before it is spent.
         if (!cookie || cookie !== state) {
-            log('warn', 'tiktok.oauth_state_mismatch', { has_cookie: Boolean(cookie) });
+            log('warn', 'tiktok.oauth_state_mismatch', { browser_state: cookie ? 'different' : 'missing' });
             backTo(res, null, 'error', 'state_mismatch');
             return;
         }

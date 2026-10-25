@@ -98,7 +98,7 @@ youtubePublicRouter.get('/callback', async (req, res) => {
             return;
         }
         if (!cookie || cookie !== state) {
-            log('warn', 'youtube.oauth_state_mismatch', { has_cookie: Boolean(cookie) });
+            log('warn', 'youtube.oauth_state_mismatch', { browser_state: cookie ? 'different' : 'missing' });
             backTo(res, null, 'error', 'state_mismatch');
             return;
         }
