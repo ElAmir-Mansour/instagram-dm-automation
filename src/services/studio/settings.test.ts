@@ -533,7 +533,7 @@ describe('the explainer section (data-model §6.1)', () => {
             characters: [],
             voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' },
             voice_style: 'a calm, warm documentary narrator; clear, unhurried, curious',
-            pace: { ar: 2.1, en: 2.5 },
+            pace: { ar: 1.8, en: 2.5 },
             writer: 'claude_mac',
             writer_fallback: true,
             title_color: '#FFD43B',
@@ -551,7 +551,7 @@ describe('the explainer section (data-model §6.1)', () => {
         first.explainer.defaults.subtitles = false;
         assert.deepEqual(defaultStudioSettings().explainer.characters, []);
         assert.equal(defaultStudioSettings().explainer.voices.en, 'Sadaltager');
-        assert.equal(defaultStudioSettings().explainer.pace.ar, 2.1);
+        assert.equal(defaultStudioSettings().explainer.pace.ar, 1.8);
         assert.equal(defaultStudioSettings().explainer.defaults.subtitles, true);
     });
 

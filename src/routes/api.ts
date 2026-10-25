@@ -43,7 +43,7 @@ import { runRetentionSweep } from '../services/retention.js';
 import {
     describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
-import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
@@ -104,6 +104,7 @@ import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
 import { sweepLeads } from '../services/ads/leads.js';
 import { runAdsHealth } from '../services/ads/health.js';
+import { sweepWriting } from '../services/explainers/writing.js';
 import { expireProposals } from '../services/ads/proposals/store.js';
 import { runDailyReview } from '../services/ads/proposals/service.js';
 import { drainAdsOps } from '../services/ads/ops.js';
@@ -1058,7 +1059,8 @@ router.get('/cron/publish', async (req, res) => {
         const sweep = await runRetentionSweep();
         if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
             || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining
-            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0) {
+            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0
+            || sweep.allowanceRowsDeleted > 0) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -1153,6 +1155,16 @@ router.get('/cron/publish', async (req, res) => {
             log('error', 'cron.ads_daily_sync_failed', describeError(dailyErr));
         }
 
+        // Illustrated explainers (src/services/explainers/writing.ts): the backstop for the lazy check on GET /explainers/:id. An explainer whose
+        // script the Mac never claimed in 10 minutes, or whose write failed on a sign-in error, is handed to Gemini here when nobody opens its page.
+        // The run itself is started under waitUntil and finishes after this response; a database behind v59 has nothing to look at. Fail-soft.
+        try {
+            const writing = await sweepWriting();
+            if (writing.started > 0) log('info', 'cron.explainers_writing', { ...writing });
+        } catch (writingErr) {
+            if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
+        }
+
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
         // or a missing permission must not turn a publish sweep that already ran into a 500.
@@ -1194,10 +1206,14 @@ const ALLOWED_MIME_TYPES = new Set([
 
 /**
  * What /uploads/:id serves as itself: every type /upload stores, plus the infographic's GIF, which
- * only the Studio worker uploads (v31). /upload itself still refuses a GIF: no platform the
- * scheduler posts to takes one.
+ * only the Studio worker uploads (v31), and the sound of an illustrated explainer (v59): the voiced narration
+ * (an m4a, `audio/mp4`) and the owner's music tracks (`audio/mpeg`, `audio/mp4`, `audio/wav`). /upload itself
+ * still refuses all of them: no platform the scheduler posts to takes a GIF or a bare sound file. Served as
+ * themselves, the dashboard's player can play the narration and a track's preview, and a player asks for pieces
+ * (Range), which this route answers with 206 for every type alike. Audio is not a type a browser runs as script,
+ * so naming it is no more dangerous than naming the images above.
  */
-const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif']);
+export const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

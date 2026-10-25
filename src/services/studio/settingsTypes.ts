@@ -278,8 +278,12 @@ export function defaultInfographicConfig(): InfographicConfig {
     };
 }
 
-/** Words a second, per language: Arabic 2.1, English 2.5. The estimate of a script's length (spec.ts) and the default of `ExplainerConfig.pace`. */
-export const DEFAULT_EXPLAINER_PACE = { ar: 2.1, en: 2.5 } as const;
+/**
+ * Words a second, per language: Arabic 1.8, English 2.5. The estimate of a script's length (spec.ts) and the default of `ExplainerConfig.pace`.
+ * Arabic was measured on 2026-10-25: gemini-3.8-flash-tts, voice ar-001-commercial-3, the default calm narrator style, 11 words in 6.3 s of speech
+ * (1.75 words a second; it was 2.1 before the measurement).
+ */
+export const DEFAULT_EXPLAINER_PACE = { ar: 1.8, en: 2.5 } as const;
 
 /**
  * Neutral, like every default here: no character (the owner approves his own), no music (the licence of a track is the owner's to state),

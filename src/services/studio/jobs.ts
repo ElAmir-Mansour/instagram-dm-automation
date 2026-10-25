@@ -25,7 +25,7 @@ import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import { queueAdvance } from '../ads/proposals/advance.js';
-import { applyExplainerFailure, applyExplainerResult, isExplainerJobKind } from '../explainers/apply.js';
+import { applyExplainerFailure, applyExplainerResult, isExplainerJobKind, type ExplainerApplyDeps } from '../explainers/apply.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
@@ -85,15 +85,24 @@ type LockedJob = Pick<StudioJobRow, 'id' | 'creator_id' | 'kind' | 'status' | 'p
  * the operator added, whoever is asking: the callers check first and fail fast, this is the net under all of them.
  */
 export async function enqueueJob(
-    exec: Exec, creatorId: string, kind: StudioJobKind, payload: object
+    exec: Exec, creatorId: string, kind: StudioJobKind, payload: object, opts: { notBefore?: Date } = {}
 ): Promise<StudioJobView> {
     if (isMacBrainJob(kind, payload)) await assertMacBrainAllowed(creatorId);
-    const { rows } = await exec.query<StudioJobView>(
-        `INSERT INTO studio_jobs (creator_id, kind, payload)
-         VALUES ($1, $2, $3::jsonb)
-         RETURNING ${JOB_COLUMNS}`,
-        [creatorId, kind, JSON.stringify(payload)]
-    );
+    // `notBefore` (v59) is when the worker may first claim the job: a paused drawing, or a voice that ran into Gemini's limit, is asked again at the reset.
+    // A job that names none is inserted by the statement it always was, so nothing else's SQL or parameters change.
+    const { rows } = opts.notBefore
+        ? await exec.query<StudioJobView>(
+            `INSERT INTO studio_jobs (creator_id, kind, payload, not_before)
+             VALUES ($1, $2, $3::jsonb, $4)
+             RETURNING ${JOB_COLUMNS}`,
+            [creatorId, kind, JSON.stringify(payload), opts.notBefore]
+        )
+        : await exec.query<StudioJobView>(
+            `INSERT INTO studio_jobs (creator_id, kind, payload)
+             VALUES ($1, $2, $3::jsonb)
+             RETURNING ${JOB_COLUMNS}`,
+            [creatorId, kind, JSON.stringify(payload)]
+        );
     if (!rows[0]) throw new Error('studio_jobs insert returned no row.');
     return rows[0];
 }
@@ -442,8 +451,8 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
             stored = applied.stored;
             outcome = applied.outcome;
         } else if (isExplainerJobKind(job.kind)) {
-            // An illustrated explainer's step (v59, explainers/apply.ts). E1 only logs it and drops the result: nothing queues these yet.
-            const applied = await applyExplainerResult(client, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, result);
+            // An illustrated explainer's step (v59, explainers/apply.ts): its result lands on the explainer, in this transaction, or is dropped.
+            const applied = await applyExplainerResult(client, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, result, EXPLAINER_DEPS);
             stored = applied.stored;
             outcome = applied.outcome;
         } else {
@@ -769,6 +778,12 @@ export async function deleteUnreferencedUploads(
 }
 
 /**
+ * What the explainer appliers (explainers/apply.ts) need from this file, handed to them because they cannot import it: this file imports them.
+ * Function declarations are hoisted, so this object may be built before the functions it names.
+ */
+export const EXPLAINER_DEPS: ExplainerApplyDeps = { enqueue: enqueueJob, checkFiles: checkRenderFiles, deleteFiles: deleteUnreferencedUploads };
+
+/**
  * Land a render on its draft, or drop it.
  *
  * Dropped when it is not the draft's latest render job (an edit arrived while it rendered),
@@ -914,7 +929,7 @@ async function applyTranscribe(
  * (Instagram takes nothing else) — and, for one in Supabase Storage, actually there as declared:
  * a signed upload URL carries no size or type limit of its own, so the object itself is asked.
  */
-async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
+export async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
     const ids = unique(wanted.map(([id]) => id));
     const { rows } = await exec.query<{ id: string; mime_type: string; storage_path: string | null }>(
         'SELECT id, mime_type, storage_path FROM media_uploads WHERE id = ANY($1::uuid[]) AND creator_id = $2', [ids, creatorId]
@@ -1092,8 +1107,8 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
             [id, job.creator_id, error, job.id]
         );
     } else if (isExplainerJobKind(job.kind)) {
-        // The explainer goes failed at the step this job was for (explainers/apply.ts). E1 only logs it: nothing queues these yet.
-        await applyExplainerFailure(exec, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, error);
+        // The explainer goes failed at the step this job was for, or a voice that hit Gemini's limit is queued again (explainers/apply.ts).
+        await applyExplainerFailure(exec, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, error, EXPLAINER_DEPS);
     }
 }
 
@@ -1169,14 +1184,19 @@ async function renderPair(
     await exec.query('UPDATE infographics SET pair_theme = NULL WHERE id = $1', [payloadId(job, 'infographicId')]);
 }
 
-/** Counts for the status card. */
-export async function jobCounts(creatorId: string): Promise<{ pending: number; claimed: number }> {
+/**
+ * Counts for the status card: `pending` is what the worker could claim now (the Mac is behind when it is more than 0), `claimed` what it is running, and
+ * `waiting` the jobs queued for LATER (a `not_before` still in the future: a drawing paused until the image allowance resets, a voice waiting for Gemini's
+ * quota). Those are nobody's backlog, so counting them as pending made the card say "waiting for the worker" about a Mac that had nothing to do.
+ * Every job that has no `not_before` of its own is due the moment it is queued, so for them `pending` is what it always was.
+ */
+export async function jobCounts(creatorId: string): Promise<{ pending: number; claimed: number; waiting: number }> {
     const { rows } = await pool.query<{ status: string; n: number }>(
-        `SELECT status, COUNT(*)::int AS n FROM studio_jobs
+        `SELECT CASE WHEN status = 'pending' AND not_before > NOW() THEN 'waiting' ELSE status END AS status, COUNT(*)::int AS n FROM studio_jobs
           WHERE creator_id = $1 AND status IN ('pending', 'claimed')
-          GROUP BY status`,
+          GROUP BY 1`,
         [creatorId]
     );
     const count = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
-    return { pending: count('pending'), claimed: count('claimed') };
+    return { pending: count('pending'), claimed: count('claimed'), waiting: count('waiting') };
 }
