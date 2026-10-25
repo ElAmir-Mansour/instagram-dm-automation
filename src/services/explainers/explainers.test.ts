@@ -423,7 +423,10 @@ describe('editExplainer: what changes, and what it costs', () => {
         assert.deepEqual(view.draft!.captions, { meta: 'm', youtube: { title: 'yt', description: 'yd' }, tiktok: 'tt' });
         assert.equal(view.draft!.first_comment, 'Sources\n1. Lewis');
         assert.deepEqual(view.draft!.replies, [{ q: 'q?', a: 'a.' }]);
-        assert.deepEqual(view.draft!.warnings.map((w) => w.code), ['few_sources'], 'one source is too few for a short explainer; 143 words at 2.5 a second is 57.2 s, inside its range');
+        assert.deepEqual(
+            view.draft!.warnings.map((w) => w.code), ['slow_opening', 'few_sources'],
+            'one source is too few for a short explainer; 143 words at 2.5 a second is 57.2 s, inside its range; the first sentence, 12 words, holds its picture 4.8 s'
+        );
         assert.equal(view.draft!.est_seconds, 57.2);
     });
 

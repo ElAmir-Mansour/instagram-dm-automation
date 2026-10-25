@@ -70,6 +70,11 @@ const ExplainersPage = {
     MIN_SOURCES_SHORT: 3,
     /** Words a second the narrator speaks (`DEFAULT_EXPLAINER_PACE`, Arabic measured at 1.8 on 2026-10-25); the settings can override it. */
     PACE: { ar: 1.8, en: 2.5 },
+    /**
+     * Where a picture's estimated time on screen is warned about (spec.ts `PICTURE_WARN_SECONDS`): gone in under `short` seconds, held over `long`, or a
+     * first picture over `first`. The warning sentences say these numbers (`explainers.warning.slow_opening|scene_long|scene_short`).
+     */
+    PICTURE_WARN: { short: 2, long: 7, first: 4.5 },
     /** The vertical video is posted as a Short up to this long; a longer one goes to YouTube as the horizontal video (FR-027). */
     SHORT_SECONDS: 180,
     /** What the server says in a pending write's progress while the Mac is up and busy (`BUSY_MAC_NOTE` in src/services/explainers/explainers.ts). */
@@ -298,6 +303,34 @@ const ExplainersPage = {
         return Math.round((spoken / perSecond) * 10) / 10;
     },
 
+    /** Each picture's estimated seconds on screen (spec.ts `pictureHolds`): a scene and the scenes after it that keep its picture are one picture. */
+    pictureHolds(scenes, language, pace) {
+        const holds = [];
+        (Array.isArray(scenes) ? scenes : []).forEach((scene, i) => {
+            const seconds = this.estimateSeconds([scene], language, pace);
+            const last = holds[holds.length - 1];
+            if (last && scene && scene.continues === true) last.seconds = Math.round((last.seconds + seconds) * 10) / 10;
+            else holds.push({ scene: i, seconds });
+        });
+        return holds;
+    },
+
+    /**
+     * How long each picture stays, as `checkDraft` in spec.ts warns about it: a slow first picture (with its seconds), then the scenes whose picture
+     * stays too long or goes too fast (by the numbers the editor shows). A scene with no spoken words is not a fast picture.
+     */
+    pacingWarnings(scenes, language, pace) {
+        const holds = this.pictureHolds(scenes, language, pace);
+        const W = this.PICTURE_WARN;
+        const out = [];
+        if (holds.length && holds[0].seconds > W.first) out.push({ code: 'slow_opening', secs: holds[0].seconds });
+        const long = holds.slice(1).filter((h) => h.seconds > W.long).map((h) => h.scene + 1);
+        if (long.length) out.push({ code: 'scene_long', scenes: long });
+        const short = holds.filter((h) => h.seconds > 0 && h.seconds < W.short).map((h) => h.scene + 1);
+        if (short.length) out.push({ code: 'scene_short', scenes: short });
+        return out;
+    },
+
     /** Whether a line ends in a question mark, Latin or Arabic, with closing quotes and brackets after it allowed. */
     endsWithQuestion(text) {
         const trimmed = String(text == null ? '' : text).replace(/[\s"'’”»)\]}›]+$/u, '');
@@ -319,8 +352,8 @@ const ExplainersPage = {
     },
 
     /**
-     * The warnings of a script that the owner may still approve over, from what is in the editor: the same five as `checkDraft` in spec.ts.
-     * Returns codes with the numbers their sentence needs.
+     * The warnings of a script that the owner may still approve over, from what is in the editor, as `checkDraft` in spec.ts finds them: the scene
+     * count, the length, how long each picture stays, and the sources. Returns codes with the numbers their sentence needs.
      */
     scriptWarnings(scenes, sources, tier, language, pace) {
         const out = [];
@@ -332,6 +365,7 @@ const ExplainersPage = {
             const est = this.estimateSeconds(list, language, pace);
             if (est < range.min) out.push({ code: 'duration_short', est, min: range.min, max: range.max });
             else if (est > range.max) out.push({ code: 'duration_long', est, min: range.min, max: range.max });
+            out.push(...this.pacingWarnings(list, language, pace));
         }
         const cited = (Array.isArray(sources) ? sources : []).filter((s) => s && (String(s.title || '').trim() || String(s.url || '').trim())).length;
         if (cited === 0) out.push({ code: 'needs_sources' });
@@ -1571,8 +1605,8 @@ const ExplainersPage = {
         const est = !dirty && stored !== null ? stored : this.estimateSeconds(scenes, d.language, pace);
         const range = this.DURATION_RANGE[d.length_tier];
         const warnings = dirty
-            ? [...this.scriptWarnings(scenes, sources, d.length_tier, d.language, pace), ...this.savedWarnings(d, est).filter((w) => w.code === 'research_limited')]
-            : this.savedWarnings(d, est);
+            ? [...this.scriptWarnings(scenes, sources, d.length_tier, d.language, pace), ...this.savedWarnings(d, est, pace).filter((w) => w.code === 'research_limited')]
+            : this.savedWarnings(d, est, pace);
         const warningLines = warnings.map((w) => html`<li><i data-lucide="alert-circle" aria-hidden="true"></i> ${this.warningText(w)}</li>`);
         // What Approve will refuse. Only a draft is waiting for approval; after it, the script was clean and a save cannot make it otherwise.
         const problemLines = !dirty && d.status === 'draft'
@@ -1592,11 +1626,13 @@ const ExplainersPage = {
     },
 
     /** The warnings the server stored with the draft, with the numbers their sentence needs, taken from the script as it stands. */
-    savedWarnings(d, est) {
+    savedWarnings(d, est, pace) {
         const list = d.draft && Array.isArray(d.draft.warnings) ? d.draft.warnings : [];
         const bounds = this.SCENE_BOUNDS[d.length_tier] || this.SCENE_BOUNDS.short;
         const cited = d.draft && Array.isArray(d.draft.sources) ? d.draft.sources.length : 0;
+        const pacing = this.pacingWarnings(d.scenes, d.language, pace);
         return list.filter((w) => w && typeof w === 'object' && typeof w.code === 'string').map((w) => ({
+            ...(pacing.find((p) => p.code === w.code) || {}),
             code: w.code, message: typeof w.message === 'string' ? w.message : '',
             n: w.code === 'few_sources' ? cited : d.scenes.length, min: w.code === 'few_sources' ? this.MIN_SOURCES_SHORT : bounds.min, max: bounds.max, est,
         }));
@@ -1605,7 +1641,11 @@ const ExplainersPage = {
     /** A warning as a sentence in the interface language, by its code; the server's own words for a code this page has no sentence for. */
     warningText(w) {
         const key = `explainers.warning.${w.code}`;
-        const params = { n: UI.formatNumber(w.n || 0), min: UI.formatNumber(w.min || 0), max: UI.formatNumber(w.max || 0), est: this.lri(this.clock(w.est || 0)), tier: this.tierLabel(this.detail ? this.detail.length_tier : 'short') };
+        const params = {
+            n: UI.formatNumber(w.n || 0), min: UI.formatNumber(w.min || 0), max: UI.formatNumber(w.max || 0), est: this.lri(this.clock(w.est || 0)),
+            tier: this.tierLabel(this.detail ? this.detail.length_tier : 'short'), secs: this.lri(this.clock(w.secs || 0)),
+            scenes: (Array.isArray(w.scenes) ? w.scenes : []).map((s) => UI.formatNumber(s)).join(t('explainers.warning.sceneSep')),
+        };
         const said = t(key, params);
         return said !== key ? said : String(w.message || '');
     },

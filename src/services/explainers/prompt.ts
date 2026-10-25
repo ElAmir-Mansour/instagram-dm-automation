@@ -10,15 +10,16 @@
  * woman or girl in any picture and no text in one (FR-013, FR-014), and the owner's rule that a post must survive expert comments (2026-10-13): the
  * likely objections are written down, with their answers, while the script is still open to being fixed.
  *
- * Every number the prompt states is read from `spec.ts` (`SCENE_BOUNDS`, `DURATION_RANGE_S`, `LIMITS`), never typed twice, and the schema is the
- * file `writerSchema.json`, which must stay byte-for-byte the contract's `writer-output.schema.json` and the worker's `explainerSchema.json`.
+ * Every number the prompt states is read from `spec.ts` (`SCENE_BOUNDS`, `DURATION_RANGE_S`, `LIMITS`, `PICTURE_SECONDS`, `PICTURE_WARN_SECONDS`), never
+ * typed twice, and the schema is the file `writerSchema.json`, which must stay byte-for-byte the contract's `writer-output.schema.json` and the
+ * worker's `explainerSchema.json`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ExplainerLanguage, ExplainerLengthTier } from '../../db/rows.js';
 import { dialectLine } from '../studio/infographicSpec.js';
-import { DEFAULT_PACE, DURATION_RANGE_S, LIMITS, SCENE_BOUNDS } from './spec.js';
+import { DEFAULT_PACE, DURATION_RANGE_S, LIMITS, PICTURE_SECONDS, PICTURE_WARN_SECONDS, SCENE_BOUNDS } from './spec.js';
 
 // ─── The schema ────────────────────────────────────────────────────────────────────────────────
 
@@ -42,11 +43,6 @@ export function writerSchema(): Record<string, unknown> {
 
 // ─── The plan: how long, how many scenes ───────────────────────────────────────────────────────
 
-/** Words in a sentence a scene is written in: short enough for one picture and for 3 to 6 seconds on screen. */
-export const SENTENCE_WORDS = { min: 8, max: 16 } as const;
-/** The average the writer is pointed at when it is told how many scenes to aim for. */
-const AIM_WORDS_PER_SCENE = 11;
-
 /** How a tier is said to the writer: as a length ("60-90 seconds") and as what it makes of a video ("a 60-90 second video"). */
 const TIER_NAME: Readonly<Record<ExplainerLengthTier, string>> = { short: '60-90 seconds', medium: '3-5 minutes', long: '10-15 minutes' };
 const TIER_ADJECTIVE: Readonly<Record<ExplainerLengthTier, string>> = { short: '60-90 second', medium: '3-5 minute', long: '10-15 minute' };
@@ -61,13 +57,19 @@ export interface WriterPlan {
     /** The spoken words that fill `seconds_min` to `seconds_max` at that pace. */
     words_min: number;
     words_max: number;
-    /** About how many scenes make the middle of the range. */
+    /** About how many scenes make the middle of the range: a picture every `PICTURE_SECONDS.aim` seconds. */
     scenes_aim: number;
+    /** Words in a scene's sentence: `PICTURE_SECONDS.min` to `.max` seconds of speech at the pace. */
+    sentence_words: { min: number; max: number };
+    /** The most words in the first sentence, the hook: `PICTURE_SECONDS.first` seconds of speech. */
+    hook_words: number;
 }
 
 /**
- * The tier's bounds with the pace from the settings (`ExplainerWritePayload.bounds`, plus the words they come to). A pace that cannot be one
- * (zero, negative, not a number) is the language's default, as `estimateSeconds` treats it: the plan and the estimate must agree.
+ * The tier's bounds with the pace from the settings (`ExplainerWritePayload.bounds`, plus the words they come to), and the words of one sentence,
+ * worked out from how long a picture should stay on screen (`PICTURE_SECONDS`): at a faster pace a sentence holds more words for the same seconds.
+ * A pace that cannot be one (zero, negative, not a number) is the language's default, as `estimateSeconds` treats it: the plan and the estimate
+ * must agree.
  */
 export function writerPlan(tier: ExplainerLengthTier, language: ExplainerLanguage, pace?: number): WriterPlan {
     const perSecond = typeof pace === 'number' && Number.isFinite(pace) && pace > 0 ? pace : DEFAULT_PACE[language];
@@ -75,10 +77,13 @@ export function writerPlan(tier: ExplainerLengthTier, language: ExplainerLanguag
     const seconds = DURATION_RANGE_S[tier];
     const wordsMin = Math.round(seconds.min * perSecond);
     const wordsMax = Math.round(seconds.max * perSecond);
-    const aim = Math.round((wordsMin + wordsMax) / 2 / AIM_WORDS_PER_SCENE);
+    const aim = Math.round((wordsMin + wordsMax) / 2 / (PICTURE_SECONDS.aim * perSecond));
+    const sentenceMin = Math.max(3, Math.round(PICTURE_SECONDS.min * perSecond));
     return {
         scenes_min: scenes.min, scenes_max: scenes.max, seconds_min: seconds.min, seconds_max: seconds.max, pace: perSecond,
         words_min: wordsMin, words_max: wordsMax, scenes_aim: Math.min(scenes.max, Math.max(scenes.min, aim)),
+        sentence_words: { min: sentenceMin, max: Math.max(sentenceMin, Math.round(PICTURE_SECONDS.max * perSecond)) },
+        hook_words: Math.max(3, Math.round(PICTURE_SECONDS.first * perSecond)),
     };
 }
 
@@ -167,7 +172,8 @@ export function writeSystemPrompt(language: ExplainerLanguage, tier: ExplainerLe
         '5. The closing question: the LAST scene, alone. A real question that asks the viewer for an opinion or an experience of their own, specific to the topic, ending in a question mark («؟» in Arabic). Never a request for a keyword, a number, an emoji, a like, a share, a tag or a follow: ' + BAIT_EXAMPLES + '. The app refuses a script, a caption or a comment that does.',
         '',
         'SCENES',
-        `- One sentence per scene, ${SENTENCE_WORDS.min} to ${SENTENCE_WORDS.max} words (toward the short end in Arabic, where the narrator speaks about ${DEFAULT_PACE.ar} words a second: a picture should stay on screen 3 to 6 seconds), short and concrete enough to be drawn as one picture. \`narration\` is at most ${LIMITS.narration} characters. Write it the way a narrator speaks it: plain words, active voice, one idea, no parentheses, no lists, and no sentence that cannot be understood without the one before it.`,
+        `- One sentence per scene, ${plan.sentence_words.min} to ${plan.sentence_words.max} words, short and concrete enough to be drawn as one picture. At ${plan.pace} words a second that keeps each picture on screen about ${PICTURE_SECONDS.min} to ${PICTURE_SECONDS.max} seconds: long enough to look at it and read its label, short enough to keep the eye moving and the viewer focused. A thought that needs more words is two sentences, each with its own picture. \`narration\` is at most ${LIMITS.narration} characters. Write it the way a narrator speaks it: plain words, active voice, one idea, no parentheses, no lists, and no sentence that cannot be understood without the one before it.`,
+        `- The opening moves fastest. The first sentence, the hook, has at most ${plan.hook_words} words, so the first picture changes within about ${PICTURE_SECONDS.first} seconds, while viewers decide whether to stay; the next two sentences stay near the short end.`,
         `- Length: ${plan.scenes_min} to ${plan.scenes_max} scenes, spoken in ${plan.seconds_min} to ${plan.seconds_max} seconds at ${plan.pace} words a second, which is ${plan.words_min} to ${plan.words_max} spoken words in all (a ${TIER_ADJECTIVE[tier]} video). Aim for about ${plan.scenes_aim} scenes and the middle of that range. Count as you write: a script outside the range is flagged to the creator.`,
         '- Every scene has:',
         `  narration: the sentence as shown on screen.`,
@@ -206,8 +212,9 @@ export function writeSystemPrompt(language: ExplainerLanguage, tier: ExplainerLe
             : '2. Every sentence that states a fact has `source_ids`; every source is cited and is one of the numbered sources; no name, year, number or address comes from memory.',
         '3. Every brief is in English, names its characters by key, has no text in the picture, and holds none of the forbidden words.',
         `4. Every label is at most ${LIMITS.labelWords} words or a number.`,
-        '5. The scene count and the spoken word count are inside the ranges above.',
-        '6. The title, the captions and the first comment are about this video; there are 5 to 10 replies.',
+        `5. The first sentence has at most ${plan.hook_words} words and every other one ${plan.sentence_words.min} to ${plan.sentence_words.max}: the app flags a first picture held over ${PICTURE_WARN_SECONDS.first} seconds, and any picture held over ${PICTURE_WARN_SECONDS.long} or under ${PICTURE_WARN_SECONDS.short}.`,
+        '6. The scene count and the spoken word count are inside the ranges above.',
+        '7. The title, the captions and the first comment are about this video; there are 5 to 10 replies.',
         'Answer with the JSON object of the schema and nothing else.',
     ].join('\n');
 }
