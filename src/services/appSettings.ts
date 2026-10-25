@@ -265,6 +265,13 @@ export const APP_SETTING_KEYS = {
      * once the log line `dm.echo_classified` shows it.
      */
     dmEchoOwnerAppIds: 'dm.echo_owner_app_ids',
+    /**
+     * The image provider illustrated explainers draw with (v59, `src/services/explainers/pictures/provider.ts`), as JSON:
+     * `{ provider: 'cloudflare', account_id, token_enc, model, daily_cap, units_per_picture }`. Not a secret AS A ROW: the Cloudflare API token
+     * inside it is already `token_enc`, encrypted with `src/config/crypto.ts` before the JSON is written, and every answer shows only its last four
+     * characters. Platform-wide, because the provider account is the owner's. Edited by a platform admin (`PUT /api/admin/explainers/provider`).
+     */
+    explainersImageProvider: 'explainers.image_provider',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
