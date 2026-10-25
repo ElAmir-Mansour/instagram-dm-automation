@@ -393,10 +393,11 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         // settings
         [/FROM studio_settings WHERE creator_id = \$1/, () => ({ rows: world.settingsRow ? [world.settingsRow] : [] })],
         [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({ rows: world.appSettings.has(p[0]) ? [{ value: world.appSettings.get(p[0]), is_secret: false }] : [] })],
-        // The status card's statement (`workerSummary`), and the takeover's: the most recently seen worker of the tenant that is not revoked. The predicate is in
-        // the pattern, so a statement that stopped excluding the revoked ones is "unexpected" here, not answered.
-        [/^SELECT name, last_seen_at FROM studio_workers WHERE creator_id = \$1 AND revoked_at IS NULL ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1$/, (p) => {
-            const live = world.workers.filter((w) => w.creator_id === p[0] && w.revoked_at === null);
+        // The status card's statement (`workerSummary`), and the takeover's: the most recently seen worker of the tenant. It does what the statement SAYS: the
+        // revoked ones are left out only when the text has `revoked_at IS NULL`, so a statement that stopped excluding them is answered with them.
+        [/^SELECT name, last_seen_at FROM studio_workers WHERE creator_id = \$1( AND revoked_at IS NULL)? ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1$/, (p, sql) => {
+            const excludesRevoked = /AND revoked_at IS NULL/.test(sql);
+            const live = world.workers.filter((w) => w.creator_id === p[0] && (!excludesRevoked || w.revoked_at === null));
             if (world.workerLastSeen) live.push({ id: 'shorthand', creator_id: p[0], name: 'Mac', last_seen_at: world.workerLastSeen, revoked_at: null, created_at: world.now });
             live.sort((a, b) => (+(b.last_seen_at ?? 0) - +(a.last_seen_at ?? 0)) || (+b.created_at - +a.created_at));
             return { rows: live[0] ? [{ name: live[0].name, last_seen_at: live[0].last_seen_at }] : [] };
