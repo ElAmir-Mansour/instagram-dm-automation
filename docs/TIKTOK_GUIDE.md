@@ -121,12 +121,12 @@ the **Public site address** field, so save that first (§3). Copy them; do not t
 
 | Portal field | Value | Served by |
 |---|---|---|
-| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:98` |
-| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:109` |
-| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:103` |
+| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:213` |
+| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:224` |
+| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:218` |
 | Redirect URI (Login Kit) | `https://msg-response-auto.vercel.app/api/tiktok/callback` | `src/routes/tiktok.ts:83` |
 | Webhook callback URL | `https://msg-response-auto.vercel.app/api/tiktok/webhook` | `src/routes/tiktok.ts:149` |
-| Scopes to request | what Connect will ask for, today `user.info.basic,video.upload,video.publish` | `src/services/tiktok.ts:53` |
+| Scopes to request | what Connect will ask for, today `user.info.basic,video.upload,video.publish` | `src/services/tiktok.ts:64` |
 
 > **TikTok compares the redirect URI byte for byte.** A trailing slash, `http://`, or a preview
 > deployment's host is a different URI, and Connect fails. That is why it is built from the saved
@@ -351,7 +351,7 @@ box is a real "no" (`dashboard/js/pages/settings.js:3939-3942`, `src/routes/tikt
 | **on** | **off** — today | all three | the composer asks, per post: "Post directly to my profile" or "Send to my TikTok drafts (inbox)" | **Only me** |
 | on | on | `user.info.basic`, `video.publish` | direct, always | any level TikTok offers the account |
 
-(`tiktokScopes`, `src/services/tiktok.ts:53-56`; the per-post choice, `src/routes/api.ts:2965-2971`.)
+(`tiktokScopes`, `src/services/tiktok.ts:64-70`; the per-post choice, `src/routes/api.ts:2965-2971`.)
 Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 
 ### 5.1 Switching Direct Post on
@@ -385,7 +385,7 @@ Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 >   scheduled (`scheduled_posts.platform_options`), and the publish-time check only narrows it,
 >   never widens it (`src/services/tiktokPublish.ts:287-297`). Edit each one and choose Everyone.
 > - Studio carousels scheduled *after* the tick do go out public automatically
->   (`studioTikTokOptions`, `src/services/studio/schedule.ts:39-50`).
+>   (`studioTikTokOptions`, `src/services/studio/schedule.ts:45-58`).
 
 No reconnect is needed after the audit: the existing connection already holds `video.publish`. A
 later reconnect asks only for `user.info.basic` and `video.publish`, which ends inbox drafts — as
@@ -533,10 +533,10 @@ The Studio makes Instagram carousels and a 9:16 TikTok version of each (STUDIO.m
    while unaudited (Everyone once audited), the draft's TikTok title, Auto-add music on, comments
    allowed, and the **Your brand** disclosure on — every Studio carousel is labelled "Promotional
    content". The click is the consent (`studioTikTokOptions` and `runTikTokBatch`,
-   `src/services/studio/schedule.ts:39-50`, `:220-273`).
+   `src/services/studio/schedule.ts:45-58`, `:343-396`).
 4. It refuses with "Direct Post is not available: switch it on in Settings → TikTok app, then
    reconnect TikTok." unless the connection holds `video.publish` and the Direct Post switch is on
-   (`src/services/studio/schedule.ts:56-64`).
+   (`src/services/studio/schedule.ts:64-72`).
 5. The rows go out on the next drains. Keep the account private until the SQL in §6.3 step 3 comes
    back empty, then do steps 4–6.
 

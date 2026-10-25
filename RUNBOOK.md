@@ -94,7 +94,7 @@ The `jobs` table is what breaks the tie. Every verified **comment** delivery is 
 
 > Note the asymmetry: `entry.changes` elements are enqueued unconditionally, but `entry.messaging`
 > events are filtered first — echoes, read watermarks and delivery receipts never become jobs at
-> all (`isActionableMessagingEvent`, `src/webhook/router.ts:64`). So an empty `jobs` table rules
+> all (`isActionableMessagingEvent`, `src/webhook/router.ts:86`). So an empty `jobs` table rules
 > out comment traffic; it does not by itself rule out DM traffic that was all receipts.
 
 > **An empty `jobs` table is the one thing "nothing matched" cannot explain.**
@@ -116,7 +116,7 @@ after 7 days (§5.3), so an empty table now means "no delivery in the last seven
 quiet week looks the same. Post a comment from a second account before you conclude anything.
 
 The one caveat: if `WEBHOOK_QUEUE=off` is set in the environment, nothing is enqueued by design
-(`src/index.ts:226`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
+(`src/index.ts:418`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
 first.
 
 ---
@@ -128,8 +128,8 @@ Work these in order. The first four are cheap and cover almost everything.
 ### 2.1 Is the keyword actually a substring match?
 
 Matching is **substring by default**, on Arabic-normalised text
-(`src/services/matching.ts:83-85`, `src/utils/arabic.ts:141`). `trigger_keyword` is a
-comma-separated list and any one entry matching is enough (`src/services/matching.ts:75-85`).
+(`src/services/matching.ts:115-116`, `src/utils/arabic.ts:141`). `trigger_keyword` is a
+comma-separated list and any one entry matching is enough (`src/services/matching.ts:111-116`).
 A campaign with a non-null `post_id` fires only on that post (`src/services/matching.ts:122`).
 
 ```bash
@@ -293,7 +293,7 @@ a reconnect moves it). Fixing it means re-authorising the app (Settings → Inst
 | Writer | Trigger |
 |---|---|
 | `recordTokenStatus` (`src/routes/api.ts:2470`) | someone opens the dashboard token page, saves a token, or runs the extend flow — three routes, one helper |
-| `persistInspection` (`src/services/tokenHealth.ts:284`) | a deliberate re-check asks Meta and records the answer, including `POST /api/admin/tenants/:id/recheck-token` |
+| `persistInspection` (`src/services/tokenHealth.ts:307`) | a deliberate re-check asks Meta and records the answer, including `POST /api/admin/tenants/:id/recheck-token` |
 | `noteMetaFailure` (`src/services/tokenHealth.ts:49`) | **a real Meta send failed with code 190** |
 | `recheckAllMetaTokens` (`src/services/metaTokenRecheck.ts:191`) | **the daily cron** asks Meta about every connected tenant's Page token and writes what Meta definitively said (valid, expiring, invalid). A transient failure writes nothing |
 | `src/routes/admin.ts` (tenant create / PATCH) | a tenant is created (sets `'unknown'`), or an admin updates one |
@@ -334,7 +334,7 @@ Two operational consequences:
   so a legacy plaintext token keeps working. `diagnose.mjs` warns when it finds one and the fix
   is to re-save the token from Settings (`scripts/diagnose.mjs:397-401`).
 - `TOKEN_ENCRYPTION_KEY` is **not** required at startup, but it **is** required to save a token
-  or create a tenant, and those endpoints say so (`src/routes/admin.ts:426-435`, `:652-660`,
+  or create a tenant, and those endpoints say so (`src/routes/admin.ts:763-771`, `:1061-1069`,
   `.env.example:32-39`). Generate with `openssl rand -hex 32`.
 
 **Losing `TOKEN_ENCRYPTION_KEY` loses every secret the app stores, not only the Meta tokens.**
@@ -438,9 +438,9 @@ Historically that republished it and **duplicated the Facebook post on the live 
 That is fixed, but understand *how*, because the fix is what you are relying on:
 `published_post_id` now retains whatever did go live, as `FB:<id>`, `IG:<id>` or
 `FB:<id> | IG:<id>` (`publishedPlatforms` / `formatPublishedIds`,
-`src/routes/api.ts:378` and `:386`, written on the failure path at `:565-575`), and the next
-attempt parses it back and skips the platform that is already public (`:492-494`, and the
-`&& !fbId` / `&& !igId` guards at `:501` and `:522`). The `error_log` also names what is live:
+`src/services/publishedIds.ts:22` and `:30`, written on the failure path at `src/routes/api.ts:828-838`), and the next
+attempt parses it back and skips the platform that is already public (`:699-701`, and the
+`&& !fbId` / `&& !igId` guards at `:726` and `:749`). The `error_log` also names what is live:
 `Partially published (FB:123) — the rest failed: <reason>`.
 
 So: **before retrying a `FAILED` post, read `published_post_id` and `error_log`.** If
@@ -457,7 +457,7 @@ on that vocabulary and a half-published post is not a finished post
   Facebook Page stories need a `/photo_stories` + `/video_stories` upload that is not
   implemented (`unsupportedPlatformCombination`, `src/routes/api.ts:510`, called at `:1937`).
   `publishFacebookPost` also throws on it rather than degrading, because a degraded publish
-  still returns a post id and is recorded as a success (`src/services/instagram.ts:285-290`).
+  still returns a post id and is recorded as a success (`src/services/instagram.ts:603-608`).
 - For cross-posting a video, prefer **`video`** over `reel`. This entry used to say
   `publishFacebookPost` "does not handle `reel` and falls through to a text-only feed post" —
   **that is no longer true**: `reel` and `video` are the same asset to Facebook and both now
@@ -466,7 +466,7 @@ on that vocabulary and a half-published post is not a finished post
 
 Also always set `cover_url`, or Instagram takes frame 0 as the thumbnail and any video fading
 up from black gets a black tile in the profile grid. `attemptPublish` passes it through
-(`src/routes/api.ts:538`).
+(`src/routes/api.ts:776`).
 
 ---
 
@@ -737,7 +737,7 @@ harmlessly and is recorded, and anything else pending is applied too. Check firs
 ### What the published page commits you to
 
 `https://msg-response-auto.vercel.app/data-deletion` (served from `public/data-deletion.html`
-via `src/index.ts:105-107`) makes four promises:
+via `src/index.ts:256-258`) makes four promises:
 
 1. On request, with an Instagram username: **"we will delete all associated records within 30
    days."**
@@ -763,7 +763,7 @@ sweep at work. The
 minimum accepted is 7; a misconfigured value disables pruning rather than falling back to a
 default, and logs `retention.misconfigured` (`src/services/retention.ts:89-99`, `:107-112`).
 The sweep runs once daily from the publish cron and converges rather than clearing one batch a
-day — up to 20 passes of 5,000 rows (`src/services/retention.ts:190-222`,
+day — up to 20 passes of 5,000 rows (`src/services/retention.ts:710-783`,
 `src/routes/api.ts:1059`).
 
 > **Fixed 2026-09-21.** `.env.example` used to declare `RAW_PAYLOAD_RETENTION_DAYS` twice —
@@ -2429,7 +2429,7 @@ save fails with *instagram caption is missing the keyword ask «…»*.
 
 Matching is substring by default, so a live campaign on a shorter word answers inside a longer one.
 At scheduling, an existing campaign that already answers the keyword means no new one is created
-(`planCampaign`, `src/services/studio/schedule.ts:100`). Which active campaigns could answer a given
+(`planCampaign`, `src/services/studio/schedule.ts:116`). Which active campaigns could answer a given
 keyword (replace `تمام`; approximate, because the app also normalises Arabic letter forms and
 tatweel before it compares):
 

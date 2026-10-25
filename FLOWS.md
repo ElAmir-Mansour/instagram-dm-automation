@@ -97,8 +97,9 @@ is a label only (**`src/utils/probe.ts`**) and grants nothing.
 **`src/index.ts:384`** — a missing or non-object body is a flat **400**, not a thrown
 `TypeError`. Same redelivery-storm reasoning as above.
 
-**`src/index.ts:208`** — `body.object === 'instagram' || body.object === 'page'`. Anything else
-logs `webhook.unrecognised_object` and returns **200** (**:209-213**) — acknowledging an event
+**`src/index.ts:391`** — `isAcceptedWebhookObject(body.object)` (**`src/webhook/router.ts:106`**: `instagram`,
+`page` or `whatsapp_business_account`). Anything else
+logs `webhook.unrecognised_object` and returns **200** (**:391-395**) — acknowledging an event
 this app does not handle is correct; making Meta retry it forever is not.
 
 ### 1.4 — Enqueue, then acknowledge
@@ -109,7 +110,7 @@ middleware at **`src/index.ts:65`** put on every line for this request. It is ca
 queue boundary so the work and its acknowledgement share an id.
 
 `enqueueWebhookBody` (**`src/webhook/router.ts:217`**) calls `planJobs`
-(**`src/webhook/router.ts:74`**), which flattens the body into `EnqueueInput[]` **without
+(**`src/webhook/router.ts:148`**), which flattens the body into `EnqueueInput[]` **without
 touching the database**. For comments that is **`src/webhook/router.ts:182-191`**: one
 `comment.process` job per element of `entry.changes`, carrying the change verbatim.
 
@@ -166,7 +167,7 @@ anything it does not finish stays `pending` and costs nothing. Full mechanics in
 [flow 5](#5-job-lifecycle).
 
 The claim itself is **`src/jobs/queue.ts:83`**, `PostgresJobQueue.claim`. The handler lookup and
-dispatch is **`src/jobs/runner.ts:89`**.
+dispatch is **`src/jobs/runner.ts:109`**.
 
 > **The drain runs under `waitUntil`, and nothing awaits it after the 200.**
 > `acknowledgeThenRun` (**`src/webhook/ack.ts:31`**) starts the work as one promise that never
@@ -192,8 +193,8 @@ is `true`. It decides whether the pipeline may leave a failure retryable — get
 optimistically strands an interaction at PENDING forever, which in the dashboard looks exactly
 like the webhook having stopped.
 
-The legacy inline path passes `FINAL_ATTEMPT` (**`src/webhook/router.ts:164`**,
-**`:178`**) — correctly, because that path has no retry to leave work for.
+The legacy inline path passes `FINAL_ATTEMPT` (**`src/webhook/router.ts:287`**,
+**`:306`**) — correctly, because that path has no retry to leave work for.
 `WebhookHandlerOptions.lastAttempt` defaults to `true` everywhere it is omitted
 (**`src/webhook/options.ts:14-26`**), so a caller that forgets gets the safe behaviour.
 
@@ -248,13 +249,13 @@ outstanding TODO (verify the IGSID assumption against production logs) and names
 ### 1.9 — Tenant resolution
 
 **`src/webhook/comments.ts:219`** — `getCreatorByPageId(entryId)`, at
-**`src/services/tenant.ts:112`**. One query, filtering `is_active = true` and matching
+**`src/services/tenant.ts:158`**. One query, filtering `is_active = true` and matching
 `entry.id` against `instagram_page_id` **or** `facebook_page_id`
 (**`src/services/tenant.ts:169-175`**). No match logs `comment.no_creator` and returns
 (**`:204-207`**) — not necessarily a bug (a webhook for a page this deployment does not serve),
 but also exactly what a mis-set page id looks like, hence `warn`.
 
-The page access token is decrypted here (**`src/services/tenant.ts:131`**,
+The page access token is decrypted here (**`src/services/tenant.ts:180`**,
 `withDecryptedToken`) rather than at the call sites, so no path can forget and send
 `enc:v1:...` to Meta as a bearer token.
 
@@ -411,7 +412,7 @@ Meta error naming the empty message rather than becoming a silent no-op that loo
 
 ### 1.15 — `sendPrivateReply` — the one retryable step
 
-**`src/webhook/comments.ts:309`** — `sendPrivateReply(commentId, firstPart, token, fbPageId)`,
+**`src/webhook/comments.ts:319`** — `sendPrivateReply(commentId, firstPart, token, fbPageId)`,
 at **`src/services/instagram.ts:239`**. `POST /{page-id|me}/messages` with
 `recipient: { comment_id }` and `messaging_type: 'RESPONSE'`
 (**`src/services/instagram.ts:299-305`**). Facebook requires `/{page-id}/messages`; Instagram
@@ -555,8 +556,8 @@ Someone sends a direct message. Gemini answers it.
 Hops 1.1 to 1.5 are identical — same route, same signature check, same enqueue-before-ack. The
 divergence is at **`src/webhook/router.ts:170-180`**, the `entry.messaging` branch.
 
-**`src/webhook/router.ts:88`** — `if (!isActionableMessagingEvent(event)) continue;`. That
-function (**`src/webhook/router.ts:64`**) drops:
+**`src/webhook/router.ts:172`** — `if (!isActionableMessagingEvent(event, options)) continue;`. That
+function (**`src/webhook/router.ts:86`**) drops:
 
 - **echoes** — `event.message.is_echo` (**:67**), the page's own outbound messages coming back.
   On an active account they are a large share of all messaging events. **Unless echo takeover is on**
@@ -593,7 +594,7 @@ The handler adapter is **`src/jobs/handlers.ts:40`** → `handleMessagingEvent`.
 **`src/webhook/messaging.ts:235`**. A second echo check at **:130** (the inline fallback path
 does not go through `isActionableMessagingEvent`) hands the event to `handleEcho` (`src/webhook/echo.ts`,
 §2.6d), which with takeover off reads one setting and drops it, as it always did. Then `normalizeDm`
-(**`src/webhook/messaging.ts:49`**).
+(**`src/webhook/messaging.ts:112`**).
 
 | Shape | Source | Stored as |
 |---|---|---|
@@ -642,7 +643,7 @@ retry would insert a **second** inbound row and answer the same person twice. An
 that order: `recipient.id` on a message event is the Instagram Business Account id (most
 reliable); `entry.id` could be the IG id or the FB Page id depending on subscription type.
 
-**`src/webhook/messaging.ts:265-272`** — the conversation, as **one** statement:
+**`src/webhook/messaging.ts:425-434`** — the conversation, as **one** statement:
 
 ```sql
 INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
@@ -938,7 +939,7 @@ Only `is_prefetch = FALSE` rows are clicks to anything that reads them: the foll
 
 ### 2.7 — Gemini
 
-**`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),
+**`src/webhook/messaging.ts:571`** — `generateAiResponse(conversationId, dmPromptText(dm),
 creator.id, undefined, dmCtx)`, at **`src/services/ai.ts:515`**. Timed and logged as `ai.replied` with
 `duration_ms` (**`src/webhook/messaging.ts:583`**), because this is both the dominant
 marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
@@ -970,7 +971,7 @@ and register it spoke (`intoProfile`, **`src/services/profile/views.ts:171`**), 
 rules from `kitFor(ctx.language)`: the register rule 1 asks for, rule 2's offer noun by `who.offerKind` (courses,
 programs, products, services, else offers), the character limits. Gulf + courses is today's text byte for byte.
 
-**`decideAgent`** — **`src/services/ai.ts:345`**, called at **`src/services/ai.ts:378`**. The
+**`decideAgent`** — **`src/services/ai.ts:484`**, called at **`src/services/ai.ts:544`**. The
 whole safety rule, and both halves of it have been wrong in production:
 
 | stored row | sandbox? | decision |
@@ -996,8 +997,8 @@ while every layer reported success.
 fallback persona and no fixed promotional reply.
 
 **History window** — **`src/services/ai.ts:561-568`**: the last `HISTORY_WINDOW = 8`
-(**`src/services/ai.ts:86`**) messages for this conversation, `ORDER BY created_at DESC`, then
-reversed into chronological order (**:405**). Trimmed from 15 because the system prompt and the
+(**`src/services/ai.ts:97`**) messages for this conversation, `ORDER BY created_at DESC`, then
+reversed into chronological order (**:571**). Trimmed from 15 because the system prompt and the
 entire knowledge base are re-sent verbatim on every call, and Arabic runs ~2-2.5× more tokens
 per character than English. The current message is appended only if it is not already the last
 row (**:417-423**).
@@ -1008,7 +1009,7 @@ button id `GO_TO_COURSE_1|GO_TO_OFFER_1`), passed with `responseMimeType: "appli
 `text | quick_reply | carousel` and describes Meta's own limits inline (quick-reply titles ≤ 20
 chars, carousel titles ≤ 80, 2-10 cards).
 
-**Temperature** — **`src/services/ai.ts:435`** uses `Number.isFinite(agent.temperature)`, not
+**Temperature** — **`src/services/ai.ts:605`** uses `Number.isFinite(agent.temperature)`, not
 `|| 0.7`. The old form turned a deliberate `0` — the setting you pick precisely to stop the agent
 improvising about prices — back into 0.7.
 
@@ -1018,7 +1019,7 @@ on **Operations → Gemini API key**, else `GEMINI_API_KEY`. One key serves ever
 neither set it throws `MISSING_GEMINI_KEY`, which names both places to fix it; a switched-off
 agent never gets this far, so it needs no key.
 
-**The API key travels in a header, not a query string** — **`src/services/ai.ts:454-457`**:
+**The API key travels in a header, not a query string** — **`src/services/ai.ts:176`** (`postToGemini`):
 
 ```js
 axios.post(url, payload, { headers: { 'x-goog-api-key': gemini.key }, timeout: GEMINI_TIMEOUT_MS })
@@ -1065,7 +1066,7 @@ are not (**:211-213**) — `String({})` is `[object Object]`, worse than nothing
 Two guards after it: **`src/services/ai.ts:676`** throws when a `text` response has no usable
 text (an empty reply is a failure, not a message — sending it produces a Meta rejection
 attributed to the send rather than the model, and writing it to `messages` would feed a blank
-turn back as history), and `enforceMetaConstraints` (**`src/services/ai.ts:255`**) truncates to
+turn back as history), and `enforceMetaConstraints` (**`src/services/ai.ts:383`**) truncates to
 Meta's limits.
 
 Back in the pipeline, **`src/webhook/messaging.ts:598`** maps to the wire format with
@@ -1105,8 +1106,8 @@ again after a significant lapse of time.
   (**`src/webhook/meta-payload.ts:118`**), and the pipeline sends the line as its own message
   first (**`src/webhook/messaging.ts:640-648`**, logging `dm.disclosure_standalone`).
 
-**Endpoint selection** — `resolveDmPageId` at **`src/webhook/messaging.ts:108`**, called at
-**:356**. Meta requires `/{page-id}/messages` for Page access tokens; `/me/messages` only
+**Endpoint selection** — `resolveDmPageId` at **`src/webhook/messaging.ts:191`**, called at
+**:632**. Meta requires `/{page-id}/messages` for Page access tokens; `/me/messages` only
 resolves correctly for Instagram-Login tokens. There is no `field === 'feed'` marker on a
 messaging event, so the signal is whether the page id the event is addressed to
 (`recipientId` or `entryId`) equals the creator's `facebook_page_id`. The comment path always
@@ -1181,14 +1182,14 @@ share the creation route and the claim, then branch — see [flow 6](#6-tiktok-p
 
 ### 3.1 — Creation
 
-**`src/routes/api.ts:1925`** — `POST /api/posts/scheduled`. Behind `requireAuth` →
+**`src/routes/api.ts:2864`** — `POST /api/posts/scheduled`. Behind `requireAuth` →
 `requireLiveSession` → `resolveTenant` (see [flow 4](#4-login--session--tenant)), so
-`getTenantId(req)` (**:1943**) is safe.
+`getTenantId(req)` (**:2929**) is safe.
 
 Validation:
 
 - `platform`, `post_type`, `scheduled_time` all required (**:1929**).
-- **`src/routes/api.ts:1937`** — `unsupportedPlatformCombination(platform, post_type)`, at
+- **`src/routes/api.ts:2886`** — `unsupportedPlatformCombination(platform, post_type)`, at
   **`src/routes/api.ts:510`**. Rejects `story` + `facebook`/`both` with a 400. Facebook Page
   stories need the two-step `/photo_stories` + `/video_stories` upload, which is not
   implemented, and on `both` Facebook runs first and throws — so a story scheduled for both
@@ -1276,7 +1277,7 @@ drain, is a third outcome that never moves the status.
 ### 3.4 — `attemptPublish()` and partial-publish recovery
 
 **`src/routes/api.ts:691`**. Shared by `publishDuePosts` and
-`POST /api/posts/scheduled/:id/publish-now` (**`src/routes/api.ts:2139`**).
+`POST /api/posts/scheduled/:id/publish-now` (**`src/routes/api.ts:3336`**).
 
 Callers must claim the row first; `attemptPublish` deliberately does not, because the two callers
 claim differently — a sweep of every due row versus one row scoped to a tenant. It **does** own
@@ -1291,8 +1292,8 @@ TikTok and YouTube rows are dispatched before this function and never read the M
 **The recovery, hop by hop:**
 
 1. **`src/routes/api.ts:699`** — `const already = publishedPlatforms(post.published_post_id);`
-2. `publishedPlatforms` (**`src/routes/api.ts:378`**) parses `FB:<id> | IG:<id>` back apart with
-   two regexes (**:380-381**), returning `{ fb, ig }`.
+2. `publishedPlatforms` (**`src/services/publishedIds.ts:22`**) parses `FB:<id> | IG:<id>` back apart with
+   two regexes (**:24-25**), returning `{ fb, ig }`.
 3. **`src/routes/api.ts:700-701`** seeds `fbId` / `igId` from it.
 4. **`src/routes/api.ts:726`** — Facebook publishes only `if ((platform === 'facebook' ||
    platform === 'both') && !fbId)`. An already-live Facebook post logs
@@ -1300,7 +1301,7 @@ TikTok and YouTube rows are dispatched before this function and never read the M
 5. **`src/routes/api.ts:749`** — the same `&& !igId` guard for Instagram (**:543** for the skip
    log).
 6. On full success, **`src/routes/api.ts:797-802`** writes `status = 'PUBLISHED'`,
-   `published_post_id = formatPublishedIds(fbId, igId)` (**`src/routes/api.ts:386`**),
+   `published_post_id = formatPublishedIds(fbId, igId)` (**`src/services/publishedIds.ts:30`**),
    `error_log = NULL`.
 7. On failure, **`src/routes/api.ts:828`** computes `partial = formatPublishedIds(fbId, igId)`
    and **:570-575** writes `status = 'FAILED'` **with `published_post_id = partial`** and an
@@ -1406,7 +1407,7 @@ thumbnails) still sees the lead image (**`src/config/migration_v20_carousel.sql`
      TikTok carousel, exactly one for a TikTok `image` (`media_url` alone, or a one-item list);
    - every entry an http(s) URL string;
    - our own uploads are looked up in one `SELECT id, mime_type` — never the bytes — through
-     `MediaStore.mimeTypes` (**`src/services/storage.ts:95`**), then held to `imageProblem`
+     `MediaStore.mimeTypes` (**`src/services/storage.ts:223`**, `mimeTypesOf`), then held to `imageProblem`
      (**`src/services/postMedia.ts:72`**): no video as a slide; JPEG only when Instagram is a
      target; for TikTok, only our own uploads, and only JPEG or WebP. An external URL passes
      for Meta, which fetches it itself — there is nothing here to inspect.
@@ -1439,7 +1440,7 @@ Facebook-then-Instagram order, the same `FB:… | IG:…` bookkeeping as
    `POST /{page}/photos` with `published: false` (**:350**) — otherwise every slide appears on
    the Page as a post of its own — then one `POST /{page}/feed` carrying the caption and
    `attached_media: [{ media_fbid }, …]` (**:357**).
-3. **`src/routes/api.ts:633`** → `publishInstagramCarousel` (**`src/services/instagram.ts:905`**): one child
+3. **`src/routes/api.ts:767`** → `publishInstagramCarousel` (**`src/services/instagram.ts:905`**): one child
    container per image, `is_carousel_item: true` and no caption (**:555**); then the parent,
    `media_type: 'CAROUSEL'`, `children` comma-joined, with the caption (**:563**); then the
    same `waitForContainer` poll on the parent (**:370**) and `publishContainer` (**:410**), with
@@ -1479,7 +1480,7 @@ every TikTok post shares: the pending-draft limit, the token, the scope for its 
 > carries a host TikTok refuses, with `url_ownership_unverified` (**`src/services/tiktok.ts:139`**,
 > worded for the operator). TikTok's fetcher also wants a URL that ends like an image, so
 > `GET /api/uploads/:id` answers `<uuid>.jpg|.jpeg|.png|.webp|.mp4` too, ignoring the extension
-> and serving the stored type (**`src/routes/api.ts:944`**, `uploadIdFromSegment`,
+> and serving the stored type (**`src/routes/api.ts:1246`**, `uploadIdFromSegment`,
 > **`src/services/storage.ts:508`**).
 
 **Retention** — `pruneOrphanedMedia` keeps every upload named in the `media_urls` of a post that
@@ -1580,7 +1581,7 @@ would lock the operator out of their own dashboard.
 
 ### 4.4 — Token mint and HMAC key derivation
 
-`createSession` — **`src/middleware/auth.ts:93`**:
+`createSession` — **`src/middleware/auth.ts:116`**:
 
 ```
 body  = base64url(JSON.stringify({ ...payload, iat: Date.now() }))
@@ -1668,7 +1669,7 @@ the highest-privilege surface as the one place a revoked token still worked.
    `getActiveCreatorId()`, the same thing every call site used to assume implicitly.
 3. **`src/services/tenant.ts:583`** — still nothing → **409**, *"No creator account is configured
    yet."*
-4. **`src/services/tenant.ts:295`** — `assertTenantAccess(session)` false → **404 "Not found."**
+4. **`src/services/tenant.ts:596-597`** — `resolveTenantAccess(session)` not `allowed` → **404 "Not found."**
 
 > **409 vs 404.** They answer different questions and the distinction is deliberate.
 > **409** means *the deployment has no tenant to act as* — a first-run state, fixable by
@@ -2243,12 +2244,12 @@ It re-establishes the **correlation id from the enqueueing request**
 (**`src/jobs/runner.ts:94-101`**), so a log search for one Meta delivery turns up the work it
 caused and not just its acknowledgement.
 
-Dispatch is **`src/jobs/runner.ts:89`**. The registry is keyed by the same union `job.kind` is
+Dispatch is **`src/jobs/runner.ts:109`**. The registry is keyed by the same union `job.kind` is
 narrowed to, but the per-kind payload types make the pairing unprovable to the compiler without a
 discriminated switch at every call site — so the cast is asserted once, here.
 
-Success → `queue.complete(job.id)` (**:92**, `status = 'done'`, `last_error = NULL`,
-**`src/jobs/queue.ts:153`**).
+Success → `queue.complete(job.id)` (**:115**, `status = 'done'`, `last_error = NULL`,
+**`src/jobs/queue.ts:159`**).
 
 ### 5.4 — Failure, backoff and jitter
 
@@ -2277,9 +2278,9 @@ expired token — so every job in the batch fails at once and would otherwise re
 turning one outage into a thundering herd against a service that is already unhappy. Mirrors
 `withRetry` in `src/services/http.ts`.
 
-`queue.fail` (**`src/jobs/queue.ts:160`**) has two branches: `retryInSeconds === null` →
-`status = 'failed'` (**:162-169**); otherwise back to `'pending'` with
-`run_after = NOW() + interval` (**:173-181**). `last_error` is truncated to 2000 chars both
+`queue.fail` (**`src/jobs/queue.ts:174`**) has two branches: `retryInSeconds === null` →
+`status = 'failed'` (**:186-193**); otherwise back to `'pending'` with
+`run_after = NOW() + interval` (**:197-205**). `last_error` is truncated to 2000 chars both
 ways — a Meta error body can be long and this column is read in a dashboard list view.
 
 ### 5.5 — The drain loop and its budget
@@ -2585,7 +2586,7 @@ Inbox mode leaves privacy, interactions and disclosure to TikTok's editor. Direc
 editor step, so TikTok's Content Sharing Guidelines move those choices into our composer, and
 a scheduled row carries them in `scheduled_posts.platform_options` until it publishes.
 
-1. **Mode is decided at creation** (`src/routes/api.ts:2191`). The post is `direct` only if
+1. **Mode is decided at creation** (`src/routes/api.ts:2965`). The post is `direct` only if
    the connection holds `video.publish` **and** app setting `tiktok.direct_post_enabled` is
    `'true'` (`postModeFor`, `src/routes/tiktok.ts`). Otherwise it's `inbox`, and every TikTok
    row created before v19 (`platform_options` NULL) counts as inbox.

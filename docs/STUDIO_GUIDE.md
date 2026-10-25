@@ -1032,7 +1032,7 @@ trigger, the draft's DM, no public reply, every post (`post_id` NULL), active, a
 `substring` match mode. "Already answers" is decided by `matchCampaign` itself, with each
 campaign's own match mode, over the campaigns that apply to every post: a substring campaign on a
 shorter word inside the keyword counts, because it would answer those comments anyway
-(`planCampaign`, `src/services/studio/schedule.ts:100`).
+(`planCampaign`, `src/services/studio/schedule.ts:116`).
 
 ---
 
