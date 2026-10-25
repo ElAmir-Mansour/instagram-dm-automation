@@ -1209,9 +1209,11 @@ const AiSettingsPage = {
         return t(aiRes.engine === 'providers' ? 'ai.sandboxViaProviders' : 'ai.sandboxViaGemini');
     },
 
-    /** AI3: the 409 "agent is turned off" arrived as raw English. */
+    /**
+     * What the test box says when a test fails: the server's own words, or a generic line when it sent none. There is no "the agent is
+     * off" case to word: the box answers while the assistant is off (`decideAgent`, `isSandbox`), so a 409 here is never that.
+     */
     sandboxErrorText(err) {
-        if (err && err.status === 409) return t('ai.sandboxAgentOff');
         return (err && err.message) || t('ai.errorReply');
     },
 

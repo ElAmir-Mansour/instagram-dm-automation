@@ -325,10 +325,15 @@ describe('AI — the sandbox and the unsaved note (AI1 AI3 AI5 AI6)', () => {
     });
 
     for (const lang of LANGS) {
-        it(`says the agent is off in the operator's language, and passes other errors through (${lang})`, () => {
+        it(`shows what the server said for a failed test, 409 included, and a generic line when it said nothing (${lang})`, () => {
             const { AiSettingsPage, t } = load(lang);
-            assert.equal(AiSettingsPage.sandboxErrorText({ status: 409, message: 'The AI agent is turned off — enable it to run a test.' }), t('ai.sandboxAgentOff'));
+            // The test box answers while the assistant is off, so there is no "the agent is off" answer to translate: a 409 here is the
+            // deployment having no creator account at all (resolveTenant), and the server's own sentence is the true one to show.
+            const noCreator = 'No creator account is configured yet. Add one before using the dashboard.';
+            assert.equal(AiSettingsPage.sandboxErrorText({ status: 409, message: noCreator }), noCreator);
+            assert.equal(AiSettingsPage.sandboxErrorText({ status: 502, message: 'The AI providers engine failed (no_key): no key.' }), 'The AI providers engine failed (no_key): no key.');
             assert.equal(AiSettingsPage.sandboxErrorText({ status: 500, message: 'Gemini timed out' }), 'Gemini timed out');
+            assert.equal(AiSettingsPage.sandboxErrorText({ status: 500 }), t('ai.errorReply'));
             assert.equal(AiSettingsPage.sandboxErrorText(null), t('ai.errorReply'));
         });
 

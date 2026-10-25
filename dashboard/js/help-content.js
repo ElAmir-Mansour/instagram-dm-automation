@@ -15,6 +15,7 @@
  *
  * A block is one of:
  *   'text'                                   a paragraph
+ *   { h: '…' }                               a sub-heading inside a section (an h4 under the section's own h3)
  *   { ul: ['…'] }  { ol: ['…'] }            a list; `ol` is for steps done in order
  *   { code: '…', caption: '…' }              a command to copy, always left to right
  *   { tip: '…' }  { note: '…' }  { warn: '…' }   a callout
@@ -1834,12 +1835,12 @@ const HelpContent = {
                     body: {
                         ar: [
                             'الحصة الافتراضية لتطبيق عند يوتيوب 10,000 وحدة في اليوم. والرفع الواحد يكلّف 1,600 وحدة، وصورته المصغّرة 50، فيعني حوالي ست رفعات في اليوم. الحصة للتطبيق مو لكل قناة، فكل المساحات على المنصة تسحب من نفس الحصة.',
-                            'وإذا خلصت، يرفض يوتيوب الرفع التالي. المنشور يظهر عليه **فشلت**، والسبب: «The YouTube API’s daily quota is used up (about six uploads a day)». ولا شي يعيد المحاولة لحاله، حتى لو قالت الرسالة غير كذا: اضغط **انشر الآن** على المنشور بعد ما تتجدد الحصة، عند منتصف الليل بتوقيت المحيط الهادئ، ويكمل الرفع من حيث وقف.',
+                            'وإذا خلصت، يرفض يوتيوب الرفع التالي. المنشور يظهر عليه **فشلت**، والسبب: «The YouTube API’s daily quota is used up (about six uploads a day) — press Publish now after midnight Pacific time and the upload goes ahead.» ولا شي يعيد المحاولة لحاله، فالمنشور ينتظرك: اضغط **انشر الآن** على المنشور بعد ما تتجدد الحصة، عند منتصف الليل بتوقيت المحيط الهادئ.',
                             'ولكل قناة حد رفع يومي عند يوتيوب أيضاً («YouTube’s upload limit for this channel is reached for today — retry tomorrow»): والعلاج نفسه في اليوم التالي.',
                         ],
                         en: [
                             'YouTube’s default allowance for an app is 10,000 quota units a day. One upload costs 1,600 units and setting its thumbnail 50, so about six uploads a day. The allowance is the app’s, not each channel’s, so every workspace on the platform draws on the same one.',
-                            'When it is used up, YouTube refuses the next upload. The post shows **Failed**, with the reason “The YouTube API’s daily quota is used up (about six uploads a day)”. Nothing retries it by itself, whatever the message may suggest: press **Publish now** on the post once the quota has renewed, at midnight Pacific time, and the upload resumes where it stopped.',
+                            'When it is used up, YouTube refuses the next upload. The post shows **Failed**, with the reason “The YouTube API’s daily quota is used up (about six uploads a day) — press Publish now after midnight Pacific time and the upload goes ahead.” Nothing retries it by itself, so the post waits for you: press **Publish now** on it once the quota has renewed, at midnight Pacific time.',
                             'Each channel also has a daily upload limit at YouTube (“YouTube’s upload limit for this channel is reached for today — retry tomorrow”): the same fix, the next day.',
                         ],
                     },

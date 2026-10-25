@@ -30,6 +30,7 @@ import { stepsFor, NO_FLAGS, WIZARD_STEPS } from '../services/onboardingWizard.j
 import { captionProblems } from '../services/studio/infographicSpec.js';
 import { PICK_FOLDER_TTL_MINUTES } from '../services/studio/jobs.js';
 import { SCAN_EXTENSIONS, SCAN_MIN_AGE_S } from '../services/monteur/daily.js';
+import { toYouTubeError, YouTubeApiError } from '../services/youtube.js';
 import { uploadPrivacy } from '../services/youtubePublish.js';
 
 type Json = Record<string, any>;
@@ -401,17 +402,28 @@ describe('Help Center — YouTube', () => {
         }
     });
 
-    it('says the daily limit as the code does, and that nothing retries a post that hit it', () => {
+    it('says the daily limit as the code does, and that nothing retries a post that hit it: the message and the article both say to press Publish now', () => {
         const youtube = readFileSync('src/services/youtube.ts', 'utf8');
-        assert.match(youtube, /quotaExceeded: 'The YouTube API’s daily quota is used up \(about six uploads a day\)/);
+        // The reason as a failed upload writes it on the post, built by the function that builds it and never retyped here.
+        const refused = toYouTubeError('YouTube upload start', { response: { status: 403, data: { error: { code: 403, message: 'quota', errors: [{ reason: 'quotaExceeded' }] } } } });
+        assert.ok(refused instanceof YouTubeApiError && refused.reason === 'quotaExceeded');
+        const message = refused.message.replace(/^YouTube upload start: /, '');
+        assert.match(message, /^The YouTube API’s daily quota is used up \(about six uploads a day\)/);
         assert.match(youtube, /10,000 quota units a day, and a thumbnail 50/, '1,600 for the upload, 50 for the thumbnail, 10,000 a day');
         assert.equal((youtube.match(/RETRYABLE_REASONS/g) || []).length, 1, 'RETRYABLE_REASONS is declared and consulted nowhere in this file');
         const consumers = sources().filter((f) => f.replace(/\\/g, '/') !== 'src/services/youtube.ts').filter((f) => /RETRYABLE_REASONS/.test(readFileSync(f, 'utf8')));
-        assert.deepEqual(consumers, [], 'nor in any other, so no sweep retries a failed Short: the day one does, the article\'s "nothing retries it by itself" is read again');
+        assert.deepEqual(consumers, [], 'nor in any other, so no sweep retries a failed Short: the message may not promise one');
+        // So the message tells the owner to do it, with the button's own name, and after the day the quota counts in.
+        assert.ok(message.includes(label('en', 'posts.publishNow')) && message.includes('after midnight Pacific time'), message);
+        assert.doesNotMatch(message, /retried|retry|retrying/i, 'and promises no retry');
+        // …which Publish now can do: it takes a FAILED row (pinned for the whole YouTube card in the test below).
+        assert.match(readFileSync('src/routes/api.ts', 'utf8'), /WHERE id = \$1 AND creator_id = \$2 AND status IN \('PENDING', 'FAILED'\)/);
         for (const lang of LANGS) {
             const text = textOf('youtube', 'quota', lang);
             for (const part of ['10,000', '1,600', '50', 'about six uploads a day']) assert.ok(text.includes(part), `${lang}: ${part}`);
             assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), `${lang}: Publish now is the way to retry`);
+            assert.ok(text.includes(message), `${lang}: the article quotes the reason as the code words it`);
+            assert.equal((lang === 'en' ? /whatever the message may suggest/i : /حتى لو قالت الرسالة/).test(text), false, `${lang}: and no longer argues with it`);
         }
     });
 

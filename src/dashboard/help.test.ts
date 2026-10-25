@@ -67,6 +67,8 @@ interface HelpApi {
     search(query: string): Array<{ slug: string; section: string; href: string; title: string }>;
     listMarkup(): { toString(): string };
     articleMarkup(article: Json): { toString(): string };
+    sectionMarkup(article: Json, section: Json): { toString(): string };
+    blockMarkup(block: unknown): { toString(): string };
     blockText(block: unknown): string;
     articles(): Json[];
 }
@@ -490,6 +492,76 @@ describe('Help Center — every article in both languages', () => {
                 assert.equal(markup.includes('help:feedback'), false, `${lang}:${a.slug} still asks "was this helpful?"`);
             }
         }
+    });
+
+    it('renders every block of every article: a block kind the reader does not know would vanish from the page without a sound', () => {
+        // `{ h: … }` did exactly that: 34 sub-headings in the Ads article were written, shipped, and never shown, because blockMarkup
+        // fell through to '' for a kind it had no branch for. Nothing else noticed: the section still rendered, just without them.
+        let blocks = 0;
+        for (const lang of ['ar', 'en'] as const) {
+            const s = load(lang);
+            for (const a of s.content.articles) {
+                for (const sec of a.sections) {
+                    for (const block of sec.body[lang] as unknown[]) {
+                        blocks++;
+                        assert.ok(String(s.Help.blockMarkup(block)).trim() !== '', `${lang}:${a.slug}#${sec.id} draws ${JSON.stringify(block).slice(0, 70)}`);
+                    }
+                }
+            }
+        }
+        assert.ok(blocks > 1000, `${blocks} blocks were looked at`);
+    });
+
+    it('shows a sub-heading inside a section as a heading under the section’s own, in its place, in both languages', () => {
+        const unescape = (v: string): string => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+        for (const lang of ['ar', 'en'] as const) {
+            const s = load(lang);
+            let seen = 0;
+            let written = 0;
+            for (const a of s.content.articles) {
+                for (const sec of a.sections) {
+                    const body = sec.body[lang] as Json[];
+                    // Spread into this realm's array: the content comes from the page's `vm`, and a deep equal compares prototypes.
+                    const heads = [...body.filter((b) => b && typeof b === 'object' && typeof b.h === 'string').map((b) => b.h as string)];
+                    written += heads.length;
+                    const markup = String(s.Help.sectionMarkup(a, sec));
+                    const drawn = [...markup.matchAll(/<h4 class="help-subhead">(.*?)<\/h4>/g)].map((m) => unescape(m[1]!));
+                    assert.deepEqual(drawn, heads, `${lang}:${a.slug}#${sec.id} draws its sub-headings, in the order they were written`);
+                    seen += drawn.length;
+                    // Under the section's own <h3> and after it, never above.
+                    if (heads.length) assert.ok(markup.indexOf('<h3 class="help-section-title"') < markup.indexOf('<h4 class="help-subhead">'), `${lang}:${a.slug}#${sec.id}`);
+                }
+            }
+            // A scan that finds nothing would pass: the Ads article really does carry these.
+            assert.ok(written >= 10, `${lang}: ${written} sub-headings are written`);
+            assert.equal(seen, written, `${lang}: and every one of them is drawn`);
+        }
+    });
+
+    it('escapes a sub-heading exactly as it escapes a paragraph: the same text gives the same inner markup, and none of it can inject', () => {
+        const s = load('en');
+        const hostile = '<img src=x onerror=alert(1)> **bold** `code` [[faq]] a & b';
+        const inner = (markup: string, tag: string): string => markup.trim().replace(new RegExp(`^<${tag}[^>]*>`), '').replace(new RegExp(`</${tag}>$`), '');
+        const heading = String(s.Help.blockMarkup({ h: hostile }));
+        const paragraph = String(s.Help.blockMarkup(hostile));
+        assert.match(heading.trim(), /^<h4 class="help-subhead">[\s\S]*<\/h4>$/);
+        assert.equal(inner(heading, 'h4'), inner(paragraph, 'p'));
+        assert.equal(heading.includes('<img'), false, 'no tag survives');
+        assert.ok(heading.includes('&lt;img src=x onerror=alert(1)&gt;') && heading.includes('a &amp; b'));
+        assert.ok(heading.includes('<strong>bold</strong>') && heading.includes('<code dir="ltr">code</code>'), 'it takes the same inline markup as the text under it');
+        assert.ok(heading.includes('<a class="help-inline-link" href="#/help/faq">'), 'including a link to an article that exists');
+    });
+
+    it('searches what the page shows: a word only a sub-heading has finds its section', () => {
+        // "Once unlocked" and «للقائمة» (in «ما يحدث للقائمة») are said nowhere else in the Ads article: before the heading was in the index, no search could land on it.
+        for (const [lang, word] of [['en', 'unlocked'], ['ar', 'للقائمة']] as const) {
+            const s = load(lang);
+            const hit = Array.from(s.Help.search(word)).find((r) => r.slug === 'ads');
+            assert.ok(hit, `${lang}: «${word}» finds the Ads article`);
+            assert.equal(hit.section, 'customer-lists', `${lang}: and the section the heading is in`);
+        }
+        const s = load('en');
+        assert.equal(s.Help.blockText({ h: 'A **bold** `code` heading' }), 'A bold code heading', 'plain text, without the inline markup');
     });
 
     it('writes no HTML into the content: everything is escaped, so markup would show as text', () => {

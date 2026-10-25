@@ -99,7 +99,7 @@ const REASON_MESSAGES: Record<string, string> = {
     unauthorized: 'The YouTube connection is no longer valid — reconnect YouTube in Settings.',
     insufficientPermissions: 'YouTube upload was not allowed when you connected — reconnect and tick “Manage your YouTube videos”.',
     youtubeSignupRequired: 'This Google account has no YouTube channel — create one on youtube.com, then reconnect.',
-    quotaExceeded: 'The YouTube API’s daily quota is used up (about six uploads a day) — it is retried after midnight Pacific time.',
+    quotaExceeded: 'The YouTube API’s daily quota is used up (about six uploads a day) — press Publish now after midnight Pacific time and the upload goes ahead.',
     uploadLimitExceeded: 'YouTube’s upload limit for this channel is reached for today — retry tomorrow.',
     rateLimitExceeded: 'YouTube is rate-limiting this app — it will be retried.',
     invalidTitle: 'YouTube refused the title (at most 100 characters, no < or >).',

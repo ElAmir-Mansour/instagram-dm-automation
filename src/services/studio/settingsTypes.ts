@@ -129,7 +129,7 @@ export type MonteurConfig = {
     post_at: string[];
     /** 10–60. */
     min_seconds: number;
-    /** 15–90, and more than `min_seconds`. */
+    /** 15–180, and more than `min_seconds`. */
     max_seconds: number;
 };
 
