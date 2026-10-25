@@ -77,7 +77,7 @@ use case's **Webhooks** page):
 Leave the rest unsubscribed (calls, groups, flows, templates, `smb_*`/coexistence fields belong to later phases).
 
 **What "verified" looks like from our side** (logs, `vercel logs msg-response-auto.vercel.app --since 30m`):
-`GET /webhook` followed by `webhook.verified`. The handshake lives at `src/index.ts:322`.
+`GET /webhook` followed by `webhook.verified`. The handshake lives at `src/index.ts:321`.
 
 ### 1.4 Create the permanent token (system user)
 
@@ -228,7 +228,7 @@ to AI providers that do not train on them (no free-tier Gemini).
 ## 8. Gotchas
 
 - **The webhook check reads ONE workspace's verify token.** `GET /webhook` accepts `META_VERIFY_TOKEN` (env) or the verify
-  token of the **first active workspace** it finds (`src/index.ts:340`, `LIMIT 1`). With several workspaces, the token you
+  token of the **first active workspace** it finds (`src/index.ts:339`, `LIMIT 1`). With several workspaces, the token you
   see in another workspace's Settings may not be the one checked. Use the **Default** workspace's token. Changing it in
   Settings does not break existing Instagram/Facebook subscriptions (Meta re-checks only when a subscription changes).
 - **Fields empty = no events**, even with a green "verified" subscription (seen 2026-10-19 before §1.3 step 5).
