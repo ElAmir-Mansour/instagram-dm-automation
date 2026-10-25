@@ -986,7 +986,7 @@ its scheduled time — minutes with the Heroku worker on, up to hours on the Git
 **Is it safe to press Publish now twice?**
 
 Yes. The click claims the row atomically, so a second click while it is sending gets "Cannot
-publish now — this post is already PUBLISHING." (`src/routes/api.ts:3028-3056`). And a retry of a
+publish now — this post is already PUBLISHING." (`src/routes/api.ts:3352-3380`). And a retry of a
 row that already reached TikTok asks TikTok about it first, instead of posting it again
 (`src/services/tiktokPublish.ts:430-441`, `:515-528`).
 

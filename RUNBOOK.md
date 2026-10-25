@@ -380,7 +380,7 @@ it). Keep a copy of the key where the database is not.
 
 A missing scope disables a path **silently**: `instagram_manage_messages` is DMs,
 `instagram_content_publish` is scheduling, `pages_manage_engagement` is public replies
-(`scripts/diagnose.mjs:450-452`).
+(`scripts/diagnose.mjs:447-449`).
 
 ---
 
@@ -694,7 +694,7 @@ Healthy apply output is one `applying <file> ... ok` line per file, then
 `All migrations applied.`
 
 **Each migration is its own transaction.** A failure rolls that file back entirely, stops the
-run, prints the error, and **exits non-zero** (`scripts/migrate.mjs:102-126`). A partial schema
+run, prints the error, and **exits non-zero** (`scripts/migrate.mjs:114-138`). A partial schema
 change is not possible; a partial *run* is — files before the failure are applied and recorded,
 so fix the failing file and re-run.
 
@@ -1100,7 +1100,7 @@ the old attempt as failed does a retry make a new post.
 Two ways to retry:
 
 - **Publish now** on the card — claims a `PENDING` or `FAILED` row, publishes it at once and waits
-  up to 12 s for TikTok's verdict (`src/routes/api.ts:3028-3033`, `src/services/tiktokPublish.ts:45`).
+  up to 12 s for TikTok's verdict (`src/routes/api.ts:3352-3357`, `src/services/tiktokPublish.ts:45`).
 - **Edit and save** — flips `FAILED → PENDING` (`src/routes/api.ts:3214`), and the next drain takes
   it. Edits are refused once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`:2395-2398`).
 

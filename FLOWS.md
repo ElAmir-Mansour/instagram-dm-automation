@@ -230,7 +230,7 @@ Two independent checks, because one of them is not reliable.
 
 1. **`src/webhook/comments.ts:213`** — `selfAuthoredCommentIds.has(commentId)`. An in-process
    `Set` (**`src/webhook/comments.ts:46`**), capped at 500 entries with FIFO eviction
-   (**`:57-65`**), written at **`src/webhook/comments.ts:375`** with the id of every public
+   (**`:57-65`**), written at **`src/webhook/comments.ts:461`** with the id of every public
    reply this instance posts.
 2. **`src/webhook/comments.ts:228-229`** — `senderId === pageOwnerId`, where `pageOwnerId` is
    `creator.facebook_page_id` or `creator.instagram_page_id` depending on platform.
@@ -415,7 +415,7 @@ Meta error naming the empty message rather than becoming a silent no-op that loo
 **`src/webhook/comments.ts:319`** — `sendPrivateReply(commentId, firstPart, token, fbPageId)`,
 at **`src/services/instagram.ts:239`**. `POST /{page-id|me}/messages` with
 `recipient: { comment_id }` and `messaging_type: 'RESPONSE'`
-(**`src/services/instagram.ts:299-305`**). Facebook requires `/{page-id}/messages`; Instagram
+(**`src/services/instagram.ts:254-261`**). Facebook requires `/{page-id}/messages`; Instagram
 works with `/me` — hence `fbPageId` being threaded through from
 **`src/webhook/comments.ts:307`**. Wrapped in `withRetry`
 (**`src/services/http.ts:158`**), which fires only on 5xx / 429 / transport faults.
@@ -538,7 +538,7 @@ public reply (1.19) is skipped, since it says to check the DMs.
 - `sendPublicReply` (**:394**, **`src/services/instagram.ts:288`**) — Instagram posts to
   `/{comment-id}/replies`, Facebook to `/{comment-id}/comments`
   (**`src/services/instagram.ts:294`**).
-- **`src/webhook/comments.ts:375`** — `rememberSelfAuthored(posted?.id)`, closing the loop from
+- **`src/webhook/comments.ts:461`** — `rememberSelfAuthored(posted?.id)`, closing the loop from
   [1.8](#18--the-self-authored-loop-guard).
 
 Failure keeps SENT (**:405-406**) and appends to `error_log`. A Meta code 200 gets rewritten
@@ -958,7 +958,7 @@ conversation is stamped (the bot stays on), the customer is sent the handoff lin
 switched off is `null` for either engine, as below. The sandbox runs the engine on screen (`POST /api/settings/ai/test`, `engine` and
 `gemini_fallback` in the body), labels the layer's spend `eval`, and answers 502 with the reason when nothing could answer.
 
-**The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:507`**,
+**The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:530`**,
 the function at **`src/services/profile/context.ts:344`**) is read once per DM and handed to `generateAiResponse`, the
 disclosure and (in the sandbox, which reads it itself, **`src/services/ai.ts:524`**) the starter persona. It says the language
 and register the `dm` surface speaks and what the creator sells. A profile that can't be read is logged
@@ -1082,7 +1082,7 @@ returns both `url` and `payload` on every button regardless of type
 network call**: a disclosure that has to travel as its own message is still one logical reply to
 one person.
 
-Refusal is **retried, not dropped** (**`src/webhook/messaging.ts:553-560`**): release the claim
+Refusal is **retried, not dropped** (**`src/webhook/messaging.ts:622-629`**): release the claim
 and throw, if `mayRetry`. The counters are hourly and the runner's backoff (~30 s, ~2 m, ~8 m)
 may well spend every attempt inside the same window — but it may not, and the alternative is a
 real customer silently never answered, which is what used to happen. Nothing else will come back
@@ -1115,13 +1115,13 @@ threaded this through; the DM path never did, so every Facebook Messenger reply 
 
 **Send** — **`src/webhook/messaging.ts:652`**, `sendDirectMessage`
 (**`src/services/instagram.ts:318`**), `messaging_type: 'RESPONSE'`
-(**`src/services/instagram.ts:257`** — without it the send is evaluated outside the standard
+(**`src/services/instagram.ts:338`** — without it the send is evaluated outside the standard
 messaging window and rejected once that window matters).
 
 **`ai_disclosed_at` is written only after a successful send**
-(**`src/webhook/messaging.ts:637-639`**), so a failed first reply still discloses next time.
+(**`src/webhook/messaging.ts:659-661`**), so a failed first reply still discloses next time.
 
-Then the outbound `messages` row (**`src/webhook/messaging.ts:345-355`**).
+Then the outbound `messages` row (**`src/webhook/messaging.ts:666-676`**).
 
 **Two refusals that belong to ad traffic (A3).**
 
@@ -1138,7 +1138,7 @@ Then the outbound `messages` row (**`src/webhook/messaging.ts:345-355`**).
 
 ### 2.10 — `markHandled`, last
 
-**`src/webhook/messaging.ts:476`** — `await markHandled(claim.id)`, defined at
+**`src/webhook/messaging.ts:680`** — `await markHandled(claim.id)`, defined at
 **`src/webhook/messaging.ts:330`** (`handled_at = NOW(), reply_claimed_at = NULL`).
 
 > **Why this order — `markHandled` is the final write.**
@@ -1196,13 +1196,13 @@ Validation:
   fails at Facebook and never reaches Instagram, where it would have worked. Saying so once, at
   create time, to the person who can fix it, beats saying it daily in a cron log nobody reads.
 
-Insert at **`src/routes/api.ts:2129-2142`** with `status = 'PENDING'`. `cover_url` is carried
+Insert at **`src/routes/api.ts:2994-3007`** with `status = 'PENDING'`. `cover_url` is carried
 through — it is what stops a reel getting a black tile in the profile grid, because Instagram
 otherwise uses frame 0.
 
-`publish_now` (**:1970**) takes a separate immediate path
-(**`src/routes/api.ts:1971-2040`**) rather than waiting for a sweep. Note it answers **502**,
-not 201, on failure (**:2044**) — a 201 for a row just marked FAILED read as success to every
+`publish_now` (**:3020**) takes a separate immediate path
+(**`src/routes/api.ts:3021-3075`**) rather than waiting for a sweep. Note it answers **502**,
+not 201, on failure (**:3071**) — a 201 for a row just marked FAILED read as success to every
 caller.
 
 ### 3.2 — Four callers converge on the same sweep
@@ -1667,7 +1667,7 @@ the highest-privilege surface as the one place a revoked token still worked.
 1. No session → 401 (**:277-280**).
 2. **`src/services/tenant.ts:583-585`** — a session with no `tenantId` (i.e. legacy) adopts
    `getActiveCreatorId()`, the same thing every call site used to assume implicitly.
-3. **`src/services/tenant.ts:583`** — still nothing → **409**, *"No creator account is configured
+3. **`src/services/tenant.ts:587`** — still nothing → **409**, *"No creator account is configured
    yet."*
 4. **`src/services/tenant.ts:596-597`** — `resolveTenantAccess(session)` not `allowed` → **404 "Not found."**
 
@@ -2513,16 +2513,16 @@ with an empty id.
    straight from the media store (`media_uploads` bytes), not fetched over HTTP.
 5. `planChunks` (**`src/services/tiktok.ts:400`**): up to 64MB goes whole, otherwise 32MB chunks
    with the remainder on the last.
-6. **Resume check** (**`src/services/tiktokPublish.ts:430-443`**) — a row that already has an
+6. **Resume check** (**`src/services/tiktokPublish.ts:515-528`**) — a row that already has an
    `external_publish_id` reached TikTok before; ask `fetchPublishStatus` first rather than upload
    a duplicate draft against the 5-a-day limit.
 7. `initInboxVideoUpload` (**`src/services/tiktok.ts:443`**) — `source: 'FILE_UPLOAD'`, caption as
    the undocumented `post_info.title`; on `invalid_params` it retries once without it
    (**:366-374**). Otherwise NOT retried: a 5xx may already have created a pending share.
 8. `external_publish_id` is written **before** any bytes go up
-   (**`src/services/tiktokPublish.ts:239-242`**), so a crash from here on is resumable.
+   (**`src/services/tiktokPublish.ts:535-538`**), so a crash from here on is resumable.
 9. `uploadChunks` (**`src/services/tiktok.ts:485`**) — sequential PUTs with `Content-Range`, each
-   retried (a re-PUT is safe). Then `PROCESSING` (**`src/services/tiktokPublish.ts:239-243`**).
+   retried (a re-PUT is safe). Then `PROCESSING` (**`src/services/tiktokPublish.ts:545-549`**).
 10. **Inline poll** (**:237-256**) — every 3s for 12s, `fetchPublishStatus` → `applyStatus`. A
     small reel usually reaches `IN_INBOX` here, so "Publish now" shows the real outcome. Anything
     still processing returns `PROCESSING` and is left to 6.5.

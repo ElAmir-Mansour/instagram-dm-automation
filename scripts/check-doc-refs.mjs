@@ -20,9 +20,16 @@
  *   node scripts/check-doc-refs.mjs --reanchor  FIX (by hand, any time). For every `path:N`
  *     (or `path:N-M`) anchor, `git blame` finds the commit that wrote that doc line, reads the
  *     code line N as it was at that commit, and looks for the same text in the file today.
- *     Found once, or found and one copy is nearest: N (and M, by the same offset) is rewritten.
- *     Not found: listed as "gone" for a person to fix. Writes the docs in place; review the diff.
- *     Run it on a clean tree: blame needs the doc lines committed.
+ *     Found once: N (and M, by the same offset) is rewritten. Found several times (a `}`, a
+ *     `try {`, a repeated call): the lines around each copy are compared with the lines that
+ *     were around it then, and only a copy whose surroundings match better than every other
+ *     copy's is taken, and only when at least two of its neighbours still agree, even for a single
+ *     copy (a rewritten line can leave its twin elsewhere). Anything less is listed as "ambiguous"
+ *     and left alone: picking the nearest copy put about 21 of 31 such anchors on the wrong line on
+ *     2026-10-25. Not found: listed as
+ *     "gone" for a person to fix. Writes the docs in place; review the diff. Run it on a clean
+ *     tree: blame needs the doc lines committed. A doc whose name carries a date
+ *     (`UX_AUDIT_2026-09-27.md`) is a snapshot of the code as it was, and is not re-anchored.
  *
  * Paths that live in the Mac render worker's repo (aicourse-captions) are not checked here;
  * WORKER_PREFIXES lists them. A path with a wildcard or a placeholder (`*`, `<`, `{`) is a
@@ -122,11 +129,31 @@ function blameCommits(doc) {
     return byLine;
 }
 
-/** Rewrites the drifted `path:N` anchors of one doc; returns `{ text, moved, gone }`. */
+/** How many of the lines around a cited line still agree with the lines that were around it: what tells one copy of a repeated line from another. */
+const CONTEXT_LINES = 4;
+/** A move needs at least this many agreeing neighbours (of up to 8); below it the anchor is listed for a person instead. */
+const MIN_CONTEXT = 2;
+function contextScore(then, thenIdx, now, nowIdx) {
+    let score = 0;
+    for (let k = 1; k <= CONTEXT_LINES; k++) {
+        for (const d of [-k, k]) {
+            const a = then[thenIdx + d];
+            const b = now[nowIdx + d];
+            if (a !== undefined && b !== undefined && a.trim() !== '' && a.trim() === b.trim()) score++;
+        }
+    }
+    return score;
+}
+
+/** A dated doc (`…_2026-09-27.md`) records the code as it was that day; its anchors are history, not drift. */
+export const isSnapshotDoc = (doc) => /\d{4}-\d{2}-\d{2}/.test(path.basename(doc));
+
+/** Rewrites the drifted `path:N` anchors of one doc; returns `{ text, moved, gone, ambiguous }`. */
 export function reanchorDoc(doc, text, { commitOfLine, readAt, readNow }) {
     const lines = text.split('\n');
     let moved = 0;
     const gone = [];
+    const ambiguous = [];
     const result = lines.map((lineText, i) => {
         const commit = commitOfLine(i + 1);
         if (!commit || /^0+$/.test(commit)) return lineText;
@@ -139,11 +166,17 @@ export function reanchorDoc(doc, text, { commitOfLine, readAt, readNow }) {
             if (!then || !now || r.line > then.length) continue;
             const target = then[r.line - 1].trim();
             if (target.length < 4) continue;
-            if (r.line <= now.length && now[r.line - 1].trim() === target) continue;
             const hits = [];
             now.forEach((l, j) => { if (l.trim() === target) hits.push(j + 1); });
             if (hits.length === 0) { gone.push(`${doc}:${i + 1}  ${r.ref}:${r.line}`); continue; }
-            const best = hits.reduce((a, b) => (Math.abs(b - r.line) < Math.abs(a - r.line) ? b : a));
+            // Even a single copy needs company: a line that was rewritten can leave an identical line elsewhere (a second
+            // `metaHttp.post(url, {` in another function), and moving to it would be confidently wrong.
+            const scored = hits.map((h) => ({ h, score: contextScore(then, r.line - 1, now, h - 1) }));
+            const top = Math.max(...scored.map((x) => x.score));
+            const winners = scored.filter((x) => x.score === top);
+            if (winners.length === 1 && winners[0].h === r.line) continue;
+            if (top < MIN_CONTEXT || winners.length !== 1) { ambiguous.push(`${doc}:${i + 1}  ${r.ref}:${r.line}`); continue; }
+            const best = winners[0].h;
             const shift = best - r.line;
             const replacement = r.lineEnd !== null ? `${r.ref}:${best}-${r.lineEnd + shift}` : `${r.ref}:${best}`;
             out += lineText.slice(last, r.index) + replacement;
@@ -152,7 +185,7 @@ export function reanchorDoc(doc, text, { commitOfLine, readAt, readNow }) {
         }
         return out + lineText.slice(last);
     });
-    return { text: result.join('\n'), moved, gone };
+    return { text: result.join('\n'), moved, gone, ambiguous };
 }
 
 function main() {
@@ -178,17 +211,22 @@ function main() {
         };
         let movedTotal = 0;
         const goneTotal = [];
+        const ambiguousTotal = [];
         for (const doc of docs) {
+            if (isSnapshotDoc(doc)) continue;
             const text = readFileSync(doc, 'utf8');
             const byLine = blameCommits(doc);
-            const { text: next, moved, gone } = reanchorDoc(doc, text, { commitOfLine: (n) => byLine.get(n), readAt, readNow });
+            const { text: next, moved, gone, ambiguous } = reanchorDoc(doc, text, { commitOfLine: (n) => byLine.get(n), readAt, readNow });
             if (moved) writeFileSync(doc, next);
             movedTotal += moved;
             goneTotal.push(...gone);
-            if (moved || gone.length) console.log(`${doc}: ${moved} anchor(s) moved, ${gone.length} gone`);
+            ambiguousTotal.push(...ambiguous);
+            if (moved || gone.length || ambiguous.length) console.log(`${doc}: ${moved} anchor(s) moved, ${gone.length} gone, ${ambiguous.length} ambiguous`);
         }
         console.log(`\n${movedTotal} anchor(s) moved. ${goneTotal.length} point at code that no longer exists; fix these by hand:`);
         for (const g of goneTotal) console.log(`  ${g}`);
+        console.log(`\n${ambiguousTotal.length} could not be told apart from another copy of the same line; check these by hand:`);
+        for (const a of ambiguousTotal) console.log(`  ${a}`);
         return;
     }
 
