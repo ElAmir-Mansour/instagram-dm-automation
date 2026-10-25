@@ -4,6 +4,8 @@
 
 The #1 recurring issue in this project is **expired tokens**. This document contains everything needed to diagnose and fix token problems.
 
+> WhatsApp uses its own permanent **system-user** token, set up and connected separately: see [`WHATSAPP_GUIDE.md`](WHATSAPP_GUIDE.md) §1.4 and §2.
+
 ---
 
 ## Token Types (Know the Difference!)
@@ -26,20 +28,27 @@ The #1 recurring issue in this project is **expired tokens**. This document cont
 1. Go to [Graph API Explorer](https://developers.facebook.com/tools/explorer/)
 2. Select app: `AutoResponseBot` (App ID: `847772258381375`)
 3. **IMPORTANT:** Set token type to **User Token** (NOT Page Token)
-4. Add permissions:
-   - `pages_show_list`
-   - `pages_manage_metadata`
-   - `pages_read_engagement`
-   - `business_management`
+4. Add **all twelve** permissions the app needs (the list is `REQUIRED_SCOPES` in `src/services/tokenHealth.ts`; `node scripts/diagnose.mjs` checks the same twelve). A token missing one of them breaks that path **silently**:
    - `instagram_basic`
-   - `instagram_manage_comments`
-   - `instagram_manage_messages`
+   - `instagram_manage_comments` (Instagram comments and public replies)
+   - `instagram_manage_messages` (Instagram DMs)
+   - `instagram_content_publish` (Instagram publishing)
+   - `pages_messaging` (Messenger replies)
+   - `pages_manage_engagement` (Facebook comment replies)
+   - `pages_manage_metadata`
+   - `pages_manage_posts` (Facebook publishing)
+   - `pages_read_engagement`
+   - `pages_read_user_content`
+   - `pages_show_list`
+   - `business_management`
+
+   Add `instagram_manage_insights` and `read_insights` as well if the Growth screen should show numbers. **Connect with Facebook** (Settings, when the operator has set it up) asks for all fourteen by itself (`LOGIN_SCOPES` in `src/services/metaLogin.ts`).
 5. Click **Generate Access Token** → Copy it
 
 ### Step 2: Run the exchange script
+From the repository root, with `META_APP_ID` and `META_APP_SECRET` in your `.env` (the script exits without them):
 ```bash
-cd /Users/elamir/Documents/Msg_Response_Auto
-node scripts/exchange-token.mjs YOUR_USER_TOKEN
+node --env-file=.env scripts/exchange-token.mjs YOUR_USER_TOKEN
 ```
 
 ### Step 3: Verify
@@ -48,8 +57,10 @@ node scripts/exchange-token.mjs YOUR_USER_TOKEN
 - Confirm **Expires: Never**
 
 ### Step 4: Update in production
-- Go to Dashboard → Settings → Paste the new token
-- Or update directly in Supabase: `UPDATE creators SET page_access_token = 'TOKEN' WHERE is_active = true`
+- Dashboard → **Settings** → **Advanced** → **Update access token** → paste → **Validate & save**. The app checks the token with Meta first, stores it
+  encrypted (`enc:v1:…`, `src/config/crypto.ts`) and records its health, so the Settings and Overview notices are right.
+- **Never write the token with SQL.** A raw `UPDATE creators SET page_access_token = …` skips the encryption (a plain value is
+  accepted and stays plain) and the health stamp, and without a `WHERE id = …` it overwrites **every** tenant's token at once.
 
 ---
 
@@ -95,18 +106,15 @@ A "permanent" token can still be invalidated by:
 
 ---
 
-## Database Schema for Tokens
+## Where the token lives
 
-```sql
--- Table: creators
--- The page_access_token column stores the Meta Page Access Token
-SELECT column_name FROM information_schema.columns WHERE table_name = 'creators';
--- Result: id, instagram_page_id, page_access_token, is_active, created_at
-```
+One `creators` row per tenant. The token columns that matter:
 
-- `instagram_page_id`: The Instagram Business Account ID (e.g., `17841459652725922`)
-- `page_access_token`: The Meta Page Access Token used for all API calls
-- `is_active`: Whether this creator is currently active
+- `page_access_token`: the Page token used for every Meta call, stored **encrypted** (`enc:v1:…`). Only the app writes it.
+- `instagram_page_id`, `facebook_page_id`: the Instagram business account and the Facebook Page it serves.
+- `token_status` and the other `token_*` columns: the health the app last recorded (daily recheck, saves, real send failures).
+
+The full column list grows with the migrations in `src/config/migration_v*.sql`; read it there, not from this page.
 
 ---
 
@@ -122,23 +130,21 @@ SELECT column_name FROM information_schema.columns WHERE table_name = 'creators'
 
 ---
 
-## App Credentials (DO NOT EXPOSE)
+## App identifiers (public)
+
+These are identifiers, not secrets. The secrets (`META_APP_SECRET`, tokens) live only in the environment and in Settings, never in git.
 
 - **App ID:** `847772258381375`
 - **App Name:** `AutoResponseBot`
-- **App Secret:** Stored in `.env` as `META_APP_SECRET` — NEVER commit to git
 - **Page ID (Facebook):** `100560442828593` (ElAmir Mansour)
 - **Instagram Account ID:** `17841459652725922`
 
 ---
 
-## Exchange Script Location
+## Exchange script
 
-```
-/Users/elamir/Documents/Msg_Response_Auto/scripts/exchange-token.mjs
-```
-
-Usage: `node scripts/exchange-token.mjs <SHORT_LIVED_USER_TOKEN>`
+`scripts/exchange-token.mjs`. Usage, from the repository root: `node --env-file=.env scripts/exchange-token.mjs <SHORT_LIVED_USER_TOKEN>`.
+It calls Graph API `v21.0` (hard-coded in the script); the app itself is on `v26.0` (`src/services/instagram.ts`).
 
 
 ---
@@ -165,8 +171,10 @@ ads token, stored apart from `creators.page_access_token`. Step-by-step creation
 
 ### Scopes
 
-`ads_management`, `ads_read`, `business_management`, `pages_read_engagement`, `pages_manage_ads`. The ad account, the Page and the
-Instagram account must be **assigned** to the system user (ad account with "Manage campaigns"), or Meta answers with a permission
+`ads_management`, `ads_read`, `business_management`, `pages_read_engagement`, `pages_manage_ads` (`ADS_SCOPES` in
+`src/services/ads/health.ts`). A **Connect** token gets only `ads_read`, `ads_management` and `business_management` on top of the
+login scopes (`src/services/metaLogin.ts`), never `pages_manage_ads`, so **Test connection** lists that one as missing for it: use
+the system-user token for ads. The ad account, the Page and the Instagram account must be **assigned** to the system user (ad account with "Manage campaigns"), or Meta answers with a permission
 error even though the scopes are ticked (`10/1341012` = the Page is not assigned). The dashboard's **Test connection** lists missing
 scopes and the assigned assets; `node scripts/ads-probe.mjs` prints the same from a terminal (`debug_token` needs `META_APP_ID` and
 `META_APP_SECRET` in the environment).
