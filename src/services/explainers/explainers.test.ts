@@ -16,7 +16,7 @@ import {
 } from './explainers.js';
 import { ExplainerError } from './errors.js';
 import { writerSchema } from './prompt.js';
-import { CLOSING_QUESTION, EXPLAINER, JOB, TENANT, validWriterOutput } from './testFixtures.js';
+import { CLOSING_QUESTION, EXPLAINER, JOB, SENTENCE, TENANT, validWriterOutput } from './testFixtures.js';
 import { BASE, explainerSettings, installWorld, type World } from './testDb.js';
 import { setRunDeps, setRunLauncher } from './writing.js';
 
@@ -852,7 +852,9 @@ describe('approvePictures', () => {
         assert.deepEqual(p.formats, ['vertical', 'horizontal']);
         assert.equal(p.scenes.length, 12);
         assert.deepEqual(p.scenes[1], { position: 1, start: 6, end: 12, label: 'idea 1', picture_url: `${BASE}/api/uploads/${id(21)}` });
-        assert.deepEqual(p.words, { '0': [[0, 0.5, 'The']] });
+        // The subtitles show each scene's narration as written, on its spoken words' times (subtitles.ts). This fixture voiced one word of scene 0,
+        // so the whole narration rides on it.
+        assert.deepEqual(p.words, { '0': [[0, 0.5, `${SENTENCE} (0)`]] });
         assert.deepEqual(p.brand, { name: 'Sam Lee', handle: '@samlee', site: 'samlee.example', photo_url: `${BASE}/api/uploads/${id(8)}` });
     });
 

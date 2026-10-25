@@ -13,6 +13,7 @@ import type { ExplainerTrack, StudioSettings } from '../studio/settingsTypes.js'
 import { ExplainerError } from './errors.js';
 import { buildWriterInputs, type PreviousDraft, type WriterRequest } from './prompt.js';
 import { isAudioStale } from './state.js';
+import { subtitleWordsFor } from './subtitles.js';
 
 /** The longest part the voice is asked for at once (research.md R3: one request per short video, parts of about three minutes beyond). */
 export const VOICE_CHUNK_SECONDS_MAX = 180;
@@ -136,7 +137,8 @@ export function renderReadiness(
 }
 
 /**
- * The `explainer_render` payload: the audio, the scenes with their times, labels and pictures, the words for the subtitles, the owner's brand (the
+ * The `explainer_render` payload: the audio, the scenes with their times, labels and pictures, the subtitle words (each scene's narration as written,
+ * timed by its spoken words: subtitles.ts), the owner's brand (the
  * infographic settings: his names, handle, site and portrait) and the sound. `base` is the public address the worker downloads from. Throws what
  * `renderReadiness` throws.
  */
@@ -155,7 +157,8 @@ export function renderPayload(
             position: scene.position, start: scene.start_s ?? 0, end: scene.end_s ?? 0, label: scene.label,
             picture_url: absoluteUrl(pictureOf(scenes, index)!.url, base),
         })),
-        words: row.words ?? {},
+        // The narration as written (OpenAI, not «أوبن إيه آي»), on the spoken words' times: subtitles.ts.
+        words: subtitleWordsFor(scenes, row.words ?? {}),
         brand: { name, handle: brand.handle, site: brand.site, ...(brand.photo_url ? { photo_url: absoluteUrl(brand.photo_url, base) } : {}) },
         title_color: settings.explainer.title_color,
         formats: ['vertical', 'horizontal'],
