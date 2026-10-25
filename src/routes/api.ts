@@ -397,7 +397,7 @@ router.get('/jobs/drain', async (req, res) => {
 
     // Why the publish sweep runs here as well as on the daily cron: `vercel.json` allows one
     // cron a day on the Hobby plan, so a post scheduled for 15:15 waited for the next
-    // midnight UTC. This endpoint runs every ~5-15 minutes, so calling the sweep from it is
+    // midnight UTC. This endpoint runs about every minute (the Heroku worker), so calling the sweep from it is
     // what finally makes the dashboard's minute picker close to honest. Safe to run from two
     // schedules at once because the claim is atomic.
     let publish: PublishSweepResult | null = null;
@@ -477,7 +477,7 @@ router.get('/jobs/drain', async (req, res) => {
  * nobody opened. `heroku-worker/worker.mjs` calls it in its own loop, about every minute.
  *
  * Guarded exactly like `/api/jobs/drain` (the same `requireCronSecret`: Bearer `CRON_SECRET`, fail closed), and NOT part of it: a
- * draft takes minutes, the drain's worker budget is 45 s and `publishDuePosts` runs first, so sharing the call would make the queue
+ * draft takes minutes, the drain's queue gets 45 s and its publishes and sweeps share the rest, so sharing the call would make the queue
  * wait on a model. POST, because it changes state; the spec's GET would let a link prefetcher start spending.
  */
 router.post('/onboarding/drafts/sweep', async (req, res) => {
@@ -896,8 +896,8 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
  * Extracted from `/api/cron/publish` so that `/api/jobs/drain` can call it too. That is the
  * whole point: `vercel.json` can only register one cron a day on the Hobby plan, so a post
  * scheduled for 15:15 waited until the next midnight UTC — the dashboard has always offered a
- * minute picker for a promise the backend could not keep. The drain now runs every ~5-15
- * minutes (`.github/workflows/drain.yml`), so calling this from there closes most of that gap
+ * minute picker for a promise the backend could not keep. The drain now runs about every minute
+ * (the Heroku worker, `heroku-worker/`; FLOWS.md §3.2), so calling this from there closes that gap
  * without a paid plan.
  *
  * Nothing about the publishing itself changed. The atomic `status = 'PENDING'` claim is what
