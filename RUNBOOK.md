@@ -498,7 +498,7 @@ with `[abandoned: the claim went stale and no attempts remain]` appended
 
 A drain that only ran out of its time budget does not leave claims for this: it hands the jobs it
 claimed but did not reach back to `pending` itself, with the attempt given back (`job.released`
-in the logs; `src/jobs/runner.ts:163`, `src/jobs/queue.ts:256`). So a row that stays `running`
+in the logs; `src/jobs/runner.ts:167`, `src/jobs/queue.ts:260`). So a row that stays `running`
 means its drain was frozen or killed, or that handing it back failed (`job.release_failed`).
 
 Retries are exponential with jitter: roughly **30s, 2m, 8m**, `max_attempts` 3 by default

@@ -2165,25 +2165,31 @@ ways — a Meta error body can be long and this column is read in a dashboard li
 
 ### 5.5 — The drain loop and its budget
 
-**`src/jobs/runner.ts:182`** — `drainJobs`. Loop while `claimed < maxJobs`:
+**`src/jobs/runner.ts:187`** — `drainJobs`. Loop while `claimed < maxJobs`:
 
-1. **Budget check before claiming** (**:197-200**) → `budgetExhausted`, break.
-2. Claim `min(batchSize, maxJobs - claimed)` (**:204**). A claim failure logs and breaks
-   (**:205-208**).
-3. Empty batch → break (**:210**).
-4. Run each job (**:212**), **re-checking the budget inside the batch** (**:219-225**) — a batch of
+1. **Budget check before claiming** (**:202-205**) → `budgetExhausted`, break.
+2. Claim `min(batchSize, maxJobs - claimed)` (**:209**). A claim failure logs and breaks
+   (**:210-213**).
+3. Empty batch → break (**:215**).
+4. Run each job (**:217**), **re-checking the budget inside the batch** (**:224-230**) — a batch of
    five DM jobs is potentially 40 seconds of Gemini, and the budget has to be able to stop it
    partway.
-5. **Hand back what the loop did not reach** (**:223**, `handBackUnrun`, **:163**). The claim took
+5. **Hand back what the loop did not reach** (**:228**, `handBackUnrun`, **:167**). The claim took
    the whole batch in one statement (`status = 'running'`, `attempts + 1`,
    **`src/jobs/queue.ts:126-128`**), so when the budget stops the loop partway, the jobs after the
    last one it ran are `running` with an attempt counted, and nothing is going to start them.
-   `queue.releaseUnrun(ids)` (**`src/jobs/queue.ts:256`**) returns them to `pending` in one
-   UPDATE: `claimed_at = NULL`, `attempts = GREATEST(attempts - 1, 0)`, and only rows still
-   `running` (a job that finished, failed or was reaped meanwhile is left alone). `run_after` and
-   `last_error` are untouched, so they keep their place in the line and the next drain's claim
-   takes them. It logs `job.released` (`released`, `unrun`, `job_ids`; `released` is lower than
-   `unrun` when a row was no longer `running`). If the release itself fails it logs
+   `queue.releaseUnrun(claims)` (**`src/jobs/queue.ts:260`**) is handed each job's id **and the
+   attempt number its claim gave it** (`claim` returns the row with it already counted), and
+   returns them to `pending` in one UPDATE: `claimed_at = NULL`,
+   `attempts = GREATEST(attempts - 1, 0)`, matched on
+   `WHERE (id, attempts) IN (SELECT * FROM unnest($1::uuid[], $2::int[])) AND status = 'running'`.
+   Only the claim this drain made matches. A job that finished or failed meanwhile is left alone,
+   and so is one the reaper freed and **another drain has claimed since**: the reaper does not touch
+   `attempts` and the next claim counts one more, so that row is on a later attempt than this drain
+   holds, it is running over there, and putting it back would let a third drain run it too.
+   `run_after` and `last_error` are untouched, so a released job keeps its place in the line and the
+   next drain's claim takes it. It logs `job.released` (`released`, `unrun`, `job_ids`; `released`
+   is lower than `unrun` when a row was no longer that claim). If the release itself fails it logs
    `job.release_failed` (`error`) and the drain ends normally: those jobs wait for `reapStale`
    (300 s), as every one of them used to. Nothing is released when the budget ends on the last job
    of a batch, or when the queue empties first.
@@ -3967,7 +3973,7 @@ error, and several write **no row at all**.
 | 4 | the Overview's profile card cannot be read — **`routes/profile.ts:83`** | `profile.progress_failed` (`error`) | no (the region stays empty) |
 | 4 | a draft or invite event that could not be written — **`onboardingEvents.ts:92`** | `onboarding.event_failed` (`warn`) | no (the draft or the link still worked) |
 | 4 | the daily sweep forgets old events, long-expired invites and a draft's fetched text — **`onboardingRetention.ts:81`** | `retention.onboarding_pruned` (`info`) | rows deleted, or `sources` set to NULL; the draft row stays |
-| 5 | budget spent — **`runner.ts:197`**, **`:219`** | `job.drain_complete` (`budgetExhausted: true`); `job.released` when a batch had jobs left | jobs never claimed stay `pending`; the batch's unreached jobs go back to `pending` with their attempt given back (if that write fails, `job.release_failed`, and they wait for the 300 s reaper) |
+| 5 | budget spent — **`runner.ts:202`**, **`:224`** | `job.drain_complete` (`budgetExhausted: true`); `job.released` when a batch had jobs left | jobs never claimed stay `pending`; the batch's unreached jobs go back to `pending` with their attempt given back, unless the reaper has already freed one and another drain claimed it (that claim is left alone). If the write fails: `job.release_failed`, and they wait for the 300 s reaper |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |

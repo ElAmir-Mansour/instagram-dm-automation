@@ -159,6 +159,13 @@ export interface Job<K extends JobKind = JobKind> {
     tenant_key: string | null;
 }
 
+/**
+ * What names one claim of a job: the row, and the attempt number that claim gave it. `claim` returns every row with `attempts` already
+ * counted, so a `Job` is a `JobClaim`. The number is what tells this claim from a later one on the same row: the reaper frees a stale
+ * claim without touching `attempts`, and the next claim counts one more.
+ */
+export type JobClaim = Pick<Job, 'id' | 'attempts'>;
+
 export interface EnqueueInput<K extends JobKind = JobKind> {
     kind: K;
     payload: JobPayloads[K];
@@ -259,10 +266,14 @@ export interface JobQueue {
      * partway through a batch (`drainJobs`). Left alone, those jobs sit `running` until `reapStale` frees them
      * `CLAIM_VISIBILITY_SECONDS` later, and one claimed on its last attempt is failed "abandoned" without ever having run.
      *
-     * Only rows still `running` are touched: a job that has since finished, failed or been reaped is not the caller's to give back.
+     * A row is handed back only while it is still THE CLAIM THE CALLER MADE: `running`, and on the attempt number that claim gave it
+     * (`JobClaim`). A job that has since finished or failed is not the caller's to give back, and neither is one the reaper freed and
+     * another drain claimed in the meantime: that claim counted a later attempt and is running somewhere else, and putting it back in
+     * the queue would let a third drain run it as well. Such a row is left exactly as it is.
+     *
      * Only for jobs that did NOT run; the refund is true of those and of nothing else. Returns how many were handed back.
      */
-    releaseUnrun(jobIds: readonly string[]): Promise<number>;
+    releaseUnrun(claims: readonly JobClaim[]): Promise<number>;
     /** Delete `done` rows older than the retention window. Returns how many. */
     pruneCompleted(olderThanDays: number, limit: number): Promise<number>;
 }

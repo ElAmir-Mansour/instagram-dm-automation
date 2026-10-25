@@ -346,14 +346,26 @@ describe('releaseUnrun', () => {
     // out partway) did not run, so what the claim counted did not happen. The guarantees below live in the SQL, not in TypeScript,
     // so they are asserted on the statement; `pool.query` is the stand-in, as for every other test in this file.
 
+    /** What `claim` hands the drain for a job: the id, and the attempt number that claim counted. */
+    const claim = (id: string, attempts: number) => ({ id, attempts });
+
     it('hands the jobs back as they were: pending, claim cleared, the attempt the claim counted refunded', async () => {
         await withDb([[/UPDATE jobs/, { rowCount: 2 }]], async (executed) => {
-            const released = await queue.releaseUnrun(['job-2', 'job-3']);
+            const released = await queue.releaseUnrun([claim('job-2', 1), claim('job-3', 2)]);
 
             assert.equal(released, 2, 'the return value is how many rows the UPDATE moved');
             assert.equal(executed.length, 1, 'one statement for the whole batch');
             assert.match(flat(executed[0]!.sql), /SET status = 'pending', claimed_at = NULL, attempts = GREATEST\(attempts - 1, 0\)/);
-            assert.deepEqual(executed[0]!.params, [['job-2', 'job-3']], 'the ids reach the query as one array');
+        });
+    });
+
+    it('sends the ids and the attempts as two arrays that line up, one claim per position', async () => {
+        // `unnest($1, $2)` zips them back into (id, attempts) pairs by position, so a claim's id must sit at the same index as its attempt.
+        // This is what notices if one of the two is ever sorted, filtered or deduplicated on its own.
+        await withDb([[/UPDATE jobs/, { rowCount: 3 }]], async (executed) => {
+            await queue.releaseUnrun([claim('job-9', 3), claim('job-2', 1), claim('job-5', 2)]);
+
+            assert.deepEqual(executed[0]!.params, [['job-9', 'job-2', 'job-5'], [3, 1, 2]]);
         });
     });
 
@@ -361,7 +373,7 @@ describe('releaseUnrun', () => {
         // A bare `attempts - 1` would write -1, and `attempts >= max_attempts` / `attempts < max_attempts` in the reaper and the
         // runner would then read a job that has had no attempts as having a spare one.
         await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async (executed) => {
-            await queue.releaseUnrun(['job-1']);
+            await queue.releaseUnrun([claim('job-1', 1)]);
 
             const sql = flat(executed[0]!.sql);
             assert.match(sql, /GREATEST\(attempts - 1, 0\)/);
@@ -369,19 +381,37 @@ describe('releaseUnrun', () => {
         });
     });
 
-    it('only touches rows that are still running, picked by id', async () => {
-        // The guard that stops it undoing a job that has since finished, failed, or been taken back by the reaper.
+    it('only touches rows that are still running, matched on the claim', async () => {
+        // The guard that stops it undoing a job that has since finished or failed.
         await withDb([[/UPDATE jobs/, { rowCount: 0 }]], async (executed) => {
-            await queue.releaseUnrun(['job-1']);
+            await queue.releaseUnrun([claim('job-1', 1)]);
 
-            assert.match(flat(executed[0]!.sql), /WHERE id = ANY\(\$1::uuid\[\]\) AND status = 'running'$/);
+            assert.match(
+                flat(executed[0]!.sql),
+                /WHERE \(id, attempts\) IN \(SELECT \* FROM unnest\(\$1::uuid\[\], \$2::int\[\]\)\) AND status = 'running'$/
+            );
+        });
+    });
+
+    it('matches each row on the attempt its claim gave it, so a job that was reaped and claimed again is left alone', async () => {
+        // The reaper frees a stale claim without touching `attempts`, and the next claim counts one more. A drain that stalled past the
+        // window and then hands back "its" jobs would, matched on id and status alone, put the OTHER drain's live claim back in the queue
+        // for a third drain to run as well: a duplicate DM to a real person. `(id, attempts)` makes the claim's own number part of the
+        // match, so a row that has moved on to a later attempt matches nothing. There is no database here, so this is the statement's text.
+        await withDb([[/UPDATE jobs/, { rowCount: 0 }]], async (executed) => {
+            const released = await queue.releaseUnrun([claim('job-1', 1)]);
+
+            const sql = flat(executed[0]!.sql);
+            assert.match(sql, /WHERE \(id, attempts\) IN \(SELECT \* FROM unnest\(\$1::uuid\[\], \$2::int\[\]\)\)/);
+            assert.equal(/id = ANY/.test(sql), false, 'the id alone is not enough to match on');
+            assert.equal(released, 0, 'and a row that no longer matches is reported as not moved');
         });
     });
 
     it('does not reschedule the job or touch its error: it is not a failure, and it keeps its place in the line', async () => {
         // `run_after` is what `fail` writes to push a retry out; a job handed back is due now, so the next drain's claim takes it.
         await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async (executed) => {
-            await queue.releaseUnrun(['job-1']);
+            await queue.releaseUnrun([claim('job-1', 1)]);
 
             const sql = flat(executed[0]!.sql);
             assert.equal(/run_after/.test(sql), false);
@@ -389,14 +419,14 @@ describe('releaseUnrun', () => {
         });
     });
 
-    it('returns how many rows it really moved, which is fewer when some were no longer running', async () => {
+    it('returns how many rows it really moved, which is fewer when some were no longer this claim', async () => {
         await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async () => {
-            assert.equal(await queue.releaseUnrun(['job-1', 'job-2', 'job-3']), 1);
+            assert.equal(await queue.releaseUnrun([claim('job-1', 1), claim('job-2', 1), claim('job-3', 2)]), 1);
         });
     });
 
     it('sends nothing at all for an empty list', async () => {
-        // No route is arranged, so any statement would throw. `ANY('{}')` would be harmless, but a round trip for nothing is not.
+        // No route is arranged, so any statement would throw. `unnest('{}', '{}')` would be harmless, but a round trip for nothing is not.
         await withDb([], async (executed) => {
             assert.equal(await queue.releaseUnrun([]), 0);
             assert.equal(executed.length, 0);

@@ -21,7 +21,7 @@
  */
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import { log } from '../utils/log.js';
-import { isJobKind, type EnqueueInput, type Job, type JobKind, type JobQueue, type PayloadRedaction } from './types.js';
+import { isJobKind, type EnqueueInput, type Job, type JobClaim, type JobKind, type JobQueue, type PayloadRedaction } from './types.js';
 
 /** Shape the claim query returns, before it is narrowed to `Job`. */
 interface JobDbRow {
@@ -249,22 +249,27 @@ export class PostgresJobQueue implements JobQueue {
      * a row that somehow reads 0 from going negative. `run_after` and `last_error` are left alone: it is not a failure and it keeps
      * its place in the line, due now and claimable by the very next drain.
      *
-     * `status = 'running'` is the guard. A row that has finished, failed or already been taken back by the reaper is
-     * not this caller's to touch. One UPDATE does the whole batch, and it returns how many rows it really moved: fewer than were
-     * asked for means some were no longer `running`.
+     * The CLAIM is what is matched, not just the row: `(id, attempts)` against the pairs the caller was handed, and `status =
+     * 'running'`. The reaper frees a stale claim without touching `attempts` and the next claim counts one more, so a job that was
+     * reaped and then claimed by another drain while this one was busy is on a later attempt than the caller holds, and is left to
+     * that drain. An id and `status` alone would put that live claim back in the queue for a third drain to run too, which is a
+     * duplicate DM to a real person. A row that finished, failed or was reaped and not yet claimed again does not match either. One
+     * UPDATE does the whole batch, and it returns how many rows it really moved: fewer than were asked for means some were no longer
+     * this caller's claim.
      */
-    async releaseUnrun(jobIds: readonly string[]): Promise<number> {
-        if (jobIds.length === 0) return 0;
+    async releaseUnrun(claims: readonly JobClaim[]): Promise<number> {
+        if (claims.length === 0) return 0;
 
+        // Two parallel arrays, one position per claim; `unnest` zips them back into (id, attempts) pairs.
         return queryCount(
             `UPDATE jobs
                 SET status = 'pending',
                     claimed_at = NULL,
                     attempts = GREATEST(attempts - 1, 0),
                     updated_at = NOW()
-              WHERE id = ANY($1::uuid[])
+              WHERE (id, attempts) IN (SELECT * FROM unnest($1::uuid[], $2::int[]))
                 AND status = 'running'`,
-            [jobIds]
+            [claims.map((claim) => claim.id), claims.map((claim) => claim.attempts)]
         );
     }
 

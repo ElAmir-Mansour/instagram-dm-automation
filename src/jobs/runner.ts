@@ -156,6 +156,10 @@ async function runInScope(
  * used to hold the other two back by about five minutes, and a job claimed on its last attempt was failed "[abandoned …]" for a run
  * it never had. Handed back, they are `pending` now, due and claimable by the very next drain, with the attempt refunded.
  *
+ * Each is handed back as the claim THIS drain made: its id and the attempt number that claim gave it (`claim` returns the row with
+ * it already counted). A job the reaper freed and another drain claimed meanwhile is on a later attempt, so it is not handed back
+ * from under that drain.
+ *
  * Never throws, for the reason `drainJobs` never does: this runs on the way out of a drain that has already spent its time. A
  * failed release only leaves the jobs where they were, waiting for the reaper, which is what happened to every one of them before
  * this existed, so it says so and carries on.
@@ -165,8 +169,9 @@ async function handBackUnrun(queue: JobQueue, jobs: Job[]): Promise<void> {
 
     const jobIds = jobs.map((job) => job.id);
     try {
-        // `released` can be lower than `unrun`: a row that is no longer `running` (the reaper got there first) is left as it is.
-        const released = await queue.releaseUnrun(jobIds);
+        // `released` can be lower than `unrun`: a row that is no longer this claim (it finished, or the reaper freed it and another
+        // drain took it) is left as it is.
+        const released = await queue.releaseUnrun(jobs.map(({ id, attempts }) => ({ id, attempts })));
         log('info', 'job.released', { released, unrun: jobIds.length, job_ids: jobIds });
     } catch (err) {
         log('error', 'job.release_failed', { unrun: jobIds.length, job_ids: jobIds, ...describeError(err) });
