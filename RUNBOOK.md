@@ -3,11 +3,33 @@
 For the person who operates this, at 2am, when something is wrong.
 
 Every procedure below is: the symptom, what to run, what healthy looks like, and what to do
-when it isn't. Claims are cited to `file:line` so you can check them rather than trust them.
+when it isn't. Claims are cited so you can check them rather than trust them: older ones to
+`file:line`, newer ones to the file plus the function, route, setting or log event, because line
+numbers move and a name can be searched for.
 
 This document works backwards from a symptom. When you need the forward direction — every hop a
 comment, DM, publish, login or job actually takes, in order — see [`FLOWS.md`](FLOWS.md); its
 final table indexes every point where a flow can silently do nothing.
+
+## Find your symptom
+
+| What you see | Go to |
+|---|---|
+| You do not know what is wrong yet | §1 |
+| A comment got no DM | §2 |
+| A token, a "Reconnect" notice, a missing Meta permission | §3 |
+| A post did not publish | §4 (TikTok §10, YouTube §14) |
+| Jobs are pending, stuck or failed; something runs late | §5 |
+| A migration is pending, or a schema error | §6 |
+| Someone asked for their data to be deleted | §7 |
+| Adding a client, an invite, a webhook subscription | §8 |
+| A deploy broke something | §9 |
+| TikTok: a failed post, "Only me", the token, drafts | §10 |
+| WhatsApp: a message did not arrive, no reply, free replies | §12 |
+| Ads: "Spending is not being watched", paused campaigns, a dead token, limits | §13 |
+| YouTube: "Needs reconnecting", the quota, a Short that is not public | §14 |
+| The Mac: Studio jobs wait or fail, Claude jobs, explainer pictures stopped | §15 (the Carousel Studio section has the worker commands) |
+| The DM bot: slow, silent, sales mode, the hand-off alert | §16 |
 
 **Ground rule.** Two scripts are safe to run at any time and cannot write:
 `scripts/diagnose.mjs` and `scripts/watch.mjs` run every query in its own
@@ -18,8 +40,8 @@ Two things are **never** "just a test", because both act on the live accounts:
 
 | Endpoint | What it actually does |
 |---|---|
-| `GET /api/cron/publish` | Publishes every `PENDING` post whose `scheduled_time` has passed (`publishDuePosts`, `src/routes/api.ts:600`; route at `:666`). Six posts were pending when this was written. |
-| `GET /api/jobs/drain` | Runs real handlers — sends real DMs and real public replies (`src/routes/api.ts:328`). |
+| `GET /api/cron/publish` | The daily cron's whole job. It publishes every `PENDING` post whose `scheduled_time` has passed (`publishDuePosts`), and it runs the once-a-day sweeps: stale publish claims, retention, a backstop queue drain, the TikTok, YouTube, WhatsApp and Meta Page token refreshes and health checks, the ads health check and proposals, the explainers backstop and the growth sync (route `GET /cron/publish`, `src/routes/api.ts`). |
+| `GET /api/jobs/drain` | Runs real handlers: it sends real DMs and real public replies. In the same call it publishes due posts, asks TikTok about unfinished uploads, and runs the ads sweeps: the spending guard (which can **pause every active campaign** in the ad account), the rules, the write queue and its sync, the split-test polls and the lead purge. It ends with the Monteur sweep (route `GET /jobs/drain`, `src/routes/api.ts`). |
 
 ---
 
@@ -82,12 +104,16 @@ The `jobs` table is what breaks the tie. Every verified **comment** delivery is 
 ! queue    the jobs table is EMPTY — no webhook delivery has ever been enqueued
 ```
 
-That warning is currently **present** on production. It means no delivery has reached the
-handler since migration v13 was applied. Do not read it as proof of a broken webhook on its
-own: the migrations were applied at 2026-09-21 13:17Z and the account's typical comment gap is
-68 minutes, so an empty table a couple of hours later is also just a quiet evening. It becomes
-an incident when it is still empty after a comment you posted yourself — which is the whole
-point of `VERIFYING.md`.
+On 2026-09-21 that warning was **present** on production: no delivery had reached the handler
+since migration v13 was applied. Do not read it as proof of a broken webhook on its own: the
+migrations were applied at 2026-09-21 13:17Z and the account's typical comment gap was 68
+minutes, so an empty table a couple of hours later was also just a quiet evening. It becomes an
+incident when it is still empty after a comment you posted yourself — which is the whole point
+of `VERIFYING.md`.
+
+The word "ever" in that line is no longer true. The daily retention sweep deletes `done` jobs
+after 7 days (§5.3), so an empty table now means "no delivery in the last seven days", and a
+quiet week looks the same. Post a comment from a second account before you conclude anything.
 
 The one caveat: if `WEBHOOK_QUEUE=off` is set in the environment, nothing is enqueued by design
 (`src/index.ts:226`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
@@ -150,11 +176,20 @@ pointed at an unrelated project while Facebook worked fine. `diagnose.mjs` check
 ```
 ✔ meta     all 2 webhook subscriptions point at this deployment
   instagram → https://msg-response-auto.vercel.app/webhook (active) [comments, mentions, messages, messaging_postbacks, story_insights]
-  page      → https://msg-response-auto.vercel.app/webhook (active) [feed, messages, messaging_postbacks]
+  page      → https://msg-response-auto.vercel.app/webhook (active) [feed, messages, messaging_postbacks, messaging_referrals]
 ```
 
 Both must name *this* deployment, and the fields list must contain what you depend on —
 `comments`/`feed` for the comment path, `messages` for DMs.
+
+The `page` object also needs `messaging_referrals`: a person who already has a Messenger thread
+and taps a click-to-message ad is announced only by that field, so without it ads → DM
+attribution silently misses every existing thread. `diagnose.mjs` warns when a field is missing
+(`object "page" is not subscribed to: messaging_referrals`). `leadgen` (lead ads) is needed only
+once a tenant has a lead-ads legal sign-off, so `diagnose.mjs` prints its absence as a fact, not
+a warning. The app subscribes a connected Page to the same list itself (`WEBHOOK_FIELDS` and
+`leadgenFieldsFor`, `src/services/metaLogin.ts`); the App Dashboard's Page webhook needs the
+fields too.
 
 ### 2.3 Was the signature rejected?
 
@@ -189,11 +224,22 @@ its reason into `interactions.error_log`:
 
 | Reason in `error_log` | Meaning | Where |
 |---|---|---|
-| `Skipped: recipient already received an automated DM within 24 hours.` | Per-recipient courtesy cap. Working as designed. | `src/webhook/comments.ts:264-268` |
-| `Send quota exhausted (creator: …)` | This tenant's hourly ceiling, 180/hr. | `src/webhook/comments.ts:277-294` |
-| `Send quota exhausted (app: …)` | The **app-wide** pool, shared by every tenant — another tenant may have caused it. Default 1000/hr, `META_APP_HOURLY_LIMIT`. | `src/utils/rateLimiter.ts:87-102` |
+| `Skipped: recipient already received an automated DM within 24 hours.` | Per-recipient courtesy cap. Working as designed. | `src/webhook/comments.ts:272-279` |
+| `Skipped: hourly DM quota reached (N/180). …` | This tenant's hourly ceiling, 180/hr (`DEFAULT_HOURLY_LIMIT`). | `src/webhook/comments.ts` |
+| `Skipped: the app-wide Meta send budget is exhausted (N/L this hour). …` | The **app-wide** pool, shared by every tenant — another tenant may have caused it. Default 1000/hr, `META_APP_HOURLY_LIMIT`. | `src/webhook/comments.ts`, `checkFairSendQuota` in `src/utils/rateLimiter.ts` |
 | `App does not have Advanced Access to instagram_manage_messages` | The recipient must have messaged you first, or you need App Review. | Meta |
 | `Activity already replied to` | That comment was already handled. | Meta |
+
+Both quota lines also log `dm.quota_exhausted`, with `blocked_by` (`creator` or `app`) and
+`source: 'comment'`. A skipped comment is **not retried**: the row is `FAILED` and the person gets
+no DM.
+
+`Send quota exhausted (creator: N/L)` and `Send quota exhausted (app: N/L)` are the **DM** path's
+wording (`src/webhook/messaging.ts`), not the comment path's, and they are not written to
+`interactions`. A DM is retried instead: the text is the job's `last_error` while it backs off
+(30 s, 2 m, 8 m; §5.3), and the same `dm.quota_exhausted` line says which ceiling (`source: 'dm'`).
+If the ceiling still holds on the last attempt, the message is concluded with no reply and only
+that log line remains.
 
 A `PENDING` interaction row is unfinished work, not a resting state: `SENT` is written before
 `recordDmSent` and every failure path writes `FAILED` or `USER_BLOCKED_DMS`
@@ -219,8 +265,8 @@ node scripts/watch.mjs
 
 ### The silent failure with a date on it
 
-Production today reports a healthy token **and** this, in the `DETAIL` block rather than as a
-warning:
+On 2026-09-21 production reported a healthy token **and** this, in the `DETAIL` block rather than
+as a warning:
 
 ```
 [Default] data access expires in 89d (2026-12-19 14:29:29Z)
@@ -229,11 +275,16 @@ warning:
 Data access is **separate from token expiry**. The token is a PAGE token that never expires,
 but Meta lapses *data access* after 90 days without re-authorisation, and when it does, reads
 start failing while `/debug_token` still answers `is_valid: true`
-(`scripts/diagnose.mjs:419-425`). Nothing in the app notices.
+(`scripts/diagnose.mjs:435-442`).
 
-**Diarise 2026-12-19.** It becomes a warning only inside 14 days
-(`scripts/diagnose.mjs:424`), which is later than you want to find out. Fixing it means
-re-authorising the app and re-exchanging the token (§3.3), not pasting the same one back.
+Two things now watch for it, and both start only inside 14 days of the date. The daily check
+asks Meta about every connected tenant's Page token and raises **Reconnect due** for a
+data-access date less than 14 days away (`recheckAllMetaTokens`,
+`src/services/metaTokenRecheck.ts`; §3.1). `diagnose.mjs` turns its `DETAIL` line into a warning
+inside the same 14 days (`scripts/diagnose.mjs:440`). That is later than you want to find out, so
+**diarise the date** your own `node scripts/diagnose.mjs` prints (it was 2026-12-19 on 2026-09-21;
+a reconnect moves it). Fixing it means re-authorising the app (Settings → Instagram & Facebook →
+**Reconnect**) or re-exchanging the token (§3.3), not pasting the same one back.
 
 ### 3.1 What actually refreshes `token_status`
 
@@ -286,10 +337,28 @@ Two operational consequences:
   or create a tenant, and those endpoints say so (`src/routes/admin.ts:426-435`, `:652-660`,
   `.env.example:32-39`). Generate with `openssl rand -hex 32`.
 
-**Losing `TOKEN_ENCRYPTION_KEY` means every encrypted token is unrecoverable** and each tenant
-must paste a fresh one. It is not in the database by design — the threat model is database
-access, which is exactly what materialised when the connection string was committed to a public
-repo (`src/config/crypto.ts:4-8`).
+**Losing `TOKEN_ENCRYPTION_KEY` loses every secret the app stores, not only the Meta tokens.**
+It is not in the database by design — the threat model is database access, which is exactly what
+materialised when the connection string was committed to a public repo
+(`src/config/crypto.ts:4-8`). The same key (`encryptSecret`, `src/config/crypto.ts`) protects:
+
+- the Meta Page tokens (`creators.page_access_token`), and the unfinished Facebook Connect picks
+  in `oauth_states.payload`, which hold Page tokens;
+- the TikTok, YouTube and WhatsApp connection tokens (`platform_connections`);
+- every secret app setting (`app_settings` rows with `is_secret`, written by `setSetting`,
+  `src/services/appSettings.ts`): the Gemini key, the AI-provider keys (Anthropic, OpenAI,
+  OpenRouter, Groq, custom), the TikTok and YouTube client secrets, the YouTube API key, the
+  media-storage key, the Telegram bot token, the email (Resend) key, and each tenant's ads token
+  (`ads.token.<tenant>`);
+- the Cloudflare token that draws explainer pictures
+  (`src/services/explainers/pictures/provider.ts`);
+- what a person typed into a lead form (`ads_leads.answers_enc`), and the keyed hash that finds
+  a person's leads for an erasure (`personKey`).
+
+With the key gone, each of these must be entered again, and lead answers cannot be read. A
+**wrong** key is no better: decrypting throws, so what needs the value fails (the daily Meta
+check logs `token.recheck_unreadable` for a token it cannot decrypt, and does nothing else with
+it). Keep a copy of the key where the database is not.
 
 ### 3.3 Rotating a token
 
@@ -330,14 +399,16 @@ of counts by status. Today: `PENDING=6  PUBLISHED=10`.
 
 The Vercel cron runs **once daily at 00:00 UTC** — a Hobby-plan limit (`vercel.json` `crons`) —
 but it is no longer the only thing that publishes. `GET /api/jobs/drain` calls
-`publishDuePosts()` too (`src/routes/api.ts:352`), and that endpoint is on the GitHub Actions
-schedule, so a post scheduled for 14:30 goes out on the next drain rather than waiting for
-midnight UTC.
+`publishDuePosts()` too (the route `GET /jobs/drain` in `src/routes/api.ts`), and three things call
+that endpoint (§5.1), so a post scheduled for 14:30 goes out on the next drain rather than waiting
+for midnight UTC.
 
-What that buys is "within the drain interval", not minute accuracy. GitHub throttles scheduled
-workflows, so the real gap varies from minutes to hours — see §5.1. A post that is late by an
-hour is expected behaviour, not a fault; a post still `PENDING` the next day means the drain is
-not running at all, and §5.1 says how to check.
+What that buys is "within the drain interval", not minute accuracy. With the Heroku worker
+running, the interval is about a minute, and the publish itself takes more (a reel that Instagram
+is still processing is held and tried again on later sweeps; see *Publishing and DM safety*). With
+the worker off, only GitHub's schedule is left, and it delivers every 2 to 5 hours (§5.1), so a
+post late by hours is expected behaviour, not a fault. A post still `PENDING` the next day means
+no drain is running at all, and §5.1 says how to check.
 
 ### 4.2 Stranded claims
 
@@ -417,15 +488,32 @@ node scripts/diagnose.mjs        # read the `queue` section
 
 ### 5.1 What drains the queue, and how to check it is still doing so
 
-Three things can call `GET /api/jobs/drain`. Two are live:
+Three things call `GET /api/jobs/drain`, and all three are live:
 
 | Caller | Interval | State |
 |---|---|---|
-| `.github/workflows/drain.yml` | `*/5`, throttled by GitHub — see below | **active** |
-| Vercel cron → `GET /api/cron/publish`, which calls `drainWorker()` (`src/routes/api.ts:712`) | once daily, 00:00 UTC | **active**, the backstop |
-| `heroku-worker/worker.mjs` | 60s | **scaled to zero** (~$7/mo when on) |
+| `heroku-worker/worker.mjs` (Heroku app `autoreply-pro-worker`) | 60 s after the last call finished | **running** (`worker=1`, about $7 a month). On 2026-10-25 the Vercel logs showed `GET /api/jobs/drain` once a minute |
+| `.github/workflows/drain.yml` | written as `*/5`; GitHub delivers it every 2 to 5 hours, see below | **active**, free |
+| Vercel cron → `GET /api/cron/publish`, which calls `drainWorker()` (`src/routes/api.ts:1071`) | once daily, 00:00 UTC | **active**, the backstop |
 
-Check the GitHub one first, because its failure mode is silent:
+The worker has a second job: it is the **only** caller of `POST /api/onboarding/drafts/sweep`,
+which moves tenant profile drafts along (§8.1). Scale it to zero and both stop. How to turn it on
+and off, its settings, its log lines (`worker.drain_ok`, `worker.drain_bad_status`,
+`worker.drain_failed`) and how to deploy a change are in
+[`heroku-worker/README.md`](heroku-worker/README.md).
+
+Check the worker first, because it is what keeps the interval short:
+
+```bash
+heroku ps -a autoreply-pro-worker     # "worker.1: up" means on; needs `heroku login`
+```
+
+or look for `/api/jobs/drain` once a minute in the Vercel logs. If it is off and should not be:
+`heroku ps:scale worker=1 -a autoreply-pro-worker`. If you switch it off on purpose, also set
+`FREQUENT_SWEEP` to `false` in `dashboard/js/pages/posts.js`, or the Posts screen promises minutes
+that the daily cron cannot keep.
+
+The GitHub one fails silently, so check it too:
 
 ```bash
 gh run list --workflow=drain.yml --limit 5
@@ -435,17 +523,18 @@ A run that **fails in under ~10 seconds** means `CRON_SECRET` is not set as a re
 or does not match production. That is not hypothetical: the workflow existed for a long time and
 had *never once succeeded* for exactly that reason, which reads as "configured" at a glance
 because a red row in a tab nobody opens looks the same as no rows at all. Fix with
-`gh secret set CRON_SECRET`.
+`gh secret set CRON_SECRET`. The secret must be the same in Vercel, in the GitHub repository
+secret and in the Heroku config var `CRON_SECRET`; a rotation changes all three
+(`heroku-worker/README.md`).
 
-**Do not expect five-minute punctuality.** GitHub throttles scheduled workflows and explicitly
-does not guarantee them; observed delivery on this repository has been hours apart, not minutes
-(`.github/workflows/drain.yml:12-23` says so in the workflow itself). Frequent-but-irregular is
-the honest description. If the interval genuinely matters — minute-accurate scheduled posts,
-say — scale the Heroku worker back up:
-
-```bash
-heroku ps:scale worker=1 -a autoreply-pro-worker
-```
+**Do not expect five-minute punctuality.** The workflow asks for `*/5`, but GitHub throttles
+scheduled workflows and does not guarantee them. The comment at the top of
+`.github/workflows/drain.yml` says what was measured in October 2026: every 2-4.5 hours, so it is
+the backstop. Counted with `gh run list --workflow=drain.yml --limit 30` on 2026-10-25: 25
+scheduled runs since 2026-10-22, every one green, about 2 to 5 hours apart (the other five rows
+were manual `workflow_dispatch` runs). Read it as "a few times a day". That is why the Heroku
+worker, and not the workflow, is what answers "every minute". FLOWS.md §3.2 lays the four callers
+side by side.
 
 To drain by hand:
 
@@ -460,9 +549,29 @@ both running the same job — which would be a duplicate DM to a real person
 (`src/jobs/queue.ts`, `PostgresJobQueue.claim`). It is **not** `FOR UPDATE SKIP LOCKED`, and
 cannot be: Postgres rejects that alongside a window function.
 
-A healthy response is JSON: `{"claimed":N,"succeeded":N,"failed":0,"budgetExhausted":false,"reaped":0}`.
-`budgetExhausted: true` just means it stopped on its time budget with work left — the next call
-takes it.
+A healthy response is JSON. The queue's own numbers come first, then one key for each other thing
+the call does:
+
+```json
+{"claimed":N,"succeeded":N,"failed":0,"budgetExhausted":false,"reaped":0,
+ "publish":{"due":N,"claimed":N,"published":[],"heldForInactiveTenant":0},
+ "monteur":{…},
+ "tiktok":{"checked":N,"settled":N,"gaveUp":N}}
+```
+
+`budgetExhausted: true` just means the queue stopped on its time budget with work left — the next
+call takes it. A key `jobsError`, `publishError` or `monteurError` names a part that threw; the
+status is 500 only when both the queue and the publish part failed (`composeDrainResponse`,
+`src/routes/api.ts`). The ads sweeps (the guard, rules, write queue, sync, split tests, lead
+purge) add nothing to the body. They write their own log lines when they did something or
+failed: `ads.cap_sweep`, `ads.rules_sweep`, `ads.ops_drain`, `ads.sync_sweep`, `ads.study_sweep`,
+`ads.leads_sweep`.
+
+**One call can take minutes, and that is not a hang.** The queue's own budget is 45 s (§5.2), but
+the sweeps after it run until a deadline 270 s after the request started (`SWEEP_DEADLINE_MS` in
+`src/services/monteur/sweep.ts`, overridden by the env var `MONTEUR_SWEEP_DEADLINE_MS`): the
+Monteur's pick alone is two Gemini calls. The callers wait for it: the worker up to 290 s
+(`REQUEST_TIMEOUT_MS`), the workflow's `curl` up to 300 s.
 
 ### 5.2 Draining by hand
 
@@ -488,9 +597,11 @@ FROM jobs WHERE status='done' AND created_at > now()-interval '1 day' GROUP BY 1
 A median back near 70 s means the instance is being frozen again. Look for
 `runtime.wait_until_unavailable` in the logs (the platform gave the request no `waitUntil`).
 
-> **Unverified:** `vercel.json` sets no `maxDuration` for the function, so the 45s worker
-> budget is not provably inside the platform's limit for this plan. If `/api/jobs/drain`
-> returns a platform timeout rather than JSON, lower `JOB_WORKER_BUDGET_MS` first.
+> **Unverified:** `vercel.json` sets no `maxDuration` for the function, so the platform's limit
+> for this plan is only assumed to be 300 s (the sweep deadline in §5.1 and `drain.yml` both
+> assume it). If `/api/jobs/drain` returns a platform timeout rather than JSON, lower
+> `MONTEUR_SWEEP_DEADLINE_MS` first, because the sweeps are what run long, then
+> `JOB_WORKER_BUDGET_MS`.
 
 ### 5.3 Stuck and failed jobs
 
@@ -503,8 +614,12 @@ with `[abandoned: the claim went stale and no attempts remain]` appended
 
 A drain that only ran out of its time budget does not leave claims for this: it hands the jobs it
 claimed but did not reach back to `pending` itself, with the attempt given back (`job.released`
-in the logs; `src/jobs/runner.ts:167`, `src/jobs/queue.ts:260`). So a row that stays `running`
-means its drain was frozen or killed, or that handing it back failed (`job.release_failed`).
+in the logs; `src/jobs/runner.ts:167`, `src/jobs/queue.ts:260`). `job.released` carries
+`released`, `unrun` and `job_ids`; `released` lower than `unrun` means some row had already moved
+on (it finished, or another drain took it), and that row is left alone. So a row that stays
+`running` means its drain was frozen or killed, or that handing it back failed
+(`job.release_failed`). A `running` row older than 300 s is freed by the next drain's reap, as
+above; one that stays `running` for much longer means no drain has run (§5.1).
 
 Retries are exponential with jitter: roughly **30s, 2m, 8m**, `max_attempts` 3 by default
 (`src/jobs/runner.ts:36-40`, `src/config/migration_v13_jobs.sql:43`). Jittered because the
@@ -522,6 +637,18 @@ SELECT id, kind, status, attempts, max_attempts, run_after, claimed_at,
 
 `failed` rows are **never** pruned — those are the ones you need. `done` rows are deleted after
 7 days by the retention sweep (`src/services/retention.ts:45`, `src/jobs/queue.ts:223-234`).
+
+**Replaying a dead job.** Once the cause is fixed, use the admin **Job queue** screen (`#/jobs`,
+platform admin only). It lists jobs by status (`pending`, `running`, `done`, `failed`,
+`cancelled`) and by tenant, and never shows `payload`, because that holds the verbatim Meta
+event. **Retry** puts a `failed` or `cancelled` job back to `pending` with its attempts reset to
+0 and `run_after` set to now, so it gets all its attempts again; its `last_error` stays until it
+succeeds. **Cancel** stops a `pending` job from ever running (it becomes `cancelled`); a
+`running` job cannot be cancelled. The routes are `GET /api/admin/jobs` (`status`, `tenant`,
+`limit`), `POST /api/admin/jobs/:id/retry` and `POST /api/admin/jobs/:id/cancel`
+(`src/routes/admin.ts`). A job in the wrong state answers 409 `JOB_NOT_RETRYABLE` or
+`JOB_NOT_CANCELLABLE`, and every press is an audit row (`job.retry`, `job.cancel`). A retry
+before the cause is fixed only spends the attempts again.
 
 ### 5.4 Rolling the queue back entirely
 
@@ -544,13 +671,24 @@ npm run migrate            # apply it
 Both read `.env` via `node --env-file=.env` (`package.json`). Healthy status output:
 
 ```
-applied: 15
+applied: N
 pending: none
 ```
 
-15, not 14: the ledger counts `schema.sql` plus the fourteen `src/config/migration_v*.sql`
-files (v2 through v15). The canonical list is `EXPECTED_MIGRATIONS` in
-`src/config/migrations.ts`, and `migrations.test.ts` fails if it drifts from what is on disk.
+`pending: none` is the line to read. `N` is the number of rows in the ledger, and it should equal
+the number of entries in `EXPECTED_MIGRATIONS` (`src/config/migrations.ts`): `schema.sql` plus
+every migration file in `src/config/`. That list is the canonical one, and `migrations.test.ts`
+fails if it drifts from what is on disk. It does not stay still, so do not memorise the number
+(it was 54 on 2026-10-25; the numbering skips v43 and v46 to v49). To see what this checkout
+expects:
+
+```bash
+grep -c "^    '.*\.sql',$" src/config/migrations.ts
+```
+
+If `applied` is lower, run `npm run migrate:status` to see the file names that are pending. If a
+file name in the ledger is missing from the list, the deployed code is older than its database
+(`compareSchema` calls it `unknown`; do not run a migration for that).
 
 Healthy apply output is one `applying <file> ... ok` line per file, then
 `All migrations applied.`
@@ -618,7 +756,10 @@ via `src/index.ts:105-107`) makes four promises:
 holds the same text deletes nothing — this is the mechanism by which the promise is otherwise
 untrue (`src/services/retention.ts:14-18`).
 
-**Set `RAW_PAYLOAD_RETENTION_DAYS=30` in the Vercel environment to match the page.** The
+**Set `RAW_PAYLOAD_RETENTION_DAYS=30` in the Vercel environment to match the page.** On 2026-10-25 it
+was set: `vercel env ls production` lists it (added about 2026-09-21). Vercel keeps it as a secret, so its
+value cannot be read back; the daily cron's `cron.retention_sweep` line (`rawPayloadsCleared`) shows the
+sweep at work. The
 minimum accepted is 7; a misconfigured value disables pruning rather than falling back to a
 default, and logs `retention.misconfigured` (`src/services/retention.ts:83-93`, `:107-112`).
 The sweep runs once daily from the publish cron and converges rather than clearing one batch a
@@ -633,8 +774,8 @@ day — up to 20 passes of 5,000 rows (`src/services/retention.ts:190-222`,
 ### Handling a request
 
 **There is now tooling, as of 2026-09-21.** This section previously said there was none, and
-that erasure was manual SQL — true when written, false now. Use the dashboard: **Erasure**, the
-last item in the admin nav because it is the only hard DELETE in the product. It is backed by
+that erasure was manual SQL — true when written, false now. Use the dashboard: **Data erasure**,
+the last item in the admin nav because it is the only hard DELETE in the product. It is backed by
 `src/services/erasure.ts` and `GET /api/admin/erasure/preview` + `POST /api/admin/erasure`,
 both `platform_admin` only.
 
@@ -650,11 +791,41 @@ That drift check is not just a guard against a stale preview — it is what make
 token harmless. Once the rows are gone the counts are zero, so the same token cannot delete a
 second person who later arrives under the same handle.
 
-It clears all four tables the published page names — `interactions`, `messages`,
-`conversations` and `dm_send_log` — which is the part manual SQL got wrong: the obvious
-statement clears `messages.text` and leaves `raw_payload` holding the same text as a verbatim
-JSONB copy of the Meta event, so the row still contains everything the person wrote plus their
-Meta user id.
+It deletes from six tables. Four are the ones the published page names — `interactions`,
+`messages`, `conversations` and `dm_send_log` — which is the part manual SQL got wrong: the
+obvious statement clears `messages.text` and leaves `raw_payload` holding the same text as a
+verbatim JSONB copy of the Meta event, so the row still contains everything the person wrote plus
+their Meta user id. The other two came later:
+
+- the contact's **private uploads** in `media_uploads` (voice notes, photos and files a person
+  sent on WhatsApp), found through the person's messages and deleted first; the daily sweep then
+  removes the object from Storage;
+- the **lead-ad leads** in `ads_leads` that gave the handle as an email address or a phone number,
+  found by a keyed hash of it and never by reading anyone's answers. An Instagram handle deletes
+  no lead.
+
+Deleting a conversation also deletes the tracked links sent in it and their clicks
+(`tracked_links`, `link_clicks`: the schema cascades).
+
+**Stop requests are kept.** A stop or a consent change (`contact_consents`: the person's platform id, the
+words they sent, the time) survives the erasure. Its link to the conversation is set to NULL
+(`ON DELETE SET NULL`, migration v50), and nothing deletes the row, because it is the evidence that the
+person asked. Keeping it, or deleting it in `erasure.ts`, is the owner's decision; the WhatsApp privacy
+update (#221) discloses that it is kept. The preview counts conversations,
+messages, interactions, the send log and leads. The uploads are not in those counts: they are
+`media_deleted` in the audit row.
+
+**It never touches `jobs`.** A queued event holds the person's words verbatim in `payload`. A
+`done` job is deleted after 7 days, but a `failed` job is never pruned (§5.3), so one can still
+hold the person after the erasure. Look for it (read-only; replace the handle):
+
+```sql
+SELECT id, kind, status, created_at FROM jobs
+ WHERE status = 'failed' AND payload::text ILIKE '%' || '<handle>' || '%';
+```
+
+If one turns up it is yours to delete by hand, with a `SELECT` first, like the other raw SQL
+below. Its `dedupe_key` goes with it.
 
 The preview deliberately returns **metadata only, never message bodies**. Usernames, IGSIDs,
 tenant names and timestamps are enough to confirm the right person; the text of what a private
@@ -690,13 +861,17 @@ POST /api/admin/tenants
   { name, instagram_page_id, facebook_page_id, page_access_token, webhook_verify_token }
 ```
 
-`instagram_page_id` and `page_access_token` are both required (NOT NULL in the schema). The
-token is encrypted in the handler, so a tenant created this way **never has a plaintext token in
-the database at any point** (`src/routes/admin.ts:426-435`). A duplicate page id is a 409
-(`:503`).
+In this form `instagram_page_id` and `page_access_token` are both required, and the token is
+checked with Meta before anything is written. The schema no longer insists on them: migration v34
+(`migration_v34_onboarding.sql`) dropped both NOT NULLs, so a body with just `{ name }` (and
+optionally `lang`, `instagram_username`, `website`) creates a tenant with **no Meta connection**,
+which connects its Page later with **Connect with Facebook**. A CHECK keeps a Page id from existing
+without a token. The token is encrypted in the handler, so a tenant created this way **never has a
+plaintext token in the database at any point** (`POST /tenants`, `src/routes/admin.ts`). A
+duplicate page id is a 409.
 
 If `TOKEN_ENCRYPTION_KEY` is unset this returns a 500 that names the problem and tells you to
-run `openssl rand -hex 32` (`src/routes/admin.ts:426-435`). Set it first.
+run `openssl rand -hex 32` (the same handler). Set it first.
 
 Then create the client's user and grant membership in one call:
 
@@ -704,10 +879,12 @@ Then create the client's user and grant membership in one call:
 POST /api/admin/users        { email, password, role: 'user', creator_id }
 ```
 
-Password minimum is 12 characters (`src/routes/admin.ts:301`, `:341-344`). A user with no
+Password minimum is 12 characters (`MIN_PASSWORD_LENGTH`, `src/services/adminGuards.ts`). A user with no
 membership can log in and reach nothing, which is why the common case grants it in the same
-request (`src/routes/admin.ts:364-372`). There is **no self-serve signup** — this endpoint is
-the only way a `users` row comes into existence (`src/routes/admin.ts:327-332`).
+request (`POST /users`, `src/routes/admin.ts`). There is **no self-serve signup**. A `users` row comes
+into existence in two ways only: this endpoint, and an invite link (`acceptInvite`,
+`src/services/invites.ts`), which creates the account when the invited person opens the link and
+sets a password (below).
 
 Both are also available as dashboard screens for a `platform_admin`: **Tenants** and **Users**
 (`dashboard/js/app.js:53-54`, `dashboard/js/pages/tenants.js`, `dashboard/js/pages/users.js`).
@@ -745,7 +922,7 @@ answer in code** and keeps it as a draft. **Nothing is applied until a person ap
   reading the sources and kept what code found (colours, logo candidates, links); the wizard continues by hand. Add a key, then start a new
   draft (`POST …/draft`, five new drafts a tenant a day).
 - **Stuck in `queued` / `drafting`:** something has to move it. The wizard's poll does, and so does `POST /api/onboarding/drafts/sweep`, which the
-  Heroku worker calls about every minute (`heroku ps:scale worker=1 -a autoreply-pro-worker`; its second loop, `DRAFT_SWEEP_INTERVAL_MS`). With the
+  Heroku worker calls about every minute (it is the only caller, §5.1; its second loop, `DRAFT_SWEEP_INTERVAL_MS`). With the
   worker off and nobody on the wizard, a draft waits; after 30 minutes whoever touches it first ends it as `expired`. The sweep is guarded like the
   drain (Bearer `CRON_SECRET`). Redeploy the worker after pulling this: an old worker has no second loop.
 - **`failed`, `no_source`:** nothing could be read: check `sources_status` (a private or personal Instagram account is `not_readable`, a site that
@@ -784,7 +961,10 @@ So, in this order:
 4. Now create or change the subscription, and set the callback URL to
    `https://<deployment>/webhook`. Remember §2.2: one callback URL per object type, app-wide,
    so changing it for one tenant changes it for all of them.
-5. Subscribe the fields you need: `comments`/`feed`, `messages`, `messaging_postbacks`.
+5. Subscribe the fields you need: `comments`/`feed`, `messages`, `messaging_postbacks`, and on
+   the `page` object `messaging_referrals` (ads → DM attribution for a person who already has a
+   Messenger thread). Add `leadgen` only for lead ads, after a lead-ads sign-off. §2.2 says what
+   `diagnose.mjs` checks.
 6. Re-run `node scripts/diagnose.mjs` and confirm the new subscription points at this
    deployment.
 
@@ -800,7 +980,9 @@ The application side works; the permission to use it is the blocker.
 ## 9. Rolling back a deploy
 
 Vercel is the only pipeline — there is no CI deploy step (`.github/workflows/ci.yml` runs
-typecheck, tests and a dashboard syntax check, and nothing else).
+typecheck, tests, a dashboard syntax check and ten `check:*` guards (§11), and nothing else).
+Every merge to `main` deploys production through Vercel's Git integration, with no manual step
+(`README.md`, *Deploys*), so a rollback is the way back from a merge that went wrong.
 
 ```bash
 vercel rollback              # interactive: pick a previous deployment
@@ -835,11 +1017,13 @@ node scripts/diagnose.mjs
 ```
 
 The app **refuses all traffic with a 503 naming the missing variable** if required environment
-variables are absent, rather than serving with a missing secret
-(`src/index.ts:23-29`, `:70-76`; the seven required vars are `src/config/env.ts:12-27`). So if
-every route 503s after a rollback, read the body — it tells you which variable it is. The app
-also refuses to start if `DASHBOARD_PASSWORD` is the old published default `"admin"`, which is
-in the public repo's history (`src/config/env.ts:49-53`).
+variables are absent, rather than serving with a missing secret (`startupError` in `src/index.ts`;
+the log line is `startup.validation_failed`). The six required vars are `DATABASE_URL`,
+`META_VERIFY_TOKEN`, `META_APP_SECRET`, `INSTAGRAM_APP_SECRET`, `DASHBOARD_PASSWORD` and
+`CRON_SECRET` (`REQUIRED_VARS` in `src/config/env.ts`). So if every route 503s after a rollback,
+read the body — it tells you which variable it is. The app also refuses to start if
+`DASHBOARD_PASSWORD` is the old published default `"admin"`, which is in the public repo's
+history (`src/config/env.ts:49-53`).
 
 ---
 
@@ -1152,15 +1336,18 @@ counts rows that moved.
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # 548 unit tests, node:test via tsx
+npm test             # the whole suite, node:test via tsx
 ```
 
-Both pass on `main` as of 2026-09-22 (548 tests, 110 suites, 0 failures). CI also runs four
-content guards — `check:assets`, `check:icons`, `check:contrast` and `check:i18n` — each added
-after a failure that nothing else could see. There is **no build
+Both pass on `main`. `npm test` prints its totals last: read the `fail` line, which must be `0`.
+The suite grows with every change (16,350 tests in 2,983 suites on 2026-10-25), so do not compare
+the count with this one. CI also runs ten content guards, each added after a
+failure that nothing else could see: `check:assets`, `check:icons`, `check:icon-subset`,
+`check:hero3d`, `check:font`, `check:og`, `check:brand-icons`, `check:contrast`, `check:i18n` and
+`check:voice`. Run any of them with `npm run check:<name>`. There is **no build
 step**: TypeScript runs through `ts-node/esm` locally and `@vercel/node` in production. The
 dashboard has no build and no typecheck, so a syntax error there ships silently and blanks the
-page — `find dashboard -name '*.js' | xargs -n1 node --check` is the only guard it has, and CI
+page — `find dashboard -name '*.js' | xargs -n1 node --check` is the guard for that, and CI
 runs it (`.github/workflows/ci.yml`).
 
 Inspect production configuration without deploying:
@@ -1168,6 +1355,727 @@ Inspect production configuration without deploying:
 ```bash
 vercel env pull .env.local --environment=production
 ```
+
+---
+
+## 12. WhatsApp
+
+Setup, Meta's dashboards, the costs and the go-live rules are in
+[`docs/WHATSAPP_GUIDE.md`](docs/WHATSAPP_GUIDE.md); its §3 has the checks for "nothing shows up".
+Every hop a message takes is FLOWS.md §10. This section works backwards from a symptom. The
+settings are on **Settings → Connections → WhatsApp**: any member reads them, only the owner
+changes them. Its log lines start with `wa.` (messages, sends, alerts) or `whatsapp.` (the
+connection and the settings).
+
+Three facts explain most of what you will see:
+
+- **The assistant starts `off`.** `ai_agents.whatsapp_mode` is `off`, `test` or `everyone`. `off`
+  stores messages and answers nobody. `test` answers only the numbers on the test-sender list.
+  `everyone` is refused: `PUT /api/whatsapp/agent` answers 409 `go_live_not_ready`, with what is
+  missing, until the go-live gate exists (`src/routes/whatsapp.ts`).
+- **A sender who is not a test sender is stored as a bare record**: no words, no name, no phone
+  number, and the queued job's copy is cut down the same way (`src/webhook/whatsappRedact.ts`).
+  That is deliberate until the public privacy pages name WhatsApp (guide §3, step 4). So a thread
+  with no text in the Inbox is expected for a stranger.
+- **Replies are free only up to 1,000 a month per number** (`FREE_REPLIES_PER_MONTH`). Past that
+  the app sends nothing Meta would charge for, unless the owner ticked **Allow paid messages
+  beyond the 1,000 free replies a month**.
+
+The queries below select metadata only, never message text. Run them like the TikTok ones: in the
+Supabase SQL editor, or through `connectReadOnly()` as in §2.1. A WhatsApp message is a
+`dm.process` job and a delivery status or account event is a `wa.event` job, so a stuck one shows
+in the Job queue screen (§5.3).
+
+### 12.1 "A WhatsApp message did not arrive" — nothing in the Inbox
+
+Read the Vercel logs from the time you sent it and match what you find:
+
+| What you find | Means | Do |
+|---|---|---|
+| no `POST /webhook` at all | Meta did not send it | In Meta, the WhatsApp use case → Webhooks: the seven fields are subscribed (guide §1.3) and the app is subscribed to the account. Pressing **Connect number** again does `POST /{waba_id}/subscribed_apps` (guide §3, check 1) |
+| `webhook.signature_rejected` | the event was signed by another Meta app | §2.3; the WhatsApp events must come from the same app (guide §1.1) |
+| `wa.no_creator { phone_number_id }` | no connection for that number: never connected, disconnected (`revoked`), or connected in another workspace | **Connect number** (guide §2) |
+| `wa.creator_inactive` | the tenant is switched off, and its webhooks with it | a platform admin sets the tenant active again |
+| `wa.ignored { reason: 'group' }` or `'no_user_id'` | a group message, or one with no sender id: no thread is made, by design | nothing |
+| `wa.inbound_stored` | it arrived and was stored | 12.2 |
+
+### 12.2 "It arrived, but nobody answered"
+
+Read `wa.inbound_stored`. Its `no_reply_reason` says why, `stored` says `full` or
+`metadata_only`, and `answered` says whether the assistant replied. The same reason is on the
+message row:
+
+```sql
+SELECT m.created_at, m.message_type, m.no_reply_reason
+  FROM messages m
+  JOIN conversations c ON c.id = m.conversation_id
+ WHERE c.platform = 'whatsapp' AND m.direction = 'inbound'
+ ORDER BY m.created_at DESC
+ LIMIT 20;
+```
+
+| `no_reply_reason` | Means | Do |
+|---|---|---|
+| `agent_off` | the mode is `off`, which is how every number starts | **Who the assistant answers** → *Test senders only*, and add your own number |
+| `not_test_sender` | mode `test`, and this sender is not on the list | add the number in digits with the country code and no `+` (or the WhatsApp user id, `EG.…`). `everyone` stays refused until go-live |
+| `connection_invalid` | Meta refused the stored token: the message is stored, nothing is sent | 12.5 |
+| `bot_paused` | a person took the thread over (`conversations.is_bot_active` is false) | switch the assistant back on for that thread in the Inbox |
+| `unsupported_type` | a reaction, or something the assistant cannot read | expected |
+| `opted_out` | the person sent a stop word | expected; the wording is kept in `contact_consents` |
+| `window_closed`, `billable_blocked` | the reply was refused at the send | 12.3 |
+| `provider_unavailable`, `failure` | the AI could not answer, or the reply failed for another reason | `wa.answer_failed` has the reason, and the owner was alerted (§16.4). For the AI side see §16.2 |
+| `superseded` | a newer message replaced this one | expected |
+
+### 12.3 "The assistant answered, but the customer never got it"
+
+A reply fails in one of two ways: the app refuses to send it (no call to Meta is made), or Meta
+accepts it and fails it later. A refusal logs `wa.send_refused` with a `reason`:
+
+| `reason` | Means | Do |
+|---|---|---|
+| `connection_invalid` | not connected, or Meta refused the connection | 12.5 |
+| `window_closed` | more than 24 hours since the customer's last message, and no free-entry window: WhatsApp takes no free-form message | nothing; a reply is possible once the customer writes again. A person typing in the Inbox gets 409 `WHATSAPP_WINDOW_CLOSED` |
+| `billable_blocked` | the month's 1,000 free replies are used and paid messages are off | 12.4 |
+| `invalid_message` | the reply did not fit one WhatsApp message | a code fix; the log has the reason |
+
+A send that fails on Meta's side logs `wa.send_failed` (`reason`, `code`, `permanent`,
+`may_have_landed`). A reply Meta accepted and then failed arrives later as a delivery status:
+`wa.message_failed { code }`, and the message row says so:
+
+```sql
+SELECT m.created_at, m.delivery_status, m.delivery_error_code, left(m.delivery_error, 120) AS delivery_error
+  FROM messages m
+  JOIN conversations c ON c.id = m.conversation_id
+ WHERE c.platform = 'whatsapp' AND m.direction = 'outbound'
+ ORDER BY m.created_at DESC
+ LIMIT 20;
+```
+
+The codes you will meet (`src/services/whatsappErrors.ts`): `131047`, the 24-hour window is
+closed; `131026`, Meta could not deliver it (not a WhatsApp number, or the person has not accepted
+WhatsApp's new terms), which no retry fixes; `131042`, a payment problem on the WhatsApp account
+(when it comes back on the send itself, the connection is marked invalid: 12.5); `131056` and
+`130429`, too many messages to one person or too many at once, both of which can be retried. On a
+**test number**, replies reach only the recipients added in Meta (guide §1.2).
+
+### 12.4 Free replies and paid messages
+
+The card's **Free replies this month** counts delivered service messages per month (the
+`channel_usage` ledger; a month starts at 00:00 UTC on the 1st, because the account's own time zone
+is not read yet: `periodOf` in `src/services/channelUsage.ts`). Up to the 1,000th reply nothing
+changes.
+
+- **One alert a month**, when the month's free replies reach `free_tier_alert_at` (900 unless the
+  owner changed it; `PUT /api/whatsapp/billing` sets it from 0 to 1000). It does not repeat at
+  1,000. If the check itself failed, the log says `wa.free_tier_check_failed`.
+- **Past 1,000 with paid messages off** (the default): the assistant sends nothing. The log is
+  `wa.send_refused` with `reason: 'billable_blocked'` and `free_used`, the message row says
+  `billable_blocked`, the conversation is handed over ("Needs you" in the Inbox) and the owner is
+  told (§16.4).
+- **Past 1,000 with paid messages on**: replies go, and Meta bills each one (the rates are in guide
+  §7 and are Meta's, so check them there). Meta delivers none of them if the WhatsApp account has
+  no payment method (guide, *The state of things*).
+
+### 12.5 "Needs reconnecting", and the alerts
+
+The card's pill reads **Needs reconnecting** when the connection is `invalid`, with *Last answer
+from Meta: …* under it. What marks it: Meta refusing the token or a permission (codes 190, 200,
+10) on a send or on the daily read, or a payment problem (131042) on a send. While it stands,
+messages are still stored (Meta sends each once and never again), and nothing is sent.
+
+**Fix:** make a new system-user token (guide §1.4), then **Settings → Connections → WhatsApp →
+Reconnect with a new token**. **Refresh status** re-reads the number from Meta
+(`POST /api/whatsapp/refresh`); it answers *Meta still refuses the stored token* while the token
+is still bad. A connection that was `invalid` goes back to `active` only when Meta also reports
+the token valid with both WhatsApp permissions (`whatsapp.connection_recovered`).
+
+**A new token does not help when Meta itself blocked the account.** A restriction that stops
+replies, a ban or a disconnection that Meta reports (the `account_update` events) is kept as
+`account_block` on the connection, and a valid token does not lift it. The log says
+`whatsapp.connection_blocked` with the `block`, and the connection stays `invalid`. Meta's own
+*reconnected* or *reinstated* event lifts it, or the end of a restriction
+(`whatsapp.account_block_expired`). The owner's alert says what Meta did; read the reason in
+WhatsApp Manager and appeal there (FLOWS.md §10.10).
+
+The daily cron reads every connected number once (`refreshAllWhatsAppConnections`,
+`src/services/whatsappHealth.ts`): the log is `cron.whatsapp_health` with `checked`, `invalid`,
+`alerts` and `alertFailures`, and `wa.health_checked` per number. It catches a refused token before
+the next customer does. A change the owner needs to know about (the quality rating, the messaging
+limit, the number's status, the name review, a restriction, a ban, a disconnection, a refused or
+restored token, the free replies) is one alert, once.
+
+**WhatsApp account alerts go to Telegram only** (`notifyWhatsAppOwner`,
+`src/services/whatsappNotify.ts`: the operator's bot, Arabic and English in one message). Email
+does not carry them. A customer your assistant could not answer on WhatsApp (window closed, paid
+messages off, connection refused) is a different alert, a hand-off, and hand-offs go to Telegram
+and email (§16.4). With Telegram off or incomplete, an account alert is not sent at all: the log
+is `wa.alert_not_sent { why: 'alerts_off' }`, and the facts are still on the card (the status,
+quality and limit chips). Switch it on under **Settings → Messages & alerts →
+Handoff alerts** (*Send me alerts on Telegram*, the bot token and your chat id), then press
+**Send test message**. `wa.alert_failed` means Telegram refused it; the alert is given back and
+tried again (the next daily read, or the next event).
+
+---
+
+## 13. Ads Manager
+
+The Meta ads module: Boost, the **Ads** screen and the spending guard. Setup, the money rule,
+every alert and a troubleshooting list are in [`docs/ADS_GUIDE.md`](docs/ADS_GUIDE.md) (its
+*Alerts*, *Account health* and *Troubleshooting* sections, and *Ads and the DM assistant (A3)* for
+conversations that start from an ad). The token's own rules are in
+[`docs/TOKEN_GUIDE.md`](docs/TOKEN_GUIDE.md) ("Ads token"). The hop-by-hop walk is FLOWS.md §11
+(the money rule, the guard, the paced queue) and §12 (an ad → a conversation).
+
+Four facts explain most of what you will see:
+
+- **Ads are off per tenant** until a platform admin switches them on. Until then every
+  `/api/ads/*` route answers 404 `ADS_DISABLED` (`src/routes/ads.ts`).
+- **Everything is created `PAUSED`.** Nothing spends until someone confirms **Activate**.
+- **The guard, the rules, the write queue and the sync run inside `GET /api/jobs/drain`** (§5.1).
+  If no drain runs, none of them runs. The daily cron adds the health check, the Boost sync, the
+  proposals and the 28-day results sync. (A drain called by hand runs them too, so it is not a test.)
+- **Read-only look at Meta:** `node scripts/ads-probe.mjs`, with `--tenant <uuid>` for one tenant,
+  `--env <path>` for a `.env` and `--json` for machine output. It uses only GET calls and a
+  read-only database connection, and prints the access tier, the API version Meta served, the
+  account's status and funding (the type only), the token's scopes and expiry, and the assets it
+  reaches. It never prints a token.
+
+Two read-only queries show most of the state (paste them into the SQL editor, or run them through
+`connectReadOnly()` as in §2.1):
+
+```sql
+-- When the guard last SUCCEEDED (cap_checked) and last TRIED (cap_attempt), per tenant
+SELECT key, value FROM app_settings
+ WHERE key LIKE 'ads.cap_checked.%' OR key LIKE 'ads.cap_attempt.%'
+ ORDER BY key;
+
+-- The newest alerts, and which channel each went to
+SELECT created_at, kind, day, channels FROM ads_alerts ORDER BY created_at DESC LIMIT 20;
+```
+
+### 13.1 "Spending is not being watched" (`guard_blind`)
+
+The banner on the Ads screen, and the alert of the same name. The guard has had no successful
+check for 2 hours. The banner reads `GET /api/ads/overview` → `guard: { lastCheckedAt, blind }`
+(`guardState`, `src/services/ads/health.ts`). While it stands, a campaign that reaches your cap may
+not be paused for you; pause in Meta if you cannot confirm.
+
+Check in this order:
+
+1. **Is any drain running?** If `cap_attempt` and `cap_checked` are both more than 2 hours old,
+   nothing is calling the guard (§5.1). With the Heroku worker off, GitHub delivers a drain only
+   every 2 to 5 hours, so the banner can appear with nothing wrong at Meta. The `guard_blind` alert
+   is raised from inside a *failing* check, so with no drain there is only the banner and no alert.
+2. **Is `cap_attempt` newer than `cap_checked`?** Then checks are failing. `ads.cap_check_failed`
+   (warn) has the reason: Meta's code, a throttle (`ads.throttled`), or "this month's spend
+   unreadable". A failing tenant is tried again 10 minutes later; a drain in between skips it.
+3. **A dead token** is its own case: 13.3.
+
+There is no button. When the cause is gone, the next check writes `cap_checked` and the banner
+clears.
+
+### 13.2 "Campaigns were paused at the cap" (`cap_paused`)
+
+Not a fault: the cap did its job. Once an hour, from the drain, the guard checks whether this
+month's spend has reached the monthly cap, or whether one more day of every active campaign (a
+daily budget counted at 1.75×, a lifetime budget at its whole unspent part) would pass it. If so it
+pauses **every active campaign in the ad account**, including campaigns made in Meta Ads Manager.
+Saving a monthly cap at or below this month's spend does the same at once (the answer carries
+`warnings: ['will_pause_all']`).
+
+You can see it three ways: the alert `cap_paused` (it cannot be switched off), the log
+`ads.cap_paused_all` (warn, with `spent`, `next_day`, `cap`, `paused` and `of`), and the audit row
+written by `system:ads-guard`:
+
+```sql
+SELECT created_at, detail FROM audit_log WHERE action = 'ads.cap_paused' ORDER BY created_at DESC LIMIT 5;
+```
+
+**To run ads again:** raise the **Monthly spend cap** (Settings → Connections → Meta ads (Boost);
+above the platform ceiling the save is refused with `OVER_CEILING`), then resume the campaigns in
+**Ads → Campaigns**. A resume needs a confirm and passes the money rule. If the cap is still at or
+below the spend, the guard pauses them again within the hour.
+
+If the audit row's `not_paused` is above 0, or the log has `ads.cap_pause_failed`, Meta refused to
+pause some campaign. That check counts as failed and is tried again in 10 minutes. Look at those
+campaigns in Meta Ads Manager yourself.
+
+### 13.3 "Meta no longer accepts your ads access" (`TOKEN_INVALID`)
+
+What you see: that notice on the Ads screen; a button that answers **409 `TOKEN_INVALID`** (never
+401, which the dashboard reads as "signed out": `metaRefusal`, `src/services/adBoosts.ts`); the
+alert `token_dead` (once a day, it cannot be switched off). The tenant's `ads.health.<tenant>`
+setting then holds `token.health: 'dead'`, and that tenant's write queue stays stopped until a new
+token is saved.
+
+Cause: Meta answered a call with code 190 or 102. The token also dies when its system user is
+deleted, when its asset assignments are removed, or when the app's secret is reset
+(`docs/TOKEN_GUIDE.md`). `10/1341012` means the Page is not assigned to the system user.
+
+**Check:** Settings → Connections → Meta ads (Boost) → **Test connection**
+(`POST /api/ads/settings/test`) lists the scopes the token has and lacks and the assets it
+reaches. `node scripts/ads-probe.mjs` prints the same from a terminal.
+
+**Fix:** make a new system-user token ("Never" expiry, the five scopes) and install it **before**
+revoking the old one: `docs/TOKEN_GUIDE.md`, "Ads token" → "Rotating it". Paste it into
+**System-user ads token** and press **Test connection**.
+
+### 13.4 "Meta is limiting requests" (`RATE_LIMITED`, `EDIT_LIMIT`)
+
+- **`RATE_LIMITED`** (429, with `retryAt`). On the Limited access tier Meta allows about 60 points
+  per 300 s per ad account (a read is 1, a write 3). The app's pacer keeps to 45 and refuses
+  anything more **without calling Meta**. A throttle from Meta blocks the account until Meta's own
+  reset time (300 s when it gives none) and is **never retried** (`withRetry({ ads: true })`). The
+  log is `ads.throttled`, with `retry_at`.
+- **`EDIT_LIMIT`** (429, with `retryAt`). Meta's limits on edits: 4 budget changes per ad set per
+  hour (613/1487632), an object that is busy (613/4841018, tried again after 30 s), and 10 changes
+  a day to the account's own spending limit (17/1885172, which fails the change).
+
+Nothing is lost. A change waits in the queue and goes out when the block ends:
+`GET /api/ads/ops?state=pending,running,verify` lists what is waiting. A double press returns the
+same op, so pressing again does not queue a second one. **Fix:** wait for `retryAt`.
+
+### 13.5 "The assistant does not answer a conversation that came from an ad"
+
+If it is one Instagram thread whose replies are refused with Meta error **100 / 2534037**, Meta's
+own Business AI holds that thread. It is not retried and it is not handed over (the hand-off line
+would be refused the same way). The conversation gets `no_reply_reason = 'business_ai_owns_thread'`,
+the Inbox shows a notice, one `business_ai` alert goes out (once a day), and the log has
+`dm.pipeline_failed` and an error line that starts `ads.alert_` and ends in the alert's kind
+(`raiseAlert`, `src/services/ads/attribution.ts`):
+
+```sql
+SELECT id, platform, no_reply_reason FROM conversations WHERE no_reply_reason = 'business_ai_owns_thread';
+```
+
+**Fix:** in Meta Business Suite, Business AI → "Take control of conversations with your Business
+AI". The next reply Meta accepts clears the notice by itself (`clearNoReplyReason`).
+
+A related alert is `window_error`: a reply to an ad conversation was refused for being outside the
+window (`10/2018278` or `551`). The longer-window switch of that platform turns itself off
+(Settings → Connections → Meta ads → *Conversations from ads*) and the alert goes out. Turn the
+switch back on only after a real day-2 reply was accepted (guide, A3).
+
+### 13.6 Two more checks
+
+- **An alert did not arrive.** Read the `ads_alerts` row above: one alert is kept per kind, object
+  and day (`ads.alert_duplicate` means today's already went), and `channels` says `sent`, `failed`
+  or `off` for Telegram, email and the admin copy. A channel is used only when the recipient is set
+  (**Alert recipients**, then **Send a test**; `POST /api/ads/settings/alerts` with `test: true`)
+  and the deployment has the bot token or the email key (Settings → Messages & alerts).
+  `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason. Two kinds
+  never arrive, whatever the card says: **An ad was rejected** (`ad_rejected`) and **An ad has
+  issues** (`ad_issues`) have a checkbox, but nothing in the app raises them yet
+  (`docs/ADS_GUIDE.md`, *Alerts*). The rule template **Ad rejected → tell me** (Ads → Rules)
+  catches a rejected ad instead.
+- **A change or a create is stuck.** `GET /api/ads/ops/<id>` shows one op. An op `running` for over
+  5 minutes is reaped. A create that timed out is `verify`: the app searches Meta for its
+  `AR·<op id>` tag, resends at most once, and never creates twice (FLOWS.md §11.2 C). Ads Manager
+  showing a campaign without an ad means a later op failed or waits; nothing spends.
+
+---
+
+## 14. YouTube
+
+A Short is its own `scheduled_posts` row (`platform = 'youtube'`, `post_type = 'video'`). It is
+made in Posts, or by the Monteur or the infographics, usually beside the Instagram and Facebook
+row of the same video. The ordinary sweep publishes it (§4.1; `publishYouTubePost`,
+`src/services/youtubePublish.ts`). The connection is on **Settings → Connections → YouTube**: any
+member reads it, the owner connects. The Google OAuth
+client and the **Upload Shorts as public** switch are on **Settings → Platform**, platform admin
+only. There is no YouTube guide; the contract is the header of `src/services/youtube.ts` and
+`src/services/youtubePublish.ts`, and FLOWS.md §3.7 walks a Short from the row to the video id and
+the daily check.
+
+Read-only queries (SQL editor, or `connectReadOnly()` as in §2.1):
+
+```sql
+-- the connection; the tokens are never selected
+SELECT status, scopes, display_name, refresh_expires_at, last_refreshed_at, left(last_error, 160) AS last_error
+  FROM platform_connections
+ WHERE platform = 'youtube';
+
+-- the last twenty Shorts; `YTU:` in external_publish_id is an upload session left open
+SELECT id, status, scheduled_time, attempts, external_publish_id IS NOT NULL AS session_open,
+       published_post_id, left(error_log, 200) AS error_log
+  FROM scheduled_posts
+ WHERE platform = 'youtube'
+ ORDER BY scheduled_time DESC
+ LIMIT 20;
+```
+
+### 14.1 "Needs reconnecting" — the saved login was wiped
+
+The card says **Needs reconnecting**, with *Last problem: …* under it. Shorts fail with "Google
+refused the saved login (access was removed, or it expired) — reconnect YouTube in Settings."
+(Google's `invalid_grant`), and the log has `youtube.token_refresh_refused`.
+
+What it does: a refresh or an API call that Google answers with `invalid_grant`,
+`unauthorized_client`, `authError`, a missing permission, or a 401 calls `markConnectionInvalid`
+(`src/services/youtubeConnections.ts`). That **deletes the access and refresh tokens and the
+channel's name and picture**, and keeps the channel id and the reason. YouTube's developer policies
+want the data gone soon after access is revoked, and `/privacy` promises it by the next daily
+check. A dead refresh token cannot be revived: there is nothing to restore, only to reconnect.
+
+Causes, most likely first:
+
+- **The Google app is still in Testing.** A refresh token then lives 7 days (`refresh_expires_at`
+  is set only in this case). The card warns beforehand: *The Google app is still in Testing, so
+  this connection stops on {date}.* **Fix the cause first:** publish the app in Google Cloud
+  (Audience → Publish app), or it will die again a week after every reconnect.
+- Access was removed at myaccount.google.com/permissions, or the client ID or secret was changed
+  (`unauthorized_client`).
+
+**Fix:** the owner presses **Reconnect**. Then retry the Shorts that failed meanwhile with
+**Publish now**. A failed connect shows a reason on return: `channel_in_use` (the channel is
+connected to another workspace), `no_channel`, `scope_missing` (tick *Manage your YouTube
+videos*), `redirect_mismatch` (the card shows the redirect URI to register on the Google client;
+it is built from `app.public_base_url`, never from the Host header), `bad_client`,
+`state_mismatch` and `state_expired` (start again from the same browser). The log
+`youtube.oauth_callback_failed` carries Google's reason. Google's sign-in page warns *Google hasn't
+verified this app* until Google verifies it: choose Advanced, then *Go to AutoReply Pro*.
+
+### 14.2 "A Short failed" — the quota and the other refusals
+
+Read `error_log` on the card in Posts, or in the second query. It names the step and then
+Google's reason, in the app's own sentence (`REASON_MESSAGES`, `src/services/youtube.ts`). The log
+is `youtube.publish_failed`.
+
+| `error_log` says | Means | Do |
+|---|---|---|
+| *…daily quota is used up (about six uploads a day)…* (`quotaExceeded`) | `videos.insert` costs 1,600 of the 10,000 units Google gives the project a day, and a thumbnail 50: about six Shorts a day. The quota resets at midnight Pacific time | wait for the reset, then **Publish now** (below) |
+| *…upload limit for this channel is reached for today…* (`uploadLimitExceeded`) | YouTube's own limit for the channel | retry tomorrow |
+| *…reconnect YouTube in Settings.* | 14.1 | 14.1 |
+| *…takes MP4, MOV or WebM here — this file is …* | the video is another type | upload an MP4 |
+| *The YouTube upload did not finish — retry it, and it resumes where it stopped.* | the upload timed out part way | **Publish now**. It first asks Google how far the saved session (`external_publish_id = 'YTU:…'`) got and carries on from there, so it never posts the same Short twice |
+| *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, or the channel may not set custom thumbnails). The Short is up | nothing |
+
+**The quota sentence over-promises.** It says the upload "is retried after midnight Pacific
+time". Nothing retries it: the sweep takes only `PENDING` rows, and a failed Short stays `FAILED`
+(`RETRYABLE_REASONS` in `src/services/youtube.ts` is not used by it). After the reset press
+**Publish now** on the card, or edit and save the post (that flips `FAILED` to `PENDING`).
+
+### 14.3 "A Short is private", or "no longer public"
+
+Two things decide it. The switch **Upload Shorts as public** (`youtube.public_uploads`; off by
+default) says what the app asks for: off, every upload is `private`; on, the post's own choice,
+which is public unless it says otherwise. To read it, query `app_settings` for the key
+`youtube.public_uploads`: the value `true` is on, and no row is off. And **what YouTube reports
+back wins over what was asked**. YouTube documents that an unaudited project's uploads stay
+private. This project's have gone out public so far, but nothing promises it stays so. When
+YouTube kept a Short private, its `PUBLISHED` row says *YouTube kept this upload private — make it
+public in YouTube Studio.* That is not a failure: set it public in YouTube Studio by hand.
+
+**The daily visibility check** (`checkYouTubeVisibility`, `src/services/youtubeVisibility.ts`, run
+by the daily cron after the token refresh) asks YouTube about every published Short, 50 to a
+call, 1 quota unit each, the newest 500 per tenant. One that is not as expected gets a sentence in
+its `error_log` that starts *Visibility check {day}:* (*YouTube now shows this Short as private*,
+*YouTube no longer has this video*, or *shows this upload as rejected*). Posts shows it beside
+**Open on YouTube**, and the Settings card says *{n} of {total} Shorts are no longer public on
+YouTube. See them in Posts.* Each day's sentence replaces the last, so a Short that is public
+again loses its note at the next check. With the switch off, private is what was asked, so a
+private Short gets no note. The logs: `cron.youtube_visibility` (`checked`, `notPublic`,
+`missing`, `failed`), `youtube.visibility_changed` (warn, when any Short is not as expected) and
+`youtube.visibility_check_tenant_failed`. To list them:
+
+```sql
+SELECT id, scheduled_time, left(error_log, 200) AS error_log
+  FROM scheduled_posts
+ WHERE platform = 'youtube' AND status = 'PUBLISHED' AND error_log LIKE '%Visibility check%'
+ ORDER BY scheduled_time DESC;
+```
+
+---
+
+## 15. Studio jobs and the Mac worker
+
+The Studio's queue is **`studio_jobs`, not `jobs`**. `/api/jobs/drain` and the cron never touch it;
+only the worker on the owner's Mac takes work from it. The *Carousel Studio* section below has the
+worker's commands, the "worker is offline" query and the carousel, lesson and draft problems. This
+section covers what came after it: the Monteur, infographics, ad proposals and illustrated
+explainers, and the rule that decides who may ask Claude on the Mac. The contracts are
+[`MONTEUR.md`](MONTEUR.md) (the jobs in §3, Claude on the Mac in §6.3), [`STUDIO.md`](STUDIO.md)
+§11 (explainers) and [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md) §9 (the symptoms in the
+Studio's own words). The hop-by-hop walks are FLOWS.md §7 (who may ask) and §13 (explainers). The
+worker itself lives in another repo, `aicourse-captions`; its README maps its log lines to fixes.
+
+### 15.1 What the Mac is asked to do
+
+| `studio_jobs.kind` | Work | Claude? |
+|---|---|---|
+| `scan_library`, `index_lesson`, `render_carousel` | the Carousel Studio | no (indexing uses the worker's own Gemini key) |
+| `pick_folder`, `monteur_scan`, `monteur_transcribe`, `monteur_render` | the Monteur's folder, scan, transcript and render | no |
+| `monteur_think` | the Monteur's pick, copy, edit and the Analyst, while `monteur.brain` is `claude_mac` | **yes** |
+| `render_infographic` | an infographic's render; with `write` in the payload, Claude writes the page and its caption first | **yes**, only with `write` |
+| `ads_think` | an ad proposal drafted for the owner | **yes** |
+| `explainer_write` | an explainer's researched script | **yes** |
+| `explainer_voice`, `explainer_draw`, `explainer_render` | the narration, a loop that asks the server to draw (15.5), the videos | no |
+
+### 15.2 Jobs wait and nothing moves
+
+1. **Is the Mac up?** Run the "worker is offline" query in the *Carousel Studio* section: `online`
+   means a call within 90 s.
+2. **What is queued:**
+
+   ```sql
+   SELECT kind, status, count(*) AS jobs, min(created_at) AS oldest, min(not_before) AS earliest_start
+     FROM studio_jobs
+    WHERE status IN ('pending', 'claimed')
+    GROUP BY kind, status
+    ORDER BY oldest;
+   ```
+
+3. A `pending` job whose `not_before` is in the future is waiting for a **time**, not for the Mac:
+   a paused explainer drawing (15.5), or a voice step waiting for Gemini's free speech allowance
+   (the explainer's note starts `VOICE_LIMIT:` and the step is queued again for the reset). The
+   dashboard counts those as *waiting*, apart from the Mac's backlog.
+4. A `claimed` job whose last heartbeat is more than 15 minutes old is handed out again at the next
+   claim, and fails after three claims (*stopped reporting on this job 3 times*; see the table in
+   the *Carousel Studio* section).
+5. **What failed:**
+
+   ```sql
+   SELECT id, kind, attempts, left(error, 200) AS error, updated_at
+     FROM studio_jobs
+    WHERE status = 'failed'
+    ORDER BY updated_at DESC
+    LIMIT 20;
+   ```
+
+### 15.3 A job fails at once: "doesn't know the job kind"
+
+What you see: a job `failed` straight away, and with it the explainer, the Monteur source, the
+infographic or the ad proposal that waited for it, with *…doesn't know the job kind "<kind>"* in
+`studio_jobs.error`. The **worker** writes that sentence, in the `aicourse-captions` repo, so it
+cannot be found by searching `src/`.
+
+Cause: the app queued a kind that the running worker has no handler for. A new kind arrives in
+this repo first, with a deploy. The worker has it only after its own repo is updated **and** its
+launchd agent is restarted.
+
+**Fix:** on the Mac, update the worker's repo, then restart the agent and queue the work again
+(**Retry** on the explainer, the source, the infographic or the proposal):
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.aicourse.studio-worker
+```
+
+For a release that adds a kind the order is: migrate, deploy, update the worker and restart it
+(MONTEUR.md §6.3, *Rollout*). A `monteur_think` that reaches an old worker is only a failed try,
+never a lost day (15.4).
+
+### 15.4 Claude jobs: the Mac is asleep, `claude` is signed out, or the tenant is refused
+
+Every Claude job needs the Mac awake, the worker running and the `claude` command signed in to
+the owner's plan. What happens when one of them is missing depends on the job:
+
+- **`monteur_think`** is one *try* of a request (`src/services/monteur/think.ts`). A try that
+  shows no sign of life for 20 minutes fails with *No answer within 20 minutes: the Mac may be
+  asleep, or its Studio worker stopped.* The request is asked again after 10 minutes, then 30
+  minutes, then 2 hours. The fourth failure stops the item (the source, or the Analyst's run) with
+  **"Claude on the Mac didn't answer: …"** and the last reason. While it waits the item says
+  *Waiting for Claude on the Mac: …*; a drain never waits for the Mac. **Retry** on the item
+  starts again from try 1.
+- **`explainer_write`**: the CLI's sign-in refusal (*Failed to authenticate*, *OAuth session
+  expired*, *Please run /login*) fails the write, and the next look at the explainer hands the
+  script to Gemini (`src/services/explainers/writing.ts`). The same takeover happens when the Mac
+  has not picked the write up in 10 minutes **and** no live worker has been heard from; a Mac that
+  is up but busy is not replaced, and the explainer says it is busy. A free Gemini key cannot
+  research on the web, and the failure says so. If the owner chose Gemini as the writer, Gemini
+  writes from the start and the Mac is never asked. With `writer_fallback` off there is no
+  takeover at all: the explainer waits for the Mac or fails with its reason. **Fix:** sign
+  `claude` in again on the Mac, then Retry (FLOWS.md §13.5).
+- **`render_infographic` with `write`** and **`ads_think`** have no takeover. They wait for the Mac
+  like any job, or fail with the worker's reason. An ad proposal that the Mac never answers within
+  24 hours is failed by the daily cron (`cron.ads_proposals_expired`, `staleDrafts`).
+
+**The Mac is refused: `NEEDS_API_BRAIN`.**
+
+- **What you see:** a 409 with the code `NEEDS_API_BRAIN` (*This tenant's AI work can't run on the
+  operator's Mac; it needs the AI providers layer*), a queued job failed with that text, and the
+  log `studio.mac_brain_refused`.
+- **Why:** this is the rule working, not a fault. Claude on the Mac runs on the owner's personal
+  Claude plan, and Anthropic's terms forbid routing anyone else's work through it. So the server
+  refuses it for every tenant except the owner (the first creator ever made) and the tenants a
+  platform admin listed (the app setting `studio.mac_brain_tenants`; unset means the owner alone).
+  The code is in `src/services/macBrain.ts`.
+- **Fix for a client tenant:** use the AI providers layer. The Monteur uses `monteur.brain: 'api'`,
+  infographics are written on the server, and ad proposals go through `ads_draft` and
+  `ads_review`. With no provider key saved the answer is 409 `NEEDS_AI_PROVIDER` (for ad proposals,
+  `AI_NOT_CONFIGURED`): the platform admin adds a key under Operations → AI providers.
+- **Do not add a client to the list to make the error go away.** `GET /api/admin/mac-brain-tenants`
+  shows the list, and `PUT` saves it (`{ "tenants": [ids] }`, or `{ "tenants": null }` for the owner
+  alone). Each save is an audit row, `settings.mac_brain_write`.
+
+### 15.5 "The explainer's pictures stopped" — Cloudflare's daily allowance
+
+The pictures are drawn by the **app**, not the Mac: Cloudflare Workers AI, on its free plan of
+10,000 units a day. The Mac's `explainer_draw` job is only a loop that asks the server for one
+picture at a time (`POST /api/studio/worker/explainers/:id/draw-next`; FLOWS.md §13.10). Cloudflare
+cannot be asked what is left, so the app counts an estimate (about 110 units a picture, 80 pictures
+a day by default) and reserves it before each call.
+
+What you see: the explainer stays **drawing**. The card says *Waiting for tomorrow's allowance*, or
+*Drawing is paused until {when}: today's allowance is used up.* The explainer's `draw_paused_until`
+is set, the worker's loop is answered `paused` with an `until`, a redraw of one scene by hand
+answers 429 `EXPLAINER_ALLOWANCE_PAUSED` with `retryAt`, and the log has
+`explainer.allowance_exhausted` with `resumes_at`. Two Cloudflare answers look alike and are not:
+
+| Cloudflare says | The app reads it as | What happens |
+|---|---|---|
+| error code **3036** (**4006** in older answers), "Account limited" | the day's allowance is used up | drawing pauses until the next **00:05 UTC**, and the next `explainer_draw` job is queued for then. It resumes by itself; nothing is charged |
+| error code **3040** "Out of capacity", or a bare **429** | Cloudflare is **busy** for a moment, not a day's pause | that scene fails with *Cloudflare is busy right now…; try again in a few minutes*, and its units are given back |
+
+The app's own daily cap (80 pictures by default) pauses the same way at the same time. **There is
+nothing to press.** Check the state:
+
+```sql
+SELECT id, status, failed_step, draw_paused_until, left(error, 160) AS note, updated_at
+  FROM explainers
+ WHERE status IN ('drawing', 'failed')
+ ORDER BY updated_at DESC
+ LIMIT 10;
+```
+
+`GET /api/studio/explainers/allowance` answers `used_units`, `pictures`, `cap`, `est_left` and
+`paused_until`. A scene that failed for another reason stays failed. Three scenes failing in a row
+make the worker stop, and nothing retries by itself: the owner redraws the scene, or presses
+**Continue drawing**.
+
+---
+
+## 16. The DM bot
+
+It answers direct messages on Instagram and Messenger (WhatsApp, §12, shares its brain). The
+forward walk is FLOWS.md §2: the claim (§2.5), the sales switch (§2.6b), the hand-off and the
+owner's alert (§2.6d), the send (§2.9) and a failure (§2.11). A DM is a `dm.process` job (§5); its
+log lines start with `dm.` or `ai.`. The settings are on the **DM assistant** page: **Turn on
+auto-replies**, **Reply engine** (Gemini, the default, or *AI providers*, with **Fall back to
+Gemini**) and **Sales replies**; and per thread in the Inbox, **AI replies: on** or **off**. Read
+them in one place (counts only, no text):
+
+```sql
+SELECT is_active, model, engine, gemini_fallback, sales_mode,
+       cardinality(sales_test_senders) AS sales_test_senders
+  FROM ai_agents;
+```
+
+### 16.1 "Replies are slow"
+
+Measure first, with the median query of §5.2 (created to done, per job kind): seconds is healthy.
+Then look for these, most likely first:
+
+| Cause | You see | Do |
+|---|---|---|
+| The invocation was frozen after the 200 | a median near 70 s, and `runtime.wait_until_unavailable` (warn) in the logs: the platform gave the request no `waitUntil` (`src/webhook/ack.ts`, `src/utils/waitUntil.ts`) | the next drain finishes the job. The Heroku worker drains every minute (§5.1); a `running` row left behind is freed after 300 s (§5.3) |
+| No drain is running | `pending` jobs with an old `run_after`; the `queue` warning of `diagnose.mjs` above 15 minutes | §5.1 |
+| The send quota | `dm.quota_exhausted` with `source: 'dm'`; the job's `last_error` reads *Send quota exhausted (creator: N/L).* or `(app: …)` | the job retries after about 30 s, 2 m and 8 m, and on the last attempt is concluded with no reply (§2.4). The ceilings are 180 an hour per tenant and 1,000 for the whole app |
+| The model is slow or failing | `job.retrying` with the model's error; `dm.pipeline_failed`; with the *AI providers* engine, `dm.engine_fallback` (it answered once with Gemini instead) | 16.2 |
+
+```sql
+SELECT kind, status, count(*) AS jobs, min(run_after) AS oldest_due, max(attempts) AS most_attempts
+  FROM jobs
+ WHERE status IN ('pending', 'running')
+ GROUP BY kind, status;
+```
+
+### 16.2 "A DM got no reply at all"
+
+Find the message in the logs and read what follows `dm.received`:
+
+| You find | Means | Do |
+|---|---|---|
+| `dm.duplicate_ignored` | Meta redelivered a message that is already handled, or being handled | nothing |
+| `dm.bot_paused` | a person took the thread over (the Inbox says **AI replies: off**) | switch it on again for that thread (`PUT /api/conversations/:id/toggle-bot`). A reply the owner types pauses the thread only when *Pause the assistant for a customer when I reply to them myself* is on (Settings → Handoff alerts) |
+| `ai.agent_disabled` (info), or `ai.unconfigured` (warn) | **Turn on auto-replies** is off, or the tenant has no agent row. Silence is deliberate here | the DM assistant page: turn it on and save |
+| `dm.quota_exhausted` | the hourly ceiling | 16.1 |
+| `dm.pipeline_failed` (error) | the reply failed; the line has the reason | below |
+| `dm.engine_failed` | the *AI providers* engine failed, and so did the fallback (or **Fall back to Gemini** is off) | the line says why: no key, no route, a spent budget, an outage. Operations → AI providers |
+| the thread's `no_reply_reason` is `business_ai_owns_thread` | Meta's Business AI holds the Instagram thread | §13.5 |
+| `dm.failure_handoff` | the last attempt failed: the customer was handed over, the owner told | below |
+
+**A failed reply.** `dm.pipeline_failed` carries the model's or Meta's error. What to do depends
+on it:
+
+- A transient error (a Gemini 429 or 503, a Meta 5xx, a reset connection) is retried:
+  `job.retrying` after about 30 s, 2 m and 8 m.
+- A permanent Meta error is final at once and is never retried: code 190 (a dead token), 200 (a
+  missing permission) or 10903 (the person blocked DMs).
+- *No Gemini API key* means none is saved or set: Operations → Gemini API key, or `GEMINI_API_KEY`.
+- A **404** from the model means that key has no access to it. Google serves the 2.5 family only to
+  keys that used it before, and the default model is `gemini-2.5-flash` (`DEFAULT_MODEL`,
+  `src/services/ai.ts`). The page's model picker offers three; try one in the page's **Agent
+  sandbox** before relying on it.
+
+**It is not silence any more.** On the last attempt of a failure that is not a permanent Meta
+one, `handoffAfterFailure` (`src/services/dmSales/failureHandoff.ts`; every `sales_mode`) marks
+the conversation `stage = 'handoff'` with `handoff_reason = 'unsure'`, and does **not** pause the
+bot: an outage is not a request for a person, so the customer's next message gets a normal reply.
+It sends the customer the hand-off line **once** (the profile's own, or the language kit's, with
+the automated-service disclosure in front when that has not been given) and tells the owner
+(16.4). The log is `dm.failure_handoff` (error, with `state` and `line_sent`). A message with no
+words (a photo, a voice note, a sticker) is not handed over, because it asked nothing. In the
+Inbox these threads are under the filter **Needs you**:
+
+```sql
+SELECT id, platform, stage, handoff_reason, handoff_at, is_bot_active
+  FROM conversations
+ WHERE stage = 'handoff'
+ ORDER BY handoff_at DESC
+ LIMIT 20;
+```
+
+### 16.3 Sales mode
+
+The sales assistant is a separate switch and is **off by default**; the DM assistant answers
+exactly as it always did until the owner changes it. **Sales replies** (`ai_agents.sales_mode`)
+has three values: *Off (replies as they are today)*, *Test (only the senders below)* and *On
+(everyone)*. In Test only the listed **Test senders** get sales replies, and everyone else still
+gets the usual ones. A test sender is an Instagram-scoped user id: digits only, 5 to 32 of them,
+at most 20 (`src/services/dmSales/mode.ts`). The read fails toward `off`: a missing agent row, a
+database from before migration v39 or an error all mean the old path, and the log says
+`dm.sales_mode_read_failed` (warn).
+
+The sales assistant always writes through the AI providers route *Direct-message replies* (`dm`,
+Operations → AI providers), whichever reply engine is chosen. If that route fails it answers once
+with Gemini when **Fall back to Gemini** is on (`dm.engine_fallback`, `sales: true`); otherwise it
+hands the conversation over (`dm.engine_failed`, `sales: true`). A conversation that will not
+stop, 15 bot replies in an hour, ends itself and is handed over (`dm.sales_reply_cap`, error).
+
+### 16.4 The hand-off alert did not come
+
+An alert goes out when a conversation needs a person (`stage = 'handoff'`: a refund, a complaint,
+a request for a person, abuse, a chat that loops, an assistant that was unsure, or a reply that
+could not be sent), and, as a separate **hot lead** alert, when the link has just been sent to
+someone who wanted it. `notifyOwner` (`src/services/dmSales/handoff.ts`) sends each alert to
+**every channel that is switched on**, Telegram and email, independently. The state is recorded
+first, so the Inbox filter **Needs you** and the badge never depend on the alert.
+
+Check in this order:
+
+1. **Is a channel on and complete?** Settings → Messages & alerts → **Handoff alerts** (*Send me
+   alerts on Telegram*, the bot token and your chat id) and **Email alerts** (a Resend API key and
+   *Send me alerts by email*). **With both off the alert stops with no log line at all:** that
+   silence is `notifyOwner` returning `off`. Press **Send test message** or **Send test email**.
+2. **Whose conversation is it?** Alerts are the platform owner's. Another tenant's customers are
+   never sent to the owner's chat or email, and that tenant gets the Inbox flag and the badge only
+   (`dm.handoff_notify_skipped`, at `debug`, with `why: 'not_owner_tenant'`).
+3. **The logs:** `dm.handoff_notified` (Telegram sent) and `dm.handoff_notified_email` (email
+   sent); `dm.handoff_notify_failed` and `dm.handoff_notify_email_failed`, with `outcome` and
+   `status` (a wrong bot token or chat id, a refusal from Resend; the text is scrubbed of the
+   key and of addresses); `dm.handoff_notify_rate_limited` (at most 3 hand-off alerts and 1
+   hot-lead alert per conversation per hour); `dm.handoff_notify_error`.
+4. **The email sender.** Without a domain of your own, Resend's default sender delivers only to the
+   address the Resend account was made with. Another address needs a verified domain, entered
+   under **Send from**.
+5. **Hot leads** have their own switch on each channel: Telegram's is on unless turned off, email's
+   is off unless turned on.
+
+The alert says why in a line, for example *Needs you: the assistant could not reply (a technical
+failure)*, *refund request*, *complaint*, *asked for a person*, *abusive messages*, *the assistant
+was not sure how to answer*, and, for WhatsApp, *the 24-hour window had closed, so no reply could
+be sent*, *the free WhatsApp replies are used up and paid replies are switched off* or *the
+WhatsApp connection needs reconnecting*.
 
 ---
 
@@ -1193,7 +2101,7 @@ Three behaviours that look like failures but aren't, and one that used to be a f
 Fifteen golden conversations (Gulf, Egyptian, MSA and English: a price, "is it for beginners", "too expensive", free on YouTube, the
 link at once, off-topic, abuse, "stop", a refund, a payment problem, an injection, a question the course does not cover, a
 collaboration, an English speaker, and qualify → recommend → link) go through the real sales prompt, schema, coerce and guard against
-a model you name. Run it before every prompt or kit change, and to choose the model of the `dm` route (docs/DM_SALES_PLAN.md §11).
+a model you name. Run it before every prompt or kit change, and to choose the model of the `dm` route (Operations → AI providers). The plan behind it is in the maintainers' local notes, which are not in this repo.
 
 ```bash
 npx tsx scripts/eval-dm-sales.mts --model claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5 --report eval-report.md  # needs an Anthropic key (Operations → AI providers)
@@ -1228,7 +2136,19 @@ Uploads live in the public Supabase Storage bucket `media` (`<creator_id>/<id><e
   old one.
 - **An upload 404s:** check the row's `storage_path`, then that the object exists in the bucket.
   Deleted rows queue their object in `media_object_deletions`; the daily sweep removes it and
-  records `last_error` on failure.
+  records `last_error` on failure. A third cause is that the row is **private** (next bullet): the
+  public route answers 404 for it on purpose.
+- **Private files.** A customer's file (a WhatsApp voice note, photo or document; migration v51)
+  is stored with `is_private` set, in a second bucket, `media-private`
+  (`private/<creator_id>/<id><ext>`). The app creates that bucket on first use as non-public
+  (`public: false`), and refuses to use it if it exists and is public. `GET /api/uploads/:id`
+  answers 404 for a private row exactly as for an id that never existed, and a scheduled post
+  cannot name one
+  (`src/services/storage.ts`, header). Only the authenticated Inbox route and the voice-note
+  transcription read it, and only for the tenant that owns it. To see whether a 404 is this:
+  `SELECT id, is_private, storage_path FROM media_uploads WHERE id = '<id>'`. Without Supabase
+  Storage configured a private file stays in `data` and `is_private` alone keeps the public route
+  away from it. An erasure deletes these rows with the person's messages (§7).
 
 ## Carousel Studio
 
