@@ -103,7 +103,10 @@ describe('explainer_write: the script lands', () => {
         const draft = stateOf().draft!;
         assert.equal(draft.est_seconds, estimateSeconds(validWriterOutput(12).scenes, 'en', 1));
         assert.equal(draft.est_seconds, 143, '143 spoken words, at one a second');
-        assert.deepEqual(draft.warnings.map((w) => w.code), ['duration_long'], 'longer than the 55 to 95 seconds of a 60 to 90 second video');
+        assert.deepEqual(
+            draft.warnings.map((w) => w.code), ['duration_long', 'slow_opening', 'scene_long'],
+            'longer than the 55 to 95 seconds of a 60 to 90 second video, and at one word a second every picture stays about 12 s'
+        );
     });
 
     it('flags a script written with no web read at all: research_limited, which the owner may approve over', async () => {

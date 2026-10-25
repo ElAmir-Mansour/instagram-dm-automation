@@ -17,10 +17,10 @@ name: Drain job queue
 # `*/5` is about the finest granularity worth asking for.
 #
 # That is worth saying plainly: this does NOT deliver the minute-accurate scheduling the
-# dashboard UI implies. What it delivers is a drain every ~5-15 minutes instead of once every
-# 24 hours — which is the difference between a queue and a backlog. If exact timing matters
-# later, a dedicated cron service with 1-minute granularity is a drop-in replacement: same
-# URL, same bearer token, nothing here changes.
+# dashboard UI implies. Measured in October 2026, GitHub delivered it every 2-4.5 hours, not
+# every 5 minutes, so it is the backstop. The drain every minute is the Heroku worker
+# (heroku-worker/), which calls the same URL with the same bearer token. Both beat once every
+# 24 hours, which is the difference between a queue and a backlog.
 #
 # ─── Failure behaviour ──────────────────────────────────────────────────────────────────────
 #

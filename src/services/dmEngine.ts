@@ -11,10 +11,10 @@
  *   - A `gemini` engine is exactly today's: an error is thrown to the caller, whose retry rules (src/webhook/messaging.ts) are unchanged.
  *   - A `providers` engine that fails for any reason (no key, no route, a provider outage, a timeout, a refused budget, an answer with no
  *     usable text) is answered with today's Gemini path ONCE when `gemini_fallback` is on. With the fallback off, or with Gemini failing
- *     too, the result is a handoff stub: nothing is sent, and `dm.engine_failed` says why. There is no canned apology, and never two replies:
- *     the fallback runs only while no reply exists, before anything is sent.
+ *     too, the result is `{ kind: 'handoff' }`, and `dm.engine_failed` says why. Never two replies: the fallback runs only while no reply
+ *     exists, before anything is sent.
  *
- * The stub is where S8's real handoff (a flag on the conversation and a ping to the owner) will go. For now it is a terminal "no reply".
+ * The pipeline answers a handoff with `handoffAfterFailure` (S8): the thread is stamped, the customer gets the handoff line, the owner is told.
  *
  * Nothing here sends a message or writes a row. The pipeline (`messaging.ts`) owns the send, the quota and the claim.
  */
