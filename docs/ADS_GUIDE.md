@@ -117,8 +117,8 @@ alert per kind and object per day. `ads_alerts` rows are kept one year.
 | `cap_paused` | Campaigns paused because the cap was reached | the guard paused campaigns at the cap (also writes an audit row). **Cannot be switched off** |
 | `payment` | Payment problems | the daily check finds a payment problem (unsettled account, failed funding) |
 | `account_disabled` | The ad account was disabled | the daily check finds the account disabled or closed |
-| `ad_rejected` | An ad was rejected | Meta rejected an ad (seen by the sync) |
-| `ad_issues` | An ad has issues | Meta reports issues on an ad (seen by the sync) |
+| `ad_rejected` | An ad was rejected | **Not raised yet.** The checkbox is on the card, but nothing in the app sends this alert today (`src/services/ads/notify.ts` defines it; no caller). The rule template **Ad rejected → tell me** (Rules tab) catches rejected ads instead |
+| `ad_issues` | An ad has issues | **Not raised yet**, as above; the same rule template catches an ad Meta marks `WITH_ISSUES` |
 | `token_dead` | The ads access stopped working | Meta answered `190` or `102`; the tenant's queue stops and `token.health` becomes `dead`. **Cannot be switched off** |
 | `token_expiring` | The ads access is about to expire | a token with an end date (Connect) is within 14 days of it |
 | `guard_blind` | Spending is not being watched | no successful guard check for 2 hours (dead token, throttling, Meta error). **Cannot be switched off** |
