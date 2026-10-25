@@ -1,327 +1,201 @@
-# AutoReply Pro — Instagram/Facebook comment-to-DM automation
+# AutoReply Pro
 
-Self-hosted Instagram and Facebook automation on the official Meta Graph API. When someone
-comments a trigger keyword on your post, the app sends them a DM and optionally replies
-publicly. Inbound DMs are answered by Gemini. Scheduled posts publish to both platforms.
+AutoReply Pro automates a creator's Instagram, Facebook, TikTok, YouTube and WhatsApp. It turns comments into DMs, answers messages with AI, publishes scheduled content, makes content in a Studio, measures growth and runs Meta ads. One deployment can serve several workspaces (tenants), each with its own accounts, people and settings.
 
-Express 5 + TypeScript + Postgres, deployed on Vercel serverless with an RTL-first Arabic
-dashboard at `/dashboard`.
+Express 5, TypeScript and Postgres, on Vercel. Live: <https://msg-response-auto.vercel.app>. The dashboard is at `/dashboard`, in Arabic and English.
 
-**Operating it:** [`RUNBOOK.md`](RUNBOOK.md) — the procedures, symptom-first.
-**Proving it works end to end:** [`VERIFYING.md`](VERIFYING.md).
-**Why it is shaped this way:** [`ARCHITECTURE.md`](ARCHITECTURE.md).
-**What actually happens, hop by hop:** [`FLOWS.md`](FLOWS.md).
-**The Carousel Studio, in depth (what a worker is, every setting, troubleshooting):** [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md).
-**TikTok, end to end:** [`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md).
+## What it does
 
----
+- **Comment → DM campaigns:** a trigger word in a comment on an Instagram or Facebook post sends the commenter a DM and, if you want, a public reply. Arabic spellings are normalised. Matching is by `substring` (the default) or whole `word`.
+- **AI replies to DMs:** Instagram and Messenger messages are answered by Gemini, or by Anthropic, OpenAI, OpenRouter, Groq or a custom endpoint when a workspace picks the providers engine. The optional sales mode adds offers, tracked links (`/r/<code>`), one follow-up inside Meta's 24-hour window, and a hand-off to a person.
+- **Inbox and analytics:** read and answer conversations, pause the AI on one thread, see stats and an activity log, export the log as CSV.
+- **WhatsApp:** connect a WhatsApp Business number (Cloud API). Messages are stored. For now the AI agent answers only the test senders you list: "everyone" is refused until a go-live check is built.
+- **Scheduled publishing:** posts go to Instagram, Facebook, TikTok (inbox drafts, or Direct Post once switched on) and YouTube Shorts: images, videos, reels, carousels and, on Instagram, stories. What each platform accepts is checked when you save.
+- **The Studio:** carousels made from course videos, the Monteur (reels cut from long videos), animated infographics, and illustrated explainers (only the platform owner's workspace can switch them on). A worker on the creator's Mac renders them. It lives in a separate private repository, `aicourse-studio`.
+- **Growth hub:** daily Instagram and Facebook insights, best posting times, an AI coach, keyword and hashtag ideas, competitor look-ups, and reach options on posts (alt text, collaborators, trial reels).
+- **Ads Manager:** Meta Marketing API boosts, message ads with a policy check, results, audiences, rules, lead ads (locked until a sign-off) and split tests, under a monthly spending cap. Ads are created paused. A platform admin switches it on per workspace.
+- **Managed workspaces:** users with roles (owner, operator, viewer), a tenant switcher, invite links, a setup wizard, encrypted Meta tokens, and a platform-admin area for tenants, users, jobs, the audit log and data erasure.
+- **Help Center:** step-by-step guides in Arabic and English, inside the dashboard (`#/help`).
+- **Made to be operated:** a durable job queue, send-rate limits counted in Postgres, JSON logs with request ids, a migration ledger and read-only health scripts.
 
-## Features
+The dashboard menu: Today, Inbox, Keyword replies, DM assistant, Studio, Scheduler, Results, Growth, Ads, Settings and Help. Platform admins also see Operations, Clients, Client ads, Users, Job queue, Audit log and Data erasure. The routes are in `dashboard/js/app.js`.
 
-- **Comment → DM automation** — keyword-triggered DMs via the Meta Graph API, with an optional
-  public reply on the comment. When Meta won't deliver the DM (the person can't receive messages
-  from Pages), the bot replies publicly instead: the campaign's link on Facebook, "link in bio" on
-  Instagram
-- **Instagram and Facebook** — Instagram comments/DMs and Facebook Page comments/Messenger,
-  through one pipeline
-- **Arabic-first keyword matching** — Hamza variants, Teh Marbuta, Yeh, diacritics and tatweel
-  are normalised on both sides. Per-campaign `substring` or `word` matching
-- **Post-specific targeting** — a campaign can be scoped to one post id or run globally
-- **Durable job queue** — every webhook delivery is written to Postgres before Meta is
-  acknowledged, then drained within a time budget. Retries with jittered backoff, a stale-claim
-  reaper, and queue-level deduplication on top of row-level claims
-- **Scheduled publishing** — images, videos, reels and carousels to Instagram, Facebook, or both,
-  and to TikTok, with an atomic claim so overlapping runs cannot double-publish, and
-  partial-publish recovery. A reel Instagram is still processing is held and published from the
-  same container on the next sweep; a Facebook post that may already be live is never re-sent
-- **Carousel posts** — 2 to 10 images as one Instagram and Facebook post (`post_type =
-  'carousel'`), and 2 to 35 as a TikTok photo carousel. The count and the formats (JPEG for
-  Instagram, JPEG or WebP for TikTok) are checked when the post is saved, not at publish time
-- **TikTok** — videos and photo carousels, sent to the creator's TikTok inbox by default, or
-  posted directly with Direct Post (`video.publish`) once it is switched on. Direct posts stay
-  private ("Only me") until TikTok audits the app. See [`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md)
-- **Carousel Studio** — turns course videos into branded carousels for Instagram, Facebook and
-  TikTok. A worker on the creator's Mac indexes each lesson with Gemini and renders the slides
-  with Remotion; the app writes the copy from the lesson's notes, checks it against the design's
-  rules, and schedules it with its keyword → DM campaign. Per-account brand, voice, product and
-  posting times. See [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md)
-- **Growth & SEO hub** (`#/growth`) — daily Instagram and Facebook insights (views, reach, the
-  3-second skip rate, watch time, followers vs new people), best times from your own posts, an AI
-  Growth Coach, keyword and hashtag tools, competitors via Business Discovery, and publish-time
-  reach levers (alt text, collaborators, trial reels). See [`GROWTH.md`](GROWTH.md)
-- **Media in Supabase Storage** — uploads live in a public Storage bucket, not in Postgres; every
-  URL stays `/api/uploads/<id>` on the app's domain, which streams the file. Configured in
-  Settings → Media storage
-- **Gemini DM replies** — structured output, conversation history, per-thread bot toggle, and
-  the automated-service disclosure Meta requires
-- **Managed multi-tenancy** — `users`, `memberships`, identity-carrying sessions, per-tenant
-  encrypted Meta tokens, a tenant switcher, and a cross-tenant admin surface
-- **Send-rate protection** — per-tenant hourly quota, an app-wide pool ceiling, and a 24h
-  per-recipient cap, all counted in Postgres rather than per-instance memory
-- **Operable** — structured logs with request correlation, a migration ledger, a one-command
-  read-only health check, and a live pipeline watcher
+## Where to read what
 
-## Dashboard
+| If you are… | Read | It is for |
+|---|---|---|
+| a developer | [`FLOWS.md`](FLOWS.md) | How every flow works, hop by hop, with a `file:line` at each step, and where a flow can silently do nothing |
+| | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Why it is built this way: decisions and trade-offs |
+| | [`DESIGN.md`](DESIGN.md) | UI tokens (colour, type, components) and the do's and don'ts |
+| | [`STUDIO.md`](STUDIO.md), [`MONTEUR.md`](MONTEUR.md), [`GROWTH.md`](GROWTH.md) | The contracts for the Studio and its worker, the Monteur, and the Growth hub |
+| | [`src/services/ads/README.md`](src/services/ads/README.md), [`src/services/growth/README.md`](src/services/growth/README.md) | The rules the Ads module keeps. What Meta's Graph API really answers for Growth |
+| an operator | [`RUNBOOK.md`](RUNBOOK.md) | Start from a symptom, find the fix |
+| | [`VERIFYING.md`](VERIFYING.md) | Prove once, end to end, that a real Meta event works |
+| | [`docs/TOKEN_GUIDE.md`](docs/TOKEN_GUIDE.md) | Meta tokens: types, how to get a permanent one, what kills one, the ads token |
+| | [`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md) | TikTok setup, review and operation |
+| | [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md) | The Carousel Studio and its Mac worker: every setting, cost and fix |
+| | [`docs/ADS_GUIDE.md`](docs/ADS_GUIDE.md) | The Ads Manager for operators and clients |
+| | [`docs/WHATSAPP_GUIDE.md`](docs/WHATSAPP_GUIDE.md) | WhatsApp setup and operation |
+| an end user | The Help Center in the dashboard, `#/help` | Guides in Arabic and English. The text is in `dashboard/js/help-content.js` |
+| legal or compliance | [`/privacy`](https://msg-response-auto.vercel.app/privacy), [`/terms`](https://msg-response-auto.vercel.app/terms), [`/data-deletion`](https://msg-response-auto.vercel.app/data-deletion) | The public pages. Their source is `public/privacy.html`, `public/terms.html` and `public/data-deletion.html` |
 
-At `/dashboard`. Overview, Campaigns, Analytics, Activity Log, Scheduled Posts, **Studio**
-(the Carousel Studio: the lesson library, drafts and editor, plus its own Settings tab with the
-brand kit, voice, product, posting times, library folder and workers), Inbox, AI Settings,
-Settings — plus **Tenants** and **Users** for a platform admin.
+The maintainers also keep local notes and specs outside this public repository.
 
----
+## How it runs
+
+- **App:** one Express app (`src/index.ts`) on Vercel serverless (`vercel.json`, `@vercel/node`). There is no build step. No instance keeps state that the others need: sessions are signed tokens, and the send-rate counters are database rows.
+- **Data:** Supabase Postgres, through its pooler (`src/config/db.ts`). Uploads go to Supabase Storage once Settings → Media storage is filled in, and stay in Postgres until then. Either way the URL is `/api/uploads/<id>`.
+- **Work queue:** `POST /webhook` checks the signature, writes each event to the `jobs` table (`src/jobs/`), answers `200`, then drains the queue under `waitUntil` for up to 8 seconds (`src/webhook/ack.ts`). Unfinished jobs stay `pending`. Failed jobs are retried with backoff.
+- **Publishing:** `GET /api/jobs/drain` and `GET /api/cron/publish` both publish due posts, so a scheduled post goes out at the first call after its time. With only the daily cron, that can be a day late.
+
+| What calls the app | What it calls | How often |
+|---|---|---|
+| GitHub Actions, `.github/workflows/drain.yml` | `GET /api/jobs/drain` | Scheduled `*/5`, but GitHub starts it only every few hours |
+| A small poller, `heroku-worker/` (a Heroku worker process) | `GET /api/jobs/drain`, and `POST /api/onboarding/drafts/sweep` for profile drafts | Every 60 seconds, in two loops |
+| Vercel cron, `vercel.json` | `GET /api/cron/publish`: stale claims, retention, drain, publish, daily health checks and syncs | Daily at 00:00 UTC |
+| The Mac worker | `POST /api/studio/worker/claim` | It polls for Studio jobs. Jobs wait while the Mac is off |
 
 ## Setup
 
-### Prerequisites
+### 1. Prerequisites
 
-- Node.js 22+ (the test runner only expands globs in `--test` from 22)
-- A PostgreSQL database (Supabase recommended)
-- A Meta Developer App with Instagram Graph API configured
-- A Vercel account for deployment
+- Node.js 22 or newer. CI runs Node 22, and `npm test` gives glob patterns to `node --test`, which Node 20 reads as file names.
+- A Postgres database. This project runs on Supabase. On Vercel, use its pooler address (port 6543).
+- A Meta developer app, and a Vercel account.
+- Serving accounts you do not own needs Meta Advanced Access (Business Verification and App Review). See [`RUNBOOK.md`](RUNBOOK.md) §8.3.
 
-### 1. Clone and install
+### 2. Install and configure
 
 ```bash
 git clone https://github.com/ElAmir-Mansour/instagram-dm-automation.git
 cd instagram-dm-automation
 npm install
-```
-
-### 2. Environment
-
-```bash
 cp .env.example .env
 ```
 
-Seven variables are **required** — the app refuses all traffic with a 503 naming the missing
-one rather than serving with a missing secret (`src/config/env.ts`):
+Six variables are **required**. If one is missing, the app answers every request with `503` and names it (`src/config/env.ts`, `src/index.ts`).
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | Postgres connection string. Use Supabase's pooler port (6543) |
-| `META_VERIFY_TOKEN` | Webhook verification handshake |
-| `META_APP_SECRET` | Facebook app's webhook signing secret |
-| `INSTAGRAM_APP_SECRET` | **A different app's secret.** "Instagram API with Instagram Login" is a separate Meta app and signs its own webhooks |
-| `GEMINI_API_KEY` | Gemini, for DM replies and the Studio. Now a fallback: a key a platform admin saves on **Operations → Gemini API key** takes over for every tenant, without a redeploy, and this variable is no longer required at boot |
-| `DASHBOARD_PASSWORD` | Dashboard login, and the session-token signing key. Cannot be `admin` — that value is in this repo's public history |
-| `CRON_SECRET` | Bearer guarding `/api/cron/publish` and `/api/jobs/drain`. `openssl rand -hex 32` |
+| `DATABASE_URL` | Postgres connection string. Use Supabase's pooler on Vercel: each instance opens its own connections |
+| `META_VERIFY_TOKEN` | The webhook verification handshake. A token saved in Settings also works, with no redeploy |
+| `META_APP_SECRET` | The Meta app's secret. It checks webhook signatures |
+| `INSTAGRAM_APP_SECRET` | The second webhook signing secret: the "Instagram API with Instagram Login" app has its own. A webhook is accepted if it matches either. If one Meta app sends both kinds of event, put that app's secret in both variables |
+| `DASHBOARD_PASSWORD` | The dashboard login. It cannot be `admin`. With `META_APP_SECRET` it signs session tokens, so changing either signs everyone out |
+| `CRON_SECRET` | Bearer secret for the drain, cron and draft-sweep endpoints. `openssl rand -hex 32` |
 
-Strongly recommended:
+Strongly recommended, and in `.env.example`:
 
 | Variable | Notes |
 |---|---|
-| `TOKEN_ENCRYPTION_KEY` | 32 bytes hex (`openssl rand -hex 32`). Encrypts Meta tokens at rest. Not required at startup, but **required to save a token or create a tenant** |
-| `RAW_PAYLOAD_RETENTION_DAYS` | Set to `30` to match what the published `/data-deletion` page promises. Unset means keep forever |
+| `TOKEN_ENCRYPTION_KEY` | 32 bytes as hex (`openssl rand -hex 32`). Encrypts Meta tokens at rest. The app starts without it, but you cannot save a token or create a tenant |
+| `RAW_PAYLOAD_RETENTION_DAYS` | `30` matches the public `/data-deletion` page. Unset keeps raw event copies forever |
 
-Optional knobs — logging, queue budgets, the app-wide rate ceiling — are documented inline in
-`.env.example`.
+`META_APP_ID` is not needed to boot, but token extension, Connect with Facebook and the scripts below use it.
+
+Values that belong to the whole platform are dashboard settings, not env vars. An env var is only a fallback (`src/services/appSettings.ts`). A platform admin enters AI provider keys under **Operations**. The TikTok and YouTube app credentials, Connect with Facebook, media storage and the public site details are under **Settings**. Secrets are stored encrypted.
+
+`.env.example` documents the fallbacks `GEMINI_API_KEY`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `PUBLIC_BASE_URL` and `META_LOGIN_CONFIG_ID`, and the knobs `LOG_LEVEL`, `LOG_STACKS`, `WEBHOOK_QUEUE`, `JOB_INLINE_BUDGET_MS`, `JOB_WORKER_BUDGET_MS`, `META_API_VERSION` and `MEDIA_RETENTION_DAYS`. The code also reads some it does not list, such as `META_APP_HOURLY_LIMIT` (the app-wide hourly send ceiling), `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 
 ### 3. Database
 
 ```bash
-npm run migrate:status     # what would run
-npm run migrate            # apply it
+npm run migrate:status   # what would run
+npm run migrate          # apply it
 ```
 
-`schema.sql` runs first, then `src/config/migration_v*.sql` in version order. Every applied
-file is recorded with a checksum in `schema_migrations`, each runs in its own transaction, and
-a failure exits non-zero. All files are idempotent.
+`schema.sql` runs first, then the files in `src/config/` in version order. The list the code expects is `EXPECTED_MIGRATIONS` in `src/config/migrations.ts`. Each file runs in its own transaction and is recorded with a checksum in `schema_migrations`. A failure exits non-zero. Run migrations **before** you merge code that needs them, because a merge deploys at once.
 
-If your database already has the current schema but no ledger, `node scripts/migrate.mjs
---baseline` marks everything applied without running it.
+For a database that already has the current schema but no ledger, `node --env-file=.env scripts/migrate.mjs --baseline` marks **every** pending file as applied without running it. Use it only when that schema is really there.
 
-Migrations run to `migration_v23_media_storage.sql`; `src/config/migrations.ts`
-(`EXPECTED_MIGRATIONS`) is the canonical list. Apply them **before** deploying the code that
-needs them.
+### 4. Run locally
 
-### 4. Meta access token
+`npm run start:dev` serves <http://localhost:3000/dashboard> and <http://localhost:3000/health>.
 
-You need a **permanent Page Access Token**.
+### 5. Deploy and schedule
 
-```bash
-# 1. Graph API Explorer → select your app → token type USER (not Page!)
-# 2. Add every required scope → Generate Access Token
-# 3. Exchange it:
-node scripts/exchange-token.mjs YOUR_SHORT_LIVED_USER_TOKEN
-```
+Import the repository into Vercel and add the environment variables there. Every merge to `main` then deploys production. For the GitHub Actions scheduler, add `CRON_SECRET` as a repository secret (`gh secret set CRON_SECRET`) and set the repository variable `BASE_URL` to your deployment, because `drain.yml` defaults to the live site. The poller in `heroku-worker/` reads `CRON_SECRET` and `DRAIN_BASE_URL`.
 
-Paste the result into the dashboard Settings page, which encrypts it on write. See
-[`docs/TOKEN_GUIDE.md`](docs/TOKEN_GUIDE.md) for the manual route.
+### 6. Connect Meta
 
-| Type | Lifespan | Source |
-|---|---|---|
-| Short-lived (User or Page) | ~1 hour | Graph API Explorer |
-| Long-lived Page | 60 days | Exchange a short-lived Page token |
-| **Permanent Page** | never expires | Exchange a **User** token → `/me/accounts` |
+Sign in at `/dashboard` with `DASHBOARD_PASSWORD`. On an empty database, create the first workspace on the **Clients** page (**New tenant**): by name, or with an Instagram Page id and a Page access token (`POST /api/admin/tenants`). A workspace connects its Page with **Connect with Facebook**, or by pasting a permanent Page access token in Settings. Connect with Facebook is off until a platform admin switches it on in Settings. It needs the public base URL (a Settings value, or `PUBLIC_BASE_URL`), and `/api/meta/callback` must be a Valid OAuth Redirect URI in your Meta app.
 
-> **Common mistake:** generating a Page token directly in the Explorer and exchanging it only
-> ever gets you 60 days. You must start from a **User** token.
+To make a permanent Page token, start from a **User** token. `node --env-file=.env scripts/exchange-token.mjs <short-lived user token>` swaps it for a long-lived User token, reads `/me/accounts` and prints each Page's token with its expiry. It needs `META_APP_ID` and `META_APP_SECRET`. Exchanging a Page token directly gives only 60 days ([`docs/TOKEN_GUIDE.md`](docs/TOKEN_GUIDE.md)).
 
-> **Separately:** Meta lapses *data access* 90 days after the last re-authorisation, and when it
-> does, reads fail while `/debug_token` still reports the token as valid. `scripts/diagnose.mjs`
-> reports the date. Diarise it.
-
-### 5. Run locally
-
-```bash
-npm run start:dev
-```
-
-- Dashboard: <http://localhost:3000/dashboard>
-- Health: <http://localhost:3000/health>
-
-### 6. Deploy
-
-```bash
-vercel --prod --yes
-```
-
-Set every environment variable in Vercel → Settings → Environment Variables. There is no build
-step and no CI deploy step; Vercel is the only pipeline. `vercel rollback` reverts.
+Meta also ends a user's data access about 90 days after they last approved the app, while the token still reports valid. Settings shows the date, and `scripts/diagnose.mjs` warns 14 days before.
 
 ### 7. Webhooks
 
-In the [Meta Developer Console](https://developers.facebook.com/apps/):
+In the Meta app, set the callback URL to `https://<your-domain>/webhook` and the verify token to `META_VERIFY_TOKEN` (or the one saved in Settings). Subscribe these fields:
 
-1. Set the callback URL to `https://your-domain.vercel.app/webhook`
-2. Set the verify token to match `META_VERIFY_TOKEN` (or `creators.webhook_verify_token`)
-3. Subscribe to `feed`/`comments`, `messages`, `messaging_postbacks`
+- object `page`: `feed`, `messages`, `messaging_postbacks`, `messaging_referrals`. Connect with Facebook subscribes each Page to these for you (`src/services/metaLogin.ts`)
+- object `instagram`: `comments`, `messages` (what `scripts/diagnose.mjs` expects)
+- `leadgen` on a Page, only while a platform admin has recorded a lead-ads sign-off
 
-**Confirm the verify-token handshake succeeds *before* creating the subscription.** Meta only
-re-checks the token when a subscription changes, and a wrong or empty token produces an opaque
-`Callback verification failed: HTTP 403` while existing webhooks keep delivering. Note also
-that there is **one callback URL per object type, app-wide** — changing it for one tenant
-changes it for all of them.
+Meta checks the verify token again at every subscription change, and a wrong or empty token fails with an opaque `HTTP 403`. Run the handshake check in Settings before you save a change in Meta's console. There is one callback URL per object type for the whole app.
 
 ### 8. Check it
 
-```bash
-node scripts/diagnose.mjs
-```
-
-Read-only. Reports deployment, security guards, webhook subscriptions, token health, event
-flow, queue, publishing, rate limits, schema and storage. Exits `0` healthy, `1` warnings,
-`2` critical, `3` could not run.
-
----
+`node scripts/diagnose.mjs --url https://<your-domain>` is read-only. It reads the database named in your `.env` and the deployment at `--url` (the default is the live site). It exits `0` healthy, `1` warnings, `2` critical, `3` could not run. `node scripts/watch.mjs` follows one comment or DM through the pipeline, also read-only. [`VERIFYING.md`](VERIFYING.md) is the full proof.
 
 ## Development
 
 ```bash
+npm run start:dev    # local server on port 3000, reads .env
 npm run typecheck    # tsc --noEmit
-npm test             # 548 tests across 110 suites, node:test via tsx
+npm test             # node --test through tsx
+find dashboard -name '*.js' -print0 | xargs -0 -n1 node --check   # the dashboard has no build step
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests, and `node --check` over `dashboard/` —
-the dashboard has no build step, so that is its only guard against a syntax error blanking the
-page.
+CI (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`. It runs typecheck, tests, the dashboard syntax check, and these guards (run one with `npm run <name>`):
 
----
+| Guard | What it protects |
+|---|---|
+| `check:assets` | The dashboard cache version (see Gotchas) |
+| `check:icons` | Icons that depend on reading direction are mirrored in right-to-left pages, and only those |
+| `check:icon-subset` | `dashboard/js/icons.js` is what `scripts/build-icons.mjs` writes |
+| `check:hero3d`, `check:font`, `check:og`, `check:brand-icons` | The committed landing bundle, display font, share cards and icon set match their builders. Rebuild with `npm run build:hero3d`, `build:font`, `build:og` or `build:brand-icons` |
+| `check:contrast` | Token colours keep WCAG AA contrast |
+| `check:i18n` | Every English string has an Arabic one |
+| `check:voice` | The words the product never says do not appear in dashboard or public text |
 
-## API reference
+**Deploys:** every merge to `main` deploys production through Vercel's Git integration. There is no manual deploy step. Each pull request gets a preview deployment. `vercel rollback` goes back ([`RUNBOOK.md`](RUNBOOK.md) §9).
 
-This is the surface. For what happens *behind* a route — the webhook pipeline, the publish
-sweep, the auth chain — [`FLOWS.md`](FLOWS.md) walks each one hop by hop with a `file:line` at
-every step.
+## API surface
 
-Unauthenticated:
+Mounts are in `src/index.ts` and `src/routes/api.ts`. [`FLOWS.md`](FLOWS.md) walks what happens behind each. Roles inside a workspace are `viewer` < `operator` < `owner`, and a platform admin acts as owner everywhere. A session token goes in `Authorization: Bearer`.
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness + database connectivity |
-| `GET`/`POST` | `/webhook` | Meta verification handshake / event delivery |
-| `GET` | `/privacy`, `/data-deletion` | Meta App Review compliance pages |
-| `GET` | `/api/uploads/:id` | Serve stored media by UUID (Meta cURLs this during ingestion) |
-| `POST` | `/api/auth/login` | Login — returns an HMAC session token |
-| `POST` | `/api/invites/peek` | What an invite link is for (tenant, role, expiry); never uses the link up. The token is in the body, never the URL |
-| `POST` | `/api/invites/accept` | Use a link: create the account (or add a signed-in one, or reset a password) and answer a session. Single-use, one atomic claim |
-| `GET` | `/api/meta/callback` | Facebook Login for Business redirect target. Trusts only a single-use `state` that equals the cookie set by `POST /api/meta/connect`; answers with a redirect to the dashboard, never a token |
-| `POST` | `/api/meta/deauthorize` | Meta's **Deauthorize Callback URL** (register it under Facebook Login, Settings): a person removed the app, and Meta posts a form with `signed_request`. Trusts only that request's HMAC-SHA256 (checked with every app secret before anything is read from it); disconnects the tenants whose `creators.meta_user_id` is that person's, exactly, and nobody else's (the owner's pasted-token connection has none). 403 for a bad signature, 200 when nothing matches |
-
-Bearer `CRON_SECRET`:
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/jobs/drain` | Drain the job queue. **Runs real handlers — sends real DMs** |
-| `GET` | `/api/cron/publish` | Reap stale claims, retention sweep, backstop drain, then **publish every due post to the live accounts**; also refreshes the TikTok and YouTube tokens and rechecks every connected tenant's Meta token (a transient failure writes nothing) |
-| `POST` | `/api/onboarding/drafts/sweep` | Advance the profile drafts nobody is working on (the backstop `heroku-worker` calls about every minute). Bearer `CRON_SECRET`, like the drain. Costs AI spend |
-
-Session token required:
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/auth/me` | Session identity, role, tenant, available tenants, and `onboarding: { status, step, gated }`: whether this session is sent to the setup wizard |
-| `GET` | `/api/onboarding` | The setup wizard's state: status, where to resume, each step's saved draft, the profile with its `version`, what activation still misses |
-| `PUT` | `/api/onboarding/steps/:step` | Owner. Autosave a step's draft (`{ values }`, never touches the profile), mark it `done`/`skipped`, or note it is on screen |
-| `POST` | `/api/onboarding/complete` | Owner. Finish the wizard (needs the six activation fields); idempotent |
-| `POST` | `/api/auth/switch-tenant` | Act as another tenant |
-| `GET` | `/api/stats`, `/api/stats/daily`, `/api/stats/hourly`, `/api/stats/campaigns` | Dashboard metrics |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/campaigns` | Campaign CRUD, including `match_mode` |
-| `GET` | `/api/interactions` | Paginated activity log |
-| `GET` | `/api/interactions/export` | CSV export, scoped to the acting tenant |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/posts/scheduled` | Scheduler CRUD |
-| `GET` | `/api/posts/live` | Recent published posts from Meta |
-| `POST` | `/api/upload` | Media upload (base64 JSON; ~3.3MB ceiling) |
-| `GET`/`POST` | `/api/conversations`, `/api/conversations/:id/messages` | Inbox |
-| `PUT` | `/api/conversations/:id/toggle-bot` | Pause or resume the AI on one thread |
-| `GET`/`POST` | `/api/settings/token`, `/api/settings/token/status` | Token status and rotation |
-| `GET`/`POST` | `/api/settings/ai` | AI agent configuration |
-| `GET`/`POST` | `/api/settings/webhook-token` | Change the verify token with no redeploy |
-| `GET` | `/api/meta/connection` | Is Connect with Facebook on, is the app set up, and this tenant's Meta connection (never a token) |
-| `POST` | `/api/meta/connect` | Owner: mint a state and a cookie, return the Login dialog URL (`{ returnTo?, reconnect?, authType? }`). Refuses a tenant that is connected unless `reconnect` is true |
-| `GET`/`POST` | `/api/meta/candidates`, `/api/meta/select` | Owner: the Pages waiting for a choice (names and ids, never a token) / choose one. The choice spends the pick and nulls its stored tokens |
-| `POST` | `/api/meta/disconnect` | Owner: unsubscribe the Page from the webhook and delete the ids and the token. Needs `{ "confirm": true }` |
-| `GET` | `/api/meta/comment-check` | Operator and up: has a `comment.process` job arrived for this tenant since it connected? A count and a time, never a comment (the setup wizard's "ask a friend to comment *test*") |
-| `GET`/`POST` | `/api/onboarding/draft` | The tenant's profile draft (the wizard polls it every 3 s) / start one. Owner of the tenant, only while its onboarding is open |
-| `POST` | `/api/onboarding/draft/advance` | Do the next steps of the draft (up to 270 s inside the request); the wizard fires it when the poll says `advanceable` |
-
-Platform admin only (returns **404** to everyone else — the surface does not announce itself):
-
-| Method | Path | Description |
-|---|---|---|
-| `GET`/`POST` | `/api/admin/tenants` | Cross-tenant health list / create a tenant |
-| `PATCH` | `/api/admin/tenants/:id` | Rename or enable/disable |
-| `GET`/`POST` | `/api/admin/users` | List / create a user, optionally with a membership |
-| `POST` | `/api/admin/users/:id/revoke` | Invalidate every session that user holds |
-| `POST` | `/api/admin/users/:id/memberships` | Grant or change a membership |
-| `POST`/`GET` | `/api/admin/tenants/:id/invites` | Make an invite (or a password-reset link): the link comes back once / list a tenant's invites, without links |
-| `POST` | `/api/admin/invites/:id/regenerate` | A new link for the same person; the old one stops working in the same step |
-| `DELETE` | `/api/admin/invites/:id` | Revoke a link |
-| `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules |
-| `GET`/`POST` | `/api/meta/app-settings` | Connect with Facebook: the on/off switch (default off) and the Login for Business configuration id, and what to register in Meta's dashboard |
-| `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules, the YouTube Data API key (never returned: `{set, source, last4}`) and the tenant whose Instagram reads other people's profiles |
-| `GET`/`POST` | `/api/admin/tenants/:id/draft` | A tenant's profile draft: read it / start one (`force` makes a new one over a finished draft). The tenant comes from the path |
-| `POST` | `/api/admin/tenants/:id/draft/advance` | Do the next steps of the draft (up to 270 s inside the request); **starts** the draft from the handle and site typed at creation when there is none |
-
----
+| Mount | File | Who may call it | For |
+|---|---|---|---|
+| `/webhook` | `src/index.ts`, `src/webhook/` | Meta: verify token on `GET`, HMAC signature on `POST` | Comment, message and WhatsApp events go to the job queue |
+| `/health`, `/r/:code` | `src/index.ts`, `src/routes/links.ts` | Anyone | Liveness and database check. Tracked links: redirect and count the click |
+| `/`, `/privacy`, `/terms`, `/data-deletion`, `/pricing`, `/eid`, `/robots.txt`, `/sitemap.xml` | `src/index.ts`, `src/routes/seo.ts`, `public/` | Anyone | The public site and legal pages |
+| `/dashboard` | `dashboard/` | Static files. Its API calls need a session | The dashboard |
+| `/api/auth/login`, `/api/uploads/:id`, `/api/interactions/export` | `src/routes/api.ts` | Anyone. Login is throttled per IP. The CSV needs a one-time link | Password login. Stored media for Meta and TikTok to fetch. The CSV download |
+| `/api/invites` | `src/routes/invites.ts` | Anyone holding an invite token | `peek` and `accept` an invite link |
+| `/api/tiktok`, `/api/youtube`, `/api/meta` (the callback, webhook and deauthorize paths) | `tiktok.ts`, `youtube.ts`, `meta.ts` | The provider. Each proves itself: a single-use state with its cookie, or an HMAC | OAuth redirects and provider webhooks |
+| `/api/studio/worker` | `src/routes/studio.ts` | The Mac worker, with a per-workspace Bearer token | Claim jobs, report progress, upload files |
+| `/api/jobs/drain`, `/api/cron/publish`, `/api/onboarding/drafts/sweep` | `src/routes/api.ts` | Bearer `CRON_SECRET` | Schedulers only: see Gotchas |
+| `/api/auth/me`, `/api/auth/switch-tenant`, `/api/auth/password` | `src/routes/api.ts` | Any session | Who am I, change workspace, change password |
+| `/api/{stats,campaigns,interactions,posts,upload,conversations,dm/funnel,settings,health/tenant,attention,creators}` | `src/routes/api.ts` | Any member reads, `operator` writes, `owner` changes the Meta token and webhook token. Some settings are platform admin only | The core dashboard API |
+| `/api/tiktok`, `/api/youtube` | `tiktok.ts`, `youtube.ts` | Members read, `owner` connects, platform admin saves the app keys | Connections and publishing options |
+| `/api/meta` | `src/routes/meta.ts` | `owner` connects, `operator` runs the comment check, platform admin saves app settings | Connect with Facebook |
+| `/api/whatsapp` | `src/routes/whatsapp.ts` | Members read, `owner` writes | Number, agent mode, billing, entry links |
+| `/api/studio` | `src/routes/studio.ts` | `operator`. `owner` manages workers. Explainers also need a switch that only the platform owner's workspace can have | Carousels, Monteur, infographics, explainers |
+| `/api/growth` | `src/routes/growth.ts` | `operator` | Insights, coach, keywords, competitors |
+| `/api/profile`, `/api/dm/ice-breakers` | `profile.ts`, `iceBreakers.ts` | Profile: `operator` reads, `owner` writes. Ice breakers: `owner` | The creator profile. Instagram ice breakers |
+| `/api/ads` | `src/routes/ads.ts` and the `ads*.ts` files | `viewer` reads, `owner` writes. Answers `404` until a platform admin switches ads on | The Ads Manager |
+| `/api/onboarding` | `onboarding.ts`, `onboardingDrafts.ts` | `operator` reads, `owner` writes | The setup wizard and the profile draft |
+| `/api/admin` | `src/routes/admin.ts` and `admin*.ts` | Platform admin only. Anyone else gets `404` | Tenants, users, invites, jobs, audit, erasure, AI providers, media storage |
 
 ## Gotchas
 
-1. **Vercel is stateless.** Never use in-memory stores for sessions or counters. Sessions are
-   HMAC-signed tokens; rate-limit counters live in Postgres, because a per-instance counter
-   multiplies the real send rate by however many instances are warm.
-2. **Work after the response can be frozen.** The webhook therefore writes every event to the
-   `jobs` table *before* answering Meta, then drains within a budget. Anything unfinished stays
-   `pending` instead of being silently lost, and `.github/workflows/drain.yml` calls
-   `/api/jobs/drain` on a schedule so it does not wait for the next delivery. GitHub throttles
-   scheduled workflows, so treat that interval as "frequent but not punctual"; the daily Vercel
-   cron is the backstop that bounds the worst case at 24h.
-3. **Token type matters.** Use PAGE tokens for API calls, not USER tokens.
-4. **24-hour messaging window.** Meta only allows messaging within 24 hours of a user
-   interaction.
-5. **Two Meta apps, two signing secrets.** Dropping either silently 403s half your traffic —
-   before anything touches the database, so it is indistinguishable from no events arriving.
-6. **Substring matching is the default.** A short keyword fires inside unrelated words: `عيد`
-   matches inside `سعيد`, `جو` inside `موجود`, `تم` inside `اهتمام`. Set `match_mode = 'word'`
-   per campaign.
-7. **`post_type` must be `video`, not `reel`**, for anything cross-posted to Facebook. Always
-   set `cover_url` too, or Instagram uses frame 0 as the thumbnail.
-
-> **Verified 2026-09-21: this is no longer the live configuration.** `GET /{META_APP_ID}/subscriptions` returns *both* the `instagram` and `page` objects under one app, so every event is signed with `META_APP_SECRET` and `INSTAGRAM_APP_SECRET` is vestigial. The dual-secret check in `verifyMetaSignature` stays — it costs nothing and this setup has changed before — but do not diagnose a silent comment path by suspecting that secret first. `diagnose.mjs` now derives this for itself and says so.
-
-
-More, with the history behind each: [`RUNBOOK.md`](RUNBOOK.md) and `CLAUDE.md`.
+1. **Two webhook secrets.** A webhook is accepted if its signature matches `META_APP_SECRET` or `INSTAGRAM_APP_SECRET` (`src/utils/signature.ts`). A bad signature gets a `403` before anything is written, so it looks like "no events arriving". The log line `webhook.signature_rejected` says how many secrets were tried.
+2. **Vercel caps a request body at 4.5 MB.** `POST /api/upload` takes base64 JSON, so its real limit is about 3.2 MB of file (`src/routes/api.ts`). Larger media goes by a signed direct upload to Storage (`/api/ads/uploads/sign`, `/api/studio/worker/uploads/sign`).
+3. **`/api/uploads/:id` must answer `Range` with `206`.** Players and Meta fetch media in pieces. Without `206`, every piece streams the whole file, and Vercel's CDN does not answer ranged requests from its cache (`src/utils/byteRange.ts`). Check: `curl -H 'Range: bytes=0-1023' -D - -o /dev/null <upload url>` must show `206` and `content-length: 1024`.
+4. **Bump the dashboard cache version on every dashboard change.** Every `?v=` in `dashboard/index.html` and `ASSET_VERSION` in `dashboard/js/app.js` must change together, or a returning browser mixes old and new files. `npm run check:assets` fails otherwise, and also holds the pages in `public/` to the same number.
+5. **The drain and cron endpoints are not dry runs.** `GET /api/jobs/drain` runs the real handlers, so it sends real DMs and replies. `GET /api/cron/publish` publishes every due post to the live accounts.
 
 ## License
 
-MIT
+The server in this repository is MIT (see [`LICENSE`](LICENSE)). The Studio worker and the Monteur and infographic templates are in a separate private repository and are not open source.
