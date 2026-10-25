@@ -78,11 +78,14 @@ studio_jobs (
 Enable RLS on all four tables, as migration v11 does. Add indexes on `lesson_moments(lesson_id)`,
 `carousel_drafts(creator_id, created_at DESC)` and `studio_jobs(status, created_at)`.
 
-New `app_settings` keys:
-- `studio.worker_token` (secret, encrypted like the TikTok client secret)
-- `studio.worker_last_seen` (ISO timestamp)
-- `studio.worker_name`
-- `studio.course_root` (default `/Users/elamir/Desktop/AI Course`)
+**Since v21** the `kind` CHECK allows 14 kinds (`STUDIO_JOB_KINDS`, `src/services/studio/jobs.ts`): these three, the Monteur's
+five (`pick_folder`, `monteur_scan`, `monteur_transcribe`, `monteur_render`, `monteur_think`; MONTEUR.md), `render_infographic`
+(v31, the infographics), `ads_think` (v55, the Ads Manager's AI proposals) and the explainers' four (§11).
+
+**Workers** (as built in v21, not the `studio.worker_*` app settings this contract first proposed): each Mac worker is a row in
+`studio_workers` with its own token, stored only as a hash (`token_hash`), a name and when it was last seen
+(`src/services/studio/worker.ts`). The operator creates one in Studio → Settings (the token is shown once) and revokes it there.
+The folder a worker may read, `courseRoot`, is in the worker's own config (§9), not in the app.
 
 ## 3. Shared types
 
@@ -133,10 +136,12 @@ Errors are `4xx { error: string, problems?: string[] }`.
 | DELETE `/api/studio/drafts/:id` | | 204. Refused once `scheduled`. Also deletes its render uploads. |
 | POST `/api/studio/tiktok/batch` | | For every draft with `schedule.tiktok='queue'` and no `tiktok_row_id`, creates a TikTok carousel row due now, 40s apart. Options: direct, SELF_ONLY while unaudited, title = `captions.tiktokTitle`, `auto_add_music` true, `allow_comment` true, `brand_organic` true, consent (the operator's click is the consent). Returns `{ queued }`. |
 | POST `/api/studio/drafts/:id/tiktok-public` | `{ done: boolean }` | Ticks the "made public on TikTok" checklist. Returns `{ draft }`. |
-| GET `/api/studio/slots?count=n` | | `{ slots: ISO[] }`: the next free 13:00 / 21:00 KSA (10:00Z / 18:00Z) slots not already holding a PENDING Meta post |
+| GET `/api/studio/slots?count=n` | | `{ slots: ISO[] }`: the next free posting times from the account's Schedule settings (§10.3; wall-clock times in its timezone, `src/services/studio/slots.ts`) not already holding a PENDING Meta post |
 | POST `/api/studio/plan` | `{ count, lessonIds? }` | `{ proposals: (DraftInput & { title: string, rationale: string, slot: ISO })[] }`. The dashboard then POSTs `/drafts` for each proposal it keeps. |
-| GET `/api/studio/worker-token` | | `{ set, lastSeen, name }` (platform admin) |
-| POST `/api/studio/worker-token` | | `{ token }`, shown once; rotating invalidates the old one (platform admin) |
+| POST `/api/studio/drafts/:id/unschedule` | | The way back from `scheduled`: its queued posts are removed and the draft reopens. 409 once any of them went out. |
+| GET `/api/studio/workers` | | `{ workers }` |
+| POST `/api/studio/workers` | `{ name }` | 201 `{ worker, token }`: the token is shown once (admin) |
+| DELETE `/api/studio/workers/:id` | | 204: the worker is revoked (admin) |
 
 ## 5. Worker API
 
@@ -170,7 +175,7 @@ arrived while it was rendering), and deletes that job's uploads.
 
 ## 6. Rules: `src/services/studio/rules.ts`
 
-`validateCarousel(c: Carousel, shotNames: ReadonlySet<string>): string[]` returns one message per problem,
+`validateCarousel(c: Carousel, shotNames: ReadonlySet<string>, settings: RuleSettings): string[]` returns one message per problem,
 and an empty list when the carousel is valid. It ports every check in
 `~/Desktop/AI Course/aicourse-captions/scripts/check-carousels.mts`:
 - each budget
@@ -196,7 +201,8 @@ planWeek(count: number, lessons: LessonRow[], ctx: GenContext): Promise<Proposal
 type GenContext = { recentTopics: string[]; recentAccents: string[]; activeKeywords: string[]; palette: string[] };
 ```
 
-- **Model and call:** Gemini with the platform's key (saved on Operations, else `GEMINI_API_KEY`) through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
+- **Model and call:** for the owner, Gemini with the platform's key (saved on Operations, else `GEMINI_API_KEY`); for any other
+  tenant, the AI providers layer (purpose `tenant_studio`, `writerOptionsFor` in `src/services/studio/tenantAi.ts`). Gemini goes through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
 - **Repair:** up to 2 rounds that send the model `validateCarousel`'s problems to fix.
 - **Style:** the tenant's own approved carousels (at most 3 of `studio_settings.examples`) as few-shot examples, none if it has none (P14 removed the built-in fallback; the owner's three are in his own row, marked `reference: true`), plus the voice guide:
   - light Gulf/white dialect
@@ -212,7 +218,7 @@ type GenContext = { recentTopics: string[]; recentAccents: string[]; activeKeywo
 - **Keyword:** the input keyword, or a single easy Arabic word that isn't a substring of any
   `activeKeywords`. When an existing active keyword already fits the topic (e.g. متجر), reuse it and set
   `create: false`.
-- **DM:** the وكيل DM template from `docs/studio-contract.md` §8, with only its two topical lines changed.
+- **DM:** the وكيل DM template from §8 of this doc, with only its two topical lines changed.
 - **Accent:** from `palette`, avoiding `recentAccents`.
 
 ## 8. The DM template
@@ -238,7 +244,8 @@ https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB3
 
 ## 9. The worker: `aicourse-captions/scripts/studio-worker.mjs`
 
-- **Config:** `studio.config.json`, gitignored: `{ appUrl, token, geminiApiKey, courseRoot, name }`.
+- **Config:** `studio.config.json`, gitignored: `{ appUrl, token, geminiApiKey, courseRoot, name, indexConcurrency, claudePath }`
+  (`studio.config.example.json` in the worker repo; the worker's README says what each does).
 - **Polling:** claim every 5s while jobs keep coming, backing off to 30s when idle. Send progress (the
   heartbeat) at least every 30s during a job.
 - **Rendering:** compositions `Studio-ig` and `Studio-tt`, sized by `calculateMetadata` from
@@ -361,7 +368,7 @@ makes `scheduled_posts` rows. **Owner-only and dark by default**: the switch is 
 by hop with a `file:line` at each step; this section is the contract: the tables, the four jobs, the settings and the routes. The Mac's side is
 `aicourse-captions/scripts/studio/explainerWrite.mjs`, `explainerVoice.mjs`, `explainerDraw.mjs` and `explainerRender.mjs`.
 
-Where the spec (`docs/specs/003-illustrated-explainers/`, local, not tracked) and the code differ, this section follows the code.
+Where the design spec (kept outside this repo) and the code differ, this section follows the code.
 
 ### 11.1 Tables: `src/config/migration_v59_explainers.sql`
 
@@ -560,7 +567,7 @@ of their code (11.6); beside them, a refused script carries `findings` and `prob
 | POST `/api/studio/explainers/:id/approve` | `{ version }` | `Explainer` (`voicing`). **Gate 1.** 409 `CHANGED_MEANWHILE` when `version` is not the `draft_version` the owner read; 422 `EXPLAINER_DRAFT_REFUSED` while the script has a problem or no title |
 | POST `/api/studio/explainers/:id/revoice` | | `Explainer` (`voicing`), from `drawing`, `review` or `ready`, only while the audio is stale |
 | POST `/api/studio/explainers/:id/draw` | | `Explainer`, from `drawing` only: starts the unattended drawing again (after a pause, or failed scenes); a drawing already running is left alone |
-| POST `/api/studio/explainers/:id/scenes/:position/draw` | `{ note? }` | `{ scene, allowance }`: draws or redraws one scene now, synchronously (up to 30 s). 429 `EXPLAINER_ALLOWANCE_PAUSED`, 422 `EXPLAINER_PROMPT_REFUSED`, 409 `EXPLAINER_NEEDS_REFERENCE`, 409 `EXPLAINER_NO_PROVIDER` |
+| POST `/api/studio/explainers/:id/scenes/:position/draw` | `{ note? }` | `{ scene, allowance }`: draws or redraws one scene now, synchronously (up to 55 s, `CLOUDFLARE_TIMEOUT_MS`). 429 `EXPLAINER_ALLOWANCE_PAUSED`, 422 `EXPLAINER_PROMPT_REFUSED`, 409 `EXPLAINER_NEEDS_REFERENCE`, 409 `EXPLAINER_NO_PROVIDER` |
 | POST `/api/studio/explainers/:id/scenes/:position/pick` | `{ index }` | `{ scene }`: goes back to one of the scene's earlier pictures (`pictures[index]`); nothing is drawn or spent |
 | POST `/api/studio/explainers/:id/approve-pictures` | | `Explainer` (`rendering`), from `review` only. **Gate 2.** 409 `EXPLAINER_AUDIO_STALE`, `EXPLAINER_NO_TRACK`, or `EXPLAINER_PICTURES_MISSING` with the `positions` |
 | POST `/api/studio/explainers/:id/render` | | `Explainer` (`rendering`), from `ready`; the previous render stays until the new one lands |

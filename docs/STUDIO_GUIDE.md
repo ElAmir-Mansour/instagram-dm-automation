@@ -19,7 +19,9 @@ settings). The behaviour is the code: `src/routes/studio.ts`, `src/services/stud
 repo on the Mac at `~/Desktop/AI Course/aicourse-captions/` (`scripts/studio-worker.mjs`,
 `scripts/studio/*.mjs`). Where STUDIO.md and the code disagree, this guide follows the code and
 says so. Checked against `main` at `60f2cae` on 2026-09-25, with the numbers from the first live
-rollout on 2026-09-24.
+rollout on 2026-09-24; the places that changed since were corrected on 2026-10-25 (docs audit). The
+Studio's other tabs have their own docs: the Monteur in `MONTEUR.md`, explainers in `STUDIO.md` §11
+and Help → Illustrated explainers, infographics in `FLOWS.md` §7.
 
 ---
 
@@ -59,8 +61,9 @@ The Studio does that work for you, from your own lessons:
 - **It sets up the automation.** Each carousel asks followers to comment one keyword, and the
   Studio creates the campaign that answers that comment with a DM carrying your link.
 
-You find it in the dashboard under **Studio** (الاستوديو), in two tabs: **Carousels**
-(الكاروسيل), where you make them, and **Settings** (الإعدادات), where your brand, voice, product,
+You find it in the dashboard under **Studio** (الاستوديو). The Studio has five tabs: **Carousels**
+(الكاروسيل), where you make them; **Monteur**, **Infographics** and **Explainers**, the other three
+kinds of content (not covered here); and **Settings** (الإعدادات), where your brand, voice, product,
 posting times, library folder and workers live.
 
 ### The three steps
@@ -157,11 +160,14 @@ indexing and rendering need the worker, so they wait in the queue until it is ba
 ### The queue (Operator)
 
 - The worker's jobs live in `studio_jobs` (migration v21). This is **not** the webhook queue
-  `jobs` (v13): `/api/jobs/drain` never touches it, and nothing on Vercel runs these jobs.
-- Kinds: `scan_library`, `index_lesson`, `render_carousel`. States: `pending → claimed → done`,
-  or `failed`.
-- **Claim order**: renders first, then scans, then indexing, oldest first within each
-  (`CLAIM_SQL`, `src/services/studio/jobs.ts:145`). A render asked for while forty lessons wait
+  `jobs` (v13). The carousel jobs are run only by the Mac worker; elsewhere, the drain's Monteur
+  sweep queues `monteur_think` jobs, and the app itself writes an explainer with Gemini when the Mac
+  can't (`STUDIO.md` §11).
+- Kinds: 14 in all (`STUDIO_JOB_KINDS`); the carousels' are `scan_library`, `index_lesson` and
+  `render_carousel`. States: `pending → claimed → done`, or `failed`.
+- **Claim order**: a folder pick first (someone is waiting at the dialog), then renders and the
+  Claude jobs, then scans, then indexing, oldest first within each (`CLAIM_SQL` in
+  `src/services/studio/jobs.ts`). A render asked for while forty lessons wait
   to be indexed still goes next. It does not interrupt a job already running, so at worst it
   waits for the lesson being indexed at that moment.
 - The claim is `FOR UPDATE SKIP LOCKED`, so two workers split the queue instead of taking the
@@ -234,9 +240,13 @@ Three facts make it necessary:
 
 It does **not**:
 
-- write any words: the app writes the copy, and the worker only draws what it is given;
+- write the carousels' words: the app writes that copy, and the worker only draws what it is given.
+  (For the owner only, the worker does run Claude jobs that write: the Monteur's thinking,
+  infographics, explainers and ad proposals. Their payloads carry the app's prompts. A tenant's
+  render-only worker refuses them.);
 - schedule or publish anything;
-- read any file outside the folder named in its config (`courseRoot`), even if the app asks;
+- read any file outside the folder named in its config (`courseRoot`) or a folder someone picked
+  in the native dialog on that Mac (the Monteur's), even if the app asks;
 - listen for connections: there is no server in it and no port to open;
 - upload your full videos anywhere;
 - see any other account's jobs;
@@ -635,7 +645,7 @@ A **draft** is one carousel on its way from an idea to a scheduled post. Drafts 
 | `generating` | **Writing** (يكتب) | The app is writing it with Gemini, inside your request, for up to two minutes | Wait, or leave the page: the draft appears under Drafts when it is written |
 | `rendering` | **Rendering** (يرسم الشرائح) | The copy is saved, and a render is queued or running on the worker | Keep editing (a save queues a newer render). With the worker offline it reads *Waiting for your Mac worker* (بانتظار العامل على الماك) |
 | `ready` | **Ready** (جاهز) | The slides are drawn | Edit, rewrite, schedule, delete |
-| `scheduled` | **Scheduled** (مجدول) | Its posts and its campaign exist | Nothing: it is read-only, and cannot be deleted, because it is the record of what was posted. Its posts are in **Posts** |
+| `scheduled` | **Scheduled** (مجدول) | Its posts and its campaign exist | **Unschedule** takes it back to Ready while none of its posts has gone out (`POST /api/studio/drafts/:id/unschedule`; 409 after one has). Once posted it is the record of what was posted: read-only, and it cannot be deleted. Its posts are in **Posts** |
 | `failed` | **Failed** (فشل) | Writing or drawing failed; the reason is shown | With its copy kept: **Render again** (أعد الرسم), or edit and save. With no copy (the writing itself failed): delete it and generate again |
 
 *Operator:*
@@ -743,12 +753,12 @@ still breaks N rule(s) after M repair round(s): …"*.
 
 *Operator: the writer's model chain* is `STUDIO_MODELS` (`src/services/studio/generate.ts:154`):
 `gemini-3.1-pro-preview` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.8-flash`, called
-with the app's Gemini key (the one saved on **Operations**, else `GEMINI_API_KEY`). A model answering **400, 404, 429 or 503** hands the call to the
-next one. A **500** or a dropped connection stops the chain where it is, and counts as retryable,
+with the app's Gemini key (the one saved on **Operations**, else `GEMINI_API_KEY`). A model answering **400, 404, 429, 500 or 503** hands the call to the
+next one (`generate.ts`). A dropped connection stops the chain where it is, and counts as retryable,
 as does a 429 or 503 from the last model: the first call is then retried once, from the top of the
 chain, if at least 50 s of the budget remain. A timeout is not retried (each call's timeout is what
 is left of the budget), and repair calls never are. The error that surfaces is the last model's.
-Unlike the indexer, the writer does *not* skip past a 500. Like the indexer, it never uses
+Like the indexer, it skips past a 500, and it never uses
 `gemini-2.5-flash`, and the schema is sent without `minItems`/`maxItems`. Temperature 0.8 for the
 draft and 0.4 for repairs, thinking budgets 2048 and 1024 tokens. Each attempt is logged on Vercel
 as `studio.ai_request_failed` (per model) or `studio.ai_usage` (model and tokens), and each draft as
@@ -1157,6 +1167,7 @@ await API.saveStudioSettings({ examples: null });      // back to none: the writ
 | **Operations → Gemini API key** (platform admin), else the Vercel environment's `GEMINI_API_KEY` | The app's Gemini key, shared with the DM bot | The writer. The worker has its own key, `geminiApiKey`, in its config |
 | Settings → **TikTok app (platform admin)** → **Public site address** (`app.public_base_url`, else `PUBLIC_BASE_URL`, else the request's own host) | The app's public address | Every image a worker uploads is served from it. With none at all, uploads fail: *"No public address for this app: set it in Settings → TikTok app."* |
 | Settings → **TikTok app (platform admin)** → Direct Post switches | *Direct Post is switched on…* and *TikTok has approved this app…* | Whether the TikTok batch can run at all, and whether **Post to TikTok at the same time** is offered |
+| Settings → Platform → Media storage → **Delete files once posted** (`storage.cleanup_after_publish`) | Removes a post's files once it is published | |
 | Vercel environment, `MEDIA_RETENTION_DAYS` | Opt-in sweep of old, unreferenced uploads | It keeps every draft's current render and every moment's thumbnail; unset, nothing is swept |
 
 ---
@@ -1185,7 +1196,7 @@ On the free tier, as found on 2026-09-24:
 
    | Chain | Models, in order | Moves to the next model on |
    |---|---|---|
-   | Writer (the app) | `gemini-3.1-pro-preview` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.8-flash` | 400, 404, 429, 503 |
+   | Writer (the app) | `gemini-3.1-pro-preview` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.8-flash` | 400, 404, 429, 500, 503 |
    | Indexer (the worker) | `gemini-3.5-flash` → `gemini-3.6-flash` → `gemini-3-flash-preview` | 400, 404, 429, 500, 503 |
 
    Each model in a chain is a separate daily allowance, so a chain stretches the free tier.
@@ -1232,7 +1243,7 @@ A budget alert in Google Cloud Billing (**Budgets & alerts**) is cheap insurance
 
 | What | Where | Notes |
 |---|---|---|
-| Storage | The app's Postgres, `media_uploads`, which holds files as bytes inside the database (the Supabase free tier is 500 MB) | A 480px thumbnail per moment, and two images per slide per render (at most 3 MB each, usually far less). A newer render deletes the older one's images unless a scheduled post uses them. The retention sweep is opt-in (`MEDIA_RETENTION_DAYS`) |
+| Storage | `media_uploads`: since v23 the files go to Supabase Storage once Settings → Platform → Media storage is filled in (the table keeps only their details); before that, or without it, the bytes sit inside the database (the Supabase free tier is 500 MB) | A 480px thumbnail per moment, and two images per slide per render (at most 3 MB each, usually far less). A newer render deletes the older one's images unless a scheduled post uses them. The retention sweep is opt-in (`MEDIA_RETENTION_DAYS`) |
 | Upload time | Your connection | Per lesson: the proxy (0.6 MB took 31 s) and 12 to 30 thumbnails. Per render: two images per slide. At 20 to 30 KB/s, the uploads are most of a render's 170 s |
 | Function time | Vercel | Each generation holds one request open for up to two minutes |
 | Your Mac | Electricity | It must be on, awake and logged in for jobs to run |
@@ -1290,7 +1301,7 @@ Studio*](../VERIFYING.md#verifying-the-carousel-studio).
 | **Failed**: *Writing the carousel failed: Gemini request failed [HTTP 429]: …* | The writer's chain has spent its daily quota. On the free tier the Pro model always does, then each Flash model | Wait for the reset, or enable billing (section 8) |
 | **Failed** with *[HTTP 404]* | The error shown is the last model's, so every model in the chain answered 404: they are gone, or closed to this key | On Vercel, one `studio.ai_request_failed` line per model says which. If they are all gone, the names in `STUDIO_MODELS` (`src/services/studio/generate.ts:154`) need updating: a code change |
 | **Failed** with *[HTTP 400]* | Every model refused the request. A 400 that every model gives is the request's fault, not the models' | The per-model message in `studio.ai_request_failed`; a code fix, like stripping `minItems`/`maxItems` was |
-| **Failed** with *[HTTP 500]* | Google's side. The writer retries a 500 once but does not skip to the next model | Generate again |
+| **Failed** with *[HTTP 500]* | Google's side, on every model in the chain (each 500 moves to the next) | Generate again |
 | **Failed**: *The draft still breaks N rule(s) after M repair round(s): …* | The model could not meet the rules in the time allowed, usually a limit or the keyword | Generate again. Or type the keyword yourself, ask for fewer slides, or pick an angle |
 | **Failed** with *keyword: no usable candidate (…)* | Every word it suggested overlaps a live keyword | Type a keyword that doesn't, or reuse a live campaign's word |
 | Generate answers *"Lesson 4.3 (…) is not indexed yet: index it first so the post has something true to say"* | A picked lesson has no notes | Index it, or write **From an idea** |
@@ -1316,7 +1327,7 @@ Studio*](../VERIFYING.md#verifying-the-carousel-studio).
 |---|---|---|
 | **Problems to fix: n** when saving | The rules refused the edit. Nothing was saved | Each problem sits on its slide and field. `45 > 40` means shorten it. *instagram caption is missing the keyword ask «…»* means the Instagram caption needs your keyword line with the current keyword (you changed the keyword). *Latin digit next to Arabic text* means write ٣, not 3. Also: *highlight not in title*, *first slide must be cover*, *last slide must be cta*, *slides: 11 items, expected 6–10*, *compare sides differ in length* |
 | *The campaign answers "X" but the carousel asks for "Y": they must be the same word* | The carousel's keyword and its campaign's differ (only possible through the API; the editor keeps them together) | Make them the same word |
-| *"This draft is scheduled, so it can no longer be changed. Its posts are in Posts."* | Scheduled drafts are read-only | Delete its post in Posts, then write a new version from the same lesson |
+| *"This draft is scheduled, so it can no longer be changed. Its posts are in Posts."* | Scheduled drafts are read-only | **Unschedule** it (while none of its posts has gone out), or delete its post in Posts and write a new version from the same lesson |
 | *"The draft changed while the slide was being rewritten. Reload it and try again."* | Another save landed during the rewrite | Reload the draft and rewrite again |
 | A rewrite fails with problems | The rewritten slide still broke a rule, so nothing changed | Add an instruction and rewrite again, or edit the slide yourself |
 
@@ -1402,7 +1413,7 @@ every frame.
 A slide the writer could not back with a source was dropped. It never goes below 6.
 
 **Can I change a carousel after scheduling it?**
-No. Delete its post in **Posts**, then write a new version from the same lesson.
+Yes, until one of its posts goes out: **Unschedule** takes it back to Ready. After that, delete its post in **Posts**, then write a new version from the same lesson.
 
 **What happens if I rename a video?**
 The next scan finds it as a new lesson; index that one. Drafts made from the old name keep their
@@ -1457,16 +1468,7 @@ A deleted slide: **Undo** for 12 seconds. Unsaved edits: **Discard changes**. A 
 
 ### Where the older documents are out of date
 
-The code wins; these are the places the earlier documents disagree with it:
+The code wins. STUDIO.md and the worker's README were corrected on 2026-10-25; one gap remains:
 
-- **STUDIO.md §7** says the writer uses `gemini-2.5-pro`. It uses `STUDIO_MODELS`, section 5.
-- **STUDIO.md §9** and the worker's README say indexing uploads the video to `gemini-2.5-flash`.
-  It uploads a proxy, to `INDEX_MODELS`, and never uses `gemini-2.5-flash`.
-- **STUDIO.md §2 and §4** list global `studio.worker_*` settings and `/api/studio/worker-token`.
-  §10 replaced them with `studio_workers` and `/api/studio/workers`.
-- **STUDIO.md §4** gives fixed 13:00 and 21:00 Riyadh slots. Slots come from each account's
-  Schedule settings.
-- The worker's README says the config's `name` is how the worker shows up in the dashboard. The
-  app ignores it and shows the name typed when the worker was created.
 - The render payload carries no `digits`, so the templates' own numerals follow **Slide
   direction**, not **Digits**.

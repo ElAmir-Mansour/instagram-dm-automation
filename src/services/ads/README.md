@@ -46,6 +46,23 @@ v1's `adsManager.ts` and its `/campaigns/:id` routes were removed after A12 (the
 | `rulesWiring.ts` | The pass wired to the stored copy, the queue, A7's proposals and the alerts; `evaluateDueRules` (the drain's share) |
 | `rulesStore.ts` | `ads_rules` and `ads_rule_runs`: save = approve, due rules, run rows, the cooldown read |
 | `metaAds.ts` | v1's Graph helpers (moved here in A2) |
+| `results.ts` | `GET /api/ads/results` (A6): the Results tab and the ad rows, from the stored insights only, never Meta |
+| `attribution.ts` | Ads → DM attribution (A3): which ad a conversation came from, what the bot may be told, the reply window, the two ad-only send refusals |
+| `switches.ts` | A3's two per-tenant switches, both off by default: `ads.bot_context.<t>` and `ads.extended_window.<t>` |
+| `adUploads.ts` | Signed direct uploads (A5): the builder's pictures and videos go from the browser straight to Supabase Storage (Vercel's 4.5 MB cap) |
+| `adMedia.ts` | Uploaded ad media from our Storage to Meta and into a creative (A5) |
+| `creatives.ts` | Creatives for the builder (A5): the 9:16 placement version, `adimages` / `advideos`, video status, previews |
+| `targetingSearch.ts` | What the builder asks Meta before creating anything (A5): targeting search and the reach estimate |
+| `lifecycle.ts` | Duplicate (A5): the `POST /{id}/copies` parameters; a copy is always created PAUSED |
+| `graphPort.ts` | The narrow Graph interface the A5 builder code is written against, so it can be tested with a stub |
+| `audiences.ts` | Custom Audiences (A8): engagement, video and lookalike audiences, and customer lists |
+| `hashing.ts` | Customer lists (A8): parse, normalise, hash and batch, so a raw email or phone exists in one place only |
+| `legalSignoff.ts` | The legal sign-off that unlocks customer lists and lead ads (A8/A10, `ads_legal_signoffs`) |
+| `leads.ts` | Lead ads (A10): instant forms, the leads they collect, and what the law asks of them; locked per tenant until a sign-off |
+| `studies.ts`, `studiesStore.ts`, `studiesPorts.ts` | Split tests (A12): the logic, its `ads_studies` table, and its wiring to the other modules |
+| `ownership.ts` | Tenant isolation: every id from a request or a queued op is re-checked against the stored copy (`ownObject`) |
+| `tenantsOverview.ts` | The platform admin's view of every tenant's ads (`GET /api/admin/ads/tenants`), Postgres only |
+| `proposals/` | AI proposals (A7): Claude drafts a campaign or a change; checks, states, the daily review, `ports.ts` |
 | `testDb.ts`, `testing/` | Tests only: fake pools (the advisory lock really waits; the queue's markers; objects and settings) |
 
 Tests sit beside each file. FLOWS.md §11 walks the money rule and the guard (§11.1), the sync and the queue (§11.2), creating an ad (§11.3) and the rules (§11.6) hop by hop; Help → Ads is the user-facing article.
