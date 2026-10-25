@@ -782,6 +782,7 @@ const MonteurPage = {
                         variant: 'secondary', size: 'sm', icon: 'play', label: t('monteur.run.now'),
                         action: 'monteur:runNow', id: 'mt-run-now', disabled: noFolder || scanning, title: runTitle,
                     })}
+                    ${UI.helpLink('monteur', t('help.link.monteur'))}
                 </div>
             </div>
         `;

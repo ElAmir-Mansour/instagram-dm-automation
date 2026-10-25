@@ -1547,7 +1547,7 @@ const SettingsPage = {
             <section class="section">
                 <h2 class="section-title">${t('settings.youtube.title')}</h2>
                 <div class="settings-card surface">
-                    <p class="form-hint mbe-4">${t('settings.youtube.intro')}</p>
+                    <p class="form-hint mbe-4">${t('settings.youtube.intro')} ${UI.helpLink('youtube', t('help.link.youtube'), { className: 'settings-youtube-help' })}</p>
                     ${body}
                     ${danger}
                 </div>

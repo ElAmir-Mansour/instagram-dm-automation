@@ -894,6 +894,7 @@ const OverviewPage = {
                         `)}
                     </div>
                 `}
+                <p class="form-hint mbs-3 briefing-help">${UI.helpLink('getting-started', t('help.link.gettingStarted'))}</p>
             </section>
         `;
     },

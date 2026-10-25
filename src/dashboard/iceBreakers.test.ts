@@ -493,6 +493,9 @@ describe('the ice breakers card: everything typed, reported or refused is escape
     const HOSTILE_ATTR = `" autofocus onfocus="alert(document.cookie)`;
     const HOSTILE_SCRIPT = '</textarea></div></details><script>alert(1)</script>';
 
+    /** The card's one link: the Help Center's, written in the card itself. Everything a person or Instagram supplied is text, never an href. */
+    const HELP_LINK = '#/help/dm-assistant#ice-breakers';
+    const hrefsOf = (markup: string): string[] => [...markup.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
     const noExecutableMarkup = (markup: string, label: string): void => {
         assert.ok(!/<img\b/i.test(markup), `${label}: a raw <img>`);
         assert.ok(!/<script\b/i.test(markup), `${label}: a raw <script>`);
@@ -516,7 +519,7 @@ describe('the ice breakers card: everything typed, reported or refused is escape
         noExecutableMarkup(markup, 'editor');
         assert.ok(markup.includes('value="&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"'), 'the hostile question is the value of its input, as text');
         assert.ok(markup.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
-        assert.ok(!/href=/.test(markup), 'the editor has no link at all: a menu url is an input value');
+        assert.deepEqual(hrefsOf(markup), [HELP_LINK], 'the editor has one link, the Help Center\'s, and no other: a menu url is an input value');
     });
 
     it('what Instagram reports back: questions, titles, payloads, urls and locales are text, a url is never an href, and nothing grows an attribute', () => {
@@ -534,7 +537,7 @@ describe('the ice breakers card: everything typed, reported or refused is escape
         const markup = markupOf(s);
 
         noExecutableMarkup(markup, 'read-back');
-        assert.ok(!/href=/.test(markup), 'a url Instagram reported is shown as text, never as a link');
+        assert.deepEqual(hrefsOf(markup), [HELP_LINK], 'a url Instagram reported is shown as text, never as a link: the only link is the Help Center\'s');
         assert.ok(markup.includes('javascript:alert(document.cookie)'), 'it is shown as the text it is');
         assert.ok(markup.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
     });

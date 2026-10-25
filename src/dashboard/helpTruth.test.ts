@@ -14,7 +14,23 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
+import { decideAgent, HISTORY_WINDOW } from '../services/ai.js';
 import { REQUIRED_ALERT_KINDS, SHOWN_ALERT_KINDS } from '../services/ads/settings.js';
+import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
+import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, FOLLOWUP_WINDOW_MS, MAX_FOLLOWUPS_PER_CONVERSATION } from '../services/dmSales/followup.js';
+import { MAX_ABUSE_STRIKES, MAX_AI_REPLIES_PER_HOUR } from '../services/dmSales/flow.js';
+import { ICE_BREAKER_MAX, ICE_BREAKER_QUESTION_MAX, MENU_ITEMS_MAX, MENU_TITLE_MAX, TAP_CODES } from '../services/dmSales/iceBreakers.js';
+import { DEFAULT_SALES_MODE, MAX_TEST_SENDERS, SALES_MODES, SENDER_ID } from '../services/dmSales/mode.js';
+import { MAX_QUALIFIER_TURNS } from '../services/dmSales/types.js';
+import { MAX_VARIANTS, MIN_VARIANTS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX } from '../services/dmSales/variants.js';
+import { MINUTES_PER_REEL, reelsForLength } from '../services/monteur/pick.js';
+import { DRAFTS_PER_DAY } from '../services/onboarding/draftStep.js';
+import { PROOFS_PER_DAY, REGENERATIONS_PER_CARD } from '../services/onboarding/proofRules.js';
+import { stepsFor, NO_FLAGS, WIZARD_STEPS } from '../services/onboardingWizard.js';
+import { captionProblems } from '../services/studio/infographicSpec.js';
+import { PICK_FOLDER_TTL_MINUTES } from '../services/studio/jobs.js';
+import { SCAN_EXTENSIONS, SCAN_MIN_AGE_S } from '../services/monteur/daily.js';
+import { uploadPrivacy } from '../services/youtubePublish.js';
 
 type Json = Record<string, any>;
 type Lang = 'ar' | 'en';
@@ -236,6 +252,351 @@ describe('Help Center — the Leads goal in the builder', () => {
             assert.ok(goal.includes(bold(label(lang, 'adsCreate.goal.locked'))), 'and the badge it carries');
             assert.ok(goal.includes('[[ads#lead-ads]]'), 'and where the sign-off is explained');
             assert.equal(lang === 'en' ? /come later/.test(goal) : /تأتي لاحقًا/.test(goal), false, 'and no longer says they come later');
+        });
+    }
+});
+
+// ─── 6. The Monteur ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One number a source file declares as `export const NAME = <number>`: read, never retyped. */
+function declared(file: string, name: string): number {
+    const m = new RegExp(`export const ${name}\\s*(?::[^=]+)?=\\s*(\\d+)`).exec(readFileSync(file, 'utf8'));
+    assert.ok(m, `${file} declares ${name}`);
+    return Number(m![1]);
+}
+
+describe('Help Center — the Monteur', () => {
+    it('is what the code does: one reel for each started 10 minutes, up to the setting', () => {
+        assert.equal(MINUTES_PER_REEL, 10);
+        assert.deepEqual([5, 11, 33].map((minutes) => reelsForLength(minutes * 60, 3)), [1, 2, 3], 'the three videos the article works out, with the setting at 3');
+        assert.equal(reelsForLength(33 * 60, 2), 2, 'and never more than the setting');
+        const settings = readFileSync('src/services/studio/settings.ts', 'utf8');
+        assert.match(settings, /between\(monteur\.reels_per_video, 'monteur\.reels_per_video', 1, 5, true\)/, 'Most reels per video: 1 to 5');
+        assert.match(settings, /between\(monteur\.videos_per_run, 'monteur\.videos_per_run', 1, 10, true\)/, 'Videos per run: 1 to 10');
+        assert.match(settings, /times\(monteur\.post_at, 'monteur\.post_at', 1, 4\)/, 'Post at: 1 to 4 times');
+    });
+
+    it('says so, with the same numbers, in both languages', () => {
+        const en = textOf('monteur', 'count', 'en');
+        for (const part of ['each started 10 minutes', '(1 to 5)', 'a 5-minute video gives one reel at most', 'an 11-minute one gives two', 'a 33-minute one gives three']) {
+            assert.ok(en.includes(part), `en: «${part}»`);
+        }
+        const ar = textOf('monteur', 'count', 'ar');
+        for (const part of ['لكل 10 دقائق', '(من 1 إلى 5)', 'فيديو من 5 دقائق', 'فيديو من 11 دقيقة', 'فيديو من 33 دقيقة']) {
+            assert.ok(ar.includes(part), `ar: «${part}»`);
+        }
+        assert.ok(textOf('monteur', 'folder', 'en').includes('(1 to 10)') && textOf('monteur', 'folder', 'ar').includes('(من 1 إلى 10)'), 'Videos per run');
+        assert.ok(textOf('monteur', 'start', 'en').includes('up to 4 posting times a day') && textOf('monteur', 'start', 'ar').includes('أربعة أوقات'), 'Post at');
+    });
+
+    it('names the limits of a reel as the code holds them: the title, the captions, the keyword', () => {
+        const title = declared('src/services/monteur/transcript.ts', 'MAX_TITLE');
+        const caption = declared('src/services/monteur/clips.ts', 'MAX_CAPTION').toLocaleString('en-US');
+        const letters = declared('src/services/monteur/copy.ts', 'MIN_KEYWORD_LETTERS');
+        const row = (lang: Lang, lead: string): string => (listOf('monteur', 'review', lang, 'dl') as string[][]).find((r) => r[0]!.includes(lead))![1]!;
+        assert.ok(row('en', 'Title on the video').includes(`Up to ${title} characters`), `en title: ${title}`);
+        assert.ok(row('ar', 'العنوان على الفيديو').includes(`حتى ${title} حرفاً`), `ar title: ${title}`);
+        assert.ok(row('en', 'TikTok caption').includes(`Each up to ${caption} characters`), `en captions: ${caption}`);
+        assert.ok(row('ar', 'نص تيك توك').includes(`حتى ${caption} حرف`), `ar captions: ${caption}`);
+        assert.ok(row('en', 'Comment keyword').includes(`at least ${letters} letters`), `en keyword: ${letters}`);
+        assert.ok(row('ar', 'الكلمة المفتاحية للتعليقات').includes(`${letters} أحرف على الأقل`), `ar keyword: ${letters}`);
+    });
+
+    it('names the folder as the code holds it: five kinds of file, a minute old, a folder window that expires after 10 minutes', () => {
+        assert.deepEqual([...SCAN_EXTENSIONS], ['.mp4', '.mov', '.m4v', '.mkv', '.webm']);
+        assert.equal(SCAN_MIN_AGE_S, 60);
+        assert.equal(PICK_FOLDER_TTL_MINUTES, 10);
+        for (const lang of LANGS) {
+            const text = textOf('monteur', 'folder', lang);
+            for (const ext of SCAN_EXTENSIONS) assert.ok(text.includes(`\`${ext}\``), `${lang}: ${ext}`);
+            assert.ok(lang === 'en' ? text.includes('in the folder for a minute') : text.includes('يمر عليه دقيقة'), `${lang}: a file is taken once it is a minute old`);
+            assert.ok(lang === 'en' ? text.includes(`If ${PICK_FOLDER_TTL_MINUTES} minutes pass`) : text.includes(`مرّت ${PICK_FOLDER_TTL_MINUTES} دقائق`), `${lang}: the window expires`);
+        }
+        // The 5 minutes the dialog waits are the worker's (MONTEUR.md §3), and the page says them in its own words.
+        assert.match(readFileSync('MONTEUR.md', 'utf8'), /After 5 minutes it gives up and reports `cancelled`\./);
+        assert.match(label('en', 'monteur.folder.timeout'), /within 5 minutes/);
+    });
+
+    it('is what Approve does: TikTok has to be ready, YouTube is not looked at, and the comment campaign is switched on in whole-word mode with no public reply', () => {
+        const clips = readFileSync('src/services/monteur/clips.ts', 'utf8');
+        const approve = clips.slice(clips.indexOf('export async function approveClip'), clips.indexOf('// ─── Reject'));
+        assert.ok(approve.length > 1000, 'the function was found');
+        assert.match(approve, /if \(platforms\.includes\('tiktok'\)\) \{[\s\S]*?await assertDirectPostReady\(creatorId, flags\)/, 'TikTok is checked at the click');
+        assert.doesNotMatch(approve, /getAccessToken|YouTubeNotConnected|getYouTubeConnection|assertYouTube|youtubeConnection/i, 'and YouTube\'s connection is not');
+        assert.match(approve, /\[creatorId, campaignPlan\.triggers, campaignPlan\.dm, null, null, true, 'word'\]/, 'the campaign: no public reply, every post, switched on, a whole word');
+        assert.match(approve, /'REEL_DAY_TAKEN'/, 'two reels of one video never share a day');
+        for (const lang of LANGS) {
+            const text = textOf('monteur', 'approve', lang);
+            assert.ok(text.includes(lang === 'en' ? 'matches the keyword as a whole word' : 'وتطابق الكلمة كاملة'), `${lang}: whole word`);
+            assert.ok(text.includes(lang === 'en' ? 'with no public reply' : 'بدون رد علني'), `${lang}: no public reply`);
+            assert.ok(text.includes('[[youtube#disconnected]]'), `${lang}: YouTube failing later, not at the click`);
+        }
+    });
+});
+
+// ─── 7. Infographics ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('Help Center — infographics', () => {
+    const spec = { columns: [{ name: 'RAG' }, { name: 'CAG' }, { name: 'الوكيل' }] };
+    const arabicSpec = { columns: [{ name: 'RAG' }, { name: 'CAG' }, { name: 'الأمر' }] };
+
+    it('is what the code does: the caption names every column, case and Arabic letter variants aside, and is neither empty nor over 2,200', () => {
+        assert.deepEqual(captionProblems('RAG, CAG and الوكيل compared', spec), []);
+        assert.deepEqual(captionProblems('rag cag الوكيل', spec), [], 'Latin case does not matter');
+        assert.equal(captionProblems('RAG CAG الوكيل', arabicSpec).length, 1, 'a missing column is named');
+        assert.deepEqual(captionProblems('RAG CAG الامر', arabicSpec), [], 'and أ, إ and ا are one letter');
+        assert.equal(captionProblems('', spec).length, 1, 'empty');
+        assert.equal(captionProblems(`RAG CAG الوكيل ${'x'.repeat(2200)}`, spec).length, 1, 'over 2,200');
+    });
+
+    it('says so in both languages, and says the GIF is never scheduled', () => {
+        for (const lang of LANGS) {
+            const text = textOf('infographics', 'caption', lang);
+            assert.ok(text.includes('2,200'), `${lang}: the limit`);
+            assert.ok(lang === 'en' ? text.includes('every column') && text.includes('أ, إ and ا') : text.includes('كل عمود') && text.includes('أ وإ وا'), `${lang}: the rule and its two exceptions`);
+        }
+        const source = readFileSync('src/services/studio/infographics.ts', 'utf8');
+        const start = source.indexOf('export async function scheduleInfographic');
+        const schedule = source.slice(start, source.indexOf('DELETE /infographics/:id. Its scheduled', start));
+        assert.ok(schedule.length > 1000, 'the function was found');
+        assert.match(schedule, /const issues = captionIssues\(row\.caption, row\.spec\);\s*const primary = primaryCaptionIssue\(issues\);\s*if \(primary\) throw/, 'Schedule is refused until the caption is right');
+        assert.equal((schedule.match(/mediaUrl: row\.render\.mp4_url/g) || []).length, 2, 'Instagram and Facebook, and YouTube, post the MP4');
+        assert.doesNotMatch(schedule, /\bgif\b|\bgif_|_gif\b|\.gif\b/i, 'and the GIF is nowhere in it');
+        for (const lang of LANGS) {
+            const gif = (listOf('infographics', 'what', lang, 'dl') as string[][]).find((r) => r[0] === 'GIF')![1]!;
+            assert.ok(lang === 'en' ? gif.includes('never posted for you') : gif.includes('ما يُنشر عنك أبداً'), `${lang}: the GIF is yours to download`);
+        }
+    });
+
+    it('posts where the code does: Instagram and Facebook as one post, YouTube as its sibling', () => {
+        const source = readFileSync('src/services/studio/infographics.ts', 'utf8');
+        assert.match(source, /const platforms = settings\.infographic\.platforms;\s*const meta = metaPlatformFor\(platforms\);\s*const youtube = platforms\.includes\('youtube'\);/);
+        assert.match(source, /platform: 'youtube', caption, mediaUrl: row\.render\.mp4_url, coverUrl: row\.render\.cover_url/);
+    });
+
+    it('is what the code does about who writes it: a workspace with no provider is refused, and the Mac is never tried for it', () => {
+        const tenant = readFileSync('src/services/studio/tenantAi.ts', 'utf8');
+        assert.match(tenant, /Nothing was sent to the Mac\./, 'the refusal says the Mac was not tried');
+        assert.match(tenant, /\*\*Nothing falls back\.\*\*/, 'and the file says it never falls back');
+        for (const lang of LANGS) {
+            const text = textOf('infographics', 'who', lang);
+            assert.ok(lang === 'en' ? text.includes('It never falls back to a Mac.') : text.includes('وما يرجع للماك بدالاً عنه أبداً'), `${lang}: never the Mac instead`);
+        }
+    });
+});
+
+// ─── 8. YouTube ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('Help Center — YouTube', () => {
+    it('is what the code does: every upload is private unless the platform switch is on, and then it asks for public', () => {
+        assert.equal(uploadPrivacy({}, false), 'private');
+        assert.equal(uploadPrivacy({ privacy: 'public' }, false), 'private', 'a post cannot ask for more than the switch allows');
+        assert.equal(uploadPrivacy({}, true), 'public');
+        assert.equal(uploadPrivacy({ privacy: 'unlisted' }, true), 'unlisted');
+        assert.match(readFileSync('src/services/appSettings.ts', 'utf8'), /\(await getSetting\(APP_SETTING_KEYS\.youtubePublicUploads\)\) === 'true'/, 'and the switch is off until it is set to true');
+        for (const lang of LANGS) {
+            const text = textOf('youtube', 'public', lang);
+            assert.ok(text.includes(label(lang, 'settings.youtube.privacyPrivate')), `${lang}: the card's own words for private`);
+            assert.ok(text.includes(label(lang, 'settings.youtube.privacyPublic')), `${lang}: and for public`);
+        }
+    });
+
+    it('says the daily limit as the code does, and that nothing retries a post that hit it', () => {
+        const youtube = readFileSync('src/services/youtube.ts', 'utf8');
+        assert.match(youtube, /quotaExceeded: 'The YouTube API’s daily quota is used up \(about six uploads a day\)/);
+        assert.match(youtube, /10,000 quota units a day, and a thumbnail 50/, '1,600 for the upload, 50 for the thumbnail, 10,000 a day');
+        assert.equal((youtube.match(/RETRYABLE_REASONS/g) || []).length, 1, 'RETRYABLE_REASONS is declared and consulted nowhere in this file');
+        const consumers = sources().filter((f) => f.replace(/\\/g, '/') !== 'src/services/youtube.ts').filter((f) => /RETRYABLE_REASONS/.test(readFileSync(f, 'utf8')));
+        assert.deepEqual(consumers, [], 'nor in any other, so no sweep retries a failed Short: the day one does, the article\'s "nothing retries it by itself" is read again');
+        for (const lang of LANGS) {
+            const text = textOf('youtube', 'quota', lang);
+            for (const part of ['10,000', '1,600', '50', 'about six uploads a day']) assert.ok(text.includes(part), `${lang}: ${part}`);
+            assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), `${lang}: Publish now is the way to retry`);
+        }
+    });
+
+    for (const lang of LANGS) {
+        it(`says what Disconnect YouTube does to a scheduled post, in the dialog and in the article: it fails when it comes due, and Publish now retries it (${lang})`, () => {
+            const hint = label(lang, 'settings.youtube.disconnectHint');
+            assert.ok(hint.includes(label(lang, 'posts.publishNow')), `the dialog names ${label(lang, 'posts.publishNow')}: ${hint}`);
+            assert.equal((lang === 'en' ? /won.t upload until/i : /ما ترفع لين/).test(hint), false, 'and no longer promises the post waits');
+            const text = textOf('youtube', 'disconnected', lang);
+            assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), 'the article names it too');
+            assert.ok(text.includes(bold(label(lang, 'settings.youtube.disconnect'))) && text.includes(bold(label(lang, 'settings.youtube.statusInvalid'))), 'for both ways the connection goes');
+        });
+    }
+
+    it('is what the code does: a due post with no usable connection is claimed, fails with the reason written on it, and Publish now takes it again', () => {
+        const api = readFileSync('src/routes/api.ts', 'utf8');
+        assert.match(api, /WHERE s\.status = 'PENDING' AND s\.scheduled_time <= NOW\(\) AND s\.archived_at IS NULL/, 'the sweep takes every due PENDING row, whatever its connection');
+        assert.match(api, /if \(post\.platform === 'youtube'\) \{\s*return publishYouTubePost\(/, 'a YouTube row goes to publishYouTubePost');
+        assert.match(api, /WHERE id = \$1 AND creator_id = \$2 AND status IN \('PENDING', 'FAILED'\)/, 'and Publish now takes a PENDING or a FAILED one');
+        const publish = readFileSync('src/services/youtubePublish.ts', 'utf8');
+        assert.match(publish, /const \{ accessToken, connection \} = await getAccessToken\(post\.creator_id\);/, 'the token is fetched inside the try');
+        assert.match(publish, /SET status = 'FAILED', error_log = \$2\s+WHERE id = \$1 AND status IN \('PUBLISHING', 'PENDING'\)/, 'and any error ends in FAILED');
+        assert.match(readFileSync('src/services/youtubeConnections.ts', 'utf8'), /constructor\(message = 'YouTube is not connected for this account — connect it in Settings\.'\)/, 'with the sentence the article quotes');
+    });
+
+    it('is what the code does when Google refuses the login: the tokens, the channel name and its picture are deleted at once, the channel id stays', () => {
+        const connections = readFileSync('src/services/youtubeConnections.ts', 'utf8');
+        const start = connections.indexOf('export async function markConnectionInvalid');
+        const invalid = connections.slice(start, connections.indexOf('async function writeRefreshed', start));
+        assert.match(invalid, /SET status = 'invalid', last_error = \$2, access_token = NULL, access_expires_at = NULL,\s*refresh_token = NULL, refresh_expires_at = NULL, display_name = NULL, avatar_url = NULL,/);
+        assert.doesNotMatch(invalid, /external_account_id/, 'and the channel id is not among them');
+    });
+});
+
+// ─── 9. Joining a workspace ──────────────────────────────────────────────────────────────────────────────────────────
+
+describe('Help Center — the setup a new workspace goes through', () => {
+    it('is the order and the rules the code holds: About you and Your voice are required, Accounts is there only when the operator switched it on', () => {
+        assert.deepEqual(WIZARD_STEPS.map((s) => s.id), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
+        assert.deepEqual(WIZARD_STEPS.filter((s) => s.required).map((s) => s.id), ['about', 'voice']);
+        assert.equal(stepsFor(NO_FLAGS).find((s) => s.id === 'connect')!.enabled, false, 'Accounts is off until the platform administrator switches it on');
+        assert.equal(stepsFor({ connect: true }).find((s) => s.id === 'connect')!.enabled, true);
+        for (const lang of LANGS) {
+            const rows = listOf('onboarding', 'steps', lang, 'dl') as string[][];
+            assert.equal(rows.length, WIZARD_STEPS.length, `${lang}: one row per step`);
+            const required = lang === 'en' ? /^Required\./ : /^إلزامية\./;
+            const optional = lang === 'en' ? /^Optional/ : /^اختيارية/;
+            rows.forEach((row, i) => {
+                const step = WIZARD_STEPS[i]!;
+                if (step.id === 'done') return;
+                assert.equal(required.test(row[1]!), step.required, `${lang}: ${step.id} ${step.required ? 'is' : 'is not'} required`);
+                if (!step.required) assert.ok(optional.test(row[1]!), `${lang}: ${step.id} is optional`);
+            });
+        }
+    });
+});
+
+describe('Help Center — the limits of the setup', () => {
+    it('are the ones the code holds: 5 rounds of suggestions a day, 3 rounds of samples a day, 3 rewrites of a sample, 10 minutes for the test comment', () => {
+        assert.equal(DRAFTS_PER_DAY, 5);
+        assert.equal(PROOFS_PER_DAY, 3);
+        assert.equal(REGENERATIONS_PER_CARD, 3);
+        assert.match(readFileSync('dashboard/js/pages/welcome.js', 'utf8'), /CHECK_GIVE_UP_MS: 10 \* 60 \* 1000,/, 'the page waits 10 minutes for the comment');
+        assert.ok(textOf('onboarding', 'draft', 'en').includes(`ask for suggestions ${DRAFTS_PER_DAY} times a day`));
+        assert.ok(textOf('onboarding', 'draft', 'ar').includes(`تطلب الاقتراحات ${DRAFTS_PER_DAY} مرات في اليوم`));
+        assert.ok(textOf('onboarding', 'samples', 'en').includes(`up to ${REGENERATIONS_PER_CARD} times, and samples can be written ${PROOFS_PER_DAY} times a day`));
+        assert.ok(textOf('onboarding', 'samples', 'ar').includes(`حتى ${REGENERATIONS_PER_CARD} مرات، والعيّنات تُكتب ${PROOFS_PER_DAY} مرات في اليوم`));
+        assert.ok(textOf('onboarding', 'accounts', 'en').includes('It waits for 10 minutes'));
+        assert.ok(textOf('onboarding', 'accounts', 'ar').includes('وتنتظره 10 دقائق'));
+    });
+});
+
+// ─── 10. The DM assistant ────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('Help Center — the DM assistant', () => {
+    const has = (slug: string, id: string, lang: Lang, ...parts: string[]): void => {
+        const text = textOf(slug, id, lang);
+        for (const part of parts) assert.ok(text.includes(part), `${slug}#${id} (${lang}) says «${part}»`);
+    };
+
+    it('is what the code does about who it answers: nothing before a first save, and nothing while it is off, but the test box answers either way', () => {
+        assert.deepEqual(decideAgent(null, false), { speak: false, reason: 'unconfigured' });
+        assert.deepEqual(decideAgent({ is_active: false } as never, false), { speak: false, reason: 'disabled' });
+        assert.equal(decideAgent({ is_active: false } as never, true).speak, true, 'the sandbox speaks while the switch is off');
+        assert.equal(decideAgent(null, true).speak, true, 'and before anything was saved');
+        const admin = readFileSync('src/routes/admin.ts', 'utf8');
+        assert.match(admin, /VALUES \(\$1, false, \$2, ''\)\s*ON CONFLICT \(creator_id\) DO NOTHING/, 'a workspace the platform administrator creates starts with the assistant off');
+        assert.equal(HISTORY_WINDOW, 8);
+        assert.match(readFileSync('src/services/dmSales/turn.ts', 'utf8'), /export const SALES_HISTORY_WINDOW = 12;/);
+        assert.match(readFileSync('src/webhook/messaging.ts', 'utf8'), /const DISCLOSURE_MAX_AGE_MS = 7 \* 24 \* 60 \* 60 \* 1000;/, 'the automated-reply line returns after 7 days');
+        for (const lang of LANGS) has('dm-assistant', 'what', lang, lang === 'en' ? 'last 8 messages' : 'آخر 8 رسائل', lang === 'en' ? '12 for sales replies' : 'و12 في ردود المبيعات', lang === 'en' ? 'more than 7 days old' : 'أكثر من 7 أيام');
+    });
+
+    it('is what the code does about Sales replies: off for everybody to start, a test list of at most 20 ids of 5 to 32 digits', () => {
+        assert.equal(DEFAULT_SALES_MODE, 'off');
+        assert.deepEqual([...SALES_MODES], ['off', 'test', 'on']);
+        assert.equal(MAX_TEST_SENDERS, 20);
+        assert.ok(SENDER_ID.test('1'.repeat(5)) && SENDER_ID.test('1'.repeat(32)) && !SENDER_ID.test('1'.repeat(4)) && !SENDER_ID.test('1'.repeat(33)) && !SENDER_ID.test('12a45'));
+        for (const lang of LANGS) {
+            const labels = ['ai.salesOff', 'ai.salesTest', 'ai.salesOn'].map((key) => bold(label(lang, key)));
+            // Spread into this realm's array: the article's own lists come from the page's `vm` context, and a deep equal compares prototypes.
+            const rows = [...(listOf('dm-assistant', 'sales', lang, 'dl', 0) as string[][]).map((r) => r[0])];
+            assert.deepEqual(rows, labels, `${lang}: the three states, in the screen's own words and order`);
+            has('dm-assistant', 'sales', lang, lang === 'en' ? '(5 to 32 digits)' : '(من 5 إلى 32 رقماً)', lang === 'en' ? 'up to 20' : 'وحتى 20');
+        }
+    });
+
+    it('is what the code does about the guard and the hand-over: two questions, 15 replies an hour, a second insult stops it', () => {
+        assert.equal(MAX_QUALIFIER_TURNS, 2);
+        assert.equal(MAX_AI_REPLIES_PER_HOUR, 15);
+        assert.equal(MAX_ABUSE_STRIKES, 2);
+        for (const lang of LANGS) {
+            has('dm-assistant', 'sales', lang, lang === 'en' ? 'up to two questions' : 'حتى سؤالين', lang === 'en' ? '15 replies' : '15 رداً', lang === 'en' ? 'a second one stops the assistant' : 'والثانية توقف المساعد');
+        }
+        const price = readFileSync('src/services/dmSales/price.ts', 'utf8');
+        assert.match(price, /if \(!isCalendarDate\(until\) \|\| todayIn\(now, timezone\) > until\) return null;/, 'a price is said only until its date has passed');
+        assert.match(readFileSync('src/services/dmSales/link.ts', 'utf8'), /return `\$\{base\}\/r\/\$\{code\}`;/, 'the link is a tracked /r/ link');
+        for (const lang of LANGS) assert.ok(textOf('dm-assistant', 'sales', lang).includes(bold(label(lang, 'tenantProfile.sales.f.price_valid_until'))), `${lang}: the price's date field, by its own name`);
+    });
+
+    it('is what the code does after a reply that could not be written: the customer gets one line, the conversation shows Needs you, and the assistant stays on', () => {
+        const failure = readFileSync('src/services/dmSales/failureHandoff.ts', 'utf8');
+        const start = failure.indexOf('async function stamp');
+        const stamp = failure.slice(start, failure.indexOf('async function recordLine', start));
+        assert.match(stamp, /SET stage = 'handoff', handoff_at = NOW\(\), handoff_reason = \$3/);
+        assert.doesNotMatch(stamp, /is_bot_active/, 'it never pauses the bot');
+        assert.match(readFileSync('src/webhook/messaging.ts', 'utf8'), /if \(dmReply\.kind === 'handoff'\) \{\s*await handOver\(\);/, 'the engine failing, with the fallback off, ends the same way');
+        for (const lang of LANGS) {
+            const text = textOf('dm-assistant', 'engine', lang);
+            assert.ok(text.includes(bold(label(lang, 'inbox.filter.needs_you'))), `${lang}: the Inbox label`);
+            assert.ok(text.includes(bold(label(lang, 'ai.fallbackTitle'))) && text.includes(bold(label(lang, 'ai.engineProviders'))), `${lang}: the two switches, as the page names them`);
+        }
+    });
+
+    it('is what the code does about the follow-up: one, after 240 minutes unless set, from 0 to 1,320, inside 23 hours', () => {
+        assert.equal(FOLLOWUP_MINUTES_DEFAULT, 240);
+        assert.equal(FOLLOWUP_MINUTES_MIN, 0);
+        assert.equal(FOLLOWUP_MINUTES_MAX, 1320);
+        assert.equal(MAX_FOLLOWUPS_PER_CONVERSATION, 1);
+        assert.equal(FOLLOWUP_WINDOW_MS, 23 * 60 * 60 * 1000);
+        for (const lang of LANGS) {
+            has('dm-assistant', 'followup', lang, lang === 'en' ? '4 hours later (the default)' : 'بعد 4 ساعات (الافتراضي)', lang === 'en' ? 'from 0 to 1,320 minutes' : 'من 0 إلى 1320 دقيقة', lang === 'en' ? '240 by default' : 'والافتراضي 240', lang === 'en' ? 'after 23 hours' : 'بعد مرور 23 ساعة', lang === 'en' ? 'only one is ever sent per conversation' : 'ما يُرسل إلا واحدة لكل محادثة');
+            assert.ok(textOf('dm-assistant', 'followup', lang).includes(bold(label(lang, 'ai.salesFollowup'))), `${lang}: the field's own name`);
+        }
+    });
+
+    it('is what the code does about the wording experiment: two or three variants, a name of 40, guidance of 300, a share of 0 to 100, percentages from 30 conversations', () => {
+        assert.deepEqual([MIN_VARIANTS, MAX_VARIANTS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX, MIN_VARIANT_SAMPLE], [2, 3, 40, 300, 100, 30]);
+        for (const lang of LANGS) {
+            const rows = listOf('dm-assistant', 'variants', lang, 'dl') as string[][];
+            const desc = (key: string): string => rows.find((r) => r[0] === bold(label(lang, key)))![1]!;
+            assert.ok(desc('ai.variantName').includes(lang === 'en' ? '40 characters' : '40 حرفاً'), `${lang}: name`);
+            assert.ok(desc('ai.variantShare').includes(lang === 'en' ? 'from 0 to 100' : 'من 0 إلى 100'), `${lang}: share`);
+            assert.ok(desc('ai.variantOpening').includes(lang === 'en' ? '300 characters' : '300 حرف'), `${lang}: opening`);
+            assert.ok(desc('ai.variantCta').includes(lang === 'en' ? '300 characters' : '300 حرف'), `${lang}: offer`);
+            has('dm-assistant', 'variants', lang, lang === 'en' ? 'until a variant has 30 conversations' : 'قبل ما تصل الصيغة إلى 30 محادثة', lang === 'en' ? 'at least two variants' : 'صيغتان على الأقل');
+        }
+    });
+
+    it('is what the code does about ice breakers: 4 questions of 80 characters, a menu of 5 items of 30, seven answers to "what it asks", the owner only', () => {
+        assert.deepEqual([ICE_BREAKER_MAX, ICE_BREAKER_QUESTION_MAX, MENU_ITEMS_MAX, MENU_TITLE_MAX], [4, 80, 5, 30]);
+        const route = readFileSync('src/routes/iceBreakers.ts', 'utf8');
+        assert.match(route, /const canAdminister = requireTenantRole\('owner'\);/, 'every route is the owner\'s');
+        assert.match(readFileSync('dashboard/js/pages/settings.js', 'utf8'), /id: 'iceb', group: 'messages', who: 'owner'/, 'and the card is the owner\'s, under Messages & alerts');
+        for (const lang of LANGS) {
+            const steps = listOf('dm-assistant', 'ice-breakers', lang, 'ol') as string[];
+            const asks = TAP_CODES.map((code) => bold(label(lang, `iceb.tap.${code}`)));
+            const at = (s: string): number => steps[1]!.indexOf(s);
+            assert.ok(asks.every((s) => at(s) > -1), `${lang}: every answer, by the screen's name`);
+            assert.deepEqual([...asks].sort((a, b) => at(a) - at(b)), asks, `${lang}: in the screen's order`);
+            assert.ok(steps[0]!.includes(lang === 'en' ? `up to ${ICE_BREAKER_MAX} questions, each at most ${ICE_BREAKER_QUESTION_MAX} characters` : `حتى ${ICE_BREAKER_MAX} أسئلة، وطول كل سؤال ${ICE_BREAKER_QUESTION_MAX} حرفاً`), `${lang}: questions`);
+            assert.ok(steps[2]!.includes(lang === 'en' ? `up to ${MENU_ITEMS_MAX} items, each title at most ${MENU_TITLE_MAX} characters` : `حتى ${MENU_ITEMS_MAX} عناصر، وعنوان كل عنصر ${MENU_TITLE_MAX} حرفاً`), `${lang}: menu`);
+            assert.ok(textOf('dm-assistant', 'ice-breakers', lang).includes(bold(label(lang, 'settings.group.messages'))), `${lang}: where to find it`);
+        }
+    });
+});
+
+// ─── 11. Which AI the product uses ───────────────────────────────────────────────────────────────────────────────────
+
+describe('Help Center — which AI the product uses', () => {
+    for (const lang of LANGS) {
+        it(`no longer says all of it is Gemini, and points at where the other choices are (${lang})`, () => {
+            const text = textOf('ai-usage', 'where', lang);
+            assert.equal((lang === 'en' ? /All the AI in the product is/ : /كل الذكاء الاصطناعي في المنتج من/).test(text), false);
+            for (const link of ['[[dm-assistant#engine]]', '[[monteur#settings]]', '[[infographics#who]]']) assert.ok(text.includes(link), `${lang}: ${link}`);
         });
     }
 });
