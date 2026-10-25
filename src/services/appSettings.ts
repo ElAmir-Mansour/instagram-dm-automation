@@ -81,6 +81,26 @@ export const APP_SETTING_KEYS = {
      */
     metaLoginConfigId: 'meta.login_config_id',
     /**
+     * 'true': Connect (Facebook Login) also asks for `ads_read`, `ads_management` and `business_management`, so a tenant who grants them
+     * gets Boost with no token to paste (`captureAdsAccess` in src/services/adBoosts.ts). Off by default, and off means the dialog asks for
+     * exactly what it asked before: asking for a permission the app's use cases do not include makes Meta refuse the WHOLE dialog, so this
+     * goes on only after the operator added "Create & manage ads with Marketing API" to the app. With a configuration id the permissions
+     * come from the configuration instead, and this only changes what Settings lists. Not a secret. Platform admin, `POST /api/meta/app-settings`.
+     */
+    metaAdsScopesEnabled: 'meta.ads_scopes_enabled',
+    /**
+     * The Marketing API version the ads module calls (src/services/ads/graph.ts), pinned on its own instead of following `META_API_VERSION`:
+     * that env var is the publisher's rollback lever, and ads must never silently drop below v25.0 (v24 ends 2026-11-10, and Advantage+
+     * behaviour differs by version). Unset means `v26.0`; a value below `v25.0` is refused when saved and ignored when read. Not a secret.
+     * Platform admin.
+     */
+    adsApiVersion: 'ads.api_version',
+    /**
+     * 'false' stops the platform admin's own alert channel from getting a copy of every tenant's ads alerts (src/services/ads/notify.ts).
+     * Unset or anything else means a copy is sent: a client's cap pause or dead token should reach the operator who manages the account.
+     */
+    adsCopyAdmin: 'ads.copy_admin',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -245,6 +265,13 @@ export const APP_SETTING_KEYS = {
      * once the log line `dm.echo_classified` shows it.
      */
     dmEchoOwnerAppIds: 'dm.echo_owner_app_ids',
+    /**
+     * The image provider illustrated explainers draw with (v59, `src/services/explainers/pictures/provider.ts`), as JSON:
+     * `{ provider: 'cloudflare', account_id, token_enc, model, daily_cap, units_per_picture }`. Not a secret AS A ROW: the Cloudflare API token
+     * inside it is already `token_enc`, encrypted with `src/config/crypto.ts` before the JSON is written, and every answer shows only its last four
+     * characters. Platform-wide, because the provider account is the owner's. Edited by a platform admin (`PUT /api/admin/explainers/provider`).
+     */
+    explainersImageProvider: 'explainers.image_provider',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -260,11 +287,48 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   deactivated), so a row is never orphaned.
  *   dmVariants      the owner's A/B wording experiment for the DM sales turn: up to three variants of how to open and how to offer the link, their
  *                   weights, and whether it is running (DM plan S14, `src/services/dmSales/variantStore.ts`). Not a secret.
+ *   adsSettings     the owner's Meta ads limits for Boost: the ad account id, the max daily budget and the monthly spend cap, as JSON
+ *                   (`src/services/adBoosts.ts`). Not a secret. The server refuses any boost over these.
+ *   adsToken        the system-user token with `ads_management` / `ads_read` that Boost calls the Marketing API with. A SECRET: encrypted at
+ *                   rest like the Page token, and never in an answer (`{ set, last4 }` is all the card is told).
+ *   adsCapChecked   when the hourly monthly-cap guard last checked the tenant's ad account SUCCESSFULLY (src/services/ads/guard.ts). Not a secret.
+ *   adsCapAttempt   when the guard last tried, successful or not: a failing tenant is retried every 10 minutes. Not a secret.
+ *   adsEnabled      'true': the platform admin switched the Ads Manager on for the tenant; every /api/ads route 404s without it. Not a secret.
+ *   adsCeiling      the platform admin's ceiling on a managed client's limits, `{ maxDailyBudget, monthlyCap }`. Not a secret.
+ *   adsAlerts       where the tenant's ads alerts go: `{ telegramChatId, email, lang, kinds }` (src/services/ads/notify.ts). Not a secret.
+ *   adsHealth       the stored copy of the last ad account and token check (src/services/ads/health.ts). Not a secret: no token in it.
+ *   adsBotContext, adsExtendedWindow, adsShareSpend   switches of later phases (A3, A11), read with their defaults (off). Not secrets.
+ *   (All ads families are documented in src/services/ads/settings.ts.)
+ *   adsSync         the Ads Manager sync's bookkeeping per tenant, as JSON: when the structure, today's results and the 28 days last ran, a
+ *                   manual refresh waiting, an insights report to resume (`src/services/ads/sync.ts`). Not a secret.
+ *   adsMedia        what Meta made of each uploaded ad image or video (A5): `{ [mediaId]: { kind, imageHash?, videoId?, videoStatus?, at } }`,
+ *                   the newest 200 (`src/services/ads/adMedia.ts`). Not a secret.
+ *   adsLeadsCaughtUp when the 6-hourly lead catch-up last ran for the tenant (A10, `src/services/ads/leads.ts`), an ISO instant. Not a secret.
+ *   explainersEnabled 'true': the platform admin switched illustrated explainers on for the tenant (v59, `src/services/explainers/switch.ts`). Absent is
+ *                   off, and in this version only the platform owner can be switched on. Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
     dmVariants: 'dm.variants.',
+    adsSettings: 'ads.settings.',
+    adsToken: 'ads.token.',
+    adsCapChecked: 'ads.cap_checked.',
+    adsCapAttempt: 'ads.cap_attempt.',
+    adsEnabled: 'ads.enabled.',
+    adsCeiling: 'ads.ceiling.',
+    adsAlerts: 'ads.alerts.',
+    adsHealth: 'ads.health.',
+    adsBotContext: 'ads.bot_context.',
+    adsExtendedWindow: 'ads.extended_window.',
+    adsShareSpend: 'ads.share_spend.',
+    adsSync: 'ads.sync.',
+    adsMedia: 'ads.media.',
+    adsLeadsCaughtUp: 'ads.leads_caught_up.',
+    explainersEnabled: 'explainers.enabled.',
 } as const;
+
+/** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */
+const SECRET_TENANT_PREFIXES: readonly string[] = [TENANT_SETTING_PREFIXES.adsToken];
 
 export type TenantSettingKey = `${(typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES]}${string}`;
 
@@ -292,7 +356,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
 ]);
 
 export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {
-    return SECRET_KEYS.has(key as AppSettingKey);
+    return SECRET_KEYS.has(key as AppSettingKey) || SECRET_TENANT_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /** The decrypted value, or null when unset. */
@@ -482,6 +546,8 @@ export interface MetaLoginSettings {
     configId: string | null;
     /** Where the id came from, so the card can say "set in the environment". */
     configIdSource: 'database' | 'env' | null;
+    /** Whether Connect also asks for the ads permissions (`meta.ads_scopes_enabled`). Default false. */
+    adsScopesEnabled: boolean;
 }
 
 /** A Login for Business configuration id is a number: Meta's own are 15 or 16 digits, and nothing shorter than 6 or longer than 30 is one. */
@@ -492,9 +558,10 @@ export const META_CONFIG_ID_PATTERN = /^[0-9]{6,30}$/;
  * `META_LOGIN_CONFIG_ID`). A saved or env value that is not a configuration id is ignored with a log line, never sent to Meta.
  */
 export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
-    const [enabled, dbConfig] = await Promise.all([
+    const [enabled, dbConfig, adsScopes] = await Promise.all([
         getSetting(APP_SETTING_KEYS.metaLoginEnabled),
         getSetting(APP_SETTING_KEYS.metaLoginConfigId),
+        getSetting(APP_SETTING_KEYS.metaAdsScopesEnabled),
     ]);
     const envConfig = process.env.META_LOGIN_CONFIG_ID?.trim() || null;
     const candidate = dbConfig ?? envConfig;
@@ -504,6 +571,7 @@ export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
         enabled: enabled === 'true',
         configId,
         configIdSource: configId ? (dbConfig ? 'database' : 'env') : null,
+        adsScopesEnabled: adsScopes === 'true',
     };
 }
 

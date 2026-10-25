@@ -36,6 +36,7 @@ const STRINGS = vm.runInContext('I18N.strings', ctx) as Record<Lang, Record<stri
 const CONTENT = vm.runInContext(`${readFileSync('dashboard/js/help-content.js', 'utf8')}\n;HelpContent`, ctx, { filename: 'help-content.js' }) as Json;
 
 /** Deliberate non-UI emphasis, per language: the bold text (as `clean` leaves it) → why. */
+// «Gemini» left both lists on 2026-10-25: the Explainers settings name the writer «Gemini» (explainers.writerSetting.gemini), so it is an interface string.
 const NOT_UI: Record<Lang, Record<string, string>> = {
     ar: {
         'ردود الكلمات المفتاحية': 'feature name leading a list item',
@@ -72,15 +73,26 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'ffmpeg': 'a program the worker needs',
         'لقطة': 'emphasis',
         'خاصاً': 'emphasis: the TikTok account setting',
-        'Gemini': 'a product name',
         'المفتاح المجاني حدوده ضيقة': 'quota fact leading a list item',
         'Verify and save': 'a control in Meta’s dashboard',
         'System users': 'a control in Meta’s dashboard',
         'Assign assets': 'a control in Meta’s dashboard',
         'Generate token': 'a control in Meta’s dashboard',
+        // The Ads article (ads#connect): Meta Business Settings, in Arabic, and Telegram's own button.
+        'إعدادات الأعمال': 'a control in Meta’s dashboard',
+        'إضافة': 'a control in Meta’s dashboard',
+        'مستخدمو النظام': 'a control in Meta’s dashboard',
+        'إسناد الأصول': 'a control in Meta’s dashboard',
+        'إنشاء رمز جديد': 'a control in Meta’s dashboard',
+        'انتهاء صلاحية الرمز': 'a control in Meta’s dashboard',
+        'إدارة الحملات': 'a permission level in Meta’s dashboard',
+        'مسؤول': 'a role in Meta’s dashboard',
+        'موظف': 'a role in Meta’s dashboard',
+        'الحسابات الإعلانية': 'a control in Meta’s dashboard',
+        'جودة الحساب': 'a page in Meta’s dashboard',
+        'Start': 'a control in Telegram',
     },
     en: {
-        'Keyword replies': 'feature name leading a list item',
         'An AI agent for DMs': 'feature name leading a list item',
         'Post scheduling': 'feature name leading a list item',
         'Carousel Studio': 'feature name leading a list item',
@@ -115,12 +127,21 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'ffmpeg': 'a program the worker needs',
         'moments': 'emphasis',
         'private': 'emphasis: the TikTok account setting',
-        'Gemini': 'a product name',
         'A free key has tight limits': 'quota fact leading a list item',
         'Verify and save': 'a control in Meta’s dashboard',
         'System users': 'a control in Meta’s dashboard',
         'Assign assets': 'a control in Meta’s dashboard',
         'Generate token': 'a control in Meta’s dashboard',
+        // The Ads article (ads#connect): Meta Business Settings, and Telegram's own button.
+        'Business Settings': 'a control in Meta’s dashboard',
+        'Generate new token': 'a control in Meta’s dashboard',
+        'Token expiration': 'a control in Meta’s dashboard',
+        'Manage campaigns': 'a permission level in Meta’s dashboard',
+        'Admin': 'a role in Meta’s dashboard',
+        'Employee': 'a role in Meta’s dashboard',
+        'Ad accounts': 'a control in Meta’s dashboard',
+        'Account Quality': 'a page in Meta’s dashboard',
+        // 'Start' (Telegram's button) is also the builder's start-date label since A5 (adsCreate.budget.start): an interface string now.
     },
 };
 

@@ -26,7 +26,7 @@ import { richProfile } from './testSupport.js';
 
 const MUTEX = /^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/;
 const PROFILE_ROW = /^SELECT profile, version FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE$/;
-const STUDIO_READ = /^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = \$1 FOR UPDATE$/;
+const STUDIO_READ = /^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings WHERE creator_id = \$1 FOR UPDATE$/;
 const GROWTH_READ = /^SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = \$1 FOR UPDATE$/;
 const STUDIO_WRITE = /^INSERT INTO studio_settings /;
 const GROWTH_WRITE = /^INSERT INTO growth_settings /;

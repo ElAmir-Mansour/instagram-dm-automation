@@ -5,10 +5,10 @@
  * does the real work — reap stale claims, then process due jobs — through
  * `GET /api/jobs/drain`, which is authenticated and already deployed on Vercel. This script
  * does not reimplement any of that. It is a loop that calls the endpoint on a fixed interval,
- * because nothing else reliably calls it: Vercel's Hobby-plan cron only runs once a day, and
- * the GitHub Actions workflow meant to fill that gap every 5-15 minutes has never actually
- * fired — CRON_SECRET was never added as a repository secret, so every scheduled run fails in
- * the first few seconds before it can call anything.
+ * because nothing else calls it often: Vercel's Hobby-plan cron only runs once a day, and the
+ * GitHub Actions workflow (.github/workflows/drain.yml, scheduled every 5 minutes) is delivered
+ * by GitHub only every few hours (2–4.5 h apart when measured on 2026-10-25). Until 2026-09-22
+ * that workflow never ran at all: CRON_SECRET was not a repository secret.
  *
  * A worker dyno does not sleep and is not killed after a response the way a Vercel function
  * is, so this can poll far more often than either of those — the interval below is a safety

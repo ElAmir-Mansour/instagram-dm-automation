@@ -133,6 +133,7 @@ const ActivityPage = {
      *  final before a single row of data has arrived. */
     skeleton() {
         return html`
+            ${UI.resultsTabs('log')}
             ${Motion.tableCard(15, [
                 t('table.user'), t('table.keyword'), t('table.postId'),
                 t('table.status'), t('table.error'), t('table.time'),
@@ -179,7 +180,7 @@ const ActivityPage = {
         } catch (err) {
             if (!live()) return;
             gate.done();
-            UI.renderError(container, { title: t('activity.errorTitle'), message: err.message }, () => this.loadData());
+            UI.renderError(container, { title: t('activity.errorTitle'), message: err.message, before: UI.resultsTabs('log') }, () => this.loadData());
             return;
         }
         if (!live()) return;
@@ -198,6 +199,7 @@ const ActivityPage = {
             UI.renderError(container, {
                 title: t('activity.errorTitle'),
                 message: t('error.unexpected'),
+                before: UI.resultsTabs('log'),
             }, () => this.loadData());
             return;
         }
@@ -211,6 +213,7 @@ const ActivityPage = {
         const emptyMessage = filtered ? t('activity.noneFiltered') : t('activity.none');
 
         container.innerHTML = esc(html`
+            ${UI.resultsTabs('log')}
             <div class="table-card surface">
                 <!-- This screen had no heading at all below the page <h1>, so
                      there was nothing to navigate it by. The filter bar is not

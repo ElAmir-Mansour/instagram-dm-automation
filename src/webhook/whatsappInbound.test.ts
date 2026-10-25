@@ -16,6 +16,9 @@
  *     recorded for every message it is not asked for
  *   - every inbound stamps `last_inbound_at`, and a redelivery does not
  *   - a BSUID that changes follows the person through the thread, their consents and the test list, and never merges or deletes a thread
+ *   - (W6, W7, W8 wired in) a stop phrase from a tester is decided by the opt-out step and never reaches the agent; a stranger's file is NEVER downloaded; a voice note
+ *     or a captioned file reaches the agent as words and a file with none as the one line; a known entry-link ref attributes the thread and is out of the agent's words
+ *     (the stored text is as received) while a referral alone never sets the free window. The steps are stand-ins that FAIL THE TEST when asked for what they should not be.
  */
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -31,7 +34,7 @@ import type { Job, JobKind, WhatsAppDmPayload } from '../jobs/types.js';
 import { metaHttp } from '../services/http.js';
 import { setLogSink } from '../utils/log.js';
 import { planJobs, processWebhookBody } from './router.js';
-import { handleWhatsAppInbound, isTestSender, noReplyReasonFor } from './whatsappInbound.js';
+import { handleWhatsAppInbound, isTestSender, noReplyReasonFor, type InboundSteps } from './whatsappInbound.js';
 import type { WhatsAppAnswerFn, WhatsAppAnswerInput } from './whatsappAnswer.js';
 
 const CREATOR = '11111111-1111-4111-8111-111111111111';
@@ -82,6 +85,25 @@ let answerCalls: WhatsAppAnswerInput[];
 let answerImpl: WhatsAppAnswerFn;
 const unexpectedAnswer: WhatsAppAnswerFn = async () => { throw new Error('the agent must not be asked for this message'); };
 const answers = (impl: WhatsAppAnswerFn = async () => ({ reason: null })) => { answerImpl = impl; };
+
+/** The other steps (an opt-out, a file, its words, the entry-link labels), each a recorder that FAILS unless the test arranged it. */
+type StepCalls = {
+    stop: Parameters<InboundSteps['stop']>[0][]; saveFile: Parameters<InboundSteps['saveFile']>[0][]; readMedia: Parameters<InboundSteps['readMedia']>[0][];
+    acknowledge: Parameters<InboundSteps['acknowledge']>[0][]; labels: string[];
+};
+let stepCalls: StepCalls;
+let steps: InboundSteps;
+const freshSteps = (): InboundSteps => ({
+    stop: async (input) => { stepCalls.stop.push(input); throw new Error('the opt-out step must not be asked for this message'); },
+    saveFile: async (input) => { stepCalls.saveFile.push(input); throw new Error('a file must not be saved for this message'); },
+    readMedia: async (input) => { stepCalls.readMedia.push(input); throw new Error('the media step must not be asked for this message'); },
+    acknowledge: async (input) => { stepCalls.acknowledge.push(input); throw new Error('the one line must not be asked for this message'); },
+    labels: async (creatorId) => { stepCalls.labels.push(creatorId); return {}; },
+});
+const stops = (impl: InboundSteps['stop'] = async () => ({ newlyOptedOut: true, followupsCancelled: 0, confirmation: 'sent' })) => { steps.stop = async (input) => { stepCalls.stop.push(input); return impl(input); }; };
+const saves = (impl: InboundSteps['saveFile'] = async () => ({ uploadId: 'upload-1', mimeType: 'audio/ogg' })) => { steps.saveFile = async (input) => { stepCalls.saveFile.push(input); return impl(input); }; };
+const reads = (impl: InboundSteps['readMedia']) => { steps.readMedia = async (input) => { stepCalls.readMedia.push(input); return impl(input); }; };
+const acknowledges = (impl: InboundSteps['acknowledge'] = async () => null) => { steps.acknowledge = async (input) => { stepCalls.acknowledge.push(input); return impl(input); }; };
 
 const originalQuery = pool.query;
 const originalConnect = pool.connect;
@@ -142,14 +164,14 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
                 existing.wa_parent_user_id = existing.wa_parent_user_id ?? parent;
                 existing.profile_name = name ?? existing.profile_name;
                 existing.entry_source = existing.entry_source ?? JSON.parse(entry);
-                return result([{ id: existing.id, is_bot_active: existing.is_bot_active ?? true, ai_disclosed_at: existing.ai_disclosed_at ?? null }]);
+                return result([{ id: existing.id, is_bot_active: existing.is_bot_active ?? true, ai_disclosed_at: existing.ai_disclosed_at ?? null, entry_source: existing.entry_source }]);
             }
             const c: Conv = {
                 id: `conv-${++nextId}`, creator_id: creator, instagram_user_id: userId, platform: 'whatsapp', status: 'active', last_message_at: clock, last_inbound_at: clock,
                 wa_phone: phone, wa_username: username, wa_parent_user_id: parent, profile_name: name, entry_source: JSON.parse(entry),
             };
             db.convs.push(c);
-            return result([{ id: c.id, is_bot_active: true, ai_disclosed_at: null }]);
+            return result([{ id: c.id, is_bot_active: true, ai_disclosed_at: null, entry_source: c.entry_source }]);
         }
         // The system-message variant: no `last_inbound_at`, no `last_message_at` bump.
         const [, , phone, parent] = params;
@@ -185,6 +207,11 @@ function fakeQuery(sqlIn: string, params: any[] = []): { rows: any[]; rowCount: 
         m.reply_claimed_at = clock;
         m.reply_attempts += 1;
         return result([{ id: m.id, reply_attempts: m.reply_attempts }]);
+    }
+    if (sql.startsWith('UPDATE messages SET reply_claimed_at = NULL WHERE id = $1 AND handled_at IS NULL')) {
+        const m = db.msgs.find((x) => x.id === params[0] && x.handled_at === null);
+        if (m) m.reply_claimed_at = null;
+        return result([], m ? 1 : 0);
     }
     if (sql.startsWith('UPDATE messages SET handled_at = NOW(), reply_claimed_at = NULL, no_reply_reason = $2 WHERE id = $1')) {
         // `$2` is NULL for a message the agent answered.
@@ -241,6 +268,8 @@ beforeEach(() => {
     failConversationUpsert = false;
     answerCalls = [];
     answerImpl = unexpectedAnswer;
+    stepCalls = { stop: [], saveFile: [], readMedia: [], acknowledge: [], labels: [] };
+    steps = freshSteps();
     db = { convs: [], msgs: [], consents: [], agent: { whatsapp_mode: 'off', whatsapp_test_senders: [] } };
 
     const previous = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
@@ -305,7 +334,7 @@ const jobsOf = (body: any): WhatsAppDmPayload[] => planJobs(body).filter((j) => 
 /** What the runner does with a delivery: plan it, then hand each message job to the handler. */
 async function deliver(body: any, options = { lastAttempt: true }): Promise<void> {
     const answer: WhatsAppAnswerFn = async (input) => { answerCalls.push(input); return answerImpl(input); };
-    for (const payload of jobsOf(body)) await handleWhatsAppInbound(payload, options, answer);
+    for (const payload of jobsOf(body)) await handleWhatsAppInbound(payload, options, answer, steps);
 }
 
 const agent = (mode: string, senders: string[] = []) => { db.agent = { whatsapp_mode: mode, whatsapp_test_senders: senders }; };
@@ -418,7 +447,9 @@ describe('a message from a listed test sender', () => {
         const iv = image.entry[0].changes[0].value;
         iv.contacts[0].user_id = BSUID;
         iv.messages[0].from_user_id = BSUID;
+        saves(async () => ({ uploadId: 'upload-photo', mimeType: 'image/jpeg' }));
         await deliver(image);
+        assert.equal(stepCalls.saveFile.length, 1, 'a tester\'s file is saved even with the agent off: Meta keeps it 7 days');
         const photo = db.msgs.find((m) => m.message_type === 'image')!;
         const raw = JSON.parse(photo.raw_payload!);
         assert.equal(raw.messages[0].image.id, iv.messages[0].image.id, 'the media id is kept for the media phase');
@@ -572,7 +603,7 @@ describe('a message the agent answers', () => {
         const msg = only(db.msgs);
         assert.deepEqual(answerCalls, [{
             creatorId: CREATOR, conversationId: conv.id, messageId: msg.id, wamid: 'wamid.A1', phoneNumberId: PHONE_ID, senderId: BSUID,
-            text: BODY, payload: null, aiDisclosedAt: null, lastAttempt: true,
+            text: BODY, payload: null, aiDisclosedAt: null, entryRef: null, lastAttempt: true,
         }]);
     });
 
@@ -676,30 +707,19 @@ describe('a message the agent answers', () => {
 describe('a message the agent is NOT asked for, even from a listed test sender', () => {
     const body = (over: Record<string, unknown> = {}) => textBody(BODY, `wamid.N-${Math.random()}`, {}, over);
 
-    it('is not asked for media: a photo with a caption is stored in full and concluded as unsupported_type, not answered from its caption', async () => {
+    it('is not asked for a reaction or a type Meta added (`unsupported`, `order`), and none of them is downloaded or answered: stored in full, concluded as unsupported_type', async () => {
         agent('test', [BSUID]);
-        const image = fixture('image');
-        const iv = image.entry[0].changes[0].value;
-        iv.contacts[0].user_id = BSUID;
-        iv.messages[0].from_user_id = BSUID;
-        await deliver(image);
-        const photo = only(db.msgs);
-        assert.equal(photo.no_reply_reason, 'unsupported_type');
-        assert.equal(photo.text, iv.messages[0].image.caption, 'still stored: it is the tester\'s');
-        assert.equal(answerCalls.length, 0);
-    });
-
-    it('is not asked for a voice note, a location, a reaction or a type Meta added', async () => {
-        agent('test', [BSUID]);
-        for (const name of ['audio-voice', 'location', 'reaction'] as const) {
-            let f: any;
-            try { f = fixture(name); } catch { continue; }
+        for (const name of ['unsupported', 'order', 'reaction'] as const) {
+            const f = fixture(name);
             const v = f.entry[0].changes[0].value;
             v.contacts[0].user_id = BSUID;
             v.messages[0].from_user_id = BSUID;
+            v.messages[0].id = `wamid.U-${name}`;
             await deliver(f);
         }
         assert.equal(answerCalls.length, 0);
+        assert.deepEqual([stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.acknowledge.length, stepCalls.stop.length], [0, 0, 0, 0], 'not even the one line: it is for a sticker, a location or a card');
+        assert.ok(db.msgs.length >= 2);
         assert.ok(db.msgs.every((m) => m.no_reply_reason === 'unsupported_type'), db.msgs.map((m) => m.no_reply_reason).join(','));
     });
 
@@ -1296,5 +1316,520 @@ describe('the stored payload of a job (the queue keeps it 7 days, a failed one f
         assert.equal(jobs[0]!.status, 'done');
         assertNoSecrets(jobs[0]!);
         assert.equal(logged('wa.settings_unreadable').length, 1);
+    });
+});
+
+// ─── W7 wired in: a stop phrase from a listed tester ───────────────────────────────────
+
+/** A message with a file, in the shape Meta sends it, from one person (BSUID first). A message with no caption has none of the field. */
+function fileBody(type: 'image' | 'video' | 'document' | 'audio' | 'sticker', id: string, fields: Record<string, unknown>, who: Sender = {}): any {
+    return textBody('', id, who, { type, text: undefined, [type]: fields });
+}
+const VOICE = { id: 'MEDIA-VOICE-1', mime_type: 'audio/ogg; codecs=opus', voice: true };
+const PHOTO = { id: 'MEDIA-PHOTO-1', mime_type: 'image/jpeg' };
+
+describe('a stop phrase from a listed tester (T044, review C2)', () => {
+    it('is decided by the opt-out step, with the contact, the thread, the words and the language, and the agent is never asked: the row says opted_out', async () => {
+        agent('test', [BSUID]);
+        stops();
+        await deliver(textBody('إيقاف', 'wamid.P1'));
+        const conv = only(db.convs);
+        assert.deepEqual(stepCalls.stop, [{ creatorId: CREATOR, conversationId: conv.id, senderId: BSUID, text: 'إيقاف', lang: 'ar', confirm: true }]);
+        assert.equal(answerCalls.length, 0, 'one path decides: the turn is not run for a stop');
+        const msg = only(db.msgs);
+        assert.deepEqual([msg.no_reply_reason, msg.text], ['opted_out', 'إيقاف']);
+        assert.notEqual(msg.handled_at, null);
+        const said = only(logged('wa.inbound_stored'));
+        assert.deepEqual([said.answered, said.no_reply_reason], [false, 'opted_out']);
+    });
+
+    it('reads English and Arabic, around punctuation and in any case, and the language of the phrase is the language of the confirmation', async () => {
+        agent('test', [BSUID]);
+        stops();
+        await deliver(textBody('  STOP! ', 'wamid.P2'));
+        await deliver(textBody('ايقاف.', 'wamid.P3'));
+        await deliver(textBody('Unsubscribe', 'wamid.P4'));
+        assert.deepEqual(stepCalls.stop.map((c) => c.lang), ['en', 'ar', 'en']);
+        assert.ok(db.msgs.every((m) => m.no_reply_reason === 'opted_out'));
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is honoured in every mode, with the connection refused and while a person has the thread, and the confirmation goes only when the agent may speak', async () => {
+        const cases: Array<[string, () => void, boolean]> = [
+            ['mode test', () => agent('test', [BSUID]), true],
+            ['mode everyone', () => agent('everyone', [BSUID]), true],
+            ['mode off', () => agent('off', [BSUID]), false],
+            ['a refused connection', () => { agent('test', [BSUID]); connection = connectionRow({ status: 'invalid' }); }, false],
+            ['a person has the thread', () => {
+                agent('test', [BSUID]);
+                db.convs.push({
+                    id: 'conv-paused', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+                    wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null, is_bot_active: false,
+                });
+            }, false],
+        ];
+        let n = 0;
+        for (const [name, arrange, confirm] of cases) {
+            db.convs.length = 0; db.msgs.length = 0; stepCalls.stop.length = 0; connection = connectionRow();
+            arrange();
+            stops();
+            await deliver(textBody('stop', `wamid.Q${n++}`));
+            assert.equal(stepCalls.stop.length, 1, name);
+            assert.equal(stepCalls.stop[0]!.confirm, confirm, `${name}: confirm`);
+            assert.equal(only(db.msgs).no_reply_reason, 'opted_out', name);
+        }
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is NOT a stop when the stop word is only part of what they wrote: an order question, a place, a sentence', async () => {
+        agent('test', [BSUID]);
+        answers();
+        const notStops = ['عايز إلغاء الطلب', 'وين موقف السيارات؟', 'stop by tomorrow?', 'nonstop', 'كيف أوقف الاشتراك', 'please stop the plan from expiring', 'إلغاء', 'cancel'];
+        let n = 0;
+        for (const text of notStops) await deliver(textBody(text, `wamid.NS${n++}`));
+        assert.equal(stepCalls.stop.length, 0, 'the whole message must be the phrase');
+        assert.deepEqual(answerCalls.map((c) => c.text), notStops, 'each went to the agent, whose own prefilter decides what it means');
+    });
+
+    it('leaves what only the TURN\'s prefilter understands («ما ابي رسايل») to the turn: the opt-out step is for the whole-message phrases', async () => {
+        agent('test', [BSUID]);
+        answers();
+        await deliver(textBody('ما ابي رسايل', 'wamid.P5'));
+        assert.equal(stepCalls.stop.length, 0);
+        assert.equal(answerCalls.length, 1);
+    });
+
+    it('is not looked for in a stranger\'s message: nothing of theirs is read, kept or recorded', async () => {
+        agent('test', ['EG.the.owner.tester']);
+        await deliver(textBody('stop', 'wamid.P6'));
+        assert.equal(stepCalls.stop.length, 0);
+        const msg = only(db.msgs);
+        assert.deepEqual([msg.no_reply_reason, msg.text, msg.raw_payload], ['not_test_sender', '', null]);
+    });
+
+    it('is read in a tapped button, in a photo\'s caption (and then the file is not even saved) and in what a voice note says', async () => {
+        agent('test', [BSUID]);
+        stops();
+        saves();
+        const button = fixture('interactive-button-reply');
+        const bv = button.entry[0].changes[0].value;
+        bv.contacts[0].user_id = BSUID;
+        bv.messages[0].from_user_id = BSUID;
+        bv.messages[0].id = 'wamid.P7';
+        bv.messages[0].interactive.button_reply.title = 'Stop';
+        await deliver(button);
+        await deliver(fileBody('image', 'wamid.P8', { ...PHOTO, caption: 'وقف' }));
+        assert.deepEqual(stepCalls.stop.map((c) => c.text), ['Stop', 'وقف']);
+        assert.equal(stepCalls.saveFile.length, 0, 'a photo captioned with a stop is a stop, not a file to keep');
+
+        reads(async () => ({ kind: 'text', text: 'توقف' }));
+        await deliver(fileBody('audio', 'wamid.P9', VOICE));
+        assert.deepEqual(stepCalls.stop.map((c) => c.text), ['Stop', 'وقف', 'توقف']);
+        assert.equal(stepCalls.stop[2]!.confirm, true);
+        assert.equal(answerCalls.length, 0);
+        assert.ok(db.msgs.every((m) => m.no_reply_reason === 'opted_out'), db.msgs.map((m) => m.no_reply_reason).join(','));
+    });
+
+    it('a stop that could not be written is retried while an attempt is left (the claim given back at once), and never answered', async () => {
+        agent('test', [BSUID]);
+        steps.stop = async (input) => { stepCalls.stop.push(input); throw new Error('connection terminated unexpectedly'); };
+        const body = textBody('stop', 'wamid.P10');
+        await assert.rejects(() => deliver(body, { lastAttempt: false }), /connection terminated/);
+        const msg = only(db.msgs);
+        assert.deepEqual([msg.handled_at, msg.reply_claimed_at], [null, null], 'open, and free for the retry to take at once');
+        assert.equal(logged('wa.optout_retrying').length, 1);
+
+        stops();
+        await deliver(body, { lastAttempt: false });
+        assert.equal(only(db.msgs).no_reply_reason, 'opted_out');
+        assert.equal(only(db.msgs).reply_attempts, 2);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('a stop that could not be written on the LAST attempt is said loudly and concluded as a failure: nothing is sent to someone who said stop', async () => {
+        agent('test', [BSUID]);
+        steps.stop = async (input) => { stepCalls.stop.push(input); throw new Error('connection terminated unexpectedly'); };
+        await deliver(textBody('stop', 'wamid.P11'), { lastAttempt: true });
+        assert.equal(only(db.msgs).no_reply_reason, 'failure');
+        const said = only(logged('wa.optout_not_recorded'));
+        assert.equal(said.level, 'error');
+        assert.equal(answerCalls.length, 0);
+    });
+});
+
+// ─── W6 wired in: what a tester sends that is not typed words ──────────────────────────
+
+// ─── A sticker, a location, a contact card: the chat never goes silent ─────────────────
+
+/** A sticker, a location or a contact card from one person, in the shape Meta sends it. */
+function wordlessBody(type: 'sticker' | 'location' | 'contacts', id: string, who: Sender = {}): any {
+    const content: Record<string, unknown> = {
+        sticker: { id: 'MEDIA-STICKER-1', mime_type: 'image/webp', animated: false },
+        location: { latitude: 21.4858, longitude: 39.1925, name: 'Jeddah Corniche', address: 'Jeddah' },
+        contacts: [{ name: { formatted_name: 'Sami A.', first_name: 'Sami' }, phones: [{ phone: '+966500000000', type: 'CELL' }] }],
+    };
+    return textBody('', id, who, { type, text: undefined, [type]: content[type] });
+}
+
+describe('a sticker, a location or a contact card from a listed tester: one short line, and the chat is never silent', () => {
+    const KINDS = ['sticker', 'location', 'contacts'] as const;
+
+    for (const kind of KINDS) {
+        it(`${kind}: the one-line step is asked once, with the thread and the row, and nothing is downloaded, read or sent to the agent; the row says NULL because the line went out`, async () => {
+            agent('test', [BSUID]);
+            acknowledges(async () => null);
+            await deliver(wordlessBody(kind, `wamid.W-${kind}`));
+
+            const conv = only(db.convs);
+            const msg = only(db.msgs);
+            assert.deepEqual(stepCalls.acknowledge, [{ creatorId: CREATOR, conversationId: conv.id, messageId: msg.id, what: kind, aiDisclosedAt: null }]);
+            assert.deepEqual([answerCalls.length, stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.stop.length], [0, 0, 0, 0]);
+            assert.equal(msg.no_reply_reason, null, 'answered: the line went out');
+            assert.notEqual(msg.handled_at, null);
+            assert.equal(msg.message_type, kind);
+            const said = only(logged('wa.inbound_stored'));
+            assert.deepEqual([said.answered, said.no_reply_reason], [true, null]);
+        });
+    }
+
+    it('what the one-line step concludes is what the row says: superseded in a burst, a closed window, an agent switched off, a refused send', async () => {
+        agent('test', [BSUID]);
+        const reasons = [null, 'superseded', 'window_closed', 'agent_off', 'failure'] as const;
+        let n = 0;
+        for (const reason of reasons) {
+            acknowledges(async () => reason);
+            await deliver(wordlessBody('sticker', `wamid.W2-${n++}`));
+        }
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), [...reasons]);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('is said to a tester in mode test and in mode everyone (which is test-only until the go-live gate)', async () => {
+        acknowledges(async () => null);
+        for (const mode of ['test', 'everyone'] as const) {
+            agent(mode, [BSUID]);
+            db.convs.length = 0;
+            db.msgs.length = 0;
+            await deliver(wordlessBody('location', `wamid.W3-${mode}`));
+            assert.equal(only(db.msgs).no_reply_reason, null, mode);
+        }
+        assert.equal(stepCalls.acknowledge.length, 2);
+    });
+
+    it('is NEVER said to a stranger, in any mode, with every other fact in their favour: store-only, no line, the reason is not_test_sender (or agent_off for a thread in mode off), and nothing of theirs is kept', async () => {
+        for (const mode of ['off', 'test', 'everyone'] as const) {
+            agent(mode, ['EG.the.owner.tester']);
+            for (const kind of KINDS) await deliver(wordlessBody(kind, `wamid.X-${mode}-${kind}`));
+        }
+        assert.equal(stepCalls.acknowledge.length, 0, 'not one line to a stranger');
+        assert.deepEqual([answerCalls.length, stepCalls.saveFile.length, stepCalls.readMedia.length], [0, 0, 0]);
+        assert.equal(db.msgs.length, 9);
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), [
+            'agent_off', 'agent_off', 'agent_off', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender', 'not_test_sender',
+        ]);
+        for (const m of db.msgs) assert.deepEqual([m.text, m.payload, m.raw_payload], ['', null, null], m.message_type);
+    });
+
+    it('is not said when the agent may not answer a tester: mode off, a connection Meta refused, a thread a person has. Each keeps its own reason, and nothing is sent', async () => {
+        const cases: Array<[string, () => void, string]> = [
+            ['mode off', () => agent('off', [BSUID]), 'agent_off'],
+            ['a refused connection', () => { agent('test', [BSUID]); connection = connectionRow({ status: 'invalid' }); }, 'connection_invalid'],
+            ['a person has the thread', () => {
+                agent('test', [BSUID]);
+                db.convs.push({
+                    id: 'conv-paused', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+                    wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null, is_bot_active: false,
+                });
+            }, 'bot_paused'],
+        ];
+        let n = 0;
+        for (const [name, arrange, reason] of cases) {
+            db.convs.length = 0;
+            db.msgs.length = 0;
+            connection = connectionRow();
+            arrange();
+            await deliver(wordlessBody('sticker', `wamid.W4-${n++}`));
+            assert.equal(only(db.msgs).no_reply_reason, reason, name);
+        }
+        assert.equal(stepCalls.acknowledge.length, 0);
+    });
+
+    it('a sticker is never read as a stop: no opt-out step is asked, only the one line', async () => {
+        agent('test', [BSUID]);
+        acknowledges();
+        await deliver(wordlessBody('sticker', 'wamid.W5'));
+        assert.equal(stepCalls.stop.length, 0);
+        assert.equal(stepCalls.acknowledge.length, 1);
+    });
+
+    it('a one-line step that fails with the database is an error the runner retries, with the claim still held: nothing is concluded half-way', async () => {
+        agent('test', [BSUID]);
+        acknowledges(async () => { throw new Error('connection terminated unexpectedly'); });
+        await assert.rejects(() => deliver(wordlessBody('contacts', 'wamid.W6'), { lastAttempt: false }), /connection terminated/);
+        const msg = only(db.msgs);
+        assert.equal(msg.handled_at, null);
+        assert.equal(msg.no_reply_reason, null);
+        assert.equal(answerCalls.length, 0);
+    });
+
+    it('a retried message is handed to the one-line step again (which finds its own claim and does not say it twice)', async () => {
+        agent('test', [BSUID]);
+        acknowledges(async () => { throw new Error('connection terminated unexpectedly'); });
+        const body = wordlessBody('location', 'wamid.W7');
+        await assert.rejects(() => deliver(body, { lastAttempt: false }), /connection terminated/);
+        db.msgs.forEach((m) => { m.reply_claimed_at = null; });
+        acknowledges(async () => null);
+        await deliver(body, { lastAttempt: true });
+        assert.equal(stepCalls.acknowledge.length, 2);
+        assert.equal(only(db.msgs).no_reply_reason, null);
+        assert.equal(only(db.msgs).reply_attempts, 2);
+    });
+});
+
+describe('a file or a voice note from a listed tester (T035, T036, review M17)', () => {
+    it('a photo WITH a caption is saved privately, and the caption is the message the agent answers', async () => {
+        agent('test', [BSUID]);
+        saves(async () => ({ uploadId: 'upload-photo', mimeType: 'image/jpeg' }));
+        reads(async (input) => ({ kind: 'text', text: input.caption }));
+        answers();
+        await deliver(fileBody('image', 'wamid.F1', { ...PHOTO, caption: 'كم سعر الخطة؟' }));
+
+        const conv = only(db.convs);
+        const msg = only(db.msgs);
+        assert.deepEqual(stepCalls.saveFile, [{ creatorId: CREATOR, messageId: msg.id, phoneNumberId: PHONE_ID, media: { kind: 'image', id: 'MEDIA-PHOTO-1', mime: 'image/jpeg', caption: 'كم سعر الخطة؟' }, resumed: false }]);
+        assert.deepEqual(
+            [stepCalls.readMedia[0]!.kind, stepCalls.readMedia[0]!.caption, stepCalls.readMedia[0]!.saved, stepCalls.readMedia[0]!.conversationId],
+            ['media', 'كم سعر الخطة؟', { uploadId: 'upload-photo', mimeType: 'image/jpeg' }, conv.id],
+        );
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.text, 'كم سعر الخطة؟');
+        assert.equal(msg.no_reply_reason, null);
+        assert.equal(msg.text, 'كم سعر الخطة؟', 'stored as received');
+    });
+
+    it('a document and a video with a caption are the same: the PDF named «my receipt» is a message about a receipt', async () => {
+        agent('test', [BSUID]);
+        saves();
+        reads(async (input) => ({ kind: 'text', text: input.caption }));
+        answers();
+        await deliver(fileBody('document', 'wamid.F2', { id: 'MEDIA-DOC-1', mime_type: 'application/pdf', filename: 'r.pdf', caption: 'my receipt' }));
+        await deliver(fileBody('video', 'wamid.F3', { id: 'MEDIA-VID-1', mime_type: 'video/mp4', caption: 'what is wrong here?' }));
+        assert.deepEqual(answerCalls.map((c) => c.text), ['my receipt', 'what is wrong here?']);
+        assert.deepEqual(stepCalls.readMedia.map((c) => c.kind), ['media', 'media']);
+    });
+
+    it('a photo with NO caption is not answered by the agent: the one line (or why not) is the media step\'s, and the row says what happened', async () => {
+        agent('test', [BSUID]);
+        saves();
+        for (const [reason, id] of [[null, 'wamid.F4'], ['superseded', 'wamid.F5'], ['window_closed', 'wamid.F6']] as const) {
+            reads(async () => ({ kind: 'concluded', reason }));
+            await deliver(fileBody('image', id, PHOTO));
+        }
+        assert.equal(answerCalls.length, 0);
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), [null, 'superseded', 'window_closed']);
+        assert.deepEqual(db.msgs.map((m) => m.text), ['[photo]', '[photo]', '[photo]'], 'a word-less message is stored under its kind\'s placeholder, as on Instagram');
+    });
+
+    it('a voice note is saved, then read: its transcript is what the agent answers', async () => {
+        agent('test', [BSUID]);
+        saves(async () => ({ uploadId: 'upload-voice', mimeType: 'audio/ogg' }));
+        reads(async () => ({ kind: 'text', text: 'هل الخطة يناسب المبتدئين؟' }));
+        answers();
+        await deliver(fileBody('audio', 'wamid.F7', VOICE));
+        assert.equal(stepCalls.saveFile[0]!.media!.id, 'MEDIA-VOICE-1');
+        assert.deepEqual([stepCalls.readMedia[0]!.kind, stepCalls.readMedia[0]!.saved], ['voice', { uploadId: 'upload-voice', mimeType: 'audio/ogg' }]);
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.text, 'هل الخطة يناسب المبتدئين؟');
+        assert.equal(only(db.msgs).no_reply_reason, null);
+    });
+
+    it('a voice note that could not be read is concluded by the media step, which sent ONE line asking for text: the agent is not asked, and the file is still kept', async () => {
+        agent('test', [BSUID]);
+        saves();
+        reads(async () => ({ kind: 'concluded', reason: null }));
+        await deliver(fileBody('audio', 'wamid.F8', VOICE));
+        assert.equal(answerCalls.length, 0);
+        assert.equal(stepCalls.saveFile.length, 1);
+        assert.equal(only(db.msgs).no_reply_reason, null, 'the line went out: the customer was answered');
+    });
+
+    it('a voice note whose file could not be had still reaches the media step, which says so to the customer (never ignored)', async () => {
+        agent('test', [BSUID]);
+        saves(async () => null);
+        reads(async (input) => { assert.equal(input.saved, null); return { kind: 'concluded', reason: null }; });
+        await deliver(fileBody('audio', 'wamid.F9', VOICE));
+        assert.equal(stepCalls.readMedia.length, 1);
+    });
+
+    it('is saved in every mode and while a person has the thread, but read ONLY when the agent will answer: mode off, and a paused thread, spend nothing on a transcription', async () => {
+        saves();
+        agent('off', [BSUID]);
+        await deliver(fileBody('audio', 'wamid.F10', VOICE));
+        agent('test', [BSUID]);
+        db.convs.length = 0;
+        db.convs.push({
+            id: 'conv-paused', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+            wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null, is_bot_active: false,
+        });
+        await deliver(fileBody('image', 'wamid.F11', { ...PHOTO, caption: 'hello' }));
+        assert.equal(stepCalls.saveFile.length, 2);
+        assert.equal(stepCalls.readMedia.length, 0);
+        assert.deepEqual(db.msgs.map((m) => m.no_reply_reason), ['agent_off', 'bot_paused']);
+    });
+
+    it('is not downloaded on a connection Meta refused (there is no token to try), and is stored all the same with the media id in the raw event', async () => {
+        agent('test', [BSUID]);
+        connection = connectionRow({ status: 'invalid' });
+        await deliver(fileBody('audio', 'wamid.F12', VOICE));
+        assert.deepEqual([stepCalls.saveFile.length, stepCalls.readMedia.length], [0, 0]);
+        const msg = only(db.msgs);
+        assert.equal(msg.no_reply_reason, 'connection_invalid');
+        assert.equal(JSON.parse(msg.raw_payload!).messages[0].audio.id, 'MEDIA-VOICE-1');
+    });
+
+    it('NEVER downloads or reads a stranger\'s file: a photo, a voice note, a document, in every mode, with every fact in favour', async () => {
+        for (const mode of ['off', 'test', 'everyone'] as const) {
+            agent(mode, ['EG.the.owner.tester']);
+            await deliver(fileBody('image', `wamid.X1-${mode}`, { ...PHOTO, caption: 'secret caption' }));
+            await deliver(fileBody('audio', `wamid.X2-${mode}`, VOICE));
+            await deliver(fileBody('document', `wamid.X3-${mode}`, { id: 'MEDIA-DOC-9', mime_type: 'application/pdf', filename: 'passport.pdf' }));
+        }
+        assert.deepEqual([stepCalls.saveFile.length, stepCalls.readMedia.length, stepCalls.stop.length, answerCalls.length], [0, 0, 0, 0]);
+        assert.equal(db.msgs.length, 9);
+        for (const m of db.msgs) assert.deepEqual([m.text, m.payload, m.raw_payload], ['', null, null], m.message_type);
+        const everything = everythingWritten();
+        for (const secret of ['MEDIA-PHOTO-1', 'MEDIA-VOICE-1', 'MEDIA-DOC-9', 'secret caption', 'passport.pdf']) assert.ok(!everything.includes(secret), secret);
+    });
+
+    it('hands a retried message to the steps as RESUMED, so a file already saved and a transcript already made are not fetched or paid for again', async () => {
+        agent('test', [BSUID]);
+        db.convs.push({
+            id: 'conv-x', creator_id: CREATOR, instagram_user_id: BSUID, platform: 'whatsapp', status: 'active', last_message_at: START, last_inbound_at: START,
+            wa_phone: null, wa_username: null, wa_parent_user_id: null, profile_name: null, entry_source: null,
+        });
+        db.msgs.push({
+            id: 'msg-x', conversation_id: 'conv-x', creator_id: CREATOR, direction: 'inbound', message_type: 'audio', text: '', payload: null, raw_payload: null,
+            meta_message_id: 'wamid.F13', handled_at: null, reply_claimed_at: START - 10 * 60 * 1000, reply_attempts: 1, no_reply_reason: null, sender: 'customer',
+        });
+        saves();
+        reads(async () => ({ kind: 'text', text: 'سؤال' }));
+        answers();
+        await deliver(fileBody('audio', 'wamid.F13', VOICE));
+        assert.equal(stepCalls.saveFile[0]!.resumed, true);
+        assert.equal(stepCalls.readMedia[0]!.resumed, true);
+        assert.equal(db.msgs.length, 1);
+    });
+
+    it('a media step that fails with the database is an error the runner retries, with the claim still held: nothing is concluded half-way', async () => {
+        agent('test', [BSUID]);
+        saves();
+        reads(async () => { throw new Error('connection terminated unexpectedly'); });
+        await assert.rejects(() => deliver(fileBody('audio', 'wamid.F14', VOICE), { lastAttempt: false }), /connection terminated/);
+        assert.equal(only(db.msgs).handled_at, null);
+        assert.equal(answerCalls.length, 0);
+    });
+});
+
+// ─── W8 wired in: where a thread came from ─────────────────────────────────────────────
+
+describe('an entry link\'s tracking code (T049, review M20)', () => {
+    const REF = 'K7M3QA';
+    const labels = { 'wa-code-1': { label: 'Instagram bio', ref: REF, created_at: '2026-10-19T08:00:00.000Z' } };
+    const PREFILL = 'مرحبا، أبغى أعرف عن الخطة';
+    const withLabels = () => { steps.labels = async (creatorId) => { stepCalls.labels.push(creatorId); return labels; }; };
+
+    it('a known ref in the first message attributes the thread to the link, with the owner\'s label: a QR code and a short link are the same kind', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L1'));
+        assert.deepEqual(only(db.convs).entry_source, { kind: 'link', ref: REF, label: 'Instagram bio', at: '2025-10-19T12:00:00.000Z' });
+        assert.deepEqual(stepCalls.labels, [CREATOR]);
+    });
+
+    it('the agent reads the words WITHOUT the code, and the stored row keeps them exactly as they arrived', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L2'));
+        assert.equal(only(db.msgs).text, `${PREFILL} #${REF}`, 'as received');
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.text, PREFILL);
+        assert.equal(answerCalls[0]!.entryRef, REF, 'and the turn is told the ref, so it can take it out of the history it reads too');
+    });
+
+    it('is read in lower case too (a phone may change the case), and only the tenant\'s OWN refs count: an unknown one is organic and untouched', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF.toLowerCase()}`, 'wamid.L3'));
+        assert.equal(only(db.convs).entry_source.kind, 'link');
+        assert.equal(answerCalls[0]!.text, PREFILL);
+
+        db.convs.length = 0; db.msgs.length = 0; answerCalls.length = 0;
+        await deliver(textBody('hello #ZZ9ZZ9', 'wamid.L4'));
+        assert.deepEqual(only(db.convs).entry_source, { kind: 'organic', at: '2025-10-19T12:00:00.000Z' });
+        assert.equal(answerCalls[0]!.text, 'hello #ZZ9ZZ9', 'a code that is not the tenant\'s is the customer\'s own text');
+        assert.equal(answerCalls[0]!.entryRef, null);
+    });
+
+    it('costs no query at all for a message with no code in it, which is nearly every message', async () => {
+        agent('test', [BSUID]);
+        answers();
+        await deliver(textBody(BODY, 'wamid.L5'));
+        await deliver(textBody('I am #1 fan', 'wamid.L6'));
+        assert.deepEqual(stepCalls.labels, []);
+    });
+
+    it('only the FIRST inbound sets it, and a later message of the thread is still read without the code (the thread\'s own ref)', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L7'));
+        await deliver(textBody('and the price?', 'wamid.L8'));
+        assert.equal(only(db.convs).entry_source.kind, 'link');
+        assert.deepEqual(answerCalls.map((c) => c.entryRef), [REF, REF]);
+
+        await deliver(textBody('one more time #K7M3QA', 'wamid.L9'));
+        assert.equal(answerCalls[2]!.text, 'one more time');
+        assert.equal(only(db.convs).entry_source.ref, REF);
+    });
+
+    it('a click-to-WhatsApp referral stays ctwa: the code does not overwrite it, and is still out of the agent\'s words', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L10', {}, { referral: { source_type: 'ad', source_id: 'AD-77', ctwa_clid: 'CLID-1', headline: 'Learn AI' } }));
+        assert.deepEqual(only(db.convs).entry_source, { kind: 'ctwa', ad_id: 'AD-77', ctwa_clid: 'CLID-1', headline: 'Learn AI', at: '2025-10-19T12:00:00.000Z' });
+        assert.equal(answerCalls[0]!.text, PREFILL);
+    });
+
+    it('labels that cannot be read cost the attribution and nothing else: the message is stored and answered, and the warning says why', async () => {
+        agent('test', [BSUID]);
+        steps.labels = async () => { throw new Error('connection terminated unexpectedly'); };
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L11'));
+        assert.equal(only(db.convs).entry_source.kind, 'organic');
+        assert.equal(only(logged('wa.entry_link_unreadable')).level, 'warn');
+        assert.equal(answerCalls.length, 1);
+        assert.equal(answerCalls[0]!.text, `${PREFILL} #${REF}`);
+    });
+
+    it('is metadata, so a stranger\'s first message through a link is attributed too, and none of their words are kept', async () => {
+        agent('test', ['EG.the.owner.tester']);
+        withLabels();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L12'));
+        assert.deepEqual(only(db.convs).entry_source, { kind: 'link', ref: REF, label: 'Instagram bio', at: '2025-10-19T12:00:00.000Z' });
+        assert.deepEqual([only(db.msgs).text, only(db.msgs).raw_payload], ['', null]);
+        assert.ok(!everythingWritten().includes(PREFILL));
+    });
+
+    it('never sets the free window: a referral, a link and an ad say where a thread began, and only a free_entry_point status says what it costs', async () => {
+        agent('test', [BSUID]);
+        withLabels();
+        answers();
+        await deliver(textBody(`${PREFILL} #${REF}`, 'wamid.L13'));
+        await deliver(textBody('from an ad', 'wamid.L14', { userId: 'EG.another' }, { referral: { source_type: 'ad', source_id: 'AD-1', ctwa_clid: 'C1' } }));
+        assert.ok(!statements.some((s) => s.sql.includes('free_window_expires_at')), 'no statement of this handler touches it');
     });
 });

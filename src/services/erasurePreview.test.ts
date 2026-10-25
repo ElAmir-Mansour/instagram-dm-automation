@@ -126,7 +126,7 @@ describe('previewErasure: byTenant and ranges', () => {
         assert.equal(preview.found, false);
         assert.deepEqual(preview.byTenant, []);
         assert.equal(preview.token, null);
-        for (const type of ['conversations', 'messages', 'interactions', 'dmSendLog'] as const) {
+        for (const type of ['conversations', 'messages', 'interactions', 'dmSendLog', 'leads'] as const) {
             assert.deepEqual(preview.ranges[type], { first: null, last: null }, type);
         }
     });
@@ -140,6 +140,7 @@ describe('previewErasure: byTenant and ranges', () => {
             messages: { first: '2026-01-02T00:00:00.000Z', last: '2026-05-06T00:00:00.000Z' },
             interactions: { first: '2026-02-01T00:00:00.000Z', last: '2026-06-01T00:00:00.000Z' },
             dmSendLog: { first: null, last: null },
+            leads: { first: null, last: null },
         });
     });
 
@@ -158,10 +159,11 @@ describe('previewErasure: byTenant and ranges', () => {
         const ranges = issued.find((q) => /conversations_first/.test(q.sql))!;
         assert.ok(counts && tenants && ranges);
 
-        // The same three lists, in the same order: conversation ids, lower-cased usernames, Instagram ids (erasure.ts `countErasure`).
+        // The same four lists, in the same order: conversation ids, lower-cased usernames, Instagram ids, and the lead keys of the handle as an
+        // email or phone (erasure.ts `countErasure`; none for an Instagram handle).
         assert.deepEqual(tenants.params, counts.params);
         assert.deepEqual(ranges.params, counts.params);
-        assert.deepEqual(counts.params, [['c1', 'c2'], ['sara'], ['sara', '111']]);
+        assert.deepEqual(counts.params, [['c1', 'c2'], ['sara'], ['sara', '111'], []]);
 
         for (const { sql } of [tenants, ranges]) {
             assert.match(sql, /conversation_id = ANY\(\$1::uuid\[\]\)/, 'messages by conversation');
@@ -169,6 +171,7 @@ describe('previewErasure: byTenant and ranges', () => {
             assert.match(sql, /recipient_id = ANY\(\$3::text\[\]\)/, 'the send log by recipient');
         }
         assert.match(tenants.sql, /id = ANY\(\$1::uuid\[\]\)/, 'conversations by id');
+        for (const { sql } of [counts, tenants, ranges]) assert.match(sql, /FROM ads_leads\s+WHERE person_keys && \$4::text\[\]/, 'leads by keyed hash');
         assert.doesNotMatch(tenants.sql, /creators WHERE|creator_id = \$/, 'no filter by workspace: matching is cross-tenant');
     });
 

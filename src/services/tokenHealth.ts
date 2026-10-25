@@ -130,7 +130,7 @@ export interface TokenInspection {
  * a never-expiring page token whose `expires_at` is 0, a data-access window that has already
  * lapsed, a valid token missing `instagram_manage_messages`.
  */
-export function describeInspection(data: any): TokenInspection {
+export function describeInspection(data: any, now: number = Date.now()): TokenInspection {
     const isValid = Boolean(data?.is_valid);
     const type = typeof data?.type === 'string' ? data.type : null;
     const scopes: string[] = Array.isArray(data?.scopes)
@@ -159,7 +159,7 @@ export function describeInspection(data: any): TokenInspection {
     } else if (type && type !== 'PAGE') {
         error = `Wrong token type: "${type}". A PAGE access token is required — a USER token `
             + 'cannot post private replies or publish.';
-    } else if (dataAccessExpiresAt && dataAccessExpiresAt.getTime() < Date.now()) {
+    } else if (dataAccessExpiresAt && dataAccessExpiresAt.getTime() < now) {
         // Separate from expiry and easy to miss: data access lapses 90 days after the user
         // last re-authorised, and reads start failing while the token still reports valid.
         error = 'Data access has expired — the account must re-authorise the app. '
@@ -194,10 +194,10 @@ export function isDebugTokenAnswer(data: unknown): data is { is_valid: boolean }
  * the operator to regenerate something that is not broken. That case stays `valid` with the
  * reason in `token_error`.
  */
-export function inspectionStatus(inspection: TokenInspection): 'valid' | 'invalid' {
+export function inspectionStatus(inspection: TokenInspection, now: number = Date.now()): 'valid' | 'invalid' {
     if (!inspection.isValid) return 'invalid';
     if (inspection.type && inspection.type !== 'PAGE') return 'invalid';
-    if (inspection.dataAccessExpiresAt && inspection.dataAccessExpiresAt.getTime() < Date.now()) return 'invalid';
+    if (inspection.dataAccessExpiresAt && inspection.dataAccessExpiresAt.getTime() < now) return 'invalid';
     return 'valid';
 }
 

@@ -91,6 +91,11 @@ export interface SalesFacts {
      * (`prompt.test.ts` pins it).
      */
     channel?: 'whatsapp';
+    /**
+     * A3: the click-to-message ad this conversation began from, when the owner switched `ads.bot_context` on (`ads/attribution.ts` `adFactsFor`).
+     * Absent (the default, and every conversation that did not begin from an ad), the facts block is byte for byte what it was (`prompt.test.ts`).
+     */
+    ad?: { name: string; offerTitle: string | null; primaryText: string | null; tapped: string | null };
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */

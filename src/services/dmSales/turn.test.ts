@@ -121,7 +121,7 @@ function recordingQueue(behaviour: 'ok' | 'keyed' | 'throw' = 'ok') {
             stored.push(input as EnqueueInput);
             return `job-${stored.length}`;
         },
-        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async pruneCompleted() { return 0; },
+        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async releaseUnrun() { return 0; }, async pruneCompleted() { return 0; },
     };
     return queue;
 }
@@ -904,6 +904,19 @@ describe('the sales turn: the thread as the model reads it', () => {
         const plain = await run({ text: 'How much?' });
         assert.ok(turnsOf(plain)[0]!.text.endsWith('How much?'));
         assert.ok(!/tapped/.test(turnsOf(plain)[0]!.text));
+    });
+
+    it('reads the customer\'s words exactly as stored on Instagram and Messenger: no channel cleaning, so a tag in their text and the spaces around it reach the model untouched', async () => {
+        // `SalesTransport.readable` is WhatsApp's (it takes an entry link's ref out of the history). With no transport the history rows are the very rows read: if anything
+        // here trimmed or rewrote them, the stored text would no longer equal the message being answered and it would be read twice.
+        const text = 'hello  #K7M3QA  ';
+        for (const recipient of ['ig-page-1', 'fb-page-1']) {
+            const r = await run({ text, history: [{ direction: 'inbound', text }], recipient });
+            const turns = turnsOf(r);
+            assert.equal(turns.length, 1, 'one user turn');
+            assert.ok(turns[0]!.text.includes('hello  #K7M3QA'), turns[0]!.text);
+            assert.equal((turns[0]!.text.match(/hello/g) ?? []).length, 1, 'the message once, not twice');
+        }
     });
 
     it('the old path sends Gemini the history exactly as it did: the placeholder and the title, no summary and no code', async () => {

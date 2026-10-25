@@ -173,7 +173,7 @@ const InfographicsPage = {
     },
 
     // ─── Markup: toolbar, worker, new ────────────────────────────────────────
-    /** The Studio's tab bar with Infographics current; studio.js and monteur.js list the same links. */
+    /** The Studio's tab bar with Infographics current; studio.js, monteur.js and explainers.js list the same links. */
     toolbarMarkup() {
         const tab = (key, href, icon, label) => html`
             <a class="btn btn-sm btn-ghost" href="${href}"
@@ -187,6 +187,7 @@ const InfographicsPage = {
                     ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                     ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
                     ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
+                    ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
                     ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
                 </nav>
             </div>

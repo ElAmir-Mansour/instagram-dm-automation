@@ -214,15 +214,24 @@ const MetaConnect = {
             ${needs ? this.attentionNote(c) : ''}
             ${this.facts(c)}
             ${owner ? html`
-                <div class="row row--wrap gap-2">
-                    ${start ? this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' }) : ''}
-                    ${c.via === 'login' ? UI.button({
-                        variant: 'danger', size: 'sm', icon: 'unlink', label: t('meta.disconnect'),
-                        action: 'metaconnect:askDisconnect', id: 'meta-disconnect',
-                    }) : ''}
-                </div>
+                ${start ? html`
+                    <div class="row row--wrap gap-2">
+                        ${this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' })}
+                    </div>
+                ` : ''}
                 ${c.via === 'token' ? html`<p class="form-hint mbs-3">${t('meta.tokenNote')}</p>` : ''}
                 ${!start && needs ? html`<p class="form-hint mbs-3">${t('meta.reconnectOff')}</p>` : ''}
+                ${c.via === 'login' ? html`
+                    <div class="settings-danger">
+                        <p class="form-label settings-danger-title"><i data-lucide="alert-triangle" aria-hidden="true"></i> ${t('settings.dangerZone')}</p>
+                        <div class="row row--wrap gap-2 mbs-3">
+                            ${UI.button({
+                                variant: 'danger', size: 'sm', icon: 'unlink', label: t('meta.disconnect'),
+                                action: 'metaconnect:askDisconnect', id: 'meta-disconnect',
+                            })}
+                        </div>
+                    </div>
+                ` : ''}
             ` : html`<p class="form-hint">${t('meta.ownerOnly')}</p>`}
         `;
     },
@@ -269,6 +278,14 @@ const MetaConnect = {
                             <span class="check-label">${t('meta.app.enabled')}</span>
                         </label>
                         <p class="form-hint" id="meta-app-enabled-hint">${t('meta.app.enabledHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="check-row check-row-tap" for="meta-app-ads-scopes">
+                            <input type="checkbox" id="meta-app-ads-scopes" name="adsScopesEnabled" ${app.adsScopesEnabled ? html.raw('checked') : ''}
+                                   aria-describedby="meta-app-ads-scopes-hint">
+                            <span class="check-label">${t('meta.app.adsScopes')}</span>
+                        </label>
+                        <p class="form-hint text-warning" id="meta-app-ads-scopes-hint">${t('meta.app.adsScopesHint')}</p>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="meta-app-config">
@@ -648,8 +665,8 @@ const MetaConnect = {
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
-            // Both are always sent: an emptied id is a real "back to the default", an unticked box a real "off".
-            await API.saveMetaAppSettings({ enabled: data.get('enabled') === 'on', configId });
+            // All three are always sent: an emptied id is a real "back to the default", an unticked box a real "off".
+            await API.saveMetaAppSettings({ enabled: data.get('enabled') === 'on', configId, adsScopesEnabled: data.get('adsScopesEnabled') === 'on' });
             UI.toast(t('meta.app.saved'), 'success');
             await this.changed();
             UI.restoreFocus(focus);

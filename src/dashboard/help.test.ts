@@ -164,8 +164,8 @@ function load(lang: 'ar' | 'en' = 'ar', hash = '#/help', extra: string[] = []): 
 const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 const REQUIRED = [
-    'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'growth', 'seo', 'tiktok', 'whatsapp', 'studio', 'worker',
-    'library', 'create', 'studio-schedule', 'studio-settings', 'ai-usage', 'troubleshooting', 'faq',
+    'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'growth', 'seo', 'tiktok', 'whatsapp', 'ads', 'studio', 'worker',
+    'library', 'create', 'studio-schedule', 'studio-settings', 'explainers', 'ai-usage', 'troubleshooting', 'faq',
 ];
 
 const ARABIC = /[\u0600-\u06FF]/g;
@@ -189,15 +189,16 @@ describe('Help Center — the route renders', () => {
         assert.equal(s.t('nav.help'), 'المساعدة');
     });
 
-    it('is in the sidebar, last in the operator’s own list, and preloaded by its hash', () => {
+    it('is in the sidebar, right after Settings in the foot, and preloaded by its hash', () => {
         const index = readFileSync('dashboard/index.html', 'utf8');
         const item = index.match(/<a href="#\/help" class="nav-item" data-page="help">[\s\S]*?<\/a>/);
         assert.ok(item, 'the nav item exists');
         assert.match(item[0], /data-i18n="nav\.help">المساعدة</);
-        // After Settings and before the admin group: the bottom of the main nav.
+        // The foot of the sidebar (US6): Settings, then Help, after the job groups and the Administration group, before the account area.
         const at = (needle: string): number => index.indexOf(needle);
         assert.ok(at('data-page="settings"') < at('data-page="help"'));
-        assert.ok(at('data-page="help"') < at('data-i18n="nav.group.admin"'));
+        assert.ok(at('data-i18n="nav.group.admin"') < at('data-page="settings"'), 'the foot comes after the Administration group');
+        assert.ok(at('data-page="help"') < at('id="nav-identity"'), 'and before the account area');
         // The inline preloader knows the page, and reads the first segment of a deep link.
         assert.match(index, /var PAGES = \[[^\]]*'help'/);
         assert.match(index, /split\(\/\[\\\/\?#\]\/\)\[0\]/);
@@ -403,7 +404,7 @@ describe('Help Center — deep links', () => {
 });
 
 describe('Help Center — every article in both languages', () => {
-    it('has the seventeen articles the Help Center promises, each slug once', () => {
+    it('has the nineteen articles the Help Center promises, each slug once', () => {
         const s = load();
         const slugs = Array.from(s.content.articles, (a) => String(a.slug));
         assert.deepEqual(slugs, REQUIRED);

@@ -21,7 +21,7 @@ import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import { setMediaStore } from '../services/storage.js';
 import { MEDIA_BUCKET, setStorageFetch } from '../services/supabaseStorage.js';
-import apiRouter from './api.js';
+import apiRouter, { SERVED_MIME_TYPES } from './api.js';
 
 const PROJECT = 'https://abcd1234.supabase.co';
 const KEY = 'sb_secret_0123456789abcdefghijKLMNOP';
@@ -87,9 +87,9 @@ function handler(): (req: unknown, res: unknown) => Promise<void> {
     return layer!.route!.stack[layer!.route!.stack.length - 1]!.handle as (req: unknown, res: unknown) => Promise<void>;
 }
 
-async function serve(id: string, method = 'GET'): Promise<FakeResponse> {
+async function serve(id: string, method = 'GET', headers: Record<string, string> = {}): Promise<FakeResponse> {
     const res = new FakeResponse();
-    await handler()({ method, params: { id }, headers: {} }, res);
+    await handler()({ method, params: { id }, headers }, res);
     return res;
 }
 
@@ -99,6 +99,8 @@ interface Row { mime_type: string; storage_path: string | null; size_bytes: stri
 let rows: Map<string, Row>;
 let settings: Map<string, { value: string; is_secret: boolean }>;
 let fetched: string[];
+/** The Range header each Supabase request carried (null for none), in order. */
+let fetchedRanges: Array<string | null>;
 let upstream: () => Response;
 let logged: Array<{ level: string; event: string }>;
 
@@ -122,6 +124,7 @@ beforeEach(() => {
     ]);
     settings = new Map();
     fetched = [];
+    fetchedRanges = [];
     logged = [];
     upstream = () => { throw new Error('Supabase was not expected to be asked'); };
     savedEnv = { enc: process.env.TOKEN_ENCRYPTION_KEY, url: process.env.SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY };
@@ -143,8 +146,9 @@ beforeEach(() => {
         }
         throw new Error(`no result arranged for SQL: ${flat}`);
     };
-    previousFetch = setStorageFetch(async (input: string) => {
+    previousFetch = setStorageFetch(async (input: string, init?: RequestInit) => {
         fetched.push(input);
+        fetchedRanges.push(new Headers(init?.headers).get('range'));
         return upstream();
     });
     setMediaStore(null);
@@ -340,5 +344,159 @@ describe('GET /uploads/:id — a legacy row whose bytes are still in Postgres', 
         assert.equal((await serve('2b8a7a0e-3c1f-4f7e-9d0a-1234567890ab')).statusCode, 404);
         assert.equal((await serve('not-a-uuid.jpg')).statusCode, 404);
         assert.deepEqual(fetched, []);
+    });
+});
+
+// ─── Sound (illustrated explainers) ─────────────────────────────────────────────────────────
+//
+// The dashboard plays the narration (an m4a) and a music track's preview from this URL. An `audio/*` type that was not on the list came back as
+// `application/octet-stream`, which a player refuses to play; anything else unknown must still come back as an opaque download.
+
+describe('GET /uploads/:id — the sound of an explainer', () => {
+    const AUDIO = '2c8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const AUDIO_PATH = `${CREATOR}/${AUDIO}.m4a`;
+
+    for (const mime of ['audio/mp4', 'audio/mpeg', 'audio/wav']) {
+        it(`serves ${mime} as itself, and a piece of it with 206, so a player can seek`, async () => {
+            storageConfigured();
+            rows.set(AUDIO, { mime_type: mime, storage_path: AUDIO_PATH, size_bytes: '4096', data: null });
+            upstream = () => new Response(Buffer.alloc(1024, 3), { status: 206, headers: { 'content-length': '1024', 'content-range': 'bytes 0-1023/4096' } });
+
+            const piece = await serve(AUDIO, 'GET', { range: 'bytes=0-1023' });
+
+            assert.equal(piece.headers['content-type'], mime, 'not application/octet-stream');
+            assert.equal(piece.statusCode, 206);
+            assert.deepEqual(fetchedRanges, ['bytes=0-1023'], 'Supabase was asked for the piece, not the file');
+            assert.equal(piece.headers['content-range'], 'bytes 0-1023/4096');
+            assert.equal(piece.headers['accept-ranges'], 'bytes');
+            assert.equal(piece.headers['x-content-type-options'], 'nosniff');
+            assert.equal(piece.body().length, 1024);
+
+            upstream = () => new Response(Buffer.alloc(4096, 3), { status: 200, headers: { 'content-length': '4096' } });
+            const whole = await serve(AUDIO);
+            assert.equal(whole.statusCode, 200);
+            assert.equal(whole.headers['content-type'], mime);
+            assert.equal(whole.body().length, 4096);
+        });
+    }
+
+    it('answers HEAD for a track with its type and its size, and fetches nothing', async () => {
+        storageConfigured();
+        rows.set(AUDIO, { mime_type: 'audio/mpeg', storage_path: AUDIO_PATH, size_bytes: '4096', data: null });
+        const res = await serve(AUDIO, 'HEAD');
+        assert.equal(res.headers['content-type'], 'audio/mpeg');
+        assert.equal(res.headers['content-length'], '4096');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.deepEqual(fetched, []);
+    });
+
+    it('slices a legacy BYTEA sound itself, with the right type', async () => {
+        rows.set(AUDIO, { mime_type: 'audio/wav', storage_path: null, size_bytes: null, data: Buffer.from('RIFFxxxxWAVEdata') });
+        const res = await serve(AUDIO, 'GET', { range: 'bytes=0-3' });
+        assert.equal(res.statusCode, 206);
+        assert.equal(res.headers['content-type'], 'audio/wav');
+        assert.deepEqual(res.sent, Buffer.from('RIFF'));
+    });
+
+    it('still serves a type nobody named as an opaque download: this origin also serves the dashboard', async () => {
+        storageConfigured();
+        for (const mime of ['text/html', 'audio/webm', 'audio/x-evil', 'application/javascript', 'image/svg+xml']) {
+            rows.set(AUDIO, { mime_type: mime, storage_path: AUDIO_PATH, size_bytes: '10', data: null });
+            upstream = () => new Response(Buffer.from('0123456789'), { status: 200, headers: { 'content-length': '10' } });
+            const res = await serve(AUDIO);
+            assert.equal(res.headers['content-type'], 'application/octet-stream', mime);
+        }
+    });
+
+    it('names exactly the audio types the explainers upload, and no other audio', () => {
+        const audio = [...SERVED_MIME_TYPES].filter((type) => type.startsWith('audio/')).sort();
+        assert.deepEqual(audio, ['audio/mp4', 'audio/mpeg', 'audio/wav']);
+        assert.equal(SERVED_MIME_TYPES.has('image/gif'), true, 'what was served before still is');
+    });
+});
+
+// ─── Ranges ─────────────────────────────────────────────────────────────────────────────────
+//
+// A piece of a file costs what it asks for (src/utils/byteRange.ts). Before this, `bytes=0-1023` of a 6MB reel streamed all 6MB,
+// once per piece, and Vercel's CDN does not answer ranges from its cache: 18.6GB of a 10GB free tier in October 2026.
+
+describe('GET /uploads/:id — a Range asks for a piece, and gets only that piece', () => {
+    it('asks Supabase for just those bytes and answers 206 with Content-Range', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.alloc(1024, 7), {
+            status: 206, headers: { 'content-length': '1024', 'content-range': `bytes 0-1023/${TEN_MB}` },
+        });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-1023' });
+
+        assert.equal(res.statusCode, 206);
+        assert.deepEqual(fetchedRanges, ['bytes=0-1023'], 'Supabase was asked for the piece, not the file');
+        assert.equal(res.headers['content-range'], `bytes 0-1023/${TEN_MB}`);
+        assert.equal(res.headers['content-length'], '1024');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.equal(res.body().length, 1024);
+    });
+
+    it('resolves an open-ended and a suffix range against the recorded size', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.alloc(10), { status: 206, headers: { 'content-length': '10' } });
+
+        await serve(STORED, 'GET', { range: `bytes=${TEN_MB - 10}-` });
+        await serve(STORED, 'GET', { range: 'bytes=-10' });
+
+        assert.deepEqual(fetchedRanges, [`bytes=${TEN_MB - 10}-${TEN_MB - 1}`, `bytes=${TEN_MB - 10}-${TEN_MB - 1}`]);
+    });
+
+    it('serves the whole object with 200 when Supabase ignores the range, as before', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.from('whole file'), { status: 200, headers: { 'content-length': '10' } });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-3' });
+
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.headers['content-range'], undefined);
+        assert.deepEqual(res.body(), Buffer.from('whole file'));
+    });
+
+    it('answers 416 for a range past the end, without asking Supabase', async () => {
+        storageConfigured();
+
+        const res = await serve(STORED, 'GET', { range: `bytes=${TEN_MB}-` });
+
+        assert.equal(res.statusCode, 416);
+        assert.equal(res.headers['content-range'], `bytes */${TEN_MB}`);
+        assert.deepEqual(fetched, []);
+    });
+
+    it('streams the whole object for a range it will not process (a list of ranges)', async () => {
+        storageConfigured();
+        upstream = () => new Response(Buffer.from('whole file'), { status: 200, headers: { 'content-length': '10' } });
+
+        const res = await serve(STORED, 'GET', { range: 'bytes=0-1,5-6' });
+
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(fetchedRanges, [null], 'no Range sent upstream');
+    });
+
+    it('slices a legacy BYTEA row itself', async () => {
+        const res = await serve(LEGACY, 'GET', { range: 'bytes=0-5' });
+
+        assert.equal(res.statusCode, 206);
+        assert.deepEqual(res.sent, Buffer.from('legacy'));
+        assert.equal(res.headers['content-range'], 'bytes 0-5/17');
+        assert.deepEqual(fetched, []);
+    });
+
+    it('answers 416 for a legacy row asked past its end', async () => {
+        const res = await serve(LEGACY, 'GET', { range: 'bytes=17-' });
+
+        assert.equal(res.statusCode, 416);
+        assert.equal(res.headers['content-range'], 'bytes */17');
+    });
+
+    it('says it takes ranges on a whole-file answer and on HEAD', async () => {
+        storageConfigured();
+        assert.equal((await serve(STORED, 'HEAD')).headers['accept-ranges'], 'bytes');
+        assert.equal((await serve(LEGACY)).headers['accept-ranges'], 'bytes');
     });
 });

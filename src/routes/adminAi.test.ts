@@ -189,7 +189,7 @@ describe('GET /ai', () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
         assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
-        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp']);
+        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
         assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
         assert.equal(body.budgets.unlimited, true);
         assert.deepEqual(body.warnings.map((w: any) => w.code), ['no_budget']);
@@ -229,7 +229,7 @@ describe('GET /ai', () => {
     it('lists the DM purpose, then WhatsApp\'s: low effort by default, not the Mac\'s, and resolved to the first provider with a key', async () => {
         saveKey('anthropic');
         const { body } = await call('GET', '/ai');
-        const [dm, whatsapp] = body.purposes.slice(-2);
+        const [dm, whatsapp] = body.purposes.slice(-4, -2);
         assert.deepEqual(dm, {
             purpose: 'dm', defaultEffort: 'low', macBrainGuarded: false, saved: null,
             resolved: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' },
@@ -243,7 +243,7 @@ describe('GET /ai', () => {
     it('shows WhatsApp\'s purpose resolved to an error, not to Gemini, when Gemini is the only key', async () => {
         db.setSetting('gemini.api_key', FAKE_KEYS.gemini, true);
         const { body } = await call('GET', '/ai');
-        const [dm, whatsapp] = body.purposes.slice(-2);
+        const [dm, whatsapp] = body.purposes.slice(-4, -2);
         assert.equal(dm.resolved.provider, 'gemini', 'Instagram\'s DM route may use it');
         assert.equal(whatsapp.resolved.error.kind, 'no_provider', 'WhatsApp\'s may not');
     });

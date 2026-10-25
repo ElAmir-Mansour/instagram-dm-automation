@@ -119,6 +119,33 @@ describe('a Short’s words', () => {
         assert.ok(!big.endsWith('�'));
         assert.equal(cutBytes('aع', 2), 'a', 'a two-byte letter is not split');
     });
+    it('title: a video that is not a Short (tagAsShort false) is not tagged: the same title, angle brackets dropped, still cut to 100 characters', () => {
+        assert.equal(shortTitle('Gemini يطلّع برومت <الإيدت>', null, false), 'Gemini يطلّع برومت الإيدت');
+        assert.equal(shortTitle('', '\n🔥 دفترك الذكي\nالباقي', false), '🔥 دفترك الذكي');
+        assert.equal(shortTitle('Already #shorts', null, false), 'Already #shorts', 'a tag the author wrote is the author’s');
+        const near = 'a'.repeat(95);
+        assert.equal(shortTitle(near, null, false), near);
+        assert.ok([...shortTitle('كلمة '.repeat(40).trim(), null, false)].length <= 100);
+        assert.equal(shortTitle(null, null, false), 'Short', 'the fallback word is not a tag');
+    });
+    it('title: the default is today’s: tagged when the switch is not given, or is true', () => {
+        assert.equal(shortTitle('A hook', null), 'A hook #Shorts');
+        assert.equal(shortTitle('A hook', null, true), 'A hook #Shorts');
+    });
+    it('description: a video that is not a Short (tagAsShort false) gets no #Shorts added, keeps one the caption carries, and is still cleaned and cut', () => {
+        assert.equal(shortDescription('سطر <١>', false), 'سطر ١');
+        assert.equal(shortDescription('x #Shorts', false), 'x #Shorts');
+        assert.equal(shortDescription('', false), '', 'nothing to say is nothing, not a tag');
+        assert.equal(shortDescription(null, false), '');
+        const big = shortDescription('ع'.repeat(4000), false);
+        assert.ok(Buffer.byteLength(big, 'utf8') <= 5000);
+        assert.ok(!big.includes('#Shorts'));
+    });
+    it('description: the default is today’s: ensured when the switch is not given, or is true', () => {
+        assert.equal(shortDescription('x'), 'x\n\n#Shorts');
+        assert.equal(shortDescription('x', true), 'x\n\n#Shorts');
+        assert.equal(shortDescription(''), '#Shorts');
+    });
     it('tags: the caption’s hashtags, deduplicated, without #', () => {
         assert.deepEqual(tagsFrom('x #ai #دفتر_ذكي #AI #Shorts'), ['ai', 'دفتر_ذكي', 'Shorts']);
         assert.deepEqual(tagsFrom(null), []);
@@ -141,6 +168,14 @@ describe('youtubePublish rules', () => {
         assert.deepEqual(youtubeOptions({ privacy: 'everyone', language: 'not a tag!' }), {});
         assert.deepEqual(youtubeOptions(null), {});
     });
+    it('reads `shorts: false` as the opt-out, and nothing else as one: a malformed row is still tagged as every row was', () => {
+        assert.deepEqual(youtubeOptions({ title: 'T', language: 'en', shorts: false }), { title: 'T', language: 'en', shorts: false });
+        for (const shorts of [true, 'false', 0, null, undefined, 'no', {}, []]) {
+            assert.deepEqual(youtubeOptions({ title: 'T', shorts }), { title: 'T' }, String(shorts));
+        }
+        assert.deepEqual(youtubeOptions({ title: 'T' }), { title: 'T' }, 'a row from before the option');
+        assert.deepEqual(youtubeOptions({ mode: 'inbox' }), {}, 'a TikTok shape still reads as nothing');
+    });
     it('private with public uploads off, whatever the row asks for; on, the row’s choice, public by default', () => {
         assert.equal(uploadPrivacy({ privacy: 'public' }, false), 'private');
         assert.equal(uploadPrivacy({}, true), 'public');
@@ -160,6 +195,19 @@ describe('youtubePublish rules', () => {
         assert.equal(m.description, 'سطر\n#ai\n\n#Shorts');
         assert.deepEqual(m.tags, ['ai']);
         assert.equal(m.language, 'ar');
+    });
+    it('a row that says shorts: false is not tagged as a Short, in its title or its description; every other row is, as before', () => {
+        const row = { caption: 'سطر\n#ai' };
+        const notAShort = metadataFor(row, { title: 'العنوان', language: 'ar', shorts: false }, 'private', HOWTO_CATEGORY_ID);
+        assert.equal(notAShort.title, 'العنوان');
+        assert.equal(notAShort.description, 'سطر\n#ai');
+        assert.deepEqual(notAShort.tags, ['ai'], 'the rest of the metadata is what it was');
+        assert.equal(notAShort.language, 'ar');
+        for (const options of [{ title: 'العنوان' }, {}, { title: 'العنوان', language: 'ar' }]) {
+            const short = metadataFor(row, options, 'private', HOWTO_CATEGORY_ID);
+            assert.ok(short.title.endsWith('#Shorts'), JSON.stringify(options));
+            assert.ok(short.description.endsWith('\n\n#Shorts'), JSON.stringify(options));
+        }
     });
 });
 
@@ -329,6 +377,54 @@ describe('publishing a Short files it under the creator\'s category', () => {
     it('still uploads when the profile cannot be read: the owner as an educator, anyone else under YouTube\'s own default', async () => {
         assert.equal(await filedUnder(OWNER, null, true), '27');
         assert.equal(await filedUnder(OTHER, null, true), '22');
+    });
+});
+
+describe('publishing a row that is not a Short (an explainer’s horizontal video over three minutes)', () => {
+    const CONNECTION = { id: 'conn-1', status: 'active', refresh_token: 'refresh', access_token: 'tok', access_expires_at: new Date(Date.now() + 3_600_000), scopes: [SCOPE_UPLOAD] };
+
+    /** The title and description the upload session was opened with, for a row carrying these `platform_options`. */
+    async function openedWith(platformOptions: unknown): Promise<{ title: string; description: string }> {
+        const db = installProfileDb(emptyState());
+        db.routes.unshift([/FROM platform_connections WHERE creator_id = \$1 AND platform = 'youtube'/, () => ({ rows: [CONNECTION] })]);
+        setPlatformOwner(db, OWNER);
+        const seen = stub((s): { status: number; data?: unknown; headers?: Record<string, string> } => {
+            if (s.method === 'GET') return { status: 200, data: Buffer.from('video'), headers: { 'content-type': 'video/mp4' } };
+            if (s.method === 'POST') return { status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U7' } };
+            return { status: 200, data: { id: 'vid7', status: { privacyStatus: 'private' } } };
+        });
+        const sink = setLogSink(() => {});
+        try {
+            assert.equal(await publishYouTubePost({
+                id: 'post-1', creator_id: OTHER, post_type: 'video' as const, caption: 'How retrieval grounds an answer.\n\n#AI', media_url: 'https://cdn.example/explainer.mp4',
+                external_publish_id: null, platform_options: platformOptions, cover_url: null,
+            }), 'PUBLISHED');
+        } finally {
+            setLogSink(sink);
+            db.restore();
+        }
+        const open = seen.find((s) => s.method === 'POST');
+        assert.ok(open, 'a session was opened');
+        return JSON.parse(String(open!.data)).snippet;
+    }
+
+    it('is uploaded with its title and description as they are: no #Shorts in either', async () => {
+        const snippet = await openedWith({ title: 'Why AI answers with confidence', language: 'en', shorts: false });
+        assert.equal(snippet.title, 'Why AI answers with confidence');
+        assert.equal(snippet.description, 'How retrieval grounds an answer.\n\n#AI');
+    });
+
+    it('every other row is uploaded as a Short, as before: #Shorts in the title and in the description', async () => {
+        const withTitle = [{ title: 'Why AI answers with confidence', language: 'en' }, { title: 'Why AI answers with confidence', shorts: true }, { title: 'Why AI answers with confidence', shorts: 'false' }];
+        for (const options of withTitle) {
+            const snippet = await openedWith(options);
+            assert.equal(snippet.title, 'Why AI answers with confidence #Shorts', JSON.stringify(options));
+            assert.equal(snippet.description, 'How retrieval grounds an answer.\n\n#AI\n\n#Shorts', JSON.stringify(options));
+        }
+        // No options at all: the caption's first line is the title, as it always was, and it is tagged too.
+        const bare = await openedWith(null);
+        assert.equal(bare.title, 'How retrieval grounds an answer. #Shorts');
+        assert.equal(bare.description, 'How retrieval grounds an answer.\n\n#AI\n\n#Shorts');
     });
 });
 

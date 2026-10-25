@@ -13,8 +13,10 @@ import { handleMessagingEvent } from '../webhook/messaging.js';
 import { handleWhatsAppInbound } from '../webhook/whatsappInbound.js';
 import { redactedPreferencePayload, redactedStatusPayload } from '../webhook/whatsappRedact.js';
 import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
+import { fetchAndStoreLead } from '../services/ads/leads.js';
 import { redactOnFailure } from './redaction.js';
 import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
+import { advanceProposal } from '../services/ads/proposals/service.js';
 
 /**
  * Whether this is the attempt after which nothing else will run.
@@ -67,5 +69,15 @@ export const handlers: JobHandlerRegistry = {
     // throws, which the runner retries; everything else is a normal return.
     'dm.followup': async (payload) => {
         await runFollowup(payload);
+    },
+    // An AI ad proposal (Ads A7). Idempotent: it reads the proposal and does whatever is next; a throw is retried by the runner.
+    'ads.draft': async (payload) => {
+        await advanceProposal(payload.creatorId, payload.proposalId);
+    },
+    // A lead from a lead ad (A10). The payload is ids only, so nothing needs redacting: the answers are fetched by the handler and go straight
+    // into `ads_leads`, encrypted. Every outcome but a transient failure finishes the job: a throttle and a locked tenant are not retried (the
+    // 6-hourly catch-up recovers a throttled lead; a locked tenant must not be asked again), and an unknown Page has no one to store it for.
+    'ads.lead': async (payload) => {
+        await fetchAndStoreLead(payload, 'webhook');
     },
 };

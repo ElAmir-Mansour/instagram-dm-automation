@@ -125,6 +125,20 @@ export interface RetryOptions {
      * reel to the Page twice on 2026-09-26 (two videos 2 s apart from one attempt).
      */
     creates?: boolean;
+    /**
+     * A Marketing API call (src/services/ads/graph.ts). Then no rate-limit or edit-limit answer is ever retried: on Meta's Limited tier
+     * each retry spends points from the same 60-per-5-minutes budget and lengthens the block, so the caller waits for the time Meta named
+     * instead (research R5). That is HTTP 429, codes 4, 17, 32 and 613 whatever the subcode, and the 80000-series ads throttles.
+     * `creates` still applies on top: a create is then resent only when the connection never went out.
+     */
+    ads?: boolean;
+}
+
+/** Rate and edit limits: never retried in `ads` mode. */
+export function isAdsLimitError(err: any): boolean {
+    if (err?.response?.status === 429) return true;
+    const code = metaErrorCode(err);
+    return typeof code === 'number' && (code === 4 || code === 17 || code === 32 || code === 613 || (code >= 80000 && code <= 80099));
 }
 
 /** Meta refused the request outright: nothing was created, so a retry cannot duplicate. */
@@ -142,8 +156,9 @@ function isSafeToRetryCreate(err: any): boolean {
 
 /** Exponential backoff with jitter. Gives up immediately on permanent errors. */
 export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}): Promise<T> {
-    const { retries = 3, baseMs = 500, label = 'meta-call', creates = false } = opts;
-    const retryable = creates ? isSafeToRetryCreate : isRetryable;
+    const { retries = 3, baseMs = 500, label = 'meta-call', creates = false, ads = false } = opts;
+    const base = creates ? isSafeToRetryCreate : isRetryable;
+    const retryable = ads ? (err: any) => !isAdsLimitError(err) && base(err) : base;
     let lastErr: any;
 
     for (let attempt = 0; attempt <= retries; attempt++) {

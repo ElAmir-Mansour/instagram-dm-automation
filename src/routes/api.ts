@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pipeline } from 'node:stream/promises';
 import { pool } from '../config/db.js';
+import { contentRange, parseByteRange } from '../utils/byteRange.js';
 import { isDiagnosticProbe } from '../utils/probe.js';
 import {
     createLegacySession, createSession, describeSessionLifetime, requireAuth, createDownloadToken, consumeDownloadToken
@@ -42,7 +43,7 @@ import { runRetentionSweep } from '../services/retention.js';
 import {
     describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
-import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
@@ -56,7 +57,8 @@ import {
     classifyOutcome, expectedFailureSql, isOutcome, outcomeCountsSql, outcomeLateral, outcomeSql, readOutcomeCounts, successPercent,
 } from '../services/outcomes.js';
 import { tenantTimezone } from '../services/profile/timezone.js';
-import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { adIdOf, annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { adNamesFor } from '../services/ads/attribution.js';
 import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
@@ -97,6 +99,19 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { adsRouter } from './ads.js';
+import { syncAllBoosts } from '../services/adBoosts.js';
+import { runGuard } from '../services/ads/guard.js';
+import { sweepLeads } from '../services/ads/leads.js';
+import { runAdsHealth } from '../services/ads/health.js';
+import { sweepWriting } from '../services/explainers/writing.js';
+import { expireProposals } from '../services/ads/proposals/store.js';
+import { runDailyReview } from '../services/ads/proposals/service.js';
+import { drainAdsOps } from '../services/ads/ops.js';
+import { evaluateDueRules } from '../services/ads/rulesWiring.js';
+import { pollStudies } from '../services/ads/studies.js';
+import { studyPorts } from '../services/ads/studiesPorts.js';
+import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -143,7 +158,10 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
         // Post previews are served straight off Meta's CDN, whose hostnames rotate.
         "img-src 'self' data: blob: https:",
         "media-src 'self' data: blob: https:",
-        "connect-src 'self'",
+        // The ad builder (A5) uploads a video straight to Supabase Storage through a signed URL (Vercel's 4.5 MB body limit), and shows
+        // Meta's own ad previews, which are iframes on www.facebook.com. Nothing else is framed or fetched cross-origin.
+        "connect-src 'self' https://*.supabase.co",
+        "frame-src https://www.facebook.com",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",
@@ -394,6 +412,48 @@ router.get('/jobs/drain', async (req, res) => {
     // TikTok answers asynchronously, so a drain also asks after uploads TikTok has not
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
+
+    // The monthly ad spending cap, after switch-on (src/services/ads/guard.ts): at most once an hour per tenant (every 10 minutes while a
+    // check is failing), every active campaign in the ad account is paused once the month reaches the owner's cap. It stops at the drain's
+    // deadline, alerts when it pauses, and alerts when it has not managed a check for two hours. Fail-soft and silent with no ads tenant.
+    try {
+        const caps = await runGuard({ deadline: sweepDeadline(startedAt) });
+        if (caps.paused > 0 || caps.failed > 0 || caps.blind > 0 || caps.stoppedAtDeadline) log('info', 'ads.cap_sweep', { ...caps });
+    } catch (err) {
+        log('error', 'ads.cap_sweep_failed', describeError(err));
+    }
+
+    // The ads write queue, then the stored copy (src/services/ads/ops.ts, sync.ts): queued changes are sent in order within Meta's limits
+    // (a button press tries inline first; this is the backstop and what runs a change that had to wait), then each enabled tenant's
+    // campaigns are read once an hour and today's results every 4 hours. After the guard, so the guard is never starved of points. Both
+    // stop at the drain's deadline and never throw.
+    // The owner's rules (src/services/ads/rules.ts), each about once an hour: pause / lower / notify are enqueued here and sent by the
+    // queue just below; raises and resumes become proposals. After the guard (the hard cap comes first), before the queue (so a rule's
+    // pause goes out in this same run). Never throws; stops at the deadline.
+    try {
+        const rules = await evaluateDueRules(sweepDeadline(startedAt));
+        if (rules.rules > 0) log('info', 'ads.rules_sweep', { ...rules });
+    } catch (err) {
+        log('error', 'ads.rules_sweep_failed', describeError(err));
+    }
+
+    try {
+        const ops = await drainAdsOps(sweepDeadline(startedAt));
+        if (ops.ran > 0 || ops.reaped > 0) log('info', 'ads.ops_drain', { ...ops });
+        const sync = await syncAllAds(sweepDeadline(startedAt));
+        if (sync.structure > 0 || sync.today > 0 || sync.failed > 0) log('info', 'ads.sync_sweep', { ...sync });
+        // Split tests (studies.ts): a finished create takes Meta's id; a running test's result is read every 6 h and once more half a day
+        // after it ends, which opens the keep-the-winner proposal. Meta is only read for running tests.
+        const studies = await pollStudies(studyPorts, sweepDeadline(startedAt), (row, err) => log('warn', 'ads.study_poll_failed', { creator_id: row.creatorId, study_id: row.id, ...describeError(err) }));
+        if (studies.checked > 0 || studies.failed > 0) log('info', 'ads.study_sweep', { ...studies });
+    } catch (err) {
+        log('error', 'ads.ops_sync_sweep_failed', describeError(err));
+    }
+
+    // Lead ads (A10, src/services/ads/leads.ts): the retention sweep (answers past the tenant's period are deleted, a count stays), then the
+    // 6-hourly catch-up of leads a missed notification would lose, for tenants with a lead_ads sign-off only. Never throws.
+    const leads = await sweepLeads(new Date(), sweepDeadline(startedAt));
+    if (leads.purged > 0 || (leads.catchUp && (leads.catchUp.stored > 0 || leads.catchUp.failed > 0))) log('info', 'ads.leads_sweep', { purged: leads.purged, ...leads.catchUp });
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
     // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
@@ -999,7 +1059,8 @@ router.get('/cron/publish', async (req, res) => {
         const sweep = await runRetentionSweep();
         if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
             || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining
-            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0) {
+            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0
+            || sweep.allowanceRowsDeleted > 0) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -1057,6 +1118,53 @@ router.get('/cron/publish', async (req, res) => {
             log('error', 'cron.meta_token_recheck_failed', describeError(recheckErr));
         }
 
+        // Boost spend and status (v52): one insights read per paused/active boost, once a day. Fail-soft, like the sweeps around it.
+        try {
+            const boosts = await syncAllBoosts();
+            if (boosts.synced > 0 || boosts.failed > 0 || boosts.skipped > 0) log('info', 'cron.ads_sync', { ...boosts });
+        } catch (adsErr) {
+            log('error', 'cron.ads_sync_failed', describeError(adsErr));
+        }
+
+        // Ads health (src/services/ads/health.ts): every enabled tenant's token, ad account status and funding, and the version Meta
+        // served; each problem is an alert, once a day. Then the ads retention sweep (alerts after a year, finished ops after 180 days, rule runs after 90 days).
+        try {
+            const health = await runAdsHealth();
+            if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });
+        } catch (healthErr) {
+            log('error', 'cron.ads_health_failed', describeError(healthErr));
+        }
+
+        // AI proposals (src/services/ads/proposals/): open ones past 7 days expire, drafts the Mac never answered (24 h) fail, then the
+        // daily review drafts at most 3 changes per tenant with ads on and 3+ days of results. Nothing is applied without approval.
+        try {
+            const swept = await expireProposals();
+            if (swept.expired > 0 || swept.staleDrafts > 0) log('info', 'cron.ads_proposals_expired', { ...swept });
+            const review = await runDailyReview();
+            if (review.queued > 0) log('info', 'cron.ads_daily_review', { ...review });
+        } catch (proposalErr) {
+            log('error', 'cron.ads_proposals_failed', describeError(proposalErr));
+        }
+
+        // The ads results of the trailing 28 days, with the country and placement breakdowns (src/services/ads/sync.ts): Meta revises
+        // results for up to 28 days, so the window is rewritten daily. Large ranges run as Meta's async report and resume next time.
+        try {
+            const daily = await syncDailyAds(Date.now() + 60_000);
+            if (daily.daily > 0 || daily.failed > 0) log('info', 'cron.ads_daily_sync', { ...daily });
+        } catch (dailyErr) {
+            log('error', 'cron.ads_daily_sync_failed', describeError(dailyErr));
+        }
+
+        // Illustrated explainers (src/services/explainers/writing.ts): the backstop for the lazy check on GET /explainers/:id. An explainer whose
+        // script the Mac never claimed in 10 minutes, or whose write failed on a sign-in error, is handed to Gemini here when nobody opens its page.
+        // The run itself is started under waitUntil and finishes after this response; a database behind v59 has nothing to look at. Fail-soft.
+        try {
+            const writing = await sweepWriting();
+            if (writing.started > 0) log('info', 'cron.explainers_writing', { ...writing });
+        } catch (writingErr) {
+            if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
+        }
+
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
         // or a missing permission must not turn a publish sweep that already ran into a 500.
@@ -1098,10 +1206,14 @@ const ALLOWED_MIME_TYPES = new Set([
 
 /**
  * What /uploads/:id serves as itself: every type /upload stores, plus the infographic's GIF, which
- * only the Studio worker uploads (v31). /upload itself still refuses a GIF: no platform the
- * scheduler posts to takes one.
+ * only the Studio worker uploads (v31), and the sound of an illustrated explainer (v59): the voiced narration
+ * (an m4a, `audio/mp4`) and the owner's music tracks (`audio/mpeg`, `audio/mp4`, `audio/wav`). /upload itself
+ * still refuses all of them: no platform the scheduler posts to takes a GIF or a bare sound file. Served as
+ * themselves, the dashboard's player can play the narration and a track's preview, and a player asks for pieces
+ * (Range), which this route answers with 206 for every type alike. Audio is not a type a browser runs as script,
+ * so naming it is no more dangerous than naming the images above.
  */
-const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif']);
+export const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -1138,7 +1250,7 @@ router.get('/uploads/:id', async (req, res) => {
         }
 
         const store = await getMediaStore();
-        const media = await store.open(id, { headOnly: req.method === 'HEAD' });
+        const media = await store.open(id, { headOnly: req.method === 'HEAD', range: req.headers?.range });
 
         if (!media) {
             res.status(404).send('Not Found');
@@ -1154,13 +1266,37 @@ router.get('/uploads/:id', async (req, res) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        // Pieces of a file are answered as pieces (src/utils/byteRange.ts): a player or Meta's fetcher asking for 1MB of a 30MB
+        // reel used to get all 30MB, once per piece, and Vercel's CDN does not answer a ranged request from its cache.
+        res.setHeader('Accept-Ranges', 'bytes');
 
-        // A legacy BYTEA row: exactly what this route always did.
+        if (media.kind === 'unsatisfiable') {
+            res.setHeader('Content-Range', `bytes */${media.total}`);
+            res.status(416).end();
+            return;
+        }
+
+        // A legacy BYTEA row: exactly what this route always did, unless a piece of it was asked for.
         if (media.kind === 'bytes') {
+            const asked = req.method === 'HEAD' ? { kind: 'none' as const } : parseByteRange(req.headers?.range, media.data.length);
+            if (asked.kind === 'unsatisfiable') {
+                res.setHeader('Content-Range', `bytes */${asked.total}`);
+                res.status(416).end();
+                return;
+            }
+            if (asked.kind === 'range') {
+                res.setHeader('Content-Range', contentRange(asked));
+                res.status(206).send(media.data.subarray(asked.start, asked.end + 1));
+                return;
+            }
             res.send(media.data);
             return;
         }
 
+        if (media.range) {
+            res.status(206);
+            res.setHeader('Content-Range', contentRange(media.range));
+        }
         if (media.size !== null) res.setHeader('Content-Length', String(media.size));
         if (!media.body) {
             res.status(200).end();
@@ -1587,6 +1723,8 @@ router.use('/profile', profileRouter);
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
 router.use('/dm/ice-breakers', iceBreakersRouter);
+// Boost a published post with Meta ads (docs/META_ADS_RESEARCH.md option 2). Owner only, every route; activation is the one that spends.
+router.use('/ads', adsRouter);
 
 // The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
 router.use('/onboarding', onboardingRouter);
@@ -3551,16 +3689,19 @@ router.get('/conversations', async (req, res) => {
         // tracked-links tables answers the list without counts rather than not at all.
         // And what the assistant is set to (UX US1, FR-006): each item's `effective_ai` is read from it, and the page's "assistant is off" strip
         // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
-        const [clicks, assistant] = await Promise.all([
+        // And the stored copy's names for the ads that started these threads (A3: the "from ad" chip). Its own optional lookup: no name is the
+        // title Meta sent with the click, never a failed list.
+        const [clicks, assistant, adNames] = await Promise.all([
             loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
             loadAssistantState(tenantId),
+            adNamesFor(tenantId, result.rows.map((row) => adIdOf(row)).filter((id): id is string => Boolean(id))),
         ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
             // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
             // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant)),
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant, adNames)),
             // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
             // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
             assistant,
@@ -3871,8 +4012,9 @@ async function conversationSummary(tenantId: string, id: string) {
     const found = await pool.query(conversationsQuery('c.creator_id = $1 AND c.id = $2', 3, 4), [tenantId, id, 1, 0]);
     const row = found.rows[0];
     if (!row) return null;
-    const [clicks, assistant] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId)]);
-    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant);
+    const adId = adIdOf(row);
+    const [clicks, assistant, adNames] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId), adNamesFor(tenantId, adId ? [adId] : [])]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant, adNames);
 }
 
 /**

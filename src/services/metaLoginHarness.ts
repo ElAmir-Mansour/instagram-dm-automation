@@ -392,6 +392,8 @@ export class FakeGraph {
     granted: string[] = [...LOGIN_SCOPES];
     declined: string[] = [];
     pages: GraphPage[] = [];
+    /** What `GET /me/adaccounts` answers (Boost's one-click capture). */
+    adAccounts: Array<{ account_id: string; name: string; currency: string; account_status: number }> = [];
     /** Per Page token: what debug_token says. Default: a valid PAGE token with every scope and data access 80 days out. */
     inspections = new Map<string, FakeInspection>();
     /** Per token: the EXACT `data` of a `debug_token` answer, whatever it is (an empty body, a string, a list): for the shapes that are not answers. */
@@ -475,6 +477,7 @@ export class FakeGraph {
             const more = start + size < this.pages.length;
             return { data: { data: slice, ...(more ? { paging: { cursors: { after: String(start + size) }, next: 'https://graph.facebook.com/next?access_token=SHOULD-NEVER-BE-FOLLOWED' } } : {}) } };
         }
+        if (method === 'GET' && path === '/me/adaccounts') return { data: { data: this.adAccounts } };
         let m = /^\/(\d+)\/subscribed_apps$/.exec(path);
         if (m && method === 'POST') {
             if (!this.dropSubscription) this.subscribed.set(m[1]!, String(new URLSearchParams(body).get('subscribed_fields')).split(','));

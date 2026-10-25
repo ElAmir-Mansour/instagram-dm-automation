@@ -16,7 +16,7 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
@@ -72,6 +72,19 @@ export type WaEventPayload =
  * failed. It also keeps the enqueue path free of any logic that could throw before the
  * acknowledgement to Meta, which is the whole reason the queue exists.
  */
+/**
+ * A Page `leadgen` webhook change (lead ads, A10): only the ids Meta sent, never the person's answers. The handler fetches the lead
+ * itself (`GET /{leadgen_id}`) with the tenant's Page token, so nothing personal ever sits in `jobs`.
+ */
+export interface LeadJobPayload {
+    leadgenId: string;
+    pageId: string | null;
+    formId: string | null;
+    adId: string | null;
+    /** Unix seconds, as Meta sent it. */
+    createdTime: number | null;
+}
+
 export interface JobPayloads {
     'comment.process': {
         /** One element of `entry.changes`, exactly as Meta sent it. */
@@ -86,11 +99,21 @@ export interface JobPayloads {
      * preference change (docs/specs/001-whatsapp-agent/contracts/webhook-inbound.md section 3). Never reaches an AI; see `WaEventPayload`.
      */
     'wa.event': WaEventPayload;
+    /** A lead from a lead ad (A10). See `LeadJobPayload`. */
+    'ads.lead': LeadJobPayload;
     /**
      * The one nudge for a link a sales DM sent (docs/DM_SALES_PLAN.md §7, S9), due `dm.sales.followup_minutes` after it. Unlike the two
      * above this is NOT a Meta event: it is written by the sales turn after the link was recorded, and everything it needs to decide is
      * read again when it runs (`src/services/dmSales/followupJob.ts`), so the payload names only what the job is about.
      */
+    /**
+     * Move an AI ad proposal on (Ads A7, src/services/ads/proposals/service.ts `advanceProposal`): draft it on the tenant's own provider, or
+     * queue / read the owner's Mac job, then run the checks. Names only the proposal; everything is read again when it runs.
+     */
+    'ads.draft': {
+        creatorId: string;
+        proposalId: string;
+    };
     'dm.followup': {
         conversationId: string;
         creatorId: string;
@@ -135,6 +158,13 @@ export interface Job<K extends JobKind = JobKind> {
     /** The fair-queueing partition. See `EnqueueInput.tenantKey`. */
     tenant_key: string | null;
 }
+
+/**
+ * What names one claim of a job: the row, and the attempt number that claim gave it. `claim` returns every row with `attempts` already
+ * counted, so a `Job` is a `JobClaim`. The number is what tells this claim from a later one on the same row: the reaper frees a stale
+ * claim without touching `attempts`, and the next claim counts one more.
+ */
+export type JobClaim = Pick<Job, 'id' | 'attempts'>;
 
 export interface EnqueueInput<K extends JobKind = JobKind> {
     kind: K;
@@ -210,6 +240,7 @@ export type JobHandlerRegistry = { [K in JobKind]: JobHandler<K> };
  *   claim    -> receive (with a visibility timeout)
  *   complete -> delete / ack
  *   fail     -> nack with a delay
+ *   release  -> nack with no delay: a message received and never started goes straight back
  *   reap     -> handled by the broker's visibility timeout; a no-op in a hosted impl
  */
 export interface JobQueue {
@@ -229,6 +260,20 @@ export interface JobQueue {
     fail(jobId: string, error: string, retryInSeconds: number | null, redact?: PayloadRedaction): Promise<void>;
     /** Return claims older than the visibility timeout to `pending`. Returns how many. */
     reapStale(olderThanSeconds: number): Promise<number>;
+    /**
+     * Hand back jobs that were claimed and never started: `pending` again with the claim cleared, and the attempt the claim counted
+     * given back (never below 0), so the next claim finds each exactly as it was. The drain calls this when its time budget ends
+     * partway through a batch (`drainJobs`). Left alone, those jobs sit `running` until `reapStale` frees them
+     * `CLAIM_VISIBILITY_SECONDS` later, and one claimed on its last attempt is failed "abandoned" without ever having run.
+     *
+     * A row is handed back only while it is still THE CLAIM THE CALLER MADE: `running`, and on the attempt number that claim gave it
+     * (`JobClaim`). A job that has since finished or failed is not the caller's to give back, and neither is one the reaper freed and
+     * another drain claimed in the meantime: that claim counted a later attempt and is running somewhere else, and putting it back in
+     * the queue would let a third drain run it as well. Such a row is left exactly as it is.
+     *
+     * Only for jobs that did NOT run; the refund is true of those and of nothing else. Returns how many were handed back.
+     */
+    releaseUnrun(claims: readonly JobClaim[]): Promise<number>;
     /** Delete `done` rows older than the retention window. Returns how many. */
     pruneCompleted(olderThanDays: number, limit: number): Promise<number>;
 }

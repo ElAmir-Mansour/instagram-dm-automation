@@ -6,11 +6,14 @@
  *   - `ai_agents.whatsapp_mode` is `test` (`everyone` is refused by the API until the go-live gate exists, and is treated as `test` here: a listed sender only)
  *   - the sender is on `whatsapp_test_senders`: the owner's own testers, by BSUID or phone
  *   - the connection is `active` (an `invalid` one still STORES: Meta never redelivers, so a message is stored now or lost)
- *   - the message is words the agent can read: text, or a tapped button or list row (media and voice are a later phase)
+ *   - the message is words the agent can read: text, a tapped button or list row, a photo's or video's or document's caption, or a voice note it could transcribe
+ *     (a photo with no caption: not words, one line is sent instead; a sticker, a location and a contact card: not words either, and the same one line; see "What a listed tester
+ *     sends that is not typed words")
  *   - nobody has taken the thread over (`conversations.is_bot_active`)
  *
- * Nothing in this file sends. The send is `whatsappAnswer.ts`' (through `channels/send.ts`), and `handleWhatsAppInbound` takes it as a dependency, so what is
- * tested here is the decision and the bookkeeping, and what is tested there is the answer.
+ * The send of an ANSWER is `whatsappAnswer.ts`' (through `channels/send.ts`), and `handleWhatsAppInbound` takes it as a dependency, so what is tested here is the
+ * decision and the bookkeeping, and what is tested there is the answer. The three other things this file may cause to be sent (the opt-out confirmation, and the one line
+ * for a voice note or file that could not be read, and for a sticker, a location or a contact card) are `whatsappOptOut.ts`' and `whatsappMediaInput.ts`', taken as dependencies the same way (`InboundSteps`).
  *
  * It is a file of its own, and not another branch of `answerDm` (messaging.ts), because the Instagram pipeline has to stay exactly what it is: this
  * writes the same tables with the same dedupe rules (the `meta_message_id` claim, the 300 s re-claim window) but a different contact
@@ -31,6 +34,24 @@
  * row is kept 7 days. So the job's payload is redacted too, in the statement that ends the job (see `handleWhatsAppInbound`). What cannot be closed is
  * the time before the handler runs: from the webhook's enqueue until the job concludes, the full event is in `jobs`.
  *
+ * ## What a listed tester says, in the order it is looked at (W6, W7, W8 wired in)
+ *
+ *   1. a STOP     the words (text, a tap, a caption) are WHOLLY a stop phrase (`matchStopMessage`, consent.ts): `whatsappOptOut.ts` decides, in every mode and whatever
+ *                 the gates below say, the turn is never run, the row says `opted_out`. See that file for what it shares with Instagram and for what happens when they write again
+ *   2. the FILE   a photo, video, document or voice note is downloaded and saved PRIVATELY, in every mode, so it outlives Meta's 7 days (`whatsappMediaInput.ts`). A stranger's is
+ *                 never downloaded: everything in this list is behind `isTestSender`
+ *   3. the GATES  `noReplyReasonFor`, as before
+ *   4. the WORDS  only when the agent will answer: a voice note is transcribed (and a transcript that is a stop phrase is a stop), a caption is the message, a file with nothing
+ *                 written on it gets the one line Instagram sends for it, and a voice note that could not be read gets ONE line asking for text
+ *   5. the AGENT  on the words, with the entry link's tracking code taken out of them (stored text is as received)
+ *
+ * ## Where a thread came from (W8, T049, review M20)
+ *
+ * The first inbound sets `entry_source` and no later one rewrites it. A click-to-WhatsApp `referral` is `ctwa` (ingest). Otherwise a ` #ref` in the words that is one of THIS
+ * tenant's entry links (`platform_connections.settings.entry_links`) is `link` with the owner's label (a QR code and a short link both: they share the ref); an unknown ref is
+ * not trusted (a person can type `#K7M3QA`), and no ref is `organic`. It is metadata, not a customer's words, so it is recorded for strangers too. `free_window_expires_at` is
+ * NOT set here, from a referral or from anything else: only a delivery status of ours that says `free_entry_point` sets it (`whatsappStatus.ts`).
+ *
  * ## The thread
  *
  * `conversations.instagram_user_id` holds the BSUID (the column kept its name; a BSUID cannot collide with a numeric IGSID or PSID). Every
@@ -48,17 +69,22 @@
  * system message goes on the new one. Consents and the test-sender id are re-keyed all the same.
  */
 import { queryOne, queryCount } from '../db/query.js';
+import type { ConversationEntrySource } from '../db/rows.js';
 import type { JobResult, WhatsAppDmPayload } from '../jobs/types.js';
+import { matchStopMessage } from '../services/consent.js';
 import { getCreatorByWhatsAppNumber } from '../services/tenant.js';
 import { withTransaction } from '../services/studio/common.js';
 import { readWhatsAppSettings, type WhatsAppAgentSettings, type WhatsAppMode } from '../services/whatsappAgent.js';
+import { getEntryLinkLabels, refFromText, type EntryLinkLabels } from '../services/whatsappEntryLinks.js';
 import { redactOnFailure } from '../jobs/redaction.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { dmPromptText } from './messaging.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
-import { answerWhatsApp, type NoReplyReason, type WhatsAppAnswerFn } from './whatsappAnswer.js';
+import { answerWhatsApp, withoutEntryRef, type NoReplyReason, type WhatsAppAnswerFn } from './whatsappAnswer.js';
+import { acknowledgeInbound, readInboundMedia, saveInboundFile, type AcknowledgeFn, type ReadMediaFn, type SaveFileFn, type SavedFile, type WordlessInbound } from './whatsappMediaInput.js';
+import { optOutWhatsAppContact, type WhatsAppStopFn } from './whatsappOptOut.js';
 import { redactedInboundPayload } from './whatsappRedact.js';
-import { normalizeWhatsAppChange, type WaEntrySource, type WaIgnored, type WaInbound, type WaSystemEvent } from './whatsapp.js';
+import { normalizeWhatsAppChange, type WaEntrySource, type WaIgnored, type WaInbound, type WaMedia, type WaSystemEvent } from './whatsapp.js';
 
 /**
  * How long one attempt may hold an inbound message before another may take it. The same 300 s as `REPLY_CLAIM_VISIBILITY_SECONDS` in
@@ -89,7 +115,8 @@ export function isTestSender(testSenders: readonly string[], ids: readonly (stri
  *   unsupported_type   a reaction or a message the agent cannot read, whatever the mode
  *   agent_off          mode `off`
  *   not_test_sender    mode `test` (or `everyone`, which is test-only until the go-live gate) and a sender who is not listed
- *   unsupported_type   media, a voice note, a location: stored, but not read yet (a later phase)
+ *   unsupported_type   what the agent can neither read nor answer with its one line (see `Incoming.answerable`). A sticker, a location and a contact card ARE answerable with that line
+ *                      (`Incoming.acknowledge`), and so are a photo, a video, a document and a voice note (read: see `Incoming.file`)
  *   connection_invalid the connection is not `active`: stored, nothing is sent
  *   bot_paused         a person has the thread
  *
@@ -124,11 +151,38 @@ interface Incoming {
     timestamp: number | null;
     /** A message the agent cannot read: a reaction, an unsupported type. */
     unsupported: boolean;
-    /** Words the agent can answer: text or a tapped button or list row. Not a photo, a voice note or a location (a later phase), even with a caption. */
+    /**
+     * Something the agent can work with: typed words (text, a tapped button or list row), or a FILE it knows what to do with (`file`). Not a sticker, a location or a contact card.
+     */
     answerable: boolean;
+    /** `voice`: audio, to be transcribed. `media`: a photo, video or document. Null for everything else (a sticker is `message.media` too, and is not read). */
+    file: 'voice' | 'media' | null;
+    /** The file's media id and type, when Meta gave an id. */
+    media: WaMedia | null;
+    /** What the customer wrote on a photo, video or document; '' for nothing. (A voice note has none.) */
+    caption: string;
+    /**
+     * A sticker, a location or a contact card: not words and not a file the agent reads, but never left unanswered. A tester gets the kit's one line (`acknowledgeInbound`), nothing is
+     * downloaded, and the row says `no_reply_reason` NULL when it went out. Null for everything else.
+     */
+    acknowledge: WordlessInbound | null;
+}
+
+/** The files a tester's message can carry that the agent reads: a voice note or any audio, a photo, a video or a document. A sticker is a like, not a question. */
+function fileOf(message: WaInbound): Incoming['file'] {
+    if (message.messageType === 'audio') return 'voice';
+    const kind = message.media?.kind;
+    return kind === 'image' || kind === 'video' || kind === 'document' ? 'media' : null;
+}
+
+/** The three types that get the one line: by Meta's own `type`, which `messageType` keeps (a sticker is also `message.media`, a location and a card are not). */
+function acknowledgeOf(message: WaInbound): WordlessInbound | null {
+    const type = message.messageType;
+    return type === 'sticker' || type === 'location' || type === 'contacts' ? type : null;
 }
 
 function incomingOf(message: WaInbound): Incoming {
+    const file = fileOf(message);
     return {
         senderId: message.senderId,
         wamid: message.metaMessageId,
@@ -142,7 +196,11 @@ function incomingOf(message: WaInbound): Incoming {
         entrySource: message.entrySource,
         timestamp: message.timestamp,
         unsupported: false,
-        answerable: !message.media && !message.needsTranscript && !message.wordless && dmPromptText(message).trim() !== '',
+        answerable: file !== null || (!message.media && !message.needsTranscript && !message.wordless && dmPromptText(message).trim() !== ''),
+        file,
+        media: message.media,
+        caption: file === 'media' ? message.media?.caption?.trim() ?? '' : '',
+        acknowledge: acknowledgeOf(message),
     };
 }
 
@@ -162,6 +220,10 @@ function incomingOfIgnored(message: WaIgnored & { senderId: string; metaMessageI
         timestamp: message.timestamp,
         unsupported: true,
         answerable: false,
+        file: null,
+        media: null,
+        caption: '',
+        acknowledge: null,
     };
 }
 
@@ -175,9 +237,36 @@ interface Context {
     progress: Progress;
     /** The agent's answer to a message this handler has decided to answer. */
     answer: WhatsAppAnswerFn;
+    /** The steps that are not the agent's answer: an opt-out, a file, an entry link. */
+    steps: InboundSteps;
     /** No retry follows this attempt. */
     lastAttempt: boolean;
 }
+
+/**
+ * What the handler asks of the code around it, as dependencies (like `answer`): so `whatsappInbound.test.ts` tests the decision and the bookkeeping with stand-ins that FAIL THE
+ * TEST when asked for a message they should not have been asked for, and each step is tested on its own where it lives.
+ */
+export interface InboundSteps {
+    /** A tester's stop phrase: record it, close the thread, confirm once (`whatsappOptOut.ts`). */
+    stop: WhatsAppStopFn;
+    /** A tester's file, saved privately (`whatsappMediaInput.ts`). */
+    saveFile: SaveFileFn;
+    /** A tester's voice note or file, as words or as the one line (`whatsappMediaInput.ts`). */
+    readMedia: ReadMediaFn;
+    /** A tester's sticker, location or contact card: the kit's one line, so the chat is never silent (`whatsappMediaInput.ts`). */
+    acknowledge: AcknowledgeFn;
+    /** The tenant's entry-link labels (`platform_connections.settings.entry_links`). */
+    labels: (creatorId: string) => Promise<EntryLinkLabels>;
+}
+
+const LIVE_STEPS: InboundSteps = {
+    stop: (input) => optOutWhatsAppContact(input),
+    saveFile: saveInboundFile(),
+    readMedia: readInboundMedia(),
+    acknowledge: acknowledgeInbound(),
+    labels: getEntryLinkLabels,
+};
 
 /** What the job has learned about its payload as it ran. */
 interface Progress {
@@ -247,7 +336,36 @@ async function markConcluded(messageId: string, reason: NoReplyReason | null): P
     );
 }
 
-/** Store one customer message (or a kept ignored one) and conclude it as not answered. */
+/** Give the claim back so the next attempt can take it at once, instead of waiting out the 300 s visibility window. The statement `whatsappAnswer.ts` uses. */
+async function releaseClaim(messageId: string): Promise<void> {
+    await queryCount('UPDATE messages SET reply_claimed_at = NULL WHERE id = $1 AND handled_at IS NULL', [messageId]);
+}
+
+/**
+ * The entry link this message came in through, when its words carry the tracking code of one of THIS tenant's links: `{ ref, label }`. The pure check comes first, so a message
+ * with no ` #ref` in it (nearly all of them) costs no query. A ref that is not the tenant's own is not trusted (anyone can type one), and labels that cannot be read are "no
+ * link": a message is stored whatever its attribution, so this never throws.
+ */
+async function entryLinkOf(ctx: Context, text: string): Promise<{ ref: string; label: string } | null> {
+    const candidate = refFromText(text);
+    if (!candidate) return null;
+    try {
+        const hit = Object.values(await ctx.steps.labels(ctx.creatorId)).find((entry) => entry.ref === candidate);
+        return hit ? { ref: hit.ref, label: hit.label } : null;
+    } catch (err) {
+        log('warn', 'wa.entry_link_unreadable', { creator_id: ctx.creatorId, ...describeError(err), effect: 'stored without a link source' });
+        return null;
+    }
+}
+
+/** The typed words of a tester's message, for the stop check: text, a tapped button or list row, a photo's caption. Null for a voice note (read later), a bare file and everything unreadable. */
+function typedWords(incoming: Incoming, said: string): string | null {
+    if (incoming.file === 'voice') return null;
+    if (incoming.file === 'media') return incoming.caption !== '' ? said : null;
+    return incoming.answerable ? said : null;
+}
+
+/** Store one customer message (or a kept ignored one) and conclude it: answered, or not answered and why. */
 async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     if (await alreadyHandled(incoming.wamid)) {
         log('info', 'wa.duplicate_ignored');
@@ -256,7 +374,12 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
 
     const test = isTestSender(ctx.settings.testSenders, [incoming.senderId], incoming.phone);
     if (test) ctx.progress.keepPayload = true;
-    const entrySource = { ...(incoming.entrySource ?? { kind: 'organic' as const }), at: isoOf(incoming.timestamp) };
+
+    // How the thread began (only the first inbound's counts: the upsert keeps what is there). A click-to-WhatsApp referral is `ctwa`; else a tracking code that is one of the
+    // tenant's own links is `link`, with the owner's label of it; else `organic`. A QR code and a short link share a ref, so they are one kind.
+    const link = await entryLinkOf(ctx, incoming.text);
+    const began: Omit<ConversationEntrySource, 'at'> = incoming.entrySource ?? (link ? { kind: 'link', ref: link.ref, label: link.label } : { kind: 'organic' });
+    const entrySource = { ...began, at: isoOf(incoming.timestamp) };
 
     // The thread. One statement, not SELECT-then-INSERT (two messages a second apart race on `unique_creator_user`). Who the person is
     // (phone, username, name, parent id) is written for a test sender only; a thread for anyone else is the BSUID and when they wrote.
@@ -264,7 +387,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     //   platform          set once and kept, as Instagram's is
     //   entry_source      only the first inbound sets it: a later message never rewrites how the thread began
     //   username, name   the latest value wins unless it is missing; phone and parent id fill once
-    const conversation = await queryOne<{ id: string; is_bot_active?: boolean | null; ai_disclosed_at?: Date | string | null }>(
+    const conversation = await queryOne<{ id: string; is_bot_active?: boolean | null; ai_disclosed_at?: Date | string | null; entry_source?: ConversationEntrySource | null }>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status, platform, last_inbound_at,
                                     wa_phone, wa_username, wa_parent_user_id, profile_name, entry_source)
          VALUES ($1, $2, 'active', 'whatsapp', NOW(), $3, $4, $5, $6, $7::jsonb)
@@ -277,7 +400,7 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
                        wa_parent_user_id = COALESCE(conversations.wa_parent_user_id, EXCLUDED.wa_parent_user_id),
                        profile_name = COALESCE(EXCLUDED.profile_name, conversations.profile_name),
                        entry_source = COALESCE(conversations.entry_source, EXCLUDED.entry_source)
-         RETURNING id, is_bot_active, ai_disclosed_at`,
+         RETURNING id, is_bot_active, ai_disclosed_at, entry_source`,
         [
             ctx.creatorId,
             incoming.senderId,
@@ -307,27 +430,94 @@ async function storeInbound(ctx: Context, incoming: Incoming): Promise<void> {
     }
     if (claim.resumed) log('info', 'wa.resumed', { message_id: claim.id, reply_attempts: claim.attempts });
 
-    // Answer, or say why not. `is_bot_active` comes back from the upsert; a row that does not say (an older statement) is a thread nobody has taken over.
+    /** Conclude, and say so. Every path below ends here. */
+    const conclude = async (why: NoReplyReason | null): Promise<void> => {
+        await markConcluded(claim.id, why);
+        log('info', 'wa.inbound_stored', {
+            message_type: incoming.messageType,
+            stored: test ? 'full' : 'metadata_only',
+            no_reply_reason: why,
+            answered: why === null,
+            connection_status: ctx.connectionStatus,
+            conversation_id: conversation.id,
+        });
+    };
+
+    // The tracking code is the owner's, not the customer's: the agent reads the words without it, and the row keeps them as they arrived. The thread's own ref covers the
+    // later messages of a thread that began on a link (and the first, when the ref was just read from the words).
+    const entryRef = conversation.entry_source?.ref ?? link?.ref ?? null;
+    const said = withoutEntryRef(incoming.text, entryRef);
+
+    // Would the agent answer this? Everything but the words themselves: who they are, the mode, the connection, whether a person has the thread.
     let reason = noReplyReasonFor({
-        unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test, answerable: incoming.answerable,
+        unsupported: incoming.unsupported, mode: ctx.settings.mode, isTestSender: test, answerable: incoming.answerable || incoming.acknowledge !== null,
         connectionActive: ctx.connectionStatus === 'active', botActive: conversation.is_bot_active !== false,
     });
+    const mayAnswer = reason === null;
+
+    /**
+     * A stop, decided by `whatsappOptOut.ts` and nobody else: the turn is not run for it. An opt-out that could not be written is retried while an attempt is left (the claim
+     * is given back first, so the retry takes it at once) and, on the last, is said loudly and concluded as a failure: nothing is sent to someone who said stop, whatever happens.
+     */
+    const optOut = async (words: string, lang: 'ar' | 'en'): Promise<void> => {
+        try {
+            await ctx.steps.stop({ creatorId: ctx.creatorId, conversationId: conversation.id, senderId: incoming.senderId, text: words, lang, confirm: mayAnswer });
+        } catch (err) {
+            if (!ctx.lastAttempt) {
+                log('warn', 'wa.optout_retrying', { creator_id: ctx.creatorId, conversation_id: conversation.id, ...describeError(err) });
+                await releaseClaim(claim.id);
+                throw err;
+            }
+            log('error', 'wa.optout_not_recorded', { creator_id: ctx.creatorId, conversation_id: conversation.id, ...describeError(err), effect: 'the stop is NOT recorded; nothing was sent to the contact' });
+            await conclude('failure');
+            return;
+        }
+        await conclude('opted_out');
+    };
+
+    // 1. A stop, in the words of a listed tester: honoured in every mode, `off` included, and whether or not a person has the thread (consent.ts, wiring note).
+    const words = test ? typedWords(incoming, said) : null;
+    const stop = words !== null ? matchStopMessage(words) : null;
+    if (words !== null && stop) return optOut(words, stop.lang);
+
+    // 2. The file, saved privately and linked to the row, for a tester and nobody else: a stranger's file is never downloaded. In every mode, because Meta keeps it 7 days; and
+    // only on a connection that can download (an `invalid` one has no token to try with).
+    let saved: SavedFile | null = null;
+    if (test && incoming.file !== null && ctx.connectionStatus === 'active') {
+        saved = await ctx.steps.saveFile({ creatorId: ctx.creatorId, messageId: claim.id, phoneNumberId: ctx.phoneNumberId, media: incoming.media, resumed: claim.resumed });
+    }
+
+    // 3 and 4. What the agent reads: the words, a voice note's transcript, a caption, or a line that says it could not read it.
+    let text = said;
+    if (reason === null && incoming.file !== null) {
+        const read = await ctx.steps.readMedia({
+            creatorId: ctx.creatorId, conversationId: conversation.id, messageId: claim.id, kind: incoming.file, media: incoming.media, caption: incoming.caption,
+            saved, resumed: claim.resumed, aiDisclosedAt: conversation.ai_disclosed_at ?? null,
+        });
+        if (read.kind === 'concluded') return conclude(read.reason);
+        text = withoutEntryRef(read.text, entryRef);
+        // A voice note that SAYS «وقف» is a stop like a typed one (a caption was checked above, with the words).
+        const spoken = incoming.file === 'voice' ? matchStopMessage(text) : null;
+        if (spoken) return optOut(text, spoken.lang);
+    }
+
+    // 4b. A sticker, a location or a contact card: nothing to read and nothing to download, but the chat does not go silent. The one line, through the same claim and transport as the
+    // file's, and the row says NULL when it went out. Only for a tester the agent may answer: a stranger, an agent that is off, a refused connection and a thread a person has all
+    // came out of `noReplyReasonFor` above with their own reason, and none of them is sent anything.
+    if (reason === null && incoming.acknowledge !== null) {
+        return conclude(await ctx.steps.acknowledge({
+            creatorId: ctx.creatorId, conversationId: conversation.id, messageId: claim.id, what: incoming.acknowledge, aiDisclosedAt: conversation.ai_disclosed_at ?? null,
+        }));
+    }
+
+    // 5. The agent. It throws only to ask for a retry (the claim is released first); anything else is concluded here, whatever happened.
     if (reason === null) {
-        // The agent. It throws only to ask for a retry (the claim is released first); anything else is concluded here, whatever happened.
         reason = (await ctx.answer({
             creatorId: ctx.creatorId, conversationId: conversation.id, messageId: claim.id, wamid: incoming.wamid, phoneNumberId: ctx.phoneNumberId,
-            senderId: incoming.senderId, text: incoming.text, payload: incoming.payload, aiDisclosedAt: conversation.ai_disclosed_at ?? null, lastAttempt: ctx.lastAttempt,
+            senderId: incoming.senderId, text, payload: incoming.payload, aiDisclosedAt: conversation.ai_disclosed_at ?? null, entryRef, lastAttempt: ctx.lastAttempt,
         })).reason;
     }
-    await markConcluded(claim.id, reason);
-    log('info', 'wa.inbound_stored', {
-        message_type: incoming.messageType,
-        stored: test ? 'full' : 'metadata_only',
-        no_reply_reason: reason,
-        answered: reason === null,
-        connection_status: ctx.connectionStatus,
-        conversation_id: conversation.id,
-    });
+    await conclude(reason);
 }
 
 // ─── A BSUID that changed ─────────────────────────────────────────────────────────────────
@@ -464,11 +654,11 @@ async function storeSystemEvent(ctx: Context, event: WaSystemEvent): Promise<voi
  * is before any of it runs: from the webhook's enqueue until the handler concludes the job, the full event is in `jobs`.
  */
 export async function handleWhatsAppInbound(
-    payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT, answer: WhatsAppAnswerFn = answerWhatsApp
+    payload: WhatsAppDmPayload, options: WebhookHandlerOptions = FINAL_ATTEMPT, answer: WhatsAppAnswerFn = answerWhatsApp, steps: Partial<InboundSteps> = {}
 ): Promise<JobResult | undefined> {
     const progress: Progress = { keepPayload: false };
     try {
-        await ingest(payload, options, progress, answer);
+        await ingest(payload, options, progress, answer, { ...LIVE_STEPS, ...steps });
     } catch (err) {
         // Not knowing who the sender was (the failure came before the settings were read) is the stranger's case: redact.
         throw progress.keepPayload ? err : redactOnFailure(err, redactedInboundPayload(payload));
@@ -476,7 +666,7 @@ export async function handleWhatsAppInbound(
     return progress.keepPayload ? undefined : { redactPayload: redactedInboundPayload(payload) };
 }
 
-async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions, progress: Progress, answer: WhatsAppAnswerFn): Promise<void> {
+async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions, progress: Progress, answer: WhatsAppAnswerFn, steps: InboundSteps): Promise<void> {
     const change = normalizeWhatsAppChange(payload.change);
     if (change.messages.length === 0) {
         log('warn', 'wa.job_empty', { phone_number_id: payload.phoneNumberId });
@@ -511,6 +701,7 @@ async function ingest(payload: WhatsAppDmPayload, options: WebhookHandlerOptions
         rawChange: payload.change,
         progress,
         answer,
+        steps,
         lastAttempt: options.lastAttempt,
     };
 

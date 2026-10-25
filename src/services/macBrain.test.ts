@@ -251,6 +251,20 @@ describe('isMacBrainJob', () => {
             assert.equal(isMacBrainJob(kind, { write: {} }), false, kind);
         }
     });
+
+    it('is true for an explainer’s script whatever its payload: Claude writes it, on the owner’s plan', () => {
+        assert.equal(isMacBrainJob('explainer_write', { explainer_id: 'e', write: { model: 'm' } }), true);
+        assert.equal(isMacBrainJob('explainer_write', {}), true, 'the kind is enough, as for a think');
+        assert.equal(isMacBrainJob('explainer_write', null), true);
+    });
+
+    it('is false for the other three explainer jobs, which use no Claude: the per-tenant switch keeps them the owner’s', () => {
+        for (const kind of ['explainer_voice', 'explainer_draw', 'explainer_render'] as const) {
+            assert.equal(isMacBrainJob(kind, { explainer_id: 'e' }), false, kind);
+            assert.equal(isMacBrainJob(kind, { write: {} }), false, `${kind} with a write key`);
+            assert.equal(isMacBrainJob(kind, null), false, `${kind} with no payload`);
+        }
+    });
 });
 
 describe('saveMacBrainTenants', () => {

@@ -177,6 +177,38 @@ describe('withdrawAll', () => {
         assert.ok(!asked.some((a) => a.sql === 'COMMIT'));
     });
 
+    it('closes the thread in the SAME transaction when asked (closeThread): the bot paused, the stage and the intent, for this tenant\'s thread on this platform', async () => {
+        await withdrawAll({ creatorId: CREATOR, platform: 'whatsapp', contactRef: BSUID, closeThread: { stage: 'closed', lastIntent: 'opt_out' } });
+        assert.ok(asked.every((a) => a.via === 'client'));
+        assert.deepEqual(asked.map((a) => a.sql.split(' ').slice(0, 3).join(' ')), [
+            'BEGIN', 'INSERT INTO contact_consents', 'INSERT INTO contact_consents', 'INSERT INTO contact_consents', 'UPDATE conversations SET', 'UPDATE conversations SET', 'UPDATE jobs SET', 'COMMIT',
+        ]);
+        const close = asked.filter((a) => a.sql.startsWith('UPDATE conversations'))[1]!;
+        assert.match(close.sql, /SET is_bot_active = FALSE, stage = \$4, last_intent = \$5 WHERE creator_id = \$1 AND instagram_user_id = \$2 AND \(platform = \$3 OR \(platform IS NULL AND \$3 = 'instagram'\)\)$/);
+        assert.deepEqual(close.params, [CREATOR, BSUID, 'whatsapp', 'closed', 'opt_out']);
+        assert.doesNotMatch(close.sql, /opted_out_at/, 'the stamp is the first statement\'s, and only for a thread not yet opted out');
+    });
+
+    it('pauses the thread even when it was opted out before (a second stop after the owner switched the bot back on), where the stamp is left alone', async () => {
+        optedOutRowCount = 0;
+        await withdrawAll({ creatorId: CREATOR, platform: 'whatsapp', contactRef: BSUID, closeThread: { stage: 'closed', lastIntent: 'opt_out' } });
+        assert.ok(asked.some((a) => /SET is_bot_active = FALSE/.test(a.sql)), 'the pause does not depend on the stamp being new');
+    });
+
+    it('writes nothing about the thread\'s state without closeThread: the statement list is what it was', async () => {
+        await withdrawAll({ creatorId: CREATOR, platform: 'whatsapp', contactRef: BSUID });
+        assert.ok(!asked.some((a) => /is_bot_active|last_intent/.test(a.sql)));
+    });
+
+    it('rolls EVERYTHING back when the close fails: a withdrawal never stands without the pause', async () => {
+        failOn = 'UPDATE conversations SET is_bot_active';
+        await assert.rejects(withdrawAll({ creatorId: CREATOR, platform: 'whatsapp', contactRef: BSUID, closeThread: { stage: 'closed', lastIntent: 'opt_out' } }), /connection terminated/);
+        const verbs = asked.map((a) => a.sql.split(' ')[0]);
+        assert.ok(verbs.includes('ROLLBACK'));
+        assert.ok(!verbs.includes('COMMIT'));
+        assert.equal(released, 1);
+    });
+
     it('takes the source from the caller and refuses an unknown one or an empty contact', async () => {
         await withdrawAll({ creatorId: CREATOR, platform: 'instagram', contactRef: '17841', source: 'owner' });
         assert.ok(asked.filter((a) => a.sql.startsWith('INSERT')).every((a) => a.params[6] === 'owner'));

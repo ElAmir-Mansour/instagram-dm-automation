@@ -279,11 +279,13 @@ export function cutChars(text: string, max: number): string {
 
 /**
  * A Short's title: the reel's hook (or the caption's first line), without `<>`, with `#Shorts`
- * appended when it fits in YouTube's 100 characters.
+ * appended when it fits in YouTube's 100 characters. `tagAsShort` false (a row's `platform_options.shorts = false`: a video that is
+ * not a Short, such as an explainer's horizontal video over three minutes) adds no tag: the same title without it, cut to 100.
  */
-export function shortTitle(title: string | null | undefined, caption: string | null | undefined): string {
+export function shortTitle(title: string | null | undefined, caption: string | null | undefined, tagAsShort: boolean = true): string {
     const base = stripAngles((title ?? '').trim() || (caption ?? '').split('\n').map((l) => l.trim()).find(Boolean) || 'Short')
         .replace(/\s+/g, ' ').trim();
+    if (!tagAsShort) return cutChars(base, MAX_TITLE_CHARS);
     if (/#shorts\b/i.test(base)) return cutChars(base, MAX_TITLE_CHARS);
     const withTag = `${base} ${SHORTS_TAG}`;
     return [...withTag].length <= MAX_TITLE_CHARS ? withTag : cutChars(base, MAX_TITLE_CHARS);
@@ -300,10 +302,13 @@ export function cutBytes(text: string, max: number): string {
     return out;
 }
 
-/** The description: the caption without `<>`, `#Shorts` ensured, within 5,000 bytes. */
-export function shortDescription(caption: string | null | undefined): string {
+/**
+ * The description: the caption without `<>`, `#Shorts` ensured, within 5,000 bytes. `tagAsShort` false adds no tag (see `shortTitle`); a `#Shorts` the caption
+ * itself carries is the author's and stays.
+ */
+export function shortDescription(caption: string | null | undefined, tagAsShort: boolean = true): string {
     let text = stripAngles(caption ?? '').trim();
-    if (!/#shorts\b/i.test(text)) text = text ? `${text}\n\n${SHORTS_TAG}` : SHORTS_TAG;
+    if (tagAsShort && !/#shorts\b/i.test(text)) text = text ? `${text}\n\n${SHORTS_TAG}` : SHORTS_TAG;
     return cutBytes(text, MAX_DESCRIPTION_BYTES);
 }
 

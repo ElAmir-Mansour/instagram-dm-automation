@@ -107,6 +107,7 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['POST', '/ai/test'],
     ['GET', '/ai/models/anthropic'],
     ['GET', '/ai/usage'],
+    ['GET', '/ads/tenants'],
 ];
 
 describe('the platform_admin gate', () => {
@@ -358,7 +359,7 @@ describe('refusals carry stable codes', () => {
     });
 
     describe('erasure', () => {
-        const COUNTS = { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0 };
+        const COUNTS = { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 };
         const saved: Record<string, string | undefined> = {};
         beforeEach(() => {
             saved.pw = process.env.DASHBOARD_PASSWORD; saved.app = process.env.META_APP_SECRET;
@@ -403,7 +404,7 @@ describe('refusals carry stable codes', () => {
             assert.equal(reply.body.code, 'ERASURE_COUNTS_DRIFTED');
             assert.match(reply.body.error, /Nothing was deleted/);
             assert.deepEqual(reply.body.expected, COUNTS);
-            assert.deepEqual(reply.body.actual, { messages: 5, conversations: 1, interactions: 0, dmSendLog: 0 });
+            assert.deepEqual(reply.body.actual, { messages: 5, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 });
             assert.deepEqual(writes, [], 'a drifted token deletes nothing');
         });
 
@@ -426,7 +427,7 @@ describe('refusals carry stable codes', () => {
             assert.equal(reply.status, 200, JSON.stringify(reply.body));
             assert.ok(auditDetail, 'the audit row was written');
             assert.equal(auditDetail.media_deleted, 3);
-            assert.deepEqual(auditDetail.deleted, { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0 }, 'the counts are the preview\'s, unchanged');
+            assert.deepEqual(auditDetail.deleted, { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 }, 'the counts are the preview\'s, unchanged');
         });
     });
 });

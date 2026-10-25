@@ -525,7 +525,7 @@ describe('Studio: failures are sentences, with the raw text behind Details (T054
 // ─── The ratchet ────────────────────────────────────────────────────────────────────────────────────
 
 describe('no Studio page prints a server message as the sentence (T054 ratchet)', () => {
-    const FILES = ['dashboard/js/pages/monteur.js', 'dashboard/js/pages/studio.js', 'dashboard/js/pages/infographics.js'];
+    const FILES = ['dashboard/js/pages/monteur.js', 'dashboard/js/pages/studio.js', 'dashboard/js/pages/infographics.js', 'dashboard/js/pages/explainers.js'];
     /** Source with comments removed, so a rule explained in a comment is not mistaken for code. */
     const code = (file: string): string => readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 

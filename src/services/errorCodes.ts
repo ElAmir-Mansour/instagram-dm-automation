@@ -130,6 +130,27 @@ export const ERROR_CODES = {
     AI_PROVIDER_REJECTED: { status: [503], meaning: 'The AI provider refused the operator\'s key or plan. Nothing the tenant can fix.' },
     AI_UNAVAILABLE: { status: [503], meaning: 'The AI provider is busy or not answering. May pass.' },
     AI_ANSWER_UNUSABLE: { status: [502], meaning: 'The AI answered something that could not be used.' },
+
+    // ─── Studio: illustrated explainers (v59, src/services/explainers/errors.ts) ───────────────────────
+    EXPLAINERS_DISABLED: { status: [404], meaning: 'Any Explainers route for a tenant the platform admin has not switched Explainers on for (`explainers.enabled.<tenant>`).' },
+    EXPLAINER_NOT_FOUND: { status: [404], meaning: 'An explainer that does not exist, is another tenant\'s, or was deleted.' },
+    EXPLAINER_BAD_STATE: { status: [409], meaning: 'A move the explainer\'s status machine does not allow from where it is (approve a script that is voiced, retry one that did not fail, edit one that is scheduled).', params: ['status', 'to'] },
+    EXPLAINER_PROMPT_REFUSED: { status: [422], meaning: 'A picture brief or character description that names a woman or a girl, or breaks another picture rule: nothing was sent to the image provider.' },
+    EXPLAINER_NO_PROVIDER: { status: [409], meaning: 'Drawing a picture when no image provider is set up (the platform admin\'s Settings → Explainers card).' },
+    EXPLAINER_ALLOWANCE_PAUSED: { status: [429], meaning: 'The image provider\'s free allowance, or the owner\'s daily cap, is used up: drawing waits. `retryAt` says until when.', params: ['retryAt'] },
+    EXPLAINER_PROVIDER_ERROR: { status: [502], meaning: 'The image provider answered an error for a picture.' },
+    EXPLAINER_NO_TRACK: { status: [409], meaning: 'The sound is music and the explainer has no track to use: none chosen, or the one chosen is no longer in the library.' },
+    EXPLAINER_NEEDS_REFERENCE: { status: [409], meaning: 'A scene names a character that has no approved reference picture yet.', params: ['character'] },
+    EXPLAINERS_OWNER_ONLY: { status: [409], meaning: 'Switching Explainers on for a tenant that is not the platform owner (this version is the owner\'s alone).' },
+    EXPLAINER_DRAFT_REFUSED: { status: [422], meaning: 'A script that breaks a rule a save may not add or an approval may not carry (a closing line that is not a question, engagement bait, a woman in a brief, a field past its limit). `found` is how many; the answer\'s `findings` lists each.', params: ['found'] },
+    EXPLAINER_AUDIO_STALE: { status: [409], meaning: 'Approving pictures or rendering when the narration changed after it was voiced: voice it again first.' },
+    EXPLAINER_PICTURES_MISSING: { status: [409], meaning: 'Approving pictures while some scene has none: `missing` of them, and `positions` says which.', params: ['missing'] },
+    EXPLAINER_RENDER_STALE: { status: [409], meaning: 'Scheduling a video that was rendered before the narration or the sound last changed.' },
+    /**
+     * Not sent by a route: RECOGNISED by the dashboard in the note an explainer keeps while its voice waits for Gemini's free allowance. The note starts with
+     * `VOICE_LIMIT:` (what the worker reports, and apply.ts keeps), and the queued voice job's `not_before` says when it is tried again.
+     */
+    EXPLAINER_VOICE_LIMIT: { status: [429], meaning: 'Recognised in an explainer\'s stored note (it starts with "VOICE_LIMIT:"): Gemini\'s free voice allowance is used up and the voice step is queued again for the reset.' },
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

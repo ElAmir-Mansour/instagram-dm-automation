@@ -171,13 +171,16 @@ describe('Row Level Security on every table', () => {
         const created = files.flatMap((f) => createdTables(f.sql));
         for (const known of [
             'creators', 'campaigns', 'users', 'jobs', 'studio_settings', 'growth_settings', 'infographics', 'creator_profiles', 'creator_profile_versions',
-            'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage',
+            'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage', 'explainers', 'explainer_scenes', 'image_allowance',
         ]) {
             assert.ok(created.includes(known), `${known} is found`);
         }
         assert.ok(created.length >= 40, `found ${created.length} tables`);
         const enabled = files.flatMap((f) => [...rlsEnabledTables(f.sql)]);
-        for (const known of ['creators', 'studio_settings', 'creator_profiles', 'creator_profile_versions', 'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage']) {
+        for (const known of [
+            'creators', 'studio_settings', 'creator_profiles', 'creator_profile_versions', 'onboarding', 'invites', 'profile_drafts', 'voice_examples',
+            'onboarding_events', 'ai_usage', 'explainers', 'explainer_scenes', 'image_allowance',
+        ]) {
             assert.ok(enabled.includes(known), `${known} has RLS enabled somewhere`);
         }
     });
@@ -1139,5 +1142,378 @@ describe('migration v51: private media (media_uploads.is_private)', () => {
 
     it('creates no table, so there is no new table to enable row level security on', () => {
         assert.doesNotMatch(sql, /CREATE TABLE/i);
+    });
+});
+
+// ─── v53: the Ads Manager's core tables ────────────────────────────────────────────────────────
+
+describe('migration v53: ads core (stored copy, results and breakdowns, ops queue, pacer, alerts)', () => {
+    const FILE = 'migration_v53_ads_core.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    const TABLES = ['ads_objects', 'ads_insights_daily', 'ads_insights_breakdown', 'ads_ops', 'ads_pacer', 'ads_alerts'];
+
+    it('is registered right after v52, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('creates exactly the six ads tables, each keyed by the tenant with ON DELETE CASCADE, and enables RLS on every one in this file', () => {
+        assert.deepEqual(createdTables(raw).sort(), [...TABLES].sort());
+        const enabled = rlsEnabledTables(raw);
+        for (const t of TABLES) {
+            assert.ok(enabled.has(t), `${t} has RLS enabled`);
+            const body = sql.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\((.*?)\\);`))?.[1] ?? '';
+            assert.match(body, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/, `${t} is keyed by the tenant`);
+        }
+    });
+
+    it('constrains the closed vocabularies with CHECKs', () => {
+        assert.match(sql, /level TEXT NOT NULL CHECK \(level IN \('campaign', 'adset', 'ad', 'creative'\)\)/);
+        assert.match(sql, /origin TEXT NOT NULL CHECK \(origin IN \('app', 'boost', 'proposal', 'meta'\)\)/);
+        assert.match(sql, /CHECK \(budget_kind IN \('daily', 'lifetime', 'none'\)\)/);
+        assert.match(sql, /level TEXT NOT NULL CHECK \(level IN \('account', 'campaign', 'adset', 'ad'\)\)/);
+        assert.match(sql, /CHECK \(kind IN \('create', 'update', 'status', 'budget', 'archive', 'delete', 'spend_cap', 'audience_create', 'audience_users', 'lead_form', 'study'\)\)/);
+        assert.match(sql, /CHECK \(state IN \('pending', 'running', 'verify', 'done', 'failed', 'cancelled'\)\)/);
+        assert.match(sql, /idempotency_key TEXT UNIQUE/);
+        assert.match(sql, /depends_on UUID REFERENCES ads_ops\(id\)/);
+        assert.match(sql, /app_meta JSONB NOT NULL DEFAULT '\{\}'/);
+    });
+
+    it('has the unique keys the design relies on: one stored row per Meta object, one result row per day, one alert per kind and object a day', () => {
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_objects_meta ON ads_objects \(creator_id, level, meta_id\) WHERE meta_id IS NOT NULL/);
+        assert.match(sql, /PRIMARY KEY \(creator_id, level, meta_id, day\)/);
+        assert.match(sql, /PRIMARY KEY \(creator_id, level, meta_id, day, breakdown, key\)/);
+        assert.match(sql, /breakdown TEXT NOT NULL CHECK \(breakdown IN \('country', 'placement'\)\)/);
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_alerts_once_a_day ON ads_alerts \(creator_id, kind, object_key, day\)/);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_ads_ops_claim ON ads_ops \(ad_account_id, state, not_before\)/);
+        assert.match(sql, /ad_account_id TEXT PRIMARY KEY/);
+    });
+
+    it('holds one live boost per post and platform in the database, under a NEW index name (IF NOT EXISTS matches names, v15)', () => {
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_boosts_one_live ON ad_boosts \(scheduled_post_id, platform\) WHERE status IN \('creating', 'paused', 'active'\)/);
+        const earlier = allMigrationFiles().filter((f) => f.name !== FILE).map((f) => withoutComments(f.sql)).join('\n');
+        assert.doesNotMatch(earlier, /idx_ad_boosts_one_live/);
+    });
+
+    it('adds tracked_links.ads_object_id as a nullable reference that outlives the stored row', () => {
+        assert.match(sql, /ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS ads_object_id UUID REFERENCES ads_objects\(id\) ON DELETE SET NULL/);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_tracked_links_ads_object ON tracked_links \(ads_object_id\)/);
+    });
+
+    it('keeps ads on for every tenant that already has ads settings, and never overwrites a switch the admin set', () => {
+        assert.match(sql, /INSERT INTO app_settings \(key, value, is_secret\) SELECT 'ads\.enabled\.' \|\| substr\(key, length\('ads\.settings\.'\) \+ 1\), 'true', FALSE FROM app_settings WHERE key LIKE 'ads\.settings\.%' ON CONFLICT \(key\) DO NOTHING/);
+    });
+
+    it('backfills Boost\'s objects as origin boost, idempotently', () => {
+        const inserts = [...sql.matchAll(/INSERT INTO ads_objects[^;]*;/g)].map((m) => m[0]);
+        assert.equal(inserts.length, 4);
+        for (const s of inserts) {
+            assert.match(s, /'boost'/);
+            assert.match(s, /ON CONFLICT \(creator_id, level, meta_id\) WHERE meta_id IS NOT NULL DO NOTHING/);
+        }
+    });
+
+    it('is idempotent: every table and index is IF NOT EXISTS, and nothing is dropped', () => {
+        assert.equal((sql.match(/CREATE TABLE/g) ?? []).length, (sql.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+        assert.doesNotMatch(sql, /\bDROP\b|\bTRUNCATE\b|\bDELETE FROM\b|CONCURRENTLY/i);
+    });
+});
+
+describe('migration v54: ads attribution (conversations.ad_touches, no_reply_reason, the entry ad index)', () => {
+    const FILE = 'migration_v54_ads_attribution.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v52 (v53 belongs to the ads core and may sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+    });
+
+    it('adds ad_touches (JSONB NOT NULL, a constant default) and no_reply_reason (nullable TEXT) to conversations, and nothing else', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]*);/g)].map((m) => [m[1], m[2], m[3]!.trim()]);
+        assert.deepEqual(added, [
+            ['conversations', 'ad_touches', "JSONB NOT NULL DEFAULT '[]'::jsonb"],
+            ['conversations', 'no_reply_reason', 'TEXT'],
+        ]);
+        assert.doesNotMatch(sql, /DEFAULT\s+(now|random|gen_random|uuid|clock|\()/i, 'a volatile default would rewrite the table');
+    });
+
+    it('builds one partial expression index on the rows that carry an ad id, idempotently, and changes no row', () => {
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_conversations_entry_ad ON conversations \(creator_id, \(entry_source->>'ad_id'\)\) WHERE entry_source \? 'ad_id';/);
+        assert.doesNotMatch(sql, /CONCURRENTLY/, 'the runner applies each file inside a transaction, where it is refused');
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b/i, 'it changes no row and removes nothing');
+        assert.doesNotMatch(sql, /CREATE TABLE/i);
+    });
+});
+
+// ─── v55: AI proposals ──────────────────────────────────────────────────────────────────────────
+
+describe('migration v55: ads proposals (ads_proposals, studio_jobs ads_think)', () => {
+    const FILE = 'migration_v55_ads_proposals.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v54, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v54_ads_attribution.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+    });
+
+    it('closes the vocabularies of kind, source and state, keys the table by the tenant and turns row level security on', () => {
+        assert.match(sql, /CREATE TABLE IF NOT EXISTS ads_proposals \(/);
+        assert.match(sql, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/);
+        assert.match(sql, /kind IN \('new_campaign', 'change', 'rule_raise', 'test_winner'\)/);
+        assert.match(sql, /source IN \('request', 'post', 'daily_review', 'rule', 'study'\)/);
+        assert.match(sql, /state IN \('drafting', 'open', 'approved', 'applying', 'applied', 'failed', 'rejected', 'expired'\)/);
+        assert.match(sql, /expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\) \+ INTERVAL '7 days'/);
+        assert.match(sql, /ALTER TABLE ads_proposals ENABLE ROW LEVEL SECURITY;/);
+    });
+
+    it('widens studio_jobs_kind_check with ads_think and keeps every kind v31 allowed', () => {
+        const m = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(m, 'the constraint is re-added');
+        const kinds = [...m[1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]);
+        const v31 = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(withoutComments(readFileSync(path.join(CONFIG_DIR, 'migration_v31_infographics.sql'), 'utf8')).replace(/\s+/g, ' '));
+        const before = [...v31![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]);
+        assert.deepEqual(kinds, [...before, 'ads_think']);
+    });
+
+    it('allows only kinds the queue still knows (v59 widens it again, and the test of the latest widening holds that one to the full list)', async () => {
+        const { STUDIO_JOB_KINDS } = await import('../services/studio/jobs.js');
+        const m = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/.exec(sql);
+        const kinds = [...m![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]!);
+        assert.ok(kinds.length > 0);
+        for (const kind of kinds) assert.ok((STUDIO_JOB_KINDS as readonly string[]).includes(kind), kind);
+    });
+});
+
+// ─── v57: lead ads (locked) ─────────────────────────────────────────────────────────────────────
+
+describe('migration v57: ads lead forms and leads (encrypted answers, retention, erasure keys)', () => {
+    const FILE = 'migration_v57_ads_leads.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v56, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v56_ads_audiences_rules.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+    });
+
+    it('creates both tables idempotently, keyed by the tenant, with row level security on', () => {
+        for (const table of ['ads_lead_forms', 'ads_leads']) {
+            assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`));
+            assert.match(sql, new RegExp(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`));
+        }
+        assert.equal(sql.match(/creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/g)?.length, 2);
+        assert.doesNotMatch(sql, /CREATE TABLE IF NOT EXISTS ads_legal_signoffs/, 'the sign-off table is v56\'s');
+        for (const m of sql.matchAll(/CREATE (UNIQUE )?INDEX (\w+ )*/g)) assert.match(m[0], /IF NOT EXISTS/);
+    });
+
+    it('closes the vocabularies the code relies on', () => {
+        assert.match(sql, /origin IN \('app', 'meta'\)/);
+        assert.match(sql, /status IN \('pending', 'active', 'archived', 'failed'\)/);
+        assert.match(sql, /handed_to TEXT NOT NULL DEFAULT 'none' CHECK \(handed_to IN \('none', 'dm', 'whatsapp'\)\)/);
+        assert.match(sql, /received_via IN \('webhook', 'catchup'\)/);
+    });
+
+    it('stores answers only encrypted, one row per Meta lead, and keeps what retention and erasure need', () => {
+        assert.match(sql, /meta_lead_id TEXT NOT NULL UNIQUE/);
+        assert.match(sql, /answers_enc BYTEA,/);
+        assert.match(sql, /person_keys TEXT\[\] NOT NULL DEFAULT '\{\}'/);
+        assert.match(sql, /retain_until TIMESTAMPTZ NOT NULL/);
+        assert.match(sql, /purged_at TIMESTAMPTZ,/);
+        assert.match(sql, /ON ads_leads \(retain_until\) WHERE purged_at IS NULL/);
+        assert.match(sql, /ON ads_leads USING GIN \(person_keys\)/);
+        assert.match(sql, /form_id UUID REFERENCES ads_lead_forms\(id\) ON DELETE SET NULL/);
+        // No plaintext answer column of any kind.
+        assert.doesNotMatch(sql, /\b(answers|email|phone|full_name) (TEXT|JSONB)/);
+    });
+});
+
+// ─── v58: ads split tests ──────────────────────────────────────────────────────────────────────
+
+describe('migration v58: ads split tests (ads_studies)', () => {
+    const FILE = 'migration_v58_ads_studies.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v52 (v53-v57 are the earlier ads phases and sit between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v52_ad_boosts.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('creates ads_studies only, idempotently, keyed by the tenant with a cascade, and turns row level security on', () => {
+        assert.deepEqual([...sql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]), ['ads_studies']);
+        assert.doesNotMatch(sql, /CREATE TABLE (?!IF NOT EXISTS)/);
+        assert.match(sql, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/);
+        assert.match(sql, /ALTER TABLE ads_studies ENABLE ROW LEVEL SECURITY;/);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+    });
+
+    it('allows exactly the two test types and the six states studies.ts uses', () => {
+        assert.match(sql, /type TEXT NOT NULL CHECK \(type IN \('creative', 'audience'\)\)/);
+        assert.match(sql, /CHECK \(state IN \('creating', 'ready', 'running', 'ended', 'stopped', 'failed'\)\)/);
+    });
+
+    it('changes no existing row and removes nothing', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b|\bALTER TABLE (?!ads_studies)/i);
+    });
+});
+
+// ─── v59: illustrated explainers ───────────────────────────────────────────────────────────────
+
+describe('migration v59: illustrated explainers (explainers, explainer_scenes, image_allowance, studio_jobs.not_before, the explainer kinds, studio_settings.explainer)', () => {
+    const FILE = 'migration_v59_explainers.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    const KIND_CHECK = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/;
+    const kindsIn = (text: string): string[] => [...KIND_CHECK.exec(text)![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]!);
+
+    it('is registered after v58, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v58_ads_studies.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('creates the three tables and no other, idempotently, with row level security on each', () => {
+        assert.deepEqual(createdTables(raw), ['explainers', 'explainer_scenes', 'image_allowance']);
+        assert.doesNotMatch(sql, /CREATE TABLE (?!IF NOT EXISTS)/);
+        for (const table of ['explainers', 'explainer_scenes', 'image_allowance']) {
+            assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`));
+            assert.match(sql, new RegExp(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`));
+        }
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+    });
+
+    it('keys an explainer and each of its scenes by the tenant, and a scene by its explainer, all with a cascade; the allowance belongs to no tenant', () => {
+        assert.equal(sql.match(/creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/g)?.length, 2);
+        assert.match(sql, /explainer_id UUID NOT NULL REFERENCES explainers\(id\) ON DELETE CASCADE/);
+        const allowance = /CREATE TABLE IF NOT EXISTS image_allowance \(([^;]*?)\); ALTER TABLE image_allowance/.exec(sql);
+        assert.ok(allowance, 'the allowance table is found');
+        assert.doesNotMatch(allowance![1]!, /creator_id/);
+        assert.match(allowance![1]!, /PRIMARY KEY \(provider, day\)/);
+        assert.match(allowance![1]!, /day DATE NOT NULL/);
+    });
+
+    it('closes the vocabularies the status machine and the pipeline rely on', () => {
+        assert.match(sql, /status TEXT NOT NULL CHECK \(status IN \('writing', 'draft', 'voicing', 'drawing', 'review', 'rendering', 'ready', 'scheduled', 'failed'\)\)/);
+        assert.match(sql, /failed_step TEXT CHECK \(failed_step IN \('write', 'voice', 'draw', 'render', 'schedule'\)\)/);
+        assert.match(sql, /language TEXT NOT NULL DEFAULT 'ar' CHECK \(language IN \('ar', 'en'\)\)/);
+        assert.match(sql, /length_tier TEXT NOT NULL CHECK \(length_tier IN \('short', 'medium', 'long'\)\)/);
+        assert.match(sql, /sound_mode TEXT NOT NULL CHECK \(sound_mode IN \('music', 'sfx'\)\)/);
+        assert.match(sql, /draw_status TEXT NOT NULL DEFAULT 'pending' CHECK \(draw_status IN \('pending', 'drawing', 'done', 'failed', 'skipped'\)\)/);
+    });
+
+    it('the status vocabulary is the one the state machine uses', async () => {
+        const { EXPLAINER_STATUSES, EXPLAINER_STEPS } = await import('../services/explainers/state.js');
+        const list = (re: RegExp): string[] => [...re.exec(sql)![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]!);
+        assert.deepEqual(list(/status TEXT NOT NULL CHECK \(status IN \(([^)]*)\)\)/), [...EXPLAINER_STATUSES]);
+        assert.deepEqual(list(/failed_step TEXT CHECK \(failed_step IN \(([^)]*)\)\)/), [...EXPLAINER_STEPS]);
+    });
+
+    it('a failure names its step, and only a failure does', () => {
+        assert.match(sql, /CONSTRAINT explainers_failure_names_step_check CHECK \(\(status = 'failed'\) = \(failed_step IS NOT NULL\)\)/);
+        // Postgres names a column's own CHECK <table>_<column>_check, and a second constraint of that name is refused: the one above must not be it.
+        assert.doesNotMatch(sql, /CONSTRAINT explainers_failed_step_check/);
+    });
+
+    it('a scene\'s times are both set or both null, never negative, and end after they start', () => {
+        assert.match(sql, /CONSTRAINT explainer_scenes_times_check CHECK \(\(start_s IS NULL AND end_s IS NULL\) OR \(start_s IS NOT NULL AND end_s IS NOT NULL AND start_s >= 0 AND end_s > start_s\)\)/);
+        assert.match(sql, /start_s NUMERIC,/);
+        assert.match(sql, /end_s NUMERIC,/);
+    });
+
+    it('holds the fields the defaults of the code assume', () => {
+        assert.match(sql, /source_links JSONB NOT NULL DEFAULT '\[\]'::jsonb/);
+        assert.match(sql, /subtitles BOOLEAN NOT NULL DEFAULT TRUE/);
+        assert.match(sql, /draft_version INT NOT NULL DEFAULT 0/);
+        assert.match(sql, /pictures JSONB NOT NULL DEFAULT '\[\]'::jsonb/);
+        assert.match(sql, /continues BOOLEAN NOT NULL DEFAULT FALSE/);
+        assert.match(sql, /draw_attempts INT NOT NULL DEFAULT 0/);
+        assert.match(sql, /draw_paused_until TIMESTAMPTZ,/);
+        assert.match(sql, /units NUMERIC NOT NULL DEFAULT 0/);
+        assert.match(sql, /exhausted_at TIMESTAMPTZ,/);
+    });
+
+    it('indexes the explainers by tenant, newest first, and the scenes by explainer and position', () => {
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_explainers_creator ON explainers \(creator_id, created_at DESC\);/);
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_explainer_scenes_explainer ON explainer_scenes \(explainer_id, position\);/);
+    });
+
+    it('adds not_before to the queue: NOT NULL, defaulting to NOW(), so every job that sets none is claimable at once', () => {
+        assert.match(sql, /ALTER TABLE studio_jobs ADD COLUMN IF NOT EXISTS not_before TIMESTAMPTZ NOT NULL DEFAULT NOW\(\);/);
+    });
+
+    it('widens studio_jobs_kind_check with the four explainer kinds, in order after every kind v55 allowed', () => {
+        assert.ok(KIND_CHECK.test(sql), 'the constraint is re-added');
+        const v55 = kindsIn(withoutComments(readFileSync(path.join(CONFIG_DIR, 'migration_v55_ads_proposals.sql'), 'utf8')).replace(/\s+/g, ' '));
+        assert.deepEqual(kindsIn(sql), [...v55, 'explainer_write', 'explainer_voice', 'explainer_draw', 'explainer_render']);
+        assert.ok(sql.indexOf('DROP CONSTRAINT IF EXISTS studio_jobs_kind_check') < sql.indexOf('ADD CONSTRAINT studio_jobs_kind_check'), 'dropped first, so a re-run is harmless');
+    });
+
+    it('adds the explainer settings section: JSONB, NOT NULL, an empty object until it is saved', () => {
+        assert.match(sql, /ALTER TABLE studio_settings ADD COLUMN IF NOT EXISTS explainer JSONB NOT NULL DEFAULT '\{\}';/);
+    });
+
+    it('touches only the tables it makes, the queue and the settings, changes no existing row and removes nothing but the constraint it re-adds', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b|\bDROP COLUMN\b|CONCURRENTLY/i);
+        assert.equal(sql.match(/\bDROP\b/g)?.length, 1);
+        const altered = new Set([...sql.matchAll(/ALTER TABLE (\w+)/g)].map((m) => m[1]));
+        assert.deepEqual([...altered].sort(), ['explainer_scenes', 'explainers', 'image_allowance', 'studio_jobs', 'studio_settings']);
+    });
+});
+
+// ─── The kind CHECK of the Mac's queue ─────────────────────────────────────────────────────────
+
+describe('studio_jobs_kind_check', () => {
+    it('is last widened by a migration that allows exactly the kinds the queue knows (the latest widening is the one that counts)', async () => {
+        const { STUDIO_JOB_KINDS } = await import('../services/studio/jobs.js');
+        const check = /ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/;
+        const widened = allMigrationFiles()
+            .map((f) => ({ name: f.name, match: check.exec(withoutComments(f.sql).replace(/\s+/g, ' ')) }))
+            .filter((f) => f.match !== null);
+        assert.ok(widened.length >= 5, 'the scan finds the widenings, so an empty answer is not "found nothing"');
+        const latest = widened[widened.length - 1]!;
+        const kinds = [...latest.match![1]!.matchAll(/'(\w+)'/g)].map((k) => k[1]!);
+        assert.deepEqual([...kinds].sort(), [...STUDIO_JOB_KINDS].sort(), `${latest.name} is the latest widening`);
     });
 });

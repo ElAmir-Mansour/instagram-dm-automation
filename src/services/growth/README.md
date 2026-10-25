@@ -91,7 +91,7 @@ Sources:
   - It returns **public** videos only.
   - Fields: `id`, `create_time`, `cover_image_url`, `share_url`, `video_description`, `duration`, `title`, `like_count`, `comment_count`, `share_count`, `view_count`.
   - It has no reach or watch time.
-- The TikTok app requests neither scope. Requesting an unapproved scope fails the whole authorisation (CLAUDE.md, "TikTok"). So `/api/growth/status` says `tiktok: 'unavailable'` and lists them in `tiktokMissing`.
+- The TikTok app requests neither scope. Requesting an unapproved scope fails the whole authorisation (`docs/TIKTOK_GUIDE.md` §2). So `/api/growth/status` says `tiktok: 'unavailable'` and lists them in `tiktokMissing`.
 
 ## 2. Verified against production, v26.0, 2026-09-25 — the sets the sync uses
 
@@ -148,7 +148,7 @@ The coach's system prompt reasons about retention (the 3-second hook) when reach
 
 ## 3. Operator steps
 
-1. **Meta token:** already done on 2026-09-25. Next time, regenerate it by the procedure in `docs/TOKEN_GUIDE.md`, adding `instagram_manage_insights` and `read_insights` to the Graph API Explorer's list. `GET /api/growth/status` confirms them through `debug_token`.
+1. **Meta token:** already done on 2026-09-25. Next time, connect with Facebook from Settings (it asks for both insights scopes), or regenerate it by the procedure in `docs/TOKEN_GUIDE.md`, adding `instagram_manage_insights` and `read_insights` to the Graph API Explorer's list. `GET /api/growth/status` confirms them through `debug_token`.
 2. **Migration:** run `npm run migrate` **before** deploying (v22). Every scheduled-post insert now names `meta_options`.
 3. **Other people's accounts** need Advanced Access (App Review) for both permissions. The one-tenant setup works on Standard Access.
 4. **TikTok analytics:** add `user.info.stats` and `video.list` in the TikTok portal before any code for them is built.

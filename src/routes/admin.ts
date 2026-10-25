@@ -55,6 +55,8 @@ import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
 import { sendError } from '../services/errorCodes.js';
+import { LegalSignoffError, listSignoffs, parseSignoffInput, recordSignoff, revokeSignoff } from '../services/ads/legalSignoff.js';
+import { syncLeadgenSubscription } from '../services/ads/leads.js';
 import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
@@ -68,7 +70,10 @@ import { defaultProfile } from '../services/profile/defaults.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
+import { needsCeiling, parseCeiling, readCeiling, saveCeiling, setAdsEnabled } from '../services/ads/settings.js';
 import { seedApiBrain } from '../services/studio/settings.js';
+import { adminAdsRouter } from './adminAds.js';
+import { adminExplainersRouter } from './adminExplainers.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
 import { profileErrorBody } from './profile.js';
@@ -338,6 +343,10 @@ router.use('/ai', aiRouter);
 
 /** The funnel from invite to a finished setup, for Operations (src/routes/adminOnboarding.ts). Counts and durations only. */
 router.use('/onboarding', onboardingFunnelRouter);
+// The Ads overview (A11). The per-tenant switch, ceiling and sign-off routes below it fall through this router.
+router.use('/ads', adminAdsRouter);
+// Illustrated explainers' image provider, switch and test (v59, E2). Gated again inside.
+router.use('/explainers', adminExplainersRouter);
 
 // ─── Media storage ──────────────────────────────────────────────────────────
 
@@ -1249,6 +1258,94 @@ router.get('/tenants/:id/invites', async (req, res) => {
     }
 });
 
+// ─── Ads legal sign-off (Ads Manager A8, v56) ───────────────────────────────────────────────────────────────────────
+
+/**
+ * The platform admin's record that a legal opinion covers customer lists or lead ads for some countries (Egypt PDPL 151/2020,
+ * Saudi PDPL). Until a non-revoked row exists the tenant's capability stays locked (`services/ads/legalSignoff.ts`). The tenant
+ * is the one in the PATH; the body cannot name another. Audited with the scope, countries and ids, never the note's text.
+ */
+async function adsTenantExists(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
+    return (await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [id])).length > 0;
+}
+
+/** `{ error, code: 'INVALID', field }` for a refused sign-off body. */
+function answerSignoffRefusal(res: Response, err: LegalSignoffError): void {
+    res.status(400).json({ error: err.message, code: err.code, field: err.field });
+}
+
+router.get('/ads/tenants/:id/legal-signoff', async (req, res) => {
+    try {
+        const { id } = req.params as { id: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        res.json({ signoffs: await listSignoffs(id, { includeRevoked: true }) });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_list_failed', 'Failed to list the legal sign-offs.');
+    }
+});
+
+router.post('/ads/tenants/:id/legal-signoff', async (req, res) => {
+    try {
+        const { id } = req.params as { id: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        let input;
+        try {
+            input = parseSignoffInput(req.body);
+        } catch (err) {
+            if (err instanceof LegalSignoffError) {
+                answerSignoffRefusal(res, err);
+                return;
+            }
+            throw err;
+        }
+        const signoff = await recordSignoff(id, input, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, {
+            change: 'recorded', signoff_id: signoff.id, scope: signoff.scope, countries: signoff.countries,
+        });
+        // Lead ads (A10): the Page starts hearing `leadgen` now, not at the next 6-hourly catch-up.
+        if (signoff.scope === 'lead_ads') await syncLeadgenQuietly(id);
+        res.status(201).json({ signoff });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_record_failed', 'Failed to record the legal sign-off.');
+    }
+});
+
+/** `syncLeadgenSubscription`, never failing the admin's request: a Page that cannot be reached converges at the next lead catch-up. */
+async function syncLeadgenQuietly(creatorId: string): Promise<void> {
+    try {
+        await syncLeadgenSubscription(creatorId);
+    } catch (err) {
+        log('warn', 'admin.leadgen_subscription_failed', { creator_id: creatorId, ...describeError(err) });
+    }
+}
+
+router.delete('/ads/tenants/:id/legal-signoff/:sid', async (req, res) => {
+    try {
+        const { id, sid } = req.params as { id: string; sid: string };
+        if (!(await adsTenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        const revoked = await revokeSignoff(id, sid);
+        if (revoked) {
+            await audit(req, AUDIT_ACTIONS.adsLegalSignoff, 'creator', id, { change: 'revoked', signoff_id: sid });
+            // The scope of a revoked row is not at hand, and re-subscribing is idempotent: the Page keeps `leadgen` only while a lead_ads
+            // sign-off is still active, so a lead_ads revocation stops the notifications at once (A10).
+            await syncLeadgenQuietly(id);
+        }
+        res.json({ revoked });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_signoff_revoke_failed', 'Failed to revoke the legal sign-off.');
+    }
+});
+
 // ─── Profile drafts (P24) ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -2116,6 +2213,63 @@ router.get('/audit', async (req, res) => {
         res.json({ limit, ...listing });
     } catch (err) {
         failWith(res, err, 'admin.audit_list_failed', 'Failed to fetch the audit log.');
+    }
+});
+
+
+// ─── Ads Manager: the per-tenant switch and the ceiling (src/services/ads/settings.ts) ──────────────────────────
+
+async function tenantExists(id: string): Promise<boolean> {
+    return (await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [id])).length > 0;
+}
+
+/**
+ * Switch the Ads Manager on or off for a tenant (`ads.enabled.<tenant>`). Off, every /api/ads route answers 404 ADS_DISABLED and the guard
+ * and the health check skip the tenant. A managed client cannot be switched on before it has a ceiling: no client may ever set limits
+ * with nothing above them. The platform owner's own tenant needs none.
+ */
+router.post('/ads/tenants/:id/enabled', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        const enabled = req.body?.enabled;
+        if (typeof enabled !== 'boolean') {
+            res.status(400).json({ error: 'enabled is true or false.', code: 'INVALID', field: 'enabled' });
+            return;
+        }
+        if (enabled && (await needsCeiling(id)) && !(await readCeiling(id))) {
+            res.status(409).json({ error: 'Set this tenant\'s ads ceiling (max daily budget and monthly cap) before switching ads on.', code: 'CEILING_REQUIRED' });
+            return;
+        }
+        await setAdsEnabled(id, enabled, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsEnabledChanged, 'creator', id, { enabled });
+        res.json({ enabled });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_enabled_failed', 'Failed to change the ads switch.');
+    }
+});
+
+/** A tenant's ceiling: the most its owner may set as the max daily budget and the monthly cap. */
+router.post('/ads/tenants/:id/ceiling', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        const ceiling = parseCeiling(req.body);
+        if (!ceiling) {
+            res.status(400).json({ error: 'Give a max daily budget and a monthly cap above 0 (the daily one not above the monthly one).', code: 'INVALID', field: 'maxDailyBudget' });
+            return;
+        }
+        await saveCeiling(id, ceiling, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.adsCeilingChanged, 'creator', id, { ...ceiling });
+        res.json({ ceiling });
+    } catch (err) {
+        failWith(res, err, 'admin.ads_ceiling_failed', 'Failed to save the ads ceiling.');
     }
 });
 

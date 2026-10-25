@@ -87,7 +87,7 @@ const InboxPage = {
     /** The route's own cap. */
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
-    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused']),
+    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']),
     /** What `effective_ai` says (src/services/inboxAssistant.ts: a test fails when these differ). */
     EFFECTIVE_STATES: Object.freeze(['on', 'off_global', 'paused_thread', 'sales_test', 'sales_live']),
     /** The effective state → the state of the `assistant` status pill (components.js). No prototype, so a stranger finds nothing. */
@@ -130,6 +130,8 @@ const InboxPage = {
     /** The text the pipeline stores for a carousel (which has none) and for a story mention. */
     STRUCTURED_PLACEHOLDER: '[Structured Template]',
     STORY_MENTION_PLACEHOLDER: '[Story Mention]',
+    /** What an Instagram voice note is stored as (src/webhook/attachments.ts). A WhatsApp voice note's text is its transcript instead, once it has been transcribed. */
+    VOICE_PLACEHOLDER: '[voice note]',
     /**
      * A message with no words (src/webhook/attachments.ts): the pipeline stores its kind as `message_type` and a placeholder (`[photo]`) as
      * its text. This maps each kind to the chip that names it (`attachmentStyle`), so the chip is the message and the placeholder is never
@@ -666,7 +668,27 @@ const InboxPage = {
         if (this.filter === 'needs_you') return this.needsYou(thread);
         if (this.filter === 'hot') return Attention.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
+        if (this.filter === 'ads') return this.fromAd(thread);
         return true;
+    },
+
+    // ─── Ads → DM attribution (A3) ───────────────────────────────────────────
+    /** The thread began from an ad (click-to-message or click-to-WhatsApp), or a later ad brought the person back: what the Ads filter keeps. */
+    fromAd(thread) {
+        return !!thread && (!!thread.ad || Number(thread.adTouches) > 0);
+    },
+
+    /** "From ad: <name>" on a thread that began from one, "From an ad" when its name is not known; '' for any other. */
+    adBadge(thread) {
+        if (!thread || !thread.ad) return '';
+        const label = thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed');
+        return html`<span class="badge badge-info" data-from-ad><i data-lucide="megaphone" aria-hidden="true"></i><bdi dir="auto">${label}</bdi></span>`;
+    },
+
+    /** Meta Business AI holds the thread, so nothing the bot sends gets through until the owner takes it back. */
+    businessAiBadge(thread) {
+        if (!thread || thread.noReplyReason !== 'business_ai_owns_thread') return '';
+        return html`<span class="badge badge-warning" data-business-ai><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.ad.businessAi')}</span>`;
     },
 
     syncFilterButtons() {
@@ -919,6 +941,8 @@ const InboxPage = {
             <span class="thread-preview" dir="auto">${this.threadPreview(x)}</span>
             <span class="thread-badges">
                 ${this.assistantPill(x)}
+                ${this.businessAiBadge(x)}
+                ${this.adBadge(x)}
                 ${this.stageChip(x.stage)}
                 ${Attention.isHot(x) ? this.hotBadge() : ''}
                 ${this.needsReply(x)
@@ -980,6 +1004,7 @@ const InboxPage = {
         if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
         if (kind === 'hot') return html`<div class="empty-threads" data-empty="hot"><p>${t('inbox.noHot')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
+        if (kind === 'ads') return html`<div class="empty-threads" data-empty="ads"><p>${t('inbox.noAds')}</p>${UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help'))}</div>`;
         return html`
             <div class="empty-threads" data-empty="none">
                 <p>${t('inbox.noThreads')}</p>
@@ -1478,6 +1503,17 @@ const InboxPage = {
             chips.push(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }));
         }
         if (Attention.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
+        // A3: Meta Business AI holds the thread (the bot's sends are refused), and the ad the thread began from, each with where to read more.
+        if (thread.noReplyReason === 'business_ai_owns_thread') {
+            chips.push(this.metaChip(t('inbox.ad.businessAi'), { icon: 'alert-circle', accent: true, note: t('inbox.ad.businessAiNote') }));
+            chips.push(UI.helpLink('ads#business-ai', t('inbox.ad.businessAiHelp')));
+        }
+        if (thread.ad) {
+            chips.push(this.metaChip(thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed'), { icon: 'megaphone' }));
+            chips.push(UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help')));
+        } else if (Number(thread.adTouches) > 0) {
+            chips.push(this.metaChip(t('inbox.ad.returned'), { icon: 'megaphone' }));
+        }
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
         if (this.needsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
         // Marked handled by the owner, and the customer has not written since: why the two chips above are gone.
@@ -1822,6 +1858,7 @@ const InboxPage = {
         const text = typeof msg.text === 'string' ? msg.text : '';
         const structure = this.structuredContent(msg);
         const attachments = isOut ? '' : this.attachmentsMarkup(msg);
+        const transcript = isOut ? '' : this.voiceTranscript(msg);
 
         // A placeholder is not words. "[Structured Template]" is what a carousel is stored as; its cards are the message, and
         // when they cannot be drawn (the stored body is pruned after a while) the bubble says what it was instead.
@@ -1851,6 +1888,7 @@ const InboxPage = {
                     ${note ? html`<p class="msg-note" dir="auto">${note}</p>` : ''}
                     ${structure}
                     ${attachments}
+                    ${transcript ? html`<div class="msg-transcript"><span class="msg-transcript-label">${t('inbox.voiceTranscript')}</span><p class="msg-transcript-text" dir="auto">${transcript}</p></div>` : ''}
                     <span class="message-time">${UI.formatTime(msg.created_at)}</span>
                 </div>
                 ${detail}
@@ -2013,6 +2051,18 @@ const InboxPage = {
         const stored = this.wordlessKind(msg && msg.message_type);
         if (stored && !out.some((a) => a.kind === stored)) out.push({ kind: stored, url: '' });
         return out.slice(0, this.MAX_ATTACHMENTS);
+    },
+
+    /**
+     * What a voice note SAID, for the owner to read under its chip. A WhatsApp voice note is transcribed and the transcript is stored as the inbound row's `text`
+     * (src/webhook/whatsappMediaInput.ts); an Instagram one is stored as the `[voice note]` placeholder and has no words, and one that could not be transcribed has none
+     * either. So: an inbound `audio` row whose text is neither empty nor the placeholder. '' for everything else (a customer's typed `[voice note]` in a text row included).
+     * The caller prints it through `html`, which escapes it like every other message text.
+     */
+    voiceTranscript(msg) {
+        if (!msg || msg.direction !== 'inbound' || msg.message_type !== 'audio') return '';
+        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+        return text && text !== this.VOICE_PLACEHOLDER ? text : '';
     },
 
     /** The chip kind a row's `message_type` stands for when the message had no words, or '' for anything else (text, a tap, a carousel). */

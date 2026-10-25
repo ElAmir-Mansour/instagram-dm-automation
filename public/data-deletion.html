@@ -111,6 +111,19 @@
   PRIVATE_MEDIA_ORPHAN_DAYS, src/services/retention.ts:506; pruneOrphanedPrivateMedia(), :536. Voice notes and files are worded "if a copy
   was kept" because nothing in the pipeline saves or transcribes them yet: see the WhatsApp block in public/privacy.html.
 
+  OWNER ALERTS (added 2026-10-25) — section 5's "Alerts to the operator". When a
+  conversation with the platform owner's own account needs a person, he may be
+  sent an alert by Telegram and/or by email through Resend, carrying the
+  person's @username (or the last four characters of their id) and up to 200
+  characters of their last message: notifyOwner(),
+  src/services/dmSales/handoff.ts:123-218; noticeWho() and buildNoticeText(),
+  src/services/notify.ts:354-371; emailSubject()/emailBody(),
+  src/services/notifyEmail.ts:359-371. /privacy's ledger has the triggers. No
+  copy of an alert is kept in our database (the hourly allowance is a
+  rate_limit_counters row, pruned after 48 h), so the erasure route has nothing
+  of it to delete; the copies in the operator's Telegram chat and mailbox, and
+  Telegram's and Resend's, are beyond it, which is what the bullet says.
+
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
     · Contact email for deletion requests: the contact email in Settings → Public site —
       section 2 (the first route) and section 8, both languages.
@@ -177,7 +190,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.48">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.77">
 
     <style>
         * { box-sizing: border-box; }
@@ -1007,7 +1020,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>حذف بياناتك</h1>
-                <p class="stamp">آخر تحديث: 19 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 أكتوبر 2026</p>
 
                 <p>
                     إن علّقت على منشور، أو أرسلت رسالة خاصة أو رسالة على واتساب، إلى حساب أو رقم يستخدم «أوتوريبلاي برو»،
@@ -1053,6 +1066,11 @@
                         دورتك كما وجدها الاستوديو وملاحظاتها، واللقطات المختارة منها مع صورها المصغّرة،
                         ومسودّات الكاروسيل وشرائحها المُصمَّمة. القسم 7 يشرح ما يُحذف منها ومتى.
                     </li>
+                    <li>
+                        <strong>إن ملأت نموذج جمع عملاء في إعلان</strong> (متاح فقط للنشاط الذي سُجّل له اعتماد قانوني): إجاباتك كما
+                        كتبتها (مثل الاسم ورقم الهاتف والبريد الإلكتروني)، مشفّرة، مع تاريخ الإرسال والنموذج والإعلان، وجوابك عن سؤال
+                        الموافقة على التواصل إن وُجد، ورمز مموّه لبريدك ورقمك يُستخدم فقط للعثور عليها عند طلب الحذف.
+                    </li>
                 </ul>
 
                 <h2>2. كيف تطلب الحذف</h2>
@@ -1068,6 +1086,8 @@
                         اذكر <strong>اسم المستخدم</strong> الذي علّقت أو راسلت منه. هو المفتاح
                         الوحيد الذي يُعرَف به ما هو لك؛ فبدونه لا يمكن تمييز بياناتك عن بيانات غيرك. وعلى واتساب اذكر رقم هاتفك الذي
                         راسلتَ منه، أو اسم المستخدم على واتساب إن كان لك؛ فنبحث بهما يدوياً عن محادثتك.
+                        وإن كان طلبك عن نموذج جمع عملاء، فاذكر <strong>البريد الإلكتروني أو رقم الهاتف</strong> الذي كتبته فيه:
+                        تُحذف إجاباتك كلها.
                     </li>
                     <li>
                         ستصلك رسالة تأكيد، ويُحذف كل ما يتعلّق بك <strong>في غضون 30 يوماً</strong>
@@ -1108,6 +1128,10 @@
                     <li>
                         <strong>سجلّ «رسالة آلية واحدة في اليوم»</strong> — معرّف حسابك ووقت
                         الإرسال — يُحذف بعد 48 ساعة.
+                    </li>
+                    <li>
+                        <strong>إجابات نماذج جمع العملاء</strong> — تُحذف تلقائياً بعد 90 يوماً من إرسالها، أو بعد المدة التي
+                        يختارها صاحب النشاط (من يوم إلى 365 يوماً)، ويبقى بعدها سجلّ للعدد فقط دون أي بيانات عنك.
                     </li>
                     <li>
                         <strong>ملف أُرسل على واتساب وحُفظت منه نسخة لا تشير إليها أي رسالة</strong> يُحذف بعد 30 يوماً من
@@ -1166,10 +1190,11 @@
                         حذفها نيابةً عنك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
                     </li>
                     <li>
-                        <strong>تنبيهات صاحب الحساب:</strong> قد يكون مقتطف من آخر رسالة كتبتَها قد أُرسل إلى بريد صاحب
-                        الحساب عبر <bdi lang="en" dir="ltr">Resend</bdi> أو إلى تيليجرام (القسم 1 من
-                        <a href="/privacy">سياسة الخصوصية</a>). هذه نسخ لا تحتفظ بها قاعدة بياناتنا: هي في بريد صاحب
-                        الحساب أو محادثته على تيليجرام وعند هاتين الجهتين، تخضع لسياستيهما، ولا يمحوها حذف محادثتك.
+                        <strong>تنبيهات المُشغّل:</strong> إن احتاجت محادثةٌ مع حساب مُشغّل الأداة نفسه إلى شخص، فقد يكون تنبيهٌ أُرسل
+                        إليه على تيليجرام و/أو بالبريد الإلكتروني عبر <bdi lang="en" dir="ltr">Resend</bdi> قد ذكر اسم المستخدم الخاص بك
+                        (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها (القسم 3 من
+                        <a href="/privacy">سياسة الخصوصية</a>). تلك النسخ في محادثة تيليجرام وصندوق البريد الخاصّين به، ونسختا تيليجرام
+                        و<bdi lang="en" dir="ltr">Resend</bdi> تخضعان لسياستيهما؛ وحذف بياناتك هنا لا يصل إليها.
                     </li>
                     <li>
                         <strong>سجلّات التشغيل:</strong> تحتوي سجلّات المنصّة المستضيفة على أسماء
@@ -1302,7 +1327,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Deleting your data</h1>
-                <p class="stamp">Last updated: 19 October 2026</p>
+                <p class="stamp">Last updated: 25 October 2026</p>
 
                 <p>
                     If you commented on a post, or sent a direct message or a WhatsApp message, to an
@@ -1355,6 +1380,12 @@
                         out of them with their thumbnails, and your carousel drafts and their
                         rendered slides. Section 7 explains what is deleted, and when.
                     </li>
+                    <li>
+                        <strong>If you filled in a lead form in an ad</strong> (only for a business with a recorded legal
+                        sign-off): your answers as you typed them (such as your name, phone number and email), encrypted, with
+                        the date, the form and the ad, your answer to the contact-consent question if there was one, and a
+                        scrambled code of your email and number used only to find them when you ask for deletion.
+                    </li>
                 </ul>
 
                 <h2>2. How to request deletion</h2>
@@ -1370,7 +1401,9 @@
                         Include the <strong>username</strong> you commented or messaged from. It
                         is the only key by which your records can be identified; without it
                         yours cannot be told apart from anyone else's. On WhatsApp, give the phone number you wrote from, or your WhatsApp
-                        username if you have one; the person handling the request looks your conversation up from it by hand.
+                        username if you have one; the person handling the request looks your conversation up from it by hand. If your request is about a
+                        lead form, give the <strong>email or phone number</strong> you typed in it: all
+                        your answers are deleted.
                     </li>
                     <li>
                         You will get a confirmation, and everything relating to you is deleted
@@ -1415,6 +1448,10 @@
                     <li>
                         <strong>The one-automated-DM-per-day log</strong> — your account ID and a
                         timestamp — is deleted after 48 hours.
+                    </li>
+                    <li>
+                        <strong>Lead-form answers</strong> — deleted automatically 90 days after they were sent, or after the
+                        period the business owner chooses (1 to 365 days); a count-only record then stays with no data about you.
                     </li>
                     <li>
                         <strong>A file sent on WhatsApp</strong>, if a copy of it was kept and no message points to it, is
@@ -1476,11 +1513,12 @@
                         <a href="/privacy">privacy policy</a>.
                     </li>
                     <li>
-                        <strong>Alerts to the account owner:</strong> an excerpt of the last thing you wrote may have been
-                        sent to the account owner's email through Resend, or to Telegram (section 1 of the
-                        <a href="/privacy">privacy policy</a>). Those copies are not held in our database: they sit in the
-                        owner's mailbox or Telegram chat and at those two services, under their policies, and deleting
-                        your conversation does not remove them.
+                        <strong>Alerts to the operator:</strong> if a conversation with the operator's own account needed a
+                        person, an alert sent to him by Telegram and/or by email through Resend may have carried your
+                        username (or the last four characters of your account ID) and up to 200 characters of your last
+                        message (section 3 of the <a href="/privacy">privacy policy</a>). Those copies are in his Telegram
+                        chat and mailbox, and Telegram's and Resend's copies are governed by their own policies; deleting
+                        your data here does not reach them.
                     </li>
                     <li>
                         <strong>Operational logs:</strong> the hosting platform's logs contain

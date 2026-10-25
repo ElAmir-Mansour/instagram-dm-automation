@@ -23,11 +23,19 @@
  */
 import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel, ExampleCarousel } from '../services/studio/carouselTypes.js';
-import type { InfographicConfig, InfographicSocial, InfographicTheme, MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
+import type { DraftFinding } from '../services/explainers/spec.js';
+import type {
+    ExplainerConfig, ExplainerLanguage, ExplainerLengthTier, ExplainerSoundMode, ExplainerWriter, InfographicConfig, InfographicSocial, InfographicTheme,
+    MonteurConfig, MonteurStyle,
+} from '../services/studio/settingsTypes.js';
 
 export type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 
 export type { MonteurConfig, MonteurPlatform } from '../services/studio/settingsTypes.js';
+
+export type {
+    ExplainerCharacter, ExplainerConfig, ExplainerLanguage, ExplainerLengthTier, ExplainerSoundMode, ExplainerTrack, ExplainerWriter,
+} from '../services/studio/settingsTypes.js';
 
 /** Postgres `TIMESTAMP WITH TIME ZONE` arrives as a Date through `pg`'s default parser. */
 export type Timestamptz = Date;
@@ -181,18 +189,51 @@ export interface ConversationRow {
     entry_source?: ConversationEntrySource | null;
     /** v50. WhatsApp: the end of the click-to-WhatsApp free-entry window, or NULL. With `last_inbound_at` it decides whether a free-form reply may go out. */
     free_window_expires_at?: Timestamptz | null;
+    /** v54. Later Meta ad referrals on a conversation whose `entry_source` is already set, newest first, at most 10 (`src/services/ads/attribution.ts`). */
+    ad_touches?: AdTouch[];
+    /** v54. Why the bot cannot answer this conversation at all, or NULL. See `ConversationNoReplyReason`. */
+    no_reply_reason?: ConversationNoReplyReason | null;
+}
+
+/** v54. `conversations.no_reply_reason`: Meta Business AI holds the thread (send error 100/2534037), so the bot's sends are refused until the owner takes it back. */
+export type ConversationNoReplyReason = 'business_ai_owns_thread';
+
+/** v54. One later ad referral, in `conversations.ad_touches`. */
+export interface AdTouch {
+    ad_id: string | null;
+    ref: string | null;
+    platform: 'instagram' | 'messenger';
+    at: string;
 }
 
 /**
- * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried, `ad_id`, `ctwa_clid` and `headline`
- * come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601).
+ * v54. What Meta's click-to-message referral carries about the ad (`referral.ads_context_data`), as Meta sent it: the ad's title and its media links.
+ * Stored on the conversation (privacy.html says so); never shown to the model unless `ads.bot_context` is on.
+ */
+export interface AdsContextData {
+    ad_title?: string;
+    photo_url?: string;
+    video_url?: string;
+    post_id?: string;
+}
+
+/**
+ * v50. What `conversations.entry_source` holds: how a thread began. `ref` is the short code a link or QR carried (and `label` the owner's name for
+ * that link, copied when the thread began: a link renamed or deleted later does not rewrite how an old thread began), `ad_id`, `ctwa_clid` and
+ * `headline` come from a click-to-WhatsApp referral, and `at` is when the first inbound arrived (ISO 8601). A QR code and a short link are both `link`.
+ * v54: `ctm` is a click-to-message ad on Instagram Direct or Messenger (`ad_id`, our own `ref` when the app made the ad, `platform`, `ads_context_data`).
  */
 export interface ConversationEntrySource {
-    kind: 'link' | 'qr' | 'ctwa' | 'ig_bridge' | 'ice_breaker' | 'organic';
+    kind: 'link' | 'qr' | 'ctwa' | 'ctm' | 'ig_bridge' | 'ice_breaker' | 'organic';
     ref?: string;
+    label?: string;
     ad_id?: string;
     ctwa_clid?: string;
     headline?: string;
+    /** v54, `ctm` only: which network's click-to-message ad (Instagram Direct or Messenger). */
+    platform?: 'instagram' | 'messenger';
+    /** v54, `ctm` only: the ad's title and media links Meta sent with the referral. */
+    ads_context_data?: AdsContextData;
     at: string;
 }
 
@@ -705,7 +746,15 @@ export type StudioJobKind =
     /** Claude on the Mac (v28, MONTEUR.md §6.3). */
     | 'monteur_think'
     /** v31: an infographic, written by Claude when the payload asks, then rendered. */
-    | 'render_infographic';
+    | 'render_infographic'
+    /** v55: an ad proposal drafted by Claude on the owner's Mac (Ads A7, src/services/ads/proposals/service.ts). */
+    | 'ads_think'
+    /**
+     * v59, illustrated explainers (src/services/explainers/): the script written by Claude on the Mac (`explainer_write`, the only one that is
+     * Claude's work), the narration voiced and timed (`explainer_voice`), the scenes drawn by looping on the server (`explainer_draw`), and the
+     * two videos and the cover rendered (`explainer_render`). Payloads and results: contracts/worker-jobs.md.
+     */
+    | 'explainer_write' | 'explainer_voice' | 'explainer_draw' | 'explainer_render';
 export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
 
 export interface ScanLibraryPayload { root: string }
@@ -730,10 +779,16 @@ export interface StudioJobRow {
     kind: StudioJobKind;
     payload:
         | ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload
-        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload
-        | RenderInfographicPayload;
+        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload | AdsThinkPayload
+        | RenderInfographicPayload
+        | ExplainerWritePayload | ExplainerVoicePayload | ExplainerDrawPayload | ExplainerRenderPayload;
     status: StudioJobStatus;
     progress: string | null;
+    /**
+     * v59. A pending job is claimable only once this has passed (default: the moment it was queued, so every other kind is unaffected). A
+     * paused drawing queues its next `explainer_draw` for the hour the provider's allowance resets.
+     */
+    not_before: Timestamptz;
     claimed_at: Timestamptz | null;
     /** Moved by every progress call. A claim older than 15 minutes by this is claimable again. */
     heartbeat_at: Timestamptz | null;
@@ -824,6 +879,8 @@ export interface StudioSettings {
     monteur: MonteurConfig;
     /** v31. The brand an infographic is drawn in, and where Schedule posts it. */
     infographic: InfographicConfig;
+    /** v59. The look and sound of illustrated explainers: style, characters, voices, writer, music library (src/services/explainers/). */
+    explainer: ExplainerConfig;
 }
 
 export interface StudioSettingsRow extends StudioSettings {
@@ -1091,6 +1148,24 @@ export interface MonteurThinkPayload {
     retired?: true;
 }
 
+/**
+ * An `ads_think` (v55, Ads A7): Claude on the owner's Mac drafts an ad proposal. The worker (aicourse-captions
+ * scripts/studio/adsThinkJob.mjs) answers it exactly as it answers a `monteur_think`, with a `MonteurThinkResult`.
+ * Aggregates only: `user` is the proposal input (src/services/ads/proposals/input.ts), never customer data.
+ */
+export interface AdsThinkPayload {
+    proposalId: string;
+    /** 1, or 2 after the one regeneration the checks allow. */
+    attempt: number;
+    task: 'draft_campaign' | 'review';
+    purpose: 'ads_draft' | 'ads_review';
+    model: string;
+    system: string;
+    user: string;
+    /** JSON Schema (contracts/ai-proposal.schema.md). */
+    schema: Record<string, unknown>;
+}
+
 /** What the worker sends back for a `monteur_think`, as `completeJob` stores it. */
 export interface MonteurThinkResult {
     /** Claude's `structured_output`, or its `result` text when there was none. */
@@ -1321,6 +1396,245 @@ export interface RenderInfographicPayload {
     };
     spec?: unknown;
     write?: { model: string; purpose: string; system: string; user: string; schema: Record<string, unknown> };
+}
+
+// ── Illustrated explainers (v59, src/services/explainers/) ──
+
+export type ExplainerStatus = 'writing' | 'draft' | 'voicing' | 'drawing' | 'review' | 'rendering' | 'ready' | 'scheduled' | 'failed';
+/** What `failed_step` records: the step that failed, and so the state a retry goes back to (state.ts `RETRY_STATUS`). */
+export type ExplainerStep = 'write' | 'voice' | 'draw' | 'render' | 'schedule';
+export type ExplainerDrawStatus = 'pending' | 'drawing' | 'done' | 'failed' | 'skipped';
+
+export interface ExplainerSource { title: string; by: string; year: string; url: string }
+export interface ExplainerReply { q: string; a: string }
+
+/** What the draft is made of besides its scenes (which are rows of their own). */
+export interface ExplainerDraft {
+    /** Who wrote it: Claude on the Mac, or Gemini on the server. Absent on a draft that predates the setting. */
+    writer?: ExplainerWriter;
+    captions: { meta: string; youtube: { title: string; description: string }; tiktok: string };
+    /** Lists the sources. */
+    first_comment: string;
+    /** Likely objections, each with an answer. */
+    replies: ExplainerReply[];
+    sources: ExplainerSource[];
+    /** The spoken words ÷ the narrator's pace (spec.ts `estimateSeconds`). */
+    est_seconds: number;
+    /** What the checks found that the owner may still approve over: scene count, length, sources (spec.ts `checkDraft`). */
+    warnings: DraftFinding[];
+}
+
+/** One picture of a scene: `url` is `/api/uploads/<media_id>` on our own address. */
+export interface ExplainerPicture {
+    media_id: string;
+    url: string;
+    seed: number;
+    provider: string;
+    model: string;
+    prompt_hash: string;
+    at: string;
+}
+
+/** `version` is the `draft_version` the narration had when it was voiced: another number means the audio is out of date. */
+export interface ExplainerAudio {
+    url: string;
+    media_id: string;
+    duration: number;
+    voice: string;
+    version: number;
+    words_version: number;
+    /** Some scene could not be aligned to the audio: its times were spread by word count, and the owner is asked to check them. */
+    fallback: boolean;
+}
+
+/** The words of each scene with their times, for subtitles: `{ "<position>": [[start, end, "word"], …] }`. */
+export type ExplainerWords = Record<string, [number, number, string][]>;
+
+export interface ExplainerRender {
+    vertical_url: string;
+    horizontal_url: string;
+    cover_url: string;
+    duration: number;
+    sound_mode: ExplainerSoundMode;
+    version: number;
+    job_id: string;
+}
+
+export interface ExplainerSchedule {
+    scheduled_time: string;
+    group_id: string;
+    row_ids: string[];
+}
+
+export interface ExplainerRow {
+    id: string;
+    creator_id: string;
+    status: ExplainerStatus;
+    /** The step that failed, while `status` is `failed`: what Retry runs again. */
+    failed_step: ExplainerStep | null;
+    /** The reason of the last failure or pause, in words the owner reads. */
+    error: string | null;
+    topic: string;
+    language: ExplainerLanguage;
+    length_tier: ExplainerLengthTier;
+    sound_mode: ExplainerSoundMode;
+    /** A track's key in `studio_settings.explainer.music`. Needed before a render when `sound_mode` is `music`. */
+    music_track_id: string | null;
+    subtitles: boolean;
+    notes: string | null;
+    source_links: { url: string }[];
+    title: string | null;
+    draft: ExplainerDraft | null;
+    /** +1 on every writer result and every save of narration: audio made at an older number is out of date (`audio.version`). */
+    draft_version: number;
+    rewrite_note: string | null;
+    audio: ExplainerAudio | null;
+    words: ExplainerWords | null;
+    render: ExplainerRender | null;
+    schedule: ExplainerSchedule | null;
+    /** The studio job working on it now: the result of any other job is dropped, as an infographic's is. */
+    job_id: string | null;
+    /** Set while drawing waits for the image provider's allowance to reset. */
+    draw_paused_until: Timestamptz | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export interface ExplainerSceneRow {
+    id: string;
+    explainer_id: string;
+    /** The explainer's tenant: every query names it. */
+    creator_id: string;
+    /** 0-based; renumbered when the owner saves the list. */
+    position: number;
+    /** The sentence as shown on screen. */
+    narration: string;
+    /** What the narrator says: English terms spelled the way an Arabic voice says them. */
+    spoken: string;
+    /** At most 4 words or a number; empty for none. Drawn by the renderer, never by the image model. */
+    label: string;
+    /** English, for the image model. */
+    brief: string;
+    /** Keys of `studio_settings.explainer.characters`. */
+    characters: string[];
+    /** Keeps the previous scene's picture. */
+    continues: boolean;
+    /** NUMERIC: select it as `start_s::float8` or `pg` hands back a string. Null until the narration is voiced. */
+    start_s: number | null;
+    /** NUMERIC: select it as `end_s::float8`. */
+    end_s: number | null;
+    picture: ExplainerPicture | null;
+    /** The last three pictures, newest first: what a redraw can go back to. */
+    pictures: ExplainerPicture[];
+    draw_status: ExplainerDrawStatus;
+    draw_error: string | null;
+    draw_note: string | null;
+    draw_attempts: number;
+    updated_at: Timestamptz;
+}
+
+/** What the image provider's free allowance has been used for, per provider and UTC day. Platform-wide: the provider account is the owner's. */
+export interface ImageAllowanceRow {
+    provider: string;
+    /** A DATE: select it as `day::text`, or `pg` turns it into a Date at local midnight. */
+    day: string;
+    /** NUMERIC: select it as `units::float8`. Estimated, not billed. */
+    units: number;
+    pictures: number;
+    /** When the provider said the free allocation was used up. */
+    exhausted_at: Timestamptz | null;
+}
+
+/**
+ * `explainer_write`: Claude on the owner's Mac researches (web search and fetch only) and writes the script. The app builds `write`
+ * (prompts and schema); the worker answers with `ExplainerWriteResult`.
+ */
+export interface ExplainerWritePayload {
+    explainer_id: string;
+    language: ExplainerLanguage;
+    length_tier: ExplainerLengthTier;
+    topic: string;
+    notes: string | null;
+    source_links: string[];
+    rewrite_note?: string;
+    previous_draft?: unknown;
+    characters: { key: string; name: string; description: string }[];
+    style: string;
+    bounds: { scenes_min: number; scenes_max: number; seconds_min: number; seconds_max: number; pace: number };
+    write: { model: string; system: string; user: string; schema: Record<string, unknown> };
+}
+
+/** What the writer answers (contracts/writer-output.schema.json): the draft before it is split into rows. */
+export interface ExplainerWriterOutput {
+    title: string;
+    scenes: { narration: string; spoken: string; label: string; brief: string; characters: string[]; continues: boolean; source_ids: number[] }[];
+    captions: { meta: string; youtube: { title: string; description: string }; tiktok: string };
+    first_comment: string;
+    replies: ExplainerReply[];
+    sources: ExplainerSource[];
+}
+
+export interface ExplainerWriteResult {
+    written: ExplainerWriterOutput;
+    model: string;
+    usage?: unknown;
+    /**
+     * How many rounds of web reading the Mac's writer did: 0 means it wrote from memory, with no page read. Absent means unknown, which is NOT 0
+     * (an older worker does not send it, and the server's Gemini writer has grounding instead). The app flags a 0 as `research_limited`.
+     */
+    research_rounds?: number;
+}
+
+/** `explainer_voice`: the narration voiced and timed. `version` is the `draft_version` it was asked for: a result for another is stale. */
+export interface ExplainerVoicePayload {
+    explainer_id: string;
+    version: number;
+    language: ExplainerLanguage;
+    voice: string;
+    style: string;
+    scenes: { position: number; spoken: string }[];
+    chunk_seconds_max: number;
+}
+
+export interface ExplainerVoiceResult {
+    audio: { url: string; duration: number; voice: string; fallback: boolean };
+    version: number;
+    scenes: { position: number; start: number; end: number }[];
+    words: ExplainerWords;
+}
+
+/** `explainer_draw`: the worker loops on the server's `draw-next` route until nothing is pending, the allowance is spent, or scenes keep failing. */
+export interface ExplainerDrawPayload {
+    explainer_id: string;
+}
+
+export type ExplainerDrawResult = { state: 'done' } | { state: 'paused'; until: string } | { state: 'failed' };
+
+/** `explainer_render`: the two videos and the cover, from the pictures, the audio and the chosen sound. */
+export interface ExplainerRenderPayload {
+    explainer_id: string;
+    version: number;
+    title: string;
+    language: ExplainerLanguage;
+    subtitles: boolean;
+    sound_mode: ExplainerSoundMode;
+    music?: { url: string; credit_required: boolean };
+    sfx: boolean;
+    audio: { url: string; duration: number };
+    scenes: { position: number; start: number; end: number; label: string; picture_url: string }[];
+    words: ExplainerWords;
+    brand: { name: string; handle: string; site: string; photo_url?: string };
+    title_color: string;
+    formats: ('vertical' | 'horizontal')[];
+}
+
+export interface ExplainerRenderResult {
+    vertical_url: string;
+    horizontal_url: string;
+    cover_url: string;
+    duration: number;
+    version: number;
+    sound_mode: ExplainerSoundMode;
 }
 
 // ── Creator Profile (v33, src/services/profile/) ──

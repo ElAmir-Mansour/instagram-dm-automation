@@ -305,10 +305,14 @@ bdi { unicode-bidi: isolate; }
     transition: transform var(--motion-slow) var(--ease-standard);
 }
 .sidebar-header {
-    padding: var(--space-5) var(--space-4);
+    /* As tall as the page header, so the two bottom borders are one line; the brand link keeps its 44px target inside it. */
+    min-block-size: var(--header-height);
+    padding-inline: var(--space-4);
+    display: flex; align-items: center;
     border-block-end: 1px solid var(--border-subtle);
 }
-.sidebar-logo { display: flex; align-items: center; gap: var(--space-3); }
+/* The way home (SH-27): a link that looks like the brand it always was. No rule here may touch the mark's paint (design-md.test.ts). */
+.sidebar-logo { display: flex; align-items: center; gap: var(--space-3); color: inherit; text-decoration: none; min-block-size: var(--tap-target); }
 .logo-mark {
     /* Kufi «رد» (DESIGN.md section 4). 32px, not 38: the master's every edge lands on a whole pixel at 32 and
        between pixels at 38. The rounded tile is the SVG's own (2 modules), so this box has no radius and no
@@ -325,7 +329,7 @@ bdi { unicode-bidi: isolate; }
 
 .sidebar-nav {
     flex: 1;
-    padding: var(--space-3) var(--space-2);
+    padding: var(--space-2);
     display: flex; flex-direction: column; gap: 2px;
     overflow-y: auto;
     /* Containing block for the indicator below. */
@@ -353,12 +357,13 @@ bdi { unicode-bidi: isolate; }
     opacity: 0;
     pointer-events: none;
     z-index: 0;
-    view-transition-name: nav-active;
     transition: transform var(--motion-base) var(--ease-standard),
                 block-size var(--motion-base) var(--ease-standard),
                 opacity var(--motion-fast) var(--ease-standard);
 }
-.nav-indicator.is-visible { opacity: 1; }
+.nav-indicator.is-visible { opacity: 1; view-transition-name: nav-active; }
+/* The second marker is over the foot (Settings, Help), which is not inside the padded list: it spans the foot's own box. */
+.nav-indicator--foot { inset-inline: 0; }
 /* First placement, and re-measurements after a resize or a font load: there is
    no previous position to travel from, so do not travel. */
 .nav-indicator.no-transition { transition: none; }
@@ -391,8 +396,34 @@ bdi { unicode-bidi: isolate; }
 .nav-item.active:hover { background: transparent; }
 
 .sidebar-footer { padding: var(--space-2); border-block-start: 1px solid var(--border-subtle); }
+.sidebar-foot-nav { position: relative; }
 .nav-logout { width: 100%; }
 .nav-logout:hover { color: var(--danger-text); background: var(--danger-soft); }
+/* The account area (SH-27): who is signed in, then your own password and sign-out. */
+.nav-account {
+    margin-block-start: var(--space-1); padding-block-start: var(--space-1);
+    border-block-start: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column; gap: 2px;
+}
+.nav-account .nav-item { inline-size: 100%; }
+.nav-identity {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    min-inline-size: 0;
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+}
+.nav-identity[hidden] { display: none; }
+.nav-identity [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; }
+/* One line, cut at its end: an address is read from its start, and the full one is the line's title. */
+.nav-identity-text { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A short window (a laptop with a toolbar, a phone on its side): the whole sidebar scrolls, so the foot is reachable instead of squeezing the
+   list to a few rows. */
+@media (max-height: 700px) {
+    .sidebar { overflow-y: auto; }
+    .sidebar-nav { flex: none; overflow-y: visible; }
+}
 
 .main-content {
     flex: 1;
@@ -1388,6 +1419,50 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .login-keep { align-items: center; }
 /* An invite link hides the login card from the first frame (index.html's head script); App.showLogin() lifts the attribute. */
 html[data-invite] #login-screen { display: none; }
+/* A stored session (SH-03): the head script sets data-session, the password form is not shown, and the shell's own shape stands in for
+   the app until App has the answer of /auth/me and lifts the attribute (App.settleFirstFrame). Static, with nothing to focus or read.
+   data-gated is a tenant that will be sent to the setup wizard, which has no sidebar to flash. */
+html[data-session] #login-screen { display: none; }
+.shell-skeleton { display: none; }
+html[data-session] .shell-skeleton { display: block; min-block-size: 100vh; min-block-size: 100dvh; background: var(--surface-page); }
+.shell-skeleton-side {
+    position: fixed; inset-block: 0; inset-inline-start: 0;
+    inline-size: var(--sidebar-width);
+    background: var(--surface-chrome);
+    border-inline-end: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column;
+}
+.shell-skeleton-brand {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-5) var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.shell-skeleton-rows { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-3); }
+.shell-skel-mark { inline-size: 32px; block-size: 32px; border-radius: var(--radius-sm); flex-shrink: 0; }
+.shell-skel-line { block-size: var(--space-3); border-radius: var(--radius-xs); }
+.shell-skel-row { block-size: var(--tap-target); border-radius: var(--radius-sm); }
+.shell-skel-w-xs { inline-size: 24%; }
+.shell-skel-w-md { inline-size: 55%; }
+.shell-skeleton-main { margin-inline-start: var(--sidebar-width); min-inline-size: 0; }
+.shell-skeleton-header {
+    min-block-size: var(--header-height);
+    padding-inline: var(--space-6);
+    display: flex; align-items: center;
+    background: var(--surface-chrome);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.shell-skeleton-header .shell-skel-line { max-inline-size: 280px; }
+.shell-skeleton-page { padding: var(--space-6); display: grid; gap: var(--space-4); }
+.shell-skel-card { display: block; block-size: 120px; border-radius: var(--radius-md); }
+.shell-skel-tall { block-size: 260px; }
+html[data-gated] .shell-skeleton-side { display: none; }
+html[data-gated] .shell-skeleton-main { margin-inline-start: 0; }
+@media (max-width: 860px) {
+    .shell-skeleton-side { display: none; }
+    .shell-skeleton-main { margin-inline-start: 0; }
+    .shell-skeleton-header { padding-inline: var(--space-4); }
+    .shell-skeleton-page { padding: var(--space-4); }
+}
 #login-email-group.hidden ~ .login-keep,
 #login-email-group.hidden ~ .login-use-password { display: none; }
 
@@ -2983,14 +3058,41 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 }
 .erasure-sample li { overflow-wrap: anywhere; }
 
-/* ─── Sidebar group label ───────────────────────────────────────────────── */
+/* ─── Sidebar groups (UX overhaul US6) ──────────────────────────────────────
+   Each group is a heading and a list the heading names (`aria-labelledby`). The heading is a plain label, never letter-spaced small caps. */
+.nav-group { display: flex; flex-direction: column; }
 .nav-group-label {
     display: block;
-    padding: var(--space-4) var(--space-4) var(--space-2);
+    padding: var(--space-2) var(--space-3) var(--space-1);
     font-size: var(--fs-100);
     font-weight: var(--fw-semibold);
     color: var(--text-muted);
 }
+.nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav-list[hidden] { display: none; }
+
+/* Administration: ONE collapsible group, a heading that is a real button. The dot says the platform has a problem and is there only then. */
+.nav-group--admin { margin-block-start: var(--space-1); padding-block-start: var(--space-1); border-block-start: 1px solid var(--border-subtle); }
+.nav-group-toggle {
+    display: flex; align-items: center; gap: var(--space-2);
+    inline-size: 100%; min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+    text-align: start;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.nav-group-toggle:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
+/* A chevron down is the same in both directions (check-rtl-icons); open, it points up. */
+.nav-group-toggle [data-lucide] {
+    inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0;
+    margin-inline-start: auto;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+.nav-group-toggle[aria-expanded='true'] [data-lucide] { transform: rotate(180deg); }
+.nav-dot { inline-size: var(--space-2); block-size: var(--space-2); flex-shrink: 0; border-radius: var(--radius-pill); background: var(--danger); }
+.nav-dot[hidden] { display: none; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Responsive.  Every screen has to work at 375px.
@@ -3024,7 +3126,10 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
         box-shadow: var(--elev-3);
     }
     html[dir='rtl'] .sidebar { transform: translateX(100%); }
-    .sidebar.open { transform: none; }
+    /* The RTL selector above is more specific than `.sidebar.open` alone, so in Arabic the open drawer stayed off-screen: the open
+       state has to be as specific as the closed one it undoes. */
+    .sidebar.open,
+    html[dir='rtl'] .sidebar.open { transform: none; }
     /* Just below the drawer, above page content. Created and toggled by app.js —
        the drawer had no scrim, no Escape-to-close and no click-outside-to-close, unlike
        every other overlay in the app (the modal already has all three). */
@@ -3374,6 +3479,18 @@ html[lang='en'] .page-toolbar-count {
 @media (max-width: 560px) {
     .chart-line-y, .chart-line-svg { block-size: 132px; }
     .chart-line-x > span.is-minor { visibility: hidden; }
+}
+
+/* Compared magnitudes (Charts.compareBars): a label, a thin bar that grows from the reading edge, and the value in text ink. One hue;
+   the bar's track is the grid colour. On a phone the label takes its own line so a long ad name never squeezes the bar. */
+.chart-bars { display: flex; flex-direction: column; gap: var(--space-2); padding-block: var(--space-2); }
+.chart-bars-row { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+.chart-bars-label { color: var(--text-default); font-size: var(--fs-200); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-bars-svg { display: block; inline-size: 100%; block-size: 8px; }
+.chart-bars-value { color: var(--text-strong); font-variant-numeric: tabular-nums; font-size: var(--fs-200); white-space: nowrap; }
+@media (max-width: 560px) {
+    .chart-bars-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .chart-bars-label { grid-column: 1 / -1; }
 }
 
 /* ─── Shared patterns (UX audit VS15) ───────────────────────────────────────
@@ -4154,7 +4271,9 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     .slide-card-actions { inline-size: 100%; }
     .shot-field { flex-direction: column; }
     .shot-thumb { inline-size: 100%; }
-    .studio-tabs { inline-size: 100%; }
+    /* Five tabs no longer fit one row on a phone: they wrap onto a second row, each stretching to fill it, so none is clipped off the edge. */
+    .studio-tabs { inline-size: 100%; flex-wrap: wrap; }
+    .studio-tabs .btn { flex: 1 1 auto; justify-content: center; }
     .studio-step-label { display: none; }
     .studio-step.is-current .studio-step-label { display: inline; }
     .studio-lessons { max-block-size: 18rem; }
@@ -4507,6 +4626,9 @@ mark.help-hit {
 /* ─── Trend ─────────────────────────────────────────────────────────────── */
 .growth-trend-head { flex-wrap: wrap; }
 .growth-trend-summary { margin: 0 0 var(--space-2); }
+/* The ads' own card (A6), under the organic summary: a separate chart, never a second axis on the organic one. */
+.growth-paid { margin-block-start: var(--space-4); }
+.growth-paid .form-hint { margin: var(--space-2) 0 0; }
 
 /* ─── Sections with a heading, a line and an action ─────────────────────── */
 .growth-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-4); }
@@ -4856,13 +4978,14 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .text-meta.text-danger, .stat-sub.text-danger { color: var(--danger-text); }
 .stat-sub.text-success { color: var(--success-text); }
 
-/* SH3: the waiting count on the Inbox nav item. Data, not decoration: hidden at zero. */
+/* SH3: the waiting count on the Inbox nav item. Data, not decoration: hidden at zero. "Three people are waiting" is work, not a failure
+   (SH-31): the accent fill, which also stays visible over the active row's accent-soft marker. Red (`.nav-dot`) is for what broke. */
 .nav-count {
     margin-inline-start: auto;
     min-inline-size: 22px; block-size: 22px; padding-inline: var(--space-2);
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: var(--radius-pill);
-    background: var(--danger-soft); color: var(--danger-text);
+    background: var(--accent); color: var(--text-on-accent);
     font-size: var(--fs-100); font-weight: var(--fw-semibold);
     font-variant-numeric: tabular-nums;
 }
@@ -5227,6 +5350,15 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
     color: var(--accent-text);
 }
 
+/* What a voice note said (WhatsApp transcribes it), under its chip: a small label, then the words as in any other bubble. */
+.msg-transcript {
+    display: flex; flex-direction: column; gap: var(--space-1);
+    margin-block-start: var(--space-2); padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+}
+.msg-transcript-label { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); }
+.msg-transcript-text { margin: 0; overflow-wrap: anywhere; }
+
 /* A carousel button's destination, under its picture: a link out as a real (44px) link, a postback as the payload it sends back. */
 .carousel-btn-wrap { display: flex; flex-direction: column; }
 .carousel-btn-url {
@@ -5585,6 +5717,8 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 }
 /* Navigation: it changes the URL, so it reads as a place you are. */
 .ui-tabs--link { gap: var(--space-2); border-block-end: 1px solid var(--border-subtle); }
+/* The Results view strip (`UI.resultsTabs`), at the top of the numbers and the log. */
+.page-tabs { margin-block-end: var(--space-4); }
 .ui-tabs--link .ui-tab {
     border-block-end: 2px solid transparent;
     margin-block-end: -1px;
@@ -5665,3 +5799,63 @@ ul.log-cards { list-style: none; }
 .ui-card-fields { display: grid; gap: var(--space-2); margin: 0; }
 .ui-card-field { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
 .ui-card-field dd { margin: 0; min-inline-size: 0; text-align: end; overflow-wrap: anywhere; }
+
+/* Boost (Meta ads) on a published post card, and the dialog's summary. */
+.boost-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.boost-box { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.boost-box-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.boost-metrics { gap: var(--space-3); }
+.boost-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.boost-summary { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); }
+.boost-summary p { margin: 0; }
+.boost-summary p + p { margin-block-start: var(--space-1); }
+.boost-summary strong { font-size: var(--fs-300); color: var(--text-strong); }
+.boost-summary-lead { font-size: var(--fs-200); color: var(--text-muted); }
+.boost-actions .btn { min-block-size: var(--tap-target); }
+.boost-link { display: inline-flex; align-items: center; gap: var(--space-1); min-block-size: var(--tap-target); }
+
+/* Ad builder, quick mode (ads_builder.js): the dialog Boost opens. Logical properties only; every target is 44px. */
+.adsb-caption { margin: 0; padding: var(--space-3); border-inline-start: 3px solid var(--border-strong, var(--border-subtle)); background: var(--surface-sunken); border-radius: var(--radius-sm); max-block-size: 7.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.adsb-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.adsb-subtitle { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.adsb-dests { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.adsb-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-4); }
+.adsb-ice-row { display: flex; align-items: flex-start; gap: var(--space-2); padding-block: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.adsb-ice-fields { flex: 1; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.adsb-ice-row .btn { min-block-size: var(--tap-target); min-inline-size: var(--tap-target); }
+.adsb-ice-add { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-block-start: var(--space-2); }
+.adsb-ice-add .btn { min-block-size: var(--tap-target); }
+.adsb-policy-box { display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-fields, .adsb-findings, .adsb-review ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.adsb-field { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.adsb-field-name { margin: 0 0 var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
+.adsb-snippet { margin: 0 0 var(--space-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.adsb-mark { background: var(--warning-soft); color: var(--text-strong); border-radius: 2px; padding-inline: 2px; text-decoration: underline wavy var(--warning-text); text-underline-offset: 3px; }
+.adsb-finding--block .adsb-mark, .adsb-field:has(.adsb-finding--block) .adsb-mark { background: var(--danger-soft); text-decoration-color: var(--danger-text); }
+.adsb-finding { display: flex; flex-direction: column; gap: var(--space-1); padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--warning-text); }
+.adsb-finding--block { border-inline-start-color: var(--danger-text); }
+.adsb-finding .badge { align-self: flex-start; }
+.adsb-why, .adsb-rewrite { margin: 0; font-size: var(--fs-200); }
+.adsb-clean { margin: 0; display: flex; align-items: center; gap: var(--space-2); }
+.adsb-review { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-review p, .adsb-block p { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); }
+.adsb-review li { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-200); }
+.adsb-review li a { min-block-size: var(--tap-target); display: inline-flex; align-items: center; }
+.adsb-ack { margin-block-start: var(--space-2); }
+
+/* The Meta ads readiness steps and the alert kinds are drawn by the Settings card (Settings does not load pages/ads.css); every other `.ads-` rule lives in css/pages/ads.css. */
+.ads-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ads-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ads-check [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; color: var(--text-muted); }
+.ads-check--done [data-lucide] { color: var(--success-text); }
+.ads-step { align-items: flex-start; }
+.ads-step > [data-lucide] { margin-block-start: 2px; }
+.ads-step-text { display: flex; flex-direction: column; gap: var(--space-1); flex: 1 1 auto; min-inline-size: 0; }
+.ads-step-text .form-hint { margin: 0; }
+.ads-step .help-link { margin-inline-start: auto; }
+.ads-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-2) var(--space-4); }
+.ads-test-summary { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--fs-200); }
+.ads-test-summary p { margin: 0; }
+@media (max-width: 480px) {
+    .ads-test-actions .btn { flex: 1 1 auto; }
+}

@@ -31,6 +31,7 @@ import { planWhatsAppEntry, WHATSAPP_OBJECT } from './whatsappPlan.js';
 import { handleWhatsAppInbound } from './whatsappInbound.js';
 import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
 import { isWhatsAppDmPayload } from '../jobs/types.js';
+import { fetchAndStoreLead } from '../services/ads/leads.js';
 
 /**
  * The id Meta gives this comment, for queue-level deduplication.
@@ -48,7 +49,20 @@ function commentDedupeKey(change: any): string | undefined {
 /** Same idea for DMs; `messages.meta_message_id UNIQUE` is the layer below. */
 function dmDedupeKey(event: any): string | undefined {
     const mid = event?.message?.mid ?? event?.postback?.mid;
-    return typeof mid === 'string' && mid ? `dm:${mid}` : undefined;
+    if (typeof mid === 'string' && mid) return `dm:${mid}`;
+    // A standalone ad referral (a returning person tapped a click-to-Messenger ad, A3) has no `mid`. Who, which ad and when is what makes it one
+    // event, so a redelivery of it is refused at enqueue like a message's.
+    if (isAdReferral(event?.referral)) {
+        const sender = event?.sender?.id;
+        const ts = event?.timestamp;
+        if (sender && ts) return `dmref:${sender}:${event.referral.ad_id ?? event.referral.ref ?? ''}:${ts}`;
+    }
+    return undefined;
+}
+
+/** A referral from a click-to-message ad (`source: 'ADS'`), as opposed to an `m.me`/`ig.me` link's or any other. */
+function isAdReferral(referral: any): boolean {
+    return Boolean(referral) && typeof referral === 'object' && String(referral.source ?? '').toUpperCase() === 'ADS';
 }
 
 /**
@@ -65,7 +79,7 @@ function dmDedupeKey(event: any): string | undefined {
  * Filtering here rather than in the handler keeps the queue a record of work, which is what
  * makes "how much is pending" a number worth reading.
  *
- * Erring towards enqueueing: an event with a `message` or a `postback` goes through even if
+ * Erring towards enqueueing: an event with a `message` or a `postback` (or an ad's standalone `referral`, A3) goes through even if
  * this function cannot see anything answerable in it, because the handler is the thing that
  * knows, and dropping a real customer message would be far worse than one wasted job.
  */
@@ -77,6 +91,10 @@ function isActionableMessagingEvent(event: any, options: PlanOptions = {}): bool
     if (event?.message?.is_echo) return Boolean(options.echoes) && !echoFromOwnApp(event);
     if (event?.message) return true;
     if (event?.postback) return true;
+    // A standalone ad referral: a person who already has a thread tapped a click-to-Messenger ad (A3). It carries no words, but it says which ad
+    // brought them, which is the whole of ads → DM attribution; `handleMessagingEvent` records it and sends nothing. Other referrals (m.me links)
+    // stay dropped, as before.
+    if (isAdReferral(event?.referral)) return true;
     return false;
 }
 
@@ -98,6 +116,32 @@ export interface PlanOptions {
 function hasEcho(body: any): boolean {
     const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
     return entries.some((entry) => Array.isArray(entry?.messaging) && entry.messaging.some((event: any) => event?.message?.is_echo));
+}
+
+/**
+ * A `leadgen` change → the `ads.lead` job (A10): the ids only (`value.leadgen_id`, `page_id`, `form_id`, `ad_id`, `created_time`), never an
+ * answer, which Meta does not send here anyway. The dedupe key is Meta's lead id, so a redelivered notification is one job. A change with no
+ * lead id cannot be fetched and is dropped (logged, no ids beyond the Page).
+ */
+export function planLead(change: any, entryId: string | undefined): EnqueueInput<'ads.lead'> | null {
+    const v = change?.value ?? {};
+    const id = (x: unknown): string | null => (typeof x === 'string' && x ? x : typeof x === 'number' ? String(x) : null);
+    const leadgenId = id(v.leadgen_id);
+    if (!leadgenId) {
+        log('warn', 'webhook.leadgen_without_id', { entry_id: entryId ?? null });
+        return null;
+    }
+    return {
+        kind: 'ads.lead',
+        payload: {
+            leadgenId,
+            pageId: id(v.page_id) ?? entryId ?? null,
+            formId: id(v.form_id),
+            adId: id(v.ad_id),
+            createdTime: typeof v.created_time === 'number' ? v.created_time : null,
+        },
+        dedupeKey: `lead:${leadgenId}`,
+    };
 }
 
 /** Flatten one webhook body into the jobs it implies, without touching the database. */
@@ -137,6 +181,13 @@ export function planJobs(body: any, options: PlanOptions = {}): EnqueueInput[] {
 
         if (Array.isArray(entry?.changes)) {
             for (const change of entry.changes) {
+                // A lead from a lead ad (A10): its own job, never the comment pipeline. Only a Page subscribed to `leadgen` sends these,
+                // and only a tenant with a lead_ads legal sign-off is subscribed (leads.ts).
+                if (change?.field === 'leadgen') {
+                    const lead = planLead(change, entryId);
+                    if (lead) planned.push({ ...lead, tenantKey });
+                    continue;
+                }
                 planned.push({
                     kind: 'comment.process',
                     payload: { change, entryId },
@@ -247,6 +298,11 @@ async function processEntry(entry: any, objectType: string): Promise<void> {
         if (Array.isArray(entry?.changes)) {
             for (const change of entry.changes) {
                 try {
+                    if (change?.field === 'leadgen') {
+                        const lead = planLead(change, entryId);
+                        if (lead) await fetchAndStoreLead(lead.payload, 'webhook');
+                        continue;
+                    }
                     await handleCommentChange(change, entryId, FINAL_ATTEMPT);
                 } catch (err: any) {
                     log('error', 'webhook.comment_failed', {

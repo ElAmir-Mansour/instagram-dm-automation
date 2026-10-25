@@ -171,6 +171,7 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     if (facts.tapped) lines.push(c.tapped(facts.tapped.intent));
     if (facts.variant?.opening) lines.push(c.variantOpening(facts.variant.opening));
     if (facts.variant?.cta) lines.push(c.variantCta(facts.variant.cta));
+    if (facts.ad) lines.push(...c.ad(facts.ad));
     return lines.join('\n');
 }
 

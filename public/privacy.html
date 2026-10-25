@@ -130,25 +130,86 @@
       not the name (src/routes/youtube.ts, the callback);
     · no third-party content, ads or cookies: the YouTube code has none.
 
-  DM REPLIES THROUGH AN AI PROVIDER — ADDED 2026-10-15 (section 3's third
-  paragraph, and the DM sentences in section 5 and on /data-deletion and /terms).
-  Gemini is the default engine; the operator can change it per account, and the
-  claims are what the code does when they do:
+  DM REPLIES THROUGH AN AI PROVIDER — ADDED 2026-10-15, RE-VERIFIED 2026-10-25
+  (section 3's third paragraph, and the DM sentences in section 5 and on
+  /data-deletion and /terms). Gemini is the default engine; the operator can
+  change it per account, and the claims are what the code does when they do:
     · the engine is per account, `gemini` by default, `providers` the other:
       DM_ENGINES / DEFAULT_DM_ENGINE, src/services/dmEngine.ts:37-43;
     · `providers` sends the same persona, knowledge base and history window as
-      Gemini (HISTORY_WINDOW = 8, src/services/ai.ts:97) through the `dm` route:
-      generateDmViaLayer(), dmEngine.ts:145-201;
-    · sales mode always uses the `dm` route, with up to 12 messages:
-      SALES_HISTORY_WINDOW, src/services/dmSales/turn.ts:72, and the turn's
-      facts (stage, link sent, button tapped, the CAMPAIGN'S keyword, never the
-      comment's text): salesFactsBlock(), src/services/dmSales/prompt.ts:163-174,
+      Gemini (HISTORY_WINDOW = 8, src/services/ai.ts:97) through the `dm` route,
+      and NO notes about the conversation: generateDmViaLayer(),
+      dmEngine.ts:145-201. Hence "In sales mode" before the notes on the page;
+    · sales mode (ai_agents.sales_mode, read per message in
+      src/webhook/messaging.ts:525-533) always uses the `dm` route
+      (generate({ purpose: 'dm' }), src/services/dmSales/turn.ts:454-457), with up
+      to 12 messages: SALES_HISTORY_WINDOW, turn.ts:78, and the turn's facts
+      (stage, link sent, button tapped, the CAMPAIGN'S keyword, never the
+      comment's text): salesFactsBlock(), src/services/dmSales/prompt.ts:163-176,
       the keyword from bridge.ts:138;
+    · the ad the person came from joins those facts ONLY when the tenant switched
+      ads.bot_context on ("Give the assistant the ad's context"; section 1's ads
+      list says the same): adContextFor(), messaging.ts:755-766, handed to the
+      sales turn only (messaging.ts:537-551, turn.ts:400), as the ad's name, its
+      offer, its text (cut to 200 characters) and the button tapped (adFactsFor(),
+      src/services/ads/attribution.ts:285-303; the lines, src/services/profile/
+      kits.ts:314-318 and :577-581). Never the media links or the ad id;
     · each turn is direction and text only (dmTurns(), dmEngine.ts:105-113;
       salesTurns(), dmSales/history.ts:114): no username, account id or
-      conversation id is in any request the layer builds;
+      conversation id is in any request the layer builds, and no adapter adds
+      one (the request bodies: src/services/llm/adapters/anthropic.ts,
+      chatCompletions.ts, openai.ts and gemini.ts carry model, system text,
+      turns, schema and limits only);
     · a provider that fails is answered once by Gemini when the account's
-      fallback is on (generateDmReply(), dmEngine.ts:235; turn.ts:370-381).
+      fallback is on (generateDmReply(), dmEngine.ts:235-283; the sales turn's
+      modelFailed(), turn.ts:408-450), and otherwise handed to a person, which
+      may alert the operator (next block).
+
+  OWNER ALERTS WHEN A PERSON IS NEEDED — ADDED 2026-10-25 (section 3's last
+  paragraph, the alerts line in section 2, the Resend and Telegram lines in
+  section 5, section 7's dashboard line, and "Alerts to the operator" in section
+  5 of /data-deletion). What triggers an alert, where it goes, what it carries:
+    · a reply that fails on its LAST attempt (not a permanent Meta error, not a
+      message with no words), in EVERY sales_mode, and the `providers` engine
+      failing with its fallback off or failed too: handOver(),
+      src/webhook/messaging.ts:490-499, called at :577-581 and :721 →
+      handoffAfterFailure(), src/services/dmSales/failureHandoff.ts:115-162,
+      which calls notifyOwner() at :150-153 (reason engine_failed);
+    · sales mode only: a turn that ends in the handoff stage (asked for a
+      person, a refund, a complaint, an answer the data could not support, a
+      loop) or a reply that sent the link to a buying intent (ready_to_buy,
+      price, level_fit): noticeFor(), src/services/dmSales/handoff.ts:76-84,
+      HOT_INTENTS :52, called once the turn is recorded (turn.ts:248-252);
+    · ONLY the platform owner's tenant (the first creator, getPlatformOwnerId(),
+      src/services/tenant.ts:100-106) is ever alerted, on the deployment's own
+      channels (app_settings notify.*): handoff.ts:138-141. Any other tenant
+      gets the inbox flag only. Hence "the operator ... only about
+      conversations with his own account";
+    · only when a channel is switched on AND complete (Telegram: token and chat
+      id; email: a Resend key and an address): telegramReady(), notify.ts:71-73;
+      emailReady(), notifyEmail.ts:140-142; handoff.ts:130-136. Hot leads have
+      their own switch per channel (Telegram on unless turned off, email off
+      unless turned on: notify.ts:61, notifyEmail.ts:105). At most 3 hand-off
+      alerts and 1 hot-lead alert per conversation per hour (handoff.ts:55-56,
+      :145-155; the counter is a rate_limit_counters row, pruned after 48 h,
+      src/utils/rateLimiter.ts:179). Hence "may be alerted";
+    · what it carries: the reason; the person (noticeWho(), notify.ts:354-359:
+      the @username when the conversation has one, else the LAST FOUR
+      characters of the platform-scoped id); the last inbound message cut to
+      200 characters, links replaced by «[link]», bidi and control characters
+      removed (excerpt(), notify.ts:251-261; buildNoticeText(), :362-371); the
+      time Meta's 24 h window has left; the inbox link (inboxLink(),
+      notify.ts:264-266, which holds the conversation's internal id). The email
+      adds the channel and puts noticeWho() in its subject (emailSubject() and
+      emailBody(), notifyEmail.ts:359-371);
+    · how it travels: Telegram's Bot API, plain text, link previews off
+      (sendTelegramMessage(), notify.ts:188-208; TELEGRAM_API :23); Resend's API
+      (sendEmail(), notifyEmail.ts:299-321; RESEND_API :44). Nothing of the
+      alert is stored in our database. Resend's policy URL,
+      https://resend.com/legal/privacy-policy, was opened on 2026-10-25;
+    · NOT the ads alerts: section 1's "never customer data" is about
+      src/services/ads/notify.ts, which renders only the ad account, amounts and
+      Meta's status, and it stays true. The new paragraph says the two differ.
 
   WHATSAPP — ADDED 2026-10-19, STACKED ON THE DM-PROVIDER TEXT ABOVE (docs/specs/001-whatsapp-agent: FR-028, FR-029, FR-018, research R4,
   R12). Section 1's "When you send a message on WhatsApp" (id whatsapp-ar / whatsapp-en: the anchor the go-live gate, T061, can look
@@ -205,6 +266,122 @@
     · from Meta's documentation, read 2026-10-19 (developers.facebook.com/documentation/business-messaging/whatsapp/data-privacy-and-security):
       Meta acts as data processor / service provider for the Cloud API, a message has a maximum retention of 30 days, and the Cloud API
       manages the encryption keys on the business's behalf. Not checkable from code; re-read the page when Meta revises it.
+
+  META ADS (BOOST) — ADDED 2026-10-22 WITH PR #225 (migration v52). Section 1
+  "When the account owner boosts a post" and the ads lines in sections 2, 4,
+  5, 6 and 7 claim the following, and the code does it:
+    · the owner's own data only: the ad account id, the max daily budget and
+      the monthly cap (app_settings `ads.settings.<tenant>`), and the ads
+      token, encrypted (`ads.token.<tenant>`, isSecretSetting → encryptSecret):
+      src/services/adBoosts.ts readAdsSettings()/saveAdsSettings();
+    · the token comes from Connect when the owner grants ads_management
+      (captureAdsAccess(), called from finishLogin() in metaLogin.ts; the ads
+      permissions are asked only while meta.ads_scopes_enabled is on), or is
+      pasted on the Settings card;
+    · per boost (table ad_boosts, migration_v52): the post, platform, media id,
+      ad account, objective, country, optional link, currency, budget, days,
+      total, status, Meta's campaign/ad set/creative/ad ids, spend, and
+      insights = reach, impressions, clicks, CPM, results — AGGREGATE numbers
+      (readInsights(), metaAds.ts). Meta never tells the app who saw or
+      clicked an ad, and the app asks for nothing that would;
+    · targeting is a country, age 18+ and Meta's own audience automation
+      (buildAdSetParams(), metaAds.ts). No custom audience, no pixel, no list
+      of people: nothing about commenters or DM senders is sent to Meta for
+      ads — no code path reads interactions/messages for ads;
+    · payment is between the owner and Meta: the app never sees or stores card
+      or billing details;
+    · kept: ad_boosts rows have no expiry (the record of money spent); a deleted
+      post sets scheduled_post_id NULL (ON DELETE SET NULL), a deleted boost is
+      status 'deleted', the row stays. Rows go with the tenant (ON DELETE
+      CASCADE on creators);
+    · removed: a Connect ads token is deleted when Meta is disconnected or the
+      app is removed in Facebook (forgetConnectedAdsAccess(), from
+      removeMetaConnection()); a pasted token stays until removed on the card;
+    · audit_log `ads.*` rows: post id, platform, budget, days, total, currency,
+      status, campaign id; settings_write names WHICH fields changed. Never the
+      token (src/routes/ads.ts audit()).
+
+  META ADS, PHASE A1 (SAFETY FOUNDATION) — ADDED 2026-10-22 (spec 002-meta-ads-manager,
+  R7-R9, T040). The ads lines in sections 1 (#ads-ar / #ads-en) and 4 add three claims:
+    · ALERTS: when the guard or the daily check finds a problem the app sends a
+      short alert (adsNotify.ts → ads_alerts). It holds the KIND of problem, the
+      ad account (name/id), and amounts such as this month's spend and the cap.
+      Never customer data (nobody who commented or messaged) and never card or
+      billing numbers. It goes to the Telegram chat id and/or the email address
+      the owner set (app_settings `ads.alerts.<tenant>`, Settings → Alert
+      recipients), and a copy to the platform operator while `ads.copy_admin`
+      is on (default on). One per kind and object per day. The ads_alerts rows
+      are deleted after one year (a retention sweep the A1 server PR must
+      ship; this page promises it); cap_paused, guard_blind and
+      token_dead cannot be switched off by the owner;
+    · THE GUARD PAUSES ANY ACTIVE CAMPAIGN in the connected ad account, also
+      those made in Meta Ads Manager or another tool, when this month's worst
+      case would pass the monthly cap (enforceMonthlyCaps(), hourly inside
+      /api/jobs/drain, and at once when the cap is saved at or below the spend);
+    · THE DAILY HEALTH CHECK (00:00 UTC cron) reads the ad account's status,
+      disable reason, funding status (present or not), spend cap, amount spent
+      and balance, with the token's validity. It reads no card number: of
+      funding_source_details only the type and whether one is present are kept.
+  If any of the three changes, change both languages here and the stamp.
+
+  META ADS, PHASE A3 (ADS → DM ATTRIBUTION) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R10, T083). Section 1 (#ads-ar / #ads-en):
+    · conversations.entry_source {kind:'ctm', ad_id, ref, ads_context_data:{ad_title, photo_url, video_url, post_id}, at} on the first touch,
+      conversations.ad_touches (newest 10) after: recordAdTouch, src/services/ads/attribution.ts, from normalizeDm's adSource;
+    · used for the Inbox chip (adNamesFor) and per-ad results (resultsByAd); to the model only with ads.bot_context on, and then
+      adFactsFor's name/offer/text (no media links, no ad id): src/webhook/messaging.ts adContextFor;
+    · deleted with the conversation (columns on conversations, so erasure of the conversation removes them).
+
+  META ADS, PHASE A2 (STORED COPY) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R2, R4, T059). Sections 1 and 4 add:
+    · STORED COPY: the connected ad account's campaign structure (campaigns, ad sets, ads, creatives: names, statuses, budgets, dates,
+      a display summary of targeting such as countries and ages, Meta's review notes) in ads_objects, and daily results per ad (spend,
+      impressions, reach, clicks, link clicks, conversations started, leads, video views) plus daily totals by country and by placement
+      (ads_insights_daily, ads_insights_breakdown): src/services/ads/sync.ts, mirror.ts. Aggregates only: no person-level data exists in
+      what Meta returns; targeting keeps no audience members;
+    · RETENTION: results are deleted after 37 months (runAdsHealth, ads/health.ts); queued changes (ads_ops) after 180 days;
+    · DELETED ON DISCONNECT: removing the ads token, choosing another ad account, or disconnecting Meta with a Connect ads token deletes
+      the stored copy and the results (forgetStoredCopy, ads/mirror.ts). ad_boosts spend records stay, as the Boost text says.
+
+  META ADS, PHASE A11 (MANAGED CLIENTS) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R18, Story 9). Section 1 (#ads-ar / #ads-en):
+    · WHO SEES A CLIENT'S ADS: GET /api/admin/ads/tenants (src/services/ads/tenantsOverview.ts), platform admin only: health, cap use
+      as a percentage and the last 7 days of alerts for every tenant; amounts (spend, the monthly cap, the daily max) ONLY when the
+      tenant's owner set ads.share_spend.TENANT (src/routes/adsShareSpend.ts, audited). Never the token. Each client pays Meta itself.
+
+  META ADS, PHASE A7 (AI PROPOSALS) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R13, FR-049, T144). Section 1 (#ads-ar / #ads-en):
+    · WHAT THE MODEL IS GIVEN: buildInput(), src/services/ads/proposals/input.ts — aggregates only: object names, budgets, statuses,
+      targeting summaries and 7-day totals from the stored copy (ports.ts mirrorPort), the tenant's offers (name, price, a summary of its
+      own bullets/facts with emails and phone numbers stripped), the limits and Meta's minimum, the policy rules' descriptions, the
+      owner's request text, and for a post: its caption and organic counts. Never conversations, messages, contacts, lead answers;
+    · WHO: the owner's tenant (and studio.mac_brain_tenants) → a Studio `ads_think` job answered by Claude Code on the owner's Mac
+      (service.ts advanceProposal; macBrain.ts isMacBrainJob); every other tenant → the AI providers layer (purposes ads_draft /
+      ads_review), so the provider list in #ai-providers-ar / #ai-providers-en applies;
+    · STORED: ads_proposals (v55): the owner's words, the drafted spec or change, rationale, evidence (the account's own numbers),
+      checks, and who decided; cascades with the tenant.
+  META ADS, PHASE A8 (AUDIENCES) — ADDED 2026-10-22 (spec 002-meta-ads-manager, R15, FR-050..053, T159). Section 1 (#audiences-ar /
+  #audiences-en), the intro, section 5's first line and section 6 change:
+    · ENGAGEMENT AUDIENCES: rule JSON on the tenant's own Instagram account / Page / videos (src/services/ads/audiences.ts
+      buildCreateParams) → POST act_<id>/customaudiences through ads_ops. No contact data leaves the app; Meta resolves the people.
+      ads_audiences (v56) keeps name, kind, the rule's settings, status and Meta's size range;
+    · CUSTOMER LISTS: locked per tenant until ads_legal_signoffs has a non-revoked customer_lists row (routes/adsAudiences.ts);
+      parsed, normalised and SHA-256-hashed in the request (ads/hashing.ts), opted-out people dropped (conversations.opted_out_at with
+      wa_phone, the newest contact_consents marketing row 'withdrawn', and contact_consents platform 'customer_list_optout' hashes),
+      rows outside the sign-off's countries dropped; hashes ride in audience_users ops with scrub:true (ops.ts empties exec.params when
+      the op ends); the audience row keeps only {columns, rows_sent, matched_estimate}. The raw text is never stored or logged;
+    · OPT-OUT: the owner records a request (POST /api/ads/audiences/opt-outs) → only sha256(normalised phone or email) in
+      contact_consents, plus DELETE <audience>/users ops on the tenant's customer lists at Meta.
+
+  ILLUSTRATED EXPLAINERS — ADDED 2026-10-25 (spec 003-illustrated-explainers, R2b, T069). Section 1 (#explainers-ar /
+  #explainers-en), section 4 (retention) and section 5 (Google's line, Cloudflare's line):
+    · OWNER ONLY: app_settings explainers.enabled.<tenant> (src/services/explainers/switch.ts); only the platform owner can be on;
+    · WRITING: topic, notes, source links → explainer_write, Claude Code on the owner's Mac with WebSearch/WebFetch only
+      (aicourse-captions scripts/studio/explainerWrite.mjs, the research variant of scripts/monteur/think.mjs); fallback → Gemini with
+      google_search grounding (src/services/explainers/writerGemini.ts) when the Mac is offline or signed out, or the owner picks it;
+    · VOICE: each scene's spoken text → Gemini TTS (gemini-3.8-flash-tts, worker scripts/studio/tts.mjs), free tier;
+    · PICTURES: scene briefs (English) + the characters' reference pictures (candidates drawn by the same service, or a picture the
+      owner uploads) → Cloudflare Workers AI (src/services/explainers/pictures/); the women guard refuses before any call;
+    · NEVER: conversations, messages, contacts, lead answers: no explainer code path reads them;
+    · RETENTION: pictures, references and tracks while referenced; audio and MP4s until 30 days after the last scheduled post (kept
+      while unscheduled); deleting an explainer removes its files (src/services/retention.ts).
+  If any of these changes, change both languages here and the stamp.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -272,7 +449,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.48">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.77">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1110,7 +1287,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 19 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 أكتوبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وواتساب وتيك توك ويوتيوب.</p>
@@ -1138,8 +1315,10 @@
                     وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي تنشر عليه الفيديوهات وكاروسيلات
                     الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. وإن
                     ربط قناة على يوتيوب، فهي ترفع إليها مقاطعه القصيرة بوصفها
-                    <bdi lang="en" dir="ltr">Shorts</bdi>، ولا تفعل هناك شيئاً غير ذلك. لا
-                    تقوم الأداة بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
+                    <bdi lang="en" dir="ltr">Shorts</bdi>، ولا تفعل هناك شيئاً غير ذلك. ولا
+                    تبيع الأداة البيانات. وإن استعمل صاحب الحساب ميزة الإعلانات، فقد تُعرض إعلاناته على من تفاعلوا
+                    مع حسابه أو راسلوه عبر جماهير تبنيها ميتا (<a href="#audiences-ar">الجماهير</a> أدناه، ومعها كيف
+                    تطلب ألا تُستهدف).
                 </p>
                 <p>
                     هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
@@ -1432,15 +1611,180 @@
                     واسم القناة وصورتها.
                 </p>
 
+                <h3 id="ads-ar">عندما يروّج صاحب الحساب منشوراً (إعلانات ميتا)</h3>
+                <p>
+                    وهذا الجزء أيضاً عن بيانات صاحب الحساب نفسه. يستطيع صاحب الحساب أن يروّج منشوراً نشره على
+                    إنستجرام أو فيسبوك بإعلان يُنشأ في حسابه الإعلاني لدى ميتا عبر
+                    <bdi lang="en" dir="ltr">Marketing API</bdi>. ولا يحدث ذلك إلا إن أعدّه صاحب الحساب بنفسه: إمّا بمنح
+                    صلاحيات الإعلانات عند ربط ميتا، وإمّا بلصق رمز وصول في الإعدادات. ويُنشأ كل إعلان
+                    <strong>موقوفاً</strong>، ولا يبدأ الإنفاق إلا بعد أن يؤكّد صاحب الحساب «التفعيل» بنفسه.
+                </p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن، من صاحب الحساب:</strong> معرّف حسابه الإعلاني، والحدّ الأقصى للميزانية
+                        اليومية، وسقف الإنفاق الشهري. وترفض الأداة أي ترويج يتجاوزهما.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن، مشفّراً:</strong> رمز الوصول الذي تُنشأ به الإعلانات، مشفّراً أثناء التخزين
+                        بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi> (القسم 7). ويُخزَّن بجانبه مصدره (الربط أو اللصق) وتاريخ انتهائه.
+                    </li>
+                    <li>
+                        <strong>عن كل ترويج:</strong> المنشور والمنصّة، والهدف، والبلد المستهدف، والرابط إن وُجد،
+                        والعملة والميزانية والمدة والإجمالي، والحالة، ومعرّفات الحملة والمجموعة الإعلانية والتصميم
+                        والإعلان لدى ميتا، والمبلغ المُنفَق، وأرقام الأداء: الوصول ومرات الظهور والنقرات وتكلفة الألف
+                        ظهور والنتائج.
+                    </li>
+                    <li>
+                        <strong>أرقام مجمّعة فقط:</strong> لا تُخبر ميتا الأداة بمن رأى الإعلان أو نقر عليه، ولا تطلب
+                        الأداة ذلك. واستهداف الترويج بلد وعمر 18 فأكثر وأتمتة الجمهور الخاصة بميتا، وقد يضمّ صاحب الحساب
+                        إليه جماهيره المحفوظة أو يستبعدها (<a href="#audiences-ar">الجماهير</a>). ولا تستعمل الأداة بكسل.
+                    </li>
+                    <li>
+                        <strong>لا شيء عمّن يعلّق أو يراسل:</strong> لا يُرسَل إلى ميتا لأغراض الإعلان أي شيء عمّن
+                        يعلّق أو يراسل على إنستجرام أو فيسبوك.
+                    </li>
+                    <li>
+                        <strong>المحادثات التي تبدأ من إعلان:</strong> حين يضغط شخص على إعلان مراسلة لصاحب الحساب،
+                        ترسل ميتا مع رسالته معلومات عن الإعلان، فتحفظها الأداة مع المحادثة: معرّف الإعلان، ورمز التتبّع
+                        الذي تضعه الأداة في إعلاناتها، وعنوان الإعلان وروابط صورته أو الفيديو كما أرسلتها ميتا، ووقت
+                        الضغطة (وآخر عشر ضغطات لاحقة على إعلانات أخرى). تُستعمل لإظهار الإعلان الذي بدأ المحادثة في
+                        صندوق الرسائل، ولعدّ نتائج كل إعلان (المحادثات، والنقرات على الروابط المتتبَّعة، والتحويل إلى
+                        شخص). ولا تُعطى للذكاء الاصطناعي إلا إن شغّل صاحب الحساب «أعطِ المساعد سياق الإعلان»، وحينها
+                        يُعطى اسم الإعلان والعرض ونصّه فقط، لا روابط الصور والفيديو ولا المعرّف. وتُحذف مع المحادثة.
+                    </li>
+                    <li>
+                        <strong>الدفع بين صاحب الحساب وميتا:</strong> تُخصم تكلفة الإعلانات من وسيلة الدفع في
+                        حسابه الإعلاني لدى ميتا، ولا ترى الأداة بيانات البطاقة أو الفوترة ولا تخزّنها.
+                    </li>
+                    <li>
+                        <strong>الحارس يوقف أي حملة نشطة في الحساب الإعلاني المربوط:</strong> إذا كان الإنفاق
+                        هذا الشهر، مضافاً إليه أقصى ما يمكن أن تنفقه الميزانيات الجارية، سيتجاوز سقف الإنفاق
+                        الشهري الذي وضعه صاحب الحساب، توقف الأداة الحملات النشطة. ويشمل ذلك <strong>الحملات التي
+                        أُنشئت في مدير إعلانات ميتا أو في أدوات أخرى</strong>، لا الحملات التي أنشأتها الأداة فقط.
+                        وتتحقق الأداة من ذلك كل ساعة، وفور حفظ سقف يساوي إنفاق الشهر أو يقل عنه.
+                    </li>
+                    <li>
+                        <strong>فحص يومي لحالة الحساب الإعلاني:</strong> تقرأ الأداة من ميتا حالة الحساب
+                        الإعلاني وسبب تعطيله إن وُجد، وهل لديه وسيلة دفع (نعم أو لا فقط)، وحدّ الإنفاق
+                        لدى ميتا، والمبلغ المُنفَق، وصلاحية الرمز. <strong>ولا تقرأ أرقام البطاقات</strong>، ولا تحفظ
+                        منها شيئاً.
+                    </li>
+                    <li>
+                        <strong>نسخة محفوظة من الحساب الإعلاني:</strong> تحفظ الأداة نسخة من حملات الحساب الإعلاني
+                        المربوط ومجموعاتها وإعلاناتها (الأسماء والحالات والميزانيات والتواريخ، وملخّص الاستهداف مثل
+                        الدول والأعمار، وملاحظات مراجعة ميتا)، ونتائجها اليومية لكل إعلان (الإنفاق ومرات الظهور والوصول
+                        والنقرات وبدء المحادثات والعملاء المحتملين ومشاهدات الفيديو)، ومجاميعها اليومية حسب الدولة وحسب
+                        موضع الظهور، لتعرضها الشاشات دون سؤال ميتا في كل مرة. <strong>هي أرقام مجمّعة فقط</strong>: لا
+                        تخبر ميتا الأداة بمن رأى الإعلان أو نقر عليه. وتُحذف النتائج بعد 37 شهراً، وتُحذف النسخة كلها
+                        عندما يزيل صاحب الحساب رمز الإعلانات أو يختار حساباً إعلانياً آخر أو يفصل ميتا (القسم 4).
+                    </li>
+                    <li>
+                        <strong>من يرى إنفاقك الإعلاني:</strong> إذا كان نشاطك يُدار عبر المنصة، يرى مدير المنصة صحة إعلاناتك
+                        فقط: هل يعمل الرمز، وحالة الحساب الإعلاني، وهل فيه وسيلة دفع، وتنبيهات الأسبوع الأخير، والنسبة
+                        المستهلكة من سقفك الشهري. <strong>أما المبالغ فلا يراها إلا إذا فعّل صاحب الحساب</strong> خيار «شارك إنفاقي
+                        الإعلاني مع مدير حسابي» في الإعدادات، وتختفي عنه فور إطفائه. وتدفع لميتا من وسيلة الدفع في حسابك الإعلاني أنت.
+                    </li>
+                    <li>
+                        <strong>مقترحات الإعلانات بالذكاء الاصطناعي:</strong> حين يطلب صاحب الحساب «اقترح حملة»، أو في
+                        المراجعة اليومية للإعلانات الجارية، يُعطى نموذج الذكاء الاصطناعي <strong>أرقاماً مجمّعة فقط</strong>:
+                        أسماء الحملات والمجموعات الإعلانية وميزانياتها وحالاتها وملخّص استهدافها ومجاميع آخر 7 أيام لكل منها،
+                        وعروض صاحب الحساب (الاسم والسعر وملخّص قصير يُحذف منه أي بريد أو رقم هاتف)، والحدود التي وضعها،
+                        وكلماته هو في الطلب، ونصّ المنشور وأرقامه العامة حين يبدأ الاقتراح من منشور. <strong>ولا يُعطى أبداً</strong>
+                        رسائل من يراسلون صاحب الحساب ولا أسماءهم ولا أرقامهم ولا بريدهم ولا إجاباتهم في النماذج.
+                        يكتب مسودات حساب صاحب المنصة <bdi lang="en" dir="ltr">Claude</bdi> على جهازه، ويكتب مسودات أي نشاط آخر
+                        مزوّد الذكاء الاصطناعي المفعّل له (<a href="#ai-providers-ar">مزوّدو الذكاء الاصطناعي</a> أدناه). ويُحفظ
+                        المقترح (كلمات الطلب والمسودة وسببها والأرقام التي بُنيت عليها ومن وافق أو رفض)، ولا يُنشأ شيء في
+                        ميتا ولا يتغيّر إلا بعد موافقة صاحب الحساب، وتُنشأ الحملة الجديدة موقوفة.
+                    </li>
+                    <li>
+                        <strong>تنبيهات الإعلانات:</strong> إذا وُجدت مشكلة (إيقاف الإنفاق عند السقف، أو فشل
+                        الدفع، أو تعطيل الحساب، أو توقف الرمز عن العمل، أو عجز الأداة عن مراقبة الإنفاق)
+                        أرسلت الأداة تنبيهاً قصيراً. <strong>يحوي التنبيه نوع المشكلة والحساب الإعلاني ومبالغ مثل
+                        الإنفاق والسقف، ولا يحوي أبداً بيانات عملاء ولا بيانات بطاقات.</strong> ويُرسَل إلى محادثة
+                        تيليجرام و/أو عنوان البريد الإلكتروني اللذين حدّدهما صاحب الحساب في الإعدادات، مع نسخة
+                        إلى مشغّل المنصّة. وتمرّ الرسالة عبر خدمة تيليجرام أو خدمة البريد التي تُرسَل بها. ويُحفَظ
+                        سجلّ التنبيهات سنة واحدة (القسم 4).
+                    </li>
+                    <li id="audiences-ar">
+                        <strong>الجماهير من التفاعل:</strong> يستطيع صاحب الحساب أن يطلب من ميتا بناء «جمهور» من الأشخاص
+                        الذين تفاعلوا مع حسابه على إنستجرام أو صفحته على فيسبوك، أو راسلوهما، أو شاهدوا مقاطع منشورة له،
+                        خلال مدة يختارها، أو جمهوراً «مشابهاً» لهم في دولة يختارها، ليعرض عليهم إعلاناته أو يستبعدهم منها.
+                        <strong>لا تُرسل الأداة لذلك أي بيانات عن أحد</strong>: ترسل إلى ميتا القاعدة فقط (الحساب، ونوع التفاعل،
+                        والمدة)، وميتا هي التي تعرف من تفاعل. وتحفظ الأداة اسم الجمهور ونوعه وإعداداته وحالته وحجمه التقريبي كما
+                        تقدّره ميتا. وأسماء الجماهير محايدة دائماً، ولا تُبنى أبداً من محتوى محادثاتك أو من التصنيفات التي يضعها الردّ الآلي لها.
+                    </li>
+                    <li>
+                        <strong>قوائم العملاء:</strong> تبقى مقفلة لكل نشاط حتى يسجّل مدير المنصة اعتماداً قانونياً لدوله.
+                        وبعد فتحها، يستطيع صاحب الحساب أن يرفع قائمة بريد إلكتروني أو أرقام هواتف لعملائه بعد أن يؤكّد
+                        موافقتهم. <strong>تُموَّه كل قيمة داخل الأداة</strong> (تُوحَّد ثم تُحوَّل بدالة
+                        <bdi lang="en" dir="ltr">SHA-256</bdi>) قبل أن يُرسل أي شيء إلى ميتا، ولا تُرسل إلا القيم المموّهة.
+                        <strong>ولا تُحفظ القائمة</strong>: يُقرأ النص ثم يُترك، ولا يبقى إلا عدد الصفوف المرسلة، وتُمسح القيم المموّهة
+                        من قائمة الانتظار حين ينتهي الرفع. ويُستبعد تلقائياً كل من أوقف رسائل واتساب أو سحب فيها موافقته على
+                        التسويق، وكل من سُجّل طلبه ألا يُستهدف. وتطابق ميتا القيم المموّهة مع حساباتها ثم تحذفها.
+                    </li>
+                    <li>
+                        <strong>كيف تطلب ألا تُستهدف:</strong> إن كتبت «توقف» في محادثة واتساب مع النشاط أو سحبت موافقتك على
+                        التسويق فيها، يُستبعد رقمك من كل رفع لاحق. ولكي تُحذف أيضاً من القوائم المرفوعة سابقاً، أو إن كان طلبك
+                        عن بريد إلكتروني أو من إنستجرام أو ماسنجر، فاطلب ذلك من صاحب النشاط أو راسلنا (القسم 9): يُسجَّل رقمك أو
+                        بريدك <strong>مموّهاً فقط</strong>، ويُحذف من قوائم العملاء المرفوعة لدى ميتا، ويُستبعد من أي رفع لاحق.
+                        وتستطيع أيضاً من ميتا نفسها: «لماذا أرى هذا الإعلان؟» ثم إخفاء إعلانات المعلن، أو من «تفضيلات الإعلانات»
+                        في حسابك.
+                    </li>
+                    <li id="leads-ar">
+                        <strong>نماذج جمع العملاء (إعلانات العملاء المحتملين):</strong> مقفلة لكل نشاط حتى يسجّل مدير المنصة اعتماداً
+                        قانونياً لدوله، ولا يُجمع شيء قبل ذلك. وبعد فتحها، قد يعرض عليك النشاط إعلاناً يفتح نموذجاً قصيراً داخل فيسبوك أو
+                        إنستجرام. إن ملأته وأرسلته، تصل إلينا من ميتا <strong>إجاباتك كما كتبتها</strong> (مثل الاسم ورقم الهاتف والبريد
+                        الإلكتروني وأي سؤال أضافه النشاط)، مع تاريخ الإرسال والنموذج والإعلان، وجوابك عن سؤال «هل توافق على أن نتواصل معك؟»
+                        إن وُجد. <strong>تُحفظ الإجابات مشفّرة</strong>، ويُحفظ بريدك ورقمك أيضاً في صورة رمز مموّه بمفتاح سري ليُعثر عليها إن
+                        طلبت حذفها. ولا يراها إلا صاحب النشاط، ويُسجَّل كل تنزيل لها. <strong>لا تُرسل إجاباتك إلى أي مزوّد ذكاء اصطناعي،
+                        ولا تتواصل الأداة معك تلقائياً</strong> بسببها؛ وأي تواصل من النشاط مسؤوليته هو، ويلزمه موافقتك. ولا تطلب النماذج
+                        معلومات حساسة كالصحة أو الدين أو الأرقام المالية أو أرقام الهوية.
+                    </li>
+                </ul>
+
+                <h3 id="explainers-ar">عندما يصنع صاحب المنصة فيديو شرحٍ مصوّراً (الاستوديو)</h3>
+                <p>
+                    فيديوهات الشرح المصوّرة فيديوهاتٌ بصوتٍ وصورٍ مرسومة يصنعها صاحب المنصة عن موضوعاته هو، لحساباته هو.
+                    <strong>ولا تُستخدم فيها إلا مواد صاحب المنصة نفسه: لا يُستخدم فيها أي تعليق أو رسالة أو جهة اتصال أو إجابة نموذج
+                    لأي شخص يراسل أحد الحسابات.</strong> ولا يستخدمها إلا صاحب المنصة.
+                </p>
+                <ul>
+                    <li>
+                        <strong>الكتابة:</strong> يُرسَل الموضوع والملاحظات والروابط التي يقدّمها صاحب المنصة إلى
+                        <bdi lang="en" dir="ltr">Claude</bdi> (من <bdi lang="en" dir="ltr">Anthropic</bdi>) على جهاز صاحب المنصة نفسه،
+                        فيقرأ صفحات ويب عامة ليبحث في الموضوع، ثم يكتب النص والأوصاف وقائمة المصادر. وإن كان ذلك الجهاز غير متصل أو
+                        خرج من حسابه، أو اختار صاحب المنصة ذلك، كتبه <bdi lang="en" dir="ltr">Gemini</bdi> من جوجل بدلاً منه وبحث في
+                        الويب ببحث جوجل، فيصل الموضوع والملاحظات والروابط نفسها إلى جوجل.
+                    </li>
+                    <li>
+                        <strong>الصوت:</strong> يُرسَل نص الفيديو إلى خدمة تحويل النص إلى كلام في <bdi lang="en" dir="ltr">Gemini</bdi>
+                        من جوجل لتقرأه بصوتٍ مسموع. وفي الفئة المجانية من <bdi lang="en" dir="ltr">Gemini</bdi> قد تستخدم جوجل ما
+                        يصلها لتحسين منتجاتها
+                        (<a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">شروط <bdi lang="en" dir="ltr">Gemini API</bdi></a>)،
+                        والنص هو نص فيديو سيُنشر علناً.
+                    </li>
+                    <li>
+                        <strong>الصور:</strong> يُرسَل وصفٌ قصير بالإنجليزية لصورة كل مشهد، والصور المرجعية التي اختارها صاحب المنصة
+                        لشخصياته الكرتونية المتكررة، إلى <bdi lang="en" dir="ltr">Cloudflare Workers AI</bdi> التي ترسم الصور.
+                    </li>
+                    <li>
+                        <strong>ما يُخزَّن:</strong> الموضوع والنص والأوصاف والمصادر والصور والتسجيل الصوتي والفيديوهات النهائية، مع حساب
+                        صاحب المنصة، وتُحذف كما يبيّن القسم 4.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
+                    <li>تنبيه مُشغّل الأداة حين تحتاج محادثةٌ مع حسابه هو إلى شخص (القسم 3).</li>
                     <li>الردّ على رسائلك إن راسلتَ رقماً على واتساب ربطه صاحب الحساب، وتنبيه صاحب الحساب حين تحتاج محادثة إليه.</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
+                    <li>ترويج المنشورات التي يختارها صاحب الحساب بإعلانات في حسابه الإعلاني لدى ميتا، ضمن الحدود التي وضعها، وإظهار ما أنفقه كل ترويج ونتائجه.</li>
+                    <li>إظهار إجابات نماذج جمع العملاء لصاحب النشاط الذي طلبتَ منه أن يتواصل معك، بعد الاعتماد القانوني فقط.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
@@ -1461,10 +1805,12 @@
                     ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
                     الاصطناعي المذكورين في القسم 5، والحساب الذي يستخدم وضع المبيعات في الأداة تُكتب ردوده بهذه
                     الطريقة دائماً. وعندئذٍ يُرسَل <strong>نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة</strong>،
-                    مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل، ومعها ملاحظات عن المحادثة نفسها: كأن يُذكر
-                    هل أُرسل إليك رابط من قبل، وأيّ أزرار الحساب ضغطت، أو أنك علّقت على منشور بالكلمة المفتاحية
-                    التي حدّدها الحساب (الكلمة نفسها، لا تعليقك). <strong>ولا يُرسَل إليه كذلك اسمك ولا معرّف حسابك
-                    ولا معرّف المحادثة.</strong> وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ «جيميناي» كما سبق.
+                    مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل. وفي وضع المبيعات تُرسَل معها ملاحظات عن المحادثة
+                    نفسها: كأن يُذكر هل أُرسل إليك رابط من قبل، وأيّ أزرار الحساب ضغطت، أو أنك علّقت على منشور بالكلمة
+                    المفتاحية التي حدّدها الحساب (الكلمة نفسها، لا تعليقك)، وإن جئتَ من أحد إعلانات الحساب وشغّل صاحب
+                    الحساب «أعطِ المساعد سياق الإعلان»، فاسمُ ذلك الإعلان وعرضُه ونصُّه (القسم 1). <strong>ولا يُرسَل إليه
+                    كذلك اسمك ولا معرّف حسابك ولا معرّف المحادثة.</strong> وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ
+                    «جيميناي» كما سبق.
                 </p>
                 <p>
                     <strong>رسائل واتساب لا تذهب إلى جوجل إطلاقاً.</strong> ردودها يكتبها
@@ -1487,6 +1833,17 @@
                     وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
                     بأنك تتحدّث إلى خدمة آلية. وإن طلبتَ التحدّث إلى شخص، فالمساعد مصمَّم على أن يتوقّف عن الردّ
                     وتُحوَّل المحادثة إلى صاحب الحساب.
+                </p>
+                <p>
+                    <strong>حين تحتاج محادثتك إلى شخص:</strong> قد يُنبَّه مُشغّل الأداة (القسم 9) إذا تعذّرت كتابة ردّ على
+                    رسالتك (عطل تقني)، وكذلك في وضع المبيعات حين يحوّل المساعد محادثتك إلى شخص (كأن تطلب التحدّث إلى شخص
+                    أو استرجاع مالك أو تشتكي)، أو حين يرسل إليك الرابط بعد أن سألت عن الشراء أو عن السعر أو عن مناسبته لك.
+                    ولا يحدث ذلك إلا في المحادثات مع حسابه هو، وإلا إن فعّل التنبيهات. والتنبيه رسالة على تيليجرام و/أو بريد
+                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). <strong>يُذكر فيه اسم المستخدم الخاص بك،
+                    أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم مستخدم لك، وما يصل إلى 200 حرف من آخر رسالة
+                    كتبتَها</strong>، وتُستبدَل الروابط فيها بـ«<bdi lang="en" dir="ltr">[link]</bdi>». ويُذكر فيه أيضاً سبب
+                    الحاجة إلى شخص، والوقت الباقي من نافذة الردّ لدى ميتا، ورابط إلى المحادثة في لوحة التحكم. وهذه التنبيهات
+                    غير تنبيهات الإعلانات الموصوفة في القسم 1، التي لا تحتوي شيئاً عنك.
                 </p>
 
                 <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
@@ -1538,14 +1895,43 @@
                         المرفوعة على منشوراته المجدولة إلى أن يحذفها. ويحتفظ سجلّ التدقيق بقيد لكل مرة رُبط
                         فيها يوتيوب، فيه معرّف القناة والصلاحيات الممنوحة.
                     </li>
+                    <li>
+                        <strong>إعلانات ميتا</strong> — سجلّ كل ترويج (المنصرف والنتائج ومعرّفات ميتا) يبقى بلا مدة
+                        انتهاء تلقائية، لأنه سجلّ لمال أُنفق: لا يُمحى بحذف المنشور ولا بحذف الترويج. ورمز الوصول
+                        الذي جاء مع ربط ميتا يُحذف عندما يفصل صاحب الحساب ميتا أو يزيل التطبيق من فيسبوك، أمّا
+                        الرمز الملصوق فيبقى حتى يزيله من الإعدادات. ويحتفظ سجلّ التدقيق بقيد لكل ترويج أُنشئ أو فُعّل
+                        أو أُوقف أو حُذف، فيه المنشور والميزانية والمدة والحالة ومعرّف الحملة، ولا يحوي الرمز أبداً.
+                    </li>
+                    <li>
+                        <strong>تنبيهات الإعلانات</strong> — نوع كل تنبيه وحسابه الإعلاني ومبالغه ووقته، وما إذا
+                        وصل: تُحذف بعد سنة واحدة.
+                    </li>
+                    <li>
+                        <strong>نسخة الحساب الإعلاني ونتائجه</strong> — تُحدَّث كل ساعة، وتُحذف النتائج اليومية بعد 37
+                        شهراً، وسجلّ التغييرات المرسلة إلى ميتا بعد 180 يوماً. وتُحذف النسخة والنتائج كلها عند إزالة
+                        رمز الإعلانات أو اختيار حساب إعلاني آخر أو فصل ميتا؛ أمّا سجلّات الإنفاق على الترويج فتبقى كما
+                        سبق.
+                    </li>
+                    <li>
+                        <strong>إجابات نماذج جمع العملاء</strong> — تُحذف تلقائياً بعد 90 يوماً من إرسالها، أو بعد المدة التي يختارها
+                        صاحب النشاط (من يوم إلى 365 يوماً). ويبقى بعدها سجلّ للعدد فقط (التاريخ والنموذج والإعلان) دون أي بيانات عنك.
+                        وتُحذف كلها إن طلبت الحذف (القسم 6).
+                    </li>
+                    <li>
+                        <strong>فيديوهات الشرح المصوّرة</strong> — تبقى الصور وصور الشخصيات المرجعية والمقاطع الموسيقية ما دام فيديو شرحٍ أو
+                        الإعدادات تستخدمها. ويبقى التسجيل الصوتي والفيديوهات النهائية حتى 30 يوماً بعد آخر منشور مجدول لذلك الفيديو، وما
+                        دام لم يُجدول بعد. وحذف فيديو الشرح يحذف ملفاته.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
-                <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية. نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
+                <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية، إلا قوائم العملاء المموّهة التي يرفعها صاحب نشاط فُتحت له إلى حسابه الإعلاني لدى ميتا (<a href="#audiences-ar">القسم 1</a>). نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
                 <ul>
                     <li>
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
-                        وعبرها تُرسَل الردود.
+                        وعبرها تُرسَل الردود. وإن روّج صاحب الحساب منشوراً، تتلقّى ميتا ما يلزم لإنشاء الإعلان
+                        في حسابه الإعلاني (المنشور والميزانية والمدة والبلد والرابط) وتعيد المنصرف والنتائج
+                        المجمّعة (القسم 1).
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
                     </li>
                     <li>
@@ -1573,8 +1959,15 @@
                     </li>
                     <li>
                         <strong>جوجل</strong> — تتلقّى واجهة <bdi lang="en" dir="ltr">Gemini API</bdi> نصوص الرسائل الخاصة كما
-                        هو موضّح في القسم 3.
+                        هو موضّح في القسم 3. وفي فيديوهات الشرح المصوّرة لصاحب المنصة تتلقّى أيضاً النص الذي تقرؤه بصوتٍ مسموع،
+                        والموضوع والملاحظات والروابط إن كتبت هي النص (القسم 1).
                         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
+                    </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Cloudflare</bdi></strong> (<bdi lang="en" dir="ltr">Workers AI</bdi>) — لفيديوهات
+                        الشرح المصوّرة لصاحب المنصة فقط: تتلقّى الوصف القصير لكل صورة والصور المرجعية لشخصياته الكرتونية، وترسم الصور
+                        (القسم 1).
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Cloudflare</bdi></a>.
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Supabase</bdi></strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
@@ -1588,15 +1981,15 @@
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Vercel</bdi></a>.
                     </li>
                     <li>
-                        <strong><bdi lang="en" dir="ltr">Resend</bdi></strong> — يرسل بريداً إلكترونياً تنبيهياً إلى صاحب
-                        الحساب حين تحتاج محادثة إليه، إن فعّل ذلك. يحتوي التنبيه على اسمك ومقتطف من آخر ما كتبتَه، كما في
-                        القسم 1 (واتساب)، فيمرّ ذلك المقتطف عبر <bdi lang="en" dir="ltr">Resend</bdi>.
+                        <strong><bdi lang="en" dir="ltr">Resend</bdi></strong> — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة:
+                        تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك (أو آخر أربعة أحرف
+                        من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.
                         <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Resend</bdi></a>.
                     </li>
                     <li>
-                        <strong><bdi lang="en" dir="ltr">Telegram</bdi></strong> — الأمر نفسه إن اختار صاحب الحساب
-                        تنبيهات تيليجرام، بدلاً من البريد أو معه.
-                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Telegram</bdi></a>.
+                        <strong>تيليجرام</strong> (<bdi lang="en" dir="ltr">Telegram</bdi>) — يوصل التنبيهات نفسها رسائلَ إلى محادثة
+                        تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة.
+                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيليجرام</a>.
                     </li>
                 </ul>
 
@@ -1660,6 +2053,18 @@
                     <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>؛
                     وما يحدث للبيانات المخزّنة بعدها موضّح في القسم 4.
                 </p>
+                <p>
+                    ويستطيع صاحب الحساب أن يوقف ترويجاً أو يحذفه في أي وقت من صفحة المنشورات، وأن يزيل رمز
+                    الإعلانات من الإعدادات أو بفصل ميتا. وتبقى الإعلانات وسجلّاتها لدى ميتا خاضعة لسياستها.
+                </p>
+                <p>
+                    ولكي لا تُعرض عليك إعلانات نشاطٍ عبر قائمة عملاء أو جمهور، انظر
+                    <a href="#audiences-ar">كيف تطلب ألا تُستهدف</a> في القسم 1.
+                </p>
+                <p>
+                    وإن ملأت <a href="#leads-ar">نموذج جمع عملاء</a>، فاطلب الحذف بالبريد الإلكتروني أو رقم الهاتف الذي كتبته فيه:
+                    تُحذف إجاباتك كلها، دون أن يبقى منها حتى سجلّ العدد.
+                </p>
 
                 <h2 id="security-ar">7. كيف تُحفَظ البيانات</h2>
                 <ul>
@@ -1669,11 +2074,14 @@
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
-                        رمز وصول ميتا الخاص بصاحب الحساب، ورمز وصول واتساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
+                        رمز وصول ميتا الخاص بصاحب الحساب، ورمز وصول الإعلانات إن وُجد، ورمز وصول واتساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
                         <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
-                    <li>لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات — محميّة بكلمة مرور.</li>
+                    <li>
+                        لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات كاملةً — محميّة بكلمة مرور. ولا يحمل
+                        التنبيه (القسم 3) إلا المقتطف الموصوف هناك.
+                    </li>
                 </ul>
                 <p>
                     ولا نزعم أكثر من ذلك: لا يوجد تشفير من طرف إلى طرف، ونصوص الرسائل مخزّنة
@@ -1718,7 +2126,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 19 October 2026</p>
+                <p class="stamp">Last updated: 25 October 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, WhatsApp, TikTok and YouTube.</p>
 
@@ -1747,7 +2155,9 @@
                     the owner schedules to that account, or sends them to its drafts, and does
                     nothing else there. If the owner connects a YouTube channel, it uploads the
                     owner's own short videos to that channel as Shorts, and does nothing else there.
-                    It runs no advertising or marketing targeting, and it does not sell data.
+                    It does not sell data. If the owner uses its ads features, the owner's ads may be shown
+                    to people who engaged with or messaged the owner's account, through audiences Meta builds
+                    (<a href="#audiences-en">Audiences</a> below, with how to ask not to be targeted).
                 </p>
                 <p>
                     This page describes what happens to <em>your</em> data — as someone who
@@ -2052,16 +2462,201 @@
                     stored tokens and the channel's name and picture.
                 </p>
 
+                <h3 id="ads-en">When the account owner boosts a post (Meta ads)</h3>
+                <p>
+                    This part is about the account owner's own data too. The owner can boost a post they
+                    published on Instagram or Facebook with an ad created in their own Meta ad account,
+                    through Meta's Marketing API. This happens only if the owner set it up: by granting the
+                    ads permissions when connecting Meta, or by pasting an access token in Settings. Every
+                    ad is created <strong>paused</strong>, and nothing is spent until the owner confirms
+                    "Activate" themselves.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Stored, from the owner:</strong> their ad account ID, their maximum daily
+                        budget and their monthly spending cap. The app refuses any boost above them.
+                    </li>
+                    <li>
+                        <strong>Stored, encrypted:</strong> the access token the ads are created with,
+                        encrypted at rest with AES-256-GCM (section 7). Beside it, the app stores where it came
+                        from (connecting or pasting) and when it expires.
+                    </li>
+                    <li>
+                        <strong>For each boost:</strong> the post and platform, the objective, the target
+                        country, the link if there is one, the currency, budget, number of days and total,
+                        the status, Meta's IDs for the campaign, ad set, creative and ad, the amount spent,
+                        and the results: reach, impressions, clicks, cost per thousand impressions and the
+                        objective's results.
+                    </li>
+                    <li>
+                        <strong>Totals only:</strong> Meta does not tell the app who saw or clicked an ad,
+                        and the app does not ask. A boost targets a country, age 18 and over, and Meta's own
+                        audience automation; the owner may add or leave out saved audiences
+                        (<a href="#audiences-en">Audiences</a>). The app uses no pixel.
+                    </li>
+                    <li>
+                        <strong>Nothing about people who comment or message:</strong> nothing about anyone
+                        who comments or messages on Instagram or Facebook is sent to Meta for advertising.
+                    </li>
+                    <li>
+                        <strong>Conversations that start from an ad:</strong> when someone taps one of the owner's
+                        message ads, Meta sends details of the ad with their message, and the app stores them with the
+                        conversation: the ad's ID, the tracking code the app puts on its own ads, the ad's title and the
+                        image or video links as Meta sent them, and when the tap happened (plus the last ten later taps on
+                        other ads). They are used to show which ad started the conversation in the inbox and to count
+                        each ad's results (conversations, clicks on tracked links, hand-offs to a person). They reach the
+                        AI only if the owner turns on "Give the assistant the ad's context", and then only the ad's name, offer
+                        and text, never the media links or the ID. They are deleted with the conversation.
+                    </li>
+                    <li>
+                        <strong>Payment is between the owner and Meta:</strong> the ads are charged to the
+                        payment method on the owner's Meta ad account. The app never sees or stores card or
+                        billing details.
+                    </li>
+                    <li>
+                        <strong>The spending guard pauses any active campaign in the connected ad
+                        account:</strong> if this month's spend, plus the most the running budgets could still
+                        spend, would pass the monthly spending cap the owner set, the app pauses the active
+                        campaigns. That includes <strong>campaigns made in Meta Ads Manager or in other
+                        tools</strong>, not only the ones the app created. The app checks this every hour, and
+                        at once when a cap at or below this month's spend is saved.
+                    </li>
+                    <li>
+                        <strong>A daily check of the ad account's health:</strong> the app reads from Meta the
+                        ad account's status and the reason it was disabled, if any, whether it has a payment
+                        method (yes or no only), Meta's own spending limit, the amount spent, and whether the
+                        token still works. <strong>It does not read card numbers</strong> and keeps none.
+                    </li>
+                    <li>
+                        <strong>A stored copy of the ad account:</strong> the app keeps a copy of the connected ad
+                        account's campaigns, ad sets and ads (names, statuses, budgets, dates, a summary of the
+                        targeting such as countries and ages, and Meta's review notes), their daily results per ad
+                        (spend, impressions, reach, clicks, conversations started, leads and video views), and daily
+                        totals by country and by placement, so the screens can show them without asking Meta every
+                        time. <strong>These are totals only</strong>: Meta does not tell the app who saw or clicked
+                        an ad. Results are deleted after 37 months, and the whole copy is deleted when the owner
+                        removes the ads token, chooses another ad account or disconnects Meta (section 4).
+                    </li>
+                    <li>
+                        <strong>Who sees your ad spend:</strong> if your business is managed through the platform, the platform
+                        administrator sees only the health of your ads: whether the token works, the ad account's status, whether it
+                        has a payment method, the alerts of the last week, and the percentage of your monthly cap used.
+                        <strong>The amounts are shown to the administrator only if the account owner turns on</strong> "Share my ad
+                        spend with my account manager" in Settings, and they disappear as soon as it is turned off. You pay Meta from
+                        the payment method in your own ad account.
+                    </li>
+                    <li>
+                        <strong>AI ad proposals:</strong> when the account owner asks to "Suggest a campaign", or in the daily
+                        review of running ads, the AI model is given <strong>aggregate numbers only</strong>: the campaigns' and ad
+                        sets' names, budgets, statuses, targeting summary and each one's last-7-day totals; the owner's offers
+                        (name, price and a short summary with any email address or phone number removed); the limits they set;
+                        their own words in the request; and, when a proposal starts from a post, that post's caption and public
+                        counts. It is <strong>never</strong> given the messages, names, phone numbers, emails or form answers of the
+                        people who contact the account owner. Drafts for the platform owner's own account are written by
+                        <bdi>Claude</bdi> on the owner's computer; drafts for any other business by the AI provider switched on for
+                        it (see <a href="#ai-providers-en">AI providers</a> below). The proposal is stored (the request, the draft,
+                        its reasons, the numbers it was based on, and who approved or rejected it), and nothing is created or
+                        changed at Meta until the account owner approves; a new campaign is created paused.
+                    </li>
+                    <li>
+                        <strong>Ads alerts:</strong> when something is wrong (spending paused at the cap, a
+                        failed payment, a disabled account, a token that stopped working, or the app being
+                        unable to watch spending) the app sends a short alert. <strong>An alert contains the
+                        kind of problem, the ad account and amounts such as the spend and the cap. It never
+                        contains customer data or card data.</strong> It is sent to the Telegram chat and/or
+                        the email address the owner set in Settings, with a copy to the platform operator. The
+                        message passes through Telegram's or the email service's systems to get there. Alert
+                        records are kept for one year (section 4).
+                    </li>
+                    <li id="audiences-en">
+                        <strong>Audiences from engagement:</strong> the account owner can ask Meta to build an
+                        “audience” of the people who engaged with the owner's Instagram account or Facebook Page,
+                        messaged them, or watched the owner's published videos, over a period the owner chooses, or a
+                        “lookalike” of them in a chosen country, to show them ads or leave them out.
+                        <strong>The app sends no data about anyone for this</strong>: it sends Meta only the rule (the
+                        account, the kind of engagement, the period), and Meta knows who engaged. The app keeps the
+                        audience's name, kind, settings, status and Meta's approximate size. Audience names are always
+                        neutral, and audiences are never built from what you wrote in a conversation or from how the
+                        automated replies labelled it.
+                    </li>
+                    <li>
+                        <strong>Customer lists:</strong> locked for each business until the platform admin records a
+                        legal sign-off for its countries. Once unlocked, the owner can upload a list of customers'
+                        emails or phone numbers after confirming they consented. <strong>Every value is scrambled inside
+                        the app</strong> (normalised, then hashed with <bdi lang="en" dir="ltr">SHA-256</bdi>) before
+                        anything is sent to Meta, and only scrambled values are sent. <strong>The list is not
+                        kept</strong>: the text is read and dropped, only the number of rows sent stays, and the
+                        scrambled values are cleared from the queue when the upload ends. Anyone who stopped WhatsApp
+                        messages or withdrew marketing consent there, and anyone recorded as asking not to be
+                        targeted, is left out automatically.
+                        Meta matches the scrambled values against its accounts and then deletes them.
+                    </li>
+                    <li>
+                        <strong>How to ask not to be targeted:</strong> if you reply STOP in a WhatsApp chat with the
+                        business, or withdraw marketing consent there, your number is left out of every later upload.
+                        To also be removed from lists uploaded before, or if your request is about an email or comes
+                        from Instagram or Messenger, ask the business or write to us (section 9): your number or email
+                        is then recorded <strong>scrambled only</strong>, removed from the customer lists already at
+                        Meta, and left out of every later upload. You can also do it at Meta: “Why am I seeing this
+                        ad?”, then hide ads from that advertiser, or your Ad preferences.
+                    </li>
+                    <li id="leads-en">
+                        <strong>Lead forms (lead ads):</strong> locked for each business until the platform admin records a
+                        legal sign-off for its countries, and nothing is collected before that. Once unlocked, a business may
+                        show you an ad that opens a short form inside Facebook or Instagram. If you fill it in and send it, we
+                        receive from Meta <strong>your answers as you typed them</strong> (such as your name, phone number,
+                        email and any question the business added), the date, the form and the ad, and your answer to “May we
+                        contact you?” if the form asks it. <strong>The answers are stored encrypted</strong>, and your email
+                        and number are also kept as a code scrambled with a secret key so they can be found if you ask for
+                        deletion. Only the business owner sees them, and every download of them is recorded. <strong>Your
+                        answers are never sent to any AI provider, and the app never contacts you automatically</strong>
+                        because of them; any contact from the business is its own responsibility and needs your consent. The
+                        forms do not ask for sensitive information such as health, religion, financial or ID numbers.
+                    </li>
+                </ul>
+
+                <h3 id="explainers-en">When the platform owner makes an illustrated explainer (Studio)</h3>
+                <p>
+                    Illustrated explainers are narrated videos with drawn pictures that the platform owner makes about their own topics,
+                    for their own accounts. <strong>They use only the owner's own material: no comment, message, contact or form answer
+                    of anyone who writes to an account is used for them.</strong> Only the platform owner can use them.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Writing:</strong> the topic, notes and links the owner gives are sent to <bdi>Claude</bdi> (Anthropic) on
+                        the owner's own computer, which reads public web pages to research the topic and writes the script, the captions
+                        and the list of sources. If that computer is offline or signed out, or the owner chooses it, Google's Gemini writes
+                        it instead and searches the web with Google Search; the same topic, notes and links then reach Google.
+                    </li>
+                    <li>
+                        <strong>Voice:</strong> the script's text is sent to Google's Gemini text-to-speech to be read aloud. On Gemini's
+                        free tier Google may use what it receives to improve its products
+                        (<a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API terms</a>);
+                        the script is the text of a video that will be published.
+                    </li>
+                    <li>
+                        <strong>Pictures:</strong> each scene's short picture description, in English, and the reference pictures the
+                        owner chose for their recurring cartoon characters are sent to Cloudflare Workers AI, which draws the pictures.
+                    </li>
+                    <li>
+                        <strong>Stored:</strong> the topic, script, captions, sources, pictures, narration and finished videos are stored
+                        with the owner's account, and deleted as section 4 says.
+                    </li>
+                </ul>
+
                 <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
+                    <li>To alert the operator of the tool when a conversation with his own account needs a person (section 3).</li>
                     <li>To answer you if you message a WhatsApp number the account owner connected, and to alert the account owner when a conversation needs them.</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
+                    <li>To boost the posts the account owner chooses with ads in their own Meta ad account, within the limits they set, and to show what each boost spent and achieved.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
+                    <li>Showing lead-form answers to the business you asked to contact you, only after the legal sign-off.</li>
                 </ul>
 
                 <h2 id="gemini-en">3. Automated replies and Google Gemini</h2>
@@ -2083,9 +2678,11 @@
                     of the AI providers listed in section 5, and an account that uses the tool's sales mode
                     always has them written that way. Then <strong>the text of your message and up to the last
                     twelve messages in the thread</strong>, with the direction of each, are sent to that provider
-                    in place of Google, together with notes about the conversation itself: for example, whether
-                    you have already been sent a link, which of the account's buttons you tapped, or that you
-                    commented the account's keyword on a post (the keyword, not your comment). <strong>Your
+                    in place of Google. In sales mode they go together with notes about the conversation itself:
+                    for example, whether you have already been sent a link, which of the account's buttons you
+                    tapped, or that you commented the account's keyword on a post (the keyword, not your comment),
+                    and, if you came from one of the account's ads and the account owner has turned on "Give the
+                    assistant the ad's context", that ad's name, offer and text (section 1). <strong>Your
                     username, your account ID and the conversation ID are not sent to it either.</strong> If that
                     provider cannot answer, the reply may be written by Gemini as described above.
                 </p>
@@ -2110,6 +2707,19 @@
                     As Meta's policy requires, the first message in a thread — and another one
                     after a long gap — tells you that you are talking to an automated service. If you ask for a person,
                     the assistant is built to stop replying and hand the conversation to the account owner.
+                </p>
+                <p>
+                    <strong>When your conversation needs a person:</strong> the operator of the tool (section 9) may be
+                    alerted when no reply to your message could be written (a technical failure), and, in sales mode,
+                    when the assistant hands your conversation to a person (for example because you asked for one, asked
+                    for a refund or complained) or has just sent you the link after you asked to buy, asked the price or
+                    asked whether it suits you. This happens only for conversations with his own account, and only if he
+                    has switched the alerts on. The alert is a Telegram message and/or an email sent through Resend
+                    (section 5). <strong>It names you by your username, or, if we have none, by the last four characters
+                    of your account ID, and quotes up to 200 characters of the last message you wrote</strong>, with any
+                    link in it replaced by “[link]”. It also says why a person is needed, how long Meta's reply window
+                    has left, and links to the conversation in the dashboard. These alerts are not the ads alerts in
+                    section 1, which contain nothing about you.
                 </p>
 
                 <h2 id="retention-en">4. How long it is kept</h2>
@@ -2168,14 +2778,46 @@
                         posts until the owner deletes them. The audit log keeps an entry for each time
                         YouTube was connected, with the channel ID and the scopes granted.
                     </li>
+                    <li>
+                        <strong>Meta ads</strong> — the record of each boost (amount spent, results and
+                        Meta's IDs) has no automatic expiry, because it is a record of money spent: deleting
+                        the post or the boost does not erase it. An access token that came from connecting
+                        Meta is deleted when the owner disconnects Meta or removes the app in Facebook. A
+                        pasted token stays until the owner removes it in Settings. The audit log keeps an
+                        entry for each boost created, activated, paused or deleted, with the post, budget,
+                        days, status and campaign ID, and never the token.
+                    </li>
+                    <li>
+                        <strong>Ads alerts</strong> — the kind of each alert, its ad account, its amounts and
+                        time, and whether it was delivered: deleted after one year.
+                    </li>
+                    <li>
+                        <strong>The stored copy of the ad account and its results</strong> — refreshed every hour;
+                        daily results are deleted after 37 months, and the record of changes sent to Meta after 180
+                        days. The copy and the results are deleted when the ads token is removed, another ad
+                        account is chosen, or Meta is disconnected; boost spend records stay, as above.
+                    </li>
+                    <li>
+                        <strong>Lead-form answers</strong> — deleted automatically 90 days after they were sent, or after the
+                        period the business owner chooses (1 to 365 days). A count-only record then stays (the date, the form,
+                        the ad) with no data about you. All of it is deleted if you ask (section 6).
+                    </li>
+                    <li>
+                        <strong>Illustrated explainers</strong> — the pictures, the characters' reference pictures and the music tracks are kept while
+                        an explainer or the settings use them. The narration and the finished videos are kept until 30 days after the
+                        explainer's last scheduled post, and while it has none. Deleting an explainer deletes its files.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
-                <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing. We rely on these service providers purely to run the tool:</p>
+                <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing, except the scrambled customer lists that a business with customer lists unlocked uploads to its own Meta ad account (<a href="#audiences-en">section 1</a>). We rely on these service providers purely to run the tool:</p>
                 <ul>
                     <li>
                         <strong>Meta</strong> (Instagram and Facebook) — comments and messages
-                        arrive from Meta, and replies are sent back through it.
+                        arrive from Meta, and replies are sent back through it. If the account owner
+                        boosts a post, Meta receives what it needs to create the ad in the owner's ad
+                        account (the post, budget, days, country and link) and returns the spend and the
+                        totals (section 1).
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
                     </li>
                     <li>
@@ -2205,8 +2847,15 @@
                     </li>
                     <li>
                         <strong>Google</strong> — the Gemini API receives direct-message text as
-                        described in section 3.
+                        described in section 3. For the platform owner's illustrated explainers it also receives the script to read
+                        aloud, and the topic, notes and links when Gemini writes the script (section 1).
                         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Cloudflare</strong> (Workers AI) — only for the platform owner's illustrated explainers: it receives each
+                        picture's short description and the reference pictures of the owner's cartoon characters, and draws the pictures
+                        (section 1).
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's privacy policy</a>.
                     </li>
                     <li>
                         <strong>Supabase</strong> — hosts the database everything above is
@@ -2220,14 +2869,15 @@
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Vercel's privacy policy</a>.
                     </li>
                     <li>
-                        <strong>Resend</strong> — sends the account owner an alert email when a conversation needs them, if
-                        they switched that on. The alert carries your name and an excerpt of the last thing you wrote, as
-                        section 1 (WhatsApp) says, so that excerpt passes through Resend.
+                        <strong>Resend</strong> — sends the alert emails, when they are switched on: the alerts about a
+                        conversation that needs a person, described in section 3, which carry your username (or the last
+                        four characters of your account ID) and up to 200 characters of your last message, and the ads
+                        alerts in section 1.
                         <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Resend's privacy policy</a>.
                     </li>
                     <li>
-                        <strong>Telegram</strong> — the same, if the account owner chose Telegram alerts instead of email or as
-                        well.
+                        <strong>Telegram</strong> — delivers the same alerts as Telegram messages, to the chat set in
+                        Settings, when they are switched on.
                         <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">Telegram's privacy policy</a>.
                     </li>
                 </ul>
@@ -2295,6 +2945,19 @@
                     <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>;
                     what happens to the stored data then is in section 4.
                 </p>
+                <p>
+                    An account owner can pause or delete a boost at any time from the Posts screen, and
+                    remove the ads token in Settings or by disconnecting Meta. The ads and their records
+                    at Meta remain subject to Meta's own policy.
+                </p>
+                <p>
+                    To stop being shown a business's ads through a customer list or an audience, see
+                    <a href="#audiences-en">how to ask not to be targeted</a> in section 1.
+                </p>
+                <p>
+                    If you filled in a <a href="#leads-en">lead form</a>, ask for deletion with the email or phone number you
+                    typed in it: all your answers are deleted, without even the count-only record.
+                </p>
 
                 <h2 id="security-en">7. How the data is protected</h2>
                 <ul>
@@ -2304,11 +2967,14 @@
                         it is processed, so no one else can inject forged events into the system.
                     </li>
                     <li>
-                        The account owner's Meta access token, their WhatsApp access token, and their TikTok and YouTube access
+                        The account owner's Meta access token, their ads access token if there is one, their WhatsApp access token, and their TikTok and YouTube access
                         and refresh tokens, are <strong>encrypted before they are stored</strong>,
                         with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
-                    <li>The dashboard — the only place conversations are read from — is password-protected.</li>
+                    <li>
+                        The dashboard — the only place whole conversations are read from — is password-protected. An
+                        alert (section 3) carries only the excerpt described there.
+                    </li>
                 </ul>
                 <p>
                     We claim no more than that: there is no end-to-end encryption, and message

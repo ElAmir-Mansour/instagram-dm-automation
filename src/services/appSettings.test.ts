@@ -294,7 +294,7 @@ describe('the Meta login settings (P26)', () => {
 
     it('are OFF by default: nothing saved means a tenant cannot start a connection', async () => {
         settingsHold({});
-        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null });
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null, adsScopesEnabled: false });
     });
 
     it('turn on only for the exact value "true"', async () => {
@@ -309,9 +309,9 @@ describe('the Meta login settings (P26)', () => {
     it('read the configuration id from the database first, then META_LOGIN_CONFIG_ID, and say which', async () => {
         process.env.META_LOGIN_CONFIG_ID = '111111111111111';
         settingsHold({});
-        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '111111111111111', configIdSource: 'env' });
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '111111111111111', configIdSource: 'env', adsScopesEnabled: false });
         settingsHold({ 'meta.login_config_id': '222222222222222' });
-        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '222222222222222', configIdSource: 'database' });
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '222222222222222', configIdSource: 'database', adsScopesEnabled: false });
     });
 
     it('ignore a configuration id that is not one, with a log line, instead of sending it to Meta', async () => {
@@ -319,7 +319,7 @@ describe('the Meta login settings (P26)', () => {
         const previous = setLogSink((_level, line) => { lines.push(line); });
         try {
             settingsHold({ 'meta.login_config_id': 'not-a-number' });
-            assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null });
+            assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null, adsScopesEnabled: false });
             assert.ok(lines.some((l) => /meta\.login_config_id_unreadable/.test(l)));
         } finally {
             setLogSink(previous);

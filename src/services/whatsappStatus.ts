@@ -6,7 +6,7 @@
  *   account      quality, limits, bans, restrictions, name review, Meta's alerts: written to the connection's profile and status and told to the
  *                owner once per distinct change (whatsappAccount.ts). A quality event carries no rating, so the real numbers are read from
  *                Meta afterwards (whatsappHealth.ts), best effort
- *   preference   a customer's marketing opt-in or opt-out: LOG ONLY in this phase (a later phase acts on it)
+ *   preference   a customer's "stop / resume marketing messages" button: a `marketing` consent row (`consentPreferences.ts`), for the tenant that owns the number
  *
  * None of these ever reaches an AI, and none sends a WhatsApp message. The first delivery of a `service` message also checks the owner's
  * free-reply alert (`checkFreeTierAlert`, once per period) after the transaction below has committed.
@@ -30,6 +30,13 @@
  *
  * A status for a message that has no row (`wa.status_unknown_message`) completes without a retry: it is one of ours sent before this phase
  * wrote rows, or one the agent has not stored yet. The next status for the message carries the same pricing.
+ *
+ * ## The free-entry window (W8, T049, review M20)
+ *
+ * A click-to-WhatsApp ad makes the conversation's service messages free for up to 7 days, but only for a real click on a phone, so a `referral` alone proves nothing and
+ * `free_window_expires_at` is NEVER set from one. The proof is a status of OUR message whose `pricing.type` is `free_entry_point`: Meta puts the window's own end in that
+ * status's `conversation.expiration_timestamp`, and that is what is stored (`applyFreeEntryWindow`), clamped to 7 days from the status and never moved earlier. A status
+ * with any other pricing type, or no expiry, changes nothing. The window then lets `isWindowOpen` (channels/window.ts) say yes after the 24 h are over.
  */
 import type { MessageDeliveryStatus } from '../db/rows.js';
 import type { WaEventPayload } from '../jobs/types.js';
@@ -37,8 +44,10 @@ import { normalizeWhatsAppChange, type WaStatus } from '../webhook/whatsapp.js';
 import { describeError, log } from '../utils/log.js';
 import { recordDelivery } from './channelUsage.js';
 import { withTransaction } from './studio/common.js';
+import { handleUserPreference } from './consentPreferences.js';
 import { checkFreeTierAlert, handleAccountEvent } from './whatsappAccount.js';
 import { checkConnectionHealth } from './whatsappHealth.js';
+import { getCreatorByWhatsAppNumber } from './tenant.js';
 
 /** The order a message's status only ever moves up. See the header for where `failed` sits and why. */
 export const STATUS_RANK: Readonly<Record<MessageDeliveryStatus, number>> = Object.freeze({ sent: 1, failed: 2, delivered: 3, read: 4, played: 5 });
@@ -68,6 +77,35 @@ function errorText(error: { title: string | null; details: string | null } | und
     if (!error) return null;
     const text = [error.title, error.details].filter((part): part is string => Boolean(part)).join(': ');
     return text ? text.slice(0, 500) : null;
+}
+
+/** The most a free-entry window can last: Meta's own limit, and the clamp on whatever a status says (a window cannot be longer than the offer). */
+export const FREE_ENTRY_WINDOW_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Store the free-entry window a status proves (see the header): only for `pricing.type = 'free_entry_point'`, only from the status's own `conversation.expiration_timestamp`, only
+ * for the thread of the message the status is about, never earlier than what is stored, never more than 7 days past the status, and not at all when it is already over. One
+ * statement keyed on the message, so the status's read lock on that row is what orders two statuses for one message.
+ */
+async function applyFreeEntryWindow(
+    tx: { query: (sql: string, params: unknown[]) => Promise<unknown> },
+    row: OutboundRow,
+    status: WaStatus,
+): Promise<void> {
+    if (status.pricing?.type?.toLowerCase() !== 'free_entry_point') return;
+    const expiresAt = status.conversation?.expiresAt;
+    if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || !row.creator_id) return;
+
+    const at = status.timestamp !== null ? status.timestamp * 1000 : Date.now();
+    const end = Math.min(expiresAt * 1000, at + FREE_ENTRY_WINDOW_MAX_MS);
+    if (end <= Date.now()) return;
+    await tx.query(
+        `UPDATE conversations
+            SET free_window_expires_at = $3
+          WHERE id = (SELECT conversation_id FROM messages WHERE id = $1) AND creator_id = $2 AND platform = 'whatsapp'
+            AND (free_window_expires_at IS NULL OR free_window_expires_at < $3)`,
+        [row.id, row.creator_id, new Date(end)]
+    );
 }
 
 /**
@@ -113,6 +151,8 @@ export async function applyStatus(status: WaStatus & { status: MessageDeliverySt
                 status.pricing?.billable ?? null,
             ]
         );
+
+        await applyFreeEntryWindow(tx, row, status);
 
         const counted = isDelivered(status.status) && !isDelivered(row.delivery_status);
         if (counted) {
@@ -190,10 +230,19 @@ export async function handleWhatsAppEvent(payload: WaEventPayload): Promise<void
             }
             return;
         }
-        case 'preference':
-            // A later phase turns it into a consent row. The detail names a person's phone number: not logged.
+        case 'preference': {
+            // Meta's own "stop / resume marketing messages" button, as a `marketing` consent row for the tenant that owns the number (`handleUserPreference`). It names a person:
+            // neither the phone nor the BSUID is logged here or there. A database failure throws, so the job is retried and the stop is not lost; a number nobody connected is
+            // `wa.no_creator` and completes (a retry would find the same nothing).
             log('info', 'wa.preference_event', { field: 'user_preferences', entry_id: payload.entryId, phone_number_id: payload.phoneNumberId });
+            const tenant = await getCreatorByWhatsAppNumber(payload.phoneNumberId);
+            if (!tenant) {
+                log('warn', 'wa.no_creator', { phone_number_id: payload.phoneNumberId, source: 'user_preferences' });
+                return;
+            }
+            await handleUserPreference(tenant.creator.id, payload);
             return;
+        }
         default: {
             const never: never = payload;
             log('warn', 'wa.event_unknown_kind', { kind: (never as { kind?: unknown })?.kind ?? null });

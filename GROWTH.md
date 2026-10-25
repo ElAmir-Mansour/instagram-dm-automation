@@ -6,8 +6,9 @@ SEO and reach levers the platforms offer through their APIs. It's a SaaS feature
 per tenant and nothing is hardcoded to one creator.
 
 State on 2026-09-25 (ElAmir's tenant): Instagram has 36 followers and 46 posts. Every post gets about 2
-likes and 0 comments. Media and account insights are unreachable, because the Page token lacks
-`instagram_manage_insights` (Graph error #10). Facebook Page insights need `read_insights`. TikTok
+likes and 0 comments. Media and account insights were unreachable, because the Page token lacked
+`instagram_manage_insights` (Graph error #10); Facebook Page insights need `read_insights`. The token was
+regenerated with both that day (`src/services/growth/README.md` §2), and Connect with Facebook asks for both. TikTok
 metrics need scopes the TikTok app doesn't have yet (`video.list`, `user.info.stats`).
 
 ## 1. Data: `src/config/migration_v22_growth.sql` (RLS on, idempotent)
@@ -38,8 +39,12 @@ growth_settings (
   hashtag_sets jsonb NOT NULL DEFAULT '[]',  -- [{ name, tags: string[] }]
   competitors text[] NOT NULL DEFAULT '{}',  -- Instagram usernames, for Business Discovery
   audience jsonb NOT NULL DEFAULT '{}',      -- { countries: ['SA','AE','EG'], languages: ['ar'], timezone }
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  last_sync_at timestamptz, last_sync jsonb,  -- v22: the sync's 10-minute rate limit and what the last run found
+  goal_followers integer NOT NULL DEFAULT 10000, goal_views bigint NOT NULL DEFAULT 1000000  -- v25
 )
+-- For a tenant with a stored creator profile (v33), `audience` and the goals are a MIRROR of the profile
+-- (GROWTH_PROFILE_PATHS, src/services/profile/views.ts): edit them from the dashboard, never in SQL.
 ```
 
 ## 2. Sync: `src/services/growth/*.ts`
@@ -68,7 +73,7 @@ growth_settings (
 - **Collaborators** (`collaborators`: up to 3 usernames) for Collab posts, so they're shown to both audiences.
 - **Trial reels** (`trial_params` with a graduation strategy), which show a reel to non-followers first. Offer it only if the Content Publishing API supports it for this account type.
 - **Keywords:** the Studio writer puts 1–2 of the tenant's `keywords` naturally into the caption's first line, and into the on-slide text where it fits. Hashtags come from `hashtag_sets`.
-- Every new field is optional, validated server-side, and stored in `scheduled_posts.platform_options`, or in a new column if cleaner (say which). If the API refuses a field for this account, the post still publishes without it and the row notes it.
+- Every new field is optional, validated server-side, and stored in `scheduled_posts.meta_options` (the column v22 added for these). If the API refuses a field for this account, the post still publishes without it and the row notes it.
 
 ## 5. Dashboard: the `#/growth` page («النمو والتسويق»)
 - **Permission banner.** When `missing` isn't empty, a one-screen fix: regenerate the Meta token with `instagram_manage_insights`
@@ -80,3 +85,9 @@ growth_settings (
 - **SEO tools:** the keyword list with Suggest, hashtag sets, and competitors with Business Discovery cards.
 - In the composer and the Studio schedule panel: alt text per slide, collaborators, and a trial-reel toggle, each with a "Learn more".
 - Help Center articles: "Growth & insights" and "Instagram & TikTok SEO".
+- **Paid series (Ads A6).** `GET /api/growth/overview` gains `paid: { currency, daily: [{ day, spend, results, follows, conversations,
+  linkClicks, provisional }], syncedAt, provisionalFrom, otherCurrencies, excludesTax: true } | null` (`src/services/growth/paid.ts`): an
+  account-level read of the ads stored copy (`getAdsResults`, never Meta) over the same window. One currency, the ad account's; rows in
+  any other are left out and named. `null` without ads rows, so no empty card. The page draws it as its own **Paid (ads)** card under
+  the organic summary, never on the organic chart's axis; spend excludes tax, the last 3 days are provisional, and there is no
+  sales-based figure (sales happen on another website; for the owner, Udemy).

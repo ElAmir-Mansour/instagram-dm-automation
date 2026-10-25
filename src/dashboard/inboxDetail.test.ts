@@ -803,6 +803,77 @@ describe('a message with no words — the chip is the message, and the placehold
     });
 });
 
+// ─── A WhatsApp voice note: the chip, and under it what was said ─────────────────────────────
+/**
+ * WhatsApp transcribes a tester's voice note and stores the transcript as the inbound row's `text` (src/webhook/whatsappMediaInput.ts); the row's
+ * `message_type` stays `audio`, so the inbox draws the chip as before. Before this the owner saw a chip and could not read what was said. An
+ * Instagram voice note is stored as the `[voice note]` placeholder and has no words, and is drawn exactly as it was.
+ */
+describe('a WhatsApp voice note — the chip, and the transcript under it', () => {
+    const TRANSCRIPT = 'كم سعر الخطة وهل تناسب المبتدئين؟';
+    // The whole WhatsApp event, as `raw_payload` holds it for a tester: not Instagram's `message.attachments` shape.
+    const WA_EVENT = { messaging_product: 'whatsapp', messages: [{ id: 'wamid.X', type: 'audio', audio: { id: 'MEDIA-VOICE-1', voice: true } }] };
+    const voice = (text: unknown, over: Json = {}): Json => ({ id: 'v', direction: 'inbound', message_type: 'audio', text, created_at: NOW(), raw_payload: WA_EVENT, ...over });
+    const LABELS: Record<string, string> = { en: 'Voice note transcript', ar: 'نص الرسالة الصوتية' };
+
+    for (const lang of LANGS) {
+        it(`keeps the chip and prints the transcript under it, labelled, as one block (${lang})`, () => {
+            const { I, t } = load(lang);
+            const markup = String(I.messageBubble(voice(TRANSCRIPT)));
+            assert.equal(t('inbox.voiceTranscript'), LABELS[lang]);
+            assert.ok(markup.includes(t('inbox.attach.audio')), 'the chip is still there');
+            assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 1, 'one chip');
+            assert.ok(markup.includes(`<span class="msg-transcript-label">${LABELS[lang]}</span>`), 'the label');
+            assert.ok(markup.includes(`<p class="msg-transcript-text" dir="auto">${TRANSCRIPT}</p>`), 'the words, with dir="auto" like every inbound text');
+            assert.ok(markup.indexOf('msg-attachments') < markup.indexOf('msg-transcript'), 'under the chip, not above it');
+            assert.ok(markup.indexOf('msg-transcript') < markup.indexOf('message-time'), 'inside the bubble, before its time');
+            assert.ok(!markup.includes('<p dir="auto"'), 'and not also as the bubble\'s own text line');
+        });
+    }
+
+    it('trims it, and escapes it like every other message text: a transcript is words a stranger said', () => {
+        const { I } = load();
+        const evil = '  <img src=x onerror=alert(1)> "><script>alert(2)</script>  ';
+        const markup = String(I.messageBubble(voice(evil)));
+        assert.ok(!/<script/i.test(markup) && !/<img src=x/i.test(markup), 'no markup came through');
+        assert.ok(markup.includes('&lt;img src=x onerror=alert(1)&gt;'));
+        assert.ok(markup.includes('class="msg-transcript-text" dir="auto">&lt;img'), 'trimmed');
+    });
+
+    it('is nothing for an Instagram voice note (the placeholder), an empty text, a text of spaces, or a row with no text at all: the chip alone, as before', () => {
+        const { I, t } = load();
+        for (const text of ['[voice note]', '  [voice note] ', '', '   ', null, undefined, 7]) {
+            const markup = String(I.messageBubble(voice(text)));
+            assert.ok(!markup.includes('msg-transcript'), `${JSON.stringify(text)}: no transcript block`);
+            assert.ok(!markup.includes(t('inbox.voiceTranscript')), `${JSON.stringify(text)}: no label`);
+            assert.ok(markup.includes(t('inbox.attach.audio')), `${JSON.stringify(text)}: the chip`);
+            assert.ok(!markup.includes('<p dir="auto"'), `${JSON.stringify(text)}: no text line`);
+        }
+    });
+
+    it('only an inbound audio row has one: not a typed message, not another kind of attachment, not what the bot or an operator sent', () => {
+        const { I } = load();
+        assert.equal(I.voiceTranscript(voice(TRANSCRIPT)), TRANSCRIPT);
+        assert.equal(I.voiceTranscript(voice(TRANSCRIPT, { message_type: 'text' })), '');
+        assert.equal(I.voiceTranscript(voice(TRANSCRIPT, { message_type: 'image' })), '');
+        assert.equal(I.voiceTranscript(voice(TRANSCRIPT, { message_type: 'constructor' })), '');
+        assert.equal(I.voiceTranscript(voice(TRANSCRIPT, { direction: 'outbound', sender: 'ai' })), '');
+        assert.equal(I.voiceTranscript(null), '');
+        const bot = String(I.messageBubble(voice(TRANSCRIPT, { direction: 'outbound', sender: 'ai', message_type: 'attachment_ack' })));
+        assert.ok(!bot.includes('msg-transcript'));
+        const typed = String(I.messageBubble({ id: 't', direction: 'inbound', message_type: 'text', text: TRANSCRIPT, created_at: NOW() }));
+        assert.ok(!typed.includes('msg-transcript') && typed.includes(`>${TRANSCRIPT}<`), 'typed words are the bubble\'s own text, unlabelled');
+    });
+
+    it('an Instagram voice note is drawn exactly as before: the chip, no text, no transcript', () => {
+        const { I, t } = load();
+        const ig = { sender: { id: 'u' }, recipient: { id: 'p' }, message: { mid: 'm', attachments: [{ type: 'audio', payload: { url: 'https://cdn.example.test/a.m4a' } }] } };
+        const markup = String(I.messageBubble({ id: 'i', direction: 'inbound', message_type: 'audio', text: '[voice note]', created_at: NOW(), raw_payload: ig }));
+        assert.ok(markup.includes(t('inbox.attach.audio')) && markup.includes('msg-attachment-link'), 'the chip and its Open link');
+        assert.ok(!markup.includes('msg-transcript') && !markup.includes('[voice note]') && !markup.includes('<p dir="auto"'));
+    });
+});
+
 describe('the conversation header', () => {
     const SAM = {
         id: 'c1', platform: 'instagram', instagram_user_id: '17841400003051', is_bot_active: true,

@@ -24,6 +24,8 @@ import { describeError, log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { queueAdvance } from '../ads/proposals/advance.js';
+import { applyExplainerFailure, applyExplainerResult, isExplainerJobKind, type ExplainerApplyDeps } from '../explainers/apply.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
@@ -63,7 +65,7 @@ export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
 /** Every job kind, for a claim that asks for some of them only. */
 export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
     'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
-    'monteur_think', 'render_infographic',
+    'monteur_think', 'render_infographic', 'ads_think', 'explainer_write', 'explainer_voice', 'explainer_draw', 'explainer_render',
 ];
 
 export type StudioJobView = Pick<
@@ -79,19 +81,28 @@ type LockedJob = Pick<StudioJobRow, 'id' | 'creator_id' | 'kind' | 'status' | 'p
 
 /**
  * Every job is queued here but a `monteur_think` (think.ts has its own idempotent insert). Claude's work on
- * the Mac (macBrain.ts: a think, an infographic with `write`) is refused for any tenant but the owner and those
+ * the Mac (macBrain.ts: a think, an infographic with `write`, an explainer's script) is refused for any tenant but the owner and those
  * the operator added, whoever is asking: the callers check first and fail fast, this is the net under all of them.
  */
 export async function enqueueJob(
-    exec: Exec, creatorId: string, kind: StudioJobKind, payload: object
+    exec: Exec, creatorId: string, kind: StudioJobKind, payload: object, opts: { notBefore?: Date } = {}
 ): Promise<StudioJobView> {
     if (isMacBrainJob(kind, payload)) await assertMacBrainAllowed(creatorId);
-    const { rows } = await exec.query<StudioJobView>(
-        `INSERT INTO studio_jobs (creator_id, kind, payload)
-         VALUES ($1, $2, $3::jsonb)
-         RETURNING ${JOB_COLUMNS}`,
-        [creatorId, kind, JSON.stringify(payload)]
-    );
+    // `notBefore` (v59) is when the worker may first claim the job: a paused drawing, or a voice that ran into Gemini's limit, is asked again at the reset.
+    // A job that names none is inserted by the statement it always was, so nothing else's SQL or parameters change.
+    const { rows } = opts.notBefore
+        ? await exec.query<StudioJobView>(
+            `INSERT INTO studio_jobs (creator_id, kind, payload, not_before)
+             VALUES ($1, $2, $3::jsonb, $4)
+             RETURNING ${JOB_COLUMNS}`,
+            [creatorId, kind, JSON.stringify(payload), opts.notBefore]
+        )
+        : await exec.query<StudioJobView>(
+            `INSERT INTO studio_jobs (creator_id, kind, payload)
+             VALUES ($1, $2, $3::jsonb)
+             RETURNING ${JOB_COLUMNS}`,
+            [creatorId, kind, JSON.stringify(payload)]
+        );
     if (!rows[0]) throw new Error('studio_jobs insert returned no row.');
     return rows[0];
 }
@@ -229,9 +240,18 @@ export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, so
  *   0  pick_folder         someone is looking at the Mac, waiting for the folder dialog
  *   1  render_carousel     someone is waiting at the editor
  *   1  monteur_think       Claude on the Mac: a minute, and the Monteur's next step waits for it
+ *   1  ads_think           Claude on the Mac drafting an ad proposal: the owner is looking at a "drafting" card
+ *   1  explainer_write     Claude on the Mac writing an explainer's script: the owner is looking at a "writing" card
  *   2  monteur_render      a reel for the review queue, often right after an edit
+ *   2  explainer_voice, explainer_render   the narration voiced and timed, the two videos rendered: the owner is waiting on each step
  *   3  scan_library, monteur_scan   quick folder listings that queue the real work
+ *   3  explainer_draw      the drawing loop: it ends when the day's allowance does, and does not hold up the steps above
  *   4  index_lesson, monteur_transcribe   minutes each: the backlog that must not hold the rest
+ *
+ * A pending job is claimable only once its `not_before` has passed (v59). That column defaults to the moment the job was queued, so every job
+ * that never sets one is claimable at once, as it always was; a paused drawing queues its next `explainer_draw` for the hour the image
+ * allowance resets, and the claim skips it until then. A `claimed` job gone stale is reclaimed whatever its `not_before` says: that clock is for
+ * jobs nobody has started.
  *
  * SKIP LOCKED makes two claimers split the work rather than queue behind each other's lock,
  * and the lock itself is what stops them both taking the same row: the UPDATE runs on the row
@@ -243,12 +263,13 @@ export const CLAIM_SQL = `
           FROM studio_jobs
          WHERE creator_id = $1
            AND ($4::text[] IS NULL OR kind = ANY($4::text[]))
-           AND (status = 'pending'
+           AND ((status = 'pending' AND not_before <= NOW())
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'monteur_render' THEN 2
-                            WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'ads_think' THEN 1
+                            WHEN 'explainer_write' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'explainer_voice' THEN 2 WHEN 'explainer_render' THEN 2
+                            WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 WHEN 'explainer_draw' THEN 3 ELSE 4 END,
                   created_at, id
          LIMIT 1
            FOR UPDATE SKIP LOCKED
@@ -325,7 +346,8 @@ export async function claimJob(
  * on "indexing" forever. Runs before each claim, in its own transaction.
  */
 export async function failExhaustedClaims(creatorId: string): Promise<number> {
-    return withTransaction(async (client) => {
+    const exhaustedProposals: string[] = [];
+    const failed = await withTransaction(async (client) => {
         const { rows } = await client.query<LockedJob>(
             `UPDATE studio_jobs
                 SET status = 'failed', error = $4, progress = NULL, updated_at = NOW()
@@ -338,6 +360,8 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
         for (const job of rows) {
             log('warn', 'studio.job_exhausted', { job_id: job.id, kind: job.kind });
             await applyFailure(client, job, EXHAUSTED_ERROR);
+            const proposalId = job.kind === 'ads_think' ? payloadId(job, 'proposalId') : null;
+            if (proposalId) exhaustedProposals.push(proposalId);
         }
         // Folder dialogs nobody is waiting for any more are failed, never handed out.
         const { rowCount } = await client.query(
@@ -349,6 +373,8 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
         if (rowCount) log('info', 'monteur.folder_pick_expired', { jobs: rowCount });
         return rows.length;
     });
+    for (const id of exhaustedProposals) queueAdvance(creatorId, id, 'mac_failed');
+    return failed;
 }
 
 // ─── Progress ───────────────────────────────────────────────────────────────────────────
@@ -383,7 +409,8 @@ export type CompleteOutcome = 'applied' | 'dropped' | 'already_done';
  * worker reports the failure, and if it never does the claim goes stale like any other.
  */
 export async function completeJob(creatorId: string, jobId: string, result: unknown): Promise<CompleteOutcome> {
-    return withTransaction(async (client) => {
+    let proposalId: string | null = null;
+    const done = await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'done') return 'already_done';
         if (job.status !== 'claimed') {
@@ -415,8 +442,17 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
         } else if (job.kind === 'monteur_think') {
             // Only stored: the sweep reads it by its request id on its next drain (think.ts).
             stored = parseMonteurThinkResult(result);
+        } else if (job.kind === 'ads_think') {
+            // Only stored, like a think: the proposal reads it on its next advance (ads/proposals/service.ts), queued below once this commits.
+            stored = parseMonteurThinkResult(result);
+            proposalId = payloadId(job, 'proposalId');
         } else if (job.kind === 'render_infographic') {
             const applied = await applyInfographicRender(client, job, result);
+            stored = applied.stored;
+            outcome = applied.outcome;
+        } else if (isExplainerJobKind(job.kind)) {
+            // An illustrated explainer's step (v59, explainers/apply.ts): its result lands on the explainer, in this transaction, or is dropped.
+            const applied = await applyExplainerResult(client, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, result, EXPLAINER_DEPS);
             stored = applied.stored;
             outcome = applied.outcome;
         } else {
@@ -432,6 +468,9 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
         log('info', 'studio.job_completed', { job_id: job.id, kind: job.kind, outcome });
         return outcome;
     });
+    // After the commit, never inside it: the advance reads the stored result, and may read Meta for the money rule.
+    if (proposalId) queueAdvance(creatorId, proposalId, 'mac_done');
+    return done;
 }
 
 async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<LockedJob> {
@@ -445,7 +484,7 @@ async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<Lo
     return rows[0];
 }
 
-function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId' | 'infographicId'): string | null {
+function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId' | 'infographicId' | 'proposalId'): string | null {
     const value = isPlainObject(job.payload) ? (job.payload as Record<string, unknown>)[key] : undefined;
     return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
 }
@@ -739,6 +778,12 @@ export async function deleteUnreferencedUploads(
 }
 
 /**
+ * What the explainer appliers (explainers/apply.ts) need from this file, handed to them because they cannot import it: this file imports them.
+ * Function declarations are hoisted, so this object may be built before the functions it names.
+ */
+export const EXPLAINER_DEPS: ExplainerApplyDeps = { enqueue: enqueueJob, checkFiles: checkRenderFiles, deleteFiles: deleteUnreferencedUploads };
+
+/**
  * Land a render on its draft, or drop it.
  *
  * Dropped when it is not the draft's latest render job (an edit arrived while it rendered),
@@ -884,7 +929,7 @@ async function applyTranscribe(
  * (Instagram takes nothing else) — and, for one in Supabase Storage, actually there as declared:
  * a signed upload URL carries no size or type limit of its own, so the object itself is asked.
  */
-async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
+export async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
     const ids = unique(wanted.map(([id]) => id));
     const { rows } = await exec.query<{ id: string; mime_type: string; storage_path: string | null }>(
         'SELECT id, mime_type, storage_path FROM media_uploads WHERE id = ANY($1::uuid[]) AND creator_id = $2', [ids, creatorId]
@@ -986,9 +1031,11 @@ async function applyMonteurRender(
 
 /** The worker gave up. Terminal: the operator re-presses the button once the cause is fixed. */
 export async function failJob(creatorId: string, jobId: string, error: string): Promise<void> {
+    let proposalId: string | null = null;
     await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'failed') return;
+        if (job.kind === 'ads_think') proposalId = payloadId(job, 'proposalId');
         if (job.status !== 'claimed') {
             throw new StudioError(409, `This job is ${job.status}; only a claimed job can fail.`);
         }
@@ -999,6 +1046,8 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
         await applyFailure(client, job, error);
         log('warn', 'studio.job_failed', { job_id: job.id, kind: job.kind });
     });
+    // The proposal is failed (or asked again) by its own advance, after this commits.
+    if (proposalId) queueAdvance(creatorId, proposalId, 'mac_failed');
 }
 
 /**
@@ -1006,7 +1055,7 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
  * that is no longer the draft's (or clip's) latest leaves it alone: the newer one is still on its
  * way, and a scheduled one is past rendering. A failed `pick_folder` or `monteur_scan` is only a
  * failed job: neither has a row of its own. Nor is a failed `monteur_think`: it is one try, and the
- * sweep decides what comes next (think.ts).
+ * sweep decides what comes next (think.ts). An explainer's job is handed to explainers/apply.ts.
  */
 async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<void> {
     if (job.kind === 'index_lesson') {
@@ -1057,6 +1106,9 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
               WHERE id = $1 AND creator_id = $2 AND job_id = $4 AND status IN ('writing', 'rendering')`,
             [id, job.creator_id, error, job.id]
         );
+    } else if (isExplainerJobKind(job.kind)) {
+        // The explainer goes failed at the step this job was for, or a voice that hit Gemini's limit is queued again (explainers/apply.ts).
+        await applyExplainerFailure(exec, { id: job.id, creator_id: job.creator_id, kind: job.kind, payload: job.payload }, error, EXPLAINER_DEPS);
     }
 }
 
@@ -1132,14 +1184,19 @@ async function renderPair(
     await exec.query('UPDATE infographics SET pair_theme = NULL WHERE id = $1', [payloadId(job, 'infographicId')]);
 }
 
-/** Counts for the status card. */
-export async function jobCounts(creatorId: string): Promise<{ pending: number; claimed: number }> {
+/**
+ * Counts for the status card: `pending` is what the worker could claim now (the Mac is behind when it is more than 0), `claimed` what it is running, and
+ * `waiting` the jobs queued for LATER (a `not_before` still in the future: a drawing paused until the image allowance resets, a voice waiting for Gemini's
+ * quota). Those are nobody's backlog, so counting them as pending made the card say "waiting for the worker" about a Mac that had nothing to do.
+ * Every job that has no `not_before` of its own is due the moment it is queued, so for them `pending` is what it always was.
+ */
+export async function jobCounts(creatorId: string): Promise<{ pending: number; claimed: number; waiting: number }> {
     const { rows } = await pool.query<{ status: string; n: number }>(
-        `SELECT status, COUNT(*)::int AS n FROM studio_jobs
+        `SELECT CASE WHEN status = 'pending' AND not_before > NOW() THEN 'waiting' ELSE status END AS status, COUNT(*)::int AS n FROM studio_jobs
           WHERE creator_id = $1 AND status IN ('pending', 'claimed')
-          GROUP BY status`,
+          GROUP BY 1`,
         [creatorId]
     );
     const count = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
-    return { pending: count('pending'), claimed: count('claimed') };
+    return { pending: count('pending'), claimed: count('claimed'), waiting: count('waiting') };
 }

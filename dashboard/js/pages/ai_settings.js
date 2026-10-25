@@ -32,6 +32,16 @@ const AiSettingsPage = {
     /** Set by `discardChanges()`: the person was asked, and said to lose the edits, so `destroy()` must not park them. */
     _discarded: false,
 
+    /**
+     * May this session change the agent? `POST /settings/ai`, `POST /settings/ai/test` and `POST /settings/sales-variants` are `canOperate` on the
+     * server (the follow-up delay's route is a platform admin's, who always acts as owner), while `GET /settings/ai` is open to every role: a
+     * viewer reads this page and has no live control on it, instead of learning it from an English 403 toast. Optimistic like `App.tenantRole()`:
+     * where the shell cannot answer (a test harness, a page before the session has loaded) the session is an operator's.
+     */
+    canEdit() {
+        return typeof App === 'undefined' || typeof App.canOperate !== 'function' || App.canOperate();
+    },
+
     render() {
         const container = document.getElementById('page-container');
         if (!container) return;
@@ -172,6 +182,11 @@ const AiSettingsPage = {
     },
 
     shell() {
+        // A viewer reads: the switches, pickers, slider and buttons are disabled, and the text boxes are read-only, so the prompt can still be
+        // read, selected and copied. An operator's markup is what it always was: both are '' for them.
+        const editable = this.canEdit();
+        const off = editable ? '' : html.raw(' disabled');
+        const lock = editable ? '' : html.raw(' readonly');
         return html`
             <div class="ai-grid">
                 <section class="surface ai-panel">
@@ -185,6 +200,7 @@ const AiSettingsPage = {
                         <h3 aria-level="2">${t('ai.configTitle')}</h3>
                     </div>
                     <p class="form-hint mbe-3">${UI.helpLink('ai-usage', t('help.link.aiUsage'), { newTab: true })}</p>
+                    ${editable ? '' : html`<p class="form-hint mbe-3" id="ai-readonly-note" role="note"><i data-lucide="eye" aria-hidden="true"></i> ${t('ai.readOnly')}</p>`}
                     <div id="ai-settings-error"></div>
                     <form id="ai-settings-form" data-submit="ai:saveSettings"
                           data-input="ai:refreshDirty" data-change="ai:refreshDirty">
@@ -195,7 +211,7 @@ const AiSettingsPage = {
                             </div>
                             <label class="switch" for="ai-active-toggle">
                                 <span class="sr-only">${t('ai.enableLabel')}</span>
-                                <input type="checkbox" id="ai-active-toggle" checked>
+                                <input type="checkbox" id="ai-active-toggle" checked${off}>
                                 <span class="switch-track"></span>
                             </label>
                         </div>
@@ -215,7 +231,7 @@ const AiSettingsPage = {
                                  voice — unintelligible, not merely wrong. -->
                             <textarea id="system-prompt-text" class="field-textarea user-content" dir="auto" lang="ar" rows="8"
                                       aria-describedby="system-prompt-desc"
-                                      placeholder="${t('ai.systemPromptPlaceholder')}" required></textarea>
+                                      placeholder="${t('ai.systemPromptPlaceholder')}" required${lock}></textarea>
                         </div>
 
                         <div class="form-group">
@@ -223,7 +239,7 @@ const AiSettingsPage = {
                             <span class="field-desc" id="knowledge-base-desc">${t('ai.knowledgeDesc')}</span>
                             <textarea id="knowledge-base-text" class="field-textarea user-content" dir="auto" lang="ar" rows="10"
                                       aria-describedby="knowledge-base-desc"
-                                      placeholder="${t('ai.knowledgePlaceholder')}"></textarea>
+                                      placeholder="${t('ai.knowledgePlaceholder')}"${lock}></textarea>
                         </div>
 
                         <!-- The reply engine: Gemini is the call the bot has always made; AI providers goes through the layer
@@ -231,7 +247,7 @@ const AiSettingsPage = {
                         <div class="form-group">
                             <label class="form-label" for="engine-selector">${t('ai.engine')}</label>
                             <select class="select" id="engine-selector" data-change="ai:engineChanged"
-                                    aria-describedby="engine-desc engine-route-hint">
+                                    aria-describedby="engine-desc engine-route-hint"${off}>
                                 <option value="gemini">${t('ai.engineGemini')}</option>
                                 <option value="providers">${t('ai.engineProviders')}</option>
                             </select>
@@ -246,7 +262,7 @@ const AiSettingsPage = {
                             </div>
                             <label class="switch" for="gemini-fallback-toggle">
                                 <span class="sr-only">${t('ai.fallbackLabel')}</span>
-                                <input type="checkbox" id="gemini-fallback-toggle" data-change="ai:fallbackChanged" checked>
+                                <input type="checkbox" id="gemini-fallback-toggle" data-change="ai:fallbackChanged" checked${off}>
                                 <span class="switch-track"></span>
                             </label>
                         </div>
@@ -255,7 +271,7 @@ const AiSettingsPage = {
                              through the same "dm" route as the engine above, whichever engine is picked. The IDs are numbers, so the box is LTR. -->
                         <div class="form-group">
                             <label class="form-label" for="sales-mode-selector">${t('ai.sales')}</label>
-                            <select class="select" id="sales-mode-selector" data-change="ai:salesChanged" aria-describedby="sales-desc">
+                            <select class="select" id="sales-mode-selector" data-change="ai:salesChanged" aria-describedby="sales-desc"${off}>
                                 <option value="off">${t('ai.salesOff')}</option>
                                 <option value="test">${t('ai.salesTest')}</option>
                                 <option value="on">${t('ai.salesOn')}</option>
@@ -269,7 +285,7 @@ const AiSettingsPage = {
                             <textarea id="sales-test-senders" class="field-textarea" dir="ltr" lang="en" rows="3" inputmode="numeric"
                                       spellcheck="false" autocomplete="off" data-input="ai:salesChanged"
                                       aria-describedby="sales-senders-desc sales-senders-hint"
-                                      placeholder="${t('ai.salesSendersPlaceholder')}"></textarea>
+                                      placeholder="${t('ai.salesSendersPlaceholder')}"${lock}></textarea>
                             <p class="form-hint hidden" id="sales-senders-hint" role="status" aria-live="polite"></p>
                         </div>
 
@@ -279,7 +295,7 @@ const AiSettingsPage = {
                             <label class="form-label" for="sales-followup-minutes">${t('ai.salesFollowup')}</label>
                             <span class="field-desc" id="sales-followup-desc">${t('ai.salesFollowupDesc')}</span>
                             <input class="field" id="sales-followup-minutes" type="number" inputmode="numeric" dir="ltr" lang="en" min="0" max="1320" step="1"
-                                   autocomplete="off" data-input="ai:salesChanged" aria-describedby="sales-followup-desc sales-followup-hint">
+                                   autocomplete="off" data-input="ai:salesChanged" aria-describedby="sales-followup-desc sales-followup-hint"${lock}>
                             <p class="form-hint hidden" id="sales-followup-hint" role="status" aria-live="polite"></p>
                         </div>
 
@@ -294,13 +310,13 @@ const AiSettingsPage = {
                                 </div>
                                 <label class="switch" for="sales-variants-enabled">
                                     <span class="sr-only">${t('ai.variantsRun')}</span>
-                                    <input type="checkbox" id="sales-variants-enabled" data-change="ai:variantsChanged" aria-describedby="sales-variants-desc sales-variants-hint">
+                                    <input type="checkbox" id="sales-variants-enabled" data-change="ai:variantsChanged" aria-describedby="sales-variants-desc sales-variants-hint"${off}>
                                     <span class="switch-track"></span>
                                 </label>
                             </div>
                             <div class="variant-list" id="sales-variants-list"></div>
                             <div class="variant-actions">
-                                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'plus', label: t('ai.variantAdd'), action: 'ai:addVariant', id: 'sales-variant-add' })}
+                                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'plus', label: t('ai.variantAdd'), action: 'ai:addVariant', id: 'sales-variant-add', disabled: !editable })}
                             </div>
                             <p class="form-hint">${t('ai.variantsRetire')}</p>
                             <p class="form-hint hidden" id="sales-variants-hint" role="status" aria-live="polite"></p>
@@ -314,7 +330,7 @@ const AiSettingsPage = {
                                      This still offered Gemini 1.5 Flash after Google
                                      stopped serving it, and choosing it would have
                                      failed every DM. -->
-                                <select class="select" id="model-selector" aria-describedby="model-selector-hint">
+                                <select class="select" id="model-selector" aria-describedby="model-selector-hint"${off}>
                                     <option value="gemini-2.5-flash">Gemini 2.5 Flash ${t('ai.defaultModel')}</option>
                                     <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
                                     <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
@@ -335,7 +351,7 @@ const AiSettingsPage = {
                                     <output class="text-meta" id="temp-value" for="temp-slider">0.7</output>
                                 </div>
                                 <input type="range" id="temp-slider" min="0" max="1" step="0.1" value="0.7"
-                                       data-input="ai:updateTemperature" aria-describedby="temp-anchors">
+                                       data-input="ai:updateTemperature" aria-describedby="temp-anchors"${off}>
                                 <!-- AI5: what the two ends mean. A bare 0–1 slider said
                                      nothing about which end stops the agent improvising. -->
                                 <span class="field-desc" id="temp-anchors">${t('ai.temperatureAnchors')}</span>
@@ -345,7 +361,7 @@ const AiSettingsPage = {
                         <div class="form-actions ai-save-row">
                             ${UI.button({
                                 variant: 'primary', type: 'submit', icon: 'check',
-                                label: t('common.saveChanges'), id: 'save-settings-btn',
+                                label: t('common.saveChanges'), id: 'save-settings-btn', disabled: !editable,
                             })}
                             <span class="unsaved-note hidden" id="ai-unsaved-note" role="status">${t('ai.unsaved')}</span>
                         </div>
@@ -375,10 +391,10 @@ const AiSettingsPage = {
                             <form id="sandbox-send-form" data-submit="ai:sendSandboxTest">
                                 <label class="sr-only" for="sandbox-user-input">${t('ai.sandboxLabel')}</label>
                                 <input type="text" class="field" id="sandbox-user-input" dir="auto"
-                                       placeholder="${t('ai.sandboxPlaceholder')}">
+                                       placeholder="${t('ai.sandboxPlaceholder')}"${off}>
                                 ${UI.button({
                                     variant: 'primary', type: 'submit', icon: 'send',
-                                    ariaLabel: t('ai.sandboxSend'), id: 'sandbox-btn',
+                                    ariaLabel: t('ai.sandboxSend'), id: 'sandbox-btn', disabled: !editable,
                                 })}
                             </form>
                         </div>
@@ -409,8 +425,9 @@ const AiSettingsPage = {
             // looking at their actual system prompt above a dead Save button,
             // with no way out but a full page reload. Re-enabling belongs here,
             // with the fill that makes the form safe to submit again.
+            // (Never for a viewer: Save was drawn disabled, and a load must not hand it back.)
             const saveBtn = document.getElementById('save-settings-btn');
-            if (saveBtn) saveBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = !this.canEdit();
 
             toggle.checked = settings.is_active !== false;
             prompt.value = settings.system_prompt || '';
@@ -717,6 +734,8 @@ const AiSettingsPage = {
     /** One variant's card. Everything typed is an attribute value or element text of the `html` tag, which escapes it. */
     variantCard(row, canRemove, limits) {
         const field = (name) => `sales-variant-${row.id}-${name}`;
+        // Read-only for a viewer, like the rest of the form; '' for an operator.
+        const lock = this.canEdit() ? '' : html.raw(' readonly');
         return html`
             <fieldset class="variant-card" data-slot="${row.id}">
                 <legend class="variant-card-title">${t('ai.variantSlot', { slot: this.isolate(row.id) })}</legend>
@@ -724,23 +743,23 @@ const AiSettingsPage = {
                     <div class="form-group">
                         <label class="form-label" for="${field('label')}">${t('ai.variantName')}</label>
                         <input class="field" id="${field('label')}" type="text" maxlength="${limits.label}" dir="auto" autocomplete="off"
-                               value="${row.label}" placeholder="${t('ai.variantNamePlaceholder')}" data-input="ai:variantsChanged">
+                               value="${row.label}" placeholder="${t('ai.variantNamePlaceholder')}" data-input="ai:variantsChanged"${lock}>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="${field('weight')}">${t('ai.variantShare')}</label>
                         <input class="field" id="${field('weight')}" type="number" inputmode="numeric" dir="ltr" lang="en" min="0" max="${limits.weight}" step="1"
-                               autocomplete="off" value="${row.weight}" data-input="ai:variantsChanged">
+                               autocomplete="off" value="${row.weight}" data-input="ai:variantsChanged"${lock}>
                     </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="${field('opening')}">${t('ai.variantOpening')}</label>
                     <textarea class="field-textarea variant-text" id="${field('opening')}" rows="2" maxlength="${limits.text}" dir="auto"
-                              placeholder="${t('ai.variantOpeningPlaceholder')}" data-input="ai:variantsChanged">${row.opening}</textarea>
+                              placeholder="${t('ai.variantOpeningPlaceholder')}" data-input="ai:variantsChanged"${lock}>${row.opening}</textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="${field('cta')}">${t('ai.variantCta')}</label>
                     <textarea class="field-textarea variant-text" id="${field('cta')}" rows="2" maxlength="${limits.text}" dir="auto"
-                              placeholder="${t('ai.variantCtaPlaceholder')}" data-input="ai:variantsChanged">${row.cta}</textarea>
+                              placeholder="${t('ai.variantCtaPlaceholder')}" data-input="ai:variantsChanged"${lock}>${row.cta}</textarea>
                 </div>
                 ${canRemove ? UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('ai.variantRemove', { slot: this.isolate(row.id) }), action: 'ai:removeVariant', data: { slot: row.id } }) : ''}
             </fieldset>
@@ -752,12 +771,13 @@ const AiSettingsPage = {
         const state = this._variants;
         const list = document.getElementById('sales-variants-list');
         if (!state || !list) return;
-        list.innerHTML = esc(state.rows.map((row) => this.variantCard(row, !row.saved && state.rows.length > 2, state.limits)));
+        const editable = this.canEdit();
+        list.innerHTML = esc(state.rows.map((row) => this.variantCard(row, editable && !row.saved && state.rows.length > 2, state.limits)));
         UI.icons(list);
         const toggle = document.getElementById('sales-variants-enabled');
         if (toggle) toggle.checked = state.enabled;
         const add = document.getElementById('sales-variant-add');
-        if (add) add.disabled = state.rows.length >= state.limits.max;
+        if (add) add.disabled = !editable || state.rows.length >= state.limits.max;
         this.paintVariantsHint();
     },
 
@@ -804,7 +824,7 @@ const AiSettingsPage = {
 
     addVariant() {
         const state = this._variants;
-        if (!state) return;
+        if (!state || !this.canEdit()) return;
         this.syncVariantRows();
         const id = state.rows.length < state.limits.max ? this.freeVariantSlot(state.rows) : null;
         if (!id) return;
@@ -819,7 +839,7 @@ const AiSettingsPage = {
     /** Only a variant nobody has saved can be removed: a saved one may already hold conversations, and its slot must not be given to other wording. */
     removeVariant(slot) {
         const state = this._variants;
-        if (!state) return;
+        if (!state || !this.canEdit()) return;
         this.syncVariantRows();
         const row = state.rows.find((r) => r.id === slot);
         if (!row || row.saved || state.rows.length <= 2) return;
@@ -962,6 +982,8 @@ const AiSettingsPage = {
 
     async saveSettings(form, event) {
         event.preventDefault();
+        // The server refuses a viewer's save (`canOperate`); nothing is sent, and no toast quotes its 403.
+        if (!this.canEdit()) return;
         // The only double-submit guard in the dashboard (see components.js);
         // this form is never replaced on success, so restore() runs in
         // `finally` rather than being skipped on the happy path.
@@ -1072,6 +1094,8 @@ const AiSettingsPage = {
      */
     async sendSandboxTest(form, event) {
         event.preventDefault();
+        // `POST /settings/ai/test` is `canOperate` too: a test spends the agent's model, so a viewer does not run one.
+        if (!this.canEdit()) return;
         const input = document.getElementById('sandbox-user-input');
         const query = input.value.trim();
         if (!query) return;

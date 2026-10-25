@@ -133,6 +133,10 @@ export function connectionQuery(db: ConnectionDb, sqlIn: string, params: unknown
     if (sql === `${connectionColumns} WHERE creator_id = $1 AND platform = 'whatsapp'`) {
         return result(db.connections.filter((c) => c.creator_id === params[0]).map(withToken));
     }
+    // A webhook's own lookup: the connection a `phone_number_id` belongs to (`getConnectionByPhoneNumberId`), any row that is not revoked.
+    if (sql === `${connectionColumns} WHERE platform = 'whatsapp' AND external_account_id = $1 AND status <> 'revoked'`) {
+        return result(live(db).filter((c) => c.external_account_id === params[0]).map(withToken));
+    }
     if (sql === connectionColumns.replace(' FROM platform_connections', ', access_token FROM platform_connections') + ` WHERE creator_id = $1 AND platform = 'whatsapp'`) {
         return result(db.connections.filter((c) => c.creator_id === params[0]).map(withToken));
     }

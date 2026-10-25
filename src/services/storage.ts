@@ -50,6 +50,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { queryCount, queryOne, queryRows } from '../db/query.js';
+import { parseByteRange } from '../utils/byteRange.js';
 import { describeError, log } from '../utils/log.js';
 import type { MediaObjectDeletionRow, MediaUploadRow } from '../db/rows.js';
 import { APP_SETTING_KEYS, getMediaStorageConfig, getSetting, maskValue, type MediaStorageConfig } from './appSettings.js';
@@ -84,11 +85,23 @@ export type MediaContent =
      * An object in Storage, to be streamed. `size` is the Content-Length when known. `body` is
      * null when only the headers were asked for (HEAD), so nothing was fetched.
      */
-    | { kind: 'stream'; id: string; mimeType: string; size: number | null; body: Readable | null };
+    | {
+        kind: 'stream'; id: string; mimeType: string; size: number | null; body: Readable | null;
+        /** Set when `body` is only these bytes (inclusive) of a `total`-byte object: the route answers 206. `size` is the slice's. */
+        range?: { start: number; end: number; total: number };
+    }
+    /** The Range asked for lies wholly past the end of the object: the route answers 416. Nothing was fetched. */
+    | { kind: 'unsatisfiable'; id: string; mimeType: string; total: number };
 
 export interface OpenOptions {
     /** A HEAD request: answer from the row, without fetching the object. */
     headOnly?: boolean;
+    /**
+     * The request's `Range` header, as sent. A single byte range of a Storage row whose size is recorded is fetched as just those
+     * bytes (`src/utils/byteRange.ts`); anything else is ignored and the whole object streamed. A legacy BYTEA row ignores it here:
+     * the route slices those bytes itself.
+     */
+    range?: unknown;
     /**
      * Read a PRIVATE upload of this tenant instead of a public one. Without it a private row is "not found"; with it only a private row
      * of exactly this creator is found. For the authenticated inbox route, never for `/api/uploads/:id`.
@@ -432,12 +445,27 @@ export class SupabaseStorageMediaStore implements MediaStore {
         const recorded = sizeOf(row.size_bytes);
         if (options.headOnly) return { kind: 'stream', id, mimeType: row.mime_type, size: recorded, body: null };
 
-        const object = await this.clientFor(row.storage_path).openStream(row.storage_path);
+        const asked = parseByteRange(options.range, recorded);
+        if (asked.kind === 'unsatisfiable') return { kind: 'unsatisfiable', id, mimeType: row.mime_type, total: asked.total };
+        const wanted = asked.kind === 'range' ? asked : undefined;
+
+        const object = await this.clientFor(row.storage_path).openStream(row.storage_path, wanted);
         if (!object) {
             // The row says the object exists and Storage says it does not. Nothing the caller can
             // do about it, so a 404 — but loudly, because it means a file was lost.
             log('error', 'media.object_missing', { media_id: id, storage_path: row.storage_path });
             return null;
+        }
+        if (wanted && object.partial) {
+            const length = wanted.end - wanted.start + 1;
+            if (object.length !== null && object.length !== length) {
+                // Supabase sent a slice of another length than asked: the recorded size is stale. Say so; trust what is sent.
+                log('warn', 'media.range_mismatch', { media_id: id, asked_bytes: length, stored_bytes: object.length });
+            }
+            return {
+                kind: 'stream', id, mimeType: row.mime_type, size: object.length ?? length, body: object.body,
+                range: { start: wanted.start, end: object.length !== null ? wanted.start + object.length - 1 : wanted.end, total: wanted.total },
+            };
         }
         if (recorded !== null && object.length !== null && recorded !== object.length) {
             log('warn', 'media.size_mismatch', { media_id: id, recorded_bytes: recorded, stored_bytes: object.length });

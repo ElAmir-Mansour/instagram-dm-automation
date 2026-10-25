@@ -57,6 +57,32 @@ const dmDelivery = {
     }],
 };
 
+describe('planJobs: leadgen (lead ads, A10)', () => {
+    const leadgen = (value: Record<string, unknown>) => ({
+        object: 'page',
+        entry: [{ id: '200000000000001', time: 1, changes: [{ field: 'leadgen', value }] }],
+    });
+
+    it('a leadgen change is an ads.lead job keyed by the lead id, with ids only, and never a comment job', () => {
+        const planned = planJobs(leadgen({ leadgen_id: '9001', page_id: '200000000000001', form_id: '777', ad_id: '555', adgroup_id: '444', created_time: 1760000000 }));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'ads.lead');
+        assert.equal(planned[0]!.dedupeKey, 'lead:9001');
+        assert.equal(planned[0]!.tenantKey, '200000000000001');
+        assert.deepEqual(planned[0]!.payload, { leadgenId: '9001', pageId: '200000000000001', formId: '777', adId: '555', createdTime: 1760000000 });
+    });
+
+    it('a leadgen change without a lead id is dropped', () => {
+        assert.deepEqual(planJobs(leadgen({ page_id: '200000000000001' })), []);
+    });
+
+    it('a comment next to a lead still becomes a comment job', () => {
+        const body = leadgen({ leadgen_id: '9002' });
+        (body.entry[0]!.changes as any[]).push({ field: 'feed', value: { item: 'comment', comment_id: 'c1', verb: 'add' } });
+        assert.deepEqual(planJobs(body).map(j => j.kind), ['ads.lead', 'comment.process']);
+    });
+});
+
 describe('planJobs', () => {
     it('turns an Instagram comment into one comment job keyed on value.id', () => {
         const planned = planJobs(igComment);
@@ -251,6 +277,7 @@ function recordingQueue(behaviour: 'ok' | 'dedupe' | 'throw' = 'ok'): JobQueue &
         async complete() {},
         async fail() {},
         async reapStale() { return 0; },
+        async releaseUnrun() { return 0; },
         async pruneCompleted() { return 0; },
     };
 }
@@ -686,5 +713,53 @@ describe('isAcceptedWebhookObject', () => {
         for (const object of ['whatsapp', 'user', 'permissions', 'application', '', undefined, null, 5, {}, 'Instagram']) {
             assert.equal(isAcceptedWebhookObject(object), false, String(object));
         }
+    });
+});
+
+// ─── A3: ad referrals ───────────────────────────────────────────────────────────────────────────
+
+describe('planJobs — click-to-message ad referrals (A3)', () => {
+    const fixture = (name: string): any => JSON.parse(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8'));
+
+    it('enqueues an Instagram first message that carries a referral, keyed on its mid as any message', () => {
+        const planned = planJobs(fixture('ad-referral-instagram.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'dm.process');
+        assert.match(planned[0]!.dedupeKey!, /^dm:aWdf/);
+    });
+
+    it('enqueues a Messenger postback that carries a referral (a new thread), keyed on the postback mid', () => {
+        const planned = planJobs(fixture('ad-referral-messenger-postback.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.dedupeKey, 'dm:m_postback-ad-2');
+    });
+
+    it('enqueues a standalone referral from an ad (a returning person), keyed on who, which ad and when', () => {
+        const planned = planJobs(fixture('ad-referral-messenger-standalone.json'));
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'dm.process');
+        assert.equal(planned[0]!.dedupeKey, 'dmref:PSID-ad-3:120210000000000003:1761134400000');
+        assert.equal((planned[0]!.payload as any).object, 'page');
+    });
+
+    it('still drops a referral that is not from an ad, and a standalone referral event with no source', () => {
+        const planned = planJobs({
+            object: 'page',
+            entry: [{
+                id: 'p',
+                messaging: [
+                    { sender: { id: 'u' }, timestamp: 1, referral: { ref: 'promo', source: 'SHORTLINK', type: 'OPEN_THREAD' } },
+                    { sender: { id: 'u' }, timestamp: 2, referral: { ref: 'promo' } },
+                    { sender: { id: 'u' }, messaging_referral: { ref: 'promo' } },
+                ],
+            }],
+        });
+        assert.deepEqual(planned, []);
+    });
+
+    it('gives a standalone ad referral with no sender or timestamp no key (one attempt, like any event without a mid)', () => {
+        const planned = planJobs({ object: 'page', entry: [{ id: 'p', messaging: [{ referral: { ad_id: '1', source: 'ADS' } }] }] });
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.dedupeKey, undefined);
     });
 });

@@ -12,10 +12,12 @@
  * FAILED card — asks Google where that session got to first: an upload that finished before the
  * invocation died comes back as its video id instead of a second, duplicate Short.
  *
- * `platform_options` on a YouTube row: `{ title?, privacy?, language? }`. `title` is the Short's
+ * `platform_options` on a YouTube row: `{ title?, privacy?, language?, shorts? }`. `title` is the Short's
  * title (otherwise the caption's first line); `privacy` applies only while Settings → YouTube →
  * "Upload Shorts as public" is on; with it off, every upload is private. The row's `cover_url`
- * becomes the video's thumbnail.
+ * becomes the video's thumbnail. `shorts: false` is for a video that is not a Short (an explainer's horizontal video over
+ * three minutes): no `#Shorts` is added to its title or description. Only `false` says so; every other row, and every
+ * row from before the option, is tagged as it always was.
  */
 import { queryCount } from '../db/query.js';
 import type { ScheduledPostRow } from '../db/rows.js';
@@ -41,6 +43,8 @@ export interface YouTubePostOptions {
     title?: string;
     privacy?: YouTubePrivacy;
     language?: string;
+    /** `false`: this is not a Short, so `#Shorts` is not added. Absent: it is one (the default, and what every row was). */
+    shorts?: false;
 }
 
 const PRIVACIES: readonly YouTubePrivacy[] = ['public', 'unlisted', 'private'];
@@ -53,6 +57,8 @@ export function youtubeOptions(raw: unknown): YouTubePostOptions {
         ...(typeof r.title === 'string' && r.title.trim() ? { title: r.title.trim() } : {}),
         ...(typeof r.privacy === 'string' && (PRIVACIES as readonly string[]).includes(r.privacy) ? { privacy: r.privacy as YouTubePrivacy } : {}),
         ...(typeof r.language === 'string' && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(r.language) ? { language: r.language } : {}),
+        // Only the boolean false opts out: "false", 0, null and the rest read as the default, so a malformed row is still tagged as before.
+        ...(r.shorts === false ? { shorts: false as const } : {}),
     };
 }
 
@@ -95,8 +101,8 @@ export function metadataFor(
     post: Pick<ScheduledPostRow, 'caption'>, options: YouTubePostOptions, privacy: YouTubePrivacy, categoryId: string
 ): VideoMetadata {
     return {
-        title: shortTitle(options.title, post.caption),
-        description: shortDescription(post.caption),
+        title: shortTitle(options.title, post.caption, options.shorts !== false),
+        description: shortDescription(post.caption, options.shorts !== false),
         tags: tagsFrom(post.caption),
         privacy,
         categoryId,

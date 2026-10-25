@@ -5,10 +5,12 @@
  * of a contact is the newest row for (creator, contact, category). Nothing here updates or deletes a consent row; the one exception in the
  * code base is the BSUID re-key in whatsappInbound.ts, which moves a person's history to their new id, and the erasure flow, which removes it.
  *
- * ## WIRING NOTE: where the integration step must call this
+ * ## WIRING: where this is called (done: src/webhook/whatsappInbound.ts, via src/webhook/whatsappOptOut.ts)
  *
- * Nothing imports this module yet. In `src/webhook/whatsappInbound.ts`, for a TEXT inbound from a WhatsApp contact, AFTER the message row is
- * stored and BEFORE the test-sender / mode gates hand it to the sales turn (an opt-out is honoured in every mode, test senders and `off` included):
+ * For the words of a LISTED TEST SENDER's inbound (text, a tapped button, a media caption, a voice note's transcript), AFTER the message row is
+ * stored and BEFORE the mode / connection / pause gates hand it to the sales turn (an opt-out is honoured in every mode, `off` included). What the
+ * integration does beyond the sketch below: it also closes the thread as Instagram's turn does (`closeThread`: the bot is paused, the stage is
+ * `closed`), and sends the confirmation only when the agent may speak. The original sketch:
  *
  *     const stop = matchStopMessage(text);                  // whole message only, never a substring
  *     if (stop) {
@@ -148,6 +150,13 @@ export interface WithdrawAllInput {
     /** What they wrote. Default source is `stop_phrase`. */
     wording?: string | null;
     source?: ContactConsentSource;
+    /**
+     * Also CLOSE the thread the way Instagram's sales turn closes one that asked to be left alone (`recordTurn` for `optOutDecision`): the bot is paused
+     * (`is_bot_active = false`), the stage is `stage` and `last_intent` is `lastIntent`. Written in THIS transaction, so the withdrawal and the pause stand
+     * or fall together, and for the thread even when it was opted out before (a second stop after the owner switched the bot back on pauses it again, as
+     * Instagram's turn does). Absent, the statement list is exactly what it was: the WhatsApp opt-out passes it, nothing else yet.
+     */
+    closeThread?: { stage: string; lastIntent: string };
 }
 
 export interface WithdrawAllOutcome {
@@ -188,6 +197,16 @@ export async function withdrawAll(input: WithdrawAllInput): Promise<WithdrawAllO
                 AND opted_out_at IS NULL`,
             [creatorId, contactRef, platform]
         );
+
+        if (input.closeThread) {
+            await tx.query(
+                `UPDATE conversations
+                    SET is_bot_active = FALSE, stage = $4, last_intent = $5
+                  WHERE creator_id = $1 AND instagram_user_id = $2
+                    AND (platform = $3 OR (platform IS NULL AND $3 = 'instagram'))`,
+                [creatorId, contactRef, platform, input.closeThread.stage, input.closeThread.lastIntent]
+            );
+        }
 
         // A job's `senderId` is the contact's id on the platform. `cancelled` is inert: no claim, reaper or sweep reads it (jobs/types.ts).
         const cancelled = await tx.query(

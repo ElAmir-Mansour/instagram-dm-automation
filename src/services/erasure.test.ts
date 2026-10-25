@@ -18,7 +18,7 @@ import {
     commitErasure, countsDrifted, countsTotal, ERASURE_TOKEN_TTL_MS, eraseCustomerMedia, executeErasure, mintErasureToken, verifyErasureToken,
 } from './erasure.js';
 
-const COUNTS = { messages: 12, conversations: 1, interactions: 3, dmSendLog: 0 };
+const COUNTS = { messages: 12, conversations: 1, interactions: 3, dmSendLog: 0, leads: 0 };
 
 function setEnv(key: string, value: string | undefined): void {
     if (value === undefined) delete process.env[key];
@@ -173,7 +173,7 @@ describe('countsDrifted', () => {
     });
 
     it('is true when any single table moved, in either direction', () => {
-        for (const key of ['messages', 'conversations', 'interactions', 'dmSendLog'] as const) {
+        for (const key of ['messages', 'conversations', 'interactions', 'dmSendLog', 'leads'] as const) {
             assert.equal(countsDrifted(COUNTS, { ...COUNTS, [key]: COUNTS[key] + 1 }), true, `${key} up`);
             assert.equal(countsDrifted(COUNTS, { ...COUNTS, [key]: COUNTS[key] - 1 }), true, `${key} down`);
         }
@@ -184,7 +184,7 @@ describe('countsDrifted', () => {
         // drifts and is refused. That is what stops a leaked token from deleting whatever
         // arrived under the same handle afterwards.
         assert.equal(
-            countsDrifted(COUNTS, { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0 }),
+            countsDrifted(COUNTS, { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0, leads: 0 }),
             true
         );
     });
@@ -193,7 +193,7 @@ describe('countsDrifted', () => {
 describe('countsTotal', () => {
     it('sums every table, so "nothing matched" is one check', () => {
         assert.equal(countsTotal(COUNTS), 16);
-        assert.equal(countsTotal({ messages: 0, conversations: 0, interactions: 0, dmSendLog: 0 }), 0);
+        assert.equal(countsTotal({ messages: 0, conversations: 0, interactions: 0, dmSendLog: 0, leads: 0 }), 0);
     });
 });
 
@@ -202,7 +202,7 @@ describe('countsTotal', () => {
 describe('erasure deletes the contact\'s private uploads: the files a customer sent on WhatsApp', () => {
     const CONV = '33333333-3333-4333-8333-333333333333';
     const HANDLE = 'EG.1234567890';
-    const MEDIA_COUNTS = { messages: 3, conversations: 1, interactions: 0, dmSendLog: 0 };
+    const MEDIA_COUNTS = { messages: 3, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 };
 
     let statements: Array<{ sql: string; params: unknown[] }>;
     let released: number;
@@ -259,7 +259,7 @@ describe('erasure deletes the contact\'s private uploads: the files a customer s
 
         assert.ok(outcome.ok);
         assert.equal(outcome.mediaDeleted, 2);
-        assert.deepEqual(outcome.deleted, { messages: 3, conversations: 1, interactions: 0, dmSendLog: 0 }, 'the counts the preview and the token carry are unchanged');
+        assert.deepEqual(outcome.deleted, { messages: 3, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 }, 'the counts the preview and the token carry are unchanged');
 
         const media = indexOfStatement(/^DELETE FROM media_uploads/);
         assert.ok(media > 0, 'the uploads are deleted');
@@ -325,5 +325,57 @@ describe('erasure deletes the contact\'s private uploads: the files a customer s
         };
         assert.equal(await eraseCustomerMedia(exec, [CONV]), 5);
         assert.deepEqual(seen.map((sql) => sql.split(' ')[0]), ['SAVEPOINT', 'DELETE', 'RELEASE']);
+    });
+});
+
+describe('erasure reaches lead-ad leads by the email or phone they gave (A10)', () => {
+    const originalConnect = pool.connect;
+    const saved: Record<string, string | undefined> = {};
+    let statements: Array<{ sql: string; params: unknown[] }>;
+
+    beforeEach(() => {
+        for (const k of ['DASHBOARD_PASSWORD', 'META_APP_SECRET', 'TOKEN_ENCRYPTION_KEY']) saved[k] = process.env[k];
+        process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+        process.env.META_APP_SECRET = 'meta-app-secret';
+        process.env.TOKEN_ENCRYPTION_KEY = 'd'.repeat(64);
+        statements = [];
+        const client = {
+            async query(sql: string, params: unknown[] = []) {
+                const flat = sql.replace(/\s+/g, ' ').trim();
+                statements.push({ sql: flat, params });
+                if (/^SELECT id, instagram_user_id, username FROM conversations/.test(flat)) return { rows: [], rowCount: 0 };
+                if (/^SELECT \(SELECT COUNT\(\*\) FROM messages/.test(flat)) return { rows: [{ messages: 0, conversations: 0, interactions: 0, dm_send_log: 0, leads: 1 }], rowCount: 1 };
+                if (/^DELETE FROM ads_leads WHERE person_keys && \$1::text\[\]$/.test(flat)) return { rows: [], rowCount: 1 };
+                if (/^DELETE FROM/.test(flat)) return { rows: [], rowCount: 0 };
+                if (/^(BEGIN|COMMIT|ROLLBACK)\b/.test(flat)) return { rows: [], rowCount: null };
+                throw new Error(`no result arranged for SQL: ${flat}`);
+            },
+            release() {},
+        };
+        (pool as unknown as { connect: unknown }).connect = async () => client;
+    });
+
+    afterEach(() => {
+        (pool as unknown as { connect: unknown }).connect = originalConnect;
+        for (const [k, v] of Object.entries(saved)) setEnv(k, v);
+    });
+
+    it('an email handle counts and deletes the lead rows by keyed hash, inside the erasure transaction', async () => {
+        const { personKey } = await import('../config/crypto.js');
+        const counts = { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0, leads: 1 };
+        const outcome = await executeErasure(mintErasureToken('Ali@Example.com', counts));
+        assert.ok(outcome.ok);
+        assert.equal(outcome.deleted.leads, 1);
+        const del = statements.find((s) => /^DELETE FROM ads_leads/.test(s.sql))!;
+        assert.deepEqual(del.params, [[personKey('ali@example.com')]]);
+        assert.ok(statements.findIndex((s) => s.sql === 'BEGIN') < statements.indexOf(del));
+        await commitErasure(outcome.client);
+    });
+
+    it('a token minted before leads existed (no `leads`) still verifies, as 0', () => {
+        const legacy = mintErasureToken('sara', { messages: 1, conversations: 1, interactions: 0, dmSendLog: 0 } as any);
+        const v = verifyErasureToken(legacy);
+        assert.ok(v.ok);
+        assert.equal(v.counts.leads, 0);
     });
 });

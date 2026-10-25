@@ -189,6 +189,77 @@ export const AUDIT_ACTIONS = {
     whatsappEntryLinkDelete: 'whatsapp.entry_link_delete',
     /** The number's WhatsApp ice breakers and commands were changed from Settings. `detail` holds the counts, never the texts. */
     whatsappIceBreakersWrite: 'whatsapp.ice_breakers_write',
+    /** The Meta ads settings for Boost (ad account, limits, the ads token) were changed. `detail` names which, never the token. */
+    adsSettingsWrite: 'ads.settings_write',
+    /** A boost was created at Meta, PAUSED (it spends nothing). `detail` holds the post, platform, budget, days and the outcome. */
+    adsBoostCreate: 'ads.boost_create',
+    /** The owner confirmed Activate: the boost's campaign, ad set and ad were set ACTIVE and it can spend up to its planned total. */
+    adsBoostActivate: 'ads.boost_activate',
+    /** A boost's campaign was paused. */
+    adsBoostPause: 'ads.boost_pause',
+    /** A boost's campaign was deleted at Meta. */
+    adsBoostDelete: 'ads.boost_delete',
+    /** A campaign in the ad account was paused or switched on from the Ads screen. `detail` holds the campaign id and the new status. */
+    adsCampaignStatus: 'ads.campaign_status',
+    /** A campaign's budget or end date was changed from the Ads screen. `detail` holds the campaign id, the amount and the end. */
+    adsCampaignBudget: 'ads.campaign_budget',
+    /** A campaign was deleted at Meta from the Ads screen. */
+    adsCampaignDelete: 'ads.campaign_delete',
+    /** A builder draft (A4) was created PAUSED: its stored copy and its chain of create ops. `detail` holds the goal, the destinations, the budget and the op ids. */
+    adsDraftCreate: 'ads.draft_create',
+    /** An ads write was queued (A2's paced queue). `detail` holds the op id, kind and target, never a token. */
+    adsOpEnqueued: 'ads.op_enqueued',
+    /** An ads op was applied at Meta. */
+    adsOpApplied: 'ads.op_applied',
+    /** An ads op failed at Meta. `detail` holds Meta's code. */
+    adsOpFailed: 'ads.op_failed',
+    /**
+     * The spending guard paused every active campaign in a tenant's ad account because the month reached (or would pass) the monthly cap.
+     * The actor is `ADS_GUARD_ACTOR_EMAIL`. `detail` holds the spend, the cap, the look-ahead and the campaign ids paused.
+     */
+    adsCapPaused: 'ads.cap_paused',
+    adsProposalDecided: 'ads.proposal_decided',
+    adsRuleSaved: 'ads.rule_saved',
+    adsRuleActed: 'ads.rule_acted',
+    adsAudienceCreated: 'ads.audience_created',
+    adsCustomerListUploaded: 'ads.customer_list_uploaded',
+    adsLeadFormSaved: 'ads.lead_form_saved',
+    adsLegalSignoff: 'ads.legal_signoff',
+    /** A platform admin switched the Ads Manager on or off for a tenant (`ads.enabled.<tenant>`). */
+    adsEnabledChanged: 'ads.enabled_changed',
+    /** A platform admin set a tenant's ads ceiling (`ads.ceiling.<tenant>`). `detail` holds both amounts. */
+    adsCeilingChanged: 'ads.ceiling_changed',
+    /** The owner set or cleared Meta's account spending limit from Settings. `detail` holds the amount asked for and what Meta read back. */
+    adsSpendCapChanged: 'ads.spend_cap_changed',
+    /** The owner changed where ads alerts go (Telegram chat id, email, language, kinds). `detail` names the fields, never the values. */
+    adsAlertsWrite: 'ads.alerts_write',
+    /** The owner turned an A3 switch on or off (`ads.bot_context`, `ads.extended_window`). `detail` holds the switches changed and their new values. */
+    adsSwitchesWrite: 'ads.switches_write',
+    /** A Custom Audience was deleted at Meta from the Audiences screen (A8). */
+    adsAudienceDeleted: 'ads.audience_deleted',
+    /** The owner recorded that a person asked to be left out of customer-list audiences (A8). `detail` holds counts only; the contact is stored hashed, never here. */
+    adsCustomerListOptOut: 'ads.customer_list_opt_out',
+    /** A request or a queued op named an ad object that is not this tenant's, or not in its current ad account (ads/ownership.ts). Refused
+     *  with NOT_OWN_OBJECT. `detail` holds why, the id asked for and whose it was. */
+    adsNotOwnObject: 'ads.not_own_object',
+    /** A client tenant's owner turned sharing of its ad spend with the platform admin on or off (`ads.share_spend.<tenant>`). */
+    adsShareSpendChanged: 'ads.share_spend_changed',
+    /** The owner downloaded the leads CSV (A10). `detail` holds the row count and the form filter, never an answer, name, email or phone. */
+    adsLeadsExported: 'ads.leads_exported',
+    /** The owner started an illustrated explainer (v59). `detail` holds the language, length tier and sound choice, never the topic's words. */
+    explainerCreated: 'explainer.created',
+    /** The owner approved an explainer's script (gate 1): voicing starts. `detail` holds the draft version approved. */
+    explainerApproved: 'explainer.approved',
+    /** The owner approved an explainer's pictures (gate 2): rendering starts. `detail` holds the draft version and the number of scenes. */
+    explainerPicturesApproved: 'explainer.pictures_approved',
+    /** An explainer became scheduled posts (Instagram and Facebook, YouTube, TikTok). `detail` holds the platforms, the time and the group id. */
+    explainerScheduled: 'explainer.scheduled',
+    /** The owner deleted an explainer: its pictures, audio and videos are queued for deletion, except what a platform already holds. */
+    explainerDeleted: 'explainer.deleted',
+    /** A platform admin saved the explainers' image provider (account, token, caps). `detail` names the fields changed, never the token. */
+    explainersProviderUpdated: 'explainers.provider_updated',
+    /** A platform admin switched illustrated explainers on or off for a tenant (`explainers.enabled.<tenant>`). */
+    explainersEnabledChanged: 'explainers.enabled_changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

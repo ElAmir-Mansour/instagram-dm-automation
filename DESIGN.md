@@ -102,7 +102,8 @@ label. Cardamom is never a status.
 ### Platform colours: data, never decoration
 Instagram and Facebook say which network a row belongs to. TikTok and YouTube are tints only, labelled with
 `--text-strong`. Solid platform colours appear only in `.platform-bar-*`, and `check:contrast` enforces that. Their
-logos are monochrome, never in these colours (§4, Platform logos).
+logos are monochrome, never in these colours, with one exception on the landing page: the platform strip (§4, Platform
+logos), whose marks wear each brand's own colour and not these tokens.
 
 | token | dark | light | role |
 |---|---|---|---|
@@ -140,7 +141,7 @@ One token: the ink of the Rows pattern «سطور» (§4, Rows). It is texture, 
 ### The logo mark: Kufi «رد»
 Two tokens, per theme: the tile and the glyph. The dashboard's mark (`.logo-mark`, `.login-mark`) and the inline marks on the
 public pages paint them, through `.mark-tile` and `.mark-glyph`, and nothing else does. Dark UI is the Cardamom colourway and
-light UI the Ink colourway (IDENTITY.md §2). The icons are **not** painted from these: the favicon, the apple-touch icon and
+light UI the Ink colourway (the identity notes, §2; kept outside this repo). The icons are **not** painted from these: the favicon, the apple-touch icon and
 the manifest's PNGs are the Cardamom files at every size (§4, Mark).
 
 | token | dark | light | role |
@@ -367,7 +368,14 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - Items 44px, 14px medium, `--text-default`.
 - Hover: glass-hover.
 - Active: `.nav-indicator` is `--accent-soft` plus a 2px inline-start `--accent` bar; the label turns
-  `--text-strong`.
+  `--text-strong`. The foot (Settings, Help) has a marker of its own, because it is outside the scrolling list.
+- Grouped by the creator's job: Today · Replies · Content · Results. Each group is a `<ul role="list">` named
+  (`aria-labelledby`) by a 12px semibold `--text-muted` heading, never letter-spaced small caps. A page with no item
+  of its own (Reels, Infographics, the Log) reads as the item it belongs to (`navAs`).
+- Administration is one collapsible group, a `<button aria-expanded>` heading, closed by default and open for an admin
+  page. Its dot is `--danger` and means "the platform has a problem"; it is hidden at zero.
+- A count beside an item (people waiting) is `--accent` with `--text-on-accent`: work to do is not a failure. Red is
+  for what broke.
 
 ### Nav, public
 - Sticky `.topbar`: `--surface-raised` with `blur(var(--blur-chrome))`. This is the only blur on public pages.
@@ -402,7 +410,7 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Source.** simple-icons@16.33.0 (CC0 path data; the trademarks stay with their owners), WhatsApp, Instagram, Facebook,
   TikTok and YouTube, as one inline sprite right after `<body>` on all six public pages (the shared footer uses it too).
   A path is never edited by hand: `landingLogos.test.ts` compares each to the package, byte for byte.
-- **Monochrome, always.** A platform's colour is data, and each brand's own rules allow black or white (YouTube: white or
+- **Monochrome, except the platform strip.** A platform's colour is data, and each brand's own rules allow black or white (YouTube: white or
   `#282828`, and never as a play button). The inks are three tokens in the shared chrome of the public pages, not in
   tokens.css, in tokens.css's three-selector shape:
   - `--logo-mono`: white in dark, black in light.
@@ -411,7 +419,17 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Beside the name, never instead of it.** The WhatsApp glyph (20px) sits at the label's inline-start in each primary
   WhatsApp button and in the footer's WhatsApp link; a 40px `.ptile` in the platform's `-soft` tint with a 24px glyph leads
   each platform row; 16px glyphs lead the samples' links and captions; the footer's Follow row has the four accounts. No
-  logo strip, no cluster. Every glyph is `aria-hidden`, and the platform's name is real text beside it.
+  logo wall. Every glyph is `aria-hidden`, and the platform's name is real text beside it. The one cluster is the strip below.
+- **The platform strip (2026-10-19, the owner's instruction).** The first thing in the landing hero: WhatsApp, Instagram,
+  Facebook, TikTok and YouTube, each with its mark, its name as text and one line of what the product does there. A card of
+  five columns from 40rem and five rows below it; marks 48px on a phone, 80px from 1280px; no motion, no link, no picture
+  request. It is the one place on the public pages where a mark wears its platform's colour: simple-icons@16.33.0's own `hex`
+  for WhatsApp `#25D366`, Instagram `#FF0069`, Facebook `#0866FF` and YouTube `#FF0000`, declared once as `--pb-*` in the
+  landing page's `.pstrip` rule and nowhere else, so not in tokens.css and not on another page. TikTok's brand colour is black,
+  which would vanish on the dark page, so its mark stays `--logo-mono`: white in dark, black in light. The marks are the same
+  sprite symbols, never edited, mirrored or recoloured beyond that. `check:contrast` measures each on the card and at the
+  hero glow's peak (3:1 on the card, 2.5:1 at the peak); WhatsApp green on the light card is 1.9:1, the one named exemption (a
+  logo is an essential graphic under WCAG 1.4.11, and the name beside it is text). The footer's legal line is the disclaimer.
 - **Never mirrored or transformed.** Arrows mirror in RTL; a logo is not a direction.
 
 ### Mark
@@ -419,7 +437,7 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 **Kufi «رد»**, the Arabic word for "reply", on a square-Kufi grid: every stroke and gap is one module, and the only diagonal is
 the ر's 45° tail, the answer going out. Chosen 2026-10-13, in service since the B5 switch. Lucide's `zap` on the blue `#0071E3`
 tile, which it replaced, is gone from every page, and `design-md.test.ts` fails if either comes back. The drawing, its cuts, its
-colourways and its Never list are IDENTITY.md §2 (the kit is `docs/brand/mark/final/`, local only); the five kit files the build
+colourways and its Never list are in the brand identity notes (§2; kept outside this repo, as is the kit's source folder); the five kit files the build
 needs are committed in `scripts/brand-icons/`, pinned by hash.
 
 ```svg
@@ -596,7 +614,9 @@ is wrong; extend the scale.
 **Widths**
 - Designed: 375 · 390 · 768 · 1024 · 1280 · 1440.
 - 320 may wrap but never scroll sideways (`scrollWidth === clientWidth`).
-- Breakpoints in use: 30rem, 40rem, 48rem, 52rem, 62rem. Reuse them; don't invent new ones.
+- Breakpoints in use: the public pages use 30rem, 40rem, 48rem, 52rem and 62rem (and the landing's top bar 37rem, below);
+  the dashboard uses px: 400, 480, 560, 768, 860 and 1100px in `styles.css`, plus 640, 760 and 900px in `css/pages/`.
+  Reuse them; don't invent new ones.
 
 **Navigation and layout**
 - The top bar fits in one row at 375 in both languages (365/375 measured), so **no new nav items**. New
@@ -621,13 +641,13 @@ is wrong; extend the scale.
 - For public pages, read the claim ledger in landing.html's header comment.
 - For copy, check the truth table below.
 
-### Truth table (2026-10-13)
+### Truth table (2026-10-25)
 | state | what |
 |---|---|
-| Live | Comment→DM campaigns on IG/FB (DM, an optional public reply, and a best-effort like). Scheduling to IG/FB (a queue, not minute-exact). TikTok to drafts (Direct Post is "Only me" until TikTok's audit). YouTube Shorts upload (public uploads on). Carousel Studio and the Monteur (a Mac worker; Monteur review mode by default). Growth (insights need Meta permissions). Multi-account with roles, activity log, CSV export. |
-| Owner-only | Infographics (Claude on the owner's Mac). |
-| Parked | AI DM replies. Treat the inbox send path the same; don't claim either. |
-| Planned | Invite-link onboarding (~5 min); voice registers (فصحى/خليجي/مصري/شامي/English); the AI providers layer (any provider's key); Facebook Login for Business; Monteur and Infographics for clients (M8). |
+| Live | Comment→DM campaigns on IG/FB (DM, an optional public reply, and a best-effort like). Scheduling to IG/FB (a queue, not minute-exact). TikTok to drafts (Direct Post is "Only me" until TikTok's audit). YouTube Shorts upload (public uploads on). Carousel Studio and the Monteur (a Mac worker; Monteur review mode by default). Growth (insights need Meta permissions). Multi-account with roles, activity log, CSV export. AI DM replies on Instagram and Facebook (since 2026-10-13; the landing page says so only in its platform strip, `src/services/landingTruth.test.ts`). Invite links and the setup wizard for new accounts; voice registers (فصحى، خليجي، مصري، شامي); the AI providers layer (any provider's key). |
+| Owner-only | Infographics and illustrated explainers (Claude on the owner's Mac). The Ads Manager (switched on per account by the platform admin). |
+| Built, off by default | Connect with Facebook (Login for Business). The DM sales mode. The WhatsApp agent beyond its test senders (refused until the privacy pages name WhatsApp). Don't claim these as available. |
+| Planned | Monteur and Infographics for clients (M8). |
 | Not planned | Self-serve signup, online payment. |
 
 ### Asking for UI
@@ -652,9 +672,9 @@ the same paragraph as the feature.
 ### The guards
 | check | stops |
 |---|---|
-| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex); a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome); the Rows ink above 1.25:1 of a ground it is drawn on, or invisible |
+| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex), except the four `--pb-*` declarations of the landing page's platform strip, which must be simple-icons' own hexes, written once, measured on the card and at the hero glow's peak (3:1 and 2.5:1; one named exemption, WhatsApp on the light card), and used by nothing else; a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome); the Rows ink above 1.25:1 of a ground it is drawn on, or invisible |
 | `brandMotif.test.ts` | the motif tokens, `.kw`, `.kw-display`, `.is-receipt` or the `#rows` pattern missing or drifting (the pattern's geometry, its two copies); the reduced-motion guard gone, or anything animated that is not `transform` or `opacity`; the landing h1, the closing band, the login or `Motion.highlightDeliver` not using them; the landing over its served-bytes budget |
-| `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English |
+| `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English; in the platform strip: a colour that is not simple-icons' own hex or is written twice, a mark not painted by its own token, a mark with no name, motion or a flip, a strip that is not first in the hero or that differs between languages |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |
 | `check:voice` | a word from the "Never" list (IDENTITY.md §7: "Pro" outside the name, Premium, Powered by, instant, guaranteed, AI-powered, bot, revolutionary, all-in-one, magic, viral, growth hack, supercharge, unlimited, "trusted by", and the Arabic of each) in a dashboard dictionary value, a public page's text, meta or alt, or the dashboard shell's title and description. The name is allowed, and so is a limit stated ("not guaranteed"); any other exception is an entry in `scripts/check-voice.mjs` with a reason, and an entry that matches nothing fails |
@@ -666,7 +686,8 @@ the same paragraph as the feature.
 ### Before the PR
 Run:
 
-`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:voice && npm run check:icons && npm run check:icon-subset && BASE_REF=origin/main npm run check:assets`
+`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:voice && npm run check:icons && npm run check:icon-subset && npm run check:hero3d && npm run check:font && npm run check:og && npm run check:brand-icons && BASE_REF=origin/main npm run check:assets`
+(every `check:*` step in `.github/workflows/ci.yml`)
 
 Any change under `dashboard/` bumps `?v=` and `ASSET_VERSION` together, and the same `?v=` on every page in
 `SHARED_ASSET_PAGES`.

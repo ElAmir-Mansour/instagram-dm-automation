@@ -1,0 +1,32 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "100000000000001",
+      "time": 1761134400000,
+      "messaging": [
+        {
+          "sender": { "id": "PSID-ad-2" },
+          "recipient": { "id": "100000000000001" },
+          "timestamp": 1761134400000,
+          "postback": {
+            "mid": "m_postback-ad-2",
+            "title": "ما الذي يتضمنه العرض؟",
+            "payload": "ICE_BREAKER_CONTENT",
+            "referral": {
+              "ref": "ar_0123456789ab",
+              "ad_id": "120210000000000002",
+              "source": "ADS",
+              "type": "OPEN_THREAD",
+              "ads_context_data": {
+                "ad_title": "عرض الخريف",
+                "photo_url": "https://scontent.xx.fbcdn.net/v/ad-photo.jpg",
+                "post_id": "100000000000001_200000000000001"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

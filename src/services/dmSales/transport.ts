@@ -13,6 +13,8 @@
  *   - the disclosure is folded into the one message, never a bubble of its own; Instagram's hourly send quota is not spent
  *   - no comment bridge, no A/B arm, no follow-up: those are Instagram's (a follow-up is a free-form message hours later, which the 24 h window may
  *     no longer allow, and WhatsApp has no consent or template layer yet)
+ *   - the customer's words, as the model reads them, may be cleaned by the channel (`readable`): a WhatsApp entry link's tracking code is not something to
+ *     show a model, and the stored row (what the inbox shows) is left exactly as it arrived
  */
 import type { MetaMessagePayload } from '../../webhook/meta-payload.js';
 import type { SendFailureReason } from '../channels/send.js';
@@ -34,6 +36,12 @@ export interface SalesTransport {
     seen(): Promise<void>;
     /** After the turn is recorded: the channel's own bookkeeping for the row that holds the reply (the id a delivery status finds it by). Never throws. */
     recorded(replyId: string | null, sent: SentMessage): Promise<void>;
+    /**
+     * What the model reads of a message the CUSTOMER wrote (the history's inbound rows): the stored words with whatever the channel added to them taken out
+     * (WhatsApp: the ` #ref` an entry link's prefilled message ends with). Pure, and the identity for a text that holds nothing of the kind: a turn whose
+     * history rows and `inbound.text` come through the same function reads the message being answered once, not twice. Absent: the words as stored.
+     */
+    readable?(text: string): string;
 }
 
 /** The channel would not take the message. Carries what `sendWhatsAppReply` said, so whoever catches it can decide between a retry, a note and a handoff. */
