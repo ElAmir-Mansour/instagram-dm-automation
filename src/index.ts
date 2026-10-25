@@ -6,8 +6,7 @@ import { fileURLToPath } from 'url';
 
 import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
-import { appSecrets, verifyMetaSignature } from './utils/signature.js';
-import { isDiagnosticProbe } from './utils/probe.js';
+import { logSignatureRejection, verifyMetaSignature } from './utils/signature.js';
 import { enqueueWebhookBody, isAcceptedWebhookObject, processWebhookBody } from './webhook/router.js';
 import { acknowledgeThenRun } from './webhook/ack.js';
 import { drainInline } from './jobs/drain.js';
@@ -367,16 +366,9 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         // Worth being loud here: a signature failure is indistinguishable from
         // "no events arriving" unless the log says which secrets were tried. This is the
         // line the project's own troubleshooting docs call invisible — as a structured
-        // event it can finally be alerted on.
-        // `probe` distinguishes diagnose.mjs proving this guard still holds from a real
-        // rejection. The two were byte-identical in the logs, which is a trap in an app
-        // whose documented worst failure is an invisible signature rejection. It is a
-        // label only — see src/utils/probe.ts; a forged tag changes nothing here.
-        log('error', 'webhook.signature_rejected', {
-            secrets_tried: appSecrets().length,
-            instagram_secret_set: Boolean(process.env.INSTAGRAM_APP_SECRET),
-            probe: isDiagnosticProbe(req),
-        });
+        // event it can finally be alerted on. The fields, and why they are named as they
+        // are (the logger blanks anything called `*secret*`), are explained at the helper.
+        logSignatureRejection(req);
         res.sendStatus(403);
         return;
     }

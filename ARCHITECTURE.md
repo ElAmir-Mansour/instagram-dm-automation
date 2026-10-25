@@ -438,7 +438,7 @@ Structured events make this expressible. In rough priority:
 
 | Event | Condition | Why it matters |
 |---|---|---|
-| `webhook.signature_rejected` | any occurrence | Half of all traffic silently 403ing is the documented worst-case failure. `secrets_tried` and `instagram_secret_set` are on the line. |
+| `webhook.signature_rejected` | any occurrence | Half of all traffic silently 403ing is the documented worst-case failure. `app_keys_tried` and `instagram_app_configured` are on the line. |
 | `dm.quota_exhausted` | any occurrence | Real customers are being dropped. |
 | `job.failed` | any occurrence | A job that spent its attempts. Nothing else will retry it. |
 | `token.status_failed` / `meta_code: 190` | any occurrence | Dead Meta token — the whole product stops, and nothing else notices. |
@@ -666,7 +666,7 @@ job — and the only thing lost is that a contender waits the length of one auto
 rather than skipping ahead (`jobs/queue.ts:87-99`).
 
 **Rejected — QStash.** The right answer at 10-100× this volume, and it cannot be provisioned
-from here. `JobQueue`'s five methods map 1:1 onto publish/receive/ack/nack/visibility-timeout
+from here. `JobQueue`'s methods map 1:1 onto publish/receive/ack/nack/visibility-timeout
 precisely so this is a new file, not a refactor.
 
 **Rejected — in-memory queue with no table.** Solves nothing: the problem is durability across

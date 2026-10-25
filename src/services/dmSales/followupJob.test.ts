@@ -76,6 +76,7 @@ function recordingQueue(behaviour: 'ok' | 'dedupe' | 'throw' | 'keyed' = 'ok'): 
         async complete() {},
         async fail() {},
         async reapStale() { return 0; },
+        async releaseUnrun() { return 0; },
         async pruneCompleted() { return 0; },
     };
 }

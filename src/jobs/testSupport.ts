@@ -7,6 +7,8 @@
  *   - `complete(id, redact)` ends the job `done`; with `redact`, the stored payload is replaced in that same step
  *   - `fail(id, error, retryIn, redact)` returns the job to `pending` for a retry, or ends it `failed`; only an ending failure with `redact`
  *     replaces the payload
+ *   - `releaseUnrun(claims)` returns each claim that is still the live one (the job is `running` AND on the attempt that claim counted) to
+ *     `pending` and gives that attempt back (never below 0); a job in any other state, or one claimed again since, is left as it is
  *
  * `run_after` is not modelled: a job waiting out its backoff is claimable at once, which is what a test stepping through attempts wants.
  */
@@ -61,6 +63,18 @@ export function memoryQueue(planned: EnqueueInput[], maxAttempts = 3): { jobs: M
             }
         },
         async reapStale() { return 0; },
+        async releaseUnrun(claims) {
+            let released = 0;
+            for (const { id, attempts } of claims) {
+                const job = jobs.find((j) => j.id === id);
+                // Still THAT claim: running, on the attempt it counted. A job reaped and claimed again has moved on to a later one.
+                if (!job || job.status !== 'running' || job.attempts !== attempts) continue;
+                job.status = 'pending';
+                job.attempts = Math.max(job.attempts - 1, 0);
+                released += 1;
+            }
+            return released;
+        },
         async pruneCompleted() { return 0; },
     };
     return { jobs, queue, completed };

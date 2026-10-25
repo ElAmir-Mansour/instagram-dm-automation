@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request } from 'express';
-import { appSecrets, verifyMetaSignature } from './signature.js';
+import { setLogSink, type LogLevel } from './log.js';
+import { PROBE_HEADER, signProbeTag } from './probe.js';
+import { appSecrets, logSignatureRejection, verifyMetaSignature } from './signature.js';
 
 const FB_SECRET = 'facebook-app-secret';
 const IG_SECRET = 'instagram-app-secret';
@@ -187,5 +189,113 @@ describe('appSecrets', () => {
         delete process.env.META_APP_SECRET;
         delete process.env.INSTAGRAM_APP_SECRET;
         assert.deepEqual(appSecrets(), []);
+    });
+});
+
+/**
+ * The `webhook.signature_rejected` line is what RUNBOOK §2.3 sends you to read when events stop arriving, and its two diagnostic
+ * fields once printed `"[redacted]"`: the logger blanks any field whose NAME looks like a secret (`secrets_tried`,
+ * `instagram_secret_set`), and these carry a count and a yes/no. So every assertion here is on the line the REAL `log` emits,
+ * parsed back, and never on what was handed to it: a name the redactor catches would pass the second and fail the first.
+ */
+describe('logSignatureRejection', () => {
+    let savedMeta: string | undefined;
+    let savedInstagram: string | undefined;
+
+    beforeEach(() => {
+        savedMeta = process.env.META_APP_SECRET;
+        savedInstagram = process.env.INSTAGRAM_APP_SECRET;
+        process.env.META_APP_SECRET = FB_SECRET;
+        process.env.INSTAGRAM_APP_SECRET = IG_SECRET;
+    });
+
+    afterEach(() => {
+        setEnv('META_APP_SECRET', savedMeta);
+        setEnv('INSTAGRAM_APP_SECRET', savedInstagram);
+    });
+
+    /** Run the rejection once and hand back the single line it emitted: its level, the text as written, and the parsed fields. */
+    function rejection(req: Request = requestWith()): { level: LogLevel; raw: string; line: Record<string, unknown> } {
+        const emitted: Array<{ level: LogLevel; raw: string }> = [];
+        const previous = setLogSink((level, raw) => { emitted.push({ level, raw }); });
+        try {
+            logSignatureRejection(req);
+        } finally {
+            setLogSink(previous);
+        }
+        assert.equal(emitted.length, 1, 'one rejection is one line');
+        const { level, raw } = emitted[0]!;
+        return { level, raw, line: JSON.parse(raw) as Record<string, unknown> };
+    }
+
+    it('is an error-level webhook.signature_rejected line', () => {
+        const { level, line } = rejection();
+        assert.equal(level, 'error');
+        assert.equal(line['event'], 'webhook.signature_rejected');
+    });
+
+    it('prints how many secrets were tried and that the Instagram app is configured, as real values', () => {
+        const { line } = rejection();
+
+        assert.equal(line['app_keys_tried'], 2);
+        assert.equal(line['instagram_app_configured'], true);
+        assert.equal(line['probe'], false);
+    });
+
+    it('does not blank either diagnostic field', () => {
+        // The bug itself: `secrets_tried` and `instagram_secret_set` both came out as "[redacted]".
+        const { line } = rejection();
+
+        for (const field of ['app_keys_tried', 'instagram_app_configured', 'probe']) {
+            assert.notEqual(line[field], '[redacted]', `${field} must reach the log as its value`);
+        }
+        assert.equal(Object.values(line).includes('[redacted]'), false, 'nothing on this line is redacted');
+    });
+
+    it('counts one secret, and no Instagram app, when only META_APP_SECRET is set', () => {
+        // The configuration production is documented to run: one app, so `instagram_app_configured` is the answer to "is the dual check live".
+        delete process.env.INSTAGRAM_APP_SECRET;
+        const { line } = rejection();
+
+        assert.equal(line['app_keys_tried'], 1);
+        assert.equal(line['instagram_app_configured'], false);
+    });
+
+    it('counts none when nothing is configured: the case that explains every rejection', () => {
+        delete process.env.META_APP_SECRET;
+        delete process.env.INSTAGRAM_APP_SECRET;
+        const { line } = rejection();
+
+        assert.equal(line['app_keys_tried'], 0);
+        assert.equal(line['instagram_app_configured'], false);
+    });
+
+    it('treats an empty INSTAGRAM_APP_SECRET as not configured, as appSecrets does', () => {
+        process.env.INSTAGRAM_APP_SECRET = '';
+        const { line } = rejection();
+
+        assert.equal(line['app_keys_tried'], 1);
+        assert.equal(line['instagram_app_configured'], false);
+    });
+
+    it('never puts a secret on the line', () => {
+        // The fields are renamed to get past the redactor, which is also what keeps a secret out of the log. A count and a yes/no
+        // are all this line may carry: never a value, never part of one.
+        const { raw } = rejection();
+
+        assert.equal(raw.includes(FB_SECRET), false);
+        assert.equal(raw.includes(IG_SECRET), false);
+    });
+
+    it('labels this project\'s own diagnostic probe, and only that', () => {
+        // `diagnose.mjs --probe-signature` and a real rejection used to be byte-identical in the logs. The tag is a label and gates
+        // nothing (src/utils/probe.ts); here it only has to reach the line.
+        const ts = Date.now();
+        const tagged = { headers: { [PROBE_HEADER]: `${ts}.${signProbeTag(ts, FB_SECRET)}` } } as unknown as Request;
+        const forged = { headers: { [PROBE_HEADER]: `${ts}.${signProbeTag(ts, 'not-the-secret')}` } } as unknown as Request;
+
+        assert.equal(rejection(tagged).line['probe'], true);
+        assert.equal(rejection(forged).line['probe'], false);
+        assert.equal(rejection(requestWith()).line['probe'], false);
     });
 });
