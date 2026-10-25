@@ -10,10 +10,12 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import type { ExplainerLanguage, ExplainerLengthTier } from '../../db/rows.js';
 import {
-    BAIT_EXAMPLES, buildWriterInputs, FEMALE_WORDS_AR, FEMALE_WORDS_EN, SENTENCE_WORDS, writeSystemPrompt, writeUserPrompt, writerPlan, writerSchema,
+    BAIT_EXAMPLES, buildWriterInputs, FEMALE_WORDS_AR, FEMALE_WORDS_EN, writeSystemPrompt, writeUserPrompt, writerPlan, writerSchema,
     WRITER_SCHEMA_FILE, type PreviousDraft, type WriterRequest,
 } from './prompt.js';
-import { DEFAULT_PACE, DURATION_RANGE_S, engagementBait, findFemaleSubject, LIMITS, MAX_SCENES, SCENE_BOUNDS } from './spec.js';
+import {
+    DEFAULT_PACE, DURATION_RANGE_S, engagementBait, findFemaleSubject, LIMITS, MAX_SCENES, PICTURE_SECONDS, PICTURE_WARN_SECONDS, SCENE_BOUNDS,
+} from './spec.js';
 import { assertCheckable } from './writerOutput.js';
 
 const TIERS: readonly ExplainerLengthTier[] = ['short', 'medium', 'long'];
@@ -112,9 +114,9 @@ describe('writerPlan: the tier’s bounds, with the pace from the settings', () 
         }
     });
 
-    it('a short Arabic script is 99 to 171 words, and a dozen scenes is the middle of it', () => {
+    it('a short Arabic script is 99 to 171 words, and 17 scenes, a picture every 4.5 seconds, is the middle of it', () => {
         const plan = writerPlan('short', 'ar');
-        assert.deepEqual([plan.words_min, plan.words_max, plan.scenes_aim], [99, 171, 12]);
+        assert.deepEqual([plan.words_min, plan.words_max, plan.scenes_aim], [99, 171, 17]);
     });
 
     it('aims inside the tier’s scene count, whatever the pace: a very slow narrator does not ask for fewer scenes than the tier has', () => {
@@ -124,7 +126,9 @@ describe('writerPlan: the tier’s bounds, with the pace from the settings', () 
                 assert.ok(scenes_aim >= scenes_min && scenes_aim <= scenes_max, `${tier} at ${pace}: ${scenes_aim}`);
             }
         }
-        assert.equal(writerPlan('long', 'ar', 1).scenes_aim, SCENE_BOUNDS.long.min);
+        // A picture every PICTURE_SECONDS.aim seconds, so the aim is the tier's seconds, not its words: the pace changes the words, not the count.
+        for (const tier of TIERS) assert.equal(writerPlan(tier, 'ar', 1).scenes_aim, writerPlan(tier, 'ar', 2.5).scenes_aim, tier);
+        assert.equal(writerPlan('long', 'ar', 1).scenes_aim, 167, '750 s over 4.5 s a picture');
     });
 
     it('takes the settings’ pace, and ignores one that cannot be a pace, as the estimate does', () => {
@@ -223,12 +227,31 @@ describe('the system prompt: the notes variant, for a writer that has no web too
 });
 
 describe('the system prompt: scenes', () => {
-    it('is one sentence a scene, 8 to 16 words, at most 300 characters, in what a narrator says', () => {
-        const system = writeSystemPrompt('en', 'short');
-        assert.deepEqual(SENTENCE_WORDS, { min: 8, max: 16 });
-        assert.match(system, /One sentence per scene, 8 to 16 words/);
+    it('is one sentence a scene, worded to stay 3.5 to 6.5 seconds at the pace, at most 300 characters, in what a narrator says', () => {
+        assert.deepEqual(PICTURE_SECONDS, { min: 3.5, aim: 4.5, max: 6.5, first: 4 });
+        const ar = writerPlan('short', 'ar');
+        assert.deepEqual([ar.sentence_words.min, ar.sentence_words.max, ar.hook_words], [6, 12, 7], 'Arabic at 1.8 words a second');
+        const en = writerPlan('short', 'en');
+        assert.deepEqual([en.sentence_words.min, en.sentence_words.max, en.hook_words], [9, 16, 10], 'English at 2.5 words a second');
+        const slow = writerPlan('short', 'ar', 1.5);
+        assert.deepEqual([slow.sentence_words.min, slow.sentence_words.max, slow.hook_words], [5, 10, 6], 'the settings’ pace, not the default');
+
+        const system = writeSystemPrompt('ar', 'short');
+        assert.match(system, /One sentence per scene, 6 to 12 words, short and concrete enough to be drawn as one picture/);
+        assert.match(system, /keeps each picture on screen about 3\.5 to 6\.5 seconds/);
+        assert.match(system, /A thought that needs more words is two sentences, each with its own picture/);
         assert.match(system, new RegExp(`\`narration\` is at most ${LIMITS.narration} characters`));
-        assert.match(system, /short and concrete enough to be drawn as one picture/);
+        assert.match(writeSystemPrompt('en', 'short'), /One sentence per scene, 9 to 16 words/);
+    });
+
+    it('opens fastest: a hook of a few words, so the first picture changes within about 4 seconds, and the last check says what the app flags', () => {
+        const system = writeSystemPrompt('ar', 'short');
+        assert.match(system, /The first sentence, the hook, has at most 7 words, so the first picture changes within about 4 seconds/);
+        assert.match(system, /the next two sentences stay near the short end/);
+        assert.deepEqual(PICTURE_WARN_SECONDS, { short: 2, long: 7, first: 4.5 });
+        assert.match(system, /5\. The first sentence has at most 7 words and every other one 6 to 12: the app flags a first picture held over 4\.5 seconds, and any picture held over 7 or under 2\./);
+        assert.match(system, /6\. The scene count and the spoken word count are inside the ranges above\./);
+        assert.match(system, /7\. The title, the captions and the first comment are about this video/);
     });
 
     it('states the tier’s scene count, seconds, pace and word budget, from spec.ts', () => {

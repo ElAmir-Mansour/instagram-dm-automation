@@ -8,8 +8,8 @@
  *   problems   the draft breaks a rule the rest of the pipeline relies on or a content rule: a field past the limit the voice, the label tag or
  *              the picture prompt were built for, a closing line that is not a question, engagement bait, a woman in a picture brief. Whoever
  *              applies the writer's answer asks again or refuses it; an owner's save that carries one is refused.
- *   warnings   the owner may still approve over these: a script that runs short or long, a scene count outside its tier, too few sources. They
- *              are stored with the draft and shown beside it (the edge case "the script is too long or too short" is a warning, not a refusal).
+ *   warnings   the owner may still approve over these: a script that runs short or long, a scene count outside its tier, a picture held too
+ *              long or gone too fast, a slow first picture, too few sources. They are stored with the draft and shown beside it (the edge case "the script is too long or too short" is a warning, not a refusal).
  *
  * Each finding has a stable `code` (what the dashboard translates), an English `message`, and where it applies the 0-based `scene` and the
  * `field`. A rule that was missed gets a new case and a test here, never a special case in a route.
@@ -47,6 +47,22 @@ const TIER_TARGET: Readonly<Record<ExplainerLengthTier, string>> = { short: '60-
 
 /** Words a second the narrator speaks, per language. The Studio settings can override it (`explainer.pace`). */
 export const DEFAULT_PACE = DEFAULT_EXPLAINER_PACE;
+
+/**
+ * How long one picture stays on screen, in seconds: the writer's sentence lengths are worked out from these at the narrator's pace (prompt.ts
+ * `writerPlan`). Long enough to look at the picture and read its label, short enough to keep the eye moving and the viewer with the story (the
+ * owner, 2026-10-25: "people need to be focused as well"). `first` is the hook's picture, which changes within about 4 seconds: viewers decide in
+ * the first seconds whether to stay. The RAG pilot, written at 8-16 words a sentence, held its pictures 5.5-10.3 s (7 on average) and its first
+ * one 8.5 s.
+ */
+export const PICTURE_SECONDS = { min: 3.5, aim: 4.5, max: 6.5, first: 4 } as const;
+
+/**
+ * Where `checkDraft` warns about a picture's estimated time on screen: gone before it can be seen (`scene_short`), held long enough to lose the
+ * viewer (`scene_long`), or a slow first picture (`slow_opening`). A little wider than `PICTURE_SECONDS`, as the duration range is wider than its
+ * tier. The dashboard's sentences say these numbers (`explainers.warning.*` in the i18n files): change them together.
+ */
+export const PICTURE_WARN_SECONDS = { short: 2, long: 7, first: 4.5 } as const;
 
 /** The limits of a draft's fields: the voice, the label tag and the picture prompt are built for them, and the schema repeats them. */
 export const LIMITS = {
@@ -92,6 +108,23 @@ export function estimateSeconds(scenes: readonly { spoken: string }[], language:
     let spoken = 0;
     for (const scene of scenes) spoken += countWords(str(scene?.spoken));
     return Math.round((spoken / perSecond) * 10) / 10;
+}
+
+/**
+ * Each picture's estimated time on screen, in scene order: a scene and the scenes after it that keep its picture (`continues`) are one picture,
+ * as the render worker holds them (`holdsOf` in its layout). `scene` is the 0-based position of the picture's first scene.
+ */
+export function pictureHolds(
+    scenes: readonly { spoken: string; continues?: boolean }[], language: ExplainerLanguage, pace?: number
+): { scene: number; seconds: number }[] {
+    const holds: { scene: number; seconds: number }[] = [];
+    scenes.forEach((scene, i) => {
+        const seconds = estimateSeconds([scene], language, pace);
+        const last = holds[holds.length - 1];
+        if (last && scene?.continues === true) last.seconds = Math.round((last.seconds + seconds) * 10) / 10;
+        else holds.push({ scene: i, seconds });
+    });
+    return holds;
 }
 
 /** Whether a line ends in a question mark, Latin or Arabic, with closing quotes and brackets after it allowed. */
@@ -292,7 +325,9 @@ export type DraftProblemCode =
  * `research_limited` is not found by `checkDraft` (it reads a draft, not how it was written): the writer's result carries `research_rounds`, and a script
  * written with 0 web reads is flagged by whoever applies it (apply.ts). The owner may still approve over it, as over every warning.
  */
-export type DraftWarningCode = 'scene_count' | 'duration_short' | 'duration_long' | 'needs_sources' | 'few_sources' | 'research_limited';
+export type DraftWarningCode =
+    | 'scene_count' | 'duration_short' | 'duration_long' | 'slow_opening' | 'scene_long' | 'scene_short' | 'needs_sources' | 'few_sources'
+    | 'research_limited';
 
 export interface DraftFinding {
     code: DraftProblemCode | DraftWarningCode;
@@ -443,6 +478,31 @@ export function checkDraft(draft: DraftInput, ctx: DraftContext): DraftCheck {
             warnings.push({ code: 'duration_short', message: `The script runs about ${est} s, shorter than the ${range.min}-${range.max} s of a ${target} explainer.` });
         } else if (est > range.max) {
             warnings.push({ code: 'duration_long', message: `The script runs about ${est} s, longer than the ${range.min}-${range.max} s of a ${target} explainer.` });
+        }
+
+        // How long each picture stays (PICTURE_WARN_SECONDS): the first one by the opening's own limit, then any held too long or gone too fast. A
+        // scene with no spoken words is a problem of its own (field_empty), not a fast picture.
+        const holds = pictureHolds(scenes.map((s) => ({ spoken: str(s?.spoken), continues: s?.continues === true })), ctx.language, ctx.pace);
+        const first = holds[0];
+        if (first && first.seconds > PICTURE_WARN_SECONDS.first) {
+            warnings.push({
+                code: 'slow_opening', scene: 0,
+                message: `The first picture stays about ${first.seconds} s; a shorter first sentence changes it within ${PICTURE_SECONDS.first} s, while viewers decide whether to stay.`,
+            });
+        }
+        const long = holds.slice(1).filter((h) => h.seconds > PICTURE_WARN_SECONDS.long).map((h) => h.scene + 1);
+        if (long.length) {
+            warnings.push({
+                code: 'scene_long',
+                message: `A picture stays more than ${PICTURE_WARN_SECONDS.long} s in scene${long.length === 1 ? '' : 's'} ${long.join(', ')}: split ${long.length === 1 ? 'that sentence' : 'each of those sentences'} in two.`,
+            });
+        }
+        const short = holds.filter((h) => h.seconds > 0 && h.seconds < PICTURE_WARN_SECONDS.short).map((h) => h.scene + 1);
+        if (short.length) {
+            warnings.push({
+                code: 'scene_short',
+                message: `A picture is gone in under ${PICTURE_WARN_SECONDS.short} s in scene${short.length === 1 ? '' : 's'} ${short.join(', ')}: join ${short.length === 1 ? 'that sentence' : 'each of those sentences'} to the one next to it.`,
+            });
         }
     }
     if (sourceCount === 0) {
