@@ -92,7 +92,7 @@ const FIELD_COLUMNS = {
     source_links: '::jsonb', draft: '::jsonb', audio: '::jsonb', words: '::jsonb', render: '::jsonb', schedule: '::jsonb',
 } as const;
 
-export type ExplainerFields = { [K in keyof typeof FIELD_COLUMNS]?: unknown };
+export type ExplainerFields = { -readonly [K in keyof typeof FIELD_COLUMNS]?: unknown };
 
 /**
  * Set columns of an explainer that is already locked, without moving its status: a value sets the column, `null` clears it, `undefined` leaves it alone,

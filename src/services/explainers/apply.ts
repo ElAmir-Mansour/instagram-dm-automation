@@ -202,7 +202,7 @@ export function parseVoiceResult(raw: unknown, positions: readonly number[]): Vo
         for (let i = 1; i < scenes.length; i++) {
             if (scenes[i]!.start < scenes[i - 1]!.end - OVERLAP_SLACK_S) problems.push(`scenes[${i}] starts before the scene before it ends`);
         }
-        const duration = audio && isFiniteNumber(audio.duration) ? audio.duration : null;
+        const duration = audio && isFiniteNumber(audio.duration) && audio.duration > 0 ? audio.duration : null;
         const last = scenes.at(-1);
         if (duration !== null && last && last.end > duration + TIMING_SLACK_S) problems.push(`the last scene ends at ${last.end} s, after the audio's ${duration} s`);
     }
