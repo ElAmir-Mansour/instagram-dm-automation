@@ -258,6 +258,6 @@ to AI providers that do not train on them (no free-tier Gemini).
 | W6 | voice notes (transcription) and private media | live (#216, #219, #220) |
 | W7 | consent and opt-out ("إيقاف") | live (#214, #219) |
 | W8 | campaign links, QR codes, ice breakers, attribution | live (#215, #218, #219) |
-| W9 | quality / limit alerts, free-tier alert, daily health read | live (#213); alerts by email (#217) |
+| W9 | quality / limit alerts, free-tier alert, daily health read | live (#213); these account alerts go to Telegram only (`notifyWhatsAppOwner`); email (#217) carries hand-offs, not them |
 | W10 | privacy pages + go-live gate → mode **Everyone** | privacy draft #221 (needs #197 approval); gate not built |
 | W11 | managed customer numbers | planned |

@@ -756,7 +756,10 @@ via `src/index.ts:105-107`) makes four promises:
 holds the same text deletes nothing — this is the mechanism by which the promise is otherwise
 untrue (`src/services/retention.ts:14-18`).
 
-**Set `RAW_PAYLOAD_RETENTION_DAYS=30` in the Vercel environment to match the page.** The
+**Set `RAW_PAYLOAD_RETENTION_DAYS=30` in the Vercel environment to match the page.** On 2026-10-25 it
+was set: `vercel env ls production` lists it (added about 2026-09-21). Vercel keeps it as a secret, so its
+value cannot be read back; the daily cron's `cron.retention_sweep` line (`rawPayloadsCleared`) shows the
+sweep at work. The
 minimum accepted is 7; a misconfigured value disables pruning rather than falling back to a
 default, and logs `retention.misconfigured` (`src/services/retention.ts:83-93`, `:107-112`).
 The sweep runs once daily from the publish cron and converges rather than clearing one batch a
@@ -802,7 +805,13 @@ their Meta user id. The other two came later:
   no lead.
 
 Deleting a conversation also deletes the tracked links sent in it and their clicks
-(`tracked_links`, `link_clicks`: the schema cascades). The preview counts conversations,
+(`tracked_links`, `link_clicks`: the schema cascades).
+
+**Stop requests are kept.** A stop or a consent change (`contact_consents`: the person's platform id, the
+words they sent, the time) survives the erasure. Its link to the conversation is set to NULL
+(`ON DELETE SET NULL`, migration v50), and nothing deletes the row, because it is the evidence that the
+person asked. Keeping it, or deleting it in `erasure.ts`, is the owner's decision; the WhatsApp privacy
+update (#221) discloses that it is kept. The preview counts conversations,
 messages, interactions, the send log and leads. The uploads are not in those counts: they are
 `media_deleted` in the audit row.
 
