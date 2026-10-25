@@ -38,9 +38,10 @@ const HelpContent = {
         { id: 'meta', title: { ar: 'إنستجرام وفيسبوك', en: 'Instagram & Facebook' } },
         { id: 'growth', title: { ar: 'النمو والتسويق', en: 'Growth & reach' } },
         { id: 'tiktok', title: { ar: 'تيك توك', en: 'TikTok' } },
+        { id: 'youtube', title: { ar: 'يوتيوب', en: 'YouTube' } },
         { id: 'whatsapp', title: { ar: 'واتساب', en: 'WhatsApp' } },
         { id: 'ads', title: { ar: 'الإعلانات', en: 'Ads' } },
-        { id: 'studio', title: { ar: 'استوديو الكاروسيل', en: 'Carousel Studio' } },
+        { id: 'studio', title: { ar: 'الاستوديو', en: 'Studio' } },
         { id: 'more', title: { ar: 'الذكاء الاصطناعي والحلول', en: 'AI, fixes and questions' } },
     ],
 
@@ -179,6 +180,254 @@ const HelpContent = {
             ],
         },
 
+        // ─── 1b. Joining a new workspace ─────────────────────────────────────
+        {
+            slug: 'onboarding',
+            group: 'start',
+            icon: 'user-plus',
+            title: { ar: 'الانضمام لمساحة جديدة: الرابط والإعداد', en: 'Joining a new workspace: the link and the setup' },
+            summary: {
+                ar: 'الرابط اللي يوصلك، وخطوات الإعداد بالترتيب (عنك، وأسلوبك، وهويتك، وحساباتك، والعيّنات)، وزر «عبّئها عني»، وايش يجهز لما تخلص.',
+                en: 'The link you receive, the setup steps in order (about you, your voice, your look, accounts, samples), the Fill it for me button, and what is ready when you finish.',
+            },
+            related: ['getting-started', 'connect-meta', 'campaigns'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'كيف تبدأ مساحة جديدة', en: 'How a new workspace starts' },
+                    body: {
+                        ar: [
+                            'المساحة الجديدة تبدأ برابط. اللي يدير المنصة ينشئ لك مساحتك ويرسل لك الرابط، غالباً على واتساب. تفتحه وتختار كلمة مرور، وبعدها إعداد قصير يسألك عنك وعن أسلوبك. ولما ينتهي الإعداد تنفتح لوحتك.',
+                            { dl: [
+                                ['الرابط', 'صفحة ترحّب بك في مساحتك وتطلب كلمة مرور: [[onboarding#invite]].'],
+                                ['الإعداد', 'شاشات قصيرة: عنك، وأسلوبك، وهويتك، وحساباتك، وعيّنات ردود: [[onboarding#steps]].'],
+                                ['لوحتك', 'ينتهي الإعداد بزر **إلى لوحتي**. وقبلها يُرجَع مالك الحساب إلى الإعداد من كل صفحة ثانية.'],
+                            ] },
+                            { note: 'يُتمّ الإعداد مالك الحساب وحده. ولو ظهرت لك رسالة «إتمام الإعداد لمالك الحساب وحده» اطلب من المالك يفتحه، وتقدر تستخدم اللوحة في الأثناء.' },
+                        ],
+                        en: [
+                            'A new workspace starts with a link. The person who runs the platform makes your workspace and sends you the link, usually on WhatsApp. You open it and choose a password, and a short setup asks about you and your voice. When the setup ends, your dashboard opens.',
+                            { dl: [
+                                ['The link', 'A page that welcomes you to your workspace and asks for a password: [[onboarding#invite]].'],
+                                ['The setup', 'A few short screens: about you, your voice, your look, your accounts and some sample replies: [[onboarding#steps]].'],
+                                ['Your dashboard', 'The setup ends with **Go to my dashboard**. Until then the account owner is sent back to the setup from every other page.'],
+                            ] },
+                            { note: 'Only the account owner can finish the setup. If you see “Only the account owner can finish the setup”, ask the owner to open it: you can use the dashboard in the meantime.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'invite',
+                    title: { ar: 'رابط الدعوة', en: 'The invite link' },
+                    body: {
+                        ar: [
+                            'الرابط يفتح صفحة ما تحتاج حساباً بعد. تقول لك «أهلًا بك في» مساحتك، ومين دعاك، والصفة اللي تنضم بها (**مالك** أو **مشغّل** أو **مُطّلع**: [[getting-started#roles]]). وتطلب منك:',
+                            { ul: [
+                                'بريدك الإلكتروني. لو الرابط مصنوع لبريد معيّن يكون مكتوباً ومقفلاً («هذه الدعوة مخصّصة لهذا البريد»)، وإلا تكتبه أنت.',
+                                '**اختر كلمة مرور** من 12 حرفاً على الأقل. و**اقترح لي كلمة مرور** تملأ لك كلمة قوية: احفظها في مدير كلمات المرور قبل ما تتابع.',
+                                'علامة، مفعّلة من البداية، تبقيك مسجّلاً للدخول عدداً من الأيام (30 ما لم يحدد مسؤول المنصة غيرها).',
+                            ] },
+                            'اضغط **افتح مساحتي**. يُنشأ حسابك، وتدخل، ويفتح لك الإعداد.',
+                            { dl: [
+                                ['الرابط يعمل مرة وحدة', 'وتنتهي صلاحيته، بعد 7 أيام ما لم يحدد مسؤول المنصة وقتاً ثانياً. والرابط اللي استُخدم، أو حلّ محله رابط أحدث، أو أُلغي، أو انتهى، يقول «هذا الرابط لم يعد صالحًا»: اطلب رابطاً جديداً ممن أرسله، أو سجّل الدخول لو كنت عيّنت كلمة مرور من قبل.'],
+                                ['عندك حساب أصلاً؟', 'اضغط **لدي حساب بالفعل**، وسجّل الدخول، والصفحة تعرض عليك إضافة المساحة الجديدة إلى حسابك.'],
+                                ['رابط لتعيين كلمة مرور جديدة', 'شكله نفسه، لكن الصفحة تقول **عيّن كلمة مرور جديدة**، وهو يعمل مرة وحدة كمان.'],
+                                ['فتحته داخل إنستجرام أو فيسبوك أو واتساب؟', 'هذي التطبيقات تفتح الروابط في متصفح صغير خاص بها، وربط حساباتك فيه ما يمشي زين: اضغط القائمة (…) واختر «فتح في المتصفح».'],
+                            ] },
+                            'ولو أنت اللي ترسل الرابط: حوار الدعوة يعطيك **انسخ الرابط** و**أرسل عبر واتساب**. والرابط يظهر مرة وحدة فقط، لحظة ما تنشئه. و**إنشاء رابط جديد** يصدر رابطاً آخر ويوقف القديم، و**إلغاء الرابط** يوقفه.',
+                        ],
+                        en: [
+                            'The link opens a page that needs no account yet. It says “Welcome to” your workspace, who invited you, and the role you will join as (**Owner**, **Operator** or **Viewer**: see [[getting-started#roles]]). It asks for:',
+                            { ul: [
+                                'Your email address. When the link was made for one address, it is filled in and locked (“This invitation is for this address.”). Otherwise you type it.',
+                                '**Choose a password** of at least 12 characters. **Suggest one** fills in a strong one: save it in your password manager before you continue.',
+                                'A tick, on from the start, that keeps you signed in for a number of days (30 unless the platform administrator set another number).',
+                            ] },
+                            'Press **Open my workspace**. Your account is made, you are signed in, and the setup opens.',
+                            { dl: [
+                                ['A link works once', 'And it expires, after 7 days unless the platform administrator set another time. A link that was used, replaced by a newer one, revoked or expired says “This link is no longer valid”: ask whoever sent it for a new one, or, if you already set a password, sign in instead.'],
+                                ['Already have an account?', 'Press **I already have an account**, sign in, and the page offers to add the new workspace to that account.'],
+                                ['A link to set a new password', 'Looks the same, but the page says **Set a new password**, and it works once too.'],
+                                ['Opened inside Instagram, Facebook or WhatsApp?', 'Those apps open links in a small browser of their own, where connecting your accounts works badly: tap the menu (…) and choose “Open in browser”.'],
+                            ] },
+                            'If you are the person sending the link, the invite dialog gives you **Copy link** and **Send on WhatsApp**. The link is shown only once, when you make it. **Regenerate** makes a new one and stops the old one, and **Revoke** stops it.',
+                        ],
+                    },
+                },
+                {
+                    id: 'steps',
+                    title: { ar: 'خطوات الإعداد بالترتيب', en: 'The setup, step by step' },
+                    body: {
+                        ar: [
+                            'الإعداد سؤال بعد سؤال. وإجاباتك تنحفظ وأنت تكتب، فتقدر تسكّر الصفحة وتكمل بعدين من حيث وقفت. **التالي** يقدّمك، و**رجوع** يرجعك، والشاشتان الأوليان إلزاميتان ما تنتخطى. والباقي فيها **تخطَّ الآن**.',
+                            { dl: [
+                                ['عنك', 'إلزامية. «عرّفنا بنفسك»: **اسمك أو اسم نشاطك**، و**ماذا تفعل؟** (تعليم، أو تدريب واستشارات، أو متجر، أو خدمات، أو صناعة محتوى)، و**ما مجالك؟ سطر واحد**، و**أهم ما تقدّمه**، و**كيف يحصل عليه الناس؟** (**من رابط** وتكتب الرابط، أو **يراسلونني برسالة خاصة**)، و**السعر (اختياري)**، و**الدولة (اختياري)**، و**المنطقة الزمنية**، وتُحدَّد من جهازك وبها تُضبط مواعيد النشر. وفوق النموذج يقترح عليك **عبّئها عني** الإجابات: [[onboarding#draft]].'],
+                                ['أسلوبك', 'إلزامية. «كيف تخاطب متابعيك؟»: الرسالة نفسها بخمس طرق (فصحى، وخليجي، ومصري، وشامي، والإنجليزية). اختر الأقرب لأسلوبك، وحتى ثلاث كلمات للنبرة. واضغط **هذا أسلوبي**.'],
+                                ['هويتك', 'اختيارية. لونان (**اللون الرئيسي** و**لون التمييز**)، ونمط التصاميم (داكن أو فاتح)، ومعرّفك وموقعك وصورتك، مع معاينة. اضغط **اعتمد هذه الألوان**، أو **تخطَّ الآن**.'],
+                                ['الحسابات', 'اختيارية، وما تظهر إلا لو فعّل مسؤول المنصة الربط من هنا: [[onboarding#accounts]].'],
+                                ['العيّنات', 'اختيارية. «هل يبدو هذا كلامك؟»: عيّنتا ردود مكتوبتان لتحكم عليهما: [[onboarding#samples]].'],
+                                ['جاهز', '«كل شيء جاهز»: [[onboarding#after]].'],
+                            ] },
+                        ],
+                        en: [
+                            'The setup is one question at a time. Your answers are saved as you type, so you can close the page and carry on later from where you stopped. **Next** moves on and **Back** goes back. The first two screens are required and cannot be skipped; the others have **Skip for now**.',
+                            { dl: [
+                                ['About you', 'Required. “Tell us about you”: **Your name, or your business name**, **What do you do?** (teaching, coaching and advice, a shop, a service business or content creator), **What is it about? One line**, **Your main offer**, **How do people get it?** (**From a link**, and you write the link, or **They message me**), **Price (optional)**, **Country (optional)** and **Time zone**, which is found from your device and which posting times use. Above the form, **Fill it for me** can suggest the answers: [[onboarding#draft]].'],
+                                ['Your voice', 'Required. “How do you talk to your followers?”: the same message in five ways (Standard Arabic, Gulf, Egyptian, Levantine and English). Pick the one closest to you, and up to three words for the tone. Press **This sounds like me**.'],
+                                ['Your look', 'Optional. Two colours (**Main colour** and **Highlight colour**), a graphics style (dark or light), your handle, your website and your photo, with a preview. Press **Use these colours**, or **Skip for now**.'],
+                                ['Accounts', 'Optional, and only there when the platform administrator has switched on connecting from here: [[onboarding#accounts]].'],
+                                ['Samples', 'Optional. “Does this sound like you?”: two sample replies, written for you to judge: [[onboarding#samples]].'],
+                                ['Done', '“All set”: [[onboarding#after]].'],
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'draft',
+                    title: { ar: '«عبّئها عني»', en: 'Fill it for me' },
+                    body: {
+                        ar: [
+                            'في أول شاشة، **عبّئها عني** يقرأ صفحاتك العامة ويقترح عليك الإجابات، فتكتب أقل. اكتب اسم حسابك في **حسابك على إنستغرام** وعنوان موقعك في **موقعك**، واضغط **عبّئها عني**.',
+                            { ul: [
+                                'يقرأ ما هو عام بس: ملفك في إنستجرام (النبذة وبعض منشوراتك)، وموقعك (صفحته الرئيسية وبعض الصفحات اللي تشير لها قائمته)، وقناتك على يوتيوب إذا كانت مربوطة بالمساحة. ولا ينشر ولا يغيّر أي شيء.',
+                                'ياخذ لحظات: يقرأ («نقرأ حساباتك…») ثم يكتب («نكتب الاقتراحات…»). ولو تعثّر يعيد المحاولة لحاله. وما لازم تنتظر: **ابدأ دون انتظار** يطوي اللوحة في سطر وتبقى لك الاستمارة، وتظهر الاقتراحات لما تجهز.',
+                                'لما يجهز، **هذا ما وجدناه** يعرض اقتراحاً تحت كل خانة فاضية، ومن وين جاء («من نبذتك على إنستغرام»، أو «من أحد منشوراتك»، أو «من موقعك»، أو «من قناتك على يوتيوب»). اضغط **استخدم هذا** عشان يدخل النموذج، أو **ليس هذا** عشان يُترك. والاقتراح اللي عليه «راجع هذا الاقتراح قبل استخدامه» وضعه المدقق للمراجعة: اقرأه مرتين.',
+                                'ما يكتب فوق شي كتبته أنت، وما يُحفظ شي لين تضغط **التالي**.',
+                                'تقدر تطلب الاقتراحات 5 مرات في اليوم. بعدها يقول «طلبت اقتراحات كثيرة اليوم»: عبّئ النموذج بنفسك، أو جرّب غداً.',
+                                'ولو الذكاء الاصطناعي ما هو مفعّل في المنصة، يقول إنه سيملأ هذا لاحقاً ويعرض ما وجده بدونه (المعرّف والموقع والألوان).',
+                            ] },
+                        ],
+                        en: [
+                            'On the first screen, **Fill it for me** reads your public pages and suggests answers, so you type less. Type your account name in **Your Instagram** and your site in **Your website**, and press **Fill it for me**.',
+                            { ul: [
+                                'It reads only what is public: your Instagram profile (your bio and some of your posts), your website (its home page and a few pages its menu points to), and your YouTube channel when YouTube is connected to the workspace. It never posts or changes anything.',
+                                'It takes a moment: it reads (“Reading your accounts…”) and then writes (“Writing suggestions…”). If something slows it down it tries again by itself. You do not have to wait: **Start without waiting** folds the panel into one line and the form is yours, and the suggestions appear when they are ready.',
+                                'When it is ready, **Here is what we found** shows a suggestion under each empty field, and where it came from (“From your Instagram bio”, “From one of your posts”, “From your website” or “From your YouTube channel”). Press **Use this** to put it in the form, or **Not this** to leave it. A suggestion marked “Please check this one before you use it.” is one the checker flagged: read it twice.',
+                                'It never writes over what you typed, and nothing is saved until you press **Next**.',
+                                'You can ask for suggestions 5 times a day. After that it says “You have asked for enough suggestions today”: fill in the form yourself, or try again tomorrow.',
+                                'If the platform has no AI switched on yet, it says it will fill this in later and shows what it found without it (the handle, the site, your colours).',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'accounts',
+                    title: { ar: 'ربط الحسابات', en: 'Connecting your accounts' },
+                    body: {
+                        ar: [
+                            'شاشة **اربط حساباتك** فيها ثلاث بطاقات: إنستجرام وفيسبوك، وتيك توك، ويوتيوب. وهي ما تظهر إلا لو فعّل مسؤول المنصة الربط من هنا («Connect with Facebook»). وبدونها ما عليك شي هنا: اللي دعاك يربط حساباتك عنك، بعد ما تمنحه صلاحية الوصول إلى صفحتك في Meta Business Suite (الإعدادات ثم الأشخاص).',
+                            { ol: [
+                                'اضغط **اربط** في بطاقة **إنستجرام وفيسبوك** واختر الصفحة المرتبط بها حساب إنستجرام.',
+                                'تيك توك ويوتيوب اختياريان: اربطهما الحين أو لاحقاً من الإعدادات.',
+                                'تحقق اختياري: اطلب من صديق أن يكتب تعليق «test» على آخر منشور لك، من حساب آخر. وتقول الصفحة «وصل التعليق. التعليقات تصل إلى حسابك.» لما يوصل، وتنتظره 10 دقائق، وتقدر **تحقّق مجددًا**.',
+                            ] },
+                            'وتقدر تتخطى الشاشة كلها وتربط لاحقاً من **الإعدادات** ← **الاتصالات**: [[connect-meta]].',
+                        ],
+                        en: [
+                            '**Connect your accounts** shows three cards: Instagram & Facebook, TikTok and YouTube. It is only there when the platform administrator has switched on connecting from here (“Connect with Facebook”). Without it you do nothing here: the person who invited you connects your accounts for you, once you give them access to your Page in Meta Business Suite (Settings, then People).',
+                            { ol: [
+                                'Press **Connect** on the **Instagram & Facebook** card and choose the Page linked to your Instagram account.',
+                                'TikTok and YouTube are optional: connect them now, or later in Settings.',
+                                'An optional check: ask a friend to comment “test” on your latest post, from another account. The page says “Got it. Comments reach your account.” when it arrives. It waits for 10 minutes, and you can **Check again**.',
+                            ] },
+                            'You can skip the whole screen and connect later in **Settings** → **Connections**: [[connect-meta]].',
+                        ],
+                    },
+                },
+                {
+                    id: 'samples',
+                    title: { ar: 'عيّنات الردود', en: 'The sample replies' },
+                    body: {
+                        ar: [
+                            '**هل يبدو هذا كلامك؟** يعرض عيّنتين كُتبتا من إجاباتك بنفس الكتّاب اللي يستخدمهم التطبيق بعدين:',
+                            { dl: [
+                                ['نص منشور على إنستجرام', 'نص جديد بأسلوبك.'],
+                                ['ردود التعليقات الأولى', 'وش يصير لما أحد يعلّق بكلمتك: **الرسالة الخاصة** و**الرد العلني**.'],
+                            ] },
+                            'احكم على كل واحدة: **يشبهني** أو **ليس تمامًا**. ومع «ليس تمامًا» اختر وش الغلط (**رسمي أكثر من اللازم**، أو **طويل**، أو **معلومة خاطئة**، أو **سأعدّله بنفسي**) فيكتبها التطبيق من جديد. أو اكتب نسختك في **نسختك** واضغط **احفظ نسختي**.',
+                            { ul: [
+                                'كل عيّنة تُكتب من جديد حتى 3 مرات، والعيّنات تُكتب 3 مرات في اليوم.',
+                                'اللي تعتمده أو تعدّله يصير مثالاً على أسلوبك يستخدمه الكتّاب من بعدها، وعيّنة التعليقات تصير كمان حملتك الأولى (القسم اللي بعد).',
+                                'هذي عيّنات فقط: لا يُنشر شيء ولا يُرسل إلى أحد.',
+                                'ولو ما في مفتاح ذكاء اصطناعي في المنصة، تقول الخطوة «العيّنات تحتاج مفتاح ذكاء اصطناعي»، وتقدر تكمل: كل شي ثاني يشتغل.',
+                            ] },
+                        ],
+                        en: [
+                            '**Does this sound like you?** shows two samples, written from your answers by the same writers the app uses later:',
+                            { dl: [
+                                ['An Instagram caption', 'A new caption in your voice.'],
+                                ['Your first comment replies', 'What happens when someone comments your keyword: **The private message** and **The public reply**.'],
+                            ] },
+                            'Judge each one: **Sounds like me**, or **Not quite**. With “Not quite”, pick what is off (**Too formal**, **Too long**, **Wrong information** or **I’ll edit it myself**) and the app writes it again. Or type your own version in **Your version** and press **Save my version**.',
+                            { ul: [
+                                'Each sample can be written again up to 3 times, and samples can be written 3 times a day.',
+                                'What you approve or edit becomes an example of your voice, which the writers use from then on, and the comment sample also becomes your first campaign (the next section).',
+                                'These are samples only: nothing is posted and nothing is sent to anyone.',
+                                'If the platform has no AI key, the step says “Samples need an AI key”, and you can carry on: everything else works.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'after',
+                    title: { ar: 'لما تخلص', en: 'When you finish' },
+                    body: {
+                        ar: [
+                            'آخر شاشة، **كل شيء جاهز**، تقول لك وش جاهز ووش ينتظر:',
+                            { dl: [
+                                ['جاهز', 'اسمك وعرضك وأسلوبك وهويتك محفوظة.'],
+                                ['ردود التعليقات', 'تشتغل لما يُربط إنستجرام. وتقدر تربطه في أي وقت من الإعدادات.'],
+                                ['نماذج ردود بأسلوبك', 'اللي اعتمدته يوجّه ما يُكتب لك. ولو تخطيتها فكل شي يبقى يبدأ من ملفك.'],
+                                ['حملة تعليقاتك الأولى', 'كُتبت وهي متوقفة. شغّلها من **الردود التلقائية** بعد ربط إنستجرام.'],
+                                ['قواعد المحتوى', 'القواعد اللي تنطبق على ما يُكتب لك. تبدأ من الافتراضي للحسابات الجديدة، وتقدر تزيل العلامة عن اللي ما يناسبك بزر **تغيير**.'],
+                            ] },
+                            'اضغط **إلى لوحتي**. والحملة الأولى تُنشأ مرة وحدة عند إنهاء الإعداد، من عيّنتك المعتمدة (أو من الصياغة المعتادة باسم عرضك ورابطه)، ولا تُنشأ إلا لو في عرض وكلمة ورسالة تُرسل. وتُنشأ متوقفة لأن ما يجوز أن تُراسَل ناسٌ حقيقيون قبل ما تشغّلها أنت.',
+                            { tip: 'جرّبها من حساب ثاني قبل ما تشغّلها: علّق بكلمتها على أحد منشوراتك: [[campaigns#how]].' },
+                        ],
+                        en: [
+                            'The last screen, **All set**, says what is ready and what is waiting:',
+                            { dl: [
+                                ['Ready', 'Your name, offer, voice and look are saved.'],
+                                ['Comment replies', 'They switch on when Instagram is connected. You can connect it at any time in Settings.'],
+                                ['Sample replies in your voice', 'What you approved guides what is written for you. If you skipped them, everything still starts from your profile.'],
+                                ['Your first comment campaign', 'It is written and switched off. Turn it on in **Keyword replies** once Instagram is connected.'],
+                                ['Content rules', 'The rules that apply to what is written for you. They start from the default for new accounts, and you can untick one that does not suit you with **Change**.'],
+                            ] },
+                            'Press **Go to my dashboard**. The first campaign is made once, when the setup ends, from your approved sample (or from the standard wording with your offer’s name and link), and only if there is an offer, a keyword and a message to send. It is made switched off because nobody real may be messaged until you turn it on.',
+                            { tip: 'Try it from a second account before you turn it on: comment its keyword on one of your posts: [[campaigns#how]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'لما يتوقف شي', en: 'When something stops' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['«هذا الرابط لم يعد صالحًا»', 'اطلب رابطاً جديداً ممن أرسله لك، أو سجّل الدخول لو كنت عيّنت كلمة مرور من قبل: [[onboarding#invite]].'],
+                                ['«محاولات كثيرة» في صفحة الدعوة', 'انتظر عدد الثواني المكتوب وحاول من جديد.'],
+                                ['«ما زالت بعض الإجابات ناقصة»', 'الشاشتان الأوليان لازم فيهما كل الخانات الإلزامية: أكملها عشان تنهي الإعداد.'],
+                                ['«حدّث شخص آخر هذه البيانات أثناء تعديلك»', 'حمّلنا لك النسخة الأحدث (غالباً مسؤول المنصة يعبّي معك). راجعها ثم تابع.'],
+                                ['الاقتراحات ما جات', 'اضغط **ابدأ دون انتظار** وعبّئ النموذج، أو تعيد المحاولة: لو قالت الصفحة «تعذّر إعداد الاقتراحات هذه المرة» جرّب مرة ثانية أو عبّئ بنفسك.'],
+                                ['العيّنات تقول إنها تحتاج مفتاح ذكاء اصطناعي', 'مسؤول المنصة لازم يضيف مفتاحاً. كمّل بدونها: كل شي ثاني يشتغل.'],
+                                ['سكّرت الصفحة في نص الإعداد', 'افتح رابط اللوحة وسجّل الدخول: يكمل الإعداد من حيث وقفت، وإجاباتك محفوظة.'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['“This link is no longer valid”', 'Ask whoever sent it for a new link, or, if you already set a password, sign in instead: [[onboarding#invite]].'],
+                                ['“Too many attempts” on the invite page', 'Wait the number of seconds it says and try again.'],
+                                ['“A few answers are still missing”', 'The first two screens need every required field. Fill them in to finish the setup.'],
+                                ['“Someone updated this while you were editing”', 'The newer version was loaded for you (often the platform administrator filling in with you). Check it, then continue.'],
+                                ['The suggestions never came', 'Press **Start without waiting** and fill in the form yourself. If the page says “We could not make suggestions this time”, try again or fill it in yourself.'],
+                                ['The samples say they need an AI key', 'The platform administrator has to add one. Carry on without them: everything else works.'],
+                                ['I closed the page in the middle of the setup', 'Open the dashboard address and sign in: the setup resumes where you stopped, and your answers are kept.'],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
         // ─── 2. Connect Instagram & Facebook ─────────────────────────────────
         {
             slug: 'connect-meta',
@@ -1116,6 +1365,236 @@ const HelpContent = {
                                 'The last slide of the TikTok version says the same.',
                             ] },
                             { warn: 'Make sure the link really is in your bio. TikTok doesn’t give every account a **Website** field on the profile: typically business accounts get it, or accounts past a follower count (often 1,000), and the rule varies by country. Open **Edit profile** in TikTok and check you have the field before you post.' },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 5a. YouTube ─────────────────────────────────────────────────────
+        {
+            slug: 'youtube',
+            group: 'youtube',
+            icon: 'youtube',
+            title: { ar: 'يوتيوب: ربط القناة ورفع الـ Shorts', en: 'YouTube: connecting a channel and uploading Shorts' },
+            summary: {
+                ar: 'كيف تربط قناتك، وايش يُرفع عليها، ومتى يكون الرفع خاصاً أو عاماً، والفحص اليومي، وحد الرفع اليومي، وايش يصير لو انفصل الربط.',
+                en: 'How to connect your channel, what is uploaded to it, when an upload is private or public, the daily check, the daily upload limit, and what happens if the connection drops.',
+            },
+            related: ['monteur', 'infographics', 'explainers', 'troubleshooting'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'وش يروح لقناتك؟', en: 'What goes to your channel' },
+                    body: {
+                        ar: [
+                            'لما تربط قناتك، ثلاثة أشياء تقدر ترسل فيديو ليوتيوب، بنفس وقت إنستجرام وفيسبوك وغلافه صورة مصغّرة له:',
+                            { dl: [
+                                ['ريلز المونتير', 'لما يكون **يوتيوب** معلّماً في **انشر على**، يضيف الاعتماد منشوراً ليوتيوب: الريل كـ Short، بعنوان الريل ونص تيك توك، ومعه نسخة الفيديو اللي آخرها «الرابط في البايو»: [[monteur#approve]].'],
+                                ['الإنفوجرافيك', 'لما يكون **يوتيوب** معلّماً في **تنشر الجدولة ملف MP4 على**: الـ MP4 بوصفه كوصف، وعنوان الصفحة كعنوان: [[infographics#schedule]].'],
+                                ['الشروحات المصوّرة', 'الفيديو العمودي كـ Short لو مدته 3 دقائق أو أقل. وفوق 3 دقائق يُرفع الفيديو الأفقي كفيديو عادي، بدون وسم Shorts: [[explainers#publish]].'],
+                            ] },
+                            'وكاتب المنشورات في **الجدولة** ما يعرض يوتيوب لمنشور تكتبه بنفسك: بس هذي الثلاثة تصنع منشورات يوتيوب. ومنشور يوتيوب في **الجدولة** بطاقة عادية، فيها **انشر الآن** وهو ينتظر، و**افتح على يوتيوب** لما يُرفع.',
+                            { note: 'الـ Short رفع عادي لفيديو عمودي مدته حتى 3 دقائق: ما في مفتاح خاص له عند يوتيوب. فيضيف التطبيق الوسم #Shorts للعنوان والوصف. ويصنّف يوتيوب كل رفع في فئة حسب ما تعمل (إجابتك عن «ماذا تفعل؟» في الإعداد): Education للتعليم، وHowto & Style للتدريب والاستشارات، وPeople & Blogs لغيرهما. وتقدر تغيّرها من YouTube Studio.' },
+                        ],
+                        en: [
+                            'Once your channel is connected, three things can send a video to YouTube, at the same time as Instagram and Facebook and with the cover as its thumbnail:',
+                            { dl: [
+                                ['Monteur reels', 'When **YouTube** is ticked under **Post to**, Approve adds a YouTube post: the reel as a Short, with the reel’s title and the TikTok caption, in the “link in bio” copy of the video: [[monteur#approve]].'],
+                                ['Infographics', 'When **YouTube** is ticked under **Schedule posts the MP4 to**: the MP4, with the caption as its description and the page’s headline as its title: [[infographics#schedule]].'],
+                                ['Illustrated explainers', 'The vertical video as a Short when it runs 3 minutes or less. Past 3 minutes the horizontal video goes up as an ordinary video, without the Shorts tag: [[explainers#publish]].'],
+                            ] },
+                            'The Scheduler’s composer does not offer YouTube for a post you write yourself: only these three make YouTube posts. In the **Scheduler** a YouTube post is a normal card, with **Publish now** while it waits and **Open on YouTube** once it is up.',
+                            { note: 'A Short is an ordinary upload of a vertical video of up to 3 minutes: YouTube has no separate switch for it, so the app adds the tag #Shorts to the title and the description. YouTube also files each upload under a category chosen from what you do (your answer to “What do you do?” in the setup): Education for teaching, Howto & Style for coaching and advice, People & Blogs for the rest. You can change it in YouTube Studio.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'connect',
+                    title: { ar: 'ربط القناة', en: 'Connecting your channel' },
+                    body: {
+                        ar: [
+                            { ol: [
+                                'مسؤول المنصة يحفظ عميل Google أولاً ([[youtube#operator]]). وقبلها تقول البطاقة «يوتيوب ما تجهّز بعد. اطلب من مسؤول المنصة يضيف عميل Google OAuth.»',
+                                'مالك المساحة يفتح **الإعدادات** ← **الاتصالات** ← **يوتيوب** ويضغط **اربط يوتيوب**. الزر يظهر للمالك فقط.',
+                                'تنفتح Google: اختر الحساب اللي فيه القناة، وعلّم على المربعين اللي تطلبهما: إدارة فيديوهات يوتيوب (عشان الرفع)، وعرض اسم القناة وصورتها.',
+                                'ترجع للإعدادات وتشوف اسم القناة وصورتها وجنبهما **مربوط**.',
+                            ] },
+                            { ul: [
+                                'لين تتحقق Google من التطبيق، صفحة الدخول تقول «Google hasn’t verified this app»: اختر Advanced ثم Go to AutoReply Pro.',
+                                'القناة الواحدة تنربط بمساحة واحدة بس: لتنقلها اضغط **افصل يوتيوب** في المساحة الأولى. وحساب Google لازم يكون له قناة يوتيوب: لو ما عنده، سوّ قناة على youtube.com أول.',
+                                'لو ظهرت لك «ما انعطى إذن الرفع — أعد الربط وعلّم على «إدارة فيديوهات يوتيوب».»، اضغط **إعادة الربط** وعلّم على المربعين.',
+                            ] },
+                        ],
+                        en: [
+                            { ol: [
+                                'The platform administrator saves the Google client first ([[youtube#operator]]). Until then the card says “YouTube isn’t set up yet. Ask the platform administrator to add the Google OAuth client.”',
+                                'The workspace owner opens **Settings** → **Connections** → **YouTube** and presses **Connect YouTube**. Only the owner sees the button.',
+                                'Google opens: choose the account that has the channel, and tick both boxes it asks for: managing your YouTube videos (to upload) and seeing the channel’s name and picture.',
+                                'You come back to Settings and see the channel’s name and picture, marked **Connected**.',
+                            ] },
+                            { ul: [
+                                'Until Google verifies the app, its sign-in page warns “Google hasn’t verified this app”: choose Advanced, then Go to AutoReply Pro.',
+                                'A channel connects to one workspace only: to move it, press **Disconnect YouTube** in the first one. And the Google account has to have a YouTube channel: if it has none, create one on youtube.com first.',
+                                'If you see “Upload permission wasn’t granted — reconnect and tick “Manage your YouTube videos”.”, press **Reconnect** and tick both boxes.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'operator',
+                    title: { ar: 'تجهيز عميل Google (مسؤول المنصة)', en: 'Setting up the Google client (platform administrator)' },
+                    body: {
+                        ar: [
+                            'هذا يتم مرة وحدة لكل المنصة، يسوّيه مسؤول المنصة في **الإعدادات** ← **المنصة** ← **عميل Google OAuth (مسؤول المنصة)**:',
+                            { ol: [
+                                'في Google Cloud ← Google Auth Platform ← Clients أنشئ عميلاً من نوع «Web application».',
+                                'سجّل **رابط إعادة التوجيه المعتمد** اللي تعرضه البطاقة بالضبط كما هو. ويُبنى من عنوان الموقع العام، فلازم يكون عنوان الموقع محدداً في بطاقة تطبيق تيك توك أول، وإلا يقول لك الربط كذا.',
+                                'نزّل ملف JSON للعميل واختره في **ملف JSON للعميل**: يعبّي **Client ID** و**Client secret**. وما ينرسل شي لين تضغط **احفظ تطبيق يوتيوب**.',
+                                'ولو تبي الرفع عاماً علّم على **ارفع الـ Shorts عامة**: [[youtube#public]].',
+                            ] },
+                            { note: 'ما دام تطبيق Google في وضع Testing، يدوم الربط 7 أيام بس. انشره في Google Cloud (Audience ← Publish app) عشان يدوم الربط: [[youtube#reconnect]].' },
+                        ],
+                        en: [
+                            'This is done once for the whole platform, by the platform administrator, in **Settings** → **Platform** → **Google OAuth client (platform admin)**:',
+                            { ol: [
+                                'In Google Cloud, under Google Auth Platform → Clients, create a client of type “Web application”.',
+                                'Register the **Authorised redirect URI** the card shows, exactly as written. It is built from the public site address, so the site address has to be set in the TikTok app card first; without it, connecting says so.',
+                                'Download the client’s JSON file and choose it in **Client JSON file**: it fills **Client ID** and **Client secret**. Nothing is sent until you press **Save YouTube app**.',
+                                'To let uploads be public, tick **Upload Shorts as public**: [[youtube#public]].',
+                            ] },
+                            { note: 'While the Google app is in Testing, a connection lasts only 7 days. Publish the app in Google Cloud (Audience → Publish app) so connections last: [[youtube#reconnect]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'public',
+                    title: { ar: 'رفع عام أو خاص', en: 'Public or private uploads' },
+                    body: {
+                        ar: [
+                            'كون الرفع خاصاً أو عاماً مفتاح واحد لكل المنصة:',
+                            { ul: [
+                                '**ارفع الـ Shorts عامة** (في **الإعدادات** ← **المنصة** ← بطاقة تطبيق يوتيوب، ولمسؤول المنصة فقط). متوقف، وهذا الوضع الافتراضي: كل رفع خاص. ومفعّل: الرفع يطلب أن يكون عاماً.',
+                                'بطاقة يوتيوب في إعداداتك تقول لك أيهما: «الـ Shorts ترفع خاصة.» أو «الـ Shorts ترفع عامة.»',
+                                'وحتى مع تفعيله، يقدر يوتيوب يخلي رفعات تطبيق ما راجعه خاصة. الرفع ينجح، ومنشوره يقول لك جنب **افتح على يوتيوب**: «YouTube kept this upload private — make it public in YouTube Studio.» وتخليه عاماً من YouTube Studio.',
+                                'ومع إيقافه يحمل المنشور بعد رفعه ملاحظة تبدأ بـ«Uploaded to YouTube as private».',
+                            ] },
+                        ],
+                        en: [
+                            'Whether an upload is private or public is one switch for the whole platform:',
+                            { ul: [
+                                '**Upload Shorts as public** (in **Settings** → **Platform** → the YouTube app card, for the platform administrator only). Off, which is how it starts: every upload is private. On: uploads ask to be public.',
+                                'The YouTube card in your Settings says which: “Shorts are uploaded private.” or “Shorts are uploaded public.”',
+                                'Even with it on, YouTube can keep an unaudited app’s uploads private. The upload still succeeds, and its post says so beside **Open on YouTube**: “YouTube kept this upload private — make it public in YouTube Studio.” You then make it public in YouTube Studio.',
+                                'With it off, a published post carries a note that starts “Uploaded to YouTube as private”.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'check',
+                    title: { ar: 'الفحص اليومي', en: 'The daily check' },
+                    body: {
+                        ar: [
+                            'مرة كل يوم يسأل التطبيق يوتيوب عن الـ Shorts اللي نشرها (حتى 500 من الأحدث في مساحتك). الـ Short اللي ما عاد كما يجب تظهر على منشوره في **الجدولة** ملاحظة جنب **افتح على يوتيوب**، تبدأ بـ«Visibility check» وتاريخ اليوم، وتكون بالإنجليزية:',
+                            { ul: [
+                                'تقول إن اللقطة ما عادت عامة لو كان **ارفع الـ Shorts عامة** مفعّلاً وصار يوتيوب يعرضها خاصة أو غير مدرجة: «…make it public in YouTube Studio.»',
+                                'وتقول إن يوتيوب ما عاد عنده الفيديو (حُذف أو أُزيل)، أو يعرض الرفع كمرفوض أو فاشل.',
+                            ] },
+                            'ولو كان **ارفع الـ Shorts عامة** متوقفاً فالخاص هو المطلوب، فما يظهر ملاحظة إلا للفيديو المحذوف أو المُزال أو المرفوض أو الفاشل.',
+                            'وبطاقة يوتيوب في الإعدادات تلخّصها في سطر: كل الـ Shorts كما رُفعت، أو كم منها ما عاد عاماً («شوفها في المنشورات»)، أو، قبل أول فحص، أن ظهورها يُفحص مرة كل يوم.',
+                        ],
+                        en: [
+                            'Once a day the app asks YouTube about the Shorts it has published (up to the 500 newest in your workspace). A Short that is no longer as it should be gets a note on its post in the **Scheduler**, beside **Open on YouTube**. The note starts with “Visibility check” and the date, and it is written in English:',
+                            { ul: [
+                                'It says the Short is no longer public when **Upload Shorts as public** is on and YouTube now shows it as private or unlisted: “…make it public in YouTube Studio.”',
+                                'It says YouTube no longer has the video (deleted or removed), or shows the upload as rejected or failed.',
+                            ] },
+                            'With **Upload Shorts as public** off, private is what was asked for, so only a deleted, removed, rejected or failed video gets a note.',
+                            'The YouTube card in Settings sums it up in one line: all Shorts are as uploaded, or how many are no longer public (“See them in Posts”), or, before the first check, that visibility is checked once a day.',
+                        ],
+                    },
+                },
+                {
+                    id: 'quota',
+                    title: { ar: 'حد الرفع اليومي', en: 'The daily limit' },
+                    body: {
+                        ar: [
+                            'الحصة الافتراضية لتطبيق عند يوتيوب 10,000 وحدة في اليوم. والرفع الواحد يكلّف 1,600 وحدة، وصورته المصغّرة 50، فيعني حوالي ست رفعات في اليوم. الحصة للتطبيق مو لكل قناة، فكل المساحات على المنصة تسحب من نفس الحصة.',
+                            'وإذا خلصت، يرفض يوتيوب الرفع التالي. المنشور يظهر عليه **فشلت**، والسبب: «The YouTube API’s daily quota is used up (about six uploads a day)». ولا شي يعيد المحاولة لحاله، حتى لو قالت الرسالة غير كذا: اضغط **انشر الآن** على المنشور بعد ما تتجدد الحصة، عند منتصف الليل بتوقيت المحيط الهادئ، ويكمل الرفع من حيث وقف.',
+                            'ولكل قناة حد رفع يومي عند يوتيوب أيضاً («YouTube’s upload limit for this channel is reached for today — retry tomorrow»): والعلاج نفسه في اليوم التالي.',
+                        ],
+                        en: [
+                            'YouTube’s default allowance for an app is 10,000 quota units a day. One upload costs 1,600 units and setting its thumbnail 50, so about six uploads a day. The allowance is the app’s, not each channel’s, so every workspace on the platform draws on the same one.',
+                            'When it is used up, YouTube refuses the next upload. The post shows **Failed**, with the reason “The YouTube API’s daily quota is used up (about six uploads a day)”. Nothing retries it by itself, whatever the message may suggest: press **Publish now** on the post once the quota has renewed, at midnight Pacific time, and the upload resumes where it stopped.',
+                            'Each channel also has a daily upload limit at YouTube (“YouTube’s upload limit for this channel is reached for today — retry tomorrow”): the same fix, the next day.',
+                        ],
+                    },
+                },
+                {
+                    id: 'reconnect',
+                    title: { ar: 'إعادة الربط', en: 'Reconnecting' },
+                    body: {
+                        ar: [
+                            { ul: [
+                                'ممكن يموت الربط: شلت التطبيق من myaccount.google.com/permissions، أو رفضت Google الدخول المحفوظ (انسحب الوصول أو انتهى). البطاقة تقول **يحتاج إعادة ربط** ومعها آخر مشكلة. اضغط **إعادة الربط** (للمالك فقط).',
+                                'ولما يعرف التطبيق أن Google رفضت الدخول (عند الرفع التالي أو الفحص اليومي)، يحذف فوراً الرموز المحفوظة واسم القناة وصورتها، لأن سياسات يوتيوب تطلب أن تُحذف بيانات من سحب وصوله. ويبقى معرّف القناة عشان تطلب البطاقة إعادة الربط.',
+                                'ومع بقاء تطبيق Google في وضع Testing، يدوم الدخول 7 أيام بس، والبطاقة تنبّهك بالتاريخ: «تطبيق Google لسا في وضع Testing، فهذا الربط يوقف يوم …». انشر التطبيق في Google Cloud (Audience ← Publish app) وبعدين أعد الربط. وبعد النشر ما ينتهي الدخول لحاله: يموت لو شلت الوصول، أو بعد ستة أشهر بلا استخدام.',
+                                '**افصل يوتيوب** (للمالك، في آخر البطاقة) يسحب وصول التطبيق من Google ويحذف الربط المحفوظ. والـ Shorts اللي على قناتك تبقى.',
+                            ] },
+                        ],
+                        en: [
+                            { ul: [
+                                'The login can die: you removed the app at myaccount.google.com/permissions, or Google refused the saved login (access removed, or it expired). The card says **Needs reconnecting** with the last problem. Press **Reconnect** (owner only).',
+                                'Once the app learns that Google refused the login (at the next upload or the daily check), it deletes the stored tokens, the channel’s name and its picture right away, because YouTube’s policies ask for a person’s data to go when they remove access. The channel id stays so the card can ask for a reconnect.',
+                                'While the Google app is still in Testing, the login lasts only 7 days, and the card warns you with the date: “The Google app is still in Testing, so this connection stops on …”. Publish the app in Google Cloud (Audience → Publish app), then reconnect. After that the login does not expire by itself: it dies if access is removed, or after six months without use.',
+                                '**Disconnect YouTube** (owner only, at the foot of the card) revokes the app’s access with Google and deletes the stored connection. The Shorts already on your channel stay.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'disconnected',
+                    title: { ar: 'منشور يحين موعده واليوتيوب مفصول', en: 'A post that comes due while YouTube is disconnected' },
+                    body: {
+                        ar: [
+                            'منشورات يوتيوب المجدولة تبقى في طابور **الجدولة**، واللي ما حان موعده منها ينتظر. أما المنشور اللي يحين موعده والبطاقة تقول **يحتاج إعادة ربط**، أو بعد ما تضغط **افصل يوتيوب**، فيُؤخذ ويفشل، والسبب مكتوب عليه («YouTube is not connected for this account — connect it in Settings.»، أو آخر سبب من Google لو كان الربط يحتاج إعادة). ما يضيع شي: اربط من جديد، ثم اضغط **انشر الآن** على المنشور الفاشل. وما يمنع هذا نزول منشورات إنستجرام وفيسبوك لنفس الريل.',
+                            { tip: 'ولهذا الأفضل ما تفصل يوتيوب وفي طابورك منشورات مجدولة قريبة. لو لازم، تذكّر تضغط **انشر الآن** بعد ما تعيد الربط.' },
+                        ],
+                        en: [
+                            'Scheduled YouTube posts stay in the **Scheduler** queue, and the ones that are not due yet wait for their time. A post whose time comes while the card shows **Needs reconnecting**, or after you press **Disconnect YouTube**, is picked up and fails, with the reason written on it (“YouTube is not connected for this account — connect it in Settings.”, or Google’s last reason when the connection needs reconnecting). Nothing is lost: connect again, then press **Publish now** on the failed post. It does not hold back the Instagram and Facebook posts of the same reel.',
+                            { tip: 'So avoid disconnecting YouTube while posts are scheduled for the next hours. If you must, remember to press **Publish now** after you reconnect.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'لما يتوقف شي', en: 'When something stops' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['البطاقة تقول إن يوتيوب ما تجهّز بعد', 'مسؤول المنصة لازم يحفظ عميل Google أول: [[youtube#operator]].'],
+                                ['الربط انتهى بـ«رابط الربط انتهى أو بدأ من متصفح ثاني»', 'ابدأ الربط من جديد من نفس المتصفح، وكمّله خلال 10 دقائق.'],
+                                ['«قناة يوتيوب هذي مربوطة بمساحة عمل ثانية»', 'افصلها من تلك المساحة أول، ثم اربطها هنا.'],
+                                ['«حساب Google هذا ما عنده قناة يوتيوب»', 'سوّ قناة على youtube.com وبعدين اربط.'],
+                                ['«Google ما أعطى أذونات يوتيوب»', 'اربط مرة ثانية وعلّم على المربعين.'],
+                                ['«رابط إعادة التوجيه مو مسجّل»، أو «Google رفض Client ID أو السر»', 'هذي لمسؤول المنصة: راجع عميل Google في **الإعدادات** ← **المنصة**، وسجّل الرابط اللي تعرضه البطاقة.'],
+                                ['الـ Short نزل بس هو خاص', 'اقرأ [[youtube#public]].'],
+                                ['المنشور يقول إن الصورة المصغّرة ما انحطت («Thumbnail not set»)', 'الـ Short نزل، لكن يوتيوب ما سمح بالصورة المصغّرة المخصصة: تحتاج قناة موثّقة عند يوتيوب. اضبطها من YouTube Studio.'],
+                                ['المنشور فشل بسبب الحصة أو حد الرفع', 'اقرأ [[youtube#quota]].'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['The card says YouTube isn’t set up yet', 'The platform administrator has to save the Google client first: [[youtube#operator]].'],
+                                ['Connecting ended with “The connection link expired or was started in another browser”', 'Start the connection again from the same browser, and finish it within 10 minutes.'],
+                                ['“That YouTube channel is connected to another workspace”', 'Disconnect it from that workspace first, then connect it here.'],
+                                ['“That Google account has no YouTube channel”', 'Create a channel on youtube.com, then connect again.'],
+                                ['“Google didn’t grant the YouTube permissions”', 'Connect again and tick both boxes.'],
+                                ['“The redirect URI isn’t registered”, or “Google refused the client ID or secret”', 'These are for the platform administrator: check the Google client in **Settings** → **Platform**, and register the address the card shows.'],
+                                ['The Short went up but it is private', 'Read [[youtube#public]].'],
+                                ['A post says “Thumbnail not set”', 'The Short is up, but YouTube did not accept the custom thumbnail: it needs a channel YouTube has verified for them. Set it in YouTube Studio.'],
+                                ['A post failed because of the quota or the upload limit', 'Read [[youtube#quota]].'],
+                            ] },
                         ],
                     },
                 },
@@ -3820,6 +4299,548 @@ const HelpContent = {
                         ],
                         en: [
                             'Press **Save settings**. When a field has a problem it is marked where it is, with **Fix the highlighted fields, then save.** Settings apply to anything you write or redraw afterwards; posts already scheduled don’t change.',
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 11a. The Monteur ────────────────────────────────────────────────
+        {
+            slug: 'monteur',
+            group: 'studio',
+            icon: 'scissors',
+            title: { ar: 'المونتير: ريلز من فيديوهاتك الطويلة', en: 'The Monteur: reels from your long videos' },
+            summary: {
+                ar: 'يقصّ أقوى لحظات فيديوهاتك إلى ريلز، وتعتمد كل ريل قبل نشره: كيف تختار المجلد وتشغّله، وكيف تراجع الريل، ووش يسوّي الاعتماد، وكم ريل يطلع من الفيديو.',
+                en: 'How it cuts the strongest moments of your own videos into reels: choosing the folder and running it, reviewing a reel, what Approve does, and how many reels one video gives.',
+            },
+            related: ['worker', 'studio', 'youtube', 'tiktok'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'وش يسوّي المونتير؟', en: 'What the Monteur does' },
+                    body: {
+                        ar: [
+                            'المونتير يحوّل فيديوهاتك الطويلة إلى ريلز قصيرة. يسمع كل فيديو، ويختار اللحظات اللي تبدأ بجملة تشدّ، وفيها فكرة وحدة لها نتيجة، وتنفهم بدون ما قبلها، ويقصّ كل لحظة ريلاً عمودياً: العنوان على الشاشة من أول لقطة، والكلام مكتوب فوق الصورة، وآخر بطاقة تطلب الكلمة المفتاحية. بعدها يكتب النصوص، وأنت تعتمد كل ريل قبل ما ينزل أي شي.',
+                            { dl: [
+                                ['جهازك الماك (العامل)', 'يقرأ المجلد، ويسمع الفيديو ويكتب كلامه، ويرسم الريلز الجاهزة. لازم يكون شغّالاً في هذي الخطوات: [[worker]].'],
+                                ['الذكاء الاصطناعي', 'يختار اللحظات ويكتب العناوين والنصوص. وأي ذكاء يسوّيها تحدده أنت من الإعدادات: [[monteur#settings]].'],
+                                ['أنت', 'تختار الفيديوهات، وتراجع كل ريل، وتعتمده أو ترفضه.'],
+                            ] },
+                            { note: 'المونتير للمالك والمشغّل. ولو دورك «مُطّلع» تشوف رسالة تقول إنه ما يناسب دورك.' },
+                        ],
+                        en: [
+                            'The Monteur turns the long videos you record into short reels. It listens to each video, picks the moments that open with a hook, hold one idea with a payoff and make sense on their own, and cuts each one into a vertical reel: the title is on screen from the first frame, the words are captioned, and the last card asks for your keyword. Then it writes the captions, and you approve every reel before anything is posted.',
+                            { dl: [
+                                ['Your Mac (the worker)', 'Reads the folder, listens to the video and writes down what is said, and draws the finished reels. It has to be on for these steps: see [[worker]].'],
+                                ['The AI', 'Picks the moments and writes the titles and captions. Which AI does it is a setting: see [[monteur#settings]].'],
+                                ['You', 'Choose the videos, review each reel, and approve or reject it.'],
+                            ] },
+                            { note: 'The Monteur is for owners and operators. With the Viewer role you see a message saying it does not fit your role.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'start',
+                    title: { ar: 'أول مرة: التجهيز', en: 'The first time: set it up' },
+                    body: {
+                        ar: [
+                            'أول ما تفتح **الاستوديو** ← **المونتير** تنفتح الصفحة على **جهّز المونتير**: ثلاث خطوات تنحفظ مع بعض بزر **احفظ وابدأ**، وما ينحفظ شي قبل ما تضغطه.',
+                            { ol: [
+                                '**اختر مصدر الفيديوهات:** **مجلدي** (فيديوهات جديدة تحطها في مجلد على جهازك الماك) أو **مكتبة الكورس** (الدروس التالية من مكتبة الاستوديو بالترتيب، وكل درس يُستخدم مرة وحدة). ومع **مجلدي** اختر المجلد كمان: [[monteur#folder]].',
+                                '**اختر الأوقات:** **وقت التشغيل** وهو وقت التشغيل اليومي، و**أوقات النشر** وتصل لأربعة أوقات في اليوم.',
+                                '**اختر العدد والطول:** **فيديوهات في كل تشغيل**، و**أقصى عدد ريلز من كل فيديو**، و**طول الريل**، و**انشر على**، وبقية الخيارات اللي في [[monteur#settings]].',
+                            ] },
+                            'مفتاح **شغّله كل يوم** يبدأ مفعّلاً في هذا التجهيز. وبعد الحفظ ينطوي التجهيز في سطر واحد تحت **الإعدادات** وجنبه **عدّل الإعدادات**، وتظهر لك **قائمة المراجعة**.',
+                            { note: 'لو ملفك ما يقول بعد من يظهر في الفيديو، يفتح لك تفعيل المونتير ورقة قصيرة عنوانها «بضعة تفاصيل أولًا»: عبّها ويكمل التفعيل. ولو ردّت الصفحة بـ«أكمل ملفك قبل تشغيل هذا» فأساسيات إعدادك ناقصة، أكملها أول: [[onboarding#steps]].' },
+                        ],
+                        en: [
+                            'The first time you open **Studio** → **Monteur**, the page opens as **Set up the Monteur**: three steps, saved together with **Save and start**. Nothing is saved until you press it.',
+                            { ol: [
+                                '**Choose where the videos come from:** **My folder** (new videos you drop into a folder on your Mac) or **The course library** (the next lessons of your Studio library, in order, each used once). With **My folder**, also choose the folder: [[monteur#folder]].',
+                                '**Choose the times:** **Run at**, the time of the daily run, and **Post at**, up to 4 posting times a day.',
+                                '**Choose how many, and how long:** **Videos per run**, **Most reels per video**, **Reel length**, **Post to**, and the other choices explained in [[monteur#settings]].',
+                            ] },
+                            'The **Run every day** switch starts on in the setup. After you save, the setup folds into one line under **Settings** with **Edit settings** beside it, and the **Review queue** appears.',
+                            { note: 'If your profile does not yet say who is on screen, switching the Monteur on first opens a short sheet titled “A few details first”: fill it in and the switch goes through. If the page answers “Finish your profile before switching this on”, the basics of your setup are missing: finish them first ([[onboarding#steps]]).' },
+                        ],
+                    },
+                },
+                {
+                    id: 'folder',
+                    title: { ar: 'اختيار المجلد', en: 'Choosing the folder' },
+                    body: {
+                        ar: [
+                            'مع **مجلدي** اضغط **اختر المجلد** جنب **المجلد**. تنفتح نافذة اختيار مجلد على جهازك الماك، اللي يشغّل العامل. اختر المجلد من هناك ويتعبّى مساره هنا. النافذة تنتظرك 5 دقائق. ولو ما انختار شي، اضغط الزر مرة ثانية أو اكتب المسار كاملاً بنفسك، مثل `/Users/you/Videos/Reels`.',
+                            { ul: [
+                                'لو الماك مطفّي أو نايم، تنفتح النافذة لما يرجع متصلاً، والصفحة تقول لك كذا وهي تنتظر.',
+                                'يُقرأ المستوى الأول من المجلد بس، فالفيديوهات داخل المجلدات الفرعية ما تُؤخذ. والملف ما يُؤخذ إلا بعد ما يمر عليه دقيقة في المجلد، عشان ما يُقرأ فيديو لسا ينسخ.',
+                                'الملفات اللي تُؤخذ `.mp4` و`.mov` و`.m4v` و`.mkv` و`.webm`، الأقدم أولاً، لين **فيديوهات في كل تشغيل** (من 1 إلى 10) في كل تشغيل.',
+                                'ومع **مكتبة الكورس** ما في مجلد تختاره: المونتير ياخذ دروس مكتبة الاستوديو واحداً واحداً بترتيب الدروس، وكل درس مرة وحدة. ولما يصير لكل الدروس ريلز، يقول لك **شغّل الآن** كذا ويطلب منك تفحص المكتبة في الاستوديو أول: [[library]].',
+                            ] },
+                        ],
+                        en: [
+                            'With **My folder**, press **Choose folder** next to **Folder**. A folder window opens on your Mac, the one that runs the worker. Pick the folder there and its path fills in here. The window waits for you for 5 minutes. If nothing is chosen in that time, press the button again, or type the full path yourself, for example `/Users/you/Videos/Reels`.',
+                            { ul: [
+                                'If the Mac is off or asleep, the window opens when it is back online. The page says so while it waits.',
+                                'Only the top level of the folder is read, so videos inside sub-folders are not taken. A file is taken once it has been in the folder for a minute, so a video that is still being copied is not read half way.',
+                                'The files taken are `.mp4`, `.mov`, `.m4v`, `.mkv` and `.webm`, oldest first, up to **Videos per run** (1 to 10) each run.',
+                                'With **The course library** there is no folder to choose: the Monteur takes the lessons of your Studio library one by one, in lesson order, each only once. When every lesson already has its reels, **Run now** says so and asks you to scan the library in the Studio first: [[library]].',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'run',
+                    title: { ar: 'التشغيل والفيديوهات', en: 'Running it, and the videos' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['**شغّله كل يوم**', 'مفعّل: يشتغل لحاله في **وقت التشغيل** بتوقيت مساحتك. ولو الماك نايم وقتها يشتغل أول ما يصحى. متوقف: ما في تشغيل يومي، و**شغّل الآن** يبقى شغّالاً.'],
+                                ['**شغّل الآن**', 'يقرأ المجلد من فوره، سواء كان التشغيل اليومي مفعّلاً أو لا. يحتاج مجلداً (أو دروساً باقية)، ويتعطّل الزر وفي تشغيل منتظر بالفعل.'],
+                            ] },
+                            'الشريط تحت التبويبات يقول لك إن كان التشغيل اليومي مفعّلاً، ومتى التشغيل القادم، وايش لقى آخر تشغيل (مثل «فيديوهان جديدان»)، وإن كان العامل متصلاً. وقسم **الفيديوهات** (تحت قائمة المراجعة) يعرض كل فيديو ووين وصل:',
+                            { dl: [
+                                ['تفريغ الكلام', 'العامل يسمع الفيديو ويكتب كلامه.'],
+                                ['بانتظار القص', 'الكلام جاهز وينتظر اختيار اللحظات.'],
+                                ['يبحث عن اللحظات', 'الذكاء الاصطناعي يختار اللحظات ويكتب النصوص.'],
+                                ['يجهّز الريلز', 'العامل يرسم الريلز، وتظهر في **قيد التجهيز**.'],
+                                ['اكتمل', 'جهزت كل ريلزه.'],
+                                ['لا لحظة قوية', 'ما فيه شي تجاوز المعيار: بداية تشد في الثواني الأولى، وفكرة وحدة لها نتيجة، وطول ضمن إعداداتك. جرّب فيديو أطول، أو وسّع **طول الريل**.'],
+                                ['فشل', 'تحته السبب. اضغط **أعد المحاولة** عشان يبدأ الفيديو من جديد من حيث توقف.'],
+                            ] },
+                            { tip: 'الخطوات البطيئة (قراءة المجلد، وسماع الفيديو، ورسم الريلز) تصير على جهازك الماك. ولو العامل غير متصل تنتظر في الطابور ولا يضيع شي، والصفحة تقول لك كذا: [[worker#status]].' },
+                        ],
+                        en: [
+                            { dl: [
+                                ['**Run every day**', 'On: it runs by itself at **Run at**, in your workspace’s time zone. If the Mac is asleep then, it runs as soon as it wakes. Off: no daily run, and **Run now** still works.'],
+                                ['**Run now**', 'Reads the folder straight away, whether the daily run is on or not. It needs a folder (or lessons left), and the button is off while a run is already waiting.'],
+                            ] },
+                            'The strip under the tabs says whether the daily run is on, when the next run is, what the last run found (such as “2 new videos”) and whether the worker is online. The **Videos** section (below the review queue) lists each video and where it has got to:',
+                            { dl: [
+                                ['Transcribing', 'The worker listens to the video and writes down what is said.'],
+                                ['Waiting to be cut', 'The words are ready and wait for the moments to be picked.'],
+                                ['Finding the moments', 'The AI picks the moments and writes the texts.'],
+                                ['Preparing reels', 'The worker draws the reels, and they appear under **Being prepared**.'],
+                                ['Done', 'All its reels are ready.'],
+                                ['No strong moment', 'Nothing cleared the bar: a hook in the first seconds, one idea with a payoff, and a length within your settings. Try a longer video, or widen **Reel length**.'],
+                                ['Failed', 'The reason is shown under it. Press **Retry** to start the video again from where it stopped.'],
+                            ] },
+                            { tip: 'The slow steps (reading the folder, listening to the video, drawing the reels) happen on your Mac. While the worker is offline they wait in the queue and nothing is lost, and the page says so: [[worker#status]].' },
+                        ],
+                    },
+                },
+                {
+                    id: 'count',
+                    title: { ar: 'كم ريل يطلع من الفيديو؟', en: 'How many reels one video gives' },
+                    body: {
+                        ar: [
+                            'ريل واحد لكل 10 دقائق بدأت من الفيديو، وما يزيد على **أقصى عدد ريلز من كل فيديو** (من 1 إلى 5)، ومن اللحظات القوية بس. يعني فيديو من 5 دقائق يعطي ريلاً واحداً على الأكثر، وفيديو من 11 دقيقة ريلين، وفيديو من 33 دقيقة ثلاثة (لو الإعداد 3). والرقم سقف مو حصة: فيديو ما فيه لحظة قوية ما يعطي شي، وتشوف عليه «لا لحظة قوية».',
+                            { ul: [
+                                'الريل من فيديو واحد ما ينزل في نفس اليوم مع ريل ثاني منه: لو في ريل من نفس الفيديو يُنشر ذاك اليوم، يروح الاعتماد لأقرب يوم متاح.',
+                                'اللحظات الأقصر من **الأقصر (بالثواني)** أو الأطول من **الأطول (بالثواني)** تُستبعد. والافتراضي من 20 إلى 45 ثانية، ولازم يكون الأطول أكبر من الأقصر.',
+                            ] },
+                        ],
+                        en: [
+                            'One reel for each started 10 minutes of the video, never more than **Most reels per video** (1 to 5), and only for moments strong enough. So a 5-minute video gives one reel at most, an 11-minute one gives two, and a 33-minute one gives three (if the setting is 3). It is a ceiling, not a quota: a video with nothing strong enough gives none, and shows **No strong moment**.',
+                            { ul: [
+                                'Two reels from the same video never go out on the same day: if a reel from that video already posts on a day, Approve moves this one to the next free day.',
+                                'Moments shorter than **Shortest (seconds)** or longer than **Longest (seconds)** are left out. The defaults are 20 and 45 seconds, and the longest has to be more than the shortest.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'review',
+                    title: { ar: 'مراجعة الريل وتعديله', en: 'Reviewing and editing a reel' },
+                    body: {
+                        ar: [
+                            'الريلز تنزل في **قائمة المراجعة**، أحدث فيديو أولاً وأفضل ريل منه أول. وفي كل بطاقة:',
+                            { dl: [
+                                ['الفيديو', 'شغّله مع غلافه. وإذا فيه نسخة لتيك توك أو يوتيوب يفتحها **شاهد نسخة تيك توك**: آخر بطاقة فيها تقول إن الرابط في البايو بدل ما تطلب تعليقاً.'],
+                                ['التقييم', 'مدى احتمال انتشار اللحظة برأي المونتير من 10، والعلامات الأربع اللي طلع منها: البداية والاستقلال والنتيجة وقابلية الإرسال.'],
+                                ['يبدأ بـ / لماذا هذه اللحظة', 'أول جملة منطوقة في الريل، وسبب اختيار اللحظة.'],
+                                ['**العنوان على الفيديو**', 'حتى 60 حرفاً، ويظهر من أول لقطة، فهو على صورة الريل في شبكة ملفك كمان.'],
+                                ['**نص إنستجرام وفيسبوك** و**نص تيك توك**', 'كل واحد حتى 2,200 حرف.'],
+                                ['**الكلمة المفتاحية للتعليقات**', 'كلمة وحدة من 4 أحرف على الأقل. تظهر على آخر بطاقة في الفيديو، وهي اللي يكتبها المتابع في التعليقات عشان توصله رسالتك.'],
+                                ['**الرسالة الخاصة والنص البديل**', 'قسم مطوي فيه الرسالة الخاصة اللي توصل من يعلّق بالكلمة، والنص البديل للصورة.'],
+                            ] },
+                            { ul: [
+                                'نص إنستجرام وفيسبوك لازم يبقى فيه السطر اللي يطلب الكلمة المفتاحية، والكلمة بين « » مثل «سعر». البطاقة تعرض علامة صح أو تحذيراً، والحفظ يرفض نصاً أسقطها: لأن الناس بيعلّقون وما يرد عليهم أحد.',
+                                'لو غيّرت العنوان أو الكلمة المفتاحية، يُرسم الفيديو من جديد على جهازك الماك لأنهما مطبوعان عليه، وتنبّهك البطاقة قبل الحفظ. وتغيير نص فقط ما يعيد الرسم.',
+                                'الكلمة الجديدة تحلّ محل القديمة داخل النص، وتمسح الصيغ الأخرى للقديمة.',
+                                '**احفظ التعديلات** يحفظ تعديلاتك، و**اعتمد** يتوقف لين تحفظ أو تتجاهل ("احفظ تعديلاتك أو تجاهلها أولاً").',
+                            ] },
+                            { tip: 'قبل ما تعتمد شغّل الفيديو كاملاً وأنت تسمعه. المونتير يختار ويقصّ، لكن اللي يوقّع على الريل أنت.' },
+                        ],
+                        en: [
+                            'Reels land in the **Review queue**, newest video first and the Monteur’s best reel of each first. Each card shows:',
+                            { dl: [
+                                ['The video', 'Play it with its cover. When there is a copy for TikTok or YouTube, **Watch the TikTok version** opens it: its last card says the link is in your bio instead of asking for a comment.'],
+                                ['The score', 'How likely the Monteur thinks the moment is to spread, out of 10, and the four marks it comes from: Hook, Alone, Payoff and Send.'],
+                                ['It opens with / Why this moment', 'The first spoken line of the reel, and why the moment was picked.'],
+                                ['**Title on the video**', 'Up to 60 characters. It is on screen from the first frame, so it is on the reel’s thumbnail in your profile grid too.'],
+                                ['**Instagram and Facebook caption** and **TikTok caption**', 'Each up to 2,200 characters.'],
+                                ['**Comment keyword**', 'One word of at least 4 letters. It is on the video’s last card, and it is the word people comment to get your DM.'],
+                                ['**The DM and the alt text**', 'A folded part with the private message people get when they comment the keyword, and the alt text.'],
+                            ] },
+                            { ul: [
+                                'The Instagram and Facebook caption has to keep the line that asks for the keyword, with the keyword between « » (for example «price»). The card shows a tick or a warning, and a save that drops it is refused: people would comment and nobody would answer.',
+                                'Change the title or the keyword and the video is drawn again on your Mac, because both are printed on it; the card tells you before you save. Changing only a caption does not redraw anything.',
+                                'A new keyword replaces the old one inside the caption, and clears the other spellings of the old one.',
+                                '**Save changes** keeps your edits. **Approve** stays off until you save or discard them.',
+                            ] },
+                            { tip: 'Play the whole video, with the sound on, before you approve. The Monteur picks and cuts, but you are the one who signs off.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'approve',
+                    title: { ar: 'وش يسوّي «اعتمد»؟', en: 'What Approve does' },
+                    body: {
+                        ar: [
+                            'اضغط **اعتمد** (عليه الموعد اللي ياخذه الريل، مثل «اعتمد لموعد الأحد 28 سبتمبر 19:00»). يُجدول الريل وتنتقل بطاقته إلى **القادمة**. وهذا اللي يصير:',
+                            { dl: [
+                                ['الموعد', 'أول موعد متاح من **أوقات النشر** بتوقيت مساحتك. **غيّر الموعد** يخليك تكتب يوماً ووقتاً ثانياً، و**استخدم أقرب موعد متاح** يرجّعك للتلقائي. وريلان من فيديو واحد ما يخرجان في يوم واحد: لو ريل منه ينزل ذاك اليوم يصير الزر **اعتمد لأقرب يوم متاح**.'],
+                                ['إنستجرام وفيسبوك', 'منشور واحد للاثنين (أو لواحد منهما حسب **انشر على**): الفيديو وغلافه و**نص إنستجرام وفيسبوك**.'],
+                                ['تيك توك', 'منشور خاص به، بنسخة الفيديو لتيك توك و**نص تيك توك**. لازم يكون تيك توك مربوطاً وإلا يرفض الاعتماد: اربطه من الإعدادات أو شيله من **انشر على**: [[tiktok#connect]]. وقبل ما يعتمد تيك توك التطبيق ينزل «أنا فقط»: [[tiktok#before-approval]].'],
+                                ['يوتيوب', 'منشور Short بنسخة تيك توك من الفيديو، وعنوان الريل، ونص تيك توك (ومعه رابط منتجك إذا حددت واحداً). ويوتيوب غير المربوط ما يمنع نزول الريل في إنستجرام وفيسبوك: يفشل منشوره في **الجدولة** ويقول السبب: [[youtube#disconnected]].'],
+                            ] },
+                            'وحملة الرسائل: كل ريل له منشور في إنستجرام أو فيسبوك يلزمه حملة ترد على كلمته. لو عندك حملة مفعّلة لكل المنشورات تردّ على الكلمة، تُستخدم هي. وإلا ينشئ الاعتماد حملة مفعّلة للكلمة (وصيغها الأخرى): ترسل الرسالة اللي كُتبت للريل، بدون رد علني، وتطابق الكلمة كاملة. وإذا كانت الكلمة تتعارض مع كلمة مفعّلة عندك يرفض الاعتماد ويقول لك أي كلمة، فغيّر الكلمة.',
+                            { ul: [
+                                'منشورات الريل بعدها منشورات جدولة عادية: عدّلها أو احذفها أو انشرها الآن من **الجدولة**. والريل المجدول ما يتعدّل من هنا.',
+                                'لو حذفت كل منشورات الريل قبل موعدها، يرجع الريل إلى **قائمة المراجعة**.',
+                                'الريل اللي ترفضه بزر **ارفض** ما يرجع: يطلع من القائمة ولا ينزل. ونفس الزر على ريل فاشل اسمه **أخفِه**.',
+                            ] },
+                        ],
+                        en: [
+                            'Press **Approve** (it shows the time the reel will take, such as “Approve for Sun 28 Sep, 19:00”). The reel is scheduled and its card moves to **Coming up**. This is what happens:',
+                            { dl: [
+                                ['When', 'The first free time among your **Post at** times, in your workspace’s time zone. **Change time** lets you type another day and time, and **Use the next free time** takes you back to the automatic one. Two reels from one video never go out on the same day: if one of them already posts that day, the button reads **Approve for the next free day**.'],
+                                ['Instagram and Facebook', 'One post for both (or for one of them, as set under **Post to**): the video, its cover and the **Instagram and Facebook caption**.'],
+                                ['TikTok', 'A post of its own, with the TikTok copy of the video and the **TikTok caption**. TikTok has to be connected or Approve is refused: connect it in Settings or take it off **Post to**: [[tiktok#connect]]. Until TikTok approves the app it goes up as “Only me”: [[tiktok#before-approval]].'],
+                                ['YouTube', 'A Short with the TikTok copy of the video, the reel’s title and the TikTok caption (with your product link under it, if you set one). A YouTube that is not connected does not stop the reel going to Instagram and Facebook: its post fails in the **Scheduler** and says why: [[youtube#disconnected]].'],
+                            ] },
+                            'And the comment campaign: every reel with an Instagram or Facebook post needs a campaign that answers its keyword. If one of your active campaigns for all posts already answers it, that one is used. If not, Approve creates one, switched on, for the keyword (and its other spellings): it sends the DM written for the reel, with no public reply, and matches the keyword as a whole word. If the keyword would clash with one of your live keywords, Approve is refused and names it: change the keyword.',
+                            { ul: [
+                                'After that, the reel’s posts are ordinary scheduled posts: edit, delete or publish them from the **Scheduler**. A scheduled reel cannot be edited from here.',
+                                'If you delete all of a reel’s posts before their time, the reel comes back to the **Review queue**.',
+                                'A reel you **Reject** does not come back: it leaves the queue and is not posted. On a failed reel the same button is called **Dismiss**.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'auto',
+                    title: { ar: 'الجدولة التلقائية', en: 'Automatic scheduling' },
+                    body: {
+                        ar: [
+                            'تحت **عندما يجهز الريل** اختر **أراجعه بنفسي** (الافتراضي)، أو **جدوِله تلقائياً**: المونتير نفسه يعتمد كل ريل أول ما يجهز، بأقرب موعد نشر متاح وبحملة الرسائل، وبنفس فحوصات زر **اعتمد**.',
+                            { ul: [
+                                'الريل اللي ما يقدر يجدوله (ما في يوم متاح، أو كلمة تتعارض، أو تيك توك غير جاهز) يبقى في **قائمة المراجعة** ومعه السبب: «لم يُجدول تلقائياً». يجرّب مرة ثانية بعدين، وتقدر تعدّله أو تعتمده بنفسك.',
+                                'هذا الإعداد مستقل عن **شغّله كل يوم**: لو التشغيل اليومي متوقف والجدولة التلقائية مفعّلة، الريلز اللي تجهز تُجدول برضو.',
+                            ] },
+                        ],
+                        en: [
+                            'Under **When a reel is ready**, choose **I review it** (the default) or **Schedule it automatically**: the Monteur approves each reel itself as soon as it is drawn, with the next free posting time and the comment campaign, and the same checks as the **Approve** button.',
+                            { ul: [
+                                'A reel it cannot schedule (no free day, a keyword that clashes, TikTok not ready) stays in the **Review queue** with the reason: “Not scheduled automatically”. It is tried again later, and you can edit it or approve it yourself.',
+                                'This setting is separate from **Run every day**: with the daily run off and automatic scheduling on, the reels that finish drawing are still scheduled.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'settings',
+                    title: { ar: 'الإعدادات واحداً واحداً', en: 'The settings, one by one' },
+                    body: {
+                        ar: [
+                            'افتح **الإعدادات** ثم **عدّل الإعدادات**، وبعد التعديل اضغط **احفظ الإعدادات**:',
+                            { dl: [
+                                ['**الذكاء الاصطناعي لاختيار المقاطع وكتابة النصوص والتعديلات**', 'من يختار اللحظات ويكتب النصوص: **Gemini (داخل التطبيق)**، أو **Claude على الماك** (للمساحات اللي سمح لها مسؤول المنصة بس)، أو **مزوّدو الذكاء الاصطناعي (تعدّهم المنصّة)** وهو اللي تبدأ به المساحة الجديدة. ولو ما في مزوّد جاهز يتوقف الفيديو ويقول السبب، وزر **أعد المحاولة** يطلبه من جديد لما يجهز واحد.'],
+                                ['**نمط التعديلات**', '**كلاسيكي** أو **ورقي** (بطاقات تتفتح وحروف من ورق وأيقونات تُرسم أمامك ولقطات مساندة بالأبيض والأسود). يسري التغيير على الفيديو التالي الذي يُجهَّز.'],
+                                ['«لمسات بشرية»', 'تبديل الكاميرا ورسومات باليد وتظليل الكلمات وانتقالات وتجميد اللقطة، عشان يبدو الريل كأنه مُحرَّر يدوياً. تبديل الكاميرا وتجميد اللقطة والكلمات اللي خلفك تكون في الفيديوهات اللي تتكلم فيها أمام الكاميرا بس.'],
+                                ['**انشر على**', 'إنستجرام وفيسبوك وتيك توك ويوتيوب، ولازم تختار منصة وحدة على الأقل. تيك توك ويوتيوب ياخذان نسخة ثانية من الفيديو آخر بطاقة فيها تقول إن الرابط في البايو، لأنهما ما يردّان على التعليق برسالة خاصة.'],
+                                ['**أوقات النشر**', 'من وقت إلى أربعة أوقات في اليوم بتوقيت مساحتك. الاعتماد ياخذ أول وقت متاح.'],
+                            ] },
+                            'وتحت كل شي قسم **ما تعلّمه المحلّل**: قواعد مستخلصة من أداء ريلزك وفيديوهاتك، يتبعها المونتير وكاتب النصوص. يكتبها المحلّل لما تتوفر إحصاءات 5 ريلز أو فيديوهات على الأقل، مرة في الأسبوع، أو لما تضغط **حدّثها الآن**.',
+                        ],
+                        en: [
+                            'Open **Settings**, then **Edit settings**, and press **Save settings** when you are done:',
+                            { dl: [
+                                ['**AI for picking, captions and edits**', 'Who picks the moments and writes the texts: **Gemini (in the app)**, **Claude on the Mac** (only for workspaces the platform administrator has allowed to use it), or **AI providers (set up by the platform)**, which is what a new workspace starts with. If no AI provider is ready, the video stops with the reason, and **Retry** asks again once one is.'],
+                                ['**Edit style**', '**Classic** or **Paper** (unfolding cards, paper letters, drawn icons and black-and-white b-roll). A change applies to the next video prepared.'],
+                                ['“Human touches”', 'Camera cuts, doodles, highlighted words, transitions and freeze-frames, so a reel looks edited by hand. Camera cuts, freeze-frames and words behind you are only for videos of you talking to camera.'],
+                                ['**Post to**', 'Instagram, Facebook, TikTok and YouTube, with at least one ticked. TikTok and YouTube get a second copy of the video whose last card says the link is in your bio, because they cannot answer a comment with a DM.'],
+                                ['**Post at**', 'From one to four times a day, in your workspace’s time zone. Approve takes the first free one.'],
+                            ] },
+                            'At the bottom, **What the Analyst learned** holds rules drawn from how your reels and videos did, which the Monteur and the captions follow. The Analyst writes them once at least 5 reels or videos have insights, once a week, or when you press **Refresh now**.',
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'لما يتوقف شي', en: 'When something stops' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['ضغطت **شغّل الآن** وما صار شي', ['شوف العامل: لو مكتوب **العامل غير متصل** فالتشغيل ينتظر الماك: [[worker#status]].', 'ومع **مجلدي** لازم يكون المجلد موجوداً على ذاك الماك. ولو الشريط يقول إنه ما لقي المجلد، اختره من جديد بزر **اختر المجلد**.']],
+                                ['نافذة اختيار المجلد ما انفتحت', 'تنفتح على الماك اللي يشغّل العامل، مو على الجهاز اللي تتصفح منه، وتنتظرك 5 دقائق. ولو الماك مطفّي تنفتح لما يرجع. وتقدر تكتب المسار كاملاً بنفسك بدالها.'],
+                                ['ريل مكتوب عليه **فشلت**', 'فشل رسمه. اضغط **أعد المحاولة** عشان يُرسم من جديد على جهازك الماك، أو **أخفِه** عشان يطلع من القائمة.'],
+                                ['الاعتماد يرفض لأن تيك توك غير مربوط', 'اربط تيك توك من **الإعدادات** أو أزله من **انشر على**: [[tiktok#connect]].'],
+                                ['الاعتماد يقول إن ريلاً من الفيديو نفسه في ذاك اليوم، أو ما في موعد متاح', 'تنفتح لك خانة الموعد مع السبب: اختر يوماً ووقتاً ثانيين.'],
+                                ['الاعتماد يقول إن الكلمة تتعارض مع كلمة مفعّلة', 'غيّر الكلمة المفتاحية في البطاقة واحفظ، ثم اعتمد.'],
+                                ['الحفظ يرفض لأن النص ما فيه الكلمة', 'رجّع سطر الكلمة بين « » في نص إنستجرام وفيسبوك.'],
+                                ['ما أقدر أفعّل المونتير: «أكمل ملفك قبل تشغيل هذا»', 'أساسيات إعدادك ناقصة (الاسم، وما تعمل، وعرضك الرئيسي، والمنطقة الزمنية، والأسلوب). أكملها: [[onboarding#steps]].'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['I pressed **Run now** and nothing happened', ['Look at the worker: if it says **Worker offline**, the run waits for the Mac: [[worker#status]].', 'With **My folder** the folder has to exist on that Mac. If the strip says the folder was not found, choose it again with **Choose folder**.']],
+                                ['The folder window did not open', 'It opens on the Mac that runs the worker, not on the computer you are browsing from, and it waits for you for 5 minutes. If the Mac is off, it opens when it is back. You can also type the full path yourself instead.'],
+                                ['A reel says **Failed**', 'Its drawing failed. Press **Retry** to draw it again on your Mac, or **Dismiss** to take it out of the list.'],
+                                ['Approve is refused because TikTok is not connected', 'Connect TikTok in **Settings**, or take it off **Post to**: [[tiktok#connect]].'],
+                                ['Approve says another reel from this video is already on that day, or there is no free time', 'The time field opens with the reason: pick another day and time.'],
+                                ['Approve says the keyword clashes with a live keyword', 'Change the **Comment keyword** in the card, save, then approve.'],
+                                ['Saving is refused because the caption lacks the keyword', 'Put the line with the keyword between « » back into the **Instagram and Facebook caption**.'],
+                                ['I cannot switch the Monteur on: “Finish your profile before switching this on”', 'The basics of your setup are missing (your name, what you do, your main offer, your time zone and your voice). Finish them: [[onboarding#steps]].'],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 11a-2. Infographics ─────────────────────────────────────────────
+        {
+            slug: 'infographics',
+            group: 'studio',
+            icon: 'images',
+            title: { ar: 'الإنفوجرافيك: مقارنة متحركة بهويتك', en: 'Infographics: an animated comparison in your brand' },
+            summary: {
+                ar: 'من موضوع مقارنة إلى MP4 وGIF وغلاف: من يكتب الصفحة ووصفها، والتصميم الداكن والفاتح، والتعديل، وقاعدة أن الوصف يذكر كل عمود، والجدولة، وهويتك على كل صفحة.',
+                en: 'From a comparison topic to an MP4, a GIF and a cover: who writes the page and its caption, the dark and light themes, editing, the rule that the caption names every column, scheduling, and your brand on every page.',
+            },
+            related: ['worker', 'monteur', 'youtube', 'explainers'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'وش هو الإنفوجرافيك هنا؟', en: 'What an infographic is here' },
+                    body: {
+                        ar: [
+                            'الإنفوجرافيك هنا مقارنة متحركة بين شيئين أو ثلاثة، مثل «RAG vs CAG vs KAG». كل شي ياخذ عموداً فيه: اسمه، ونوع المشكلة اللي يناسبها، وملاحظة من سطر، وثلاث خطوات بالضبط، لكل خطوة رسم صغير متحرك. ويُرسم بهويتك أنت، ويطلع منه ثلاثة ملفات:',
+                            { dl: [
+                                ['MP4', 'الفيديو اللي تنشره **جدولة** على إنستجرام وفيسبوك، وعلى يوتيوب إذا اخترته.'],
+                                ['GIF', 'لأي مكان يقبل GIF مثل لينكدإن وإكس. ما يُنشر عنك أبداً: حمّله بزر **GIF**.'],
+                                ['الغلاف', 'الصورة الثابتة اللي مع الـ MP4: غلافه في إنستجرام وفيسبوك، وصورته المصغّرة في يوتيوب.'],
+                            ] },
+                            'تُكتب الصفحة ووصفها مع بعض من نفس المحتوى، فيبقى الوصف مطابقاً للـ GIF دائماً.',
+                            { note: 'الإنفوجرافيك للمالك والمشغّل. ولو دورك «مُطّلع» تشوف رسالة تقول إنه ما يناسب دورك.' },
+                        ],
+                        en: [
+                            'An infographic here is an animated comparison of two or three things, such as “RAG vs CAG vs KAG”. Every thing gets a column: its name, the kind of problem it suits, a one-line note and exactly three steps, each with a small animated diagram. It is drawn in your own brand and comes out as three files:',
+                            { dl: [
+                                ['MP4', 'The video that **Schedule** posts to Instagram and Facebook, and to YouTube when you choose it.'],
+                                ['GIF', 'For anywhere that takes a GIF, such as LinkedIn and X. It is never posted for you: download it with **GIF**.'],
+                                ['Cover', 'The still image that goes with the MP4: its cover on Instagram and Facebook, and its thumbnail on YouTube.'],
+                            ] },
+                            'The page and its caption are written together from the same content, so the caption always describes the GIF.',
+                            { note: 'Infographics are for owners and operators. With the Viewer role you see a message saying it does not fit your role.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'create',
+                    title: { ar: 'إنشاء إنفوجرافيك', en: 'Making one' },
+                    body: {
+                        ar: [
+                            'افتح **الاستوديو** ← **الإنفوجرافيك** وعبّ **إنفوجرافيك جديد**:',
+                            { dl: [
+                                ['**ماذا تقارن**', 'شيئين أو ثلاثة، مثل «RAG vs CAG vs KAG». من 3 أحرف إلى 300.'],
+                                ['**أضف ملاحظات لـ Claude**', 'يفتح **ملاحظات**: نقاط تبي تذكرها، أو الدرس اللي جاءت منه، أو الجمهور. حتى 2,000 حرف.'],
+                                ['**اللغة**', 'العربية الفصحى أو الإنجليزية. والصفحة العربية تُكتب بالفصحى دائماً، بلا لهجة. وتبدأ بـ**اللغة الافتراضية** من هويتك.'],
+                                ['**التصميم**', '**داكن وفاتح** أو **داكن** أو **فاتح**، وتبدأ على «داكن وفاتح». ومع **داكن وفاتح** تُكتب الصفحة مرة وحدة وتُرسم مرتين: إنفوجرافيكان، واحد بكل تصميم.'],
+                            ] },
+                            'اضغط **أنشئ**. يظهر الإنفوجرافيك تحت **الإنفوجرافيك الخاص بك** وهو يُكتب ويُرسم، ويصير **جاهز** لما تخلص ملفاته، وهذا ياخذ دقيقة أو دقيقتين على جهازك الماك. تقدر تطلع من الصفحة وهو يكمل.',
+                        ],
+                        en: [
+                            'Open **Studio** → **Infographics** and fill in **New infographic**:',
+                            { dl: [
+                                ['**What to compare**', 'Two or three things, such as “RAG vs CAG vs KAG”. From 3 to 300 characters.'],
+                                ['**Add notes for Claude**', 'Opens **Notes**: points to include, the lesson it comes from, the audience. Up to 2,000 characters.'],
+                                ['**Language**', 'Arabic or English. An Arabic page is always written in Modern Standard Arabic (فصحى), never in dialect. It starts as the **Default language** of your brand.'],
+                                ['**Theme**', '**Dark and light**, **Dark** or **Light**, starting on “Dark and light”. With **Dark and light** the page is written once and drawn twice, as two infographics, one in each theme.'],
+                            ] },
+                            'Press **Create**. The infographic appears under **Your infographics** while it is written and drawn, and turns **Ready** when its files are done, which takes a minute or two on your Mac. You can leave the page: it keeps working.',
+                        ],
+                    },
+                },
+                {
+                    id: 'who',
+                    title: { ar: 'من يكتبه؟', en: 'Who writes it' },
+                    body: {
+                        ar: [
+                            { ul: [
+                                'في مساحة مالك المنصة، وفي أي مساحة سمح لها مسؤول المنصة، يكتب Claude الصفحة والوصف على جهازك الماك، بحساب Claude المسجَّل فيه. وبعدها يرسم عاملك الملفات.',
+                                'وفي كل مساحة ثانية تُكتب الصفحة والوصف على الخادم، بمزوّد الذكاء الاصطناعي اللي أعدّه مسؤول المنصة (نفس المزوّدين اللي يقدر يستخدمهم مساعد الرسائل)، والماك يرسم الملفات بس. ولو ما في مزوّد جاهز، أو ميزانيته خلصت، أو هو متعطّل، يرفض **أنشئ** ويقول لك السبب ولا يُصنع شي. وما يرجع للماك بدالاً عنه أبداً.',
+                                'وفي الحالتين يرسم عاملك على الماك الملفات، فلازم يكون متصلاً. ولو ما كان، تقول البطاقة **بانتظار جهازك الماك** ولا يضيع شي: [[worker]].',
+                            ] },
+                        ],
+                        en: [
+                            { ul: [
+                                'In the platform owner’s workspace, and in any workspace the platform administrator has allowed it for, Claude writes the page and the caption on your Mac, with the Claude account signed in there. Then your worker draws the files.',
+                                'In every other workspace the page and the caption are written on the server, by the AI provider the platform administrator set up (the same ones the DM assistant can use), and the Mac only draws the files. If no provider is ready, or its budget is used up, or it is down, **Create** is refused with the reason and nothing is made. It never falls back to a Mac.',
+                                'Either way your Mac’s worker draws the files, so it has to be online. When it is not, the card says **Waiting for your Mac** and nothing is lost: [[worker]].',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'edit',
+                    title: { ar: 'التعديل والنسخة الثانية وإعادة الكتابة', en: 'Editing, the other theme and rewriting' },
+                    body: {
+                        ar: [
+                            'على بطاقة الإنفوجرافيك:',
+                            { dl: [
+                                ['**تعديل**', 'يفتح **الوصف**، وتحت **عدّل نصوص الصفحة** الصفحة نفسها: العنوان الفرعي وكلماته المميّزة، ولكل عمود اسمه وما يناسبه وملاحظته ورسمه الرئيسي وخطواته الثلاث. تعديل الوصف وحده يُحفظ فقط. أما تعديل الصفحة فيُرسم من جديد على جهازك الماك.'],
+                                ['**نسخة فاتحة** / **نسخة داكنة**', 'تسوّي نفس الإنفوجرافيك بالتصميم الثاني، في بطاقة مستقلة.'],
+                                ['**إعادة الكتابة**', 'تطلب صفحة ووصفاً جديدين لنفس الموضوع. تسألك قبلها، وتعديلاتك على هذا الإنفوجرافيك تُستبدل.'],
+                                ['**أعد المحاولة**', 'على إنفوجرافيك فشل: يرسمه من جديد.'],
+                                ['**احذف الإنفوجرافيك**', 'أيقونة سلة المهملات. تحذفه وتحذف الـ GIF معه، والمنشورات اللي جدولتها تبقى في **الجدولة**.'],
+                            ] },
+                            'وتحت الإنفوجرافيك الجاهز يعرض **تعليقات متوقعة** ما يحتمل أن ينشره خبير تحته، ولكل تعليق ردّ ودّي جاهز تنسخه بزر **انسخ الرد**.',
+                            'والإنفوجرافيك بعد جدولته ما يتعدّل. لو تبي تغيّر شيئاً، سوِّ نسخة بالتصميم الثاني وعدّل النسخة.',
+                        ],
+                        en: [
+                            'On an infographic’s card:',
+                            { dl: [
+                                ['**Edit**', 'Opens the **Caption** and, under **Edit the page’s text**, the page itself: the subtitle and its highlighted words, and for each column its name, what it suits, its note, its main diagram and its three steps. Changing only the caption just saves it. Changing the page draws it again on your Mac.'],
+                                ['**Light version** / **Dark version**', 'Makes the same infographic in the other theme, as a card of its own.'],
+                                ['**Rewrite**', 'Asks for a new page and caption for the same topic. It asks you first, and your edits to this one are replaced.'],
+                                ['**Try again**', 'On a failed one: draws it again.'],
+                                ['**Delete infographic**', 'The bin icon. Removes it and its GIF. Posts you already scheduled stay in the **Scheduler**.'],
+                            ] },
+                            'Under a ready infographic, **Likely comments** lists the comments an expert is most likely to post under it, each with a friendly reply ready to copy with **Copy reply**.',
+                            'Once an infographic is scheduled it can no longer be edited. To change something, make a copy in the other theme and edit the copy.',
+                        ],
+                    },
+                },
+                {
+                    id: 'caption',
+                    title: { ar: 'الوصف لازم يذكر كل عمود', en: 'The caption must name every column' },
+                    body: {
+                        ar: [
+                            'الإنفوجرافيك ينزل مع وصفه، فلازم يكون الوصف عن الـ GIF. والقاعدة: يجب أن يذكر كل عمود يظهر في الـ GIF بالاسم المكتوب في الصفحة. حالة الحرف اللاتيني ما تفرق، ولا أشكال الحرف العربي مثل أ وإ وا. ولا يجوز أن يكون الوصف فارغاً أو أطول من 2,200 حرف، وهذا حد إنستجرام.',
+                            { ul: [
+                                'في **تعديل**، خانة **الوصف** تفحصه وأنت تكتب: كل اسم عمود يظهر بعلامة صح لو الوصف فيه، وعلامة خطأ لو لا.',
+                                'والإنفوجرافيك الجاهز اللي يخالف القاعدة يعرض **ما يحتاج إلى إصلاح** على بطاقته، ويرفض **جدولة** لين تصلحه، والرفض يسمّي الأعمدة الناقصة.',
+                                'لو غيّرت اسم عمود في نصوص الصفحة، الفحص يتبع الاسم الجديد: خلّ الوصف مواكباً.',
+                            ] },
+                        ],
+                        en: [
+                            'An infographic is posted with its caption, so the caption has to be about the GIF. The rule: it must mention every column the GIF shows, by the name written on the page. Capital letters do not matter, and neither do Arabic letter variants such as أ, إ and ا. It also cannot be empty or longer than 2,200 characters, which is Instagram’s limit.',
+                            { ul: [
+                                'In **Edit**, the **Caption** box checks it as you type: every column name shows a tick when the caption has it and a cross when it does not.',
+                                'A ready infographic that breaks the rule shows **What to fix** on its card, and **Schedule** is refused until you fix it. The refusal names the columns that are missing.',
+                                'If you rename a column in the page text, the check follows the new name: keep the caption in step.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'schedule',
+                    title: { ar: 'الجدولة', en: 'Scheduling it' },
+                    body: {
+                        ar: [
+                            'على إنفوجرافيك **جاهز** اضغط **جدولة**. يقول لك حوار **جدولة الإنفوجرافيك** وين يروح الـ MP4 مع وصفه: المنصات اللي علّمت عليها في **تنشر الجدولة ملف MP4 على** من هويتك. وتحت **متى** اختر:',
+                            { dl: [
+                                ['أقرب موعد نشر متاح', 'أول وقت متاح من **أوقات النشر** اللي حددتها في المونتير (الريلز والإنفوجرافيك يتشاركانها) بتوقيت مساحتك. والحوار يسمّي لك الوقت والمدينة.'],
+                                ['الآن', 'يجدوله لهذي اللحظة.'],
+                                ['في وقت أختاره', 'يوم ووقت يُقرآن بتوقيت مساحتك.'],
+                            ] },
+                            'وهذا اللي يُنشر:',
+                            { ul: [
+                                'في إنستجرام وفيسبوك: منشور واحد فيه الـ MP4 وغلافه والوصف.',
+                                'وفي يوتيوب إذا علّمت عليه: فيديو وصفه هو الوصف، وعنوانه عنوان الصفحة («RAG vs CAG: …»)، وصورته المصغّرة الغلاف. ويوتيوب ما يُفحص وقت الجدولة: لو غير مربوط يفشل منشوره في **الجدولة** ويقول السبب، ويبقى منشور إنستجرام وفيسبوك ينزل: [[youtube#disconnected]].',
+                                'الـ GIF ما يُنشر في أي مكان. حمّله بزر **GIF** وانشره بنفسك على لينكدإن وإكس وغيرهما. وتيك توك مو من الخيارات.',
+                            ] },
+                            'وبعد الجدولة تقول البطاقة متى ينزل، وجنبها رابط **افتح المنشورات**.',
+                            { note: 'تحتاج الجدولة منصة وحدة على الأقل معلّم عليها في **تنشر الجدولة ملف MP4 على**، وإلا تطلب منك تحديد وين ينزل الإنفوجرافيك أول.' },
+                        ],
+                        en: [
+                            'On a **Ready** infographic press **Schedule**. The dialog, **Schedule the infographic**, says where the MP4 and its caption go: the platforms ticked under **Schedule posts the MP4 to** in your brand settings. Under **When**, choose:',
+                            { dl: [
+                                ['The next free posting time', 'The first free time among the **Post at** times you set in the Monteur (reels and infographics share them), in your workspace’s time zone. The dialog names the time and the city.'],
+                                ['Now', 'Schedules it for this moment.'],
+                                ['At a time I choose', 'A day and a time, read in your workspace’s time zone.'],
+                            ] },
+                            'What is posted:',
+                            { ul: [
+                                'On Instagram and Facebook: one post, with the MP4, its cover and the caption.',
+                                'On YouTube, when ticked: a video with the caption as its description, the page’s headline (“RAG vs CAG: …”) as its title and the cover as its thumbnail. YouTube is not checked when you schedule: if it is not connected, its post fails in the **Scheduler** with the reason, and the Instagram and Facebook post still goes out: [[youtube#disconnected]].',
+                                'The GIF is not posted anywhere. Download it with **GIF** and post it yourself on LinkedIn, X and the rest. TikTok is not one of the choices.',
+                            ] },
+                            'After scheduling, the card says when it goes out and has a link, **Open Posts**.',
+                            { note: 'Schedule needs at least one platform ticked under **Schedule posts the MP4 to**. Without one it asks you to choose where infographics are posted first.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'brand',
+                    title: { ar: 'هويتك على كل صفحة', en: 'Your brand on every page' },
+                    body: {
+                        ar: [
+                            'في أسفل الصفحة قسم **هويتك على كل إنفوجرافيك** (يكون مفتوحاً من نفسه لين تحفظ اسماً). اللي تحدده يُطبع أسفل كل صفحة:',
+                            { dl: [
+                                ['**الاسم بالعربية** و**الاسم بالإنجليزية**', 'اسمك أو اسم نشاطك بكل لغة.'],
+                                ['**الموقع** و**المعرّف**', 'عنوان موقعك (مثل example.dev) ومعرّفك (مثل @you).'],
+                                ['**أيقونات الحسابات**', 'إنستجرام ويوتيوب ولينكدإن وإكس وتيك توك وفيسبوك وغيت هب: علّم على اللي تبي يظهر.'],
+                                ['**اللون الأساسي** و**لون التمييز**', 'ألوان الصفحة.'],
+                                ['**الصورة الشخصية**', '**ارفع صورة** (JPEG أو PNG أو WebP): تُصغَّر في متصفحك إلى مربع 512 بكسل، وتظهر دائرية وبالأبيض والأسود. وأفضلها صورة مربعة لوجهك. و**إزالة** تشيلها.'],
+                                ['**تنشر الجدولة ملف MP4 على**', 'إنستجرام وفيسبوك ويوتيوب، ولازم واحد على الأقل.'],
+                                ['**التصميم الافتراضي** و**اللغة الافتراضية**', 'لما لا تغيّرهما في الإنفوجرافيك الجديد.'],
+                            ] },
+                            'اضغط **احفظ الهوية**. الإنفوجرافيك الجديد يستخدمها، والقديم يبقى بشكله لين يُرسم من جديد (بتعديل، أو نسخة بالتصميم الثاني، أو **أعد المحاولة**).',
+                        ],
+                        en: [
+                            'At the bottom of the page, **Your brand on every infographic** (open by itself until you save a name) holds what is printed at the bottom of every page:',
+                            { dl: [
+                                ['**Name in Arabic** and **Name in English**', 'Your name or your business name, in each language.'],
+                                ['**Website address** and **Handle**', 'Your site (such as example.dev) and your handle (such as @you).'],
+                                ['**Social icons**', 'Instagram, YouTube, LinkedIn, X, TikTok, Facebook and GitHub: tick the ones to show.'],
+                                ['**Main colour** and **Accent colour**', 'The colours of the page.'],
+                                ['**Portrait**', '**Upload** a photo (JPEG, PNG or WebP): it is cut to a 512-pixel square in your browser, and shown round and in black and white. A square photo of your face works best. **Remove** takes it off.'],
+                                ['**Schedule posts the MP4 to**', 'Instagram, Facebook and YouTube, with at least one ticked.'],
+                                ['**Default theme** and **Default language**', 'What a new infographic starts with, until you change it there.'],
+                            ] },
+                            'Press **Save brand**. New infographics use it, and one you already made keeps its look until it is drawn again (by an edit, a copy in the other theme or **Try again**).',
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'لما يتوقف شي', en: 'When something stops' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['**أنشئ** يقول إن ما في مزوّد ذكاء اصطناعي جاهز، أو إن ميزانية اليوم خلصت', 'ما انصنع شي. مسؤول المنصة هو اللي يحفظ المفتاح في التشغيل ← مزوّدو الذكاء الاصطناعي، أو ينتظر تجدد الميزانية. كلّمه وجرّب بعدين.'],
+                                ['**أنشئ** يقول «أكمل ملفك قبل تشغيل هذا»', 'أساسيات إعدادك ناقصة. أكملها: [[onboarding#steps]].'],
+                                ['البطاقة واقفة على **بانتظار جهازك الماك**', 'العامل غير متصل، والرسم ينتظره. شغّل الماك والعامل وبيكمل لحاله: [[worker#status]].'],
+                                ['مكتوب عليه **فشل**', 'تحته السبب. اضغط **أعد المحاولة**، أو **إعادة الكتابة** لو تبي صفحة جديدة.'],
+                                ['**جدولة** ترفض لأن الوصف ما يذكر أعمدة', 'ضع أسماء الأعمدة الناقصة في الوصف من **تعديل**: [[infographics#caption]].'],
+                                ['**جدولة** تقول اختر وين ينزل الإنفوجرافيك', 'علّم منصة واحدة على الأقل في **تنشر الجدولة ملف MP4 على** من هويتك.'],
+                                ['ما أقدر أعدّل إنفوجرافيك مجدول', 'تعديله يُقفل بعد الجدولة. سوِّ نسخة بالتصميم الثاني وعدّلها.'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['**Create** says no AI provider is ready, or today’s budget is used up', 'Nothing was made. The platform administrator saves the key in Operations → AI providers, or waits for the budget to renew. Ask them and try again later.'],
+                                ['**Create** says “Finish your profile before switching this on”', 'The basics of your setup are missing. Finish them: [[onboarding#steps]].'],
+                                ['A card sits on **Waiting for your Mac**', 'The worker is offline, and the drawing waits for it. Start the Mac and the worker and it carries on by itself: [[worker#status]].'],
+                                ['It says **Failed**', 'The reason is under it. Press **Try again**, or **Rewrite** for a new page.'],
+                                ['**Schedule** is refused because the caption does not mention some columns', 'Put the missing column names into the caption, in **Edit**: [[infographics#caption]].'],
+                                ['**Schedule** says to choose where infographics are posted', 'Tick at least one platform under **Schedule posts the MP4 to** in your brand settings.'],
+                                ['I cannot edit a scheduled infographic', 'Editing closes once it is scheduled. Make a copy in the other theme and edit that.'],
+                            ] },
                         ],
                     },
                 },
