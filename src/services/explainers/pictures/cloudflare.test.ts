@@ -107,8 +107,8 @@ describe('CloudflareImageProvider — the request', () => {
         assert.equal(calls.length, 0);
     });
 
-    it('is given a signal that ends the call after 30 seconds', async () => {
-        assert.equal(CLOUDFLARE_TIMEOUT_MS, 30_000);
+    it('is given a signal that ends the call after 55 seconds (the pilot’s pictures took up to 26 s, and one passed 30)', async () => {
+        assert.equal(CLOUDFLARE_TIMEOUT_MS, 55_000);
         const { calls, fetchImpl } = harness(() => picture(PNG));
         await provider(fetchImpl).draw(REQUEST);
         assert.ok(calls[0]!.init.signal instanceof AbortSignal);

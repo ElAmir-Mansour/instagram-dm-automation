@@ -9,7 +9,7 @@
  * outlives, so it is never read as the day's allowance (Workers AI error table, developers.cloudflare.com/workers-ai/platform/errors, 2026-10-25).
  *
  * Failures are two kinds (`ImageProviderError`): the allowance is used up (the caller pauses drawing until it resets), or anything else (the
- * caller gives the units back and marks the scene). A call that does not answer in 30 seconds is the second kind.
+ * caller gives the units back and marks the scene). A call that does not answer in 55 seconds is the second kind.
  *
  * THE TOKEN. It is held in a `#private` field, so `JSON.stringify`, `util.inspect` and a spread of the object cannot reach it. It goes into one
  * request header and nowhere else, and no message leaves this file with it in: whatever Cloudflare echoes back, and whatever the network error
@@ -23,8 +23,11 @@ import { sniffPictureMime } from './imageSize.js';
 import { ImageProviderError, type DrawRequest, type DrawnPicture, type ImageProvider } from './types.js';
 
 export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
-/** One scene's picture "answers in 30 s or less" (plan.md performance goals). */
-export const CLOUDFLARE_TIMEOUT_MS = 30_000;
+/**
+ * How long one picture may take. plan.md hoped for 30 s, but the pilot's pictures (2026-10-25) took 15 to 26 s and one passed 30 s and failed,
+ * so the call waits 55 s. The worker's draw-next call waits 120 s, and a synchronous route runs well within the function's limit.
+ */
+export const CLOUDFLARE_TIMEOUT_MS = 55_000;
 /** `input_image_0` to `input_image_3`. */
 export const CLOUDFLARE_MAX_REFERENCES = 4;
 /** "you have used up your daily free allocation of 10,000 neurons": 3036 in Cloudflare's error table, 4006 in the REST API's older answers. */
@@ -53,7 +56,7 @@ export interface CloudflareConfig {
 export interface CloudflareOptions {
     /** For tests. Defaults to the global `fetch`. */
     fetchImpl?: FetchLike;
-    /** For tests. Defaults to 30 seconds. */
+    /** For tests. Defaults to 55 seconds. */
     timeoutMs?: number;
 }
 

@@ -46,10 +46,10 @@ describe('buildScenePrompt — the order', () => {
     });
 
     it('names each character by the index of the reference picture it is sent as, in the order the scene lists them', () => {
-        assert.match(prompt, /Image 0 shows the recurring character: a curious young man with a round head/);
-        assert.match(prompt, /Image 1 shows the recurring character: an old man with a white beard/);
-        assert.match(prompt, /Keep this character exactly as in image 0/);
-        assert.match(prompt, /Keep this character exactly as in image 1/);
+        assert.match(prompt, /Image 0 is karim, a recurring character: a curious young man with a round head/);
+        assert.match(prompt, /Image 1 is samir, a recurring character: an old man with a white beard/);
+        assert.match(prompt, /Keep karim exactly as in image 0/);
+        assert.match(prompt, /Keep samir exactly as in image 1/);
         assert.ok(at('Image 0') < at('Image 1'));
     });
 
@@ -60,8 +60,9 @@ describe('buildScenePrompt — the order', () => {
         assert.match(prompt, /no real people's faces/i);
     });
 
-    it('states the people rule as what IS drawn: every person is a man or a boy', () => {
-        assert.match(prompt, /every person in the picture is a man or a boy/i);
+    it('states the people rule as what IS drawn, about humans only (a robot is not asked to be a man): every human is a man or a boy', () => {
+        assert.match(prompt, /every human in the picture is a man or a boy/i);
+        assert.doesNotMatch(prompt, /every person/i);
     });
 
     it('never names what it must not draw about people: no "no women", no "girls", no negation of a female word', () => {
@@ -153,7 +154,7 @@ describe('buildCandidatePrompt', () => {
         assert.ok(prompt.indexOf(KARIM.description) < prompt.search(/no text, letters, numbers or signage/i));
         assert.match(prompt, /single recurring cartoon character/);
         assert.match(prompt, /plain light background/);
-        assert.match(prompt, /every person in the picture is a man or a boy/i);
+        assert.match(prompt, /every human in the picture is a man or a boy/i);
         assert.match(prompt, /no real people's faces/i);
         assert.doesNotMatch(prompt, /top quarter/i, 'a character sheet has no label to leave room for');
         assert.doesNotMatch(prompt, /women|woman|girl|female/i);
@@ -222,5 +223,21 @@ describe('promptHash', () => {
             promptHash('p', { ...base, references: ['bbb', 'aaa'] }), promptHash('p', { ...base, references: ['aaa'] }), promptHash('p', { ...base, references: [] }),
         ]);
         assert.equal(hashes.size, 7);
+    });
+});
+
+describe('a scene with two characters or more (the pilot drew Karim twice and no robot, 2026-10-25)', () => {
+    const ROBOT = { key: 'robot', description: 'a small friendly robot with a cream box head and one big round eye' };
+    const two = buildScenePrompt({ style: STYLE, characters: [KARIM, ROBOT], brief: 'robot points at a paper strip while karim reads it' });
+    const one = buildScenePrompt({ style: STYLE, characters: [KARIM], brief: 'karim reads a paper strip' });
+    it('ties each image to the key the brief names', () => {
+        assert.match(two, /Image 0 is karim, a recurring character: a curious young man/);
+        assert.match(two, /Image 1 is robot, a recurring character: a small friendly robot/);
+        assert.match(two, /Keep robot exactly as in image 1/);
+    });
+    it('asks for each character exactly once, looking like its own image, and only when there are two or more', () => {
+        assert.match(two, /Each named character appears exactly once, looking like its own image and not like the other characters\./);
+        assert.doesNotMatch(one, /Each named character appears exactly once/);
+        assert.match(one, /every human in the picture is a man or a boy/i);
     });
 });
