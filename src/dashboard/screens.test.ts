@@ -306,6 +306,7 @@ function load(): Loaded {
 
     for (const f of [
         'dashboard/js/components.js',
+        'dashboard/js/attention.js',
         'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
         'dashboard/js/charts.js',
@@ -461,32 +462,23 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         assert.equal(win.isPast, true);
     });
 
-    it('the queue card and the form field say the same thing about the same post', () => {
-        // They did not. `scheduleNoteText` was corrected to the daily reality
-        // while `renderScheduledCard` kept its own copy of the branch and went
-        // on promising "within about 15 minutes" for the very same post — two
-        // answers, one screen. Both now go through `publishWindowText`, and this
-        // is what stops them drifting apart again.
+    it('the queue card no longer repeats the form field\'s promise of minutes (UX US1, audit PO-11)', () => {
+        // This used to assert the opposite: that the card carried the sentence the form field shows, so the two could not drift. They
+        // drifted in the way that mattered: a card for a post scheduled months ahead said "within about 5 minutes", and went on saying
+        // it for one that was hours late, while Overview called the same post stuck. The FORM still predicts (it is about a time that
+        // is being picked); a CARD states the time and, past the grace, that it is overdue: never a number of minutes. The card's own
+        // wording is pinned in postsArchive.test.ts; this keeps the two from being made equal again.
         const { Posts: P, UI } = load();
         const iso = '2027-03-04T18:20:00.000Z';
-        const win = P.publishWindow(iso, NOW);
-        assert.ok(win);
-
-        // The REAL card markup, not the shared helper called twice — asserting
-        // `publishWindowText` agrees with itself is what the first version of
-        // this test did, and a card that had gone back to building its own
-        // sentence sailed straight through it.
         const card = String(P.renderScheduledCard({
             id: 9, platform: 'instagram', post_type: 'image', status: 'PENDING',
             scheduled_time: iso, caption: 'c',
         }));
         const fieldText = P.scheduleNoteText(UI.toLocalInputValue(iso));
 
-        assert.ok(fieldText.length > 0);
-        assert.ok(
-            card.includes(fieldText),
-            `the card does not carry the sentence the form field shows.\n  field: ${fieldText}`
-        );
+        assert.ok(fieldText.length > 0, 'the form still says when it expects to publish');
+        assert.ok(!card.includes(fieldText), `the card must not carry the form's sentence.\n  field: ${fieldText}`);
+        assert.ok(!/within about|خلال \d+ دقائق/.test(card), 'and no promise of minutes at all');
     });
 
     it('returns null rather than an Invalid Date for anything unparseable', () => {

@@ -22,6 +22,7 @@ import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import { setStorageFetch } from '../services/supabaseStorage.js';
 import { invalidateTenantCache } from '../services/tenant.js';
+import { ERASURE_TOKEN_TTL_MS, mintErasureToken } from '../services/erasure.js';
 import adminRouter from './admin.js';
 
 interface Reply {
@@ -106,6 +107,7 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['POST', '/ai/test'],
     ['GET', '/ai/models/anthropic'],
     ['GET', '/ai/usage'],
+    ['GET', '/ads/tenants'],
 ];
 
 describe('the platform_admin gate', () => {
@@ -303,6 +305,133 @@ describe('job validation', () => {
     });
 });
 
+/**
+ * The two job refusals (JB-05) and the erasure refusals (ER-03) carry a stable code and `params` beside the English `error`, so the
+ * dashboard can say them in Arabic. The stub pool says the job is `done` (neither failed nor pending) or that the counts moved.
+ */
+describe('refusals carry stable codes', () => {
+    const restore: Array<() => void> = [];
+    afterEach(() => { while (restore.length) restore.pop()!(); });
+
+    function stubPool(handler: (sql: string, params?: unknown[]) => { rows: any[]; rowCount?: number }): void {
+        const originalQuery = pool.query;
+        const originalConnect = pool.connect;
+        const previousSink = setLogSink(() => {});
+        const run = async (sql: string, params?: unknown[]) => { const r = handler(sql, params); return { rows: r.rows, rowCount: r.rowCount ?? r.rows.length }; };
+        (pool as unknown as { query: unknown }).query = run;
+        (pool as unknown as { connect: unknown }).connect = async () => ({ query: run, release() {} });
+        restore.push(() => {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+            (pool as unknown as { connect: unknown }).connect = originalConnect;
+            setLogSink(previousSink);
+        });
+    }
+
+    it('retrying a job that has not stopped is JOB_NOT_RETRYABLE, with the status in params and, as ever, at the top level', async () => {
+        stubPool((sql) => (/SELECT status FROM jobs/.test(sql) ? { rows: [{ status: 'running' }] } : { rows: [] }));
+        const reply = await call('POST', `/jobs/${UUID}/retry`, { session: ADMIN });
+
+        assert.equal(reply.status, 409);
+        assert.equal(reply.body.code, 'JOB_NOT_RETRYABLE');
+        assert.equal(reply.body.error, 'That job is "running", not failed or cancelled — only a job that has stopped can be retried.');
+        assert.equal(reply.body.message, reply.body.error);
+        assert.deepEqual(reply.body.params, { status: 'running' });
+        assert.equal(reply.body.status, 'running', 'the legacy top-level field jobs.js could already read');
+    });
+
+    it('cancelling a job that has started is JOB_NOT_CANCELLABLE', async () => {
+        stubPool((sql) => (/SELECT status FROM jobs/.test(sql) ? { rows: [{ status: 'done' }] } : { rows: [] }));
+        const reply = await call('POST', `/jobs/${UUID}/cancel`, { session: ADMIN });
+
+        assert.equal(reply.status, 409);
+        assert.equal(reply.body.code, 'JOB_NOT_CANCELLABLE');
+        assert.match(reply.body.error, /not pending — only a job that has not started can be cancelled/);
+        assert.deepEqual(reply.body.params, { status: 'done' });
+    });
+
+    it('a job that is not there is still a plain 404 with no code: a stale page, not a refusal to translate', async () => {
+        stubPool(() => ({ rows: [] }));
+        const reply = await call('POST', `/jobs/${UUID}/retry`, { session: ADMIN });
+
+        assert.equal(reply.status, 404);
+        assert.equal(reply.body.code, undefined);
+        assert.equal(reply.body.error, 'Job not found.');
+    });
+
+    describe('erasure', () => {
+        const COUNTS = { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 };
+        const saved: Record<string, string | undefined> = {};
+        beforeEach(() => {
+            saved.pw = process.env.DASHBOARD_PASSWORD; saved.app = process.env.META_APP_SECRET;
+            process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+            process.env.META_APP_SECRET = 'meta-app-secret';
+        });
+        afterEach(() => {
+            for (const [key, value] of [['DASHBOARD_PASSWORD', saved.pw], ['META_APP_SECRET', saved.app]] as const) {
+                if (value === undefined) delete process.env[key]; else process.env[key] = value;
+            }
+        });
+
+        it('an expired preview is ERASURE_PREVIEW_EXPIRED, not the "invalid token" of a forged one', async () => {
+            const token = mintErasureToken('someone', COUNTS, Date.now() - ERASURE_TOKEN_TTL_MS - 60_000);
+            const reply = await call('POST', '/erasure', { session: ADMIN, body: { token } });
+
+            assert.equal(reply.status, 400);
+            assert.equal(reply.body.code, 'ERASURE_PREVIEW_EXPIRED');
+            assert.match(reply.body.error, /has expired\. Run the preview again/);
+            assert.deepEqual(reply.body.params, {});
+        });
+
+        it('a forged token is ERASURE_TOKEN_INVALID', async () => {
+            const [body] = mintErasureToken('someone', COUNTS).split('.') as [string];
+            const reply = await call('POST', '/erasure', { session: ADMIN, body: { token: `${body}.${'0'.repeat(64)}` } });
+
+            assert.equal(reply.status, 400);
+            assert.equal(reply.body.code, 'ERASURE_TOKEN_INVALID');
+        });
+
+        it('counts that moved since the preview are ERASURE_COUNTS_DRIFTED, and say nothing was deleted; expected and actual stay top-level', async () => {
+            const writes: string[] = [];
+            stubPool((sql) => {
+                if (/FROM conversations\s+WHERE instagram_user_id/.test(sql)) return { rows: [] };
+                if (/SELECT\s+\(SELECT COUNT/.test(sql)) return { rows: [{ messages: 5, conversations: 1, interactions: 0, dm_send_log: 0 }] };
+                if (/^\s*(DELETE|UPDATE|INSERT)/.test(sql)) writes.push(sql);
+                return { rows: [] };
+            });
+            const reply = await call('POST', '/erasure', { session: ADMIN, body: { token: mintErasureToken('someone', COUNTS) } });
+
+            assert.equal(reply.status, 409);
+            assert.equal(reply.body.code, 'ERASURE_COUNTS_DRIFTED');
+            assert.match(reply.body.error, /Nothing was deleted/);
+            assert.deepEqual(reply.body.expected, COUNTS);
+            assert.deepEqual(reply.body.actual, { messages: 5, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 });
+            assert.deepEqual(writes, [], 'a drifted token deletes nothing');
+        });
+
+        it('records the contact\'s private uploads it deleted in the audit detail, beside the counts, and not inside them', async () => {
+            const CONV = '33333333-3333-4333-8333-333333333333';
+            let auditDetail: any = null;
+            stubPool((sql, params) => {
+                if (/FROM conversations\s+WHERE instagram_user_id/.test(sql)) return { rows: [{ id: CONV, instagram_user_id: 'someone', username: null }] };
+                if (/SELECT\s+\(SELECT COUNT/.test(sql)) return { rows: [{ messages: 2, conversations: 1, interactions: 0, dm_send_log: 0 }] };
+                if (/^\s*DELETE FROM media_uploads/.test(sql)) return { rows: [], rowCount: 3 };
+                if (/^\s*DELETE FROM messages/.test(sql)) return { rows: [], rowCount: 2 };
+                if (/^\s*DELETE FROM conversations/.test(sql)) return { rows: [], rowCount: 1 };
+                if (/^\s*DELETE/.test(sql)) return { rows: [], rowCount: 0 };
+                if (/INSERT INTO audit_log/.test(sql)) { auditDetail = JSON.parse(String(params?.[5])); return { rows: [{ id: 'audit-1' }] }; }
+                return { rows: [] };
+            });
+
+            const reply = await call('POST', '/erasure', { session: ADMIN, body: { token: mintErasureToken('someone', COUNTS) } });
+
+            assert.equal(reply.status, 200, JSON.stringify(reply.body));
+            assert.ok(auditDetail, 'the audit row was written');
+            assert.equal(auditDetail.media_deleted, 3);
+            assert.deepEqual(auditDetail.deleted, { messages: 2, conversations: 1, interactions: 0, dmSendLog: 0, leads: 0 }, 'the counts are the preview\'s, unchanged');
+        });
+    });
+});
+
 describe('erasure', () => {
     it('cannot be triggered without a preview token', async () => {
         // The invariant this whole design exists for: POST accepts a token and nothing else,
@@ -319,7 +448,7 @@ describe('erasure', () => {
             const reply = await call('POST', '/erasure', { session: ADMIN, body });
 
             assert.equal(reply.status, 400, JSON.stringify(body));
-            assert.equal(reply.body.code, 'INVALID_TOKEN', JSON.stringify(body));
+            assert.equal(reply.body.code, 'ERASURE_TOKEN_INVALID', JSON.stringify(body));
             // And the message has to say what to do instead.
             assert.match(reply.body.error, /preview/i, JSON.stringify(body));
         }

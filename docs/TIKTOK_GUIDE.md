@@ -24,7 +24,7 @@ TikTok changes its portal, so treat those as "what it looked like then".
 | Scopes | `user.info.basic`, `video.upload`, `video.publish` |
 | What works | **Direct Post** (`video.publish`) — forced to **Only me** until TikTok audits the app |
 | What does not | **Inbox drafts** (`video.upload`). TikTok reported six drafts delivered; none was ever found (§12) |
-| Settings → TikTok app | "Direct Post is switched on…" ticked (Direct Post cannot happen otherwise); "TikTok has approved this app…" unticked (the audit has not passed) |
+| Settings → Platform → TikTok app | "Direct Post is switched on…" ticked (Direct Post cannot happen otherwise); "TikTok has approved this app…" unticked (the audit has not passed) |
 
 **The one rule to remember: until TikTok audits the app, the TikTok account must be private at
 the moment a post goes out, and every post goes out as "Only me".** §6.3 is the workflow that
@@ -99,13 +99,14 @@ entirely on the sandbox key.
 ### 2.3 Scopes
 
 Add all three in the portal. The app decides which to *request* at Connect time from the two
-switches in §5 (`tiktokScopes`, `src/services/tiktok.ts:53-56`):
+switches in §5 (`tiktokScopes`, `src/services/tiktok.ts`), plus a third switch for an optional fourth scope:
 
 | Scope | What it is for | Requested when |
 |---|---|---|
 | `user.info.basic` | the account's name and avatar on the Settings card | always |
 | `video.upload` | inbox drafts | Direct Post switch off; or on and **not** audited, so each post can choose |
 | `video.publish` | Direct Post | Direct Post switch on |
+| `user.info.profile` | the creator's username, bio, profile link and verified flag, read by the onboarding profile draft (migration v44) | only when **Profile access** is ticked in Settings → Platform → TikTok app (`tiktok.profile_scope_enabled`, off by default); add it in the portal first, for the same reason as below |
 
 > **Asking for a scope the portal has not granted fails the whole authorisation**, not just that
 > scope. So the Direct Post switch in Settings must never be ticked before the portal has Direct
@@ -114,7 +115,7 @@ switches in §5 (`tiktokScopes`, `src/services/tiktok.ts:53-56`):
 
 ### 2.4 The URLs to register
 
-Settings → **TikTok** → **TikTok app (platform admin)** → "Register these in the TikTok developer
+Settings → **Platform** → **TikTok app** (platform admin) → "Register these in the TikTok developer
 portal" lists every one with a copy button (`src/routes/tiktok.ts:340-346`). They are built from
 the **Public site address** field, so save that first (§3). Copy them; do not type them.
 
@@ -129,7 +130,8 @@ the **Public site address** field, so save that first (§3). Copy them; do not t
 
 > **TikTok compares the redirect URI byte for byte.** A trailing slash, `http://`, or a preview
 > deployment's host is a different URI, and Connect fails. That is why it is built from the saved
-> Public site address and never from the request's Host header (`src/services/appSettings.ts:30-37`).
+> Public site address, then `PUBLIC_BASE_URL`, and only when neither is set from the address the request
+> came in on (`getPublicBaseUrl`, `src/services/appSettings.ts`): so save the Public site address.
 
 Check they answer — all read-only:
 
@@ -156,7 +158,7 @@ photo can only be *pulled* (`PULL_FROM_URL`), and TikTok pulls only from a verif
    `https://msg-response-auto.vercel.app/` (with the trailing slash).
 2. TikTok offers a file named `tiktok<token>.txt`. Download it and open it in a text editor. It is
    one line, `tiktok-developers-site-verification=…`.
-3. Dashboard → Settings → TikTok → **TikTok app (platform admin)**:
+3. Dashboard → Settings → **Platform** → **TikTok app** (platform admin):
    - **Verification file name**: the file's name, exactly (`tiktokAbC123.txt`);
    - **Verification file contents**: the line inside it;
    - **Save TikTok app**.
@@ -205,7 +207,7 @@ shared `DASHBOARD_PASSWORD` login is a platform admin.
 
 1. Portal → the app (the sandbox today; production once approved) → **Credentials**. Copy the
    **Client key** and **Client secret**.
-2. Dashboard → **Settings** → **TikTok** → **TikTok app (platform admin)**. It is open by default
+2. Dashboard → **Settings** → **Platform** → **TikTok app** (platform admin). It is open by default
    until the app is configured.
 3. Fill in:
 
@@ -252,7 +254,7 @@ workspace, and one workspace per TikTok account.
 
 ### 4.1 Connect
 
-1. Settings → **TikTok** → **Connect TikTok**. The dashboard asks the server for TikTok's
+1. Settings → **Connections** → the TikTok card → **Connect TikTok**. The dashboard asks the server for TikTok's
    authorise URL, which also sets a single-use cookie valid for 10 minutes, then goes there
    (`src/routes/tiktok.ts:261-285`). **Start and finish in the same browser** — the cookie is how
    the callback knows the round trip is yours.
@@ -319,17 +321,20 @@ stored connection — account id, name, avatar and both tokens (`disconnect`,
 permissions" in TikTok) does the same through the `authorization.removed` webhook
 (`src/services/tiktokPublish.ts:656-660`).
 
-> **The confirm dialog says scheduled TikTok posts "won't be sent until you reconnect". The code is
-> stricter:** posts not yet due stay `PENDING`, but any post that comes due while disconnected is
-> claimed and **FAILS** with "TikTok is not connected for this account — connect it in Settings."
-> (`src/services/tiktokConnections.ts:36-41`, `:306`). After reconnecting, retry those with
-> **Publish now**.
+> **What happens to scheduled TikTok posts:** posts not yet due stay `PENDING` and wait, but any post
+> that comes due while disconnected is claimed and **FAILS** with "TikTok is not connected for this
+> account — connect it in Settings." (`TikTokNotConnectedError` and `getAccessToken` in
+> `src/services/tiktokConnections.ts`, caught by `publishTikTokPost` in `src/services/tiktokPublish.ts`).
+> After reconnecting, retry those with **Publish now**. The confirm dialog and the Help Center
+> (`tiktok#connect`) say exactly this since 2026-10-25 (the dialog used to promise "won't be sent until
+> you reconnect"), and `tiktokPublish.test.ts` proves it. A connection that **Needs reconnecting** does
+> the same to a post that comes due (§8.2).
 
 ---
 
 ## 5. The two switches: Direct Post and Audited
 
-Both live in Settings → TikTok → **TikTok app (platform admin)** → **Direct Post**, and both are
+Both live in Settings → **Platform** → **TikTok app** (platform admin) → **Direct Post**, and both are
 facts about TikTok's portal that the app cannot check for itself — you tell it:
 
 | Checkbox (exact label) | App setting | Tick it when |
@@ -422,7 +427,7 @@ me) — edit the post." (`src/services/tiktokPublish.ts:290-292`).
    | "By posting, you agree to TikTok's Music Usage Confirmation." | the declaration; it adds "Branded Content Policy" when branded content is on |
 
    The composer also states the account's longest allowed video and refuses a longer one.
-5. **Schedule** it, or tick **Publish immediately instead of scheduling**. A saved post's card has
+5. **Schedule** it, or tick **Publish now instead of scheduling**. A saved post's card has
    **Publish now** for the same thing later.
 
 At publish time the server reads `creator_info` again and re-checks everything — the privacy
@@ -512,6 +517,11 @@ webhook, and a sweep on every drain and the daily cron — all through one idemp
 so they may overlap (FLOWS.md §6.5).
 
 ### 6.5 From the Studio: "Queue for TikTok" and the batch
+
+(The Studio's other tabs post to TikTok too, each its own way: the **Monteur** posts its reels with Direct Post,
+Only me until the audit, `src/services/monteur/clips.ts`; **Explainers** always send the vertical video as an
+**inbox draft**, `src/services/explainers/schedule.ts`, which counts against the five-a-day limit in §9 and is subject
+to the inbox question in §12.)
 
 The Studio makes Instagram carousels and a 9:16 TikTok version of each (STUDIO.md §4).
 
@@ -623,7 +633,7 @@ browser's address bar; the phone, with TikTok open on the profile.
 |---|---|---|
 | 1 | `https://msg-response-auto.vercel.app/` in the browser | the address bar — this is "the domain" |
 | 2 | Log in to `/dashboard` | the workspace name — and the tenant switcher, if the demo login belongs to more than one workspace |
-| 3 | Settings → TikTok → **Connect TikTok** | the section before connecting |
+| 3 | Settings → Connections → TikTok → **Connect TikTok** | the section before connecting |
 | 4 | TikTok's authorisation page | the app name "AutoReply Pro" and the scopes; log in and authorise |
 | 5 | Back on Settings | "TikTok connected.", the **Connected** pill, the account name, the three **Permissions** chips |
 | 6 | Posts Scheduler → new post → Platform **TikTok**, Type **Video**, upload, write a caption | the upload finishing |
@@ -641,15 +651,12 @@ length limits before recording.
 
 ### 7.4 Pre-submission checklist
 
-- [ ] **Terms and Privacy name a real contact email and the operator.** All three public pages still
-  say `[not yet supplied]` (`public/terms.html:1187-1188`, `public/privacy.html:1253-1254`,
-  `public/data-deletion.html:1057-1058`). Reviewers look for these.
-- [ ] **Terms and Privacy describe the scopes you are asking for.** Today they promise exactly two
-  scopes, `user.info.basic` and `video.upload`, "and no others", uploads to the inbox only, and
-  that nothing is posted publicly on the owner's behalf (`public/privacy.html:1073-1096`,
-  `public/terms.html:994-996`, `:1027-1030`). The submission asks for `video.publish` and shows
-  Direct Post and photo posts, so the pages must say so first — otherwise the reviewer finds the
-  contradiction.
+- [x] **Terms and Privacy name a real contact email and the operator.** Done: no page says
+  `[not yet supplied]` any more (checked 2026-10-25). Reviewers look for these.
+- [x] **Terms and Privacy describe the scopes you are asking for.** Done: `/privacy` now names
+  `video.publish` and the optional fourth scope, Direct Post and photo posts (checked 2026-10-25).
+  Re-read them before each submission: a page that promises less than the submission shows is
+  the contradiction a reviewer finds.
 - [ ] Every URL registered exactly as Settings lists it; the three pages answer `200` (§2.4).
 - [ ] The URL prefix is verified, and every verification file still answers `200` (§2.5).
 - [ ] The production app has the same products, scopes, redirect URI and webhook URL as the sandbox.
@@ -712,7 +719,7 @@ When the production app is approved:
 
 1. Confirm the production app has everything in §2: products, scopes, redirect URI, webhook URL,
    URL properties.
-2. Settings → TikTok app: paste the **production** Client key and Client secret → **Save TikTok
+2. Settings → Platform → TikTok app: paste the **production** Client key and Client secret → **Save TikTok
    app**. From that moment webhooks are verified with the production secret.
 3. **Every workspace: Reconnect.** The stored tokens were issued to the sandbox app, so expect the
    next refresh under the production key to be refused and the card to say Needs reconnecting
@@ -755,13 +762,15 @@ Healthy: `status = active`; `last_refreshed_at` within the last day (the daily c
 | Photo title | **90** UTF-16 units | TikTok (`src/services/tiktok.ts:537`) | refused at scheduling if typed; cut to fit if taken from the caption |
 | Photo description | **4000** UTF-16 units | TikTok (`:538`) | cut to fit |
 | Video caption | **2200** UTF-16 units | TikTok (`:357`) | cut to fit |
-| Dashboard upload | about 3.3 MB of file | Vercel's 4.5 MB request cap | write bigger files straight to `media_uploads` (CLAUDE.md, "Workflows") |
+| Dashboard upload | about 3.3 MB of file | Vercel's 4.5 MB request cap | write bigger files straight into `media_uploads` over the database connection |
 | Accounts | one TikTok account per workspace, and one workspace per TikTok account | here (`uq_platform_connections_creator`, `uq_platform_connections_account`, `src/config/migration_v18_tiktok.sql`) | "That TikTok account is connected to another workspace…" |
 | Refresh token | 365 days from the first authorisation | TikTok | reconnect yearly (§8) |
 | A clickable link in the bio | a **Business** account, or **1,000+ followers** | TikTok | the "link in bio" call to action points at plain text (§10) |
 
 A UTF-16 unit is what JavaScript's `String.length` counts: one per Arabic or Latin letter, **two
-per emoji**. Truncation never splits an emoji in half (`truncateUtf16`, `src/services/tiktok.ts:546-551`).
+per emoji**. A photo post's title and description are cut without splitting an emoji (`truncateUtf16`);
+a video caption is cut with a plain `slice`, which can split one that sits exactly on the limit
+(`src/services/tiktok.ts`).
 
 **The 40-second stagger only works if the drain runs often.** Rows are due 40 s apart, but they
 go out when a drain runs, and one drain publishes everything already due back to back
@@ -790,7 +799,8 @@ Count in UTF-16 units: one per letter, two per emoji (§9).
   message (§12). A caption that says "comment X and we'll send you the link" promises something
   nothing will deliver.
 - **TikTok captions point to the link in the bio: «رابطه في البايو».**
-- The Studio enforces it: a TikTok caption must contain «البايو» (STUDIO.md §6), and every one
+- The Studio enforces it: a TikTok caption must contain the workspace's own TikTok line (`cta.tiktokLine`
+  in the Studio settings; the owner's says «رابطه في البايو»; `src/services/studio/rules.ts`), and every one
   carries the Studio's **TikTok caption line** setting — "Every TikTok caption carries this line.
   TikTok can't send DMs, so point people to your bio." The seeded line is in
   `scripts/seed-studio-settings.mjs:67`.
@@ -993,15 +1003,16 @@ there first." (`src/services/tiktokConnections.ts:199-201`).
 
 **Does the app read my TikTok comments, followers or analytics?**
 
-No. It stores the account's `open_id`, display name and avatar, its tokens (encrypted), and what
-TikTok reports about each post the app sent (`public/privacy.html`, "When the account owner
+No. It stores the account's `open_id`, display name and avatar (and, when **Profile access** is on,
+its username, bio, profile link and verified flag: `platform_connections.profile`, v44), its tokens
+(encrypted), and what TikTok reports about each post the app sent (`public/privacy.html`, "When the account owner
 connects TikTok").
 
 ---
 
 ## Where things live
 
-**Settings** (`app_settings`, edited in Settings → TikTok app; `src/services/appSettings.ts:17-56`):
+**Settings** (`app_settings`, edited in Settings → Platform → TikTok app; `src/services/appSettings.ts`):
 
 | Key | Holds | Env fallback |
 |---|---|---|
@@ -1012,6 +1023,7 @@ connects TikTok").
 | `tiktok.verification_history` | the ten before it, still served | — |
 | `tiktok.direct_post_enabled` | `'true'` when the Direct Post box is ticked | — |
 | `tiktok.audited` | `'true'` when the Audited box is ticked | — |
+| `tiktok.profile_scope_enabled` | `'true'` when **Profile access** is ticked (asks for `user.info.profile`) | — |
 
 **Tables:** `platform_connections` (one TikTok row per workspace, tokens `enc:v1`), `oauth_states`
 (Connect's single-use nonces), and on `scheduled_posts`: `platform = 'tiktok'`,

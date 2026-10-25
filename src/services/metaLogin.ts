@@ -36,6 +36,8 @@ import { metaHttp, metaErrorCode, metaErrorSubcode, withRetry } from './http.js'
 import { API_VERSION, GRAPH_BASE } from './instagram.js';
 import { createOAuthState, type OAuthReturnTo } from './oauthState.js';
 import { getTenant, invalidateTenantCache } from './tenant.js';
+import { captureAdsAccess, forgetConnectedAdsAccess } from './adBoosts.js';
+import { activeSignoff } from './ads/legalSignoff.js';
 import { inspectionStatus, inspectToken, REQUIRED_SCOPES, type TokenInspection } from './tokenHealth.js';
 
 // ─── What we ask Meta for ───────────────────────────────────────────────────────────────
@@ -47,13 +49,29 @@ import { inspectionStatus, inspectToken, REQUIRED_SCOPES, type TokenInspection }
 export const LOGIN_SCOPES: readonly string[] = [...new Set([...REQUIRED_SCOPES, 'instagram_manage_insights', 'read_insights'])];
 
 /**
+ * What Boost needs (docs/META_ADS_RESEARCH.md): asked for on top of LOGIN_SCOPES only when `meta.ads_scopes_enabled` is on, and never
+ * required. A person who grants them gets the ads token stored for their tenant (`captureAdsAccess`); one who declines connects as before.
+ */
+export const ADS_SCOPES: readonly string[] = ['ads_read', 'ads_management', 'business_management'];
+
+/** What the dialog asks for in `scope=` mode. */
+export function loginScopes(adsScopes: boolean): string[] {
+    return adsScopes ? [...new Set([...LOGIN_SCOPES, ...ADS_SCOPES])] : [...LOGIN_SCOPES];
+}
+
+/**
  * What a connection cannot work without. A user who declined any of these is not connected (a connection that reads no comments
  * is worse than none: it looks connected). Any other declined permission connects anyway, with a warning naming what is lost.
  */
 export const CORE_SCOPES: readonly string[] = ['pages_show_list', 'pages_manage_metadata', 'instagram_basic', 'instagram_manage_comments'];
 
-/** The Page-level webhook fields the Page is subscribed to (`POST /{page}/subscribed_apps`). Instagram comments arrive on the app-level subscription. */
-export const WEBHOOK_FIELDS: readonly string[] = ['feed', 'messages', 'messaging_postbacks'];
+/**
+ * The Page-level webhook fields the Page is subscribed to (`POST /{page}/subscribed_apps`). Instagram comments arrive on the app-level subscription.
+ * `messaging_referrals` (A3): a person who already has a Messenger thread and taps a click-to-message ad is announced ONLY by a standalone referral
+ * event on this field (a new thread's referral rides on `messaging_postbacks`, Instagram's on `messages`). The App Dashboard's Page webhook needs the
+ * field too; `scripts/diagnose.mjs` checks it.
+ */
+export const WEBHOOK_FIELDS: readonly string[] = ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals'];
 
 /** What each optional permission pays for, as stable codes the dashboard turns into words. */
 export const SCOPE_FEATURES: Readonly<Record<string, string>> = {
@@ -197,7 +215,7 @@ export function isAuthType(value: unknown): value is AuthType {
  * one, `scope=` lists what we need, which works for people with a role on the app. `authType` is a reconnect: `rerequest` asks
  * again for permissions that were declined, `reauthorize` renews Instagram's 90-day data access.
  */
-export function buildLoginUrl(input: { appId: string; redirectUri: string; state: string; configId: string | null; authType?: AuthType | null }): string {
+export function buildLoginUrl(input: { appId: string; redirectUri: string; state: string; configId: string | null; authType?: AuthType | null; adsScopes?: boolean }): string {
     const params = new URLSearchParams({
         client_id: input.appId,
         redirect_uri: input.redirectUri,
@@ -208,7 +226,7 @@ export function buildLoginUrl(input: { appId: string; redirectUri: string; state
         params.set('config_id', input.configId);
         params.set('override_default_response_type', 'true');
     } else {
-        params.set('scope', LOGIN_SCOPES.join(','));
+        params.set('scope', loginScopes(input.adsScopes === true).join(','));
     }
     if (input.authType) params.set('auth_type', input.authType);
     return `https://www.facebook.com/${API_VERSION}/dialog/oauth?${params.toString()}`;
@@ -217,6 +235,7 @@ export function buildLoginUrl(input: { appId: string; redirectUri: string; state
 /** Whether the tenant may start the flow now, and with what: the checks `POST /connect` makes before it mints a state. */
 export interface LoginAvailability {
     enabled: boolean;
+    adsScopes: boolean;
     app: MetaApp | null;
     configId: string | null;
     redirectUri: string | null;
@@ -224,7 +243,7 @@ export interface LoginAvailability {
 
 export async function loginAvailability(): Promise<LoginAvailability> {
     const [settings, redirectUri] = await Promise.all([getMetaLoginSettings(), metaRedirectUri()]);
-    return { enabled: settings.enabled, app: readMetaApp(), configId: settings.configId, redirectUri };
+    return { enabled: settings.enabled, adsScopes: settings.adsScopesEnabled, app: readMetaApp(), configId: settings.configId, redirectUri };
 }
 
 // ─── Graph: the exchange and the reads ──────────────────────────────────────────────────
@@ -522,18 +541,41 @@ export interface SubscriptionResult {
 }
 
 /**
+ * The Page fields a tenant's subscription needs on top of WEBHOOK_FIELDS: `['leadgen']` while the tenant has a recorded `lead_ads` legal sign-off
+ * (A10), nothing otherwise. A Page that is not subscribed to `leadgen` is never sent a lead, which is exactly right for a tenant whose lead ads are
+ * locked: no lead is fetched, no personal data arrives. The connect path asks this so a RECONNECT (a fresh `subscribed_apps` POST replaces the field
+ * list, it does not add to it) never drops `leadgen` from a tenant that has it.
+ *
+ * It reads the sign-off table directly (`legalSignoff.ts` imports nothing of ours) instead of going through `ads/leads.ts`, which imports THIS module:
+ * going the other way would be an import cycle. Fail-soft by design: any error (the table not there yet, the database busy) is `[]`, the usual four
+ * fields, and the 6-hourly lead catch-up converges the subscription afterwards (`syncLeadgenSubscription`). A connection must never fail over this.
+ */
+export async function leadgenFieldsFor(creatorId: string): Promise<string[]> {
+    try {
+        return (await activeSignoff(creatorId, 'lead_ads')) ? ['leadgen'] : [];
+    } catch (err) {
+        log('warn', 'meta.leadgen_fields_unread', { creator_id: creatorId, ...describeError(err) });
+        return [];
+    }
+}
+
+/**
  * Subscribe the Page to the app's webhook (`POST /{page}/subscribed_apps`, the Page's own token), then read the edge back to
  * confirm it: a POST that answered success but left the Page without `messages` is a connection that never hears a DM. Never
  * throws: a failure is a warning on a connection that is still saved (the tenant can be re-subscribed; a connection thrown away
  * after the code was spent could not be).
+ *
+ * `extraFields` (A10: `leadgen`, only for a tenant with a lead_ads sign-off) are subscribed along with WEBHOOK_FIELDS, deduplicated, and every
+ * one of them has to be on the read-back for the subscription to count as confirmed.
  */
-export async function subscribePage(pageId: string, pageToken: string, appId: string | null): Promise<SubscriptionResult> {
+export async function subscribePage(pageId: string, pageToken: string, appId: string | null, extraFields: readonly string[] = []): Promise<SubscriptionResult> {
     const secrets = [pageToken];
+    const wanted = [...new Set([...WEBHOOK_FIELDS, ...extraFields])];
     try {
         await withRetry(
             () => metaHttp.post(
                 `${GRAPH_BASE}/${pageId}/subscribed_apps`,
-                new URLSearchParams({ subscribed_fields: WEBHOOK_FIELDS.join(',') }),
+                new URLSearchParams({ subscribed_fields: wanted.join(',') }),
                 { headers: { Authorization: `Bearer ${pageToken}` } }
             ),
             { label: 'meta.subscribe_page', retries: 2, baseMs: 400 }
@@ -551,8 +593,8 @@ export async function subscribePage(pageId: string, pageToken: string, appId: st
         const apps: Array<{ id?: unknown; subscribed_fields?: unknown }> = Array.isArray(response.data?.data) ? response.data.data : [];
         const ours = apps.find((a) => (appId ? a?.id === appId : true));
         const fields = Array.isArray(ours?.subscribed_fields) ? ours.subscribed_fields : [];
-        if (WEBHOOK_FIELDS.every((f) => fields.includes(f))) return { confirmed: true, warning: null };
-        log('warn', 'meta.subscribe_incomplete', { page_id: pageId, have: fields.length, want: WEBHOOK_FIELDS.length });
+        if (wanted.every((f) => fields.includes(f))) return { confirmed: true, warning: null };
+        log('warn', 'meta.subscribe_incomplete', { page_id: pageId, have: fields.length, want: wanted.length });
         return { confirmed: false, warning: 'subscribe_unconfirmed' };
     } catch (err) {
         log('warn', 'meta.subscribe_unread', { page_id: pageId, ...describeError(graphError('graph_failed', 'meta.read_subscription', err, secrets)) });
@@ -640,7 +682,7 @@ export async function completeMetaConnection(input: CompleteInput): Promise<Comp
         throw new MetaLoginError('encryption_unavailable', 'TOKEN_ENCRYPTION_KEY is not configured: a Page token cannot be stored.');
     }
 
-    const subscription = await subscribePage(choice.pageId, choice.accessToken, readMetaApp()?.appId ?? null);
+    const subscription = await subscribePage(choice.pageId, choice.accessToken, readMetaApp()?.appId ?? null, await leadgenFieldsFor(creatorId));
 
     let saved: { id: string } | null;
     try {
@@ -792,6 +834,12 @@ export async function finishLogin(input: FinishLoginInput): Promise<LoginOutcome
         throw new MetaLoginError('permissions_missing', `Required permissions were declined: ${missingCore.join(', ')}.`, { secrets: [userToken] });
     }
 
+    // Boost: when the person granted the ads permissions, their token becomes the tenant's ads token and a sole ad account is picked.
+    // The one deliberate exception to "the user token is never stored", and only for ads. Fail-soft: it never stops the connection.
+    await captureAdsAccess(input.creatorId, userToken, permissions.granted, input.userId).catch((err) => {
+        log('warn', 'meta.ads_capture_failed', { creator_id: input.creatorId, reason: scrubSecrets(err instanceof Error ? err.message : String(err), [userToken]) });
+    });
+
     const choices = classifyPages(pages);
     const plan = planPages(choices);
     if (plan.kind === 'none') throw new MetaLoginError('no_pages', 'This Facebook account manages no Page.');
@@ -942,6 +990,10 @@ export async function removeMetaConnection(
         [creatorId, onlyIfMetaUser]
     );
     invalidateTenantCache();
+    // The ads token that came with that Connect goes with it (a pasted one stays: the owner put it there by hand).
+    if (cleared > 0) {
+        await forgetConnectedAdsAccess(creatorId).catch((err) => log('warn', 'meta.ads_forget_failed', { creator_id: creatorId, ...describeError(err) }));
+    }
     return { cleared: cleared > 0, unsubscribed };
 }
 

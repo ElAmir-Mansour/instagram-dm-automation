@@ -10,7 +10,7 @@ import { after, before, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    annotateMessages, conversationView, countOf, deliveryOf, dmJobKey, loadMessageExtras, metaCodeOf, NO_EXTRAS, profilePicOf,
+    adIdOf, adOf, adTouchCountOf, annotateMessages, noReplyReasonOf, conversationView, countOf, deliveryOf, dmJobKey, loadMessageExtras, metaCodeOf, NO_EXTRAS, profilePicOf,
     profileView, USAGE_MATCH_WINDOW_SECONDS, type JobFacts, type MessageExtras,
 } from './inboxDetail.js';
 
@@ -156,6 +156,12 @@ describe('annotateMessages', () => {
         for (const id of ['a1', 'o1', 'q2', 'old']) assert.equal(out.find((r) => r.id === id)!.delivery, null, id);
     });
 
+    it('sends a voice note\'s transcript: an audio row keeps its `text` (WhatsApp stores the transcript there), so the inbox can show it under the chip', () => {
+        const voice = { id: 'v1', direction: 'inbound', sender: 'customer', message_type: 'audio', meta_message_id: 'wamid.V', text: 'كم سعر الخطة؟' };
+        const out = annotateMessages([voice], NO_EXTRAS);
+        assert.deepEqual([out[0]!.message_type, out[0]!.text], ['audio', 'كم سعر الخطة؟']);
+    });
+
     it('keeps every row, in order, with every field it had, and both blocks always present', () => {
         const out = annotateMessages(rows, NO_EXTRAS);
         assert.deepEqual(out.map((r) => r.id), rows.map((r) => r.id));
@@ -264,5 +270,35 @@ describe('loadMessageExtras', () => {
     it('a tenant with no agent row has no agent model', async () => {
         const { extras } = await extrasWith(rows, (sql) => (/FROM ai_agents/.test(sql) ? { rows: [] } : happy(sql)));
         assert.equal(extras.agentModel, null);
+    });
+});
+
+describe('the ad a thread began from (A3)', () => {
+    const ctm = { entry_source: { kind: 'ctm', platform: 'instagram', ad_id: '120', ads_context_data: { ad_title: 'Autumn' }, at: 'x' } };
+    const ctwa = { entry_source: { kind: 'ctwa', ad_id: '121', headline: 'Chat with us', at: 'x' } };
+
+    it('a click-to-message thread: the stored name first, else the title Meta sent', () => {
+        assert.deepEqual(adOf(ctm), { kind: 'ctm', platform: 'instagram', adId: '120', name: 'Autumn' });
+        assert.deepEqual(adOf(ctm, new Map([['120', 'Go — reel 3']])), { kind: 'ctm', platform: 'instagram', adId: '120', name: 'Go — reel 3' });
+    });
+
+    it('a click-to-WhatsApp thread: the headline, platform whatsapp', () => {
+        assert.deepEqual(adOf(ctwa), { kind: 'ctwa', platform: 'whatsapp', adId: '121', name: 'Chat with us' });
+        assert.equal(adIdOf(ctwa), '121');
+    });
+
+    it('any other beginning, a missing column or text JSONB', () => {
+        assert.equal(adOf({ entry_source: { kind: 'link', ref: 'x' } }), null);
+        assert.equal(adOf({}), null);
+        assert.equal(adIdOf({ entry_source: null }), null);
+        assert.equal(adOf({ entry_source: JSON.stringify(ctm.entry_source) })?.name, 'Autumn');
+    });
+
+    it('later touches and the Business AI reason', () => {
+        assert.equal(adTouchCountOf({ ad_touches: [{}, {}] }), 2);
+        assert.equal(adTouchCountOf({}), 0);
+        assert.equal(noReplyReasonOf({ no_reply_reason: 'business_ai_owns_thread' }), 'business_ai_owns_thread');
+        assert.equal(noReplyReasonOf({ no_reply_reason: '<script>' }), null);
+        assert.equal(noReplyReasonOf({}), null);
     });
 });

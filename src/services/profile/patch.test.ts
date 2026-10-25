@@ -396,7 +396,7 @@ describe('patchProfile', () => {
         const begin = at(/^BEGIN$/);
         const mutex = at(/^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/);
         const profileRow = at(/FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE$/, begin);
-        const legacyRead = at(/^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings/, mutex);
+        const legacyRead = at(/^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings/, mutex);
         const insert = at(/^INSERT INTO creator_profiles/);
         const commit = at(/^COMMIT$/);
         assert.ok(begin >= 0 && begin < mutex && mutex < profileRow && profileRow < legacyRead && legacyRead < insert && insert < commit, JSON.stringify({ begin, mutex, profileRow, legacyRead, insert, commit }));

@@ -125,7 +125,7 @@ function load(options: {
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const file of [
-        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/pages/admin_common.js', 'dashboard/js/pages/meta_connect.js',
+        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/pages/admin_common.js', 'dashboard/js/pages/meta_connect.js',
         'dashboard/js/pages/settings.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/overview.js', 'dashboard/js/app.js',
     ]) {
         vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
@@ -434,10 +434,10 @@ describe('the operator\'s fields', () => {
         form = formOf({ configId: '987654321098765', enabled: 'on' });
         l.MetaConnect.afterChange = () => undefined;
         await l.MetaConnect.saveApp(form, { preventDefault: () => undefined });
-        assert.deepEqual(plain(l.calls.find((c) => c.fn === 'saveMetaAppSettings')!.args[0]), { enabled: true, configId: '987654321098765' });
+        assert.deepEqual(plain(l.calls.find((c) => c.fn === 'saveMetaAppSettings')!.args[0]), { enabled: true, configId: '987654321098765', adsScopesEnabled: false });
         form = formOf({ configId: '' });
         await l.MetaConnect.saveApp(form, { preventDefault: () => undefined });
-        assert.deepEqual(plain(l.calls.filter((c) => c.fn === 'saveMetaAppSettings')[1]!.args[0]), { enabled: false, configId: '' }, 'an unticked box is a real "off", an empty id a real "back to the default"');
+        assert.deepEqual(plain(l.calls.filter((c) => c.fn === 'saveMetaAppSettings')[1]!.args[0]), { enabled: false, configId: '', adsScopesEnabled: false }, 'an unticked box is a real "off", an empty id a real "back to the default"');
     });
 });
 

@@ -32,8 +32,37 @@
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
-/** The bucket every tenant's media goes into, under a folder per creator. */
+/** The bucket every tenant's media goes into, under a folder per creator. PUBLIC: posts' images and reels are fetched by Meta and TikTok. */
 export const MEDIA_BUCKET = 'media';
+
+/**
+ * The bucket a CUSTOMER's files go into (WhatsApp voice notes, photos, documents; migration v51): a PRIVATE bucket, so an object is not
+ * readable by anyone holding its URL. The app reads and writes it server-side with the secret key.
+ *
+ * What Supabase says (read 2026-10-19):
+ *   - `POST /storage/v1/bucket` takes `{ id, name, public }` and `public` defaults to false, so a bucket made without it is private
+ *     (the route handler: `isPublic ?? false`, github.com/supabase/storage src/http/routes/bucket/createBucket.ts).
+ *   - Every operation on a private bucket, downloads included, is governed by RLS policies on `storage.objects`
+ *     (https://supabase.com/docs/guides/storage/buckets/fundamentals), while a public bucket serves its objects to anyone who has the URL.
+ *   - A service key / secret key bypasses those policies ("entirely bypass RLS policies, granting you unrestricted access to all Storage
+ *     APIs", https://supabase.com/docs/guides/storage/security/access-control), so the app, which holds one, needs no policy to write or
+ *     read here; and with no policy written (the app writes none) the other keys are left with nothing: that is Supabase's default-deny, not
+ *     something this app enforces, so the bucket's own `public` flag is checked before every private write (`ensurePrivateBucket`).
+ *   - `GET /object/authenticated/{bucket}/{path}` (already how this file reads `media`) is the download for a private object.
+ */
+export const PRIVATE_MEDIA_BUCKET = 'media-private';
+
+/**
+ * Every private object's path starts with this, inside `media-private`. It is what tells a path which bucket it lives in WITHOUT a lookup:
+ * `media_object_deletions` (migration v23) holds paths and nothing else, so the daily sweep reads the bucket off the path (`bucketForPath`).
+ * A public path starts with a creator uuid or `unassigned/`, never with this.
+ */
+export const PRIVATE_PATH_PREFIX = 'private/';
+
+/** The bucket a `storage_path` lives in. */
+export function bucketForPath(path: string): string {
+    return path.startsWith(PRIVATE_PATH_PREFIX) ? PRIVATE_MEDIA_BUCKET : MEDIA_BUCKET;
+}
 
 /** Any non-browser string will do. This one says who is calling. */
 export const SERVER_USER_AGENT = 'autoreply-pro-server/1.0 (media storage)';
@@ -119,6 +148,13 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
     'video/mp4': '.mp4',
     'video/quicktime': '.mov',
     'image/gif': '.gif',
+    // What a customer sends on WhatsApp (private uploads, migration v51). Only the name in the bucket: the route and the inbox serve the stored mime type.
+    'audio/ogg': '.ogg',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'audio/aac': '.aac',
+    'audio/amr': '.amr',
+    'application/pdf': '.pdf',
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,10 +166,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * extension is only for a human reading the bucket: the route serves the stored mime type,
  * and the URL Meta and TikTok hold is still /api/uploads/<id>.
  */
-export function objectPathFor(creatorId: string | null, id: string, mimeType: string): string {
+export function objectPathFor(creatorId: string | null, id: string, mimeType: string, options: { private?: boolean } = {}): string {
     if (!UUID.test(id)) throw new Error(`Not an upload id: ${JSON.stringify(id)}`);
     const folder = creatorId && UUID.test(creatorId) ? creatorId.toLowerCase() : 'unassigned';
-    return `${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
+    // A customer's file (migration v51) lives in the PRIVATE bucket, under `private/` (see `PRIVATE_PATH_PREFIX`: the prefix names the bucket).
+    return `${options.private ? PRIVATE_PATH_PREFIX : ''}${folder}/${id.toLowerCase()}${EXTENSIONS[mimeType] ?? ''}`;
 }
 
 /** Supabase said no, or could not be reached (`status` 0). */
@@ -204,8 +241,10 @@ export interface BucketInfo {
 
 export interface ObjectStream {
     body: Readable;
-    /** The object's length when Supabase sent it unencoded, else null. */
+    /** The length of what `body` carries when Supabase sent it unencoded, else null: the slice's length for a partial answer. */
     length: number | null;
+    /** True when Supabase answered a range with 206 and `body` is only those bytes; false when it sent the whole object. */
+    partial: boolean;
 }
 
 /** Storage's fixed lifetime for a signed upload URL. */
@@ -268,15 +307,16 @@ export class SupabaseStorageClient {
     }
 
     /**
-     * Create the bucket, public. Public because the objects are exactly as public as the
+     * Create the bucket, public unless `public: false`. `media` is public because its objects are exactly as public as the
      * /api/uploads/<id> URLs that serve them — anyone holding the id could already fetch them —
-     * and it keeps a public URL available. The app itself always reads with the key.
+     * and it keeps a public URL available. The app itself always reads with the key. `media-private` is created with `public: false`:
+     * `public` is always sent, never left to Supabase's default.
      */
-    async createBucket(): Promise<void> {
+    async createBucket(options: { public?: boolean } = {}): Promise<void> {
         const response = await this.send(`${this.base}/bucket`, {
             method: 'POST',
             headers: this.headers({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ id: this.bucket, name: this.bucket, public: true }),
+            body: JSON.stringify({ id: this.bucket, name: this.bucket, public: options.public !== false }),
             signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
         }, 'create the bucket');
         if (response.ok) return;
@@ -286,12 +326,15 @@ export class SupabaseStorageClient {
         throw err;
     }
 
-    /** Make sure the bucket exists. Returns what was found, and whether this call created it. */
-    async ensureBucket(): Promise<{ created: boolean; public: boolean }> {
+    /**
+     * Make sure the bucket exists. Returns what was found, and whether this call created it. `public` is what the bucket IS, read back, not
+     * what was asked for: a caller that needs it private must check the answer (a bucket someone made public by hand stays public).
+     */
+    async ensureBucket(options: { public?: boolean } = {}): Promise<{ created: boolean; public: boolean }> {
         const existing = await this.getBucket();
         if (existing) return { created: false, public: existing.public };
-        await this.createBucket();
-        return { created: true, public: true };
+        await this.createBucket(options);
+        return { created: true, public: options.public !== false };
     }
 
     /**
@@ -390,16 +433,19 @@ export class SupabaseStorageClient {
      * Only the wait for the first byte is timed. A timeout on the whole fetch would cut off a
      * slow client halfway through a video; once the body flows, the route's own duration is the
      * bound. `identity` because a compressed transfer would make Content-Length describe bytes
-     * the client never sees.
+     * the client never sees. With `range` (inclusive), only those bytes are asked for: see
+     * `src/utils/byteRange.ts` for why the upload route must never stream a whole reel per piece.
      */
-    async openStream(path: string): Promise<ObjectStream | null> {
+    async openStream(path: string, range?: { start: number; end: number }): Promise<ObjectStream | null> {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('first byte timeout')), FIRST_BYTE_TIMEOUT_MS);
         let response: Response;
         try {
             response = await this.send(this.objectUrl('/object/authenticated', path), {
                 method: 'GET',
-                headers: this.headers({ 'Accept-Encoding': 'identity' }),
+                headers: this.headers(range
+                    ? { 'Accept-Encoding': 'identity', Range: `bytes=${range.start}-${range.end}` }
+                    : { 'Accept-Encoding': 'identity' }),
                 signal: controller.signal,
             }, 'read the file');
         } finally {
@@ -416,7 +462,9 @@ export class SupabaseStorageClient {
         const declared = Number(response.headers.get('content-length'));
         const length = encoding === 'identity' && response.headers.has('content-length')
             && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
-        return { body: Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>), length };
+        // A range Supabase ignored comes back 200 with the whole object; the caller then serves it whole, as before.
+        const partial = range !== undefined && response.status === 206;
+        return { body: Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>), length, partial };
     }
 
     /**

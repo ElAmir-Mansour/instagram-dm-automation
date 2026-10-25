@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pipeline } from 'node:stream/promises';
 import { pool } from '../config/db.js';
+import { contentRange, parseByteRange } from '../utils/byteRange.js';
 import { isDiagnosticProbe } from '../utils/probe.js';
 import {
     createLegacySession, createSession, describeSessionLifetime, requireAuth, createDownloadToken, consumeDownloadToken
@@ -11,6 +12,7 @@ import { getSessionDays } from '../services/onboardingSettings.js';
 import {
     describeTelegramSettings, mergeTelegram, parseTelegramInput, readTelegramSettings, saveTelegramInput, sendTestMessage,
 } from '../services/notify.js';
+import { describeEmailSettings, mergeEmail, parseEmailInput, readEmailSettings, saveEmailInput, sendTestEmail } from '../services/notifyEmail.js';
 import { PAGE_INBOX_APP_IDS, parseOwnerAppIds, readEchoSettings, saveEchoInput } from '../webhook/echo.js';
 import axios from 'axios';
 import {
@@ -27,6 +29,7 @@ import {
     activeVariants, MAX_VARIANTS, MIN_VARIANTS, parseVariantConfig, VARIANT_IDS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX,
 } from '../services/dmSales/variants.js';
 import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
+import { sendError } from '../services/errorCodes.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -38,17 +41,25 @@ import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../c
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
 import { runRetentionSweep } from '../services/retention.js';
 import {
-    describeInspection, inspectionStatus, noteMetaFailure, recheckTenantToken,
+    describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
-import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
+import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
 import { queryOne } from '../db/query.js';
 import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
+import { parseTryRequest, tryComment } from '../services/campaignTry.js';
 import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
-import { annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import {
+    classifyOutcome, expectedFailureSql, isOutcome, outcomeCountsSql, outcomeLateral, outcomeSql, readOutcomeCounts, successPercent,
+} from '../services/outcomes.js';
+import { tenantTimezone } from '../services/profile/timezone.js';
+import { adIdOf, annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
+import { adNamesFor } from '../services/ads/attribution.js';
+import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
@@ -60,12 +71,16 @@ import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
+import { whatsappRouter } from './whatsapp.js';
+import { sendWhatsAppReply } from '../services/channels/send.js';
+import { TEXT_BODY_MAX } from '../webhook/whatsappPayload.js';
 import { metaPublicRouter, metaRouter } from './meta.js';
 import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
 import { recheckAllMetaTokens } from '../services/metaTokenRecheck.js';
 import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
+import { refreshAllWhatsAppConnections } from '../services/whatsappHealth.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
@@ -75,7 +90,7 @@ import {
     normaliseIsoDay, normaliseWhatsappNumber, setSetting,
 } from '../services/appSettings.js';
 import { whatsappUrl } from '../services/publicPages.js';
-import { metaHttp } from '../services/http.js';
+import { isMetaUnavailable, metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
@@ -84,6 +99,19 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { adsRouter } from './ads.js';
+import { syncAllBoosts } from '../services/adBoosts.js';
+import { runGuard } from '../services/ads/guard.js';
+import { sweepLeads } from '../services/ads/leads.js';
+import { runAdsHealth } from '../services/ads/health.js';
+import { sweepWriting } from '../services/explainers/writing.js';
+import { expireProposals } from '../services/ads/proposals/store.js';
+import { runDailyReview } from '../services/ads/proposals/service.js';
+import { drainAdsOps } from '../services/ads/ops.js';
+import { evaluateDueRules } from '../services/ads/rulesWiring.js';
+import { pollStudies } from '../services/ads/studies.js';
+import { studyPorts } from '../services/ads/studiesPorts.js';
+import { syncAllAds, syncDailyAds } from '../services/ads/sync.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -130,7 +158,10 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
         // Post previews are served straight off Meta's CDN, whose hostnames rotate.
         "img-src 'self' data: blob: https:",
         "media-src 'self' data: blob: https:",
-        "connect-src 'self'",
+        // The ad builder (A5) uploads a video straight to Supabase Storage through a signed URL (Vercel's 4.5 MB body limit), and shows
+        // Meta's own ad previews, which are iframes on www.facebook.com. Nothing else is framed or fetched cross-origin.
+        "connect-src 'self' https://*.supabase.co",
+        "frame-src https://www.facebook.com",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",
@@ -381,6 +412,48 @@ router.get('/jobs/drain', async (req, res) => {
     // TikTok answers asynchronously, so a drain also asks after uploads TikTok has not
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
+
+    // The monthly ad spending cap, after switch-on (src/services/ads/guard.ts): at most once an hour per tenant (every 10 minutes while a
+    // check is failing), every active campaign in the ad account is paused once the month reaches the owner's cap. It stops at the drain's
+    // deadline, alerts when it pauses, and alerts when it has not managed a check for two hours. Fail-soft and silent with no ads tenant.
+    try {
+        const caps = await runGuard({ deadline: sweepDeadline(startedAt) });
+        if (caps.paused > 0 || caps.failed > 0 || caps.blind > 0 || caps.stoppedAtDeadline) log('info', 'ads.cap_sweep', { ...caps });
+    } catch (err) {
+        log('error', 'ads.cap_sweep_failed', describeError(err));
+    }
+
+    // The ads write queue, then the stored copy (src/services/ads/ops.ts, sync.ts): queued changes are sent in order within Meta's limits
+    // (a button press tries inline first; this is the backstop and what runs a change that had to wait), then each enabled tenant's
+    // campaigns are read once an hour and today's results every 4 hours. After the guard, so the guard is never starved of points. Both
+    // stop at the drain's deadline and never throw.
+    // The owner's rules (src/services/ads/rules.ts), each about once an hour: pause / lower / notify are enqueued here and sent by the
+    // queue just below; raises and resumes become proposals. After the guard (the hard cap comes first), before the queue (so a rule's
+    // pause goes out in this same run). Never throws; stops at the deadline.
+    try {
+        const rules = await evaluateDueRules(sweepDeadline(startedAt));
+        if (rules.rules > 0) log('info', 'ads.rules_sweep', { ...rules });
+    } catch (err) {
+        log('error', 'ads.rules_sweep_failed', describeError(err));
+    }
+
+    try {
+        const ops = await drainAdsOps(sweepDeadline(startedAt));
+        if (ops.ran > 0 || ops.reaped > 0) log('info', 'ads.ops_drain', { ...ops });
+        const sync = await syncAllAds(sweepDeadline(startedAt));
+        if (sync.structure > 0 || sync.today > 0 || sync.failed > 0) log('info', 'ads.sync_sweep', { ...sync });
+        // Split tests (studies.ts): a finished create takes Meta's id; a running test's result is read every 6 h and once more half a day
+        // after it ends, which opens the keep-the-winner proposal. Meta is only read for running tests.
+        const studies = await pollStudies(studyPorts, sweepDeadline(startedAt), (row, err) => log('warn', 'ads.study_poll_failed', { creator_id: row.creatorId, study_id: row.id, ...describeError(err) }));
+        if (studies.checked > 0 || studies.failed > 0) log('info', 'ads.study_sweep', { ...studies });
+    } catch (err) {
+        log('error', 'ads.ops_sync_sweep_failed', describeError(err));
+    }
+
+    // Lead ads (A10, src/services/ads/leads.ts): the retention sweep (answers past the tenant's period are deleted, a count stays), then the
+    // 6-hourly catch-up of leads a missed notification would lose, for tenants with a lead_ads sign-off only. Never throws.
+    const leads = await sweepLeads(new Date(), sweepDeadline(startedAt));
+    if (leads.purged > 0 || (leads.catchUp && (leads.catchUp.stored > 0 || leads.catchUp.failed > 0))) log('info', 'ads.leads_sweep', { purged: leads.purged, ...leads.catchUp });
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
     // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
@@ -849,6 +922,16 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
  * an account was suspended would have to be rebuilt by hand afterwards. Re-enabling the
  * tenant simply lets the next sweep pick them up, which is what an operator flipping that
  * switch back on expects.
+ *
+ * ── Archived posts (migration v45, UX US1) ──
+ * A row with `archived_at` set is one the owner put away on purpose: a post parked for next
+ * year, or a held one he no longer wants. The sweep does not pick it up, and the claim below
+ * repeats the test, so a row archived between the SELECT and the claim is not published
+ * either. The skip is silent on purpose, unlike the held tenants above: the owner chose it,
+ * and the dashboard lists every archived row under "Archived". It is the ONLY sweep that
+ * stops: the TikTok and Instagram reconcilers still run on a row already in flight, because
+ * archiving a post must not leave a half-published one unreconciled. Unarchiving a PENDING
+ * row whose time has passed makes it due again, and the next sweep publishes it.
  */
 export async function publishDuePosts(): Promise<PublishSweepResult> {
     // `c.is_active` is selected rather than filtered on, so the held rows can be counted and
@@ -858,7 +941,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id, c.is_active
         FROM scheduled_posts s
         JOIN creators c ON c.id = s.creator_id
-        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
+        WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW() AND s.archived_at IS NULL
         ORDER BY s.scheduled_time ASC
     `);
 
@@ -886,7 +969,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         const claim = await pool.query(
             `UPDATE scheduled_posts
                 SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-              WHERE id = $1 AND status = 'PENDING'
+              WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
           RETURNING id`,
             [post.id]
         );
@@ -976,7 +1059,8 @@ router.get('/cron/publish', async (req, res) => {
         const sweep = await runRetentionSweep();
         if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
             || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining
-            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0) {
+            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0
+            || sweep.allowanceRowsDeleted > 0) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -1015,6 +1099,15 @@ router.get('/cron/publish', async (req, res) => {
         const youtubeVisibility = await checkYouTubeVisibility();
         if (youtubeVisibility.checked > 0) log('info', 'cron.youtube_visibility', { ...youtubeVisibility });
 
+        // WhatsApp: the same daily health read for every connected number (whatsappHealth.ts): quality, limit, name, and a token or
+        // permission Meta now refuses (marked invalid, the owner alerted once). Fail-soft, like the sweeps around it.
+        try {
+            const wa = await refreshAllWhatsAppConnections();
+            if (wa.checked > 0 || wa.failed > 0) log('info', 'cron.whatsapp_health', { ...wa });
+        } catch (waErr) {
+            log('error', 'cron.whatsapp_health_failed', describeError(waErr));
+        }
+
         // Meta: the same daily health check for every connected tenant's Page token (P29, metaTokenRecheck.ts). It writes only what
         // Meta definitively said (valid, expiring, invalid) and never a transient failure, so "reconnect due" cannot be raised by
         // a Meta outage. A tenant with no token is not in the sweep. Fail-soft, like the sweeps around it.
@@ -1023,6 +1116,53 @@ router.get('/cron/publish', async (req, res) => {
             if (metaRecheck.checked > 0 || metaRecheck.skipped > 0 || metaRecheck.moreRemaining) log('info', 'cron.meta_token_recheck', { ...metaRecheck });
         } catch (recheckErr) {
             log('error', 'cron.meta_token_recheck_failed', describeError(recheckErr));
+        }
+
+        // Boost spend and status (v52): one insights read per paused/active boost, once a day. Fail-soft, like the sweeps around it.
+        try {
+            const boosts = await syncAllBoosts();
+            if (boosts.synced > 0 || boosts.failed > 0 || boosts.skipped > 0) log('info', 'cron.ads_sync', { ...boosts });
+        } catch (adsErr) {
+            log('error', 'cron.ads_sync_failed', describeError(adsErr));
+        }
+
+        // Ads health (src/services/ads/health.ts): every enabled tenant's token, ad account status and funding, and the version Meta
+        // served; each problem is an alert, once a day. Then the ads retention sweep (alerts after a year, finished ops after 180 days, rule runs after 90 days).
+        try {
+            const health = await runAdsHealth();
+            if (health.checked > 0 || health.failed > 0 || health.alerts > 0) log('info', 'cron.ads_health', { ...health });
+        } catch (healthErr) {
+            log('error', 'cron.ads_health_failed', describeError(healthErr));
+        }
+
+        // AI proposals (src/services/ads/proposals/): open ones past 7 days expire, drafts the Mac never answered (24 h) fail, then the
+        // daily review drafts at most 3 changes per tenant with ads on and 3+ days of results. Nothing is applied without approval.
+        try {
+            const swept = await expireProposals();
+            if (swept.expired > 0 || swept.staleDrafts > 0) log('info', 'cron.ads_proposals_expired', { ...swept });
+            const review = await runDailyReview();
+            if (review.queued > 0) log('info', 'cron.ads_daily_review', { ...review });
+        } catch (proposalErr) {
+            log('error', 'cron.ads_proposals_failed', describeError(proposalErr));
+        }
+
+        // The ads results of the trailing 28 days, with the country and placement breakdowns (src/services/ads/sync.ts): Meta revises
+        // results for up to 28 days, so the window is rewritten daily. Large ranges run as Meta's async report and resume next time.
+        try {
+            const daily = await syncDailyAds(Date.now() + 60_000);
+            if (daily.daily > 0 || daily.failed > 0) log('info', 'cron.ads_daily_sync', { ...daily });
+        } catch (dailyErr) {
+            log('error', 'cron.ads_daily_sync_failed', describeError(dailyErr));
+        }
+
+        // Illustrated explainers (src/services/explainers/writing.ts): the backstop for the lazy check on GET /explainers/:id. An explainer whose
+        // script the Mac never claimed in 10 minutes, or whose write failed on a sign-in error, is handed to Gemini here when nobody opens its page.
+        // The run itself is started under waitUntil and finishes after this response; a database behind v59 has nothing to look at. Fail-soft.
+        try {
+            const writing = await sweepWriting();
+            if (writing.started > 0) log('info', 'cron.explainers_writing', { ...writing });
+        } catch (writingErr) {
+            if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
         }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
@@ -1066,10 +1206,14 @@ const ALLOWED_MIME_TYPES = new Set([
 
 /**
  * What /uploads/:id serves as itself: every type /upload stores, plus the infographic's GIF, which
- * only the Studio worker uploads (v31). /upload itself still refuses a GIF: no platform the
- * scheduler posts to takes one.
+ * only the Studio worker uploads (v31), and the sound of an illustrated explainer (v59): the voiced narration
+ * (an m4a, `audio/mp4`) and the owner's music tracks (`audio/mpeg`, `audio/mp4`, `audio/wav`). /upload itself
+ * still refuses all of them: no platform the scheduler posts to takes a GIF or a bare sound file. Served as
+ * themselves, the dashboard's player can play the narration and a track's preview, and a player asks for pieces
+ * (Range), which this route answers with 206 for every type alike. Audio is not a type a browser runs as script,
+ * so naming it is no more dangerous than naming the images above.
  */
-const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif']);
+export const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -1106,7 +1250,7 @@ router.get('/uploads/:id', async (req, res) => {
         }
 
         const store = await getMediaStore();
-        const media = await store.open(id, { headOnly: req.method === 'HEAD' });
+        const media = await store.open(id, { headOnly: req.method === 'HEAD', range: req.headers?.range });
 
         if (!media) {
             res.status(404).send('Not Found');
@@ -1122,13 +1266,37 @@ router.get('/uploads/:id', async (req, res) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        // Pieces of a file are answered as pieces (src/utils/byteRange.ts): a player or Meta's fetcher asking for 1MB of a 30MB
+        // reel used to get all 30MB, once per piece, and Vercel's CDN does not answer a ranged request from its cache.
+        res.setHeader('Accept-Ranges', 'bytes');
 
-        // A legacy BYTEA row: exactly what this route always did.
+        if (media.kind === 'unsatisfiable') {
+            res.setHeader('Content-Range', `bytes */${media.total}`);
+            res.status(416).end();
+            return;
+        }
+
+        // A legacy BYTEA row: exactly what this route always did, unless a piece of it was asked for.
         if (media.kind === 'bytes') {
+            const asked = req.method === 'HEAD' ? { kind: 'none' as const } : parseByteRange(req.headers?.range, media.data.length);
+            if (asked.kind === 'unsatisfiable') {
+                res.setHeader('Content-Range', `bytes */${asked.total}`);
+                res.status(416).end();
+                return;
+            }
+            if (asked.kind === 'range') {
+                res.setHeader('Content-Range', contentRange(asked));
+                res.status(206).send(media.data.subarray(asked.start, asked.end + 1));
+                return;
+            }
             res.send(media.data);
             return;
         }
 
+        if (media.range) {
+            res.status(206);
+            res.setHeader('Content-Range', contentRange(media.range));
+        }
         if (media.size !== null) res.setHeader('Content-Length', String(media.size));
         if (!media.body) {
             res.status(200).end();
@@ -1538,6 +1706,8 @@ router.use(resolveTenant);
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
 router.use('/youtube', youtubeRouter);
+// WhatsApp (docs/specs/001-whatsapp-agent): the tenant's number, the agent's mode and the billing choice. Reads are any member's; every write is owner-only (the router carries the guards).
+router.use('/whatsapp', whatsappRouter);
 // Connecting a tenant's own Facebook Page and Instagram account: every mutating route is owner-only (it carries its own guards).
 router.use('/meta', metaRouter);
 
@@ -1553,6 +1723,8 @@ router.use('/profile', profileRouter);
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
 router.use('/dm/ice-breakers', iceBreakersRouter);
+// Boost a published post with Meta ads (docs/META_ADS_RESEARCH.md option 2). Owner only, every route; activation is the one that spends.
+router.use('/ads', adsRouter);
 
 // The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
 router.use('/onboarding', onboardingRouter);
@@ -1579,7 +1751,8 @@ router.use('/onboarding', onboardingDraftsRouter);
 // returned a masked preview rather than the value.
 //
 // Read-only by design, so deliberately NOT gated: /interactions/export/token mints a
-// short-lived token for an export of rows the caller can already read on screen.
+// short-lived token for an export of rows the caller can already read on screen. Likewise
+// POST /campaigns/try, a dry run over campaigns the caller can already list; it writes nothing.
 const canOperate = requireTenantRole('operator');
 const canAdminister = requireTenantRole('owner');
 
@@ -1611,6 +1784,29 @@ router.get('/health/tenant', async (req, res) => {
             return;
         }
         res.status(500).json({ error: 'Failed to read tenant health.' });
+    }
+});
+
+// ─── Attention ──────────────────────────────────────────────────────────────
+
+/**
+ * What needs the owner, for every page at once (UX overhaul, research R-02): the heartbeat, the items Today lists, and the count
+ * beside each nav entry. Any role may read it, as every role may open the screens it counts. Tenant-scoped like every route here;
+ * `counts.platform` is added for a platform_admin session and for no one else.
+ *
+ * Aggregate reads of columns only, no Graph call (`src/services/attention.ts`). A failed read is a 500, never a partial answer: a
+ * summary that dropped the section it could not read would say "nothing needs you".
+ */
+router.get('/attention', async (req, res) => {
+    try {
+        res.json(await getAttention(getTenantId(req), { platformAdmin: req.session?.role === 'platform_admin' }));
+    } catch (err) {
+        log('error', 'api.attention_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(500).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to read what needs attention.' });
     }
 });
 
@@ -1659,7 +1855,7 @@ router.get('/stats', async (req, res) => {
                 [req.session?.userId]
             );
 
-        const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook] = await Promise.all([
+        const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook, outcomeRows] = await Promise.all([
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'SENT'`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'FAILED'`, windowParams),
@@ -1675,16 +1871,30 @@ router.get('/stats', async (req, res) => {
             pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'instagram'`, windowParams),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'facebook'`, windowParams),
+            // The same window, sorted into what became of each DM (src/services/outcomes.ts): delivered, handled by design, needs
+            // the owner, in flight, blocked by the person. One pass, classified in SQL with the patterns `failureReasons.ts` reads.
+            pool.query(
+                `SELECT ${outcomeCountsSql()} FROM interactions i CROSS JOIN ${outcomeLateral()} WHERE ${owned}${inWindow}`,
+                windowParams
+            ),
         ]);
 
         const totalCount = total.rows[0].count;
         const sentCount = sent.rows[0].count;
+        const outcomes = readOutcomeCounts(outcomeRows?.rows?.[0]);
 
         res.json({
             totalInteractions: totalCount,
             sent: sentCount,
             failed: failed.rows[0].count,
-            successRate: totalCount > 0 ? Math.round((sentCount / totalCount) * 100) : 0,
+            /**
+             * Delivered ÷ (delivered + actionable), a whole percent: the one definition (audit OV-20). It was sent ÷ every row, so a
+             * person who already had their reply, or a send cap doing its job, counted against the account. `null` when nothing has
+             * been attempted yet: no rate is not 0%.
+             */
+            successRate: successPercent(outcomes),
+            /** What became of every row of the window. `sent` is `delivered`; `failed` still counts every FAILED row, expected or not. */
+            outcomes,
             activeCampaigns: campaigns.rows[0].count,
             activeCreators: creators.rows[0].count,
             /** 'deployment' = every active creator here; 'memberships' = the ones you can see. */
@@ -1740,34 +1950,90 @@ router.get('/stats/hourly', async (req, res) => {
 
 // ─── Daily Stats (for chart) ────────────────────────────────────────────────
 
+/**
+ * `GET /stats/daily?days=N`: one row per day for the last N days, the days of the TENANT'S zone (`tenantTimezone`), oldest first.
+ *
+ * Each row: `day` ('YYYY-MM-DD'), the legacy `sent` and `failed`, the outcome split of that day's comment DMs (`delivered`,
+ * `by_design`, `actionable`, `pending`, `blocked`: src/services/outcomes.ts) and `assistant_replies`, the DMs the assistant sent
+ * that day (outbound `messages` with `sender = 'ai'`). The two series are different things: a comment auto-reply is a DM sent in
+ * answer to a comment; an assistant reply answers a DM someone started. Overview's strip used to draw only the first and was
+ * all zeros on days the assistant had answered people (audit OV-18).
+ *
+ * Days are cut in the tenant's zone, so "today" is the owner's today: it used to be the database session's `CURRENT_DATE`, which
+ * is UTC, and an evening at UTC+3 landed on tomorrow's bar. A tenant that never chose a zone is read in UTC, as before.
+ */
 router.get('/stats/daily', async (req, res) => {
     try {
         const days = clampDays(req.query.days, 30);
+        const tenantId = getTenantId(req);
+
+        let zone = 'UTC';
+        try {
+            zone = (await tenantTimezone(tenantId)).tz;
+        } catch (err) {
+            // The zone is a nicety for the chart, not a reason for it to fail: UTC is what it always was.
+            log('warn', 'api.stats_daily_timezone_unreadable', describeError(err));
+        }
+
         // `generate_series` first, interactions LEFT JOINed onto it — a day with nothing
         // still gets a row. The plain GROUP BY this replaced only emitted a row for a day
         // that had at least one interaction, so `dayStrip` (charts.js) never received the
         // empty days it exists to show as empty cells; it drew exactly as many cells as
         // there were rows, however few. Stretched to fill a wide chart card, two real days
         // out of a claimed seven rendered as two giant bars instead of seven modest ones.
-        // The tenant filter has to live in the JOIN's own ON clause, not a WHERE clause —
-        // WHERE runs after the LEFT JOIN and would null out every date that matched no
-        // interaction, undoing the zero-fill entirely.
-        const result = await pool.query(`
-            SELECT
-                gs.day::date as day,
-                COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed
-            FROM generate_series(
-                CURRENT_DATE::timestamp - make_interval(days => $2::int - 1),
-                CURRENT_DATE::timestamp,
-                '1 day'::interval
-            ) AS gs(day)
-            LEFT JOIN interactions i
-                ON DATE_TRUNC('day', i.timestamp)::date = gs.day::date
-               AND ${interactionsOwnedBy(1)}
-            GROUP BY gs.day
-            ORDER BY gs.day ASC
-        `, [getTenantId(req), days]);
+        // The two series are aggregated per day FIRST (each over just the window) and joined onto the series after, so a day's
+        // interactions and its assistant replies cannot multiply each other and neither scans the tenant's whole history.
+        const run = (tz: string) => pool.query(`
+            WITH span AS (
+                SELECT ((NOW() AT TIME ZONE $3::text)::date - ($2::int - 1)) AS first_day,
+                       (NOW() AT TIME ZONE $3::text)::date AS last_day
+            ), series AS (
+                SELECT d::date AS day
+                  FROM span, generate_series(span.first_day::timestamp, span.last_day::timestamp, '1 day'::interval) AS d
+            ), comment_dms AS (
+                SELECT (i.timestamp AT TIME ZONE $3::text)::date AS day,
+                       COUNT(*) FILTER (WHERE i.status = 'SENT')::int AS sent,
+                       COUNT(*) FILTER (WHERE i.status = 'FAILED')::int AS failed,
+                       ${outcomeCountsSql()}
+                  FROM interactions i
+                  CROSS JOIN ${outcomeLateral()}
+                 WHERE ${interactionsOwnedBy(1)}
+                   AND i.timestamp >= (SELECT first_day FROM span)::timestamp AT TIME ZONE $3::text
+                 GROUP BY 1
+            ), assistant AS (
+                SELECT (m.created_at AT TIME ZONE $3::text)::date AS day,
+                       COUNT(*)::int AS assistant_replies
+                  FROM messages m
+                  JOIN conversations cv ON cv.id = m.conversation_id
+                 WHERE cv.creator_id = $1
+                   AND m.direction = 'outbound' AND m.sender = 'ai'
+                   AND m.created_at >= (SELECT first_day FROM span)::timestamp AT TIME ZONE $3::text
+                 GROUP BY 1
+            )
+            SELECT to_char(series.day, 'YYYY-MM-DD') AS day,
+                   COALESCE(c.sent, 0)::int AS sent,
+                   COALESCE(c.failed, 0)::int AS failed,
+                   COALESCE(c.delivered, 0)::int AS delivered,
+                   COALESCE(c.by_design, 0)::int AS by_design,
+                   COALESCE(c.actionable, 0)::int AS actionable,
+                   COALESCE(c.pending, 0)::int AS pending,
+                   COALESCE(c.blocked, 0)::int AS blocked,
+                   COALESCE(a.assistant_replies, 0)::int AS assistant_replies
+              FROM series
+              LEFT JOIN comment_dms c ON c.day = series.day
+              LEFT JOIN assistant a ON a.day = series.day
+             ORDER BY series.day ASC
+        `, [tenantId, days, tz]);
+
+        let result;
+        try {
+            result = await run(zone);
+        } catch (err) {
+            // 22023 = invalid_parameter_value: this database does not know a zone name the JavaScript side accepted.
+            if ((err as { code?: string }).code !== '22023' || zone === 'UTC') throw err;
+            log('warn', 'api.stats_daily_timezone_unknown', { zone });
+            result = await run('UTC');
+        }
         res.json(result.rows);
     } catch (err) {
         log('error', 'api.stats_daily_failed', describeError(err));
@@ -1777,21 +2043,40 @@ router.get('/stats/daily', async (req, res) => {
 
 // ─── Campaigns CRUD ─────────────────────────────────────────────────────────
 
+/**
+ * A campaign row from `GET /campaigns` with its `outcome_*` columns folded into `counts.all`
+ * (`{ delivered, by_design, actionable, pending, blocked }`), the shape specs/001-dashboard-ux/contracts/api.md gives it.
+ */
+function withOutcomeCounts(row: Record<string, unknown>): Record<string, unknown> {
+    const rest: Record<string, unknown> = {};
+    const picked: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+        if (key.startsWith('outcome_')) picked[key.slice('outcome_'.length)] = value;
+        else rest[key] = value;
+    }
+    return { ...rest, counts: { all: readOutcomeCounts(picked) } };
+}
+
 router.get('/campaigns', async (req, res) => {
     try {
+        // `sent_count`, `failed_count` and `total_interactions` are the legacy counts and stay as they were. `counts.all` is what
+        // became of each of the campaign's DMs (src/services/outcomes.ts): a card can then say "delivered 12 · handled by design 4"
+        // and keep red for the ones that need the owner (audit CA-03). The outcome columns are read into `counts` below, not sent flat.
         const result = await pool.query(`
             SELECT
                 c.*,
                 COUNT(i.id)::int as total_interactions,
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count,
+                ${outcomeCountsSql('i.id', 'o.outcome', 'outcome_')}
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id
+            LEFT JOIN ${outcomeLateral()} ON TRUE
             WHERE c.creator_id = $1
             GROUP BY c.id
             ORDER BY c.created_at DESC
         `, [getTenantId(req)]);
-        res.json(result.rows);
+        res.json(result.rows.map(withOutcomeCounts));
     } catch (err) {
         log('error', 'api.campaigns_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch campaigns.' });
@@ -1856,6 +2141,28 @@ router.post('/campaigns', canOperate, async (req, res) => {
     } catch (err) {
         log('error', 'api.campaign_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create campaign.' });
+    }
+});
+
+/**
+ * POST /campaigns/try — "what would my campaigns do with this comment?" A dry run: it writes nothing.
+ *
+ * The decision is `matchCampaign`'s own rule over the same live campaigns the webhook loads
+ * (src/services/campaignTry.ts), plus the unsaved `draft` the editor is holding. Gated like
+ * GET /campaigns, not like the writes: it only reads, so a viewer may try a comment.
+ */
+router.post('/campaigns/try', async (req, res) => {
+    const parsed = parseTryRequest(req.body);
+    if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
+        return;
+    }
+    try {
+        res.json(await tryComment(getTenantId(req), parsed.value));
+    } catch (err) {
+        // The comment is the follower's words; it stays out of the log.
+        log('error', 'api.campaign_try_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to try the comment.' });
     }
 });
 
@@ -1944,6 +2251,21 @@ router.delete('/campaigns/:id', canOperate, async (req, res) => {
 
 // ─── Campaigns Stats Leaderboard ─────────────────────────────────────────────
 
+/** How many campaigns `/stats/campaigns` lists unless asked for more. */
+export const CAMPAIGN_STATS_DEFAULT_LIMIT = 5;
+/** The most it lists for a number; `limit=all` lifts the cap, because Analytics must be able to see every campaign (audit OV-20). */
+export const CAMPAIGN_STATS_MAX_LIMIT = 500;
+
+/**
+ * `?limit=` on `/stats/campaigns`: 'all' for no cap (null), a whole number of 1 or more up to 500, else the default five.
+ * The table it feeds is a leaderboard, so five stays the answer for a caller that does not ask.
+ */
+export function campaignStatsLimit(raw: unknown): number | null {
+    if (raw === 'all') return null;
+    const n = typeof raw === 'string' && /^\d{1,6}$/.test(raw) ? Number(raw) : NaN;
+    return Number.isInteger(n) && n >= 1 ? Math.min(n, CAMPAIGN_STATS_MAX_LIMIT) : CAMPAIGN_STATS_DEFAULT_LIMIT;
+}
+
 router.get('/stats/campaigns', async (req, res) => {
     try {
         // A1: the same window as /stats. It goes in the JOIN's ON clause, not a WHERE: a WHERE
@@ -1951,19 +2273,24 @@ router.get('/stats/campaigns', async (req, res) => {
         // window, which is exactly the campaign the operator needs to see at zero.
         const days = statsWindowDays(req.query.days);
         const inWindow = days === null ? '' : ' AND i.timestamp > NOW() - make_interval(days => $2::int)';
+        const limit = campaignStatsLimit(req.query.limit);
+        // `sent_count` and `failed_count` are the legacy counts. The outcome columns say what became of the rest: a DM that was
+        // never sent because the person already had their reply is `by_design`, not a failure of the campaign.
         const result = await pool.query(`
             SELECT
                 c.id,
                 c.trigger_keyword,
                 COUNT(i.id)::int as total_triggers,
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
-                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count,
+                ${outcomeCountsSql()}
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id${inWindow}
+            LEFT JOIN ${outcomeLateral()} ON TRUE
             WHERE c.creator_id = $1
             GROUP BY c.id, c.trigger_keyword
-            ORDER BY total_triggers DESC
-            LIMIT 5
+            ORDER BY total_triggers DESC${limit === null ? '' : `
+            LIMIT ${limit}`}
         `, days === null ? [getTenantId(req)] : [getTenantId(req), days]);
         res.json(result.rows);
     } catch (err) {
@@ -1983,12 +2310,15 @@ router.get('/stats/campaigns', async (req, res) => {
 router.get('/stats/failures', async (req, res) => {
     try {
         const days = clampDays(req.query.days, 30);
+        // `expected_total` is the part of `total` the pipeline chose (a send cap, a person who already had their reply, a public reply
+        // sent instead): the same judgement `classifyOutcome` makes, in SQL, over every FAILED row and not only the texts returned.
         const result = await pool.query(`
             SELECT
                 i.error_log,
                 COUNT(*)::int AS count,
                 MAX(i.timestamp) AS last_at,
-                (SUM(COUNT(*)) OVER ())::int AS total
+                (SUM(COUNT(*)) OVER ())::int AS total,
+                (SUM(CASE WHEN ${expectedFailureSql('i.error_log')} THEN COUNT(*) ELSE 0 END) OVER ())::int AS expected_total
             FROM interactions i
             WHERE ${interactionsOwnedBy(1)}
               AND i.status = 'FAILED'
@@ -2069,6 +2399,14 @@ router.get('/interactions', async (req, res) => {
             conditions.push(`i.status = $${params.length}`);
         }
 
+        // `?outcome=actionable` is what became of the DM, not the status it was written with (src/services/outcomes.ts): the
+        // owner's "failed today" is the ones that need him, and a person who already had their reply is not one of those.
+        const outcome = req.query.outcome;
+        if (isOutcome(outcome)) {
+            params.push(outcome);
+            conditions.push(`${outcomeSql()} = $${params.length}`);
+        }
+
         if (search) {
             params.push(`%${search}%`);
             conditions.push(`i.sender_username ILIKE $${params.length}`);
@@ -2104,7 +2442,9 @@ router.get('/interactions', async (req, res) => {
         const dataResult = await pool.query(dataQuery, dataParams);
 
         res.json({
-            data: dataResult.rows,
+            // `outcome` is new on every row and nothing else changed: the dashboard draws the pill from it, so it never has its
+            // own copy of which failures were expected.
+            data: dataResult.rows.map((row) => ({ ...row, outcome: classifyOutcome(row.status, row.error_log) })),
             pagination: {
                 page,
                 limit,
@@ -2162,6 +2502,8 @@ router.get('/settings/token/status', async (req, res) => {
         if (!token) {
             res.json({
                 status: 'not_connected',
+                // The stable name of this state (src/services/errorCodes.ts), so the dashboard shows its own sentence and not `message`.
+                code: 'NOT_CONNECTED',
                 message: NOT_CONNECTED_MESSAGE,
                 expiresAt: null,
                 dataAccessExpiresAt: null,
@@ -2172,13 +2514,35 @@ router.get('/settings/token/status', async (req, res) => {
             return;
         }
 
-        // Validate token against Meta API
+        // Meta did not answer about THIS token (a timeout, a network failure, a 5xx, a rate limit, a body that is not an
+        // inspection). That says nothing about the token, so it is `unknown`, and NOTHING is written: a Meta hiccup used to be
+        // stored as `invalid`, which turned a working connection red on the dashboard and in the admin tenant list until the
+        // next check (OV-08).
+        const unanswered = (why: Record<string, unknown>) => {
+            log('warn', 'token.status_unanswered', { creator_id: creatorId, ...why });
+            res.json({
+                status: 'unknown',
+                message: TOKEN_CHECK_UNANSWERED_MESSAGE,
+                expiresAt: null,
+                dataAccessExpiresAt: null,
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
+                isActive: creator.is_active,
+            });
+        };
+
+        // Validate token against Meta API. Through `metaHttp` like every other Graph call: it has a 10 s timeout, which the
+        // bare `axios` it replaces did not, so a hung socket cost the whole function budget.
         try {
-            const debugRes = await axios.get('https://graph.facebook.com/debug_token', {
+            const debugRes = await metaHttp.get('https://graph.facebook.com/debug_token', {
                 params: { input_token: token, access_token: token }
             });
 
-            const data = debugRes.data.data;
+            const data = debugRes.data?.data;
+            if (!isDebugTokenAnswer(data)) {
+                unanswered({ reason: 'not_an_inspection' });
+                return;
+            }
 
             // `describeInspection` rather than reading `data` field by field, so this endpoint
             // and the re-check action cannot disagree about what a healthy token looks like —
@@ -2211,6 +2575,10 @@ router.get('/settings/token/status', async (req, res) => {
                 isActive: creator.is_active,
             });
         } catch (metaErr: any) {
+            if (isMetaUnavailable(metaErr)) {
+                unanswered(describeError(metaErr));
+                return;
+            }
             await recordTokenStatus(
                 creatorId, 'invalid',
                 metaErr?.response?.data?.error?.message || 'Token validation call to Meta failed.'
@@ -2402,7 +2770,7 @@ router.post('/settings/token/extend', canAdminister, async (req, res) => {
         const currentToken = creator.page_access_token;
         // Nothing to extend: a tenant created by name has no token (v34).
         if (!currentToken) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 
@@ -2502,13 +2870,13 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         const alsoTikTok = req.body?.also_tiktok === true && platform !== 'tiktok';
 
         if (!platform || !post_type || !scheduled_time) {
-            res.status(400).json({ error: 'platform, post_type, and scheduled_time are required.' });
+            sendError(res, 400, 'POST_FIELDS_REQUIRED', 'platform, post_type, and scheduled_time are required.');
             return;
         }
 
         const when = new Date(scheduled_time);
         if (Number.isNaN(when.getTime())) {
-            res.status(400).json({ error: 'scheduled_time is not a valid date.' });
+            sendError(res, 400, 'INVALID_SCHEDULE_TIME', 'scheduled_time is not a valid date.');
             return;
         }
 
@@ -2518,7 +2886,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         const unsupported = unsupportedPlatformCombination(platform, post_type)
             ?? (alsoTikTok ? unsupportedPlatformCombination('tiktok', post_type) : null);
         if (unsupported) {
-            res.status(400).json({ error: unsupported });
+            sendError(res, 400, 'POST_UNSUPPORTED_COMBINATION', { platform: String(platform), postType: String(post_type) }, unsupported);
             return;
         }
 
@@ -2529,7 +2897,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             platform, postType: post_type, mediaUrl: media_url, mediaUrls: req.body?.media_urls,
         });
         if (!media.ok) {
-            res.status(400).json({ error: media.error });
+            sendError(res, 400, 'POST_MEDIA_INVALID', media.error);
             return;
         }
         // Instagram's reach levers (GROWTH.md §4): alt text, collaborators, trial reel. Checked
@@ -2539,7 +2907,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             slideCount: post_type === 'carousel' ? (media.mediaUrls?.length ?? null) : null,
         });
         if (!metaOptions.ok) {
-            res.status(400).json({ error: metaOptions.error });
+            sendError(res, 400, 'POST_OPTIONS_INVALID', metaOptions.error);
             return;
         }
         // The TikTok sibling may bring its own images — 9:16 versions of the same slides — and
@@ -2554,7 +2922,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             })
             : null;
         if (tiktokMedia && !tiktokMedia.ok) {
-            res.status(400).json({ error: tiktokMedia.error });
+            sendError(res, 400, 'POST_MEDIA_INVALID', tiktokMedia.error);
             return;
         }
 
@@ -2569,7 +2937,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         // Said now, to the person scheduling, rather than at publish time in a card nobody is looking at: a tenant created
         // by name (v34) has no Meta token until it connects, and the sweep would only fail the row.
         if (isMetaPlatform(platform) && !creator.page_access_token) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 
@@ -2579,14 +2947,14 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         if (wantsTikTok) {
             // A photo post's image was checked with the rest of the media above.
             if (tiktokKind === 'video' && !media_url) {
-                res.status(400).json({ error: 'TikTok needs a video — upload one first.' });
+                sendError(res, 400, 'TIKTOK_NEEDS_VIDEO', 'TikTok needs a video — upload one first.');
                 return;
             }
             // Said now, to the person scheduling, rather than at publish time in a card nobody
             // is looking at.
             const connection = await getTikTokConnection(creatorId);
             if (!connection || connection.status !== 'active') {
-                res.status(409).json({ error: 'TikTok is not connected — connect it in Settings first.' });
+                sendError(res, 409, 'TIKTOK_NOT_CONNECTED', 'TikTok is not connected — connect it in Settings first.');
                 return;
             }
             // Direct Post or inbox is decided now, not at publish time, because Direct Post
@@ -2605,7 +2973,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                 ? validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited, media: tiktokKind })
                 : validateTikTokInboxOptions(req.body?.tiktok_options, tiktokKind);
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', checked.error);
                 return;
             }
             tiktokOptions = checked.options;
@@ -2747,13 +3115,14 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // Once the video is with TikTok, the row describes something that already happened;
         // editing it would change the record without changing the post.
         if (current.status === 'PUBLISHING' || current.status === 'PROCESSING' || current.status === 'IN_INBOX') {
-            res.status(409).json({ error: `This post is already ${current.status === 'IN_INBOX' ? 'in your TikTok inbox' : 'being published'} and can no longer be edited.` });
+            sendError(res, 409, 'POST_LOCKED', { status: current.status },
+                `This post is already ${current.status === 'IN_INBOX' ? 'in your TikTok inbox' : 'being published'} and can no longer be edited.`);
             return;
         }
 
         const unsupported = unsupportedAfterEdit({ platform, post_type }, current);
         if (unsupported) {
-            res.status(400).json({ error: unsupported });
+            sendError(res, 400, 'POST_UNSUPPORTED_COMBINATION', { platform: String(platform ?? current.platform), postType: String(post_type ?? current.post_type) }, unsupported);
             return;
         }
 
@@ -2774,7 +3143,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 mediaUrls: rawMediaUrls ?? current.media_urls,
             });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'POST_MEDIA_INVALID', checked.error);
                 return;
             }
             mediaUrlParam = checked.mediaUrl;
@@ -2789,12 +3158,12 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             if (!audited && rawTikTokOptions?.mode === 'inbox') {
                 const connection = await getTikTokConnection(tenantId);
                 if (!(connection?.scopes ?? []).includes('video.upload')) {
-                    res.status(409).json({ error: 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.' });
+                    sendError(res, 409, 'TIKTOK_UPLOAD_PERMISSION_MISSING', 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.');
                     return;
                 }
                 const inbox = validateTikTokInboxOptions(rawTikTokOptions, tiktokKind);
                 if (!inbox.ok) {
-                    res.status(400).json({ error: inbox.error });
+                    sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', inbox.error);
                     return;
                 }
                 tiktokOptionsJson = JSON.stringify(inbox.options);
@@ -2804,7 +3173,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             const { audited } = await getTikTokPostingFlags();
             const checked = validateTikTokOptions(rawTikTokOptions, { audited, media: tiktokKind });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'TIKTOK_OPTIONS_INVALID', checked.error);
                 return;
             }
             tiktokOptionsJson = JSON.stringify(checked.options);
@@ -2823,7 +3192,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 current: current.meta_options ?? null,
             });
             if (!checked.ok) {
-                res.status(400).json({ error: checked.error });
+                sendError(res, 400, 'POST_OPTIONS_INVALID', checked.error);
                 return;
             }
             metaOptionsJson = checked.options ? JSON.stringify(checked.options) : null;
@@ -2891,6 +3260,63 @@ router.delete('/posts/scheduled/:id', canOperate, async (req, res) => {
 });
 
 /**
+ * Archive and Unarchive one scheduled post (migration v45, UX US1, audit PO-14, FR-003): the owner's way to put away a post that
+ * is not a problem and not an upcoming post either — a failed one parked for next year, a held TikTok draft he has stopped
+ * wanting. Without it such a row sat in "Needs attention" on Posts and on Today for good, and a red badge nobody can clear teaches
+ * him to ignore every red badge.
+ *
+ *   POST    sets `scheduled_posts.archived_at`. The row leaves "Needs attention" and the attention counts, the publish sweep skips it
+ *           (`publishDuePosts`), and the dashboard lists it under "Archived". Nothing is deleted: the row and its media are kept.
+ *   DELETE  clears it. A PENDING row whose time has passed is due again and the next sweep publishes it.
+ *
+ * Any status can be archived, and both calls are idempotent: archiving an archived row keeps its original stamp, unarchiving a row
+ * that is not archived changes nothing. The dashboard offers the button on PENDING, FAILED and held rows only, but the server does
+ * not second-guess it, because the stamp changes what the OWNER sees and what the sweep picks up, never what a platform already has.
+ * It does not touch `status`, `error_log` or the publish ids, so Unarchive puts the row back exactly as it was.
+ *
+ * Operators and owners, as for edit and delete, and scoped to the session's tenant: an id from another tenant is a 404, not a hint
+ * that it exists. Answers the row as the list does (with `archived_at`), so the page can replace its copy. Not written to the audit
+ * ledger: no other post action is (create, edit, delete and publish-now are logged only), and a reversible filing action would only
+ * bury the entries that matter. A database without v45 cannot say, and answers 503 with the migration hint.
+ */
+async function setPostArchived(req: Request, res: Response, archived: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        const updated = await pool.query(
+            archived
+                ? 'UPDATE scheduled_posts SET archived_at = COALESCE(archived_at, NOW()) WHERE id = $1 AND creator_id = $2 RETURNING *'
+                : 'UPDATE scheduled_posts SET archived_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING *',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        log('info', archived ? 'posts.archived' : 'posts.unarchived', {
+            post_id: id, creator_id: tenantId, status: updated.rows[0].status,
+        });
+        res.json(updated.rows[0]);
+    } catch (err) {
+        log('error', 'api.scheduled_archive_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: archived ? 'Failed to archive this post.' : 'Failed to unarchive this post.' });
+    }
+}
+
+router.post('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, true));
+router.delete('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, false));
+
+/**
  * Retry (or fast-forward) one scheduled post from the dashboard's "Publish now" button.
  *
  * This is the fix for a real production incident: the button used to call
@@ -2948,9 +3374,8 @@ router.post('/posts/scheduled/:id/publish-now', canOperate, async (req, res) => 
                 res.status(404).json({ error: 'Scheduled post not found.' });
                 return;
             }
-            res.status(409).json({
-                error: `Cannot publish now — this post is already ${existing.rows[0].status}.`,
-            });
+            sendError(res, 409, 'POST_NOT_PUBLISHABLE', { status: existing.rows[0].status },
+                `Cannot publish now — this post is already ${existing.rows[0].status}.`);
             return;
         }
 
@@ -3089,16 +3514,15 @@ router.post('/upload', canOperate, async (req, res) => {
         const { filename, mime_type, base64_data } = req.body;
 
         if (!filename || !mime_type || !base64_data) {
-            res.status(400).json({ error: 'filename, mime_type, and base64_data are required.' });
+            sendError(res, 400, 'UPLOAD_FIELDS_REQUIRED', 'filename, mime_type, and base64_data are required.');
             return;
         }
 
         // /api/uploads/:id echoes this value back as Content-Type to anyone who asks, on the
         // same origin the dashboard is served from. Pin it to what Meta will actually ingest.
         if (!ALLOWED_MIME_TYPES.has(mime_type)) {
-            res.status(400).json({
-                error: `Unsupported file type "${mime_type}". Allowed: ${[...ALLOWED_MIME_TYPES].join(', ')}.`
-            });
+            sendError(res, 400, 'UPLOAD_TYPE_UNSUPPORTED', { mimeType: String(mime_type) },
+                `Unsupported file type "${mime_type}". Allowed: ${[...ALLOWED_MIME_TYPES].join(', ')}.`);
             return;
         }
 
@@ -3115,9 +3539,8 @@ router.post('/upload', canOperate, async (req, res) => {
         // ~3.3MB of file is the true ceiling: the old 10MB limit could never be reached, the
         // platform 413'd first with nothing useful to show the user.
         if (buffer.length > MAX_UPLOAD_BYTES) {
-            res.status(400).json({
-                error: 'File is too large. This endpoint tops out at 3.2MB because Vercel caps the whole request at 4.5MB and the file is sent as base64. For anything bigger, write it straight into media_uploads over the database connection.'
-            });
+            sendError(res, 400, 'UPLOAD_TOO_LARGE', { maxMb: MAX_UPLOAD_BYTES / 1024 / 1024, maxBytes: MAX_UPLOAD_BYTES },
+                'File is too large. This endpoint tops out at 3.2MB because Vercel caps the whole request at 4.5MB and the file is sent as base64. For anything bigger, write it straight into media_uploads over the database connection.');
             return;
         }
 
@@ -3158,6 +3581,10 @@ router.post('/upload', canOperate, async (req, res) => {
  * The list selects `c.*`, so on a database without v26 the key is simply absent; this answers
  * null for that, for a thread v26 could not attribute, and for anything that is not one of the
  * two — the inbox then shows no platform rather than a guess.
+ *
+ * `ConversationPlatform` also names 'whatsapp' since v50, and this still answers null for it: no
+ * WhatsApp thread is written yet, and the dashboard does not know the value (`UI.platformTag`).
+ * The phase that writes the first WhatsApp thread widens this together with the dashboard.
  */
 export function conversationPlatformOf(value: unknown): ConversationPlatform | null {
     return value === 'instagram' || value === 'facebook' ? value : null;
@@ -3260,12 +3687,24 @@ router.get('/conversations', async (req, res) => {
         const { rows: result, count: countRes } = answered;
         // How many times a person opened the links sent in each thread (DM plan S11): its own optional lookup, so a database without the
         // tracked-links tables answers the list without counts rather than not at all.
-        const clicks = await loadLinkClicks(tenantId, result.rows.map((row) => String(row.id)));
+        // And what the assistant is set to (UX US1, FR-006): each item's `effective_ai` is read from it, and the page's "assistant is off" strip
+        // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
+        // And the stored copy's names for the ads that started these threads (A3: the "from ad" chip). Its own optional lookup: no name is the
+        // title Meta sent with the click, never a failed list.
+        const [clicks, assistant, adNames] = await Promise.all([
+            loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
+            loadAssistantState(tenantId),
+            adNamesFor(tenantId, result.rows.map((row) => adIdOf(row)).filter((id): id is string => Boolean(id))),
+        ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
-            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state.
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)))),
+            // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
+            // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant, adNames)),
+            // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
+            // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
+            assistant,
             pagination: {
                 page,
                 limit,
@@ -3371,6 +3810,62 @@ router.post('/conversations/:id/refresh-profile', canOperate, async (req, res) =
     }
 });
 
+/**
+ * A person's reply to a WhatsApp thread from the inbox: `sendWhatsAppReply` (`kind: 'operator'`), then the bot is paused exactly as the Instagram
+ * branch pauses it (a person has taken the thread over). The sender decides whether the message may go at all, with no request to Meta for a refusal:
+ *
+ *   window closed        409 `WHATSAPP_WINDOW_CLOSED` with `closes_at`: WhatsApp allows no free-form message 24 hours after the customer's last one
+ *   connection invalid   409: Meta refused the token (or the number's payment): reconnect in Settings
+ *   billable blocked     409: the free replies are used up and replies that cost money are switched off
+ *   anything else        502: Meta did not take it, and nothing was stored or paused
+ */
+async function replyOnWhatsApp(res: Response, input: { conversationId: string; tenantId: string; text: unknown }): Promise<void> {
+    const { conversationId, tenantId, text } = input;
+    if (typeof text !== 'string' || !text.trim()) {
+        res.status(400).json({ error: 'Message text is required.' });
+        return;
+    }
+    // Over the limit is refused, not cut: the shaper would cut it at a sentence, and a person who typed a long answer has to know it was not all sent.
+    if (Array.from(text).length > TEXT_BODY_MAX) {
+        res.status(400).json({ error: `A WhatsApp message is at most ${TEXT_BODY_MAX} characters.` });
+        return;
+    }
+    log('info', 'inbox.manual_reply', { conversation_id: conversationId, chars: text.length, channel: 'whatsapp' });
+
+    const result = await sendWhatsAppReply({ creatorId: tenantId, conversationId, kind: 'operator', body: { text } });
+    if (!result.ok) {
+        switch (result.reason) {
+            case 'window_closed': {
+                const closesAt = result.closesAt?.toISOString() ?? null;
+                sendError(
+                    res, 409, 'WHATSAPP_WINDOW_CLOSED', { closes_at: closesAt },
+                    'The 24-hour WhatsApp window has closed: a reply is possible once the customer writes again.',
+                    { closes_at: closesAt }
+                );
+                return;
+            }
+            case 'conversation_not_found':
+            case 'not_whatsapp':
+                res.status(404).json({ error: 'Conversation not found.' });
+                return;
+            case 'connection_invalid':
+            case 'billable_blocked':
+                res.status(409).json({ error: result.detail });
+                return;
+            default:
+                log('error', 'api.manual_send_failed', { conversation_id: conversationId, channel: 'whatsapp', reason: result.reason, code: result.code });
+                res.status(502).json({ error: 'WhatsApp did not accept the message.' });
+                return;
+        }
+    }
+
+    await pool.query(
+        'UPDATE conversations SET last_message_at = NOW(), is_bot_active = false WHERE id = $1 AND creator_id = $2',
+        [conversationId, tenantId]
+    );
+    res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
+}
+
 router.post('/conversations/:id/messages', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
@@ -3405,9 +3900,17 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
 
         const conv = convRes.rows[0];
 
+        // A WhatsApp thread (v50) is answered through WhatsApp's own sender, never Instagram's Send API: the contact is a WhatsApp user id there,
+        // and the tenant's token and number live in `platform_connections`, not `creators`. Whatever the sender refuses (a closed 24 h window, a
+        // billable message nobody agreed to, a connection Meta refused) is answered before anything is written or the bot is paused.
+        if (conv.platform === 'whatsapp') {
+            await replyOnWhatsApp(res, { conversationId: id, tenantId, text });
+            return;
+        }
+
         // A thread outlives the connection that made it (v34: a tenant can be disconnected): nothing to send it with.
         if (!conv.page_access_token) {
-            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            sendError(res, 409, 'META_NOT_CONNECTED', NOT_CONNECTED_MESSAGE);
             return;
         }
 
@@ -3500,6 +4003,81 @@ router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
         res.status(500).json({ error: 'Failed to toggle bot.' });
     }
 });
+
+/**
+ * One conversation as the list item it is (the same query, so the same fields): what "Mark handled" answers, so the page can replace its
+ * copy of the thread. Null when there is no such thread for this tenant.
+ */
+async function conversationSummary(tenantId: string, id: string) {
+    const found = await pool.query(conversationsQuery('c.creator_id = $1 AND c.id = $2', 3, 4), [tenantId, id, 1, 0]);
+    const row = found.rows[0];
+    if (!row) return null;
+    const adId = adIdOf(row);
+    const [clicks, assistant, adNames] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId), adNamesFor(tenantId, adId ? [adId] : [])]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant, adNames);
+}
+
+/**
+ * "Mark handled" and its undo (UX US1, audit IN-01, FR-003). A thread answered from the Instagram app (the only way to answer once Meta's
+ * 24 h window has closed) is not recorded anywhere, so it stayed "Needs you" and in every count forever; this is the way out.
+ *
+ *   POST    sets `conversations.handled_at` (v45): the thread leaves To do and every "needs you" count, and stays findable in the inbox.
+ *   DELETE  clears it: the thread is back in To do if it still needs a person.
+ *
+ * A new inbound message clears the stamp by itself (the upsert in `src/webhook/messaging.ts`), so "handled" never hides a customer who
+ * asks again. Neither direction touches the thread's AI switch, stage or messages: it changes what the OWNER sees, not who answers.
+ * Operators and owners (the people who can reply); scoped to the session's tenant; both directions are written to the audit log, with the
+ * conversation id and never the person's handle or words.
+ *
+ * The answer is the thread as a list item. A database that has not had v45 applied cannot say: 503 with the migration hint.
+ */
+async function setConversationHandled(req: Request, res: Response, handled: boolean): Promise<void> {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        const tenantId = getTenantId(req);
+
+        // `RETURNING handled_at` so the answer has the stamp even if the summary below cannot be built.
+        const updated = await pool.query(
+            handled
+                ? 'UPDATE conversations SET handled_at = NOW() WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at'
+                : 'UPDATE conversations SET handled_at = NULL WHERE id = $1 AND creator_id = $2 RETURNING id, handled_at',
+            [id, tenantId]
+        );
+        if (updated.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        await writeAudit(await actorFromSession(req.session), {
+            action: handled ? AUDIT_ACTIONS.dmConversationHandled : AUDIT_ACTIONS.dmConversationUnhandled,
+            targetType: 'conversation', targetId: id, detail: { tenant_id: tenantId },
+        });
+        log('info', handled ? 'inbox.marked_handled' : 'inbox.unmarked_handled', { conversation_id: id, creator_id: tenantId });
+
+        let summary = null;
+        try {
+            summary = await conversationSummary(tenantId, id);
+        } catch (err) {
+            // The change is made and recorded: a summary that cannot be built is not a failed request.
+            log('warn', 'api.handled_summary_failed', describeError(err));
+        }
+        res.json(summary ?? { id, handled_at: updated.rows[0].handled_at ? new Date(updated.rows[0].handled_at).toISOString() : null });
+    } catch (err) {
+        log('error', 'api.conversation_handled_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(503).json({ error: ATTENTION_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to update the conversation.' });
+    }
+}
+
+router.post('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, true));
+router.delete('/conversations/:id/handled', canOperate, (req, res) => setConversationHandled(req, res, false));
 
 /**
  * The sales funnel of this tenant's DMs over the last 7, 30 (the default) or 90 days: conversations by the step they reached, the plan's
@@ -4119,15 +4697,17 @@ router.post('/settings/sales-variants', canOperate, async (req, res) => {
 
 // ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────
 //
-// `GET/POST /settings/notify` and `POST /settings/notify/test`: the Telegram bot the owner is told on when a conversation needs a person
-// (src/services/notify.ts), and the switch that lets an echo of his own reply pause the bot (src/webhook/echo.ts). Both live in
-// `app_settings`, one set for the deployment, so, like the public-site settings above, they are for platform admins only: anyone else
-// gets the same 404 a stranger would. The bot token is never in an answer: `{ set, last4 }` is all the card is ever told of it.
+// `GET/POST /settings/notify`, `POST /settings/notify/test` and `POST /settings/notify/test-email`: the Telegram bot and the email address
+// (Resend) the owner is told on when a conversation needs a person (src/services/notify.ts, notifyEmail.ts), and the switch that lets an echo
+// of his own reply pause the assistant (src/webhook/echo.ts). All live in `app_settings`, one set for the deployment, so, like the public-site
+// settings above, they are for platform admins only: anyone else gets the same 404 a stranger would. The bot token and the Resend API key are
+// never in an answer: `{ set, last4 }` is all the card is ever told of either.
 
 async function notifySettingsPayload() {
-    const [telegram, echo] = await Promise.all([readTelegramSettings(), readEchoSettings()]);
+    const [telegram, email, echo] = await Promise.all([readTelegramSettings(), readEmailSettings(), readEchoSettings()]);
     return {
         telegram: describeTelegramSettings(telegram),
+        email: describeEmailSettings(email),
         echo: { takeover: echo.takeover, ownerAppIds: echo.extraOwnerAppIds, documentedAppIds: [...PAGE_INBOX_APP_IDS] },
     };
 }
@@ -4153,6 +4733,11 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             res.status(400).json({ error: telegram.error, field: telegram.field });
             return;
         }
+        const email = parseEmailInput(body.email);
+        if (!email.ok) {
+            res.status(400).json({ error: email.error, field: email.field });
+            return;
+        }
         let echoInput: { takeover?: boolean; ownerAppIds?: string[] } | undefined;
         if (body.echo !== undefined) {
             const echo = (body.echo && typeof body.echo === 'object' ? body.echo : {}) as Record<string, unknown>;
@@ -4174,7 +4759,7 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             }
         }
 
-        if (Object.keys(telegram.value).length === 0 && Object.keys(echoInput ?? {}).length === 0) {
+        if (Object.keys(telegram.value).length === 0 && Object.keys(email.value).length === 0 && Object.keys(echoInput ?? {}).length === 0) {
             res.status(400).json({ error: 'Nothing to save.' });
             return;
         }
@@ -4186,7 +4771,15 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             return;
         }
 
+        // The same for email: on needs the key and an address (the saved one, else the site contact email).
+        const emailAfter = mergeEmail(await readEmailSettings(), email.value);
+        if (emailAfter.enabled && (!emailAfter.apiKey || !(emailAfter.to || emailAfter.defaultTo))) {
+            res.status(400).json({ error: 'Save the Resend API key first: email alerts need it.', field: 'emailEnabled' });
+            return;
+        }
+
         await saveTelegramInput(telegram.value, updatedBy);
+        await saveEmailInput(email.value, updatedBy);
         if (echoInput) await saveEchoInput(echoInput, updatedBy);
 
         // Which settings changed, never their values: the token is one of them.
@@ -4194,10 +4787,17 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
             user_id: updatedBy,
             changed: [
                 ...Object.keys(telegram.value).map((k) => `telegram.${k}`),
+                ...Object.keys(email.value).map((k) => `email.${k}`),
                 ...Object.keys(echoInput ?? {}).map((k) => `echo.${k}`),
             ],
         });
-        res.json(await notifySettingsPayload());
+
+        // Saving a new key is the owner's whole set-up, so the server tries it at once with one test email and the card shows the result: no
+        // second click to find out it works. It never fails the save (the test returns a result, whatever happens), and it is skipped when
+        // the key was removed.
+        const emailTest = typeof email.value.apiKey === 'string' ? await sendTestEmail(req.body?.lang === 'en' ? 'en' : 'ar') : undefined;
+        if (emailTest) log('info', 'api.notify_email_test', { after: 'save', ok: emailTest.ok, reason: emailTest.ok ? null : emailTest.reason, status: emailTest.ok ? null : emailTest.status });
+        res.json({ ...(await notifySettingsPayload()), ...(emailTest ? { emailTest } : {}) });
     } catch (err) {
         log('error', 'api.notify_settings_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the alert settings.' });
@@ -4213,6 +4813,19 @@ router.post('/settings/notify/test', requirePlatformAdmin, canAdminister, async 
     } catch (err) {
         log('error', 'api.notify_test_failed', describeError(err));
         res.status(500).json({ error: 'Failed to send the test message.' });
+    }
+});
+
+// The same button for the email address: sends with what is SAVED (the key never travels in this request) and answers ok / rejected (Resend's
+// status and its message, scrubbed of the key) / unreachable / not_configured. Never a 500 for Resend saying no: that is the answer.
+router.post('/settings/notify/test-email', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const result = await sendTestEmail(req.body?.lang === 'en' ? 'en' : 'ar');
+        log('info', 'api.notify_email_test', { after: 'button', ok: result.ok, reason: result.ok ? null : result.reason, status: result.ok ? null : result.status });
+        res.json(result);
+    } catch (err) {
+        log('error', 'api.notify_email_test_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to send the test email.' });
     }
 });
 

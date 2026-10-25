@@ -13,7 +13,11 @@
  *     meantime is simply not eligible, and nothing is sent (nothing was cancelled, because nothing needed to be);
  *   - the nudge goes out EXACTLY once: the right to send is one conditional UPDATE made before the send, so two runs at once, or a retry after a
  *     success, send nothing the second time; a send that fails gives the claim back and is retried, unless Meta's answer is final;
- *   - the nudge is the kit's line in the tenant's language: no model, no link.
+ *   - the nudge is the kit's line in the tenant's language: no model, no link;
+ *   - an ad conversation (`entry_source.kind = 'ctm'`) is the only one whose `ads.extended_window` switch is read; every other conversation runs
+ *     the SAME statements as before the switch existed (pinned: the exact SQL sequence);
+ *   - a send refused with Meta Business AI's 100 / 2534037 records why the bot is silent and alerts, and one refused for the window (10 / 2018278, 551)
+ *     on an ad conversation turns that platform's extended window off and alerts; both stay final (no retry).
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -21,6 +25,7 @@ import { pool } from '../../config/db.js';
 import { setJobQueue } from '../../jobs/queue.js';
 import type { EnqueueInput, JobQueue } from '../../jobs/types.js';
 import { setLogSink } from '../../utils/log.js';
+import { setAttributionAlertSink, type AttributionAlertKind } from '../ads/attribution.js';
 import { metaHttp } from '../http.js';
 import { invalidateTenantCache } from '../tenant.js';
 import { FITNESS_EN, SHOP_EG } from '../profile/fixtures.js';
@@ -175,6 +180,22 @@ describe('scheduleFollowup', () => {
         }, 'keyed');
     });
 
+    it('queues NOTHING for a WhatsApp conversation, however the rest is arranged, and says why (a free-form message hours later may be outside the window)', async () => {
+        await scheduling(null, async (queue, logged) => {
+            assert.equal(await scheduleFollowup({ ...SCHEDULE, senderId: 'EG.13491208655302741918', channel: 'whatsapp' }), 'unsupported_channel');
+            assert.equal(queue.calls.length, 0);
+            assert.equal(logged.find((l) => l.event === 'dm.followup_not_scheduled')?.reason, 'channel');
+        });
+    });
+
+    it('does not put a channel in the payload of an Instagram or Messenger job: it is byte for byte what it was', async () => {
+        await scheduling(null, async (queue) => {
+            await scheduleFollowup(SCHEDULE);
+            await scheduleFollowup({ ...SCHEDULE, pageId: 'fb-page-1' });
+            for (const call of queue.calls) assert.ok(!('channel' in (call.payload as object)));
+        });
+    });
+
     it('queues nothing when the link was not recorded (the statement matched no conversation)', async () => {
         await scheduling(null, async (queue, logged) => {
             assert.equal(await scheduleFollowup({ ...SCHEDULE, recorded: { linkAt: null, replyId: null } }), 'unrecorded');
@@ -228,6 +249,10 @@ interface World {
     /** The statement that gives the claim back fails. */
     releaseFails?: boolean;
     now?: Date;
+    /** The saved `ads.extended_window.<creator>` value, as stored. Absent is nothing saved (both platforms off). */
+    extendedWindow?: string;
+    /** The conversation's `no_reply_reason` when the job starts. */
+    noReplyReason?: string | null;
 }
 
 const CONV: Row = {
@@ -243,6 +268,9 @@ interface Run {
     events: string[];
     logged: Logged[];
     conv: Row;
+    /** `app_settings` as the statements left it, key to value. */
+    settings: Map<string, string>;
+    alerts: { creatorId: string; kind: AttributionAlertKind; objectKey: string; detail: Record<string, unknown> }[];
     outcome: Awaited<ReturnType<typeof runFollowup>> | null;
     error: any;
 }
@@ -251,6 +279,9 @@ interface Run {
 async function running(world: World = {}, payloads: any[] = [PAYLOAD], concurrently = false): Promise<Run & { outcomes: Run['outcome'][]; errors: any[] }> {
     const profile = world.profile ?? FITNESS_EN;
     const conv: Row = { ...CONV, ...world.conv };
+    if (world.noReplyReason !== undefined) conv.no_reply_reason = world.noReplyReason;
+    const settings = new Map<string, string>(world.extendedWindow !== undefined ? [['ads.extended_window.creator-1', world.extendedWindow]] : []);
+    const alerts: Run['alerts'] = [];
     const executed: Run['executed'] = [];
     const sends: Run['sends'] = [];
     const events: string[] = [];
@@ -264,7 +295,18 @@ async function running(world: World = {}, payloads: any[] = [PAYLOAD], concurren
         if (/FROM conversations c\s+WHERE c\.id = \$1/.test(sql)) return { rows: world.conversationGone ? [] : [{ ...conv }] };
         if (/FROM link_clicks lc/.test(sql)) return { rows: world.clicks ?? [] };
         if (/FROM ai_agents WHERE creator_id/.test(sql)) return { rows: agent ? [agent] : [] };
-        if (/FROM app_settings WHERE key/.test(sql)) return { rows: params[0] === 'dm.sales.followup_minutes' && world.minutes !== undefined ? [{ value: world.minutes, is_secret: false }] : [] };
+        if (/^\s*INSERT INTO app_settings/.test(sql)) { settings.set(params[0], params[1]); return { rows: [], rowCount: 1 }; }
+        if (/^\s*DELETE FROM app_settings/.test(sql)) { const had = settings.delete(params[0]); return { rows: [], rowCount: had ? 1 : 0 }; }
+        if (/FROM app_settings WHERE key/.test(sql)) {
+            if (params[0] === 'dm.sales.followup_minutes') return { rows: world.minutes !== undefined ? [{ value: world.minutes, is_secret: false }] : [] };
+            return { rows: settings.has(params[0]) ? [{ value: settings.get(params[0]), is_secret: false }] : [] };
+        }
+        if (/UPDATE conversations SET no_reply_reason = 'business_ai_owns_thread'/.test(sql)) {
+            // The statement's own condition: only when the reason is not already set.
+            if (conv.no_reply_reason === 'business_ai_owns_thread') return { rows: [] };
+            conv.no_reply_reason = 'business_ai_owns_thread';
+            return { rows: [{ id: params[0] }] };
+        }
         if (/FROM creators WHERE id = \$1/.test(sql)) return { rows: creator ? [{ ...creator }] : [] };
         if (/FROM creator_profiles/.test(sql)) return { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] };
         if (/INSERT INTO rate_limit_counters/.test(sql)) return { rows: [{ count: world.quotaCount ?? 1 }] };
@@ -295,6 +337,7 @@ async function running(world: World = {}, payloads: any[] = [PAYLOAD], concurren
     const originalQuery = pool.query;
     const originalMeta = metaHttp.post;
     const previousSink = setLogSink((level, line) => { logged.push({ level, ...JSON.parse(line) }); });
+    setAttributionAlertSink(async (alert) => { alerts.push(alert); });
     (pool as any).query = async (sql: string, params: any[] = []) => {
         executed.push({ sql, params });
         const { rows = [], rowCount } = answer(sql, params);
@@ -323,9 +366,10 @@ async function running(world: World = {}, payloads: any[] = [PAYLOAD], concurren
         (pool as any).query = originalQuery;
         (metaHttp as any).post = originalMeta;
         setLogSink(previousSink);
+        setAttributionAlertSink(null);
         invalidateTenantCache();
     }
-    return { executed, sends, events, logged, conv, outcome: outcomes[0] ?? null, outcomes, error: errors[0] ?? null, errors };
+    return { executed, sends, events, logged, conv, settings, alerts, outcome: outcomes[0] ?? null, outcomes, error: errors[0] ?? null, errors };
 }
 
 const nudges = (r: { sends: Run['sends'] }): Run['sends'] => r.sends.filter((s) => s.body.message);
@@ -464,6 +508,26 @@ describe('runFollowup: nothing is sent when the conversation has moved on (the j
         assert.equal(r.executed.length, 0, 'not even a read');
     });
 
+    it('a job that names WhatsApp (none is ever written) sends nothing and reads nothing: an Instagram message is never sent to a WhatsApp user id', async () => {
+        const r = await running({}, [{ ...PAYLOAD, senderId: 'EG.13491208655302741918', channel: 'whatsapp' }]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'channel' });
+        assert.equal(nudges(r).length, 0);
+        assert.equal(r.sends.length, 0);
+        assert.equal(claims(r), 0);
+        assert.equal(r.executed.length, 0, 'not even a read');
+        assert.deepEqual(skipped(r), ['channel']);
+    });
+
+    it('a payload with NO channel, as every job queued before the field existed, is exactly what it was: Instagram, or Messenger with a Page id', async () => {
+        assert.ok(!('channel' in PAYLOAD));
+        const instagram = await running({}, [PAYLOAD]);
+        assert.deepEqual(instagram.outcome, { kind: 'sent' });
+        assert.match(nudges(instagram)[0]!.url, /\/me\/messages$/);
+        const messenger = await running({}, [{ ...PAYLOAD, pageId: 'fb-page-1' }]);
+        assert.deepEqual(messenger.outcome, { kind: 'sent' });
+        assert.match(nudges(messenger)[0]!.url, /\/fb-page-1\/messages$/);
+    });
+
     it('the send quota is spent: the nudge is the first thing to give way, and nothing is claimed', async () => {
         const r = await running({ quotaCount: 100000 });
         assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'quota' });
@@ -598,6 +662,155 @@ describe('runFollowup: when the send fails', () => {
     });
 });
 
+// ─── Ad conversations (ads.extended_window, Business AI) ──────────────────────────────────────
+
+/** A conversation that began from an Instagram click-to-message ad three days ago, whose person wrote once then and was sent the link a minute later. */
+const AD_CLICK = '2026-10-11T10:00:00.000Z';
+const AD_CONV: Row = {
+    entry_source: { kind: 'ctm', platform: 'instagram', ad_id: 'ad-1', at: AD_CLICK }, platform: 'instagram',
+    last_link_at: new Date('2026-10-11T10:01:00Z'), last_inbound_at: new Date('2026-10-11T10:00:30Z'), last_inbound_message_at: new Date('2026-10-11T10:00:20Z'),
+};
+const AD_PAYLOAD = { ...PAYLOAD, linkAt: '2026-10-11T10:01:00.000Z' };
+const settingReads = (r: { executed: Run['executed'] }): string[] =>
+    r.executed.filter((e) => /FROM app_settings WHERE key/.test(e.sql) && String(e.params[0]).startsWith('ads.')).map((e) => String(e.params[0]));
+
+describe('runFollowup: an ad conversation and its window', () => {
+    it('reads the conversation\'s entry_source and platform in the statement that already reads it: no extra statement', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: '{"instagram":true,"messenger":false}' }, [AD_PAYLOAD]);
+        const facts = r.executed.filter((e) => /FROM conversations c/.test(e.sql));
+        assert.equal(facts.length, 1);
+        assert.match(facts[0]!.sql, /c\.entry_source, c\.platform\s+FROM conversations c/);
+    });
+
+    it('with the platform\'s switch on, nudges on day 3: inside 7 days less an hour of the click', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: '{"instagram":true,"messenger":false}' }, [AD_PAYLOAD]);
+        assert.deepEqual(r.outcome, { kind: 'sent' });
+        assert.equal(nudges(r).length, 1);
+        assert.deepEqual(settingReads(r), ['ads.extended_window.creator-1']);
+    });
+
+    it('with the switch off, or nothing saved, it is the 23 hour rule: the day-3 nudge is not sent', async () => {
+        for (const extendedWindow of ['{"instagram":false,"messenger":true}', undefined]) {
+            const r = await running({ conv: AD_CONV, extendedWindow }, [AD_PAYLOAD]);
+            assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'window_expired' }, String(extendedWindow));
+            assert.equal(nudges(r).length, 0);
+            assert.equal(claims(r), 0);
+        }
+    });
+
+    it('a saved value it cannot parse is the switch off', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: 'yes please' }, [AD_PAYLOAD]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'window_expired' });
+    });
+
+    it('past click + 7 days less an hour, even the switch does not allow it', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: '{"instagram":true,"messenger":false}', now: new Date('2026-10-18T09:00:00Z') }, [AD_PAYLOAD]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'window_expired' });
+        assert.equal(nudges(r).length, 0);
+    });
+
+    it('a Messenger ad conversation is judged by the Messenger switch, from conversations.platform = facebook', async () => {
+        const conv = { ...AD_CONV, entry_source: { kind: 'ctm', platform: 'messenger', at: AD_CLICK }, platform: 'facebook' };
+        const on = await running({ conv, extendedWindow: '{"instagram":false,"messenger":true}' }, [{ ...AD_PAYLOAD, pageId: 'fb-page-1' }]);
+        assert.deepEqual(on.outcome, { kind: 'sent' });
+        const off = await running({ conv, extendedWindow: '{"instagram":true,"messenger":false}' }, [{ ...AD_PAYLOAD, pageId: 'fb-page-1' }]);
+        assert.deepEqual(off.outcome, { kind: 'skipped', reason: 'window_expired' });
+    });
+
+    it('a conversation that is not from an ad never reads the switch: the statements are exactly the ones it ran before', async () => {
+        for (const entry_source of [null, { kind: 'link', ref: 'bio', at: AD_CLICK }, { kind: 'ctwa', ad_id: 'x', at: AD_CLICK }]) {
+            const r = await running({ conv: { entry_source, platform: 'instagram' }, extendedWindow: '{"instagram":true,"messenger":true}' });
+            assert.deepEqual(r.outcome, { kind: 'sent' });
+            assert.deepEqual(settingReads(r), [], 'no ads.* setting is read');
+            assert.deepEqual(r.executed.map((e) => e.sql.replace(/\s+/g, ' ').trim().split(' ').slice(0, 4).join(' ')), [
+                'SELECT c.stage, c.instagram_user_id AS',
+                'SELECT lc.clicked_at, lc.is_prefetch FROM',
+                'SELECT sales_mode, sales_test_senders FROM',
+                'SELECT value, is_secret FROM',
+                'SELECT id, instagram_page_id, facebook_page_id,',
+                ...r.executed.slice(5).map((e) => e.sql.replace(/\s+/g, ' ').trim().split(' ').slice(0, 4).join(' ')),
+            ]);
+        }
+    });
+
+    it('and a non-ad conversation past 23 hours is still refused with the switches on', async () => {
+        const r = await running({ conv: { ...AD_CONV, entry_source: null }, extendedWindow: '{"instagram":true,"messenger":true}' }, [AD_PAYLOAD]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'window_expired' });
+    });
+});
+
+describe('runFollowup: sends refused for reasons that belong to ad traffic', () => {
+    const failing = (error: any) => async () => { throw error; };
+    const meta = (code: number, subcode?: number) => ({ response: { status: 400, data: { error: { code, ...(subcode ? { error_subcode: subcode } : {}), message: 'refused' } } } });
+    const ON = '{"instagram":true,"messenger":false}';
+
+    it('Meta Business AI (100 / 2534037): the conversation records why the bot is silent, the owner is alerted, nothing is retried', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: ON, send: failing(meta(100, 2534037)) }, [AD_PAYLOAD]);
+        assert.equal(r.error, null);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(r.conv.no_reply_reason, 'business_ai_owns_thread');
+        assert.deepEqual(r.alerts.map((a) => [a.kind, a.objectKey, a.detail.conversation_id]), [['business_ai', 'creator-1', 'conv-1']]);
+        assert.equal(r.conv.followups_sent, 0, 'the claim was given back');
+        assert.equal(r.settings.get('ads.extended_window.creator-1'), ON, 'the window switch is untouched');
+        assert.equal(nudges(r).length, 1, 'one attempt, no retry');
+    });
+
+    it('Business AI is noted for any conversation, not only an ad one, and only once (the reason already set raises no second alert)', async () => {
+        const r = await running({ send: failing(meta(100, 2534037)) });
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(r.alerts.length, 1);
+        const again = await running({ send: failing(meta(100, 2534037)), noReplyReason: 'business_ai_owns_thread' });
+        assert.deepEqual(again.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(again.alerts.length, 0);
+    });
+
+    it('a plain 100 is not Business AI: no reason, no alert', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: ON, send: failing(meta(100)) }, [AD_PAYLOAD]);
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(r.alerts.length, 0);
+        assert.ok(!r.executed.some((e) => /no_reply_reason/.test(e.sql)));
+    });
+
+    for (const [name, error] of [['10 / 2018278', meta(10, 2018278)], ['551', meta(551)]] as const) {
+        it(`${name} on an ad conversation with the switch on: the platform's switch goes off by itself, the owner is alerted, the send stays final`, async () => {
+            const r = await running({ conv: AD_CONV, extendedWindow: ON, send: failing(error) }, [AD_PAYLOAD]);
+            assert.equal(r.error, null);
+            assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+            assert.equal(r.settings.has('ads.extended_window.creator-1'), false, 'all platforms off is stored as nothing');
+            assert.deepEqual(r.alerts.map((a) => [a.kind, a.objectKey, a.detail.platform]), [['window_error', 'creator-1:instagram', 'instagram']]);
+            assert.equal(r.conv.followups_sent, 0);
+            assert.equal(nudges(r).length, 1, 'no retry');
+        });
+    }
+
+    it('a window refusal turns off only the conversation\'s own platform', async () => {
+        const r = await running({ conv: AD_CONV, extendedWindow: '{"instagram":true,"messenger":true}', send: failing(meta(551)) }, [AD_PAYLOAD]);
+        assert.deepEqual(JSON.parse(r.settings.get('ads.extended_window.creator-1')!), { instagram: false, messenger: true });
+    });
+
+    it('a window refusal for a conversation that is not from an ad says nothing about ads: nothing is read or written, no alert, still final', async () => {
+        const r = await running({ extendedWindow: ON, send: failing(meta(10, 2018278)) });
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(r.settings.get('ads.extended_window.creator-1'), ON);
+        assert.deepEqual(r.alerts, []);
+        assert.deepEqual(settingReads(r), []);
+    });
+
+    it('a window refusal on an ad conversation whose switch was already off changes nothing and alerts nobody', async () => {
+        const r = await running({ conv: { ...AD_CONV, last_inbound_at: new Date('2026-10-14T08:59:40Z'), last_inbound_message_at: new Date('2026-10-14T08:59:30Z'), last_link_at: LINK_AT }, send: failing(meta(551)) });
+        assert.deepEqual(r.outcome, { kind: 'skipped', reason: 'send_refused' });
+        assert.equal(r.settings.size, 0);
+        assert.deepEqual(r.alerts, []);
+    });
+
+    it('551 is a final failure, like 10 and 100', () => {
+        assert.equal(isFinalSendFailure({ metaCode: 551 }), true);
+        assert.equal(isFinalSendFailure(meta(551)), true);
+        assert.equal(isFinalSendFailure(meta(100, 2534037)), true);
+        assert.equal(isFinalSendFailure(meta(10, 2018278)), true);
+    });
+});
+
 describe('runFollowup: the nudge is out; the thread\'s own record is secondary', () => {
     it('a failure to write the row in the thread is logged and NOT raised: a retry would find the claim taken and send nothing', async () => {
         const r = await running({ recordFails: true });
@@ -631,6 +844,17 @@ describe('loadFollowupState and loadLinkClicks', () => {
     it('is null for a conversation that is not there (or is another tenant\'s)', async () => {
         answering([]);
         try { assert.equal(await loadFollowupState('gone', 'creator-1'), null); } finally { restore(); }
+    });
+
+    it('carries an ad conversation\'s source (kind, platform, click time) and nothing else of it, and none for any other', async () => {
+        try {
+            answering([{ ...CONV, entry_source: { kind: 'ctm', platform: 'messenger', ad_id: 'ad-1', ref: 'ar_x', at: '2026-10-11T10:00:00.000Z' }, platform: 'facebook' }]);
+            assert.deepEqual((await loadFollowupState('c', 't'))?.entrySource, { kind: 'ctm', platform: 'messenger', at: '2026-10-11T10:00:00.000Z' });
+            answering([{ ...CONV, entry_source: { kind: 'link', ref: 'bio', at: '2026-10-11T10:00:00.000Z' } }]);
+            assert.ok(!('entrySource' in (await loadFollowupState('c', 't'))!));
+            answering([{ ...CONV, entry_source: null }]);
+            assert.ok(!('entrySource' in (await loadFollowupState('c', 't'))!));
+        } finally { restore(); }
     });
 
     it('takes the later of the two times the person last wrote, from either alone, and a missing agent row as an agent that is off', async () => {

@@ -176,6 +176,16 @@ export interface SalesKit {
         /** The owner's A/B wording for this conversation's arm (S14): how to open the first reply, and how to word the offer of the link. `text` is the owner's own. */
         variantOpening: (text: string) => string;
         variantCta: (text: string) => string;
+        /**
+         * A3: the conversation began from a click-to-message ad and the owner switched `ads.bot_context` on. The ad's name, the offer it is about,
+         * its text and the ice breaker tapped, each line only when known. Never said otherwise, so the facts block is what it always was.
+         */
+        ad: (ad: { name: string; offerTitle: string | null; primaryText: string | null; tapped: string | null }) => string[];
+        /**
+         * Where the conversation is, when it is not Instagram or Messenger (the only channels the rules above were written for): so the bot never says
+         * "Instagram" to someone on WhatsApp. Said only for a WhatsApp turn, and not at all for the others, so their facts block is what it always was.
+         */
+        channel: { whatsapp: string };
     };
     lines: SalesLines;
 }
@@ -301,6 +311,12 @@ const ARABIC_SALES_TEXT: Omit<SalesKit, 'lines'> = {
         tapped: (intent) => `ضغط على زر جاهز في المحادثة، وهو يسأل عن: ${intent}. أجب عن هذا السؤال مباشرة.`,
         variantOpening: (text) => `أسلوب افتتاح أول ردّ، من صاحب الحساب: ${text}`,
         variantCta: (text) => `صياغة عرض الرابط، من صاحب الحساب: ${text}`,
+        ad: (ad) => [
+            ad.offerTitle ? `سياق الإعلان: جاء الشخص من الإعلان «${ad.name}» عن ${ad.offerTitle}.` : `سياق الإعلان: جاء الشخص من الإعلان «${ad.name}».`,
+            ...(ad.primaryText ? [`قال الإعلان: «${ad.primaryText}».`] : []),
+            ...(ad.tapped ? [`ضغط على: «${ad.tapped}».`] : []),
+        ],
+        channel: { whatsapp: 'القناة: واتساب. هذه المحادثة على واتساب، فلا تذكر إنستغرام ولا فيسبوك ولا ماسنجر أبداً.' },
     },
 };
 
@@ -558,6 +574,12 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
                 tapped: (intent) => `They tapped a ready-made button in the chat; it asks about: ${intent}. Answer that question directly.`,
                 variantOpening: (text) => `How to open your first reply, from the account owner: ${text}`,
                 variantCta: (text) => `How to word the offer of the link, from the account owner: ${text}`,
+                ad: (ad) => [
+                    ad.offerTitle ? `AD CONTEXT: The person came from the ad "${ad.name}" about ${ad.offerTitle}.` : `AD CONTEXT: The person came from the ad "${ad.name}".`,
+                    ...(ad.primaryText ? [`The ad said: "${ad.primaryText}".`] : []),
+                    ...(ad.tapped ? [`They tapped: "${ad.tapped}".`] : []),
+                ],
+                channel: { whatsapp: 'Channel: WhatsApp. This chat is on WhatsApp, so never mention Instagram, Facebook or Messenger.' },
             },
             lines: {
                 handoff: (name) => `I've passed your message to ${name}, and you'll hear back soon 🙏`,

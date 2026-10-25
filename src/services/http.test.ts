@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isPermanentMetaError, withRetry } from './http.js';
+import { isMetaUnavailable, isPermanentMetaError, withRetry } from './http.js';
 
 /** An axios-shaped Meta API error. */
 function metaError(code: number, status = 400): unknown {
@@ -165,5 +165,46 @@ describe('isPermanentMetaError', () => {
         // A code that arrives as a string — Meta has been known to serialise it that way —
         // is not matched by the numeric set.
         assert.equal(isPermanentMetaError({ response: { data: { error: { code: '190' } } } }), false);
+    });
+});
+
+describe('isMetaUnavailable: "Meta did not answer" is not "the answer is no" (OV-08)', () => {
+    it('is true for a failure with no HTTP response: a timeout, a reset, DNS, a refused connection', () => {
+        for (const code of ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']) {
+            assert.equal(isMetaUnavailable(networkError(code)), true, code);
+        }
+        assert.equal(isMetaUnavailable(new Error('boom')), true, 'an error with no response says nothing about the token');
+    });
+
+    it('is true for a 5xx, a 429 and Meta\'s own "try again" codes', () => {
+        for (const status of [500, 502, 503, 504, 429]) assert.equal(isMetaUnavailable(httpError(status)), true, `HTTP ${status}`);
+        for (const code of [1, 2, 4, 17, 32, 341, 613]) assert.equal(isMetaUnavailable(metaError(code)), true, `code ${code}`);
+    });
+
+    it('is false for a definitive answer: a dead token (190), a missing permission (200), a bad request', () => {
+        assert.equal(isMetaUnavailable(metaError(190)), false);
+        assert.equal(isMetaUnavailable(metaError(200)), false);
+        assert.equal(isMetaUnavailable(metaError(10903)), false);
+        assert.equal(isMetaUnavailable(metaError(100)), false);
+        assert.equal(isMetaUnavailable(httpError(400)), false);
+        assert.equal(isMetaUnavailable(httpError(401)), false);
+    });
+
+    it('never reads a permanent code as unavailable, whatever status carried it', () => {
+        assert.equal(isMetaUnavailable(metaError(190, 500)), false);
+    });
+});
+
+describe('PERMANENT_CODES stays Instagram-only', () => {
+    // The set is not exported, so the pin is behavioural: sweep every code Meta could plausibly return and require
+    // `isPermanentMetaError` to hold for exactly {190, 200, 10903}. WhatsApp's own permanent codes (131047, 131026,
+    // 131050, ...) live in src/services/whatsappErrors.ts; adding one here would change how every Instagram send retries
+    // and hands off (WhatsApp task T010).
+    it('is still exactly 190, 200 and 10903', () => {
+        const permanent: number[] = [];
+        for (let code = 0; code <= 200000; code++) {
+            if (isPermanentMetaError(metaError(code))) permanent.push(code);
+        }
+        assert.deepEqual(permanent, [190, 200, 10903]);
     });
 });

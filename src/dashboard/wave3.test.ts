@@ -105,7 +105,7 @@ function load(lang: 'ar' | 'en' = 'en', opts: { storageThrows?: boolean; stored?
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const f of [
-        'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js',
+        'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js',
         'dashboard/js/pages/overview.js', 'dashboard/js/pages/inbox.js', 'dashboard/js/pages/analytics.js',
         'dashboard/js/pages/activity.js', 'dashboard/js/pages/posts.js',
     ]) {
@@ -305,12 +305,15 @@ describe('Analytics — why DMs fail (A5)', () => {
     const summary = {
         days: 30,
         total: 19,
+        // As the route answers since US1 T040: each reason says whether the pipeline chose it, and the totals are split.
+        expected_total: 5,
+        actionable_total: 14,
         reasons: [
-            { reason_code: '190', count: 8, sample: 'Private Reply Failed: Error validating access token (Code: 190)', last_at: '2026-09-26T08:00:00.000Z' },
-            { reason_code: 'recipient_cap', count: 5, sample: 'Skipped: recipient already received an automated DM within 24 hours.', last_at: '2026-09-27T08:00:00.000Z' },
-            { reason_code: 'text:Instagram media processing failed with status: #.', count: 3, sample: 'Instagram media processing failed with status: 3.', last_at: null },
-            { reason_code: '-1', count: 2, sample: 'Private Reply Failed: weird (Code: -1)', last_at: null },
-            { reason_code: 'unknown', count: 1, sample: null, last_at: null },
+            { reason_code: '190', count: 8, expected: false, expected_count: 0, sample: 'Private Reply Failed: Error validating access token (Code: 190)', last_at: '2026-09-26T08:00:00.000Z' },
+            { reason_code: 'recipient_cap', count: 5, expected: true, expected_count: 5, sample: 'Skipped: recipient already received an automated DM within 24 hours.', last_at: '2026-09-27T08:00:00.000Z' },
+            { reason_code: 'text:Instagram media processing failed with status: #.', count: 3, expected: false, expected_count: 0, sample: 'Instagram media processing failed with status: 3.', last_at: null },
+            { reason_code: '-1', count: 2, expected: false, expected_count: 0, sample: 'Private Reply Failed: weird (Code: -1)', last_at: null },
+            { reason_code: 'unknown', count: 1, expected: false, expected_count: 0, sample: null, last_at: null },
         ],
     };
 
@@ -328,7 +331,10 @@ describe('Analytics — why DMs fail (A5)', () => {
 
             const panel = s.dom.get('analytics-failures')!.innerHTML;
             const words = text(panel);
-            assert.ok(words.includes(s.t('analytics.failures.total', { count: 19, n: '19' })));
+            // Two groups: what needs the owner (14), and what the product did on purpose (5), each under its own pill.
+            assert.match(panel, /id="analytics-failures-actionable"[\s\S]*?failure-group-count">14</);
+            assert.match(panel, /id="analytics-failures-by-design"[\s\S]*?failure-group-count">5</);
+            assert.ok(words.includes(s.t('status.outcome.actionable')) && words.includes(s.t('status.outcome.by_design')));
             assert.ok(words.includes(s.t('activity.err.token')), 'a Meta code, in the interface’s language');
             assert.ok(words.includes(s.t('activity.err.recipientCap')), 'a send cap, named');
             assert.ok(words.includes('Instagram media processing failed with status: 3.'), 'no known reason: Meta’s own words');
@@ -410,10 +416,11 @@ describe('Overview — DMs failed today (O9)', () => {
         s.api.getGrowthSettings = () => Promise.resolve({});
         O.render();
         await settle();
-        const failedCall = s.calls.find((c) => c.method === 'getInteractions' && c.args[0].status === 'FAILED')!;
+        // `outcome: 'actionable'` and not `status: 'FAILED'` (US1 T042): a DM skipped on purpose is written FAILED and needs nobody.
+        const failedCall = s.calls.find((c) => c.method === 'getInteractions' && c.args[0].outcome === 'actionable')!;
         const midnight = new Date();
         midnight.setHours(0, 0, 0, 0);
-        assert.deepEqual(plain(failedCall.args[0]), { status: 'FAILED', limit: 100, since: midnight.toISOString() });
+        assert.deepEqual(plain(failedCall.args[0]), { outcome: 'actionable', limit: 100, since: midnight.toISOString() });
         O.destroy();
     });
 

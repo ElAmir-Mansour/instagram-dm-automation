@@ -230,9 +230,11 @@ async function checkDeployment() {
 // database could have shown that, because the deliveries were going somewhere else entirely.
 // This is the only check that can see it.
 
+// `messaging_referrals` (A3): a returning person's tap on a click-to-Messenger ad arrives only on this field, so without it ads → DM attribution
+// silently misses every existing thread. A new thread's referral rides on `messaging_postbacks`; Instagram's on `messages`.
 const EXPECTED_SUBSCRIPTIONS = {
     instagram: ['comments', 'messages'],
-    page: ['feed', 'messages'],
+    page: ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals'],
 };
 
 async function checkMetaConfig(dbState) {
@@ -279,6 +281,10 @@ async function checkMetaConfig(dbState) {
         if (missingFields.length) {
             warn('meta', `object "${sub.object}" is not subscribed to: ${missingFields.join(', ')}`,
                 'Events for an unsubscribed field are never sent, which is indistinguishable from no activity.');
+        }
+        // Lead ads (A10): `leadgen` is needed only once a tenant has a lead_ads legal sign-off, so its absence is a fact, not a warning.
+        if (sub.object === 'page' && !fields.includes('leadgen')) {
+            fact('meta', 'page has no "leadgen" field: lead ads (locked until a legal sign-off) receive nothing until it is added in App Dashboard → Webhooks → Page');
         }
     }
 

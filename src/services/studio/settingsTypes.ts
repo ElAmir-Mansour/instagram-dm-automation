@@ -161,6 +161,66 @@ export type InfographicConfig = {
     platforms: InfographicPlatform[];
 };
 
+export type ExplainerLanguage = 'ar' | 'en';
+export type ExplainerLengthTier = 'short' | 'medium' | 'long';
+/** Music under the voice (a track from the library), or sound effects only. */
+export type ExplainerSoundMode = 'music' | 'sfx';
+/**
+ * Who writes the script (research.md R2b): Claude on the owner's Mac, with web research, or Gemini on the server, with Google Search
+ * grounding. `writer_fallback` lets the app use Gemini by itself when the Mac cannot write.
+ */
+export type ExplainerWriter = 'claude_mac' | 'gemini';
+
+/** A recurring figure. It is drawn from its `description`; `ref_*` is the approved picture sent with every draw that names it. */
+export type ExplainerCharacter = {
+    /** Lower-case letters, digits, `-` and `_`: what a scene's brief names it by. */
+    key: string;
+    name: string;
+    /** English, for the image model. One that describes a woman or a girl is refused (the guard in explainers/spec.ts). */
+    description: string;
+    /** An upload of ours. Null until the owner has approved a picture. */
+    ref_media_id: string | null;
+    ref_url: string | null;
+    approved_at: string | null;
+};
+
+/** A music track the owner has the rights to, uploaded to the media store. */
+export type ExplainerTrack = {
+    key: string;
+    title: string;
+    artist: string;
+    media_id: string;
+    url: string;
+    license: string;
+    /** The credit line, appended to every caption of a video that uses the track when `credit_required`. */
+    credit: string;
+    credit_required: boolean;
+};
+
+/**
+ * The look of illustrated explainers (v59, src/services/explainers/): one section of the tenant's Studio settings, and NOT one the Creator
+ * Profile owns (`STUDIO_PROFILE_PATHS`), so it is read and written as stored.
+ */
+export type ExplainerConfig = {
+    /** The art direction every picture starts from. */
+    style: string;
+    characters: ExplainerCharacter[];
+    /** The narrator, per language: a Gemini voice name (`EXPLAINER_VOICES` in settings.ts). */
+    voices: { ar: string; en: string };
+    /** Sent beside the text, never in it: the voice reads the text aloud. */
+    voice_style: string;
+    /** Words a second the narrator speaks, per language: turns a script's words into its estimated length. */
+    pace: { ar: number; en: number };
+    writer: ExplainerWriter;
+    /** On: when the Mac cannot write (offline, signed out, no claim), Gemini writes. Off: the explainer waits for the Mac. */
+    writer_fallback: boolean;
+    /** `#RRGGBB`: the title at the top of the vertical video. */
+    title_color: string;
+    /** What a new explainer starts with. */
+    defaults: { sound_mode: ExplainerSoundMode; subtitles: boolean; language: ExplainerLanguage; length_tier: ExplainerLengthTier };
+    music: ExplainerTrack[];
+};
+
 export type StudioSettings = {
     brand: BrandKit;
     voice: VoiceProfile;
@@ -175,6 +235,8 @@ export type StudioSettings = {
     examples: ExampleCarousel[] | null;
     monteur: MonteurConfig;
     infographic: InfographicConfig;
+    /** v59. How illustrated explainers look and sound (src/services/explainers/). */
+    explainer: ExplainerConfig;
 };
 
 /** The Monteur's defaults: off, no folder, one reel a day from one video, each reviewed. */
@@ -213,6 +275,32 @@ export function defaultInfographicConfig(): InfographicConfig {
         theme: 'dark',
         language: 'en',
         platforms: ['instagram', 'facebook'],
+    };
+}
+
+/**
+ * Words a second, per language: Arabic 1.8, English 2.5. The estimate of a script's length (spec.ts) and the default of `ExplainerConfig.pace`.
+ * Arabic was measured on 2026-10-25: gemini-3.8-flash-tts, voice ar-001-commercial-3, the default calm narrator style, 11 words in 6.3 s of speech
+ * (1.75 words a second; it was 2.1 before the measurement).
+ */
+export const DEFAULT_EXPLAINER_PACE = { ar: 1.8, en: 2.5 } as const;
+
+/**
+ * Neutral, like every default here: no character (the owner approves his own), no music (the licence of a track is the owner's to state),
+ * and no Arabic in it. Claude on the Mac writes unless the owner chooses Gemini, and Gemini steps in when the Mac cannot.
+ */
+export function defaultExplainerConfig(): ExplainerConfig {
+    return {
+        style: 'warm hand-painted gouache illustration, soft paper texture, beige, terracotta and olive palette, thin ink outlines, simple shapes',
+        characters: [],
+        voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' },
+        voice_style: 'a calm, warm documentary narrator; clear, unhurried, curious',
+        pace: { ...DEFAULT_EXPLAINER_PACE },
+        writer: 'claude_mac',
+        writer_fallback: true,
+        title_color: '#FFD43B',
+        defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
+        music: [],
     };
 }
 
@@ -268,5 +356,6 @@ export function defaultStudioSettings(): StudioSettings {
         examples: null,
         monteur: defaultMonteurConfig(),
         infographic: defaultInfographicConfig(),
+        explainer: defaultExplainerConfig(),
     };
 }

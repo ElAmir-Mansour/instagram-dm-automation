@@ -21,7 +21,7 @@
  */
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import { log } from '../utils/log.js';
-import { isJobKind, type EnqueueInput, type Job, type JobKind, type JobQueue } from './types.js';
+import { isJobKind, type EnqueueInput, type Job, type JobKind, type JobQueue, type PayloadRedaction } from './types.js';
 
 /** Shape the claim query returns, before it is narrowed to `Job`. */
 interface JobDbRow {
@@ -156,14 +156,32 @@ export class PostgresJobQueue implements JobQueue {
         return claimed;
     }
 
-    async complete(jobId: string): Promise<void> {
+    async complete(jobId: string, redact?: PayloadRedaction): Promise<void> {
+        if (redact) {
+            // The payload is replaced in the statement that ends the job, so there is no moment at which the job is done and still holds it.
+            await queryCount(
+                `UPDATE jobs SET status = 'done', last_error = NULL, payload = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+                [jobId, JSON.stringify(redact.payload)]
+            );
+            return;
+        }
         await queryCount(
             `UPDATE jobs SET status = 'done', last_error = NULL, updated_at = NOW() WHERE id = $1`,
             [jobId]
         );
     }
 
-    async fail(jobId: string, error: string, retryInSeconds: number | null): Promise<void> {
+    async fail(jobId: string, error: string, retryInSeconds: number | null, redact?: PayloadRedaction): Promise<void> {
+        if (retryInSeconds === null && redact) {
+            // A terminal failure that redacts: a `failed` row is never pruned, so what it holds it holds for good.
+            await queryCount(
+                `UPDATE jobs
+                    SET status = 'failed', last_error = $2, payload = $3::jsonb, updated_at = NOW()
+                  WHERE id = $1`,
+                [jobId, error.slice(0, 2000), JSON.stringify(redact.payload)]
+            );
+            return;
+        }
         if (retryInSeconds === null) {
             await queryCount(
                 `UPDATE jobs

@@ -466,3 +466,58 @@ describe('publishTikTokPost — photo posts', () => {
         assert.equal(init(), undefined, 'resumed, not re-initialised');
     });
 });
+
+describe('publishTikTokPost — a post that comes due while TikTok is not connected', () => {
+    // What Settings → Disconnect TikTok, the Help Center (tiktok#connect) and the Disconnect dialog tell the owner: posts not yet due simply wait
+    // (the sweep only takes PENDING rows whose time has passed), and one that comes due with no usable connection is claimed and FAILS, with the
+    // reason on the card, and is retried with Publish now once TikTok is connected again. It is never held back as PENDING (only a full inbox is).
+    const NOT_CONNECTED = 'TikTok is not connected for this account — connect it in Settings.';
+    let tiktokCalls: string[] = [];
+    const originalPost = tiktokHttp.post;
+
+    beforeEach(() => {
+        tiktokCalls = [];
+        (tiktokHttp as any).post = async (url: string) => {
+            tiktokCalls.push(url);
+            throw new Error(`no TikTok call may be made without a connection: ${url}`);
+        };
+    });
+
+    afterEach(() => {
+        (tiktokHttp as any).post = originalPost;
+    });
+
+    const due = (): TikTokPublishTarget => ({
+        id: 'post-1', creator_id: 'creator-1', post_type: 'video', caption: 'c',
+        media_url: 'https://x/api/uploads/0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab', media_urls: null, external_publish_id: null,
+        platform_options: { mode: 'direct', privacy_level: 'SELF_ONLY', allow_comment: true, allow_duet: false, allow_stitch: false, brand_content: false, brand_organic: false },
+    });
+    const failure = () => statements.find((s) => /SET status = 'FAILED'/.test(s.sql));
+
+    it('fails the post with the not-connected reason after Disconnect TikTok deleted the connection, and calls TikTok about nothing', async () => {
+        respond = (sql) => (/FROM platform_connections/.test(sql) ? { rows: [] } : { rows: [], rowCount: 1 });
+
+        const err = await publishTikTokPost(due(), 0).then(() => null, (e) => e);
+
+        assert.equal(err?.name, 'TikTokNotConnectedError');
+        const failed = failure();
+        assert.ok(failed, 'the row is written FAILED');
+        assert.equal(failed.params[0], 'post-1');
+        assert.equal(failed.params[1], NOT_CONNECTED);
+        assert.match(oneLine(failed.sql), /WHERE id = \$1 AND status IN \('PUBLISHING', 'PROCESSING', 'PENDING'\)$/);
+        assert.deepEqual(tiktokCalls, []);
+        assert.ok(!statements.some((s) => /SET status = 'PENDING'/.test(s.sql)), 'and is not put back as PENDING, the way a full inbox is');
+    });
+
+    it('fails it the same way while the connection needs reconnecting, with TikTok\'s own reason', async () => {
+        respond = (sql) => (/FROM platform_connections/.test(sql)
+            ? { rows: [{ id: 'conn-1', creator_id: 'creator-1', status: 'invalid', refresh_token: 'r', access_token: 'a', last_error: 'invalid_grant: the refresh token is revoked' }] }
+            : { rows: [], rowCount: 1 });
+
+        const err = await publishTikTokPost(due(), 0).then(() => null, (e) => e);
+
+        assert.equal(err?.name, 'TikTokNotConnectedError');
+        assert.equal(failure()?.params[1], 'invalid_grant: the refresh token is revoked');
+        assert.deepEqual(tiktokCalls, []);
+    });
+});

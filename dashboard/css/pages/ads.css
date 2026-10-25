@@ -1,0 +1,255 @@
+/*
+ * Ads: the rules the Ads area uses and no other screen does.
+ *
+ * Loaded by App.loadPageModule next to dashboard/js/pages/ads.js (the `ads` entry declares `css: true`), and by the Campaigns tab
+ * (ads_campaigns.js asks the shell for the same file before it paints), with the same ?v=. The shared tokens and components (cards, badges,
+ * buttons, the segmented control) stay in tokens.css and styles.css. Some rules deliberately stayed there: the `.boost-` rules (Posts draws the
+ * Boost box and dialog, and Posts does not load this file) and the `.ads-check*` / `.ads-step*` readiness checklist and `.ads-kinds` (the
+ * Settings card draws them, and Settings does not load this file either).
+ * Logical properties only, tokens only: this area is read right to left first, and every target is 44px.
+ */
+
+/* ─── Ads Overview (#/ads): the owner's health strip, spend, what needs attention and what is queued. Logical properties only; every target is 44px. ─── */
+.ads-page { display: flex; flex-direction: column; gap: var(--space-5); }
+.ads-page .stats-grid, .ads-page .section { margin-block-end: 0; }
+.ads-account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3) var(--space-5); margin: 0; }
+.ads-account-grid dd { margin: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-inline-size: 0; overflow-wrap: anywhere; }
+.ads-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ads-actions .btn { min-block-size: var(--tap-target); }
+.ads-meter { inline-size: 100%; margin-block-end: var(--space-2); }
+.ads-stat .stat-sub { margin-block-start: var(--space-1); }
+.ads-payment-missing .ads-actions, #ads-first-run .ads-actions, #ads-account-problem .ads-actions { margin-block-start: var(--space-3); }
+/* The numbered steps of the first-run and no-payment cards: calm text, the number in the highlighter's label colour. */
+.ads-steps { margin: var(--space-3) 0 0; padding-inline-start: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ads-steps li { padding-inline-start: var(--space-1); }
+.ads-steps li::marker { color: var(--accent-text); font-weight: var(--fw-semibold); }
+.ads-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-4); flex-wrap: wrap; margin-block-end: var(--space-3); }
+.ads-section-head .section-title, .ads-section-head p { margin: 0; }
+.ads-limits { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); flex-wrap: wrap; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
+.ads-limits-text { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; font-size: var(--fs-200); color: var(--text-default); }
+.ads-limits-text strong { color: var(--text-strong); }
+.ads-limits-note { flex-basis: 100%; margin: 0; }
+.ads-payment-missing .btn { min-block-size: var(--tap-target); }
+.ads-name-sub { display: block; font-size: var(--fs-100); color: var(--text-muted); }
+.ads-state { display: inline-flex; align-items: center; gap: var(--space-1); }
+.ads-state [data-lucide], .ads-stat .stat-sub [data-lucide] { inline-size: 14px; block-size: 14px; flex-shrink: 0; }
+.ads-stat .stat-sub [data-lucide] { vertical-align: -2px; }
+.ads-stat--warn { border-color: var(--border-warning); }
+.ads-edit-name { margin: 0 0 var(--space-1); }
+/* Overview: the freshness notes under the figures, the attention list, the queued changes, the link to Campaigns. */
+.ads-fresh { display: flex; flex-direction: column; gap: var(--space-1); margin-block: var(--space-3); }
+.ads-fresh p { margin: 0; }
+.ads-attn-list, .ads-queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ads-attn-item, .ads-queue-item {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md);
+}
+.ads-attn-main, .ads-queue-main { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; flex: 1 1 16rem; }
+.ads-attn-title { color: var(--text-strong); overflow-wrap: anywhere; }
+.ads-attn-detail { margin: 0; font-size: var(--fs-200); color: var(--text-default); overflow-wrap: anywhere; }
+.ads-attn-at { margin: 0; }
+.ads-section-head .help-link, .ads-attn-links .btn, .ads-attn-links .help-link { min-block-size: var(--tap-target); }
+.ads-queue-object { color: var(--text-muted); overflow-wrap: anywhere; }
+.ads-queue-due { white-space: nowrap; }
+.ads-calm { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); color: var(--text-default); }
+.ads-calm [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; color: var(--success-text); }
+.ads-queue-item .badge [data-lucide] { inline-size: var(--icon-xs); block-size: var(--icon-xs); }
+.ads-campaigns-link { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
+.ads-campaigns-link .section-title, .ads-counts { margin: 0; }
+.ads-counts { flex: 1 1 auto; color: var(--text-default); }
+.ads-campaigns-link .btn { min-block-size: var(--tap-target); }
+@media (max-width: 480px) {
+    .ads-actions .btn, .ads-limits .btn, .ads-campaigns-link .btn { flex: 1 1 auto; }
+    .ads-limits-text { flex-direction: column; }
+    .ads-attn-item, .ads-queue-item { padding: var(--space-2) var(--space-3); }
+}
+
+/* ─── Tabs (Overview | Campaigns) ───────────────────────────────────────────
+   The same segmented control the Studio uses, with the bar above the page header. */
+.ads-tabs { margin-block-end: var(--space-1); }
+.ads-tabs-seg { inline-size: max-content; max-inline-size: 100%; }
+
+/* ─── Campaigns tab: the tree ────────────────────────────────────────────────
+   Campaign → ad set → ad as nested lists. Each row is a raised surface; what is inside an opened row is indented by its own inline start,
+   so the tree leans the right way in Arabic. The row is a grid: toggle, name and badges, the figures, the actions. */
+.ads-camp-page { gap: var(--space-4); }
+.ads-tax-note { margin: 0; }
+.ads-help { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; }
+.ads-tree, .ads-children { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ads-children { margin-block-start: var(--space-2); padding-inline-start: var(--space-6); border-inline-start: 1px solid var(--border-subtle); }
+.ads-row {
+    display: grid;
+    grid-template-columns: var(--tap-target) minmax(0, 1.4fr) minmax(0, 2fr) auto;
+    align-items: start;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+}
+.ads-row-lead { display: flex; align-items: center; justify-content: center; min-block-size: var(--tap-target); }
+.ads-toggle { min-block-size: var(--tap-target); min-inline-size: var(--tap-target); }
+.ads-row-main { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.ads-level { font-size: var(--fs-100); color: var(--text-muted); }
+.ads-row-name { color: var(--text-strong); overflow-wrap: anywhere; }
+.ads-badges { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.ads-queued [data-lucide] { inline-size: var(--icon-xs); block-size: var(--icon-xs); }
+.ads-review { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning-text); font-size: var(--fs-200); }
+.ads-review-title { font-weight: var(--fw-semibold); }
+.ads-review-list { margin: 0; padding-inline-start: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+.ads-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--space-2) var(--space-4); margin: 0; min-inline-size: 0; }
+.ads-figure { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.ads-figure dt { font-size: var(--fs-100); color: var(--text-muted); }
+.ads-figure dd { margin: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+.ads-figure--none { grid-column: 1 / -1; }
+.ads-edits-left { display: block; }
+.ads-kids-note { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.ads-row > .ads-actions { justify-content: flex-end; }
+
+/* A tablet keeps the three columns but lets the actions drop under the figures. */
+@media (max-width: 900px) {
+    .ads-row { grid-template-columns: var(--tap-target) minmax(0, 1fr); }
+    .ads-row > .ads-figures, .ads-row > .ads-actions { grid-column: 2; }
+    .ads-row > .ads-actions { justify-content: flex-start; }
+}
+/* A phone: less inset for what is inside, so three levels still fit. */
+@media (max-width: 480px) {
+    .ads-children { padding-inline-start: var(--space-3); }
+    .ads-row { padding: var(--space-2); }
+}
+
+/* ─── Ads → Create, the full builder (A5, ads_create.js) ───────────────────────────────── */
+.adsc-page .adsc-step { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4) var(--space-5); border-radius: var(--radius-md); }
+.adsc-step-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.adsc-stepper { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.adsc-stepper-item { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); color: var(--text-muted); font-size: var(--fs-200); }
+.adsc-stepper-item.is-current { color: var(--text-strong); border-color: var(--accent-text); font-weight: var(--fw-semibold); }
+.adsc-stepper-item.is-done { color: var(--text-default); }
+.adsc-stepper-n { display: inline-grid; place-items: center; inline-size: 1.5em; block-size: 1.5em; border-radius: 50%; border: 1px solid currentColor; font-size: var(--fs-200); }
+.adsc-fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; }
+.adsc-indent { padding-inline-start: var(--space-5); }
+.adsc-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-3) var(--space-4); }
+.adsc-chips, .adsc-mock-ice { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.adsc-chip { display: inline-flex; align-items: center; gap: var(--space-1); min-block-size: var(--tap-target); }
+.adsc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.adsc-results .btn { justify-content: flex-start; text-align: start; inline-size: 100%; }
+.adsc-ice { display: flex; align-items: center; gap: var(--space-2); }
+.adsc-ice .form-input { flex: 1 1 auto; min-inline-size: 0; }
+.adsc-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--space-1) var(--space-3); }
+.adsc-progress { inline-size: 100%; block-size: var(--space-2); accent-color: var(--accent-text); }
+.adsc-money { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
+.adsc-money p { margin: 0; }
+.adsc-nav { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.adsc-nav .form-error { flex-basis: 100%; margin: 0; }
+.adsc-previews { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 18rem)); gap: var(--space-4); align-items: start; }
+.adsc-preview { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.adsc-preview-frame { inline-size: 100%; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-raised); }
+.adsc-frame-45 { aspect-ratio: 4 / 6.2; }
+.adsc-frame-916 { aspect-ratio: 9 / 16; }
+.adsc-mock { position: relative; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-raised); overflow: hidden; }
+.adsc-mock-label { align-self: flex-start; }
+.adsc-mock-head { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.adsc-mock-avatar { display: inline-grid; place-items: center; inline-size: 2rem; block-size: 2rem; border-radius: 50%; border: 1px solid var(--border-subtle); color: var(--text-strong); }
+.adsc-mock-media { flex: 1 1 auto; min-block-size: 6rem; display: grid; place-items: center; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); overflow: hidden; color: var(--text-muted); }
+.adsc-mock-media img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.adsc-mock-text, .adsc-mock-headline { margin: 0; font-size: var(--fs-200); color: var(--text-default); overflow-wrap: anywhere; }
+.adsc-mock-more { color: var(--text-muted); }
+.adsc-mock-cta { align-self: stretch; pointer-events: none; }
+.adsc-mock-chat { display: flex; flex-direction: column; gap: var(--space-2); }
+.adsc-mock-bubble { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); font-size: var(--fs-200); color: var(--text-default); }
+/* ─── Results (A6, ads_results.js) ─────────────────────────────────────────────────────────────────────────────────────────────── */
+.adsres-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.adsres-scope .select { max-inline-size: 22rem; }
+/* The provisional days: the same tint the charts shade them with, as a key beside the sentence. */
+.adsres-provisional { display: flex; align-items: center; gap: var(--space-2); }
+.adsres-swatch { flex: none; inline-size: 14px; block-size: 14px; border-radius: var(--radius-sm); background: var(--chart-grid); border: 1px solid var(--chart-tick); }
+.adsres-totals { margin-block: var(--space-4); }
+.adsres-charts { margin-block: var(--space-4); }
+.adsres-chart-note { margin: var(--space-2) 0 0; }
+.adsres-compare, .adsres-ads { margin-block: var(--space-4); }
+.adsres-compare .chart-card-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.adsres-compare-table th[scope="row"], .adsres-ads-table th[scope="row"] { font-weight: var(--fw-medium); text-align: start; }
+.adsres-compare-table td, .adsres-ads-table td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 480px) {
+    .adsres-scope, .adsres-scope .select { inline-size: 100%; max-inline-size: none; }
+}
+/* ─── Proposals (A7, ads_proposals.js) ─────────────────────────────────────────────────────────────────────────────────────────── */
+.adsprop-list { display: flex; flex-direction: column; gap: var(--space-4); margin-block: var(--space-4); }
+.adsprop-card { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); }
+.adsprop-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsprop-title { margin: 0; font-size: var(--fs-300, 1.05rem); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; flex: 1 1 14rem; }
+.adsprop-source { font-size: var(--fs-100); color: var(--text-muted); }
+.adsprop-rationale { margin: 0; color: var(--text-default); overflow-wrap: anywhere; }
+.adsprop-spec { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-2) var(--space-4); margin: 0; }
+.adsprop-spec div { display: flex; flex-direction: column; gap: var(--space-1); }
+.adsprop-spec dt { font-size: var(--fs-100); color: var(--text-muted); }
+.adsprop-spec dd { margin: 0; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.adsprop-copy { margin: 0; padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--border-subtle); color: var(--text-default); overflow-wrap: anywhere; }
+.adsprop-greeting { margin: 0; font-size: var(--fs-200); color: var(--text-default); }
+.adsprop-ice { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.adsprop-assumptions summary { cursor: pointer; color: var(--accent-text); min-block-size: var(--tap-target); display: flex; align-items: center; }
+.adsprop-assumptions ul, .adsprop-warnings, .adsprop-evidence ul { margin: 0; padding-inline-start: var(--space-4); }
+.adsprop-evidence { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-raised); border: 1px solid var(--border-subtle); }
+.adsprop-evidence ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.adsprop-evidence li strong { font-variant-numeric: tabular-nums; color: var(--text-strong); }
+.adsprop-label { font-size: var(--fs-100); color: var(--text-muted); }
+.adsprop-effect { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
+.adsprop-warnings { color: var(--warning-text); font-size: var(--fs-200); }
+.adsprop-warnings i { inline-size: var(--icon-xs); block-size: var(--icon-xs); vertical-align: middle; }
+.adsprop-wait { display: flex; align-items: center; gap: var(--space-2); color: var(--text-muted); }
+.adsprop-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.adsprop-earlier .adsprop-card { opacity: 0.85; }
+@media (max-width: 480px) {
+    .adsprop-actions .btn { flex: 1 1 100%; }
+}
+
+/* ─── Audiences (A8, ads_audiences.js) ─── */
+.adsaud-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: var(--space-4); margin-block: var(--space-4); }
+.adsaud-card, .adsaud-lists { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsaud-lists { margin-block: var(--space-4); }
+.adsaud-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsaud-head .section-title { margin: 0; flex: 1 1 14rem; display: flex; align-items: center; gap: var(--space-2); }
+.adsaud-name { margin: 0; font-size: var(--fs-300, 1.05rem); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; flex: 1 1 10rem; }
+.adsaud-kind { font-size: var(--fs-100); color: var(--text-muted); }
+.adsaud-size { margin: 0; color: var(--text-default); font-variant-numeric: tabular-nums; }
+.adsaud-why { margin: 0; }
+.adsaud-wait { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.adsaud-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: auto; }
+.adsaud-terms { display: flex; gap: var(--space-3); padding: var(--space-4); margin-block: var(--space-4); align-items: flex-start; }
+.adsaud-terms p { margin-block: var(--space-1) var(--space-3); }
+.adsaud-needed { margin: 0; padding-inline-start: var(--space-5, 1.25rem); }
+.adsaud-counts { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5, 1.25rem); font-variant-numeric: tabular-nums; }
+.adsaud-kinds { display: grid; gap: var(--space-2); }
+.adsaud-kind-btn { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); padding: var(--space-3); text-align: start; cursor: pointer; font: inherit; color: inherit; }
+.adsaud-kind-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.adsaud-videos { display: grid; gap: var(--space-2); max-height: 18rem; overflow-y: auto; }
+.adsaud-video { display: flex; align-items: center; gap: var(--space-2); }
+.adsaud-video img { border-radius: var(--radius-sm, 4px); object-fit: cover; flex: none; }
+.adsaud-video span[dir] { flex: 1 1 auto; overflow-wrap: anywhere; }
+.adsaud-lists textarea { font-family: var(--font-mono, monospace); }
+@media (max-width: 480px) {
+    .adsaud-actions .btn { flex: 1 1 100%; }
+}
+
+/* ─── Ads → Rules (#/ads_rules, A9): templates, the rule cards with their history, and the rule dialog. Logical properties only. ─── */
+.adsrule-intro { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsrule-intro p { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; }
+.adsrule-templates, .adsrule-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: var(--space-4); }
+.adsrule-tpl, .adsrule-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+.adsrule-card[data-enabled="false"] { opacity: 0.8; }
+.adsrule-name { margin: 0; font-size: var(--fs-300, 1.05rem); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; flex: 1 1 10rem; }
+.adsrule-sentence { margin: 0; color: var(--text-default); overflow-wrap: anywhere; }
+.adsrule-last { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.adsrule-history { border-block-start: 1px solid var(--border-subtle); padding-block-start: var(--space-3); }
+.adsrule-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.adsrule-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsrule-when { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: var(--fs-100); }
+.adsrule-matched { margin: var(--space-2) 0 0; padding-inline-start: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-200); }
+.adsrule-value, .adsrule-step, .adsrule-skip { margin-inline-start: var(--space-2); }
+.adsrule-step { color: var(--text-strong); }
+.adsrule-skip { color: var(--text-muted); }
+.adsrule-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.adsrule-cond { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.adsrule-cond .form-input { inline-size: auto; flex: 1 1 8rem; min-block-size: var(--tap-target); }
+.adsrule-objects { max-block-size: 14rem; overflow-y: auto; }
+.adsrule-asks { display: flex; gap: var(--space-2); padding: var(--space-3); margin: 0; }

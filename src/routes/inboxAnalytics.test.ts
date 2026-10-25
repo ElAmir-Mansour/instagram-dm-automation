@@ -91,7 +91,9 @@ describe('GET /conversations — the platform (I8)', () => {
 
     it('answers null for anything that is not one of the two', () => {
         for (const v of ['instagram', 'facebook']) assert.equal(conversationPlatformOf(v), v);
-        for (const v of [undefined, null, '', 'tiktok', 'Instagram', 1]) assert.equal(conversationPlatformOf(v), null);
+        // 'whatsapp' is in the type since v50 but nothing writes a WhatsApp thread yet and the dashboard cannot show it: it stays null until the
+        // phase that stores the first one widens this with the dashboard.
+        for (const v of [undefined, null, '', 'tiktok', 'whatsapp', 'Instagram', 1]) assert.equal(conversationPlatformOf(v), null);
     });
 });
 
@@ -195,8 +197,9 @@ describe('GET /stats — ?days= (A1)', () => {
         const { res, sent } = await call('get', '/stats', { query: { days: '28' } }, () => count(3));
         assert.equal(res.body.days, 28);
         const windowed = sent.filter((s) => /i\.creator_id = \$1 AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\)/.test(s.sql));
-        // total, sent, failed, unique people, instagram, facebook.
-        assert.equal(windowed.length, 6);
+        // total, sent, failed, unique people, instagram, facebook, and the outcome split (src/services/outcomes.ts).
+        assert.equal(windowed.length, 7);
+        assert.ok(windowed.some((s) => /COUNT\(i\.id\) FILTER \(WHERE o\.outcome = 'actionable'\)/.test(s.sql)), 'the outcome split rides in the same window');
         for (const s of windowed) assert.deepEqual(s.params, [TENANT, 28]);
         assert.ok(windowed.some((s) => /COUNT\(DISTINCT i\.sender_username\)/.test(s.sql)), 'people reached');
         assert.ok(windowed.some((s) => /i\.platform = 'facebook'/.test(s.sql)), 'the platform split');
@@ -221,7 +224,7 @@ describe('GET /stats/campaigns — ?days= (A1)', () => {
     it('puts the window in the JOIN, so a campaign with nothing in it still shows at zero', async () => {
         const { sent } = await call('get', '/stats/campaigns', { query: { days: '7' } });
         const [q] = sent;
-        assert.match(q!.sql, /LEFT JOIN interactions i ON i\.campaign_id = c\.id AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\) WHERE c\.creator_id = \$1/);
+        assert.match(q!.sql, /LEFT JOIN interactions i ON i\.campaign_id = c\.id AND i\.timestamp > NOW\(\) - make_interval\(days => \$2::int\) LEFT JOIN LATERAL \(SELECT CASE i\.status .*\) o ON TRUE WHERE c\.creator_id = \$1/);
         assert.deepEqual(q!.params, [TENANT, 7]);
     });
 
@@ -249,7 +252,7 @@ describe('GET /stats/failures (A5)', () => {
         assert.deepEqual((await call('get', '/stats/failures', { query: { days: '99999' } })).sent[0]!.params, [TENANT, 365]);
     });
 
-    it('answers { days, total, reasons: [{ reason_code, count, sample, last_at }] }, top six', async () => {
+    it('answers { days, total, reasons: [{ reason_code, count, expected, expected_count, sample, last_at }] }, top six', async () => {
         const rows = [
             { error_log: 'Private Reply Failed: Error validating access token (Code: 190)', count: 7, last_at: new Date('2026-09-26T08:00:00Z'), total: 12 },
             { error_log: 'Skipped: recipient already received an automated DM within 24 hours.', count: 5, last_at: new Date('2026-09-27T08:00:00Z'), total: 12 },
@@ -258,9 +261,13 @@ describe('GET /stats/failures (A5)', () => {
         assert.deepEqual(res.body, {
             days: 30,
             total: 12,
+            // No `expected_total` came from the (stubbed) database, so it is counted from the groups: the 24 h cap's five.
+            expected_total: 5,
+            actionable_total: 7,
             reasons: [
-                { reason_code: '190', count: 7, sample: rows[0]!.error_log, last_at: '2026-09-26T08:00:00.000Z' },
-                { reason_code: 'recipient_cap', count: 5, sample: rows[1]!.error_log, last_at: '2026-09-27T08:00:00.000Z' },
+                // `expected`: a designed skip, not a fault (src/services/failureReasons.ts). A dead token is a fault; the 24 h cap is by design.
+                { reason_code: '190', count: 7, expected: false, expected_count: 0, sample: rows[0]!.error_log, last_at: '2026-09-26T08:00:00.000Z' },
+                { reason_code: 'recipient_cap', count: 5, expected: true, expected_count: 5, sample: rows[1]!.error_log, last_at: '2026-09-27T08:00:00.000Z' },
             ],
         });
     });

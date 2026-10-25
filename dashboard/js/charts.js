@@ -84,7 +84,32 @@ const Charts = {
     },
 
     /**
-     * One cell per day; opacity carries volume, a foot-bar carries failures.
+     * A day of a daily series as a short label ("Oct 19"). The server sends a CALENDAR day ('2026-10-19', cut in the tenant's zone),
+     * which is not an instant: parsed in the browser's zone it lands on the previous evening anywhere west of UTC, and the cell for
+     * "today" is labelled yesterday. A calendar day is read, and formatted, in UTC. Anything that is not one (a full timestamp) is
+     * an instant and keeps `UI.formatDayShort`.
+     */
+    dayLabel(day) {
+        const text = typeof day === 'string' ? day : '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+            const fmt = UI._formatter({ month: 'short', day: 'numeric', timeZone: 'UTC' });
+            if (fmt) {
+                try { return fmt.format(new Date(`${text}T00:00:00Z`)); } catch { /* fall through */ }
+            }
+        }
+        return UI.formatDayShort(day);
+    },
+
+    /**
+     * One cell per day; opacity carries volume, a foot-bar carries what went wrong.
+     *
+     * Which numbers it draws is the caller's to say (`opts.valueKey` / `badKey` / `noteKey`, default `sent` / `failed`):
+     *   - `valueKey` is the series itself: a cell's opacity, in `opts.valueToken` (default `--success`);
+     *   - `badKey` is the foot-bar in the danger colour, or null for a series with nothing to flag. It is what NEEDS the person,
+     *     not everything that did not succeed: a send the product skipped on purpose is not red (audit OV-03);
+     *   - `noteKey` is a neutral count that is named in the tooltip and the screen-reader table and never drawn red (the
+     *     "handled by design" count).
+     * Two strips with different `valueKey`s on one screen are two labelled series (Overview: comment auto-replies, assistant replies).
      *
      * Deliberately NOT a scale with a y-axis. The question this answers is "did
      * anything happen, and when", and for that a reader needs to see gaps. A
@@ -125,9 +150,15 @@ const Charts = {
             return Charts._empty(opts.emptyMessage || '');
         }
 
+        // Which columns of a day this strip draws. The defaults are what it always drew.
+        const valueKey = opts.valueKey || 'sent';
+        const badKey = opts.badKey === null ? null : (opts.badKey || 'failed');
+        const noteKey = opts.noteKey || null;
+        const num = (d, key) => (key ? Number(d && d[key]) || 0 : 0);
+
         // Most recent nearest the reading edge: rightmost in LTR, leftmost in RTL.
         const ordered = I18N.isRtl() ? [...days].reverse() : [...days];
-        const peak = Math.max(1, ...days.map((d) => (d.sent || 0) + (d.failed || 0)));
+        const peak = Math.max(1, ...days.map((d) => num(d, valueKey) + num(d, badKey)));
 
         // CELL/GAP are proportions (see the class comment above). GAP is even
         // so a cell's x stays a whole number — cosmetic, but it keeps the
@@ -144,27 +175,32 @@ const Charts = {
         // card, and a strip with few cells just leaves margin instead of ballooning.
         const MAX_SLOT_PX = 56;
         const maxWidthPx = ordered.length * MAX_SLOT_PX;
-        const sent = Charts.token('--success', '#34c759');
+        const sent = Charts.token(opts.valueToken || '--success', opts.valueFallback || '#34c759');
         const failed = Charts.token('--danger', '#ff3b30');
         const empty = Charts.token('--surface-glass', 'rgba(255,255,255,0.08)');
         // A hairline outline so an empty day reads as a deliberate, bounded
         // slot rather than a near-invisible smudge on a mostly-empty week.
         const emptyLine = Charts.token('--border-subtle', 'rgba(255,255,255,0.12)');
-        const sentLabel = opts.sentHeader || 'Sent';
-        const failedLabel = opts.failedHeader || 'Failed';
+        const sentLabel = opts.valueHeader || opts.sentHeader || 'Sent';
+        const failedLabel = opts.badHeader || opts.failedHeader || 'Failed';
+        const noteLabel = opts.noteHeader || '';
 
         const cells = ordered.map((d, i) => {
-            const total = (d.sent || 0) + (d.failed || 0);
+            const value = num(d, valueKey);
+            const bad = num(d, badKey);
+            const total = value + bad;
             const x = i * SLOT + GAP / 2;
-            const dayLabel = UI.formatDayShort(d.day);
+            const dayLabel = Charts.dayLabel(d.day);
             // A floor on opacity: a day with one event must not be invisible.
             const intensity = total === 0 ? 0 : 0.28 + 0.72 * (total / peak);
-            const failH = total > 0 && d.failed > 0
-                ? Math.max(FOOT_MIN, Math.round((BAR_H - TOP_SLIVER) * (d.failed / total)))
+            const failH = total > 0 && bad > 0
+                ? Math.max(FOOT_MIN, Math.round((BAR_H - TOP_SLIVER) * (bad / total)))
                 : 0;
             // A native tooltip on hover, with exact numbers — the one thing the
             // sr-only table below cannot offer a sighted mouse user.
-            const tip = `${dayLabel}: ${UI.formatNumber(d.sent || 0)} ${sentLabel}, ${UI.formatNumber(d.failed || 0)} ${failedLabel}`;
+            const tip = `${dayLabel}: ${UI.formatNumber(value)} ${sentLabel}`
+                + (badKey ? `, ${UI.formatNumber(bad)} ${failedLabel}` : '')
+                + (noteKey ? `, ${UI.formatNumber(num(d, noteKey))} ${noteLabel}` : '');
             return html`
                 <g>
                     <title>${tip}</title>
@@ -183,7 +219,7 @@ const Charts = {
         const labelStep = Math.max(1, Math.ceil(ordered.length / 8));
         const labels = ordered.map((d, i) => {
             const show = i % labelStep === 0 || i === ordered.length - 1;
-            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted);">${show ? UI.formatDayShort(d.day) : ''}</span>`;
+            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted);">${show ? Charts.dayLabel(d.day) : ''}</span>`;
         });
 
         return html`
@@ -197,8 +233,12 @@ const Charts = {
             </div>
             ${Charts._srTable(
                 opts.label || '',
-                [opts.dayHeader || 'Day', opts.sentHeader || 'Sent', opts.failedHeader || 'Failed'],
-                days.map((d) => [UI.formatDayShort(d.day), UI.formatNumber(d.sent || 0), UI.formatNumber(d.failed || 0)])
+                [opts.dayHeader || 'Day', sentLabel, ...(badKey ? [failedLabel] : []), ...(noteKey ? [noteLabel] : [])],
+                days.map((d) => [
+                    Charts.dayLabel(d.day), UI.formatNumber(num(d, valueKey)),
+                    ...(badKey ? [UI.formatNumber(num(d, badKey))] : []),
+                    ...(noteKey ? [UI.formatNumber(num(d, noteKey))] : []),
+                ])
             )}`;
     },
 
@@ -331,6 +371,9 @@ const Charts = {
         });
         const present = rows.filter((r) => r.value !== null);
         if (present.length < 2) return Charts._empty(opts.emptyMessage || '');
+        // Days the source may still revise (ads results: Meta restates the last 3 days). Shaded behind the line, and named in the
+        // screen-reader table; a series without the flag draws exactly as before.
+        const provisional = (Array.isArray(points) ? points : []).map((p) => !!(p && p.provisional === true));
 
         const fmt = typeof opts.format === 'function' ? opts.format : (v) => UI.formatNumber(v);
         const W = 600, H = 160, TOP = 8, BOTTOM = H - 8;
@@ -371,9 +414,13 @@ const Charts = {
         if (lastIndex >= 0 && !dots.includes(lastIndex)) dots.push(lastIndex);
 
         const dayText = (d) => (d ? UI.formatDayShort(d) : '');
+        const shades = provisional.map((on, i) => (on
+            ? html`<rect class="chart-line-provisional" x="${(rtl ? W - (i + 1) * slot : i * slot).toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="${grid}"></rect>`
+            : ''));
+        const provisionalText = (i) => (provisional[i] && opts.provisionalLabel ? ` (${opts.provisionalLabel})` : '');
         const hits = rows.map((r, i) => {
             const x = rtl ? W - (i + 1) * slot : i * slot;
-            return html`<rect x="${x.toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="transparent"><title>${dayText(r.day)}: ${r.value === null ? '—' : fmt(r.value)}</title></rect>`;
+            return html`<rect x="${x.toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="transparent"><title>${dayText(r.day)}${provisionalText(i)}: ${r.value === null ? '—' : fmt(r.value)}</title></rect>`;
         });
 
         // At most five dates, evenly spaced, always the first and the last. Every other one is
@@ -394,6 +441,7 @@ const Charts = {
                 </div>
                 <svg class="chart-line-svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none"
                      role="img" aria-label="${opts.label || ''}" focusable="false">
+                    ${shades}
                     <line x1="0" x2="${W}" y1="${TOP}" y2="${TOP}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
                     <line x1="0" x2="${W}" y1="${(TOP + BOTTOM) / 2}" y2="${(TOP + BOTTOM) / 2}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
                     <line x1="0" x2="${W}" y1="${BOTTOM}" y2="${BOTTOM}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
@@ -409,7 +457,44 @@ const Charts = {
             ${Charts._srTable(
                 opts.label || '',
                 [opts.dayHeader || 'Day', opts.valueHeader || 'Value'],
-                rows.map((r) => [dayText(r.day), r.value === null ? '—' : fmt(r.value)])
+                rows.map((r, i) => [`${dayText(r.day)}${provisionalText(i)}`, r.value === null ? '—' : fmt(r.value)])
             )}`;
+    },
+
+    /**
+     * Horizontal bars that compare one measure across a few named things (ads, countries, placements): a form for magnitude by
+     * identity, so one hue, sorted by the caller, the value written beside each bar in text ink (never the bar's colour), and a
+     * screen-reader table. `items` are `{ label, value, display? }`; a null value is "—" with no bar. The bar grows from the reading
+     * edge: in Arabic the rect is anchored on the right.
+     */
+    compareBars(items, options) {
+        const opts = options || {};
+        const list = (Array.isArray(items) ? items : []).map((it) => {
+            const n = it && it.value !== null && it.value !== undefined && it.value !== '' ? Number(it.value) : NaN;
+            return { label: it ? String(it.label ?? '') : '', value: Number.isFinite(n) ? n : null, display: it ? it.display : undefined };
+        });
+        if (!list.some((it) => it.value !== null && it.value > 0)) return Charts._empty(opts.emptyMessage || '');
+        const fmt = typeof opts.format === 'function' ? opts.format : (v) => UI.formatNumber(v);
+        const peak = Math.max(...list.map((it) => (it.value === null ? 0 : it.value)));
+        const rtl = I18N.isRtl();
+        const fill = Charts.token(opts.token || '--chart-accent', 'currentColor');
+        const track = Charts.token('--chart-grid', 'rgba(255,255,255,0.08)');
+        const text = (it) => (it.display !== undefined && it.display !== null ? it.display : it.value === null ? '—' : fmt(it.value));
+        return html`
+            <div class="chart-bars" aria-hidden="true">
+                ${list.map((it) => {
+                    const w = it.value === null || peak <= 0 ? 0 : Math.max(0, Math.min(100, (it.value / peak) * 100));
+                    return html`
+                        <div class="chart-bars-row">
+                            <span class="chart-bars-label">${it.label}</span>
+                            <svg class="chart-bars-svg" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                                <rect x="0" y="0" width="100" height="8" rx="4" fill="${track}"></rect>
+                                ${w > 0 ? html`<rect class="chart-bars-fill" x="${(rtl ? 100 - w : 0).toFixed(2)}" y="0" width="${w.toFixed(2)}" height="8" rx="4" fill="${fill}"></rect>` : ''}
+                            </svg>
+                            <span class="chart-bars-value">${text(it)}</span>
+                        </div>`;
+                })}
+            </div>
+            ${Charts._srTable(opts.label || '', [opts.nameHeader || 'Name', opts.valueHeader || 'Value'], list.map((it) => [it.label, text(it)]))}`;
     },
 };

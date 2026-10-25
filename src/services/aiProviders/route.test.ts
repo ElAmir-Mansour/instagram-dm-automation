@@ -87,7 +87,7 @@ describe('the default pick: the first provider that has a key', () => {
     it('gives each purpose its own default effort', async () => {
         saveKey('anthropic');
         for (const purpose of AI_PURPOSES) assert.equal((await pick(purpose)).effort, PURPOSE_DEFAULT_EFFORT[purpose], purpose);
-        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low']);
+        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low', 'low', 'medium', 'medium']);
     });
 
     it('answers the `dm` purpose at low effort on the default model, until a route is saved for it', async () => {
@@ -319,5 +319,70 @@ describe('the Mac guard', () => {
     it('a failing read of the list is an error, never a yes (the work is refused until the database answers)', async () => {
         db.failOn(/FROM app_settings WHERE key = \$1/, new Error('connection terminated'), 1);
         await assert.rejects(resolveRoute('tenant_infographic', OTHER), /connection terminated/);
+    });
+});
+
+describe('the `dm_whatsapp` purpose: WhatsApp replies answer only from providers that do not train on what they are sent', () => {
+    it('with no route saved for it, takes the saved `dm` route, as a saved route, at that route\'s own model and effort', async () => {
+        saveKey('groq');
+        saveRouting({ dm: { provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'low' } });
+        assert.deepEqual(await pick('dm_whatsapp'), { purpose: 'dm_whatsapp', provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'low', source: 'saved' });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'low', source: 'saved' }, 'and `dm` itself is as it was');
+    });
+
+    it('prefers a route saved for itself over the `dm` route', async () => {
+        saveKey('groq');
+        saveKey('anthropic');
+        saveRouting({ dm: { provider: 'groq', model: 'openai/gpt-oss-20b', effort: 'low' }, dm_whatsapp: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'medium' } });
+        assert.deepEqual(await pick('dm_whatsapp'), { purpose: 'dm_whatsapp', provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'medium', source: 'saved' });
+        assert.equal((await pick('dm')).provider, 'groq', 'the Instagram route does not follow it');
+    });
+
+    it('never borrows the route of a purpose that is not its fallback: a saved `tenant_studio` route is no WhatsApp route', async () => {
+        saveKey('anthropic');
+        saveRouting({ tenant_studio: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } });
+        assert.equal((await pick('dm_whatsapp')).source, 'default');
+    });
+
+    it('refuses a `dm` route on Gemini, OpenRouter or Custom (taken as its own), naming where the route came from, and never moves to another provider', async () => {
+        saveKey('groq');
+        for (const provider of ['gemini', 'openrouter'] as const) {
+            saveKey(provider);
+            saveRouting({ dm: { provider, model: 'some-model', effort: 'low' } });
+            const err = await failure(resolveRoute('dm_whatsapp', null));
+            assert.equal(err.kind, 'no_provider', provider);
+            assert.match(err.message, /dm_whatsapp \(taken from the dm route\) uses/, provider);
+            assert.match(err.message, /not on the list of providers that may answer this purpose \(Groq, Anthropic, OpenAI\)/, provider);
+            assert.equal((await pick('dm')).provider, provider, `Instagram's \`dm\` keeps ${provider}`);
+        }
+        saveProviders({ custom: { baseUrl: 'https://llm.example.com/v1', defaultModel: 'my-model' } });
+        saveRouting({ dm_whatsapp: { provider: 'custom', model: 'my-model', effort: 'low' } });
+        assert.equal((await failure(resolveRoute('dm_whatsapp', null))).kind, 'no_provider');
+    });
+
+    it('refuses a route of its own on a provider that is not allowed, even when that provider has a key', async () => {
+        saveKey('gemini');
+        saveKey('groq');
+        saveRouting({ dm_whatsapp: { provider: 'gemini', model: 'gemini-3.8-flash', effort: 'low' } });
+        const err = await failure(resolveRoute('dm_whatsapp', null));
+        assert.match(err.message, /The route for dm_whatsapp uses Google Gemini, which is not on the list/);
+    });
+
+    it('with nothing saved, defaults to the first ALLOWED provider with a key: Gemini and OpenRouter are passed over, so the default is never one of them', async () => {
+        saveKey('gemini');
+        saveKey('openrouter');
+        const none = await failure(resolveRoute('dm_whatsapp', null));
+        assert.equal(none.kind, 'no_provider', 'only providers that train: nothing to answer with');
+        saveKey('groq');
+        assert.deepEqual(await pick('dm_whatsapp'), { purpose: 'dm_whatsapp', provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low', source: 'default' });
+        saveKey('openai');
+        assert.equal((await pick('dm_whatsapp')).provider, 'openai', 'the registry\'s order, among the allowed');
+        assert.equal((await pick('dm')).provider, 'openai', 'for `dm` the first with a key is, as always, ahead of Gemini');
+    });
+
+    it('does not change how any other purpose picks: Gemini is still a default for them', async () => {
+        saveKey('gemini');
+        assert.equal((await pick('dm')).provider, 'gemini');
+        assert.equal((await pick('tenant_studio')).provider, 'gemini');
     });
 });

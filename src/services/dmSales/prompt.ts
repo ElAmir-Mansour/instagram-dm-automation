@@ -166,10 +166,12 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     const nameOf = (id: string | null): string | null => (id ? ctx.offers.find((o) => o.id === id)?.name ?? id : null);
     const lines = [kit.headers.conversation, c.stage(facts.stage), c.qualifiers(facts.qualifierTurns, MAX_QUALIFIER_TURNS)];
     lines.push(facts.linkSentFor.length > 0 ? c.linkSent(facts.linkSentFor.map((id) => nameOf(id) ?? id).join(', ')) : c.linkNotSent);
+    if (facts.channel) lines.push(c.channel[facts.channel]);
     if (facts.comment) lines.push(c.comment(facts.comment.keyword, nameOf(facts.comment.offerId)));
     if (facts.tapped) lines.push(c.tapped(facts.tapped.intent));
     if (facts.variant?.opening) lines.push(c.variantOpening(facts.variant.opening));
     if (facts.variant?.cta) lines.push(c.variantCta(facts.variant.cta));
+    if (facts.ad) lines.push(...c.ad(facts.ad));
     return lines.join('\n');
 }
 

@@ -1,6 +1,6 @@
 /**
  * Carousel Studio routes, under `/api/studio` (STUDIO.md §4, §5, §10), the Monteur's
- * (MONTEUR.md §4, §5), and the infographics' (v31, src/services/studio/infographics.ts).
+ * (MONTEUR.md §4, §5), the infographics' (v31, src/services/studio/infographics.ts) and the illustrated explainers' (v59, src/services/explainers/).
  *
  * Two routers, because the worker is not a dashboard user and carries no session:
  *
@@ -10,7 +10,7 @@
  *     POST /worker/claim               { name, kinds? } → 200 { job } | 204; queues the Monteur's daily scan first
  *     POST /worker/jobs/:id/progress   { progress } → 204 (the heartbeat)
  *     POST /worker/jobs/:id/complete   { result } → 204, and the job's side effects
- *     POST /worker/jobs/:id/fail       { error } → 204
+ *     POST /worker/jobs/:id/fail       { error } → 204; a failed explainer write is looked at at once (Gemini takes over a signed-out Mac's)
  *     POST /worker/upload              { filename, mime_type, base64_data } → { id, url }
  *     POST /worker/uploads/sign        { filename, mime_type, size_bytes } → { id, url, upload }
  *
@@ -22,14 +22,24 @@ import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { getPublicBaseUrl, getTikTokPostingFlags } from '../services/appSettings.js';
+import { sendError } from '../services/errorCodes.js';
 import { isMissingSchema } from '../services/health.js';
 import { getMediaStore } from '../services/storage.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { ExplainerError } from '../services/explainers/errors.js';
+import {
+    approveExplainer, approvePictures, createExplainer, deleteExplainer, editExplainer, getExplainer, listExplainers, renderExplainer, retryExplainer, revoiceExplainer,
+    rewriteExplainer, startDraw,
+} from '../services/explainers/explainers.js';
+import { characterCandidates, currentAllowance, drawNextStep, drawOneScene, pickOneScene } from '../services/explainers/scenes.js';
+import { scheduleExplainer } from '../services/explainers/schedule.js';
+import { isExplainersEnabled } from '../services/explainers/switch.js';
+import { afterJobFailed } from '../services/explainers/writing.js';
 import { assertAgentReady, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import { refreshLessons } from '../services/monteur/analyst.js';
 import { approveClip, patchClip, rejectClip, rerenderClip } from '../services/monteur/clips.js';
 import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
-import { signWorkerUpload } from '../services/monteur/uploads.js';
+import { signExplainerUpload, signWorkerUpload } from '../services/monteur/uploads.js';
 import { getMonteurView, presentLessons, retrySource } from '../services/monteur/view.js';
 import { clipText, isPlainObject, requireId, STUDIO_MIGRATION_HINT, StudioError } from '../services/studio/common.js';
 import {
@@ -40,7 +50,7 @@ import { claimJob, completeJob, failJob, jobCounts, reportProgress, STUDIO_JOB_K
 import { enqueueIndex, enqueueScan, getLesson, indexMissing, lessonCounts, listLessons } from '../services/studio/lessons.js';
 import { queuedTikTokCount, runTikTokBatch, scheduleDraft, unscheduleDraft } from '../services/studio/schedule.js';
 import {
-    copyInfographic, createInfographic, deleteInfographic, getInfographic, listInfographics, rerenderInfographic,
+    copyInfographic, createInfographic, deleteInfographic, getInfographic, listInfographics, nextInfographicSlot, rerenderInfographic,
     scheduleInfographic, updateInfographic,
 } from '../services/studio/infographics.js';
 import { getStudioSettings, updateStudioSettings } from '../services/studio/settings.js';
@@ -67,11 +77,27 @@ function handle(event: string, fallback: string, fn: Handler) {
                 res.status(err.status).json(profileIncompleteBody(err));
                 return;
             }
+            // An illustrated explainer's refusal: its status and code, its params for the translated sentence, and beside them what the dashboard reads off the
+            // top level (a refused script's `findings`, a missing picture's `positions`, a paused drawing's `retryAt`).
+            if (err instanceof ExplainerError) {
+                const retryAt = err.params?.retryAt ?? err.extra?.retryAt;
+                if (err.status === 429 && typeof retryAt === 'string') {
+                    const seconds = Math.ceil((Date.parse(retryAt) - Date.now()) / 1000);
+                    if (Number.isFinite(seconds)) res.set('Retry-After', String(Math.max(1, seconds)));
+                }
+                sendError(res, err.status, err.code, err.params, err.message, { ...(err.extra ?? {}), ...(err.status === 429 && retryAt !== undefined ? { retryAt } : {}) });
+                return;
+            }
             if (err instanceof StudioError) {
+                // A coded refusal is the shared envelope (`error` stays the English sentence; `code` and `params` are for the
+                // dashboard to translate); `problems` stays a top-level field, where `studio.js` and `monteur.js` read it.
+                if (err.code) {
+                    sendError(res, err.status, err.code, err.params, err.message, err.problems ? { problems: err.problems } : undefined);
+                    return;
+                }
                 res.status(err.status).json({
                     error: err.message,
                     ...(err.problems ? { problems: err.problems } : {}),
-                    ...(err.code ? { code: err.code } : {}),
                 });
                 return;
             }
@@ -194,7 +220,12 @@ studioWorkerRouter.post('/worker/jobs/:id/complete', handle('studio.complete_fai
 
 studioWorkerRouter.post('/worker/jobs/:id/fail', handle('studio.fail_failed', 'Failed to record the failure.', async (req, res) => {
     const error = clipText(req.body?.error, 2000) ?? 'The worker reported a failure without saying why.';
-    await failJob(workerTenant(res), requireId(req.params.id, 'job'), error);
+    const creatorId = workerTenant(res);
+    const jobId = requireId(req.params.id, 'job');
+    await failJob(creatorId, jobId, error);
+    // A write that failed because the Mac is signed out is answered now, not at the next look: Gemini takes the work over (explainers/writing.ts). It never
+    // throws, and it is not why the worker's failure report is late.
+    await afterJobFailed(creatorId, jobId);
     res.status(204).end();
 }));
 
@@ -207,7 +238,8 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
     const data = Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
     if (data.length === 0) throw new StudioError(400, 'base64_data decodes to nothing.');
     if (data.length > MAX_STUDIO_UPLOAD_BYTES) {
-        throw new StudioError(413, `An upload is at most 3MB decoded; this one is ${(data.length / 1024 / 1024).toFixed(1)}MB.`);
+        throw new StudioError(413, `An upload is at most 3MB decoded; this one is ${(data.length / 1024 / 1024).toFixed(1)}MB.`, undefined,
+            'UPLOAD_TOO_LARGE', { maxMb: MAX_STUDIO_UPLOAD_BYTES / 1024 / 1024, maxBytes: MAX_STUDIO_UPLOAD_BYTES });
     }
     const actual = sniffImageType(data);
     if (actual !== mimeType) {
@@ -230,6 +262,12 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
 // A rendered reel: tens of MB, straight to Supabase Storage through a signed URL (MONTEUR.md §4).
 studioWorkerRouter.post('/worker/uploads/sign', handle('monteur.sign_failed', 'Failed to sign the upload.', async (req, res) => {
     res.status(201).json(await signWorkerUpload(workerTenant(res), req.body, () => getPublicBaseUrl(requestOrigin(req))));
+}));
+
+// One step of an explainer's unattended drawing, for the Mac's `explainer_draw` job (explainers/scenes.ts): the picture is drawn here, with this tenant's allowance and
+// the image provider's credentials, never on the Mac. Refused unless `job_id` is the explainer's own current drawing job and a worker has claimed it.
+studioWorkerRouter.post('/worker/explainers/:id/draw-next', handle('studio.explainer_draw_next_failed', 'Failed to draw the next picture.', async (req, res) => {
+    res.json(await drawNextStep(workerTenant(res), req.params.id, req.body));
 }));
 
 // ─── Operator ───────────────────────────────────────────────────────────────────────────
@@ -453,6 +491,11 @@ studioRouter.get('/infographics', handle('studio.infographics_failed', 'Failed t
     res.json({ infographics: await listInfographics(getTenantId(req)) });
 }));
 
+// Before `/infographics/:id`, which would read "next-slot" as an id.
+studioRouter.get('/infographics/next-slot', handle('studio.infographic_slot_failed', 'Failed to find the next posting slot.', async (req, res) => {
+    res.json(await nextInfographicSlot(getTenantId(req)));
+}));
+
 studioRouter.get('/infographics/:id', handle('studio.infographic_failed', 'Failed to read the infographic.', async (req, res) => {
     res.json(await getInfographic(getTenantId(req), req.params.id));
 }));
@@ -488,6 +531,117 @@ studioRouter.post('/infographics/:id/schedule', handle('studio.infographic_sched
 
 studioRouter.delete('/infographics/:id', handle('studio.infographic_delete_failed', 'Failed to delete the infographic.', async (req, res) => {
     await deleteInfographic(getTenantId(req), req.params.id);
+    res.status(204).end();
+}));
+
+// ── Illustrated explainers (v59): researched by Claude on the Mac, voiced there, drawn by the app, rendered there, scheduled like the rest ──
+//
+// Every one of these asks the platform admin's switch first and answers 404 `EXPLAINERS_DISABLED` without it, then needs the operator role (the router's own guard).
+// The switch is read inside the handler, so a test that takes a handler off the router runs it too.
+
+/** `handle()` for an Explainers route: the switch first, then the route. */
+function explainerRoute(event: string, fallback: string, fn: Handler) {
+    return handle(event, fallback, async (req, res) => {
+        if (!(await isExplainersEnabled(getTenantId(req)))) throw new ExplainerError('EXPLAINERS_DISABLED', 'Explainers are not switched on for this account.');
+        await fn(req, res);
+    });
+}
+
+/** The audit row an Explainers action leaves: the actor, the explainer, and detail that never holds the topic's words or a caption. */
+async function auditExplainer(req: Request, action: string, id: string, detail: Record<string, unknown>): Promise<void> {
+    await writeAudit(await actorFromSession(req.session), { action, targetType: 'explainer', targetId: id, detail });
+}
+
+studioRouter.get('/explainers', explainerRoute('studio.explainers_failed', 'Failed to list the explainers.', async (req, res) => {
+    res.json({ items: await listExplainers(getTenantId(req)) });
+}));
+
+studioRouter.post('/explainers', explainerRoute('studio.explainer_create_failed', 'Failed to start the explainer.', async (req, res) => {
+    const explainer = await createExplainer(getTenantId(req), req.body);
+    await auditExplainer(req, AUDIT_ACTIONS.explainerCreated, explainer.id, { language: explainer.language, length_tier: explainer.length_tier, sound_mode: explainer.sound_mode });
+    res.status(201).json(explainer);
+}));
+
+// The literal paths come before `/explainers/:id`: `GET /explainers/allowance` would otherwise be an explainer whose id is "allowance".
+
+/** Today's free image allowance: `{ provider, day, used_units, pictures, cap, est_left, paused_until }`, or `null` when no image provider is set up. */
+studioRouter.get('/explainers/allowance', explainerRoute('studio.explainer_allowance_failed', 'Failed to read the image allowance.', async (_req, res) => {
+    res.json(await currentAllowance());
+}));
+
+/** Four 448 px pictures of a character, to choose its reference from. They count against the allowance. */
+studioRouter.post('/explainers/characters/candidates', explainerRoute('studio.explainer_candidates_failed', 'Failed to draw the candidates.', async (req, res) => {
+    res.json(await characterCandidates(getTenantId(req), req.body));
+}));
+
+/** A music track or a character's reference picture, from the owner's browser straight to Storage. Owner only: adding to the library is not something an operator does. */
+studioRouter.post('/explainers/uploads/sign', canAdminister, explainerRoute('studio.explainer_upload_sign_failed', 'Failed to sign the upload.', async (req, res) => {
+    const asked = isPlainObject(req.body) ? req.body : {};
+    res.status(201).json(await signExplainerUpload(getTenantId(req), { purpose: asked.purpose, mime: asked.mime, size: asked.size }, () => getPublicBaseUrl(requestOrigin(req))));
+}));
+
+studioRouter.get('/explainers/:id', explainerRoute('studio.explainer_failed', 'Failed to read the explainer.', async (req, res) => {
+    res.json(await getExplainer(getTenantId(req), req.params.id, { allowance: currentAllowance }));
+}));
+
+studioRouter.patch('/explainers/:id', explainerRoute('studio.explainer_patch_failed', 'Failed to save the explainer.', async (req, res) => {
+    res.json(await editExplainer(getTenantId(req), req.params.id, req.body));
+}));
+
+studioRouter.post('/explainers/:id/rewrite', explainerRoute('studio.explainer_rewrite_failed', 'Failed to ask for a rewrite.', async (req, res) => {
+    res.json(await rewriteExplainer(getTenantId(req), req.params.id, req.body));
+}));
+
+studioRouter.post('/explainers/:id/approve', explainerRoute('studio.explainer_approve_failed', 'Failed to approve the script.', async (req, res) => {
+    const explainer = await approveExplainer(getTenantId(req), req.params.id, req.body);
+    await auditExplainer(req, AUDIT_ACTIONS.explainerApproved, explainer.id, { version: explainer.draft_version, scenes: explainer.scenes.length });
+    res.json(explainer);
+}));
+
+studioRouter.post('/explainers/:id/revoice', explainerRoute('studio.explainer_revoice_failed', 'Failed to voice the narration again.', async (req, res) => {
+    res.json(await revoiceExplainer(getTenantId(req), req.params.id));
+}));
+
+studioRouter.post('/explainers/:id/draw', explainerRoute('studio.explainer_draw_failed', 'Failed to start the drawing.', async (req, res) => {
+    res.json(await startDraw(getTenantId(req), req.params.id));
+}));
+
+/** Draw or redraw one scene now, with the owner's note: `{ scene, allowance }`. Synchronous: the provider answers in under 30 seconds. */
+studioRouter.post('/explainers/:id/scenes/:position/draw', explainerRoute('studio.explainer_scene_draw_failed', 'Failed to draw the picture.', async (req, res) => {
+    res.json(await drawOneScene(getTenantId(req), req.params.id, req.params.position, req.body));
+}));
+
+/** Go back to one of a scene's earlier pictures: `{ scene }`. Nothing is drawn and nothing is spent. */
+studioRouter.post('/explainers/:id/scenes/:position/pick', explainerRoute('studio.explainer_scene_pick_failed', 'Failed to choose the picture.', async (req, res) => {
+    res.json(await pickOneScene(getTenantId(req), req.params.id, req.params.position, req.body));
+}));
+
+studioRouter.post('/explainers/:id/approve-pictures', explainerRoute('studio.explainer_pictures_failed', 'Failed to approve the pictures.', async (req, res) => {
+    const explainer = await approvePictures(getTenantId(req), req.params.id);
+    await auditExplainer(req, AUDIT_ACTIONS.explainerPicturesApproved, explainer.id, { version: explainer.draft_version, scenes: explainer.scenes.length });
+    res.json(explainer);
+}));
+
+studioRouter.post('/explainers/:id/render', explainerRoute('studio.explainer_render_failed', 'Failed to render the explainer.', async (req, res) => {
+    res.json(await renderExplainer(getTenantId(req), req.params.id));
+}));
+
+studioRouter.post('/explainers/:id/schedule', explainerRoute('studio.explainer_schedule_failed', 'Failed to schedule the explainer.', async (req, res) => {
+    const outcome = await scheduleExplainer(getTenantId(req), req.params.id, req.body);
+    await auditExplainer(req, AUDIT_ACTIONS.explainerScheduled, outcome.explainer.id, {
+        scheduled_time: outcome.scheduled_time, platforms: outcome.rows.map((row) => row.platform), group_id: outcome.explainer.schedule?.group_id ?? null, post_ids: outcome.rows.map((row) => row.id),
+    });
+    res.json(outcome.explainer);
+}));
+
+studioRouter.post('/explainers/:id/retry', explainerRoute('studio.explainer_retry_failed', 'Failed to retry the explainer.', async (req, res) => {
+    res.json(await retryExplainer(getTenantId(req), req.params.id));
+}));
+
+studioRouter.delete('/explainers/:id', explainerRoute('studio.explainer_delete_failed', 'Failed to delete the explainer.', async (req, res) => {
+    const id = String(req.params.id);
+    await deleteExplainer(getTenantId(req), id);
+    await auditExplainer(req, AUDIT_ACTIONS.explainerDeleted, id.toLowerCase(), {});
     res.status(204).end();
 }));
 

@@ -8,7 +8,7 @@ import type { StudioSettings, StudioSettingsRow } from '../../db/rows.js';
 import { type Exec, isPlainObject } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
-export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
+export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic', 'explainer'] as const;
 type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
 
 /**
@@ -69,7 +69,7 @@ export function overDefaults(stored: Partial<Record<Section, unknown>>): StudioS
  */
 export async function readStudioSettings(exec: Exec, creatorId: string, lock = false): Promise<StudioSettings> {
     const { rows } = await exec.query<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
-        `SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = $1${lock ? ' FOR UPDATE' : ''}`,
+        `SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings WHERE creator_id = $1${lock ? ' FOR UPDATE' : ''}`,
         [creatorId]
     );
     return rows[0] ? overDefaults(rows[0]) : defaultStudioSettings();

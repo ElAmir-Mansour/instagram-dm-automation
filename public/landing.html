@@ -363,6 +363,79 @@
   already measured (see the 2026-09-25 numbers at the end of this comment).
 
   ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-10-19 — the platform strip
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The owner asked for a big, prominent row of platform logos, so that a visitor sees at once what the
+  product automates: WhatsApp, Instagram, Facebook, TikTok and YouTube. It is the first thing in each
+  hero: a card of five columns from 40rem and five rows below it, each with its mark, its name as real
+  text and ONE line of what the product does there. Where an older section of this comment names
+  something this one changes, the older section is history.
+
+  1. THE FIVE LINES, and why each is true. Every one is pinned word for word in landingTruth.test.ts
+     (the last describe), in both languages.
+     WhatsApp   "An AI agent answers customers and hands the chat to you. Live today on test numbers."
+         src/webhook/whatsappAnswer.ts: the sales turn (runSalesTurn) with a WhatsApp transport answers an
+         inbound message, and a flow that asks for a person (a refund, a person wanted) hands the
+         conversation over: the bot pauses on the thread, the owner is told, and the customer gets the
+         hand-off line. It answers only the numbers the owner lists as test senders:
+         src/routes/whatsapp.ts `PUT /agent` refuses `everyone` (409) until the go-live gate exists, and a
+         managed client connects their own number through `POST /connect`. That is why the line says "test
+         numbers", and why no sentence on the page says "all your customers".
+         NOT CLAIMED, and pinned absent from the page: broadcasts, bulk sends, templates, newsletters,
+         promotions. Nothing here starts a conversation with a number; the agent answers one that wrote first.
+     Instagram  "Keyword comments get a DM, and an AI agent answers DMs."
+     Facebook   "Keyword comments on your Page get a DM, and an AI agent answers its messages."
+         The comment-to-DM loop is src/webhook/comments.ts (sendPrivateReply, only when a campaign's keyword
+         matches). The DM pipeline answers with the AI agent: src/webhook/messaging.ts (runSalesTurn;
+         conversations.platform says whether a thread is Instagram's or the Page's). CLAUDE.md, "AI DM
+         replies are LIVE again", records that it has answered real people since 2026-10-13.
+     TikTok     "Scheduled videos and photos, as Only me or drafts until TikTok approves the app."
+         The page's own words for its audit limit (the refusals, the Studio and Monteur diagrams):
+         src/services/tiktokPublish.ts uploads at the scheduled time to the creator's TikTok inbox or as a
+         private post, and nothing is public until TikTok audits the app. No comments and no messages on
+         TikTok: the platform row says so and this line says nothing of either.
+     YouTube    "Reels scheduled to your channel as Shorts."
+         src/services/youtubePublish.ts: a scheduled_posts row with platform='youtube' uploads the cut as a
+         Short. Public or private is the owner's choice, as the platform row says; the line promises neither.
+     The Arabic lines are the same claims in formal Arabic. "Shorts" is isolated in <bdi>, and «أنا فقط» and
+     "Only me" keep their words together with a no-break space, so a line never breaks inside them.
+  2. THIS SUPERSEDES ITEM 1 OF 2026-10-13, FOR THESE THREE LINES ONLY. That entry removed every claim
+     that AI answers direct messages, because the path was parked until Meta verified the app. It has
+     answered real people since 2026-10-13 (CLAUDE.md), so the strip says so on WhatsApp, Instagram and
+     Facebook, and nothing else on the page does: the landingTruth scan for the old claims now runs on the
+     page without the strip, and a test pins AI as claimed on exactly those three lines. NOT CHANGED here,
+     and not this change's to change: public/pricing.html still lists replies to messages as "not available
+     today", and this page's FAQ and refusals do not describe the agent. That is a gap between two public
+     pages, to be closed on the owner's word.
+  3. THE COLOURS: the one exception to "monochrome, always". Every other mark on the public pages is
+     monochrome (DESIGN.md section 4). The strip's four are in their platform's own colour, on the owner's
+     instruction, and they are simple-icons@16.33.0's own `hex` for each brand: WhatsApp #25D366,
+     Instagram #FF0069, Facebook #0866FF, YouTube #FF0000. TikTok's brand colour is black, which would
+     vanish on the dark page, so its mark stays --logo-mono: white in dark, black in light, the two inks
+     TikTok publishes. The paths are the footer's sprite, drawn with <use>: never edited, mirrored,
+     transformed, outlined or given a shadow. The four hexes are declared ONCE, as --pb-* in the .pstrip
+     rule; check:contrast reads exactly that block (checkPlatformStrip), fails on the same value anywhere
+     else on a public page, and measures every mark on the card AND at the hero glow's peak, which is
+     where the strip sits (the glow is brightest behind it). Measured there, not by hand: the marks clear
+     3:1 on the card except WhatsApp green on the LIGHT card, 1.93:1, the one named exemption (WCAG 1.4.11:
+     a logo is an essential graphic, and the name beside it is text); the tightest of the rest is
+     Facebook blue in dark, 3.44:1 on the card and 2.85:1 at the glow's peak (floor there: 2.5:1). The names
+     and lines are --text-strong and --text-default, 9.17:1 dark and 10.73:1 light at the peak.
+  4. NO MOTION, NO LINK, NO PICTURE REQUEST. The marks are SVG <use>, the strip is not interactive, and
+     nothing animates, so there is no reduced-motion case to carry. A trademark is shown beside its name,
+     and the footer's legal line (all five marks; not affiliated with, or endorsed by, Meta, TikTok or
+     Google) is the disclaimer: the strip claims no partnership.
+  5. LAYOUT. Marks are 48px on a phone and grow with the viewport to 80px from 1280px; five columns of
+     mark, name and line from 40rem, five rows below it (a 68px column cannot hold a sentence at 375px). The
+     hero's top padding went from clamp(2.5rem, 6vw, 5rem) to clamp(1.5rem, 3vw, 2.5rem), because the hero
+     now opens with a card and not with a headline. The CSS is page-local (not tokens.css), so no
+     dashboard asset changed and no cache version moved.
+  6. BYTES. +4.0 KB served (211.7 to 215.8 KB). The served-bytes budgets (brandMotif.test.ts and
+     publicPagesSeo.test.ts) went from 215 to 220 KB, with the same 3 KB left for copy.
+  Colour pairs outside the strip are unchanged.
+
+  ═══════════════════════════════════════════════════════════════════════════
 
   EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
 
@@ -538,9 +611,24 @@
         dmFallbackReply (the fixed text: Facebook with the campaign's link,
         Instagram pointing to the bio)
 
+  Added 2026-10-19 (the platform strip; the reasoning is in "WHAT CHANGED ON 2026-10-19"):
+    an AI agent answers WhatsApp customers and hands the chat to a person, on the owner's
+    test numbers today
+        src/webhook/whatsappAnswer.ts (runSalesTurn with a WhatsApp transport; the hand-off);
+        src/routes/whatsapp.ts (`PUT /agent` refuses `everyone` until the go-live gate exists;
+        `POST /connect` is how a client connects their own number)
+    a keyword comment gets a DM, and an AI agent answers DMs, on Instagram and on a Page
+        src/webhook/comments.ts (sendPrivateReply); src/webhook/messaging.ts (the DM pipeline's AI reply)
+    TikTok and YouTube posts are scheduled, with TikTok's audit limit worded as the page words it
+        src/services/tiktokPublish.ts; src/services/youtubePublish.ts
+
   AND DELIBERATELY NOT CLAIMED, on the same terms as the list further down:
+    · Nothing about WhatsApp broadcasts, bulk sends, templates, newsletters or promotions, and no
+      "all your customers": the agent answers a number that wrote first and, until the go-live gate
+      exists, only the numbers the owner lists. landingTruth.test.ts scans for each of those words.
     · NOTHING THAT SAYS AI ANSWERS DIRECT MESSAGES, and nothing that sells the
-      inbox's send path. entry.messaging → Gemini → send does not work in
+      inbox's send path. (2026-10-19: the platform strip now says it, in three lines and
+      nowhere else; see that entry. What follows is the reasoning of 2026-10-13.) entry.messaging → Gemini → send does not work in
       production: the app lacks the verification and Advanced Access that
       messaging needs. The only DM the page promises is the campaign's own
       text. The storage line in "what this does not promise" still says DM
@@ -753,7 +841,7 @@
          Keep this ?v= pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it, and public/landing.html
          is in its SHARED_ASSET_PAGES list. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.40">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.77">
 
     <style>
         /* ═══════════════════════════════════════════════════════════════════
@@ -1236,9 +1324,11 @@
            it would add a few pixels of sideways scroll on a window only a little wider than the page. `clip`, not
            `hidden`: it does not make the hero a scroll container and leaves the vertical axis alone. The inline
            padding and its matching negative margin leave the content box where it was and widen the clip to the
-           gutters, so a focus ring on the hero's first button (outline + 5px halo) is not cut at the column edge. */
+           gutters, so a focus ring on the hero's first button (outline + 5px halo) is not cut at the column edge. The top padding is
+           the distance from the bar to the platform strip, which opens the hero (2026-10-19): a card, so a smaller step than the
+           headline needed (it was clamp(2.5rem, 6vw, 5rem)). */
         .hero {
-            padding-block: clamp(2.5rem, 6vw, 5rem) 0;
+            padding-block: clamp(1.5rem, 3vw, 2.5rem) 0;
             margin-inline: calc(var(--lp-gutter) * -1);
             padding-inline: var(--lp-gutter);
             overflow-x: clip;
@@ -1250,6 +1340,70 @@
         }
         @media (min-width: 62rem) {
             .hero-grid { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+        }
+
+        /* ─── The platform strip (2026-10-19) ──────────────────────────────────
+           The first thing in the hero: the five platforms the product works on, each with its own
+           mark, its name as real text and one line of what it does there. A card of five columns
+           from 40rem; five rows below it, because a 68px column cannot hold a sentence at 375px.
+           It is the one place on the public pages where a mark wears its platform's colour, on the
+           owner's instruction; every other mark is monochrome (DESIGN.md section 4, Platform logos).
+           The four colours are simple-icons@16.33.0's own `hex` for each brand and are declared
+           HERE and nowhere else: check:contrast reads this block, fails on the same value anywhere
+           else on a public page, and measures each against the card it sits on. TikTok's brand
+           colour is black, which would vanish on the dark page, so its mark takes --logo-mono: white
+           in dark and black in light, the two inks TikTok publishes. The marks are the footer's
+           sprite symbols, drawn with <use>, never edited, mirrored or transformed: they are
+           unchanged in RTL, and the first column is the reading start in both directions. No motion. */
+        .pstrip {
+            --pb-whatsapp: #25d366;
+            --pb-instagram: #ff0069;
+            --pb-facebook: #0866ff;
+            --pb-youtube: #ff0000;
+            --pm: clamp(3rem, 1rem + 5vw, 5rem);
+            list-style: none;
+            margin: 0 0 var(--space-5);
+            padding: 0;
+        }
+        .pstrip > li {
+            display: grid;
+            grid-template-columns: var(--pm) minmax(0, 1fr);
+            align-content: center;
+            align-items: center;
+            gap: 0 var(--space-3);
+            padding: 0.625rem var(--space-4);
+        }
+        .pstrip > li + li { border-block-start: 1px solid var(--border-subtle); }
+        .pstrip strong { font-size: 1.0625rem; line-height: var(--lp-lh-ui); }
+        .pstrip span {
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-default);
+            text-wrap: pretty;
+        }
+        .pmark {
+            grid-row: 1 / span 2;
+            inline-size: var(--pm);
+            block-size: var(--pm);
+            fill: var(--logo-mono);
+        }
+        .pmark-whatsapp { fill: var(--pb-whatsapp); }
+        .pmark-instagram { fill: var(--pb-instagram); }
+        .pmark-facebook { fill: var(--pb-facebook); }
+        .pmark-youtube { fill: var(--pb-youtube); }
+        @media (min-width: 40rem) {
+            .pstrip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+            .pstrip > li {
+                grid-template-columns: minmax(0, 1fr);
+                justify-items: center;
+                align-content: start;
+                row-gap: var(--space-1);
+                padding: var(--space-4) var(--space-3);
+                text-align: center;
+            }
+            .pstrip span { text-wrap: balance; }
+            .pstrip > li + li { border-block-start: 0; border-inline-start: 1px solid var(--border-subtle); }
+            .pmark { grid-row: auto; margin-block-end: var(--space-2); }
         }
 
         /* ─── The hero artifact ────────────────────────────────────────────────
@@ -3601,6 +3755,15 @@
 
                 <!-- ─── Hero ─────────────────────────────────────────────── -->
                 <section class="hero" aria-labelledby="hero-ar">
+                    <!-- The platform strip (2026-10-19): the five platforms, first on the page. Every line is pinned in landingTruth.test.ts
+                         and sourced in the header's "WHAT CHANGED ON 2026-10-19". The marks are the sprite's, in each platform's own colour. -->
+                    <ul class="card pstrip" aria-label="المنصّات التي يعمل عليها">
+                        <li><svg class="pmark pmark-whatsapp" aria-hidden="true" focusable="false"><use href="#plogo-whatsapp"/></svg><strong>واتساب</strong><span>وكيل بالذكاء الاصطناعي يردّ على العملاء ويسلّمك المحادثة. يعمل اليوم على أرقام اختبار.</span></li>
+                        <li><svg class="pmark pmark-instagram" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg><strong>إنستجرام</strong><span>من يعلّق بكلمتك تصله رسالة خاصة، ووكيل بالذكاء الاصطناعي يردّ على الرسائل.</span></li>
+                        <li><svg class="pmark pmark-facebook" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg><strong>فيسبوك</strong><span>من يعلّق بكلمتك على صفحتك تصله رسالة خاصة، ووكيل بالذكاء الاصطناعي يردّ على رسائلها.</span></li>
+                        <li><svg class="pmark pmark-tiktok" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg><strong>تيك توك</strong><span>جدولة الفيديو والصور، «أنا&nbsp;فقط» أو مسودّات حتى يوافق تيك توك على التطبيق.</span></li>
+                        <li><svg class="pmark pmark-youtube" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg><strong>يوتيوب</strong><span>جدولة الريلز إلى قناتك بوصفها <bdi lang="en" dir="ltr">Shorts</bdi>.</span></li>
+                    </ul>
                     <div class="hero-grid">
                         <div>
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>استوديو نموّ مُدار لصنّاع المحتوى العرب</p>
@@ -4728,6 +4891,14 @@
 
                 <!-- ─── Hero ─────────────────────────────────────────────── -->
                 <section class="hero" aria-labelledby="hero-en">
+                    <!-- The platform strip: the same five, in the same order, in English. See the Arabic document's note. -->
+                    <ul class="card pstrip" aria-label="Platforms it works on">
+                        <li><svg class="pmark pmark-whatsapp" aria-hidden="true" focusable="false"><use href="#plogo-whatsapp"/></svg><strong>WhatsApp</strong><span>An AI agent answers customers and hands the chat to you. Live today on test numbers.</span></li>
+                        <li><svg class="pmark pmark-instagram" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg><strong>Instagram</strong><span>Keyword comments get a DM, and an AI agent answers DMs.</span></li>
+                        <li><svg class="pmark pmark-facebook" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg><strong>Facebook</strong><span>Keyword comments on your Page get a DM, and an AI agent answers its messages.</span></li>
+                        <li><svg class="pmark pmark-tiktok" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg><strong>TikTok</strong><span>Scheduled videos and photos, as Only&nbsp;me or drafts until TikTok approves the app.</span></li>
+                        <li><svg class="pmark pmark-youtube" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg><strong>YouTube</strong><span>Reels scheduled to your channel as Shorts.</span></li>
+                    </ul>
                     <div class="hero-grid">
                         <div>
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>A managed growth studio for Arabic creators</p>

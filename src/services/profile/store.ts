@@ -253,15 +253,12 @@ export async function loadOverlayProfile(creatorId: string, exec: Exec = pool): 
 }
 
 /**
- * `schedule.timezone` as the profile gives it (`identity.timezone`, UTC when empty), for a reader that needs the
- * timezone and nothing else: the Monteur's run reads this on every poll, so it does not fetch the profile, which can
- * be 128 KB. null means the settings row's own timezone applies (no stored profile, a newer-schema one, or no v33).
- *
- * The two values it selects are read by `upgradeProfile` itself, over a profile that holds only them, so what a
- * missing, empty or wrongly typed timezone reads as is decided in one place, and `readers.test.ts` holds this equal
- * to `getStudioSettings(...).schedule.timezone` across those cases.
+ * The overlay profile for a reader that needs the timezone and nothing else, or null when there is none to overlay (no stored
+ * profile, a newer-schema one, or no v33). Two values are selected, not the profile (which can be 128 KB), and read by
+ * `upgradeProfile` itself, over a profile that holds only them, so what a missing, empty or wrongly typed timezone reads as is
+ * decided in one place.
  */
-export async function loadScheduleTimezone(creatorId: string, exec: Exec = pool): Promise<string | null> {
+async function loadTimezoneProfile(creatorId: string, exec: Exec): Promise<CreatorProfile | null> {
     let row: { profile_schema: unknown; identity_timezone: unknown } | undefined;
     try {
         const result = await exec.query<{ profile_schema: unknown; identity_timezone: unknown }>(
@@ -279,8 +276,28 @@ export async function loadScheduleTimezone(creatorId: string, exec: Exec = pool)
     if (!row) return null;
     const read = upgradeProfile({ schema: row.profile_schema, identity: { timezone: row.identity_timezone } });
     // Only the two values were read, so what `repaired` lists is about the stand-in, not the stored profile: not passed on.
-    const profile = overlayProfile(creatorId, { profile: read.profile, newerSchema: read.newerSchema });
+    return overlayProfile(creatorId, { profile: read.profile, newerSchema: read.newerSchema });
+}
+
+/**
+ * `schedule.timezone` as the profile gives it (`identity.timezone`, UTC when empty), for a reader that needs the
+ * timezone and nothing else: the Monteur's run reads this on every poll, so it does not fetch the profile, which can
+ * be 128 KB. null means the settings row's own timezone applies (no stored profile, a newer-schema one, or no v33).
+ *
+ * `readers.test.ts` holds this equal to `getStudioSettings(...).schedule.timezone` across those cases.
+ */
+export async function loadScheduleTimezone(creatorId: string, exec: Exec = pool): Promise<string | null> {
+    const profile = await loadTimezoneProfile(creatorId, exec);
     return profile ? scheduleTimezone(profile) : null;
+}
+
+/**
+ * `identity.timezone` exactly as the profile holds it: '' when the tenant has not chosen one, which `loadScheduleTimezone` reads as
+ * UTC and so cannot tell from a tenant that chose UTC. null under the same conditions as `loadScheduleTimezone`.
+ */
+export async function loadIdentityTimezone(creatorId: string, exec: Exec = pool): Promise<string | null> {
+    const profile = await loadTimezoneProfile(creatorId, exec);
+    return profile ? profile.identity.timezone : null;
 }
 
 // ─── Writing ─────────────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,13 @@
 import { runFollowup } from '../services/dmSales/followupJob.js';
 import { handleCommentChange } from '../webhook/comments.js';
 import { handleMessagingEvent } from '../webhook/messaging.js';
-import type { JobHandlerRegistry } from './types.js';
+import { handleWhatsAppInbound } from '../webhook/whatsappInbound.js';
+import { redactedPreferencePayload, redactedStatusPayload } from '../webhook/whatsappRedact.js';
+import { handleWhatsAppEvent } from '../services/whatsappStatus.js';
+import { fetchAndStoreLead } from '../services/ads/leads.js';
+import { redactOnFailure } from './redaction.js';
+import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
+import { advanceProposal } from '../services/ads/proposals/service.js';
 
 /**
  * Whether this is the attempt after which nothing else will run.
@@ -32,15 +38,46 @@ export const handlers: JobHandlerRegistry = {
         });
     },
     'dm.process': async (payload, job) => {
+        // A WhatsApp message (`object: 'whatsapp'`) is stored, and answered for the owner's test senders, by its own handler (whatsappInbound.ts).
+        // What it returns is the redacted payload the queue stores as the job completes (a stranger's message must not sit in `jobs` for a week).
+        if (isWhatsAppDmPayload(payload)) {
+            return handleWhatsAppInbound(payload, { lastAttempt: isLastAttempt(job) });
+        }
         await handleMessagingEvent(payload.event, payload.entryId, {
             lastAttempt: isLastAttempt(job),
             object: payload.object,
         });
+    },
+    // A WhatsApp status of one of our messages, an account event or a preference change: never a customer message, never an AI, never a send.
+    // A status or a preference change names a customer's phone number, and nothing is needed from the payload once the handler has run: it is cut
+    // down as the job completes, and, if the job fails for good, as it fails (a failed row is never pruned). An account event names no one.
+    'wa.event': async (payload) => {
+        if (payload.kind === 'account') {
+            await handleWhatsAppEvent(payload);
+            return;
+        }
+        const redacted = payload.kind === 'status' ? redactedStatusPayload(payload) : redactedPreferencePayload(payload);
+        try {
+            await handleWhatsAppEvent(payload);
+        } catch (err) {
+            throw redactOnFailure(err, redacted);
+        }
+        return { redactPayload: redacted };
     },
     // Not a Meta event: the sales turn queues it after a link (DM plan S9). The handler re-reads the conversation and may well do nothing: a
     // person who answered, clicked or said stop in the meantime is simply not eligible, and the job ends as done. A transient send failure
     // throws, which the runner retries; everything else is a normal return.
     'dm.followup': async (payload) => {
         await runFollowup(payload);
+    },
+    // An AI ad proposal (Ads A7). Idempotent: it reads the proposal and does whatever is next; a throw is retried by the runner.
+    'ads.draft': async (payload) => {
+        await advanceProposal(payload.creatorId, payload.proposalId);
+    },
+    // A lead from a lead ad (A10). The payload is ids only, so nothing needs redacting: the answers are fetched by the handler and go straight
+    // into `ads_leads`, encrypted. Every outcome but a transient failure finishes the job: a throttle and a locked tenant are not retried (the
+    // 6-hourly catch-up recovers a throttled lead; a locked tenant must not be asked again), and an unknown Page has no one to store it for.
+    'ads.lead': async (payload) => {
+        await fetchAndStoreLead(payload, 'webhook');
     },
 };

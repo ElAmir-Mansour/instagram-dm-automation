@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Nine flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Thirteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -27,7 +27,11 @@ bug it was written to fix.
 [6. TikTok post → inbox → published](#6-tiktok-post--inbox--published) ·
 [7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask) ·
 [8. Meta login → a connected Page](#8-meta-login--a-connected-page) ·
-[9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait)
+[9. A tenant's profile draft](#9-a-tenants-profile-draft-read-ask-check-wait) ·
+[10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5) ·
+[11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard) ·
+[12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3) ·
+[13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule)
 
 ---
 
@@ -159,10 +163,10 @@ dispatch is **`src/jobs/runner.ts:89`**.
 
 ### 1.6 — The handler adapter
 
-**`src/jobs/handlers.ts:28`** — the `comment.process` entry unpacks the stored payload and calls
+**`src/jobs/handlers.ts:33`** — the `comment.process` entry unpacks the stored payload and calls
 `handleCommentChange(payload.change, payload.entryId, { lastAttempt: isLastAttempt(job) })`.
 
-`isLastAttempt` (**`src/jobs/handlers.ts:23`**) is `job.attempts >= job.max_attempts`. `attempts`
+`isLastAttempt` (**`src/jobs/handlers.ts:28`**) is `job.attempts >= job.max_attempts`. `attempts`
 was already incremented by the claim, so on the third attempt of a `max_attempts = 3` job this
 is `true`. It decides whether the pipeline may leave a failure retryable — getting it wrong
 optimistically strands an interaction at PENDING forever, which in the dashboard looks exactly
@@ -247,7 +251,8 @@ acquires a token with clicks instead of a pasted one is [§8](#8-meta-login--a-c
 
 ### 1.10 — Campaign query and `matchCampaign`
 
-**`src/webhook/comments.ts:220-229`** — every active campaign for this creator:
+**`src/webhook/comments.ts:237`** calls `loadLiveCampaigns(creator.id)`; the query is **`LIVE_CAMPAIGNS_SQL`** in
+**`src/services/liveCampaigns.ts:32`** — every active campaign for this creator:
 
 ```sql
 ORDER BY (post_id IS NOT NULL) DESC, length(trigger_keyword) DESC, created_at DESC
@@ -257,11 +262,15 @@ The `ORDER BY` is not cosmetic. Without it Postgres returns heap order, so a glo
 could shadow a post-specific one on the same keyword — and which one won could change after a
 `VACUUM`. Most specific first, then longest keyword, then newest.
 
-**`src/webhook/comments.ts:231`** — `matchCampaign(text, postId, campaigns)`, at
-**`src/services/matching.ts:59`**. It re-sorts defensively with `bySpecificity`
-(**`src/services/matching.ts:45`**, applied at **:68** on a copy) so a caller handing it an
+**`src/webhook/comments.ts:239`** — `matchCampaign(text, postId, campaigns)`, at
+**`src/services/matching.ts:142`**. It re-sorts defensively with `bySpecificity`
+(**`src/services/matching.ts:59`**, applied on a copy) so a caller handing it an
 arbitrarily ordered array — a unit test, a cached list — gets the same winner the database path
-does.
+does. Whether one campaign fires on one comment is `judgeCampaign` (**`src/services/matching.ts:108`**);
+`matchCampaign` takes the first campaign that does. The dashboard's dry run, `POST /api/campaigns/try`
+(**`src/services/campaignTry.ts`**), loads the same query and decides with the same function
+(`rankMatches`, **:169**, for every campaign that fires; `winReason`, **:196**, for why the first
+outranks the second), plus an unsaved draft; it writes nothing.
 
 Per candidate:
 
@@ -509,7 +518,10 @@ function (**`src/webhook/router.ts:64`**) drops:
   whose `app_id` is this deployment's own app is still dropped. The queue reads that switch only for a
   delivery that holds an echo (**`enqueueWebhookBody`**), and reads it as off when it cannot.
 - **everything with neither `message` nor `postback`** (**:68-70**) — read watermarks, delivery
-  receipts, reactions, referrals, handover-protocol events.
+  receipts, reactions, referrals, handover-protocol events. **Except one referral (A3):** a standalone
+  `referral` whose `source` is `ADS` (a person who already has a Messenger thread tapped a click-to-Messenger ad) is a job,
+  because it says which ad brought them (`isAdReferral`, §12.1). A referral from an `m.me` or `ig.me` link is
+  still dropped.
 
 > **Why filter at plan time rather than in the handler.** None of those could ever reach a reply
 > — `normalizeDm` rejects every one of them — but they were each becoming a `jobs` row first,
@@ -524,9 +536,11 @@ through even if nothing answerable is visible, because the handler is the thing 
 dropping a real customer message is far worse than one wasted job.
 
 Dedupe key is `dm:<mid>` from `message.mid` or `postback.mid`
-(**`src/webhook/router.ts:41-44`**); `tenantKey` is `entry.id` as before.
+(**`src/webhook/router.ts:49`**); `tenantKey` is `entry.id` as before. A standalone ad referral has no `mid`, so
+`dmDedupeKey` makes it `dmref:<sender>:<ad id or ref>:<timestamp>`: who, which ad and when is what makes it one event,
+and a redelivery is refused at enqueue like a message's.
 
-The handler adapter is **`src/jobs/handlers.ts:33`** → `handleMessagingEvent`.
+The handler adapter is **`src/jobs/handlers.ts:38`** → `handleMessagingEvent`.
 
 ### 2.2 — `handleMessagingEvent` and `normalizeDm`'s shapes
 
@@ -540,6 +554,7 @@ does not go through `isActionableMessagingEvent`) hands the event to `handleEcho
 | plain text message | `event.message.text` | `message_type = 'text'` |
 | quick reply | `event.message.quick_reply.payload` (text still from `message.text`) | `'text'`, payload kept |
 | postback | `event.postback.title` → text, `event.postback.payload` → payload | `'text'`, payload kept |
+| **ad referral, no words** (A3) | a standalone `event.referral` with `source: 'ADS'`, no `message` and no `postback` | no message row; recorded on the conversation only (§2.4b), job outcome `ad_referral_recorded` |
 | **no words** | no text and no payload, but `message.attachments[]`, `message.reply_to.story` or `message.is_unsupported` (`src/webhook/attachments.ts`, `describeWordless`) | `message_type` = its kind (`image`, `video`, `audio`, `file`, `sticker`, `share`, `reel`, `story_share`, `story_mention`, `story_reply`, `attachment`), `text` = a placeholder (`[photo]`) |
 
 A **message with no words** is stored whole (`raw_payload` is the Meta event, which already holds each attachment's `type` and
@@ -549,8 +564,15 @@ mention, `.media` for the rest, nothing for a sticker), claimed as an outbound r
 never in place of a real answer. Skipped, with the message still marked handled, when the bot is paused, the agent is off, the claim
 refuses or the send quota refuses (no retry for an acknowledgement); a transient send failure takes the claim back and retries.
 
-Rejection: no `senderId`, or no text, no payload *and* nothing word-less (read and delivery receipts, reactions, referrals, and an
-unsend, `message.is_deleted`, even one that still lists attachments). An attachment alone is no longer rejected: it used to be, which
+**`adSource` (A3).** `normalizeDm` also returns `adSource`, from `adSourceOf` (**`src/services/ads/attribution.ts`**): the first of
+`message.referral` (Instagram click-to-Direct, on the person's first message), `postback.referral` (Messenger click-to-Messenger, a NEW thread: the
+greeting's or an ice breaker's postback) and the event's own `referral` (Messenger, an EXISTING thread). It is an ad only when `source` is `ADS`
+(an `ig.me` or `m.me` link's referral is not) and there is an `ad_id` or a `ref`; the platform comes from the body's `object`. Everything else about
+the event reads as before: a postback's `title` is still the person's words, so an **ice-breaker tap is answered as the question they tapped**. Null
+for every event that is not from an ad, which is every event but the ones above.
+
+Rejection: no `senderId`, or no text, no payload *and* nothing word-less *and* no `adSource` (read and delivery receipts, reactions, referrals that are
+not ads, and an unsend, `message.is_deleted`, even one that still lists attachments). An attachment alone is no longer rejected: it used to be, which
 was a person waiting for an answer to a message nobody had stored. `dm.skipped_empty` logs `has_message`, `is_deleted` and the
 attachment types.
 
@@ -579,9 +601,14 @@ reliable); `entry.id` could be the IG id or the FB Page id depending on subscrip
 ```sql
 INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
 ON CONFLICT (creator_id, instagram_user_id)
-DO UPDATE SET last_message_at = NOW(), platform = COALESCE(conversations.platform, EXCLUDED.platform)
+DO UPDATE SET last_message_at = NOW(), handled_at = NULL, platform = COALESCE(conversations.platform, EXCLUDED.platform)
 RETURNING id, is_bot_active, ai_disclosed_at
 ```
+
+`handled_at = NULL` (v45) is how a new question returns a thread to the owner's To do: "Mark handled"
+(`POST /api/conversations/:id/handled`) stamps the column, and the next message **from the customer**
+clears it, in this same statement. Nothing else clears it: the owner's own reply, an Instagram-app
+echo and the bot's messages move `last_message_at` or the AI switch elsewhere and leave it alone.
 
 `platform` (v26) comes from the webhook body's `object` (`instagram` or `page`), carried in the DM
 job; a job queued before v26 falls back to which page id the message was addressed to
@@ -596,6 +623,24 @@ to be a separate `last_message_at` write.
 An empty result is impossible if the statement does what this code assumes, so it is logged as an
 `error` and returns (**:274-280**) rather than throwing a `TypeError` three lines later from a
 place that says nothing about the cause.
+
+### 2.4b — The ad touch, and the referral with no words (A3)
+
+Only an event with an `adSource` does any of this; every other DM costs nothing extra here. **Meta only sends the referral if the Page is subscribed to
+`messaging_referrals`** (`WEBHOOK_FIELDS` in **`src/services/metaLogin.ts`**, beside `feed`, `messages` and `messaging_postbacks`; a Page connected before A3
+is subscribed again only by the next Facebook reconnect, which re-posts `subscribed_apps`; the App Dashboard's Page webhook needs the field too, and
+`scripts/diagnose.mjs` warns when the app-level `page` subscription lacks it). Instagram needs nothing more: its ad referral rides on `messages`.
+
+1. **Recorded** by `recordAdTouch` (**`src/services/ads/attribution.ts`**), in one statement that takes the conversation's row lock. The FIRST touch
+   (no entry source yet, and no inbound message before this event's own) becomes `conversations.entry_source`
+   `{ kind: 'ctm', platform, ad_id, ref, ads_context_data: { ad_title, photo_url, video_url, post_id }, at }` and **is never rewritten**. Every later
+   touch goes in front of `conversations.ad_touches` (v54, newest 10). The same touch twice (a redelivery) is `duplicate` and writes nothing.
+   `ads.touch_recorded` logs which of `entry` / `touch` / `duplicate` / `missing` happened. It never throws: attribution must not cost a reply.
+2. **A referral with no words sends nothing.** No inbound row is claimed, there is nothing to answer, and the job ends done with the outcome
+   `ad_referral_recorded` (the conversation is created or updated, its entry source or touch recorded). A person's first referral that arrives with a
+   message or an ice-breaker postback is recorded the same way and the message is then answered like any other.
+3. **The join to the ad is not done here.** The conversation keeps the raw `ad_id` and our own `ref`; the Inbox and the Ads screen join at read time
+   (§12.3), so an ad made in Meta's own Ads Manager before the next sync costs this path nothing.
 
 ### 2.5 — `claimInbound` and the 300-second re-claim window
 
@@ -682,7 +727,11 @@ turn concluded; released and re-raised when the send quota stopped it; the catch
    bot and says nothing. No `mark_seen`, no model.
 4. **Model.** `mark_seen` and `typing_on` go out while the model thinks (best effort: a failure is `dm.sender_action_failed` and nothing more).
    The layer is asked for purpose `dm` with the static prompt as the cached system text and the conversation's facts in front of the last user
-   turn. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
+   turn. **Ad context (A3, `ads.bot_context`, off by default):** for a conversation that began from an ad, and only when the tenant's owner switched it
+   on, the facts block gets up to three lines, `AD CONTEXT: The person came from the ad "<name>" about <offer>. The ad said: "<text, at most 200 characters>". They
+   tapped: "<ice breaker>".` (`adFactsFor`, **`attribution.ts`**: the ad's name from the stored copy, else the title Meta sent; the offer from the ad's
+   `app_meta.offer_id`; never the media links). **With the switch off the prompt is byte for byte what it was**, pinned by the golden tests in
+   `prompt.test.ts`. The thread it reads is `salesTurns` (**`history.ts`**): a carousel or buttons the bot sent are shown as `[sent cards: …]` and
    `[buttons: …]` instead of the stored `[Structured Template]`, and a customer's button tap carries its code, `(tapped: OTHER_COURSES)`. The old
    path's history is untouched. A failure of any kind is the legacy Gemini path once when `gemini_fallback` is on, else a hand-off
    (`dm.engine_failed`): never silence.
@@ -717,10 +766,13 @@ One short nudge, a few hours after a sales DM sent a link, to someone who has no
    delay AGAIN. It sends only if: the sales mode answers this sender, follow-ups are not switched off, the agent is on, no opt-out, no hand-off,
    the AI not paused, no nudge sent yet (one per conversation, ever), the stage still `link`, no newer link, the person has not written since the
    link, no click by a PERSON (`link_clicks.is_prefetch = false`: Meta's own crawler opens every link, and does not count), and less than 23 hours
-   since their last message (Meta's window is 24). Otherwise the job ends as done and says why (`dm.followup_skipped`, `reason`).
+   since their last message (Meta's window is 24). **The 23 hours is the default of `windowEndsAt` (A3, `ads/attribution.ts`)**: for a conversation that
+   began from an ad (`entry_source.kind = 'ctm'`) on a platform whose `ads.extended_window` switch is on, the window closes at the LATER of their last
+   message + 23 h and the ad click + 7 days − 1 h (Meta's window for a click-to-message ad since 2026-09-28 runs from the click). The job reads the
+   switch only for an ad conversation, so every other one costs no extra statement. Otherwise the job ends as done and says why (`dm.followup_skipped`, `reason`).
 4. **Claimed before it is sent, so it goes at most once.** One conditional `UPDATE` (`followups_sent + 1`, stage `follow_up`) that repeats the rules
    that matter; two drains at once, a retry and a reaped claim cannot both win it. A send that fails gives the claim back and is retried by the
-   runner, except Meta's final answers (a dead token, a blocked recipient, outside the window), which are not.
+   runner, except Meta's final answers (a dead token, a blocked recipient, outside the window, error 551, Business AI's hold: §2.9), which are not.
 5. **The line** is the kit's (`SalesLines.nudge`, per register and English): no model, no link, no number. It is sent as `RESPONSE` through
    `sendDirectMessage`, recorded as an outbound `messages` row with `ai_meta {kind: 'followup'}`, and the same quota check as every send applies.
 
@@ -733,11 +785,19 @@ recorded, best effort (`notifyOwner` never throws; a failure is `dm.handoff_noti
 
 1. `noticeFor` (pure): stage `handoff` is a handoff alert (also a conversation paused for looping); a second insult (stage `closed`) and an opt-out
    alone are NOT; a reply that SENT the link (`linkSent`) to an intent in `HOT_INTENTS` (`ready_to_buy`, `price`, `level_fit`) is a hot lead.
-2. `notifyOwner`: Telegram configured and on (`notify.telegram_*` in `app_settings`; the token encrypted, `{set, last4}` to the card), hot leads on
-   (`notify.telegram_hot_leads`, on unless turned off), the conversation is the platform OWNER's tenant (another tenant's customers are never sent
-   to his chat), then the per-conversation allowance (`rate_limit_counters`, buckets `notify:<id>` 3/hour and `notify_hot:<id>` 1/hour), then
-   the facts (username, last inbound message, its time), then one plain-text `sendMessage` (no `parse_mode`; links and bidi controls in the
-   customer's words are taken out): who, why, the last message, how long Meta's 24 h window has left, and `/dashboard#/inbox?c=<id>`.
+2. `notifyOwner` (every alert, from every caller, goes through it): the two channels' settings in ONE read (`readNotifyChannels`). Telegram configured and
+   on (`notify.telegram_*` in `app_settings`; the token encrypted, `{set, last4}` to the card), hot leads on (`notify.telegram_hot_leads`, on unless
+   turned off); and/or email configured and on (`notify.email_*`: a Resend API key, encrypted, `{set, last4}` to the card; the address, else the site
+   contact email; `notify.email_hot_leads`, OFF unless turned on). A channel that is not on and complete is skipped, and with both off nothing is spent.
+   Then the conversation is the platform OWNER's tenant (another tenant's customers are never sent to his chat or inbox), then the per-conversation
+   allowance (`rate_limit_counters`, buckets `notify:<id>` 3/hour and `notify_hot:<id>` 1/hour, spent once per alert whatever the number of channels),
+   then the facts (username, last inbound message, its time), then each channel, at the same time and independently (one refusing, timing out or
+   throwing costs the other nothing): one plain-text `sendMessage` (no `parse_mode`; links and bidi controls in the customer's words are taken out), and/or
+   one plain-text email (`POST https://api.resend.com/emails`, `notifyEmail.ts`; the same text plus a channel line, the subject naming the channel and the
+   customer): who, why, the last message, how long Meta's 24 h window has left, and `/dashboard#/inbox?c=<id>`. Logs: `dm.handoff_notified` /
+   `dm.handoff_notify_failed` for Telegram, `dm.handoff_notified_email` / `dm.handoff_notify_email_failed` for email (the description scrubbed of the key and
+   of any address). Saving a Resend key (`POST /api/settings/notify`, `email.apiKey`) switches email on and sends one test email whose result comes back as
+   `emailTest`; `POST /api/settings/notify/test-email` is the button. Without a verified domain Resend delivers only to the address the account was made with.
 3. The inbox reads `stage`, `handoff_at`, `last_operator_at` and `last_inbound_message_at` (`conversationsQuery`) for "Needs you" (stage `handoff`,
    and nobody has answered since `handoff_at`: **whether the bot is paused or not**, because a sales handoff pauses it and a reply that could not be
    written at all, §2.11, leaves it on) and the window countdown. The follow-up job (§2.6c) already refuses a conversation that was handed over.
@@ -991,6 +1051,19 @@ messaging window and rejected once that window matters).
 
 Then the outbound `messages` row (**`src/webhook/messaging.ts:387-397`**).
 
+**Two refusals that belong to ad traffic (A3).**
+
+- **Meta Business AI owns the thread.** An Instagram send that fails with error **100** and subcode **2534037** means Meta's own Business AI is
+  answering that thread, and an untagged send is refused until the owner takes it back. `isBusinessAiBlock` recognises it and `noteBusinessAiBlock`
+  (**`attribution.ts`**) sets `conversations.no_reply_reason = 'business_ai_owns_thread'` (v54), raises a `business_ai` alert **once** (the reason is
+  set only when it was not already, and the alert channel dedupes per day on top), and **nothing is retried**: Meta's answer will not change. The next
+  send that succeeds clears it (`clearNoReplyReason`, one statement that touches no row in the usual case). The owner's fix is in Meta Business Suite:
+  Business AI → "Take control of conversations with your Business AI". The Inbox shows a notice on the thread meanwhile. The follow-up nudge's
+  send handles the same two refusals (`isFinalSendFailure` is now also true for 551).
+- **A send outside the window on an ad conversation.** Error 10 / subcode 2018278, or 551, on a `ctm` conversation whose platform has
+  `ads.extended_window` on means the 7-day window was not what Meta counts: `isWindowRefusal` → `noteWindowRefusal` turns that platform's switch
+  OFF by itself and raises a `window_error` alert. Without the switch, or on any other conversation, the refusal is what it always was.
+
 ### 2.10 — `markHandled`, last
 
 **`src/webhook/messaging.ts:401`** — `await markHandled(claim.id)`, defined at
@@ -1102,17 +1175,25 @@ the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
 **`src/routes/api.ts:600`**.
 
 1. **Select due rows** (**:602-608**) — `scheduled_posts` joined to `creators`,
-   `status = 'PENDING' AND scheduled_time <= NOW()`, oldest first.
+   `status = 'PENDING' AND scheduled_time <= NOW() AND s.archived_at IS NULL`, oldest first.
 2. **Claim each one atomically** (**:623-629**):
 
    ```sql
    UPDATE scheduled_posts SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
-    WHERE id = $1 AND status = 'PENDING'
+    WHERE id = $1 AND status = 'PENDING' AND archived_at IS NULL
    RETURNING id
    ```
 
    `rowCount === 0` means someone else took it: log `cron.publish_already_claimed` and
    `continue` (**:631-634**).
+
+> **Archived posts are skipped, silently and on purpose** (v45, UX US1). `POST /api/posts/scheduled/:id/archive`
+> stamps `archived_at`; the select leaves such a row out, and the claim repeats the test so a row archived
+> between the two is not published either (it matches no row and is logged as `cron.publish_already_claimed`).
+> This is the one sweep that stops: the TikTok and Instagram reconcilers (`reconcileTikTokPosts`,
+> the YouTube visibility check, the growth sync) never mention `archived_at`, so a row already in flight
+> still settles. Unarchiving a `PENDING` row whose time has passed makes it due again, and the next sweep
+> publishes it, which is why the dashboard asks first. Nothing about an archived row is a delete.
 
 > **Why the claim is an `UPDATE … WHERE status = 'PENDING'`.** The old form was SELECT-then-
 > UPDATE, which let two concurrent cron hits both read the row as PENDING and both publish it —
@@ -2375,17 +2456,21 @@ a scheduled row carries them in `scheduled_posts.platform_options` until it publ
 
 ## 7. Claude on the Mac → who may ask
 
-Two kinds of Studio work are answered by Claude Code on the **owner's Mac, on his personal Claude plan**: a
-`monteur_think` (`monteur.brain: 'claude_mac'`) and a `render_infographic` whose payload has `write`. Anthropic's
-terms forbid routing anyone else's work through that plan, so the server refuses it for every tenant the Mac is not
-for (G1, `src/services/macBrain.ts`).
+Three kinds of Studio work are answered by Claude Code on the **owner's Mac, on his personal Claude plan**: a
+`monteur_think` (`monteur.brain: 'claude_mac'`), a `render_infographic` whose payload has `write`, and an `explainer_write`
+(an illustrated explainer's researched script, [§13](#13-explainers-topic--script--voice--pictures--render--schedule)); a fourth,
+`ads_think`, is §7.5. Anthropic's terms forbid routing anyone else's work through that plan, so the server refuses it for every
+tenant the Mac is not for (G1, `src/services/macBrain.ts`). Of an explainer's four jobs only the write is Claude's: the voice, the
+drawing and the render use no Claude, and the per-tenant switch keeps all four the owner's ([13.1](#131--the-switch-and-who-may-ask)).
 
 **The owner is always allowed; the list adds tenants.** The owner is the first creator ever made
 (`getPlatformOwnerId`, `tenant.ts`: `ORDER BY created_at, id`, **no `is_active` filter**, cached 30 s), so
 deactivating him cannot hand the Mac to tenant #2, and no setting can take it from him. The app setting
 `studio.mac_brain_tenants` (a JSON list of creator ids) names the tenants allowed besides him: unset, `null` and `[]`
 all mean "the owner only", so a tenant created tomorrow is refused by default. With no creators at all, nobody is
-allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409** `{ error, code: 'NEEDS_API_BRAIN' }`.
+allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409** `{ error, message, code: 'NEEDS_API_BRAIN', params }` (the shared refusal
+envelope: `error` stays the English string, `code` and `params` are what the dashboard translates; the registry is
+`src/services/errorCodes.ts`).
 
 1. **A think is queued** only by `think()` (**`src/services/monteur/think.ts:246`**), which checks first, before a
    try is read or queued. `ask()`'s Mac route (`model.ts`) is the only way in, so the pick, the Marketer, the Editor
@@ -2395,12 +2480,13 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
    **only for the owner and the listed tenants**; any other tenant's is written on the server (7.1), so these two no longer
    answer a tenant 409. A row with no spec yet is a rewrite whatever the body says. A render alone (an edit, a copy, the
    other theme, the second half of "both themes") asks Claude nothing and is never refused.
-3. **The net:** `enqueueJob` (**`studio/jobs.ts:88`**) refuses any `monteur_think` or `render_infographic` with
-   `write` whoever calls it. A tenant's server-written infographic queues a `render_infographic` with a `spec` and **no
-   `write`**, so the net does not touch it.
+3. **The net:** `enqueueJob` (**`studio/jobs.ts:87`**) refuses any `monteur_think`, `explainer_write` or `render_infographic` with
+   `write` whoever calls it (`isMacBrainJob`, **`macBrain.ts:161`**; an `ads_think` too, §7.5). A tenant's server-written infographic
+   queues a `render_infographic` with a `spec` and **no `write`**, so the net does not touch it. Nor does it touch an explainer
+   Gemini writes: that job is inserted by the server, already claimed (`insertServerWriteJob`, [13.3](#133--who-writes-queuewrite)).
 4. **The claim:** a job already queued (before the guard, or for a tenant since taken off the list) is **failed with
    the same reason instead of being handed to the worker**, in the claim that found it, and the claim goes on to the
-   next job (`claimJob`, **`jobs.ts:300`**, at most 50 refusals per poll). Its infographic goes `failed` with the
+   next job (`claimJob`, **`jobs.ts:311`**, at most 50 refusals per poll). Its infographic goes `failed` with the
    message; a failed think is one try, and `think()` refuses before another is queued. If the allow-list **cannot be
    read** after the claim, the job is **released** (`RELEASE_CLAIM_SQL`: `pending`, attempt unspent) before the error
    goes on, so it is neither handed out unchecked nor left `claimed` for 15 minutes.
@@ -2413,7 +2499,8 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
 
 > **Fails closed, but never against the owner.** The list is read on every call. A read that errors throws; it is
 > never a yes. A saved value that is not a list of UUIDs is logged (`studio.mac_brain_setting_unreadable`) and
-> ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer.
+> ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer. An explainer's
+> script has no road through it: Explainers are switched on for the owner alone ([13.1](#131--the-switch-and-who-may-ask)).
 
 ### 7.1 The other half: a tenant's AI work on the AI providers layer (P32)
 
@@ -2452,6 +2539,185 @@ no provider is `409 NEEDS_AI_PROVIDER` ("Nothing was sent to the Mac"), a spent 
 down or refusing the operator's key `503 AI_UNAVAILABLE` / `AI_PROVIDER_REJECTED`, an unusable answer `502
 AI_ANSWER_UNUSABLE`. An infographic refused for any of them has no row and no job; a Monteur call fails its attempt with the
 same words (`monteur.brain: 'api'` is never retried on Gemini or the Mac).
+
+### 7.5 Proposals: an ad drafted by Claude, applied only after a person approves (Ads A7)
+
+(§7.2–7.4 are left for later phases; §7.6 is audiences.) The same split as §7 and §7.1, for ads: **the owner's drafts are Studio `ads_think` jobs
+on his Mac; every other tenant's go to the AI providers layer on its own key.** `ads_draft` / `ads_review` are NOT in
+`MAC_BRAIN_PURPOSES` (that set means "refuse on the layer"): a Mac tenant simply never asks the layer for them. Code in
+`src/services/ads/proposals/` (types.ts names every file); routes in `src/routes/adsProposals.ts`.
+
+1. **Request.** `POST /api/ads/proposals` (operator+) → `requestProposal` (**`service.ts:120`**): the owner's words (≤ 1000) or a
+   published post (`loadPost`). A tenant the Mac is not for is checked first with `resolveRoute(ads_draft)`: no provider is
+   **409 `AI_NOT_CONFIGURED`** and no row. Then a `drafting` row (`insertProposal`, **`store.ts:61`**, `model.via` = `mac`|`api`)
+   and `queueAdvance` (**`advance.ts:17`**): an `ads.draft` app job (**`jobs/handlers.ts:74`**) drained inline under `waitUntil`.
+2. **Advance** (`advanceProposal`, **`service.ts:161`**, idempotent; never moves a row that is not `drafting`). The input is
+   `buildInput` (**`input.ts:55`**): **aggregates only** (FR-049) — the stored copy's names, budgets, statuses, targeting summaries
+   and 7-day totals (`mirrorPort`, **`ports.ts:74`**), the offers' title/price/summary with emails and phone numbers stripped, the
+   limits (`moneyPort`), the policy rule descriptions, the request, a post's caption and organic counts, and for a request with no
+   post up to 5 recently published posts as creatives. One prompt (`prompt.ts`) and schema (`schema.ts`) for both paths.
+   - **Mac tenant**: no `ads_think` job for (proposal, attempt) → `enqueueJob(..., 'ads_think', { proposalId, attempt, task,
+     purpose, model: THINK_MODEL, system, user, schema })` — the Mac-brain guard in `enqueueJob`/`claimJob` lets it through
+     (`isMacBrainJob`, **`macBrain.ts:159`**). Pending/claimed → wait. The worker (aicourse-captions
+     `scripts/studio/adsThinkJob.mjs`, the same claude CLI call as a `monteur_think`) answers `{ output, model, usage }`;
+     `completeJob` stores it (`parseMonteurThinkResult`) and, **after its transaction commits**, `queueAdvance(..., 'mac_done')`
+     (**`studio/jobs.ts:448`**); `failJob` and an exhausted claim do the same with `mac_failed` (**`:1020`**) → the proposal fails
+     with the worker's error.
+   - **Any other tenant**: `generate({ purpose: ads_draft | ads_review })` on its own route; `no_provider` → `failed`
+     (`AI_NOT_CONFIGURED`), a non-retryable refusal → `failed`, anything else throws and the job runner retries.
+3. **Checks** (`runChecks`, **`checks.ts:235`**, contract order): schema → evidence (a review item quoting a number not in the
+   input, or an object not in the account, is **dropped**) → policy (A4 `checkPolicy`; a `block` asks again once) → money (A1
+   `moneyFor`; over the daily max or the month's remaining → **reduced** with a note; below Meta's minimum → `failed`). Then
+   spec.ts `validateSpec` (the builder's own rules; asked again once). A regeneration is attempt 2 with the failed checks as
+   feedback (a second `ads_think` job on the Mac). Pass → `open` with payload, rationale, evidence, effect, checks, model; a review
+   with 2–3 items inserts the others as `open` rows; a review with none deletes its `drafting` row.
+4. **Approve** (`POST /:id/approve`, owner, `confirm: true`; `approveProposal`, **`service.ts:273`**): refused 409 `NOT_WIRED`
+   without the ports; an `open` row past `expires_at` becomes `expired`. `recheckForApproval` (**`checks.ts:352`**) runs policy and
+   money again and **adjusts nothing** (a budget that no longer fits is 409 `OVER_MONTHLY_CAP`); a new campaign also gets Meta's
+   `validate_only` (`validateDraft`). Then `open → approved`, `applyPort` (**`ports.ts:142`**): a new campaign through A4's
+   `createDraft` (every object PAUSED), a change through A2's `requestStatus` / `requestBudget`; every op is tagged
+   `ads_ops.proposal_id` and actor `via: 'proposal'`, new objects `origin: 'proposal'` → `applying` with the op ids in `checks.ops`.
+   `settleApplying` (**`service.ts:331`**, on every list read) moves it to `applied` when all ops are done, `failed` when one failed.
+   Audit `ads.proposal_decided`.
+5. **Reject** (`POST /:id/reject`, owner): `open → rejected` with the reason. Nothing is enqueued.
+6. **Daily cron** (**`routes/api.ts:1138`**): `expireProposals` (**`store.ts:144`**: `open` past 7 days → `expired`; `drafting`
+   older than 24 h → `failed`, "the Mac did not answer") then `runDailyReview` (**`service.ts:370`**): for each `ads.enabled`
+   tenant with ≥ 3 days of results and an active object, one review a day (≤ 3 proposals), skipped quietly without an AI for it;
+   when it opens, one `proposal_ready` alert (A1 `notifyAds`).
+
+### 7.6 Audiences: engagement, lookalikes, and customer lists behind a legal lock (Ads A8)
+
+Tables in **v56** (`ads_audiences`, `ads_legal_signoffs`; the same file holds A9's `ads_rules` / `ads_rule_runs`). Code in
+`src/services/ads/audiences.ts` (rules, store, sync fold-in), `hashing.ts` (customer lists), `legalSignoff.ts` (the lock);
+routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DISABLED gate; the screen is `#/ads_audiences`
+(`dashboard/js/pages/ads_audiences.js`). **Every write goes through A2's `ads_ops`; nothing here calls Meta inline.**
+
+1. **Engagement and video audiences.** `POST /api/ads/audiences` (owner; **`adsAudiences.ts:217`**) → `parseAudienceInput`
+   (**`audiences.ts:233`**: kind, retention ≤ 730 days, video ≤ 365, 1–50 video ids) and `validateAudienceName` (**`:171`**:
+   names implying health, money troubles, religion, orientation, politics or a DM-bot segment are 400 `INVALID`
+   `reason: sensitive_name`; a blank name gets a neutral Arabic one). `tosAccepted.custom === false` (the account read A1 stores,
+   `health.account.tosAccepted`) → 409 `TERMS_NOT_ACCEPTED` with Meta's acceptance link: **the API cannot accept the terms.**
+   `buildCreateParams` (**`:363`**) builds the rule JSON on the tenant's own `instagram_page_id` (`ig_business`) or
+   `facebook_page_id` (`page`), or the legacy array rule for video (`subtype: ENGAGEMENT`); then a `creating` row and one
+   `audience_create` op (`object_key = audience:<id>`, POST `act_<id>/customaudiences`). The queue appends ` AR·<op id>` to the
+   name and verifies a lost create by that tag.
+2. **Lookalikes.** Same route, `kind: lookalike`: the seed must be the tenant's, not a lookalike, have a Meta id, not be flagged or
+   still building, and have `size_lower ≥ 100` (409 `SEED_TOO_SMALL`). Params `subtype: LOOKALIKE`, `origin_audience_id`,
+   `lookalike_spec {ratio 0.01–0.20, country}`.
+3. **Size and status.** `syncStructure` → `syncAudiences` (**`sync.ts:568`**), only when the tenant has a live audience:
+   `adoptCreatedMetaIds` (**`audiences.ts:604`**: `meta_id` from the done `audience_create` op's `result.id`), then
+   `GET act_<id>/customaudiences` (≤ 2 pages, 1 point each) → `applyAudienceReads` (**`:612`**) → `classifyAudienceRead`
+   (**`:420`**): `operation_status 471` → `flagged` (unusable; Meta reviews only in its own UI), `delivery_status 300` or an upper
+   bound < 1,000 → `too_small`, 414/441 → still `creating`, else `ready`. Fail-soft: a failed read never fails the sync.
+   `GET /api/ads/audiences` also adopts ids, and lists each audience with its newest op (a failed create with 200/1870090 shows
+   the terms message).
+4. **Builder.** The picker (`AdsAudiencePicker` in ads_audiences.js, mounted by `ads_create.js` in the audience step) sends our
+   audience ids; `createDraft` / `validateDraft` run `resolveSpecAudiences` (**`audiences.ts:688`**): each id is the tenant's,
+   an included one is `ready`, an excluded one has a Meta id; numeric ids (made in Ads Manager) pass through. A special category
+   cannot exclude (spec.ts).
+5. **Customer lists.** `POST /api/ads/audiences/customer-list` (owner; **`adsAudiences.ts:258`**):
+   1. **The lock first:** no non-revoked `customer_lists` row in `ads_legal_signoffs` → 403 `LOCKED_LEGAL` **before the text is
+      read**. Only the platform admin writes that table (`POST/DELETE /api/admin/ads/tenants/:id/legal-signoff`,
+      **`admin.ts:1288`**; tenant detail → "Ads: legal sign-off"). Egypt PDPL 151/2020 (deadline 2026-11-01) and Saudi PDPL.
+   2. The JSON body carries `{ name, columns | 'auto', defaultCountry?, text }` (≤ 3 MB; the browser reads a file with
+      FileReader). `parseCustomerText` (**`hashing.ts:259`**) → `prepareCustomerList` (**`:331`**): normalise (email trim +
+      lowercase; phone digits with the country code, no leading zero, `defaultCountry` for national numbers; names lowercase with
+      no punctuation; country ISO-2), drop rows with no email or phone, drop rows whose country is outside the sign-off's
+      `countries`, drop opted-out rows (`loadOptOutHashes`, **`:437`**: `conversations.wa_phone` with `opted_out_at`, the newest
+      `contact_consents` marketing row `withdrawn`, and `customer_list_optout` hashes), dedupe, SHA-256 every cell.
+   3. A row with only `{ columns, rows_sent, matched_estimate }` in `spec`, one `audience_create` op, then one `audience_users` op
+      per ≤ 10,000 rows (`toBatches` / `buildUsersParams`: `session {session_id, batch_seq, last_batch_flag,
+      estimated_num_total}`), each `dependsOn` the create, `path: '{dep}/users'`, `scrub: true` (ops.ts empties `exec.params` in
+      the statement that ends the op). Audit `ads.customer_list_uploaded` with counts only. **The raw text is never stored,
+      logged, audited or echoed** (pinned by `ads.audiences.test.ts`).
+6. **Opt-outs.** `POST /api/ads/audiences/opt-outs` (owner; **`adsAudiences.ts:321`**) `{ contact }` (a `+`/`00` phone or an
+   email) → only `sha256(normalised)` in `contact_consents` (`platform 'customer_list_optout'`, `withdrawn`), plus a
+   `DELETE <audience>/users` op (scrubbed) on each of the tenant's customer lists at Meta. A WhatsApp STOP excludes the number
+   from later uploads through `opted_out_at`; removal from lists already at Meta needs this route.
+7. **Delete.** `DELETE /api/ads/audiences/:id` `{ confirm: true }`: a `delete` op on the Meta id (or just the row when the create
+   never landed); the row is marked `deleted` and kept.
+
+### 7.8 Lead ads: a lead → the Leads tab, behind a legal lock (Ads A10)
+
+Tables in **v57** (`ads_lead_forms`, `ads_leads`); the lock is A8's `ads_legal_signoffs` (v56). Code in `src/services/ads/leads.ts`;
+routes in `src/routes/adsLeads.ts` (mounted in `adsRouter` after the ADS_DISABLED gate); the screen is `#/ads_leads`
+(`dashboard/js/pages/ads_leads.js`) and the builder's Leads goal (`ads_create.js`). **Forms and leads use the tenant's PAGE token,
+not the ads token and not `ads_ops`. Nothing here is given to an AI, and nothing contacts a lead.**
+
+1. **The lock.** `activeSignoff(creatorId, 'lead_ads')` (**`legalSignoff.ts:139`**). Locked: `POST /api/ads/lead-forms` →
+   403 `LOCKED_LEGAL` (**`leads.ts:363`** `createLeadForm`, before any write); a `goal: 'leads'` draft → 403 `LOCKED_LEGAL`, or a
+   country outside the sign-off's `countries` → 403 on `adsets.<i>.targeting.countries` (**`leads.ts:586`** `checkLeadSpec`,
+   called by **`drafts.ts:321`** validate and **`:443`** create); `fetchAndStoreLead` answers `locked` without a Graph call.
+2. **The subscription.** Only a Page subscribed to `leadgen` is ever sent a lead. `subscribePage(…, extraFields)`
+   (**`metaLogin.ts:571`**) POSTs `WEBHOOK_FIELDS` + `leadgenFieldsFor(creatorId)` (**`:553`**: `['leadgen']` while a lead_ads
+   sign-off is active), and the connect path passes it too (**`:685`**), so a reconnect never drops it. The admin's sign-off routes
+   call `syncLeadgenSubscription` (**`leads.ts:631`**) after a lead_ads record and after any revoke (**`admin.ts:1310`**,
+   **`:1338`**); the catch-up re-syncs every 6 h. Prerequisite outside the code: the app-level Page webhook has the `leadgen` field.
+3. **A form.** `POST /api/ads/lead-forms` (owner; **`adsLeads.ts:82`**) → `validateForm` (**`leads.ts:142`**: `AR_AR` default,
+   an allow-list of question types, CUSTOM labels checked by `restrictedCategory`, https privacy and thank-you links, the optional
+   `contact_consent` question) → a `pending` row keyed by the dialog's idempotency key → ONE `POST /{page_id}/leadgen_forms`
+   (`buildFormParams`, **`:236`**) → `active` + `meta_id`, or `failed` with Meta's sentence; no answer leaves it `pending` for the
+   catch-up to adopt by name. Audit `ads.lead_form_saved`.
+4. **A lead arrives.** Meta's Page webhook `changes[].field === 'leadgen'` → `planLead` (**`router.ts:126`**, branch at **`:186`**;
+   the inline fallback at **`:301`**) → one `ads.lead` job, ids only, dedupe `lead:<leadgen_id>` → **`handlers.ts:80`** →
+   `fetchAndStoreLead` (**`leads.ts:479`**): tenant by Page id, the lock, `GET /{leadgen_id}?fields=id,created_time,ad_id,form_id,
+   field_data` with the Page token (a throttle → `throttled`, never retried; a refusal → `failed`; no answer → throws, the job
+   retries) → `storeLead` (**`:450`**): `answers_enc = encryptBytes(field_data)`, `person_keys` = HMAC of the normalised email and
+   phone, `consent_contact`, `retain_until = created_time + leadRetentionDays`, `ON CONFLICT (meta_lead_id) DO NOTHING`, and the
+   form's `last_lead_seen_at` moves.
+5. **The catch-up and retention.** The drain (**`api.ts:453`**) calls `sweepLeads` (**`leads.ts:770`**): `purgeExpiredLeads`
+   (**`:609`**: per tenant, answers and keys NULLed, `purged_at` set, where `retain_until` passed or `created_time` is older than
+   today's setting; the row stays as a count) then `catchUpLeads` (**`:721`**: tenants with a sign-off, at most every 6 h by
+   `ads.leads_caught_up.<t>`; the Page's forms reconciled; per active form `/{form_id}/leads` with `filtering` `time_created
+   GREATER_THAN` the newest seen − 10 min, ≤ 10 pages; a throttle ends that tenant's run).
+6. **Reading.** `GET /api/ads/lead-forms` (viewer; **`adsLeads.ts:65`**) answers the lock, the countries and the forms;
+   `GET /api/ads/leads` (owner; **`:99`**) decrypts in memory; `GET /api/ads/leads.csv` (owner; **`:115`**) is audited
+   (`ads.leads_exported`, count and filters only) before the file is sent (`leadsCsv`: BOM, every cell quoted, formulas defused).
+7. **Erasure.** `resolveErasureTarget` adds `leadPersonKeys` (**`erasure.ts:122`**, `leadPersonKeysForHandle`: an email, or a phone
+   also completed with EG and SA dial codes); counts, preview and `executeErasure` include `ads_leads WHERE person_keys && $4`;
+   the rows are deleted whole inside the erasure's transaction (**`:599`**; the statement lives in erasure.ts, the one cross-tenant path, not in the ads module).
+
+### 7.9 Split tests: two versions of an ad, or two audiences; Meta names the winner, a proposal keeps it (Ads A12)
+
+Table **v58** `ads_studies`. Code in `src/services/ads/studies.ts` (every rule, behind `StudyPorts`), `studiesStore.ts` (SQL) and
+`studiesPorts.ts` (the wiring to A1/A2/A7); routes in `src/routes/adsStudies.ts`, mounted in `adsRouter` after the ADS_DISABLED gate;
+the screen is `#/ads_tests` (`dashboard/js/pages/ads_tests.js`, the Tests tab). **Creating spends nothing; Start is the one spending
+action, confirmed and money-checked.**
+
+1. **Create.** `POST /api/ads/studies` (owner) → `createStudy` (**`studies.ts:561`**): `parseStudyInput` (**`:242`**: type, 2–7 ads or
+   2–5 ad sets, a daily budget, a start from TOMORROW in the account's day, 1–30 days, `confirm: true`) → `checkArms` (**`:276`**:
+   every arm the tenant's, in its current account, made at Meta and **PAUSED**; a creative test's ads in ONE ad set (the shared
+   audience); an audience test's ad sets with their own daily budget) → A1's money rule on `lifetime:<daily × days>:<days>` →
+   `resolveBusinessId` (**`:548`**: `ads.settings.businessId`, else `GET me/businesses`: one is saved, none or several is 409
+   `BUSINESS_REQUIRED` with `choices`; the screen saves the pick through `POST /api/ads/settings {businessId}` and resends). A
+   `creating` row, then for an audience test one A2 `requestBudget` per ad set (the daily budget split equally, the arms still
+   paused), then ONE `study` op: `POST <business>/ad_studies` with `buildStudyParams` (**`:320`**) — creative `SPLIT_TEST_V2`, each
+   cell `{ name, treatment_percentage, ads: [id] }`, `creative_test_config.daily_budget` in minor units, `cooldown_start_time =
+   start_time`, `observation_end_time = end_time`; audience `SPLIT_TEST` with `adsets: [id]`; shares `equalSplit` (100/n, the rest
+   to the first arms); unix seconds. `exec.edge: 'ad_studies'` makes it a tagged create (ops.ts appends ` AR·<op id>` to the name and,
+   if the answer is lost, reads the business's newest studies and matches the tag in `readBack` **before** it would ever send it
+   again).
+2. **Reconcile** (no Meta call). `GET /api/ads/studies` (viewer+) → `listStudies` (**`:672`**): a `creating` row takes its op's outcome
+   (`reconcileCreate`): `done` with `result.id` → `ready` + `meta_id`; `failed` → `failed` with Meta's words.
+3. **Start.** `POST /api/ads/studies/:id/start {confirm: true}` (owner) → `startStudy` (**`:623`**): only `ready`, and not past its end.
+   The money rule again on `startWorstCase` (the test's daily budget for the days left, plus a paused parent's budget that starting
+   switches on — a creative test's ad set spends beside the test ads), then A2's `requestStatus(ACTIVE, confirm)` per object —
+   the arms, then their ad set, then the campaign LAST — each with A2's own payment check, daily max and money rule under its lock.
+   One refusal stops there; what was switched on before it sits under a paused parent and spends nothing. → `running`.
+4. **Stop.** `POST /:id/stop` (owner): `requestStatus(PAUSED)` on the arms (and a creative test's ad set) → `stopped`. No confirm.
+5. **Results** (the drain, **`routes/api.ts:445`**, after `syncAllAds`): `pollStudies` (**`:707`**) over `open()` (the (tenant,
+   study) pairs still `creating`/`ready`/`running`, then each read inside its tenant): creates reconciled; a `ready` test past its end
+   → `stopped` ("never started"); a `running` one every 6 h, and once more 12 h after its end → `checkStudyResult` (**`:679`**):
+   `GET <study>/objectives?fields=id,name,is_primary` → `GET <objective>?fields=results` (2 points) → `parseObjectiveResults`
+   (**`:379`**: an object, a JSON string or a list of either; `high_performer_ids`, `winner_ad_object_id`, `winner_confidence`,
+   `confidence_by_ad_object_id`, a fraction or a percent → 0–100) → `decideResult` (**`:417`**: high performers that are arms, else
+   the declared winner; every arm "high", or none, is **no winner** once final). A failure (a throttle too) is logged
+   `ads.study_poll_failed` and left for the next drain, never retried in the run.
+6. **Keep the winner.** On the final read with a winner, `winnerProposal` (**`:442`**) → A7's `insertProposal` as an **`open`**
+   `test_winner` / source `study` proposal: a review item `{ kind: 'pause', targets: <the other arms>, change: { percent: -100 },
+   evidence: { window: '<days>d', numbers: { days, dailyBudget, confidence_<A..G> } } }`, the rationale in the tenant's language.
+   Once per study (`proposal_id`). Approving it is §7.5 step 4: A7's recheck and `applyChange` → one PAUSED `requestStatus` per
+   losing arm. Nothing changes by itself.
 
 ## 8. Meta login → a connected Page
 
@@ -2788,6 +3054,843 @@ queued ─claim→ fetching ─sources saved→ drafting ─answers checked→ r
 source, last4}`) and the tenant that reads other people's Instagram (`onboarding.discovery_creator_id`). With neither, the draft still
 runs: YouTube is skipped, and Instagram by handle is read as the owner's tenant.
 
+## 10. WhatsApp message → stored thread → answered (W3b to W5)
+
+Someone writes to the owner's WhatsApp number. The message is stored, and then either **answered** (only for a listed test sender, §10.11) or
+marked "not answered, and here is why" (§10.7). The same delivery URL, signature and queue as §1 and §2; what differs is the object, the planner,
+and what the handler does. A person typing in the inbox is §10.12. What a listed tester's **stop phrase, voice note, file and entry link** do (W6, W7 and W8
+wired in) is §10.13, and what each of them does when it goes quiet is in the index at the bottom.
+
+### 10.1 — The delivery and the object gate
+
+Hops 1.1 and 1.2 are identical: `POST /webhook`, verified against the same app secret (WhatsApp events are signed with `META_APP_SECRET`: one app, three
+objects). The gate is **`src/index.ts:399`**, `isAcceptedWebhookObject(body.object)` (**`src/webhook/router.ts:88`**): `instagram`, `page` or
+`whatsapp_business_account`. Anything else logs `webhook.unrecognised_object` and gets a 200, as in 1.3. Then 1.4 to 1.6 unchanged: enqueue first,
+acknowledge, drain under `waitUntil`.
+
+### 10.2 — `planJobs`' WhatsApp branch
+
+**`src/webhook/router.ts:114`** — `if (object === WHATSAPP_OBJECT)` hands the entry to **`planWhatsAppEntry`** (**`src/webhook/whatsappPlan.ts:141`**) and
+`continue`s: the Instagram and Facebook code after it is exactly what it was (`router.test.ts` pins whole-job equality for both). A WhatsApp entry
+is read by `change.field`:
+
+| `field` | job | dedupe key | `tenantKey` |
+|---|---|---|---|
+| `messages`, each message (**`whatsappPlan.ts:88`**, `planMessagesChange`) | `dm.process` `{ object: 'whatsapp', entryId, phoneNumberId, change }` | `dm:<wamid>` (**:117**) | `phone_number_id` |
+| `messages`, each status | `wa.event` `{ kind: 'status' }` | `wa:st:<wamid>:<status>` (**:132**) | `phone_number_id` |
+| `account_update`, `account_alerts`, `phone_number_quality_update`, `phone_number_name_update`, `business_capability_update` (**:159**) | `wa.event` `{ kind: 'account' }` | `wa:acct:<field>:<time>:<sha1(value)>` (**:167**) | `entry.id` |
+| `user_preferences` (**:170**) | `wa.event` `{ kind: 'preference' }` | `wa:pref:<sha1(value)>` (**:176**) | `phone_number_id` |
+| anything else | none | | |
+
+`change` is the `value` of the change **trimmed to one message and its own contact** (**`whatsappPlan.ts:65`** `contactsFor`, **:75** `trimmed`): a batch holds
+several people, and one person's job must not carry another's profile name. The handler re-normalises it with the same `normalizeWhatsAppChange`, and
+`router.test.ts` proves that equals what was planned from, for every message and status in every fixture. The `dm:` prefix is kept: the inbox's
+delivery chip finds a message's job by `dm:<mid>`.
+
+A message that is a **group** message or has **no BSUID anywhere** becomes no job (**:111**). Every other kind of ignored message (a reaction,
+`unsupported`, an edit) still becomes a `dm.process` job, so the handler can store a row that says why or log it.
+
+> **Why the account key has the time in it (review M13).** GREEN → YELLOW → GREEN → YELLOW is four events; a key on the value alone drops the fourth
+> while the first job is still retained, and an alert is lost. With no time anywhere (`entry.time`, else the change's own) the key is omitted rather than
+> guessed: a duplicate is harmless (the handler compares with what is stored), a dropped alert is not.
+
+### 10.3 — The handler adapter, and the inline fallback
+
+**`src/jobs/handlers.ts:41`** — `isWhatsAppDmPayload(payload)` (`object === 'whatsapp'` with a `change`) sends a `dm.process` to **`handleWhatsAppInbound`**
+(**`src/webhook/whatsappInbound.ts:629`**), anything else to `handleMessagingEvent` exactly as before. **`handlers.ts:52`** — `wa.event` →
+**`handleWhatsAppEvent`** (**`src/services/whatsappStatus.ts:163`**). If the queue is down, **`router.ts:222`** → `processWhatsAppEntry` (**:205**) runs the same planner
+and the same two handlers inline, one job at a time, each isolated (`webhook.whatsapp_failed`).
+
+### 10.4 — Tenant
+
+**`src/services/tenant.ts:206`** — `getCreatorByWhatsAppNumber(phone_number_id)`: the connection for the number through `getConnectionByPhoneNumberId`
+(**`whatsappConnections.ts:198`**, any row that is **not `revoked`**), then the creator, which must be active. An **`invalid`** connection still resolves:
+Meta answers a 200 once and never redelivers, so a message that arrives while the token is dead can only be stored now or lost (review H10). No
+connection, a revoked one or no id: **`wa.no_creator`** (**`whatsappInbound.ts:654`**, `warn`) and the job completes; an inactive creator also logs
+`wa.creator_inactive` (**`tenant.ts:217`**).
+
+### 10.5 — Who is a test sender, and what is kept (review C3)
+
+**`whatsappInbound.ts:660`** reads `ai_agents.whatsapp_mode` and `whatsapp_test_senders` (`readWhatsAppSettings`). A read that fails is **retried**
+while an attempt is left; on the last attempt (**:665**, `wa.settings_unreadable`, `error`) the message is stored as for a stranger. **`isTestSender`**
+(**:104**) matches the BSUID or the phone. The public pages do not name WhatsApp yet and there is no go-live gate, so:
+
+| sender | thread (`conversations`) | message (`messages`) |
+|---|---|---|
+| a listed test sender | BSUID, phone, username, parent id, profile name (into `profile_name`, 255 max), entry source | text, interactive reply id, raw event (with the media id, type and caption), and the **private copy of a file or voice note** they sent (`media_upload_id`, §10.13) |
+| anyone else | the BSUID and entry source only (a link source is the owner's own tag, not their words) | `text = ''`, no payload, no raw event, `message_type` kept, and **no file: a stranger's media is never downloaded** |
+
+**The job's own payload is redacted too.** The queue keeps a `done` row 7 days (§5.7) and a `failed` row for good, and the payload is the event verbatim. So
+`handleWhatsAppInbound` (**`whatsappInbound.ts:629`**) returns `{ redactPayload }` for every job that did not store a listed test sender's message in full (a stranger's, no
+connection, a duplicate, an edit), and the queue's `complete` writes it **in the same `UPDATE` that marks the job `done`** (**`queue.ts`** `complete`, **`runner.ts`** `runInScope`); what is
+left is the object, account, number, wamid, type, time and BSUID (**`whatsappRedact.ts`**). A failure that will be **retried** keeps the whole payload (the next attempt needs it);
+the failure that **ends** the job redacts too (`redactOnFailure`, **`jobs/redaction.ts`**), because a failed row is never pruned. A status or preference `wa.event` is cut down the
+same way (a recipient's phone); an account event names no one and is left alone. Instagram and Facebook jobs return nothing and are untouched.
+**What this cannot close:** from the webhook's enqueue until the handler concludes the job (seconds, or up to the drain interval if the inline drain is frozen), and for a
+job whose last attempt dies without reaching the handler's end (`reapStale` abandons it), the full event is in `jobs`.
+
+### 10.6 — The thread, and the 24 h window
+
+**`whatsappInbound.ts:269`** `alreadyHandled` is asked **before** the thread is touched: a redelivery must not stamp `last_inbound_at` and reopen a window the
+customer closed days ago (`wa.duplicate_ignored`). **`:373`** — one upsert, `ON CONFLICT (creator_id, instagram_user_id)`; the column holds the BSUID, which cannot
+collide with a numeric IGSID or PSID. It stamps **`last_inbound_at = NOW()` on insert and on update, for every inbound** (review H3): nothing else stamps it for a
+thread no sales turn has answered, and `isWindowOpen` (`channels/window.ts`) reads it. `platform` is set once; `entry_source` is set by the first inbound only (a
+click-to-WhatsApp referral, else a known entry-link ref as `link`, else `organic`: §10.13). The upsert hands `entry_source` back, so the turn can take the thread's tracking code out of what
+the model reads. **`free_window_expires_at` is not written here**: not from a referral, not from a link (§10.9). `conversations.handled_at` (v45) is **not** touched, because the
+Instagram upsert does not clear it yet either.
+
+### 10.7 — Claim, then conclude
+
+**`whatsappInbound.ts:285`** `claimWhatsAppInbound`: the same `ON CONFLICT (meta_message_id) … DO NOTHING` insert and 300 s re-claim window as 2.5, with this channel's
+columns. No row back and no resumable one: `wa.duplicate_ignored`. A resumed one logs `wa.resumed` and is handed to the file and voice steps as `resumed` (§10.13). **`:314`** `markConcluded` is the last write and the only one
+that sets `messages.no_reply_reason` (NULL when the customer was answered). **`:123`** `noReplyReasonFor` decides, in this order: `unsupported_type` for a reaction or a message the
+agent cannot read (whatever the mode); `agent_off` for mode `off`; `not_test_sender` for anyone not on the list (mode `everyone` is refused by the API until the go-live
+gate and is treated as `test` here); `unsupported_type` again for a **sticker, a location or a contact card** (a photo, video, document and voice note are read since W6: §10.13); `connection_invalid` when the connection is not `active`
+(stored, nothing sent); `bot_paused` when a person has the thread; otherwise **null: the agent may answer** (§10.11). **A tester's stop phrase is looked at BEFORE this verdict is acted on** (**`:462`**, §10.13) and wins over every one of its answers but the first two:
+`opted_out`. `wa.inbound_stored` (**`:418`**, `conclude`) says which, and whether the row is `full` or `metadata_only`.
+
+### 10.8 — A BSUID that changes (review M9)
+
+A `system` message (`user_changed_number`, `user_changed_user_id`) is not the customer writing: **`:558`** `storeSystemEvent` stamps neither `last_inbound_at` nor
+`last_message_at`. **`:507`** `rekeyContact`, one transaction: the thread is re-keyed old → new unless the new id already has one (a `NOT EXISTS` in the statement,
+the unique index behind it; a race that reaches the index rolls back and re-runs without the thread step); `contact_consents.contact_ref` follows the person, so an
+opt-out holds; the id in `whatsapp_test_senders` is replaced (`array_replace`, or just removed when the new id is already listed). **If both threads exist they are
+not merged or deleted**: `wa.contact_rekey_conflict` (`warn`), and the system message goes on the new thread. Concluded as `no_reply_reason = 'system_event'`.
+
+### 10.9 — Statuses, and the usage ledger
+
+**`whatsappStatus.ts:79`** `applyStatus`, one transaction, the row read **`FOR UPDATE`** (**:87**): a status of one of OUR messages (`direction = 'outbound'`, found by
+`meta_message_id = wamid`) moves `delivery_status` only **up** (`sent` < `failed` < `delivered` < `read` < `played`, **:93**); `failed` records `delivery_error_code` and
+`delivery_error` but never moves a delivered or read message back; `pricing_category`, `pricing_type` and `billable` are copied from whichever status carries them.
+**`:117`** — the first status that takes a message from not-delivered to delivered (a `read` that arrived first included) calls **`recordDelivery`**
+(**`src/services/channelUsage.ts:124`**) **in the same transaction**, so a duplicate or out-of-order status cannot count twice and a count that fails rolls the status
+back for the retry to redo. The ledger row is per number, month (UTC for now, `TODO(M12)`), category, pricing type and recipient market (BSUID prefix `EG.`/`SA.` or
+phone `20`/`966`, else `other`). `GET /api/whatsapp/connection` reads it back as the meter (**`src/routes/whatsapp.ts:76`**, `usageOf`).
+
+**The free-entry window (W8, T049, review M20).** In the same transaction (**`whatsappStatus.ts:155`**, `applyFreeEntryWindow`): a status of ours whose `pricing.type` is **`free_entry_point`** and whose
+`conversation.expiration_timestamp` is a number stores that end in `conversations.free_window_expires_at` for the thread of the message the status is about (one statement keyed on the message, scoped to
+the tenant and to WhatsApp). It is clamped to 7 days from the status, never moved earlier than what is stored, and not stored at all when it is already over. **Nothing else sets it**: a click-to-WhatsApp
+`referral`, an entry link and an ad say where a thread began (§10.13), and a referral proves nothing about cost (it needs a real click on a phone). `isWindowOpen` (`channels/window.ts`) then lets the sender
+reply after the 24 h are over. A failing count rolls the window back with the status, and the retry stores both.
+
+### 10.10 — Account events: the connection's health, and who is told
+
+**`whatsappStatus.ts:180`** — a `wa.event` of kind `account` goes to **`handleAccountEvent`** (**`src/services/whatsappAccount.ts:490`**). **`planAccountEvent`** (**:268**, pure) reads the
+field and event into **changes**, or says `informational` (partner, pricing and linked-ad events, and a `PARTNER_REMOVED` with no `disconnection_info`: logged `wa.account_event`, nothing
+written) or `unhandled` (an event or field this build has no sample for, or a payload missing what its event needs: `wa.account_event_unhandled` with `reason`, completed, never guessed).
+The tenant is found by **`entry.id`** against `platform_connections.profile.waba_id` (an account event names no phone number), narrowed to one number when the event carries
+`display_phone_number`.
+
+| Event | `profile` | `status` | Alert |
+|---|---|---|---|
+| `ACCOUNT_DELETED`, `ACCOUNT_OFFBOARDED`, `PARTNER_REMOVED` + `disconnection_info` | `disconnection`, `account_block` (`deleted` / `offboarded` / `disconnected`) | `invalid` | disconnected |
+| `ACCOUNT_RECONNECTED` | `disconnection` cleared, block cleared | `active`, **only if an account block held it** (a dead token stays dead) | reconnected |
+| `ACCOUNT_RESTRICTION` | `restriction` (types, end) | `invalid` + `account_block: restricted` + `block_until` **only for `RESTRICTED_CUSTOMER_INITIATED_MESSAGING` still running** (replies are customer-initiated) | restriction |
+| `ACCOUNT_VIOLATION` | `violation` | unchanged | violation |
+| `DISABLED_UPDATE` | `ban` | `DISABLE` → `invalid` + `banned`; `SCHEDULE_FOR_DISABLE` unchanged; `REINSTATE` → block cleared, `active` | ban |
+| `account_alerts` | `alerts["alert:<type>"]` | unchanged | Meta's words, when `ACTIVE` |
+| `phone_number_name_update` | `name_status`; `display_name` when `APPROVED` | unchanged | name |
+| `phone_number_quality_update` | `messaging_limit` (`current_limit`), `number_status` (`FLAGGED`/`UNFLAGGED`), `throughput` (`THROUGHPUT_UPGRADE`) | unchanged | limit / number status; then `checkConnectionHealth` reads the real rating |
+| `business_capability_update` | `business_capability` (daily limit, number cap) | unchanged | capability |
+
+**"Once per distinct change" is the stored value, never the clock.** `profile.alerts[key]` is the last value the owner was told. A change whose value equals it is a duplicate
+(Meta redelivers, a job is retried: nothing written, nobody told); one that differs is news however soon it follows, so GREEN → YELLOW → GREEN → YELLOW is four alerts (review M13).
+Until a first alert is stored, the profile's own field stands in (`Change.fallback`), so the first event does not announce what the Settings card already shows; a violation, a point
+event with no state, carries `entry.time` in its value. The write is **`commitChange`** (**:150**): read the row, decide (**:155**), `UPDATE … WHERE profile IS NOT DISTINCT FROM <what was read>`,
+retried up to three times against whatever won; the alert is sent **after** the claim, and a send that fails (`wa.alert_failed`) **releases** it and fails the job, so the retry sends it once.
+Alerts switched off (`wa.alert_not_sent`) is not a failure: the state is stored. The alert goes to the operator's Telegram bot (`whatsappNotify.ts`), Arabic then English, naming WhatsApp and
+the number, with what to do; it never carries a customer.
+
+A **block** (`profile.account_block`) is why a valid token does not revive a connection: **`refreshHealth`** (**`whatsappConnections.ts:425`**, **:437**) leaves it `invalid` while the block holds
+(`wa.connection_blocked`) and clears a `restricted` one only when its `block_until` has passed.
+
+**The free-reply alert.** After the transaction in `applyStatus` commits, a first-delivered `service` message calls **`checkFreeTierAlert`** (**`whatsappAccount.ts:550`**): once the period's
+delivered `service` count reaches the connection's `settings.free_tier_alert_at` (900 by default) the owner is told, and `profile.free_tier_alerted_period` stores the period, so the 901st does
+nothing and a new month alerts again; a failed send gives the period back. It never throws into the status path (`wa.free_tier_check_failed`).
+
+**The daily read.** **`refreshAllWhatsAppConnections`** (**`whatsappHealth.ts:149`**) runs from `GET /api/cron/publish` after the YouTube visibility check, 50 connections a day, least recently read first, and
+**never throws**: one tenant's failure is `wa.health_sweep_row_failed`, counted, and does not stop the next. **`checkConnectionHealth`** (**:95**) calls `refreshHealth`; Meta refusing the token or a
+permission (190, 200, 10) makes the connection `invalid` and tells the owner once (`reportConnectionInvalid`: the stored value stops a second alert on every later day, whichever path marked it);
+anything else changes nothing. What changed since the last read (quality, messaging limit via `whatsapp_business_manager_messaging_limit`, number status, name review) is told once by the same rule
+(**`healthChanges`**, **:46**), a first reading is recorded without an alert, and a connection that comes back says so once. `TODO(M12)`: the account timezone is not read yet.
+
+`wa.event` kind `preference` (Meta's own "stop / resume marketing messages" button, W7 wired in) logs `wa.preference_event` (the number it came in on, never the person), finds the tenant by that number
+(**`whatsappStatus.ts:233`** `getCreatorByWhatsAppNumber`; a number nobody connected is `wa.no_creator`, `source: 'user_preferences'`, and completes) and calls **`handleUserPreference`**
+(**`src/services/consentPreferences.ts`**): a `marketing` row in `contact_consents`, `withdrawn` for `stop` and `granted` for `resume`, source `user_preferences`, dated by Meta's own timestamp (never in the future, so an old
+`resume` that arrives late cannot outrank a newer `stop`). It does NOT set `opted_out_at`: the button ends promotions, not the conversation (a person who writes «إيقاف» is §10.13). A database failure throws, so the
+job is retried and the stop is not lost.
+
+### 10.11 — The agent answers a test sender (W5)
+
+When `noReplyReasonFor` says null (**`whatsappInbound.ts:488`**), the handler asks `answerWhatsApp` (**`src/webhook/whatsappAnswer.ts:187`**; the handler takes it as a
+dependency, so `whatsappInbound.test.ts` tests the decision and `whatsappAnswer.test.ts` the answer). It is **the same sales turn that answers Instagram**, `runSalesTurn`
+(§2), given a WhatsApp `transport` (**`dmSales/transport.ts`**, **`whatsappAnswer.ts:105`** `whatsappTransport`), whatever the tenant's Instagram `sales_mode` says:
+
+| hop | what happens |
+|---|---|
+| 11.1 | `seen()` — **`markReadWithTyping`** (`whatsapp.ts`) while the model thinks: the read receipt and the typing indicator, best effort (`wa.sender_action_failed`), never the reason a reply fails |
+| 11.2 | the prompt is the Instagram one plus ONE fact in the conversation's block: **"Channel: WhatsApp … never mention Instagram, Facebook or Messenger"** (`prompt.ts` `salesFactsBlock`, `SalesFacts.channel`); the Instagram block is byte for byte what it was (`prompt.test.ts` pins it) |
+| 11.3 | the model is asked for purpose **`dm_whatsapp`** (**`aiProviders/purposes.ts`**): the saved `dm_whatsapp` route, else the saved `dm` route, else the first allowed provider with a key; **only Groq, Anthropic and OpenAI** (`NO_TRAINING_PROVIDERS`, **`route.ts`** `pickRoute`) — a route on Gemini, OpenRouter or Custom is `no_provider`, never a quiet move to another |
+| 11.4 | a model that cannot answer (no provider, a 429, a timeout, a budget, an empty answer) is a **hand-off**, never Gemini: **`turn.ts:402`** skips `readDmEngine` and `generateAiResponse` for a transport (`dm.engine_failed`, `fallback: 'never'`); the customer gets the profile's hand-off line, the bot is paused, the owner is told; the inbound row says `provider_unavailable` |
+| 11.5 | the rest is the turn: prefilter, rules, guard, link. What it does NOT do on another channel: spend Instagram's hourly quota, read the comment bridge or an A/B arm, **schedule a follow-up** (`scheduleFollowup` answers `unsupported_channel`; a `dm.followup` that names WhatsApp is skipped) |
+| 11.6 | `send()` — **`channels/send.ts:124`** `sendWhatsAppReply`, `kind: 'agent'`, `record: false`: **ONE message**, with the automated-service line folded into its text (never a bubble of its own; **`turn.ts:270`**). The transport refuses a second send in a turn |
+| 11.7 | the turn records the reply and the new state in one statement (`recordTurn`), then `recorded()` puts Meta's **wamid** on that row (`attachWamid`), so a delivery status finds it |
+| 11.8 | the outcome becomes `no_reply_reason` (**`reasonOfTurn`**): NULL answered, `provider_unavailable`, `bot_paused`, `superseded`, `agent_off` |
+
+**The sender (`channels/send.ts`)** says no, with NO request to Meta, to: a thread that is not this tenant's WhatsApp one; a connection that is not `active`
+(`connection_invalid`); a **closed 24 h window** (`isWindowOpen`, `window_closed`); a **billable** service message while `settings.allow_billable` is off
+(`billable_blocked`); a reply with no words (`invalid_message`). Then **`toWhatsAppMessage`** (**`webhook/whatsappPayload.ts:150`**) shapes ONE message addressed with
+`recipient: <BSUID>` and no `to` — a text, an `interactive.button` (1–3 buttons), an `interactive.list` (4–10), or an `interactive.cta_url` — and `whatsapp.sendMessage` sends it,
+**never retried once it may have landed** (`creates: true`). A failure is classified (`classifyWhatsAppError`): a dead token or a payment problem marks the connection `invalid`.
+
+**When the reply cannot be sent** (`whatsappAnswer.ts:152` `failureOf`): `window_closed`, `billable_blocked` and `connection_invalid` are final and say so on the inbound row; the
+conversation is stamped (`stage = 'handoff'`, `handoff_reason = 'unsure'`, the bot left on: `handoff_reason` is a closed list, v39) and **the owner is told what happened**
+(`notify.ts` names WhatsApp and the dashboard for a WhatsApp conversation). A throttle (nothing delivered) releases the claim and is rethrown while an attempt is left. A send that
+**may have landed** (a timeout, a 5xx) is **never retried**: concluded as `failure`, stamped. An error after the message went out (the record failed) concludes it as answered:
+the customer is never answered twice (`wa.answered_unrecorded`).
+
+### 10.12 — A person replies from the inbox (W4)
+
+**`routes/api.ts:3525`** — `POST /conversations/:id/messages` hands a WhatsApp thread to **`replyOnWhatsApp`** (**:3441**) before anything Instagram-shaped runs: `sendWhatsAppReply`,
+`kind: 'operator'`, then the bot is paused exactly as the Instagram branch pauses it. A closed window is **`409 WHATSAPP_WINDOW_CLOSED`** with `closes_at`, no request to Meta;
+a refused connection or a billable reply is a 409; a message Meta did not take is a 502 with nothing stored and the bot still on; text over 4,096 characters is a 400, not a cut.
+
+### 10.13 — A tester says stop, sends a voice note or a file, or arrives through a link (W6, W7, W8 wired in)
+
+All of this is behind **`isTestSender`**: a stranger's message is stored as metadata only, as in §10.5. For a listed tester the handler (**`whatsappInbound.ts:351`** `storeInbound`) does these things, in this order,
+after the row is claimed and before the agent is asked. Each step is a dependency the handler is given (`InboundSteps`, **:235**), so `whatsappInbound.test.ts` tests the decision with stand-ins that fail the
+test when asked for what they should not be asked for, and each step is tested where it lives.
+
+| hop | what happens |
+|---|---|
+| 13.1 | **Where the thread began** (**`:331`** `entryLinkOf`, before the thread upsert). The pure `refFromText` looks for a ` #ref` in the words first, so a message with none costs no query. A ref that is one of THIS tenant's entry links (`platform_connections.settings.entry_links`, `getEntryLinkLabels`) makes the first inbound's `entry_source` `{ kind: 'link', ref, label, at }`: a QR code and a short link share a ref, so they are one kind, and the label is the owner's, copied when the thread began. A click-to-WhatsApp `referral` stays `ctwa`; an unknown ref is not trusted (anyone can type one) and the thread is `organic`; labels that cannot be read are `wa.entry_link_unreadable` (`warn`) and the message is stored without a link source. It is metadata, so it is recorded for a stranger too, with none of their words |
+| 13.2 | **What the agent will read** (**`:430`**). The words the agent reads are the stored words **without the ` #ref`** (`withoutEntryRef`, **`whatsappAnswer.ts:157`**); the stored row keeps them as they arrived. The turn is told the thread's ref (`entryRef`, from the upsert's `entry_source`), and the WhatsApp transport's `readable` (**`whatsappAnswer.ts:119`**) puts the history's customer rows through the same function (**`dmSales/turn.ts:549`** `readableHistory`), so the model never reads the code and never reads the message being answered twice (`salesTurns` adds a row whose text differs from the stored one). Instagram and Messenger have no transport, so their history is the array they always got (`turn.test.ts` pins it) |
+| 13.3 | **A stop** (**`:462`**). The typed words of a tester (text, a tapped button, a photo's caption) go through `matchStopMessage` (**`services/consent.ts`**): the WHOLE message, normalised, must equal a phrase in the list (at most three words), never a substring (`عايز إلغاء الطلب`, `موقف`, "stop by tomorrow?" are not stops). If it is one, **`optOutWhatsAppContact`** (**`whatsappOptOut.ts:96`**) decides and **the turn is never run** (one path: a message cannot be an opt-out twice). It runs in every mode (`off` included) and while a person has the thread, because an opt-out is honoured wherever the system knows it is them |
+| 13.4 | **What a stop does: Instagram's rule, plus W7's records.** One transaction (**`consent.ts`** `withdrawAll` with `closeThread`): `withdrawn` rows for service, updates and marketing (append-only, with the wording and source `stop_phrase`), `opted_out_at` for a thread not opted out before, **the bot paused and the stage `closed` with `last_intent = 'opt_out'`** (the stage comes from `optOutDecision`, the decision Instagram's turn makes for «stop», **`whatsappOptOut.ts:49`**; `recordTurn` pauses for exactly `decision.optOut`), and the contact's pending `dm.followup` jobs cancelled. The row says **`opted_out`** |
+| 13.5 | **The confirmation, once.** `confirmationText(lang)` in the language of the phrase, through `sendWhatsAppReply` (`kind: 'agent'`, the sender writes the outbound row), only when this is the thread's FIRST opt-out (`conversationsNewlyOptedOut > 0`) **and** the agent may speak now (not `off`, an `active` connection, no person on the thread). A refusal or an error is `wa.optout_confirmation_not_sent` and **the opt-out stands**; nothing is retried. A stop written while the agent is off is therefore silent |
+| 13.6 | **When an opted-out contact writes again** (the Instagram rule). The thread is paused, so the message is stored and concluded `bot_paused` and shows in the inbox as "Needs you"; the owner may answer by hand or switch the bot back on, which does NOT clear `opted_out_at`, so no follow-up is ever sent (`followup.ts` `opted_out`) and the stage stays `closed` (no pitch: `staysClosed`, `flow.ts`). A second stop phrase is recorded again, concluded `opted_out`, and gets no second confirmation |
+| 13.7 | **What only the turn understands.** A stop the strict list does not name («ما ابي رسايل», "stop messaging me") goes to the agent, whose own prefilter decides it (`turn.ts` step 4): the opt-out line, `opted_out_at`, the pause and the closed stage are written by the turn exactly as on Instagram, and **`answerWhatsApp` then records the consent history** (**`whatsappAnswer.ts:209`** `recordTurnOptOut`, `withdrawAll` without `closeThread`: the thread is already closed, so it sends nothing and the turn's line was the one confirmation). A history that cannot be written is `wa.optout_consent_unrecorded` (`error`) and is not retried (the customer has been answered; `opted_out_at` stands). **Gap:** a refund AND a stop in one message is a hand-off whose `optOut` flag stamps `opted_out_at` (the turn's result does not carry the flag), so its consent rows are not written |
+| 13.8 | **A stop that cannot be written** throws while an attempt is left (the claim is given back first: `wa.optout_retrying`) and, on the last attempt, is `wa.optout_not_recorded` (`error`) with the row concluded `failure`: nothing is sent to someone who said stop, whatever happens. |
+| 13.9 | **The file** (**`:469`**, **`whatsappMediaInput.ts:96`** `saveInboundFile`). A tester's photo, video, document or voice note is downloaded with the connection's token, as soon as the job has it (Meta keeps it 7 days, the URL 5 minutes) and saved **privately** (`media_uploads.is_private`: never served by the public `/api/uploads/:id`), and `messages.media_upload_id` points at it so the erasure flow finds it with the contact. **In every mode** and while a person has the thread, and not on an `invalid` connection (no token). **A stranger's file is never downloaded**: the call sits behind `isTestSender`. A sticker, a location and a contact card are never downloaded (`unsupported_type`). A retried message whose row already holds the file is not downloaded again; a file that cannot be had (too large, expired, an unsupported type, no id) is `wa.media_not_saved` and the message is handled without it |
+| 13.10 | **Words from a file, only when the agent will answer** (**`:475`**, **`whatsappMediaInput.ts:171`** `readInboundMedia`). The owner's own switch (`ai_agents.is_active`) is checked first (`agent_off`: nothing is transcribed, nothing is said). A photo, video or document **with a caption**: the caption is the message, answered as typed text (the model does not see the image). **A voice note** (**:193** `transcribeVoice`): `transcribeAudio` (**`services/transcribe.ts`**) from the private copy, language `ar`, Groq only (a provider that does not train on what it is sent; paid OpenAI stays off), the transcript stored as the row's `text` (`UPDATE messages SET text`), and the turn runs on it; a transcript that is itself a stop phrase is a stop (13.3). A retried voice note whose row holds a transcript is not sent to Groq again |
+| 13.11 | **A voice note that cannot be read** (no file, a format Groq refuses, a **429**, a timeout, silence, no provider): **ONE line** asking for text, whatever the reason, never a retry (`wa.voice_unreadable` with the reason). **A file with no caption**: the same line, the kit's `attachments.media` in the owner's register. Both go through **Instagram's own claim** (`CLAIM_ACK`, **`attachmentAck.ts`**, exported for this): the outbound row is inserted FIRST and only when no later message of theirs is waiting, no words are being answered, and the line was not said within a day; a send that fails for good takes the claim back, a send that MAY have landed keeps it. The line carries the automated-service disclosure when it is the first thing said (`ai_disclosed_at` is stamped after). The row says NULL when the line went out, `superseded` when the claim was refused (`wa.media_ack_skipped`), else why it could not be sent (`window_closed`, `billable_blocked`, `connection_invalid`, `failure`) |
+
+## 11. Ads: the money rule and the guard
+
+The Ads Manager (`src/services/ads/`, README there) runs on Meta's **Limited** access tier: about 60 points per 5 minutes per ad
+account, and a 300 s block past that. Every Marketing API call goes through one client with its own pinned version, and **one money
+rule** decides everything that can start or raise spend. This section walks that rule from a click to Meta, and the hourly guard that
+holds the cap after switch-on; §11.2 walks the stored copy every screen reads and the paced queue every write goes through.
+
+### 11.1 — Money rule and guard
+
+**A. Every ads request**
+
+1. `/api/ads/*` is mounted below `resolveTenant` (`routes/api.ts:1663`). The router's first middleware, **`routes/ads.ts:83`**, answers
+   **404 `ADS_DISABLED`** unless `ads.enabled.<tenant>` is `'true'` (the platform admin's switch, `routes/admin.ts`
+   `POST /ads/tenants/:id/enabled`; migration v53 set it for every tenant that already had ads settings). It then runs the rest of the
+   request inside `withAdsContext({ creatorId, adAccountId })` (**`ads/graph.ts`** `withAdsContext`), so every Graph call it makes is
+   paced against that account.
+2. Each Graph call — `adsGet` / `adsPost` / `adsDelete` — goes through
+   **`ads/graph.ts:155`** `call`:
+   - the version is `ads.api_version` (`adsApiVersion`, default `v26.0`, never below `v25.0`), **not** `META_API_VERSION`;
+   - `reserve` (**`ads/pacer.ts:131`**) takes 1 point for a read, 3 for a write, from 45 of the 60 per 300 s; refused →
+     `AdsGraphError('throttle', retryAt)` **without calling Meta** (`graph.ts:167`);
+   - the answer's usage headers go to `observe` (Meta's `acc_id_util_pct` replaces our count); a `facebook-api-version` that is not the
+     pinned one logs **`ads.version_mismatch`**;
+   - an error is classified (`classifyAdsError`): a throttle blocks the account until Meta's `reset_time_duration` /
+     `estimated_time_to_regain_access` (300 s default), logs **`ads.throttled`** with `retry_at` (`graph.ts:194`) and is thrown at once.
+     `withRetry({ ads: true })` (**`http.ts:138`** `isAdsLimitError`) never retries a rate or edit limit.
+3. The route turns it into the answer (`metaRefusal`, `adBoosts.ts`): throttle → **429 `RATE_LIMITED`** + `retryAt`; 613/1487632,
+   613/4841018, 17/1885172 → 429 `EDIT_LIMIT`; 190/102 → **409 `TOKEN_INVALID`** (never 401, which signs the dashboard out), and the
+   tenant's `ads.health` is marked dead with a `token_dead` alert.
+
+**B. The rule (`ads/money.ts`, pure)**
+
+`worstCase = spentThisMonth + Σ remainingThisMonth(ACTIVE campaigns) + aboutToRun + candidate ≤ monthlyCap` (`checkCandidate`,
+**`money.ts:215`**). The month is the **ad account's** calendar month; a daily budget counts today at **1.75×** and each later day once
+(`remainingThisMonth`, **`money.ts:156`**); a lifetime budget counts its whole unspent part. `remaining` = cap − the worst case without
+a candidate, the one figure every screen shows (`GET /api/ads/money`, `moneyFor`, **`money.ts:531`**, cached 60 s per tenant). Figures
+exclude tax.
+
+**C. Activating a boost (the step that spends): `activateBoost`, **`adBoosts.ts:470`****
+
+1. The daily max (`checkDailyMax`: a lifetime budget as `total / days`), the payment method, then the month **read live, outside any
+   transaction** — `readMonth`, **`adBoosts.ts:486`** (spend this month + every campaign).
+2. `checkAndStartSpend` (**`money.ts:466`**, called at **`adBoosts.ts:498`**): ONE short transaction that takes
+   `pg_advisory_xact_lock(hashtextextended('ads:<tenant>', 0))` (`lockMoney`), sums what is about to run (`aboutToRun`, **`money.ts:397`**:
+   pending and running spend ops, `verify` ones for a day, and `done` ones that finished after the month was read minus 2 minutes), re-runs
+   the rule, re-reads the boost `FOR UPDATE`, writes `activated_at`, and inserts the activation as a **`running` `ads_ops` row** carrying
+   `worst_case_delta`. Refused → **400 `OVER_MONTHLY_CAP`** with the numbers.
+3. Since A2 the activation is **three ops** recorded inside that same transaction (`record`, **`money.ts:475`**, the boost's at
+   **`adBoosts.ts:507`**): ad → ad set (its window starts now) → campaign LAST, each `depends_on` the one before, the campaign's carrying
+   `worst_case_delta`. A pending op counts as about to run. After the commit `runRecorded` (**`adBoosts.ts:522`**) runs them inline, in
+   order (§11.2 B); one left waiting is sent by the drain, a failed one is the refusal (`refusalOf`), and a create's or write's timeout is
+   `verify` (§11.2 C), which keeps counting for a day.
+
+> **Why this order.** v1 read Meta *inside* the locked transaction (up to 40 s of Graph retries holding a pooled connection and the
+> lock). Reading first and recording the activation as a running op keeps the transaction to milliseconds and still lets a second
+> activation racing this one see it (`ads/money.db.test.ts`).
+
+A resume and a budget raise on a running campaign (the candidate is the *extra* worst case), from the Campaigns tab's `requestStatus` /
+`requestBudget` (**`ads/actions.ts:154`**, **`:218`**), follow the same three steps.
+
+**D. The guard: `runGuard`, **`ads/guard.ts:66`**, from every `/api/jobs/drain` (`routes/api.ts:418`, with the drain's deadline)**
+
+1. For each tenant with `ads.enabled.<t>` (**`guard.ts:80`** `guardTenant`): skip if the last **successful** check (`ads.cap_checked`)
+   was under an hour ago, or the last attempt (`ads.cap_attempt`) failed under 10 minutes ago. No token, account or cap → skip.
+2. Write `ads.cap_attempt`, read the account, this month's spend and the campaigns; if `shouldPauseAll` (spent ≥ cap, or spent + one more
+   day — daily budgets at 1.75× — > cap), `pauseAll` (**`guard.ts:143`**) pauses every ACTIVE campaign (also those made in Meta Ads
+   Manager) as `priority` calls, marks matching boosts paused, writes the **`ads.cap_paused`** audit row (actor `system:ads-guard`) and
+   sends the **`cap_paused`** alert.
+3. Only then **`ads.cap_checked`** = now (**`guard.ts:114`**). A failure leaves it, so the next drain 10 minutes on tries again; a
+   `token_dead` marks `ads.health` and alerts; two hours without a success raises **`guard_blind`** (**`guard.ts:126`**), and the Ads
+   screen shows "Spending is not being watched" (`guardState` in `health.ts`).
+4. Saving a cap at or below the month's spend (`POST /api/ads/settings`, **`routes/ads.ts:158`**) runs the guard for that tenant at once
+   (`force`) and answers `warnings: ['will_pause_all']`.
+
+**E. Alerts and the daily health check**
+
+- `notifyAds` (**`ads/notify.ts:256`**) inserts the `ads_alerts` row first — unique `(tenant, kind, object, day)` in the account's time zone,
+  so a second alert that day is not sent — then sends in the tenant's language to its own Telegram chat / email (`ads.alerts.<t>`, the
+  deployment's bot and Resend key), a bilingual copy to the admin unless `ads.copy_admin` is `'false'`, and records each channel's
+  outcome on the row. Never throws. `cap_paused`, `guard_blind`, `token_dead` cannot be switched off.
+- `runAdsHealth` (**`ads/health.ts:157`**, from the daily cron, `routes/api.ts:1129`): per tenant `checkTenantHealth` (**`health.ts:115`**) —
+  token (`debug_token` for a Connect token, `GET /me` for a pasted one), account status and funding, served version — written to
+  `ads.health.<t>` (the stored copy the screens read) and turned into alerts; then the retention sweep (`ads_alerts` after a year,
+  finished `ads_ops` after 180 days).
+
+
+### 11.2 — Sync and ops: the stored copy and the paced queue
+
+**A. Screens read the stored copy (research R2)**
+
+1. `GET /api/ads/overview` → `readOverview` (**`ads/overview.ts:92`**): Postgres only. The account is the last health check's snapshot
+   (`ads.health.<t>`), spend today and this month come from `ads_insights_daily` in the **ad account's** days (`spendFromMirror`), the
+   money rule runs over the stored ACTIVE campaigns (`rawFromMirror`), plus "needs attention" (rejected, issues, billing, ops failed in
+   the last day) and the queued ops. **No Graph call**, so a page view costs no points (v1 cost about 4 per view).
+2. `GET /api/ads/objects` and `/objects/:id` (**`routes/adsObjects.ts`**, mounted by `mountObjectRoutes` at **`routes/ads.ts:547`**,
+   after the `ADS_DISABLED` gate): `ads_objects` rows of the tenant's **current** ad account, each with 28 days of results
+   (`resultsFor`: ad rows summed; **reach never summed across days**), the ad set's budget edits left this hour, and its open ops. Every
+   `:id` goes through ONE resolver, `objectOf` (**`adsObjects.ts:104`**) → `ownObject` (**`ads/actions.ts:51`**): another tenant's row, or
+   a row of an account the tenant switched away from, is 404 `NOT_FOUND`.
+
+**B. Every write is an op (research R3)**
+
+1. A button → `requestStatus` / `requestBudget` / `requestArchive` / `requestDelete` (**`ads/actions.ts`**). Pause, archive, a cut and an
+   end date are enqueued as they are; switching on and raising run the money rule (§11.1 C) and are enqueued **inside** the locked
+   transaction. Delete is its own confirmed op and is refused on an ACTIVE object; Boost's Delete now
+   **archives**. Every op has an idempotency key (`<tenant>:<what>:<requestId or 10 s bucket>`): a double press returns the same op.
+2. `enqueue` (**`ads/ops.ts:399`**): `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`, audit `ads.op_enqueued`. The route answers
+   **202 `{ op }`** at once and hands `runOpInline` to `waitUntil` (**`ops.ts:1023`**); Boost (`writeNow`, **`actions.ts:346`**)
+   waits for it instead, so its answers keep their v1 shape.
+3. `claimNext` (**`ops.ts:501`**), ONE short transaction: the oldest due `pending` op of the account whose dependency is `done` and with
+   nothing `running`/`verify` on the same `object_key`, `FOR UPDATE SKIP LOCKED`. Meta's per-object limits come from the op history
+   (`limitWaitUntil`, **`ops.ts:195`**): 4 `budget` ops per ad set per rolling hour, 30 s after the last `done` on the object, 10
+   `spend_cap` per account per day in the account's zone. A limit pushes `not_before`; the op is not started.
+4. `execute` (**`ops.ts:778`**) calls Meta **outside any transaction**, every call through ONE function, `sendExec` (**`ops.ts:641`**),
+   inside the tenant's Graph context (pacer, §11.1 A.2). A create's name gets `AR·<op id>`. The outcome (`outcomeFor`, **`ops.ts:258`**)
+   is recorded in a second short transaction, audit `ads.op_applied` / `ads.op_failed`:
+   - done → the stored row is updated at once (status, budget, a create's `meta_id`);
+   - **throttle** → back to `pending` with `not_before` = Meta's reset (the pacer already blocked the account): **never retried in a loop**;
+   - 613/1487632 (4 budget edits this hour) → +1 h; 613/4841018 (busy) → +30 s; 17/1885172 (10 spend-cap changes) → `failed` `EDIT_LIMIT`;
+   - 190/102 → `failed` `TOKEN_INVALID`; the drain stops the account for this run, and A1's dead token (`isQueueStopped`,
+     **`ops.ts:621`**) keeps the tenant's queue stopped until a new token is saved;
+   - a timeout or 5xx on a create → **`verify`**.
+
+**C. Never create twice (research R6)**
+
+`verify` (**`ops.ts:875`**, `nextVerifyStep` **`:309`**): a create in `verify` searches its parent edge for the `AR·<op id>` tag. Found →
+`done`, its id adopted. Not found → checked again 60 s later; not found twice → `pending`, **resent exactly once** with the same tag; not
+found again → `failed`. A non-create write in `verify` reads the object back and compares. An op written by A1's synchronous path (no
+`exec`) is never sent: it fails after a day. `reap` (**`ops.ts:909`**): `running` for over 5 minutes → `verify` (creates) or `pending`.
+
+**D. The drain and the cron**
+
+1. `/api/jobs/drain` (**`routes/api.ts:439`**), after the guard so the guard is never starved of points: `drainAdsOps(deadline)`
+   (**`ops.ts:943`**: reap, then every account with something due, skipping one Meta has blocked), then `syncAllAds(deadline)`
+   (**`ads/sync.ts:779`**, **`api.ts:441`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:539`**: one paged
+   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:166`**; `upsertObjects` **`mirror.ts:232`**
+   keeps `origin` and `app_meta`, so a Boost's rows stay `boost` and new ones carrying a boost id in their name are linked to it), and
+   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:683`**; `upsertInsights` **`mirror.ts:371`**).
+   Each sync is skipped when the pacer cannot spend, and stops at a throttle.
+2. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:329`**); a read cut
+   short (a page not read, a nested edge with a next page) marks nothing.
+3. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:801`**), the trailing **28 days** at `level=ad` (an async report
+   when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
+   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:437`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
+   older than **37 months** (**`ads/health.ts:178`**).
+4. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:742`**, else 429 `RATE_LIMITED` +
+   `retryAt`), run under `waitUntil`; the drain is the backstop.
+
+**E. Disconnecting deletes the stored copy**
+
+Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/settings.ts:188`**) or disconnecting Meta with a Connect token
+(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:875`**): `ads_objects`, `ads_insights_daily` and
+`ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
+
+### 11.3 — Create: spec → ops → Meta (A4: message ads and the policy check)
+
+Every ad the app makes is one `CampaignSpec` (contracts/dashboard-api.md), mapped by ONE pure function to Graph parameters. The
+builder's quick mode and Boost's "Send messages" preset end in the same two server functions, so they cannot drift apart.
+
+**A. Quick mode** (`dashboard/js/pages/ads_builder.js`, `AdsBuilder.openQuick`). The Scheduler's **Boost** (`posts.js` `boostOpen`,
+**`posts.js:3826`**) loads the module on demand (page registry `ads_builder`, `routable: false`); a module that cannot load says so (the older
+Boost form was removed in A5). The owner picks the goal (Send messages first), the destinations, countries, daily budget × days, the greeting and up to
+four ice breakers; the post's caption is shown read-only because it IS the ad text. What is left of the month comes from `GET /money`,
+asked once when the dialog opens.
+
+**B. The policy check while typing.** `POST /api/ads/policy` (**`routes/ads.ts:427`**, operator) → `checkPolicy` (**`ads/policy.ts:550`**):
+pure, no Meta call, nothing stored, asked 400 ms after the typing stops. The text is folded first (tatweel, alef forms, diacritics,
+Arabic-Indic digits, zero-width characters), matched by versioned rules (`POLICY_VERSION`), and every finding's `[start, end)` is mapped
+back onto the ORIGINAL text, so the dialog wraps exactly those characters in `<mark>`.
+
+**C. Review: `POST /api/ads/drafts/validate`** (**`routes/ads.ts:441`**, operator) → `validateDraft` (**`ads/drafts.ts:317`**). Creates
+nothing. In order:
+1. `validateSpec` (`spec.ts`): shape and limits (greeting ≤ 300, ≤ 4 ice breakers, title ≤ 80, answer ≤ 300), special-category rules,
+   `leads` and a Facebook post for a message ad refused `UNSUPPORTED` (`FB_POST_MESSENGER_OK = false` until the live check, T094).
+2. The facts (`readFacts`): the stored account (currency), the Page and IG ids, the post's caption **from `scheduled_posts`**, never the
+   browser's, the WhatsApp number, the DM assistant and the WhatsApp agent modes.
+3. `checkPolicy` over the caption, the greeting and the ice breakers.
+4. `mapSpec` (**`spec.ts:535`**) with a placeholder link, so a mapping that cannot be made (no WhatsApp number, no IG account) is a problem.
+5. The money rule: `moneyFor` with the candidate `lifetime:<total>:<days>` (the same rule as `GET /money`, §11.1), and Meta's minimum
+   (`GET act_<id>/minimum_budgets`, cached a day per account, else the account's `min_daily_budget`).
+6. Only when nothing above blocks: `execution_options=['validate_only']` on the **campaign and every creative** (`metaValidate`,
+   **`drafts.ts:282`**, 3 points each). The creative is where a message ad's mapping is proved (CTA, greeting, opt-outs). A throttle answers
+   429 `RATE_LIMITED`; any other refusal is Meta's message in `meta.error`.
+7. The bots: per destination `on | off | test | sales_test | not_connected` (`botStates`). A warning, never a block.
+
+**D. Create: `POST /api/ads/drafts`** (**`routes/ads.ts:464`**, owner) → `createDraft` (**`drafts.ts:437`**). The server trusts nothing
+from Review:
+1. `validateSpec`, the facts, `checkPolicy` again. A block → **422 `POLICY_BLOCKED`** with `findings`; a warning without
+   `confirmPolicyWarnings: true` → **409 `POLICY_WARNINGS`** with `findings`. This is the gate before any create op.
+2. `moneyFor` again: `OVER_MONTHLY_CAP` / `OVER_DAILY_MAX` (409), `ADS_NOT_CONFIGURED`; Meta's minimum: `BELOW_META_MINIMUM` (400). The
+   draft spends nothing; the money rule runs once more at Activate, which is what spends.
+3. ONE transaction, no Graph call in it: the stored copy (`ads_objects`: campaign, ad set(s), and per ad its ad and its creative, origin
+   `app` or `boost`, status `PAUSED`, `app_meta` = goal, destinations, greeting, ice breakers, offer, post, `refShort`, policy version);
+   a tracked link per (ad, offer) when the ad links to an offer (`mintAdLink`, **`links.ts:176`**, in the same transaction: its foreign key
+   names the new ad row); then the chain of create ops, each `depends_on` the one before: campaign → ad set(s) → creative → ad (→ the
+   next creative → ad). An op names the ids it needs from earlier ops as `{op:<op id>}` in its params; `execute` fills them from those
+   ops' results (`resolveParams`, **`ops.ts:687`**) and fails the op without calling Meta when one is missing.
+4. After the commit the chain runs inline under `waitUntil`, one op after another (`runOpInline`); the drain finishes the rest (§11.2 B).
+   Each create's name gets `AR·<op id>` when it is sent, and a timeout is settled by `verify` (§11.2 C). Answer: **201 `{ campaignId,
+   ops }`**. The dialog says the ad is PAUSED and links to the Ads screen, where Activate is a confirmed status op.
+
+**E. Boost "Send messages" is a preset.** `POST /api/ads/boosts` with `objective: 'MESSAGES'` (or `goal: 'messages'`) → `boostMessages`
+(**`routes/ads.ts:470`**) → `boostToSpec` (**`spec.ts:848`**: a lifetime budget of daily × days on the ad set, one country, age 18+,
+Advantage+ audience) → step D with origin `boost`. The v1 objectives (engagement, reach, link clicks) keep v1's synchronous path and
+`ad_boosts`.
+
+**F. Results the app can count and Meta cannot.** `trackedClicksFor` (**`ads/mirror.ts:792`**), on every ad row of `/objects`:
+`direct` = people's clicks (`link_clicks.is_prefetch = FALSE`) on the ad's own `/r/` link (`tracked_links.ads_object_id`), `viaChat` =
+people's clicks on links the bot sent in conversations the ad started (`conversations.entry_source->>'ad_id'`).
+
+**G. Where it can silently do nothing**
+- The policy check passes a text it has no rule for: it is a lint, not Meta's reviewer. A missed pattern is added to `policy.ts` and
+  `POLICY_VERSION` bumped; never special-cased in a route.
+- The bot warning is ignored and Activate works anyway: people message and nobody answers (or nobody is sold to, in sales test mode).
+- The chain stops part way (a dead token, a Meta refusal on the ad set): the campaign exists at Meta, PAUSED, with nothing under it.
+  The failed op says why in `ads_ops.result`; the later ops fail `DEPENDENCY_FAILED`. Nothing spends.
+- A boosted post carries NO greeting or ice breakers (`POST_GREETING_PLACEMENT = 'omit'`): live check 2026-10-22, Meta refuses
+  `page_welcome_message` in the call to action's value and documents no other place on a post creative. The chat opens with Meta's
+  greeting; quick mode hides the fields (`GREETING_ON_POST: false`). Uploaded-media ads (A5) carry them under `link_data`/`video_data`.
+
+### 11.4 — The full builder: upload → Meta → spec → ops (A5)
+
+The Ads screen's **Create** tab (`dashboard/js/pages/ads_create.js`, `AdsCreatePage`) is the same `CampaignSpec` as quick mode (§11.3),
+every part of it, in eight steps: goal, destination, creative, text, audience, placements, budget and schedule, review. Review and Create
+are §11.3 C and D unchanged; what A5 adds is below.
+
+**A. An upload never passes through the app.** `POST /api/ads/uploads/sign` (**`routes/ads.ts:499`**, owner) → `signAdUpload`
+(**`ads/adUploads.ts:74`**): type and size first (JPG/PNG ≤ 30 MB, MP4/MOV ≤ 50 MB), then a Supabase signed upload URL (the Monteur's
+mechanism), then a PUBLIC metadata-only `media_uploads` row. The browser PUTs the file to Storage itself (XHR, progress bar), so Vercel's
+4.5 MB request limit never applies. CSP: `connect-src https://*.supabase.co` (`vercel.json`, `routes/api.ts` `securityHeaders`).
+
+**B. Handed to Meta.** `POST /api/ads/creatives/from-media` (**`routes/ads.ts:509`**, owner) → `prepareMedia` (**`ads/adMedia.ts:69`**):
+the upload must be the tenant's and of the kind claimed; an image's bytes go to `act_<id>/adimages` (base64 → `image_hash`); a video goes
+to `act_<id>/advideos` with `file_url = <public base>/api/uploads/<id>` (Meta pulls it; its bytes are never read here) and needs a cover
+image, whose public address becomes the video's `image_url` (frame 0 is black). The answer is stored in `ads.media.<tenant>` (newest
+200). Not an `ads_ops` row: neither call answers an object the queue could verify by its name tag; both still go through `ads/graph.ts`
+(paced, a throttle never retried).
+
+**C. Resolved at Review and Create.** `readFacts` calls `resolveSpecMedia` (**`ads/adMedia.ts:114`**): every media id of the spec (main,
+9:16, covers) must have a stored Meta answer; a video not yet `ready` is read once (`GET /<video id>?fields=status`, 1 point) and stored
+when it changes. Not handed to Meta, still processing or failed → a problem in Review, a 400/409 (`VIDEO_PROCESSING`) at Create; nothing
+is created.
+
+**D. The mapping additions** (`spec.ts`, pure): per-goal optimisation choices (`OPTIMIZATION_CHOICES`); only the offered positions
+(`PLACEMENT_OPTIONS`; Explore, video feeds and Messenger Stories refused `UNSUPPORTED`); day parting `adset_schedule` + `pacing_type:
+['day_parting']`, in whole hours, viewer's time zone, only with a lifetime budget (`validateSchedule`, **`spec.ts:400`**); a special
+category forbids interests too, and `political` is refused; the 9:16 version (**`spec.ts:801`**): link-click ads only, same kind as the
+main asset, `asset_feed_spec` from `placementAssetFeed` (**`ads/creatives.ts:79`**: labelled assets, `optimization_type: PLACEMENT`, a feed
+rule and a vertical rule — Stories only while `REELS_CUSTOMISATION_LIVE_CHECKED` is false) with the story spec reduced to the Page and the
+Instagram account, the opt-outs kept (`CREATIVE_OPT_OUTS`: the four keys Meta allows, live-checked).
+
+**E. What Review adds.** After Meta's `validate_only` (§11.3 C 6): `reachEstimate` (**`ads/targetingSearch.ts:90`**, `act/reachestimate`
+on the first ad set's targeting, never throws) and, only when Meta accepted the draft, `generatePreviews` (**`ads/creatives.ts:238`**) for
+the two placements `previewPlacements` picks (**`drafts.ts:375`**). A preview Meta will not give is `html: null` and the dashboard draws
+its approximate mock; an iframe is shown only from `www.facebook.com` (CSP `frame-src`). About 2 more points per Review.
+
+**F. Targeting search.** `GET /api/ads/targeting/search?type=adinterest|adgeolocation|adlocale&q=` (**`routes/ads.ts:520`**, operator):
+`GET /search` (cities only for places), cached 24 h per query in the instance; a miss is 1 point through the pacer.
+`GET /api/ads/minimum-budgets` (**`routes/ads.ts:531`**) is drafts' one floor for every goal.
+
+**G. Duplicate.** `POST /api/ads/objects/:id/duplicate` (**`routes/adsObjects.ts:178`**, owner) → `requestDuplicate`
+(**`ads/actions.ts:322`**): one `update` op on `<meta id>/copies` with `status_option: PAUSED`, `deep_copy` (never for an ad) and
+` · copy AR·<key>` added to every name. The sync brings the copy into the stored copy. Nothing spends until it is switched on.
+
+**H. Where it can silently do nothing**
+- The system user has no Page / Instagram asset: Meta refuses the creative at Review (`meta.ok: false`) and previews come back empty
+  (the mock is drawn). Nothing is created.
+- A video Meta never finishes processing stays "still processing" in Review; the owner uploads it again.
+- The Storage project on a custom domain: the browser's PUT is blocked by the CSP and the upload says it failed.
+- `ads.media.<tenant>` keeps 200 uploads; an older one is refused at Review ("upload it again").
+
+### 11.5 — Managed clients: one tenant, its own token, its own account (A11)
+
+Until Meta verifies the platform's business, every client tenant connects with a **system-user token from its own Meta business**,
+its own ad account and its own payment method; Meta bills the client, never the platform.
+
+1. The platform admin opens **Client ads** (`#/admin_ads`, `dashboard/js/pages/admin_ads.js`), sets the tenant's ceiling
+   (`POST /api/admin/ads/tenants/:id/ceiling`, A1) and switches ads on (`…/enabled`; 409 `CEILING_REQUIRED` without a ceiling).
+2. The client's owner follows Help → Ads → **For managed clients** (`ads#for-clients`), pastes the token, tests it, sets limits.
+   `POST /api/ads/settings` refuses a limit above the ceiling with `OVER_CEILING`.
+3. **Overview.** `GET /api/admin/ads/tenants` (`src/routes/adminAds.ts` → `src/services/ads/tenantsOverview.ts`) reads Postgres only:
+   the switch, ceiling and last health check from `app_settings` (the token row is selected as NULL: only its presence is read),
+   this month's spend from `ads_insights_daily` account rows in the account's own month and time zone, and `ads_alerts` of the last
+   7 days. It always shows **cap use as a percentage**; the amounts (`spend`, and the monthly cap with them) only when the client's
+   owner turned on `ads.share_spend.<t>` (`GET/POST /api/ads/settings/share-spend`, `src/routes/adsShareSpend.ts`, audited
+   `ads.share_spend_changed`). Sign-offs are `null` until A8's `ads_legal_signoffs` exists.
+4. **Isolation** (`src/services/ads/ownership.ts`). Every `:id` route resolves through `actions.ownObject`: the tenant's own row in its
+   current ad account, else `ownership.ownObject` says whose it is: another tenant's (or an old account's) object is 403
+   `NOT_OWN_OBJECT`, logged `ads.not_own_object` and audited; an id nobody has is 404. Every send of a queued op goes through
+   `ops.sendExec` → `deps.checkTarget` → `assertOpTarget`: the op's account must still be the tenant's, `act_<id>/…` must be that
+   account, and `<metaId>` must not be another tenant's or another account's stored object. `src/services/ads/isolation.test.ts`
+   also scans every SQL statement on an `ads_*` table for `creator_id`.
+
+### 11.6 — Rules: a condition on the stored copy → a protective op, or a proposal (A9)
+
+The owner's standing conditions (`src/services/ads/rulesEval.ts` pure, `rules.ts` the pass, `rulesWiring.ts` the reach into the rest,
+`rulesStore.ts` the tables; routes `src/routes/adsRules.ts`; screen `#/ads_rules`). **Our own evaluator, not Meta's `adrules_library`**:
+Meta's rules cannot ask for approval, cannot see our monthly cap or alerts, and its `CHANGE_BUDGET` would bypass the money rule and the
+4-budget-changes-an-hour accounting (research R14). The cost: a rule runs only when our drain does, which is every minute; the cap guard
+(§11.1) stays the hard safety net either way.
+
+1. **Save = approve.** `POST /api/ads/rules` (owner) → `parseRuleSpec` (**`rulesEval.ts:73`**: ≤ 5 conditions over spend, results, cost
+   per result, cost per conversation, CTR, CPM, frequency (today only, campaigns or ads: reach is not additive), spending pace (campaigns
+   and ad sets), rejected (notify only); windows today / 3d / 7d, each including today in the account's zone; a rule protects OR raises,
+   never both) → `createRule` sets `approved_by` = the saver, `approved_at` = now, audited `ads.rule_saved`. A PATCH that changes the rule
+   validates the whole rule after the change and re-approves it.
+2. **Due.** The drain (**`routes/api.ts:432`**, after the guard, before the ops queue) calls `evaluateDueRules`
+   (**`rulesWiring.ts:184`**): `dueRules` (**`rulesStore.ts:210`**) = enabled, approved, no run in the last 55 minutes; grouped by tenant
+   until the drain's deadline.
+3. **The account** (`account`, **`rulesWiring.ts:46`**): ads on, configured, token not dead, a stored account snapshot (currency, UTC
+   offset, Meta's minimum daily budget). Otherwise every due rule records a `blind` run with the reason and nothing else happens.
+4. **Order.** `evaluateTenantRules` (**`rules.ts:77`**) runs pause rules, then lower, then notify-only, then raise/resume ones, sharing
+   one `taken` set: **one action per object per evaluation**, and a protective rule claims an object first.
+5. **Fresh numbers or nothing** (`freshness`, **`rules.ts:128`**): today's rows older than 2 h (`sync.ts` `todayAt`) are read again once
+   per tenant per pass (`syncInsights(…, 'today')` within the pacer, 20 s). Refused (pacer/throttle) or failed and still stale: the rule
+   records `blind` (`throttled` / `stale`) and does not judge on old numbers.
+6. **Judge** (`planRule`, **`rulesEval.ts:388`**, over `evaluateObject` **`:309`**): the stored objects of the scope (`listObjects`;
+   a resume rule looks at PAUSED ones, a rejected-ad rule at every live one, the rest at delivering ones), the window totals from
+   `resultsFor`, "results" by the object's optimisation goal (`resultOf`). Below `min_data` = no data; all conditions must hold; money
+   spent with nothing bought is an infinite cost. Skips are recorded per object: `busy` (an op already queued on it), `already_paused`,
+   `no_budget` (no daily budget of its own), `at_minimum` (a cut never goes under Meta's minimum), `edit_limit` (`editsLeftThisHour`:
+   Meta's 4 an hour per ad set), `cooldown` (this rule acted on it in the last 24 h, `recentlyActed` **`rulesStore.ts:241`**), `taken`.
+7. **Act.** Pause / lower budget → `enqueue` (**`rulesWiring.ts:105`**) → `actions.enqueueWrite` (kind `status` / `budget`, actor
+   `{ userId: null, via: 'rule' }`, idempotency key per rule, object and hour, so a second drain in the hour finds the same op), audited
+   `ads.rule_acted`; `drainAdsOps` sends it in the same drain. Raise / resume → **one** `ads_proposals` row per run (`propose`,
+   **`rulesWiring.ts:125`**: kind `rule_raise`, source `rule`, state `open`, a review item over every matched object). Nothing raises
+   spend until the owner approves it in Proposals (§7.5): `approveProposal` re-runs the checks and `applyChange` sends a raise through
+   `requestBudget` (confirm + the money rule) and a resume through `requestStatus('ACTIVE')` (**`proposals/ports.ts:180`**).
+8. **Tell.** Every object something happened to (changed, proposed, or a "tell me") → one `rule_acted` alert (`notifyAds`, deduped per
+   rule and object a day by `ads_alerts`).
+9. **Record.** Every evaluation writes an `ads_rule_runs` row (`recordRun`, **`rulesStore.ts:231`**): `acted` (an op or an alert),
+   `proposed`, `ok`, `skipped_no_data` (objects to watch, none with enough data) or `blind` (`matched` = `{ reason }`). Only `ok`, `acted`
+   and `proposed` move `last_ok_at`. **24 h** without one (since the approval if never) → `rule_blind` (**`rules.ts:116`**), once a day.
+   Rows are kept 90 days (`health.ts` retention sweep).
+
+## 12. Ads → conversation → results (Meta Ads Manager, A3)
+
+A person taps a click-to-message ad and writes. The app records which ad brought them, shows it in the Inbox, counts what came of it per ad, and (only if the
+owner switches each on) tells the bot about the ad and uses Meta's longer reply window. Meta's own numbers for the ad come from the stored copy (the ads core,
+v53); this flow is what Meta cannot see. The DM half of it is §2.2, §2.4b, §2.6b, §2.6c and §2.9; this section is the whole path in one place. Line numbers
+are left out on purpose while A3 is being wired: every step names its function.
+
+### 12.1 — The click arrives
+
+1. **The subscription.** `WEBHOOK_FIELDS` (**`src/services/metaLogin.ts`**) is `feed, messages, messaging_postbacks` and now `messaging_referrals`. Without the
+   last, Meta never sends the Messenger referrals below.
+2. **Three shapes** (all through `POST /webhook`, signature unchanged, then a `dm.process` job; `contracts/webhook-inbound.md`):
+   - **Instagram click-to-Direct**: `message.referral` on the person's first message.
+   - **Messenger click-to-Messenger, a new thread**: `postback.referral` on the greeting or an ice-breaker postback.
+   - **Messenger, an existing thread**: a standalone `referral` event, no `message`, no `postback`.
+   Each carries `{ ref?, ad_id, source: 'ADS', type: 'OPEN_THREAD', ads_context_data: { ad_title, photo_url?, video_url?, post_id? } }`.
+3. **The router accepts the standalone one** (`isActionableMessagingEvent`, **`router.ts`**, only when `source` is `ADS`), with its own dedupe key
+   (`dmref:…`, §2.1). It used to be dropped.
+4. **`normalizeDm` returns `adSource`** (§2.2) and `recordAdTouch` writes it (§2.4b): the first touch is the conversation's `entry_source` (`kind: 'ctm'`), never
+   rewritten; later ones go to `ad_touches`. A referral with no words ends the job as `ad_referral_recorded` and sends nothing.
+5. **WhatsApp is a different shape and the same idea.** A click-to-WhatsApp message carries `referral.source_id` (the ad's id), `ctwa_clid` and
+   `headline`; **`src/webhook/whatsapp.ts`** `entrySourceOf` stores them as `entry_source` `{ kind: 'ctwa', ad_id: source_id, … }` (v50, §10.13). It is
+   not `ctm`: no touches, no bot context, no extended window (WhatsApp's free-reply rules are §10.9).
+
+### 12.2 — What the bot does with it (two switches, both OFF)
+
+Both are the owner's, per tenant, on Settings → Meta ads (`POST /api/ads/settings/switches`, **`src/services/ads/switches.ts`**). Every read fails toward OFF:
+a database that is behind, or a value that does not parse, is the switch off.
+
+1. **`ads.bot_context.<t>`** (`'on'` or absent). On: the sales turn's facts block says which ad the person came from (§2.6b). Off: the prompt is byte for
+   byte what it was (golden tests).
+2. **`ads.extended_window.<t>`** (`{instagram, messenger}`). On for a platform: a `ctm` conversation from that platform may be written to until the later of
+   their last message + 23 h and the click + 7 d − 1 h, instead of 23 h from their last message (`windowFor`, `windowEndsAt`, §2.6c). **Turned on only after the
+   live day-2 check** (a real ad conversation written to on day 2 and again past day 3, on each platform). A send Meta refuses for the window turns that platform
+   off by itself and raises `window_error` (§2.9).
+3. **Business AI** is not a switch: when Meta's own AI holds an Instagram thread the bot is silent, and the conversation says why (§2.9).
+
+### 12.3 — The join, at read time
+
+The stored conversation holds only what Meta sent (`ad_id`, `ref`, the title and media links, `at`). Whatever shows an ad's name or counts its results joins then:
+
+1. **By our own `ref` first.** An ad the app creates carries `ar_<12 hex of ads_objects.id>` (`refFor`, `refPrefix`), so it joins before the mirror has Meta's id for it.
+2. **Then by `ad_id`** against `ads_objects.meta_id` at level `ad` (`joinAd`). An ad made in Meta's own Ads Manager joins after the next sync; until then the
+   conversation keeps the raw `ad_id`, and the chip shows the title Meta sent. A database without the ads core (v53) answers null, never an error.
+3. **The Inbox** (`adNamesFor`): the "from ad" chip on a `ctm` or `ctwa` conversation, an Ads filter on the list, and the Business AI notice from `no_reply_reason`.
+   A conversation with only later `ad_touches` shows "Came back from an ad" and is kept by the Ads filter too.
+
+### 12.4 — Results per ad
+
+`resultsByAd` (**`attribution.ts`**), one statement over the v54 partial index `(creator_id, entry_source->>'ad_id')`, for the ads the Ads screen is showing
+(`ObjectView.results`): per Meta ad id, **conversations** (distinct, Instagram, Messenger and WhatsApp alike, since `ctwa` joins by `ad_id = source_id`),
+**tracked-link clicks** by a person (`link_clicks.is_prefetch = false`, through `tracked_links.conversation_id`) and **handoffs** (`handoff_at` set). Only the
+first touch counts: a conversation belongs to the ad that started it. A failure is no results (`ads.results_unreadable`), never an error on the screen.
+
+> **Why the first touch is never rewritten.** A person who taps three ads in a week is one conversation, and the sale is owed to the ad that opened it.
+> Overwriting would move credit to whichever ad they saw last and make an old ad's results shrink as people re-engage; `ad_touches` keeps the later ones for the
+> Inbox without crediting them.
+
+### 12.5 — Rollout and what can go wrong
+
+`npm run migrate` (v54: `ad_touches`, `no_reply_reason`, the index) **before** the deploy: the DM path writes `ad_touches` and the Inbox reads both columns.
+The two switches ship dark. `docs/specs/002-meta-ads-manager/contracts/webhook-inbound.md` and `research.md` §R10 are the contract; the Help Center article `ads`
+(sections `message-ads-inbox`, `bot-and-ads`, `reply-window`, `business-ai`) is what the owner reads.
+
+### 12.6 — Results history: the day-by-day joins (A6)
+
+What the Results tab (`#/ads_results`), Growth's paid card and the Results screen's ad rows read. **Postgres only**: no hop below calls Meta.
+
+1. **Stored by the sync (§11.2).** The daily job re-reads the trailing 28 days at `level=ad`, `time_increment=1`, in the **ad account's** time zone, into
+   `ads_insights_daily`, and the same days split by `country` and by `publisher_platform,platform_position` into `ads_insights_breakdown` (key `EG`,
+   `instagram:reels`). Rows of the last 3 days are `provisional`. Campaign and account rows hold only their own reach and spend.
+2. **`GET /api/ads/results`** (**`routes/adsResults.ts`**, mounted inside `adsRouter` after the `ADS_DISABLED` gate; any member) → `getAdsResults`
+   (**`ads/results.ts`**): reads `ads_objects` (names, parents, goals) and the `ad` rows for the window; a campaign, ad set or account figure is the
+   **sum of its ads**, walked up `ads_objects.parent_id`. Reach is never summed: it comes only from a row at the asked level. Each ad's `results` is the
+   metric its ad set was bought for (`resultKindOf`: conversations, link clicks, leads or follows), so a mixed campaign adds one of each. Money stays per
+   currency (`totals.byCurrency`); `currency` is null when there are two.
+3. **The app's own joins**, per day in the account's zone (`clicked_at AT TIME ZONE <tz>`; the zone is the stored account check's), people's clicks only
+   (`link_clicks.is_prefetch = false`), the same definitions as A4's `trackedClicksFor` and A3's `resultsByAd` but cut by day:
+   - **direct**: `tracked_links.ads_object_id` = the ad's `ads_objects.id` → `link_clicks`;
+   - **via chat**: `conversations.entry_source->>'ad_id'` = the ad's Meta id → `tracked_links.conversation_id` → `link_clicks` (a link that already
+     points at an ad is not counted again);
+   - **hand-offs**: the same conversations with `handoff_at` in the window.
+   A breakdown answer splits Meta's numbers only: a click has no country or placement, so the joins stay per ad.
+4. **Screens.** The Results tab draws spend, results and the three costs per day (provisional days shaded), compares by ad / country / placement, and
+   lists every ad. Growth's `GET /api/growth/overview` gains `paid` (**`growth/paid.ts`**, an account-level read of the same answer, one currency). The
+   Results screen (`#/analytics`) adds one row per running or spending ad, labelled "Ad", under the DM campaigns; a failure there hides the rows silently.
+   Every spend figure says it excludes tax. **No sales-based figure exists anywhere** (`src/dashboard/no-roas.test.ts`): sales happen on another website (for the owner, Udemy).
+
+## 13. Explainers: topic → script → voice → pictures → render → schedule
+
+An owner gives a topic and the app makes a narrated video of it: one still picture per sentence, a recurring cartoon character, a short label on some pictures, a 9:16 video, a 16:9 video and a cover, then posts. **Claude on the owner's Mac** researches the topic on the web and writes the script; the Mac voices it; **the server draws the pictures**, from a free daily allowance; the Mac renders; Schedule writes `scheduled_posts` rows that the usual sweeps publish ([flow 3](#3-scheduled-post--publish), [flow 6](#6-tiktok-post--inbox--published)). It is **owner-only and dark by default** ([13.1](#131--the-switch-and-who-may-ask)), and two steps are the owner's: he approves the script before anything is voiced (gate 1) and the pictures before anything is rendered (gate 2). The contract (tables, payloads, settings, routes) is STUDIO.md §11.
+
+Code: `src/services/explainers/` (`explainers.ts` the lifecycle the routes call, `state.ts` the status machine, `apply.ts` what a job's result does, `writing.ts` and `writerGemini.ts` who writes, `scenes.ts` and `pictures/` the drawing, `schedule.ts` the posts, `spec.ts` the rules a script is held to, `payloads.ts` the Mac jobs' payloads), the routes in `src/routes/studio.ts` and `src/routes/adminExplainers.ts`, and migration v59 (`src/config/migration_v59_explainers.sql`). The Mac's half is the other repo's: aicourse-captions `scripts/studio/explainerWrite.mjs`, `explainerVoice.mjs` (with `tts.mjs`), `explainerDraw.mjs`, `explainerRender.mjs` (with `audioMix.mjs`) and the compositions in `src/illustrated/`.
+
+```
+writing ─writer result→ draft ─approve (gate 1)→ voicing ─voice result→ drawing ─no scene left to draw→ review
+   ↑                      │                                                                               │
+   └──── rewrite ─────────┘                                                                approve pictures (gate 2)
+                                                                                                          ↓
+                                              scheduled ←─ schedule ─ ready ←─ render result ─ rendering
+                                                                       │  ↑
+                                                                       └──┘ render again
+ any running step ─its job fails or is refused→ failed (failed_step, error) ─retry→ the state that step runs in
+ a narration edit after voicing makes the audio stale: drawing, review or ready may then go back to voicing (re-voice)
+```
+
+**`transitionExplainer`** (**`src/services/explainers/state.ts:117`**) is the only code that writes `explainers.status`. It locks the row (**:124-126**), requires the row to be in one of the states the *caller's* action is for **and** the move to be in the table (`canMove`, **:68**, checked at **:131**; otherwise 409 `EXPLAINER_BAD_STATE` and nothing is written), and clears `failed_step` and `error` when it moves on unless the move writes new ones (**:144-147**), so a failure or a pause note never outlives the state it was about.
+
+> **One rule runs through every hop: a job's result is applied only if the job is `explainers.job_id`.**
+> A step that queues a job writes `job_id` in the same transaction as its move, on the explainer's row lock (the header of **`src/services/explainers/explainers.ts:16-18`**), and `lockCurrent` (**`src/services/explainers/apply.ts:77`**) re-reads the row under the same lock when a result arrives. So a rewrite, a re-voice, a restart of the drawing, a re-render and a delete never meet the old job's answer half-applied: it finds another `job_id`, or no row, and is dropped. The drop is logged and the owner is told nothing ([13.6](#136--applying-a-draft)). It is the rule an infographic's render follows too (`applyInfographicRender`, **`src/services/studio/jobs.ts:1124`**), and it is why a takeover by Gemini ([13.5](#135--gemini-steps-in-and-when-it-never-does)) only has to change one column.
+
+### 13.1 — The switch, and who may ask
+
+Every dashboard route of the feature is wrapped in `explainerRoute` (**`src/routes/studio.ts:543`**). It asks `isExplainersEnabled(getTenantId(req))` first (**`studio.ts:545`**; defined at **`src/services/explainers/switch.ts:28`**: the app setting `explainers.enabled.<tenant id>` is the value `true` and nothing else) and answers **404 `EXPLAINERS_DISABLED`** without it. The role comes from the router's own guard, operator and up (`studioRouter.use(canOperate)`, **`studio.ts:280`**); only `POST /explainers/uploads/sign` (a music track, a character's reference picture) is owner-only (**`studio.ts:578`**). The switch is read inside the handler, not in a middleware, so a test that takes a handler off the router runs it too (**`studio.ts:539-540`**).
+
+The switch can be turned **on for the platform owner only**. `setExplainersEnabled` (**`switch.ts:37`**) is the one writer of the key and refuses any other tenant with 409 `EXPLAINERS_OWNER_ONLY` (**`switch.ts:40-41`**: the owner is `getPlatformOwnerId()`, and with no owner nobody can be switched on). Turning one **off** is never refused. Its route is `PUT /api/admin/explainers/enabled` (**`src/routes/adminExplainers.ts:142`**), platform admin only, 404 for anyone else (**`adminExplainers.ts:41`**).
+
+**The worker's `draw-next` route is not behind the switch.** A worker token reaches it (`requireWorker`, **`studio.ts:178`**) and it refuses by its `job_id` instead ([13.10](#1310--drawing-the-servers-loop-and-the-allowance)).
+
+### 13.2 — Create: `POST /api/studio/explainers`
+
+**`src/routes/studio.ts:559`** → `createExplainer` (**`src/services/explainers/explainers.ts:332`**). `parseCreate` (**`explainers.ts:298`**) is the whole validation, every problem at once as a 400 with `problems`: a topic of 3 to 300 characters, `notes` of at most 2,000, at most ten distinct http(s) `source_links`, and `language`, `length_tier`, `sound_mode` and `subtitles`, each defaulting to the tenant's `studio_settings.explainer.defaults` (**:304-311**); a `music_track_id` must name a track in the library (it is ignored for sound effects).
+
+Then **one transaction** (**`explainers.ts:335-347`**): the `writing` row (**:336-341**), `queueWrite` ([13.3](#133--who-writes-queuewrite); **:343**), and `job_id` pointed at the job it queued (**:344**). When the writer is Gemini the run is started **after the commit** (`startGeminiRun`, **:349**): the run reads the row, which a transaction still open would hide. The audit row `explainer.created` names the language, the tier and the sound, never the topic (**`studio.ts:561`**).
+
+### 13.3 — Who writes: `queueWrite`
+
+`queueWrite` (**`src/services/explainers/writing.ts:94`**) reads `settings.explainer.writer` (**`writing.ts:97`**): `claude_mac`, the default, or `gemini`.
+
+- **Claude on the Mac** (**`writing.ts:99-100`**). `writePayload` (**`src/services/explainers/payloads.ts:57`**) builds the job's `write` section, `{ model: THINK_MODEL, system, user, schema }` (**`payloads.ts:67`**), from `buildWriterInputs(…, 'research')` (**`src/services/explainers/prompt.ts:305`**), and `enqueueJob(…, 'explainer_write', payload)` (**`src/services/studio/jobs.ts:87`**) queues it. `explainer_write` is Mac-brain work whatever its payload (**`src/services/macBrain.ts:161-162`**, [flow 7](#7-claude-on-the-mac--who-may-ask)), so `enqueueJob` refuses it for a tenant the Mac is not for (**`jobs.ts:90`**) and `claimJob` checks again (**`jobs.ts:321`**).
+- **Gemini** (**`writing.ts:98`**). `insertServerWriteJob` (**`writing.ts:72`**) writes the job already `claimed`, by the server, with `payload.writer = 'gemini'` and all three attempts spent (**`writing.ts:73-79`**). The Mac's claim takes a `claimed` job only when its heartbeat is stale **and** it has fewer than three attempts (**`jobs.ts:267-269`**), so it can never take a Gemini run back. No Claude is involved, so none of this is Mac-brain work.
+
+### 13.4 — The Mac's write
+
+The worker's poll (`POST /api/studio/worker/claim`, **`src/routes/studio.ts:193`**) hands the job out through `CLAIM_SQL` (**`src/services/studio/jobs.ts:260`**): rank 1, with `monteur_think` (**`jobs.ts:270-271`**), and only once its `not_before` has passed (**`jobs.ts:266`**; a job that sets none is due the moment it is queued). `explainerWriteJob` (aicourse-captions `scripts/studio/explainerWrite.mjs`) runs the app's prompts through the claude CLI on the owner's plan with **WebSearch and WebFetch only**, checks the answer against its own copy of the schema (`explainerSchema.json`), and gives a draft that does not fit **one repair**, with no web this time. The result is `{ written, model, usage?, research_rounds? }`. `research_rounds` is how many rounds of web reading the first call made: **0 means the script was written from memory** ([13.6](#136--applying-a-draft)).
+
+### 13.5 — Gemini steps in, and when it never does
+
+Gemini on the server writes in **three cases and no others** (the header of **`src/services/explainers/writing.ts:1-22`**):
+
+1. **The owner chose it** (`explainer.writer = 'gemini'`). Not a takeover: `queueWrite` made Gemini's job at the start ([13.3](#133--who-writes-queuewrite)) and the Mac is never asked.
+2. **The Mac is signed out.** Its write fails, `applyExplainerFailure` ([13.6](#136--applying-a-draft)) sends the explainer to `failed` at `write` as it does any failure, and the error is the claude CLI's own words. `isSignInFailure` (**`writing.ts:59`**) recognises them (**`writing.ts:227`**): whole sign-in messages only, such as "Failed to authenticate" or "OAuth session expired" (**`writing.ts:50-57`**). A rate limit, a spent weekly allowance and a failed page are failures of their own and are not this.
+3. **The Mac did not pick the job up in ten minutes and is off or asleep** (**`writing.ts:215-224`**). The job is still `pending`, is not Gemini's own and is `UNCLAIMED_MINUTES` = 10 old (**`writing.ts:38`**, **`:217`**), and `workerSummary` says no live worker of the tenant was heard from in the last 90 seconds (**`writing.ts:221-222`**; the window is `WORKER_ONLINE_WINDOW_MS`, **`src/services/studio/worker.ts:21`**, the dashboard's own definition of "the Mac is up").
+
+**A Mac that is up and busy is never taken over.** It runs two jobs at a time, so with both slots on a long render a script waits far past ten minutes while the Mac heartbeats; Gemini taking over would turn a short wait into a failure (a free key cannot ground its research, below). `takeoverReason` returns null (**`writing.ts:222`**), and the explainer says what the wait is instead: `BUSY_MAC_NOTE` (**`src/services/explainers/explainers.ts:123`**), shown by `busyMacNote` (**`explainers.ts:167`**) once the job has waited `BUSY_AFTER_SECONDS` = 60 (**`explainers.ts:125`**). And `explainer.writer_fallback = false` means never: `takeOverWrite` returns null at once (**`writing.ts:241`**), and the explainer waits for the Mac or fails with its reason.
+
+**Who looks.** `reconcileWriting` (**`writing.ts:282`**) is the one check. It never throws and does nothing unless the explainer is `writing`, or `failed` at `write` with a sign-in message (**`writing.ts:286-288`**). It is called from three places: `GET /explainers/:id`, before the row is read (`getExplainer`, **`explainers.ts:221-223`**); right after a worker reports a failure (`afterJobFailed`, **`writing.ts:300`**, called from **`studio.ts:228`**), so a signed-out Mac is answered at once; and the daily cron's `sweepWriting` ([13.16](#1316--the-daily-crons-parts)).
+
+**The row lock and the idempotency.** `takeOverWrite` (**`writing.ts:238`**) is one transaction on the **locked** explainer row (`lockExplainer`, **`writing.ts:243`**), and the reason is decided on the locked row (**`writing.ts:245`**). It closes the Mac's job so the Mac can never claim it later (`status = 'failed'` where it is still `pending`, **`writing.ts:249-253`**), writes Gemini's job (**`writing.ts:254`**) and points `explainers.job_id` at it, moving a `failed` row back to `writing` with the reason as its note (**`writing.ts:256-257`**). Two looks at once take turns on the lock, and the second finds the work already taken (a `writing` explainer whose job is Gemini's, or one that is no longer `failed`) and returns null, so one run starts. A late answer from the closed Mac job would be dropped anyway: only `explainers.job_id`'s result is applied. The run is started after the commit (`startGeminiRun`, **`writing.ts:188`**, under `waitUntil`).
+
+**The run** (`runGeminiWrite`, **`writing.ts:132`**) reads the rows and gives up quietly when the row is gone, its `job_id` is another's, or it is no longer `writing` (`explainer.gemini_run_skipped`, **`writing.ts:143-146`**). Then `writeWithGemini` (**`src/services/explainers/writerGemini.ts:501`**) makes two calls with the platform's key and the Studio's model chain, a 400, 404, 429, 500 or 503 handing the call to the next model (**`writerGemini.ts:46`**):
+
+1. **Research**, with Google Search grounding (`tools: [{ google_search: {} }]`, **`writerGemini.ts:372`**). The notes are in English; the sources are the grounding chunks, each Google redirect followed once to the page it leads to (`groundedSources`, **`writerGemini.ts:269`**), plus the creator's own links; `[n]` markers go where `groundingSupports` say a source backs the text (`annotateNotes`, **`writerGemini.ts:317`**).
+2. **Write**, from the notes alone, with Claude's system prompt in `notes` mode (**`writerGemini.ts:523-533`**), a JSON `responseSchema` and one repair round (**`writerGemini.ts:545-558`**).
+
+What the app does that the model is not trusted with (`onlyListedSources`, **`writerGemini.ts:441`**, called at **`writerGemini.ts:563`**): a source whose address is not in the numbered list is dropped, the sources no scene cites are dropped and the scenes' `source_ids` renumbered, the first comment is rebuilt from the sources that are left, and any address in a caption that is not one of them is removed. The answer ends the way the Mac's does: `completeJob` with `{ written, model }` (**`writing.ts:160`**), or `failJob` with the reason (**`writing.ts:157`**).
+
+**Gemini's research refused on a free key.** Google Search grounding is not offered on the free tier for Gemini 3 models, so every model refuses the research call and the run fails **saying so** instead of writing from memory. `callModels` ends in "Gemini refused the research call on every model it tried" (**`writerGemini.ts:166`**), and `writeWithGemini` appends `GROUNDING_HINT` (**`writerGemini.ts:474`**, appended at **`writerGemini.ts:511-514`**): sign the Mac's Claude Code in, or use a paid-tier key. The explainer is `failed` at `write` with that sentence and **has no draft**. (Logged: `explainer.gemini_request_refused` for each model, **`writerGemini.ts:158`**, then `explainer.gemini_run_failed`, **`writing.ts:156`**.)
+
+**A Gemini run that dies** (the function is killed) leaves a `claimed` job whose heartbeat goes stale. The next look fails it (`reapStalledRun`, **`writing.ts:267-275`**, after `STALLED_RUN_MINUTES` = 5, **`writing.ts:40`**) with "Press Retry", and **never starts a second run by itself**: each run spends two of the free tier's few requests a day. If nobody looks, the Mac's next claim fails it after 15 minutes instead (`failExhaustedClaims`, **`jobs.ts:348`**, because all three attempts are spent), in the worker's wording (`EXHAUSTED_ERROR`, **`jobs.ts:52`**).
+
+### 13.6 — Applying a draft
+
+The result comes back as `POST /worker/jobs/:id/complete` (**`src/routes/studio.ts:216`**) → `completeJob` (**`src/services/studio/jobs.ts:411`**), which locks the job row (**`jobs.ts:414`**) so a delivery retried after a timeout applies once, and hands an explainer kind to `applyExplainerResult` (**`jobs.ts:453-455`**) → `applyWrite` (**`src/services/explainers/apply.ts:111`**), inside that transaction:
+
+1. **The answer must be the schema's.** `parseWriterOutput` (**`apply.ts:113`**), with the schema the app ships (`writerSchema.json`): an answer that is not is a 400 that lists the problems (up to twenty), nothing is stored and the job stays claimed for the worker to report.
+2. **Is it still this job's?** `lockCurrent` (**`apply.ts:77-84`**) locks the explainer and answers `dropped` with `no_explainer`, `gone` or `superseded` unless `row.job_id === job.id` (**`apply.ts:82`**). The explainer must also still be `writing` (**`apply.ts:119`**). A dropped result is logged (`explainer.result_dropped`, **`apply.ts:86-89`**), the job is marked `done` with `{ dropped: reason }`, and **nothing else changes**: an older write, a rewrite asked for meanwhile and a deleted explainer all end here, and the owner sees nothing.
+3. **What the script breaks.** Characters the settings do not have are removed from each scene (**`apply.ts:121-128`**), then `checkDraft` runs (**`apply.ts:131`**, **`src/services/explainers/spec.ts:338`**). Its **problems** (a closing line that is not a question, engagement bait, a woman or a girl in a picture brief, a field past its limit) are not stored: they are computed again on every read (`presentExplainer`, **`explainers.ts:179`**) and **block approval**. Its **warnings** (scene count, length, too few sources) are stored with the draft and never block.
+4. **`research_limited`.** A script the Mac's writer wrote after **0** rounds of web reading gets one more warning, `research_limited` (**`apply.ts:132-134`**; the message, **`apply.ts:108`**): written from memory, check every fact and source before approving. A missing count is *unknown*, not 0 (an older worker; **`apply.ts:102-105`**), and Gemini's run is never flagged, since it has its grounding (`rounds` is null for it, **`apply.ts:132`**). The owner may approve over it, as over every warning.
+5. `replaceScenes` (**`apply.ts:141`**; **`src/services/explainers/store.ts:51`**, one statement for up to 300 rows), then `writing → draft` with the title, the draft, `draft_version + 1` and `job_id` cleared (**`apply.ts:142`**).
+
+A job that **fails** takes the other door: `failJob` → `applyFailure` (**`jobs.ts:1109-1111`**) → `applyExplainerFailure` (**`apply.ts:420`**), which applies the same `lockCurrent` test (**`apply.ts:421-430`**; a failure of a job that is no longer the explainer's is `explainer.failure_ignored` and moves nothing) and otherwise moves the explainer to `failed` at the step that job was for, with the worker's own words as `error` (**`apply.ts:450`**).
+
+### 13.7 — Edit and rewrite
+
+`PATCH /explainers/:id` → `editExplainer` (**`src/services/explainers/explainers.ts:523`**). A save **may not add a problem** to the script: `checkDraft` is run before and after, and a problem that is new is a 422 `EXPLAINER_DRAFT_REFUSED` with every finding and nothing stored (**`explainers.ts:552-554`**). A problem the draft already had stays listed and a save that does not touch it goes through; only approving needs the script clean. `assertEditable` (**`explainers.ts:491`**) refuses what the running step reads (the script while `writing`, the narration while `voicing`, the title, the labels and the sound while `rendering`, anything once `scheduled`), and the scene list cannot grow or shrink once the narration is voiced (**`explainers.ts:508-512`**): a picture and a time belong to a scene's place in the list. A change to a scene's `narration` or `spoken` adds one to `draft_version` (**`explainers.ts:565`**), which is what makes the voiced audio **stale** (`isAudioStale`, **`src/services/explainers/state.ts:76`**: `audio.version !== draft_version`). Labels, briefs, characters and pictures never do.
+
+`POST /explainers/:id/rewrite { note }` → `rewriteExplainer` (**`explainers.ts:582`**): only from `draft` (**`explainers.ts:590`**); it queues a new write whose prompt carries the note and the previous draft (**`explainers.ts:592`**) and moves `draft → writing` with `rewrite_note` and the new `job_id` (**`explainers.ts:593`**). The old draft stays on the screen until the new one lands.
+
+### 13.8 — Approve the script (gate 1)
+
+`POST /explainers/:id/approve { version }` (**`src/routes/studio.ts:595`**) → `approveExplainer` (**`src/services/explainers/explainers.ts:604`**), one transaction on the locked row (**`explainers.ts:610`**):
+
+1. `version` is required (**`explainers.ts:607`**) and must be the `draft_version` the owner read; any other number is **409 `CHANGED_MEANWHILE`**, "the script changed since you opened it" (**`explainers.ts:612-614`**).
+2. Only a `draft` can be approved (**`explainers.ts:611`**).
+3. The script must have **no problem left** (`checkDraft`, **`explainers.ts:616`**) and a title (**`explainers.ts:618`**), else 422 `EXPLAINER_DRAFT_REFUSED` with every finding (**`explainers.ts:619`**). Warnings, `research_limited` included, never block.
+4. `explainer_voice` is queued (**`explainers.ts:620`**) with `voicePayload`, which carries `version: row.draft_version` (**`payloads.ts:78`**), the owner's voice and style, the spoken lines and `chunk_seconds_max` 180 (**`payloads.ts:18`**). A job nobody has claimed is superseded (`supersede`, **`explainers.ts:621`**, defined **`explainers.ts:233`**) and the explainer moves `draft → voicing` with the new `job_id` (**`explainers.ts:622`**). The audit row `explainer.approved` is written by the route (**`studio.ts:597`**).
+
+### 13.9 — Voice, and its version check
+
+`explainerVoiceJob` (aicourse-captions `scripts/studio/explainerVoice.mjs`, with `tts.mjs`): Gemini speaks the script in parts cut at scene boundaries (one request per part: the free tier counts requests, not seconds), whisper.cpp times every scene and every word, the script's own words are put on the times it heard, and the `.m4a` goes up through a signed upload (`audio/mp4` is one of the types `POST /worker/uploads/sign` takes, **`src/services/monteur/uploads.ts:28`**). The result is `{ audio: { url, duration, voice, fallback }, version, scenes: [{ position, start, end }], words }`.
+
+`applyVoice` (**`src/services/explainers/apply.ts:237`**):
+
+1. `lockCurrent` (**`apply.ts:239`**) and status `voicing` (**`apply.ts:242`**), else the result is dropped as in [13.6](#136--applying-a-draft).
+2. `parseVoiceResult` (**`apply.ts:177`**, called at **`apply.ts:245`**) holds the result to the explainer's own scenes: every one, in order, `end` after `start`, no overlap past 0.05 s, the last ending within 0.5 s of the audio (**`apply.ts:194-207`**). One that is not is a 400, and the job stays claimed.
+3. **The version check** (**`apply.ts:246`**): `voice.version !== row.draft_version` means the narration moved on while it was being voiced. The audio is **not stored**: the explainer goes `failed` at `voice` with "the narration changed while it was being voiced" (**`apply.ts:250-252`**) and the result is dropped (`stale_version`, **`apply.ts:253`**). An edit of the narration is refused while voicing ([13.7](#137--edit-and-rewrite)), so this is a guard and not a flow.
+4. `checkFiles` (**`apply.ts:256`**): the audio is an upload of this tenant, of type `audio/mp4`. Its URL is **rebuilt on our own address** from its id (**`apply.ts:258-260`**), never the string the worker sent.
+5. The scene times are written in one statement (**`apply.ts:265-270`**), the previous audio's file is deleted unless it is the same upload (**`apply.ts:275`**), `explainer_draw` is queued (**`apply.ts:273`**) and the explainer moves `voicing → drawing` with the audio, the words and `job_id` = the draw job (**`apply.ts:274`**).
+
+**A voice that runs into Gemini's free allowance is not a failure.** The worker's error starts with `VOICE_LIMIT:`, and `applyExplainerFailure` (**`apply.ts:420`**, **`apply.ts:433-447`**) queues `explainer_voice` again with a `not_before`: the minute's limit after the wait it names (at least a minute), the day's at midnight Pacific plus five minutes (`voiceRetryAt`, **`apply.ts:406`**; `nextGeminiQuotaReset`, **`src/services/explainers/time.ts:18`**), up to three times (`MAX_VOICE_LIMIT_RETRIES`, **`apply.ts:399`**). The explainer stays `voicing`, with the reason and the time as its note (**`apply.ts:443-444`**).
+
+**Re-voice.** After the narration changed, `POST /explainers/:id/revoice` (`revoiceExplainer`, **`explainers.ts:629`**) voices it again, from `drawing`, `review` or `ready` (**`explainers.ts:634`**) and only while the audio is stale (**`explainers.ts:635`**). It comes back through `drawing` (nothing is pending, so the loop ends at once) to `review`, and a render made before the edit is flagged stale ([13.12](#1312--render)).
+
+### 13.10 — Drawing: the server's loop and the allowance
+
+The pictures are drawn **on the server**, never on the Mac: the image provider's credentials and the allowance live here. The Mac's `explainer_draw` job is only a loop (`explainerDrawJob`, aicourse-captions `scripts/studio/explainerDraw.mjs`) that keeps calling one route, because the Mac is the one thing that runs all day and the app has no cron finer than once a day:
+
+```
+POST /api/studio/worker/explainers/:id/draw-next { job_id }        src/routes/studio.ts:269
+  → { state: 'drawn', position, remaining } | { state: 'done' } | { state: 'paused', until } | { state: 'failed', position, error }
+```
+
+1. **The job-id check** (`drawNextStep`, **`src/services/explainers/scenes.ts:152`**). The `job_id` must be the explainer's own current job (**`scenes.ts:157`**), that job must be an `explainer_draw` that a worker has **claimed**, and the explainer must be `drawing` (**`scenes.ts:158`**). Anything else is **409 `EXPLAINER_BAD_STATE`** (**`scenes.ts:160`**, logged `explainer.draw_next_refused`, **`scenes.ts:159`**) before a unit is reserved: a stale loop, another explainer's job, a job nobody started and a finished one cannot spend the allowance. The check only reads and holds no lock across the drawing.
+2. **Which scene.** `drawNext` (**`src/services/explainers/pictures/draw.ts:497`**) takes the pending scene with the lowest position (`PEEK_NEXT_SQL`, **`draw.ts:86`**) and answers `done` when none is pending (**`draw.ts:502`**). With no image provider saved it is 409 `EXPLAINER_NO_PROVIDER` (**`draw.ts:508-509`**). It goes round at most five times when it keeps losing a claim to another caller (**`draw.ts:66`**, **`draw.ts:499`**).
+3. **A scene that `continues` is never drawn** (unless it is the first scene, which has nothing before it and is drawn like any other). `copyContinuing` (**`draw.ts:455`**, called at **`draw.ts:506`**) takes the chosen picture of the scene before, in one transaction, with no provider and no allowance. Whenever a scene's chosen picture changes (a draw, a redraw, a pick) the run of scenes after it that continue gets the new one in the same transaction (`propagate`, **`draw.ts:268`**). A scene whose predecessor has no picture is marked failed with that reason and healed when the predecessor is drawn (**`draw.ts:462-466`**). The render finds a scene's picture the same way (`pictureOf`, **`payloads.ts:97`**).
+4. **Claim → reserve → provider → store** (`drawWithProvider`, **`draw.ts:339`**), holding nothing across the call out:
+   1. What can be refused for free comes first: the words (a brief, a note or a character description that names a woman or a girl is 422 `EXPLAINER_PROMPT_REFUSED`, `buildScenePrompt`, **`draw.ts:351`**) and the characters' reference pictures (each under 512×512, `loadReferences`, **`draw.ts:352`**). A refusal here claims nothing; the scene is marked failed with the reason (**`draw.ts:342-356`**, **`draw.ts:522-525`**).
+   2. **One short transaction** (**`draw.ts:361-374`**): the scene is claimed with an UPDATE that re-checks it is still pending (`CLAIM_UNATTENDED_SQL`, **`draw.ts:91`**: two callers cannot draw one scene), its prompt is built from the row as the claim found it, and **the allowance is reserved** (`reserveAllowance`, **`draw.ts:372`**). A refusal rolls the claim back with it.
+   3. **The provider is called outside any transaction**, holding no pooled client and no row lock (**`draw.ts:391`**). "Used up" (`ALLOWANCE_EXHAUSTED`) keeps the units, marks the day exhausted and puts the scene back to `pending` (**`draw.ts:399-403`**); any other failure gives the units back and marks the scene failed with the reason (**`draw.ts:405-407`**).
+   4. The file goes into the media store (**`draw.ts:413`**); only then does **one short transaction** write the result (`storePicture`, **`draw.ts:288`**): the chosen picture, the three pictures before it as history, the scenes that continue it, and the deletion of the files that dropped out (**`draw.ts:296-303`**). A crash between the steps leaves the scene `drawing`; after two minutes it is pending again (`STALE_DRAWING_SECONDS`, **`draw.ts:58`**).
+5. **The allowance** (`src/services/explainers/pictures/allowance.ts`). `RESERVE_SQL` (**`allowance.ts:90`**) is one statement that adds the units to today's row (platform-wide, per UTC day) and refuses, in the same statement, when they would pass `daily_cap × units_per_picture` or when the provider already said the day is used up; yesterday's exhaustion is looked at first, because it still pauses the first minutes of today (**`allowance.ts:141-145`**). A refusal is 429 `EXPLAINER_ALLOWANCE_PAUSED` with `retryAt` (`pausedError`, **`allowance.ts:123`**). The count is the app's own estimate, since Cloudflare cannot be asked what is left: 80 pictures a day at 110 estimated units each by default (**`src/services/explainers/pictures/provider.ts:32-33`**). Drawing resumes at the next **00:05 UTC** (`resumeAt`, **`allowance.ts:78`**: the next midnight plus `PAUSE_MARGIN_MS`, **`allowance.ts:32`**).
+6. **After the answer** (**`scenes.ts:165-166`**). `done` → `moveToReview` (**`scenes.ts:171`**): one transaction that re-checks the explainer is still `drawing` **and** still this job's (**`scenes.ts:174`**) and moves it `drawing → review` (**`scenes.ts:176`**). `drawn` → `clearPauseNote` (**`scenes.ts:182`**), so an earlier "waiting for the allowance" note stops being true. `paused` and `failed` write nothing here.
+
+> **Why the provider is called outside any transaction.** A draw takes up to 30 seconds, and held inside a transaction it would keep a pooled connection and the scene's row lock for that long. So the claim and the reservation are one short transaction, the call runs holding neither, and the result is a second short transaction that reads the scene again under its lock, so that the history is made from what the scene holds *now* and not from what it held at the claim (**`src/services/explainers/pictures/draw.ts:10-16`**, **`draw.ts:288-305`**).
+
+**Paused → the next `explainer_draw`.** The route writes nothing on `paused`: the worker completes the job with `{ state: 'paused', until }` and `applyDraw` (**`apply.ts:294`**, the `paused` branch **`apply.ts:319-326`**) queues the next round. `resumeAt(until, now)` (**`apply.ts:286`**: the instant the worker said, if it is between a minute and two days away, else the next UTC midnight plus five minutes) goes in as `notBefore` (`enqueueJob`, **`jobs.ts:93-99`**, which writes `studio_jobs.not_before`). `CLAIM_SQL` takes a `pending` job only when `not_before <= NOW()` (**`jobs.ts:266`**), so the Mac's polls skip it until then, and `jobCounts` reports it as `waiting`, not as the Mac's backlog (**`jobs.ts:1193`**). The explainer stays `drawing`, with `job_id` the waiting job, `draw_paused_until` and a note that says when drawing continues (**`apply.ts:323`**). **There is nothing for the owner to press.** If he does, `POST /explainers/:id/draw` (`startDraw`, **`explainers.ts:654`**) replaces a waiting job with one that goes now (if the allowance is still spent it pauses again), makes the failed scenes pending (**`explainers.ts:668-673`**) and leaves a job that is already running alone (**`explainers.ts:665`**).
+
+**`done` does not mean every scene has a picture.** A scene that failed is not pending, so `drawNext` answers `done` and the explainer reaches `review` with it still `failed`, its reason in `draw_error`. The owner redraws it there by hand (`POST …/scenes/:position/draw`, `drawScene`, **`draw.ts:544`**: a synchronous draw with an optional note) or goes back to an earlier picture (`pickPicture`, **`draw.ts:581`**); pictures can be touched in `drawing`, `review`, `ready`, `scheduled` and a `failed` drawing, never while `rendering` (`picturesEditable`, **`scenes.ts:67`**). Three scenes failing **in a row** make the worker give up with `{ state: 'failed' }`; `applyDraw` then keeps the explainer `drawing` with the last reason, clears the job and the pause (**`apply.ts:328-333`**), and nothing retries by itself: the owner redraws, or presses Continue (`startDraw`).
+
+### 13.11 — Approve the pictures (gate 2)
+
+`POST /explainers/:id/approve-pictures` (**`src/routes/studio.ts:619`**) → `approvePictures` (**`src/services/explainers/explainers.ts:705`**): only from `review` (**`explainers.ts:710`**), then `queueRender` (**`explainers.ts:691`**), which builds the payload **first**. `renderPayload` (**`src/services/explainers/payloads.ts:143`**) calls `renderReadiness` (**`payloads.ts:117`**), the one list of what a render needs, in the order a person fixes it: voiced audio that is not stale (409 `EXPLAINER_AUDIO_STALE`, **`payloads.ts:121-123`**), a track in the library when the sound is music (409 `EXPLAINER_NO_TRACK`, **`payloads.ts:125-127`**), and a picture for every scene, `continues` counted (409 `EXPLAINER_PICTURES_MISSING` with the `positions`, **`payloads.ts:128-134`**). Only then is `explainer_render` queued (**`explainers.ts:694`**), a job nobody has claimed superseded (**`explainers.ts:695`**) and the explainer moved `review → rendering` (**`explainers.ts:697`**). The previous render, if there is one, stays on the row until the new one lands. The audit row `explainer.pictures_approved` is written by the route (**`studio.ts:621`**).
+
+A render of a `ready` explainer (a label, a picture or the sound changed) is the same function from `ready` (`renderExplainer`, **`explainers.ts:717`**).
+
+### 13.12 — Render
+
+`explainerRenderJob` (aicourse-captions `scripts/studio/explainerRender.mjs`, `audioMix.mjs`, the compositions in `src/illustrated/`): Remotion renders `IllustratedVertical` (1080×1920) and `IllustratedHorizontal` (1920×1080) **muted**, and the `IllustratedCover` still; ffmpeg puts the voice and the chosen sound under each video. **Music** is the owner's track at −20 dB, faded in and out and ducked by the narration (sidechain compression); **sound effects only** is a soft whoosh at every cut and a pop after every label. Both are loudness-normalised to −14 LUFS, and both videos and the cover go up through signed uploads.
+
+`applyRender` (**`src/services/explainers/apply.ts:338`**): the three URLs must be this app's upload URLs (**`apply.ts:342-346`**). `lockCurrent` (**`apply.ts:353`**), and a result that is no longer current has its three files **deleted**, since nothing will ever name them (**`apply.ts:354-359`**). The explainer must be `rendering` (**`apply.ts:362`**). `checkFiles` (**`apply.ts:364`**) wants two `video/mp4` and one `image/jpeg`, of this tenant, there in Storage. The URLs are rebuilt on our address (**`apply.ts:365-371`**), `rendering → ready` writes `render` and clears `job_id` (**`apply.ts:373`**), and the previous render's files go unless a post names them (**`apply.ts:375`**). A result whose `version` is not the explainer's `draft_version` is **still stored, and said**: `render_stale` in the view (**`explainers.ts:186`**) and a `warn` log (**`apply.ts:376-377`**), "the render is older than your edits". Schedule refuses it ([13.13](#1313--schedule)).
+
+### 13.13 — Schedule
+
+`POST /explainers/:id/schedule { when? }` (**`src/routes/studio.ts:629`**) → `scheduleExplainer` (**`src/services/explainers/schedule.ts:99`**). It is how an infographic is scheduled, through the same `insertVideoPost` (**`src/services/monteur/clips.ts:360`**) the Monteur's approve writes rows with, so the usual sweeps publish what it makes.
+
+1. `when` is `next` (the default), `now` or a date and time; anything else is 400 `INVALID_SCHEDULE_TIME` (`parseWhen`, **`schedule.ts:72-78`**).
+2. One transaction, under the tenant's **publishing lock** (`lockTenantPublishing`, **`schedule.ts:107`**: the one the Monteur's approve and the infographics take, so two schedules cannot take one slot) and the locked explainer row (**`schedule.ts:108`**).
+3. **What may be scheduled** (`readyToPost`, **`schedule.ts:81-93`**): a `ready` explainer with a render (**`schedule.ts:82`**); not one rendered before the latest edits, since `render.version !== draft_version`, or another `sound_mode`, is 409 `EXPLAINER_RENDER_STALE` (**`schedule.ts:85-87`**); and when the sound is music its track must still be in the library, 409 `EXPLAINER_NO_TRACK` (**`schedule.ts:89-91`**), because the credit line cannot be written without it.
+4. **The time** (**`schedule.ts:114-121`**): now, the time given, or the next free slot (`nextFreeSlots`, **`schedule.ts:118`**: the Monteur's `post_at` slots in the tenant's zone, thirty ahead; none free is 409 `NO_FREE_SLOT`).
+5. **The platforms.** Instagram, Facebook and YouTube follow `studio_settings.infographic.platforms`, the one setting that already says where this owner's videos go (**`schedule.ts:103-104`**); **TikTok is always made**, since it is an inbox draft the owner posts by hand anyway. One `group_id` ties the rows together (**`schedule.ts:123`**) and each platform has its own caption.
+   - **Instagram and Facebook:** one row, `both` or the one that is on (`metaPlatformFor`, **`src/services/monteur/clips.ts:348`**), with the **vertical** video, the cover and `captions.meta` (**`schedule.ts:131-135`**).
+   - **YouTube** (**`schedule.ts:136-144`**): a render of at most **180 seconds** (`YOUTUBE_SHORT_MAX_SECONDS`, **`schedule.ts:39`**) goes as the vertical video, a Short, with the cover. A **longer** one goes as the **horizontal** video, with no cover of ours (the cover is a vertical frame; YouTube picks its own), and its row carries **`shorts: false`** (**`schedule.ts:142`**), so no `#Shorts` is added to its title or description (`metadataFor`, **`src/services/youtubePublish.ts:104-105`**; `shortTitle` and `shortDescription` with `tagAsShort` false, **`src/services/youtube.ts:288`**, **`:311`**). Its options are `{ title, language }` and its caption is `captions.youtube`.
+   - **TikTok:** the vertical video as an **inbox draft** (`validateTikTokInboxOptions`, **`schedule.ts:145-149`**), with `captions.tiktok`.
+
+   A platform that is not connected is **not checked** here: its row fails in Posts, saying so, and does not keep the others off (**`schedule.ts:137`**).
+6. **The credit line.** When the track the sound used requires credit (`credit_required`), its `credit` goes at the **end of every caption** (`withCredit`, **`schedule.ts:57`**, applied at **`schedule.ts:126-130`**). The credit goes in whole: when body and credit do not fit a platform's limit (2,200 characters; 5,000 for a YouTube description) the **body** is cut at a word and ends in an ellipsis, never the credit, and the outcome lists which captions were `trimmed`.
+7. `ready → scheduled`, with `{ scheduled_time, group_id, row_ids }` (**`schedule.ts:151-152`**). The audit row `explainer.scheduled` names the platforms, the time and the group (**`studio.ts:631`**).
+
+### 13.14 — Retry and delete
+
+`POST /explainers/:id/retry` → `retryExplainer` (**`src/services/explainers/explainers.ts:731`**): only a `failed` explainer (**`explainers.ts:737`**), and it runs the failed step again from the state that step runs in (`RETRY_STATUS`, **`src/services/explainers/state.ts:35`**): `write` → `writing` (a fresh write, by whichever writer the settings name now), `voice` → `voicing`, `draw` → `drawing` (failed and half-drawn scenes made pending again, **`explainers.ts:751-754`**), `render` → `rendering`, and a failed `schedule` → `ready`, where Schedule is pressed again (scheduling is one request, not a job). A step can fail only from the state it runs in (`STEP_OF`, **`state.ts:40`**), which keeps a retry from jumping a gate the owner has not passed.
+
+`DELETE /explainers/:id` → `deleteExplainer` (**`explainers.ts:790`**): the job nobody has claimed is failed (`supersede`), the row goes (its scenes with it, `ON DELETE CASCADE`), and every file it held (the scenes' pictures and their history, the audio, the two videos and the cover: `filesOf`, **`explainers.ts:775`**) is deleted **unless a `scheduled_posts` row names it** (`deleteUnreferencedUploads`, **`src/services/studio/jobs.ts:750`**): a file already handed to a platform is the post's now. A job that is already running finishes, and its result is dropped (`gone`).
+
+### 13.15 — Retention
+
+A file an explainer names is not swept by age. `KEPT_BY_EXPLAINERS_SQL` (**`src/services/retention.ts:428`**) is three guards ANDed into the media prune's candidate query (**`retention.ts:452`**):
+
+- **A scene's pictures** (the chosen one and the three before it) for as long as the **scene exists** (**`retention.ts:431-434`**).
+- **An explainer's voiceover, two videos and cover**: without limit while it is anything but `scheduled` (a `ready` one is waiting for Schedule, and no post names its files yet), and once `scheduled` until **30 days after its posting time** (`EXPLAINER_FILES_GRACE_DAYS`, **`retention.ts:408`**; **`retention.ts:435-444`**), the owner's window to download the MP4 for the networks the app does not post to. A time that cannot be read keeps the files.
+- **The characters' reference pictures and the music tracks** while `studio_settings.explainer` names them (**`retention.ts:445-449`**).
+
+After that they go like any posted file: the posts' own guard (`NAMED_BY_POST`, **`retention.ts:300`**) keeps them for as long as a post may still fetch them. The guards read the JSON as text, so an id anywhere in it keeps its file, which can only make the sweep delete fewer. A picture the owner drew and dropped, or a candidate no character was saved with, is named by nothing and goes by age. A database without v59 runs the prune without the three guards, which the migration made together (**`retention.ts:494-499`**).
+
+The image allowance's own rows are swept too. `sweepAllowance` (**`src/services/explainers/pictures/allowance.ts:212`**) deletes `image_allowance` rows older than 90 days (**`allowance.ts:34`**), from `runRetentionSweep` once per run (`pruneAllowance`, **`retention.ts:697`**, **`retention.ts:744-750`**). That call never throws into the cron: a database without v59 has no table and reads as nothing (**`retention.ts:748`**).
+
+### 13.16 — The daily cron's parts
+
+`GET /api/cron/publish` (**`src/routes/api.ts:1022`**, [3.5](#35--daily-maintenance-only-on-the-daily-cron)) does two things for explainers, both fail-soft. `runRetentionSweep()` (**`api.ts:1059`**) ends with `sweepAllowance` ([13.15](#1315--retention)). `sweepWriting()` (**`api.ts:1162`**, **`src/services/explainers/writing.ts:314`**) looks at up to 25 explainers that are `writing`, or `failed` at `write`, oldest first, and runs `reconcileWriting` on each: the backstop for the lazy check, for a dashboard nobody opens. A script the Mac never claimed in ten minutes while it was off, or whose write failed with a sign-in error, is handed to Gemini here; the run starts under `waitUntil` and finishes after the response. It logs only when it started something (`cron.explainers_writing`), and a database behind v59 is not an error (**`api.ts:1165`**). **Nothing else of an explainer is scheduled:** the Mac's own polling moves its jobs, and the drain ([flow 5](#5-job-lifecycle)) knows nothing of them.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -2811,8 +3914,15 @@ error, and several write **no row at all**.
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
 | 2 | the sender's profile lookup (Instagram only) is refused, throttled, or cannot run on a database without v40 — **`senderProfile.ts`** `refreshSenderProfile` | `dm.profile_failed` (`warn`); a throttled one is silent | no (the reply is unaffected; the attempt is recorded in `conversations.profile_checked_at`) |
 | 2 | a **permanent** Meta refusal of the reply (a blocked recipient, a dead token) — the catch in **`messaging.ts`** (`isPermanentMetaError`) | `dm.pipeline_failed` | inbound row, `handled_at` set; **no outbound row, and nothing in `jobs`** (the job completes `done`): the inbox's "reply failed" chip cannot show it, only the logs can |
+| 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |
+| 2 | **Meta Business AI owns the Instagram thread** (error 100 / 2534037, A3) — `noteBusinessAiBlock` | `ads.alert_business_ai` (`error`), once per conversation | `conversations.no_reply_reason = 'business_ai_owns_thread'`; **not retried**, no outbound row; cleared by the next send that goes out |
+| 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
+| 7.8 | a `leadgen` change for a tenant with no lead_ads sign-off — `fetchAndStoreLead` | `ads.lead_locked` (`warn`) | **no** (nothing fetched) |
+| 7.8 | the app-level Page webhook has no `leadgen` field, or the Page is not subscribed (no sign-off yet) | *(none: Meta sends nothing)* | no; `scripts/diagnose.mjs` notes the missing field |
+| 7.8 | `GET /{leadgen_id}` refused (no `leads_retrieval`, Leads Access Manager) — `fetchAndStoreLead` | `ads.lead_read_refused` | no; the job ends `failed` and the catch-up will be refused too |
+| 7.8 | a throttle on the lead read | `ads.throttled` | no, until the 6-hourly catch-up |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |
@@ -2831,7 +3941,7 @@ error, and several write **no row at all**.
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
 | 6 | the profile scope is on but TikTok refuses the profile fields, or v44 is not applied — `completeConnection` | `tiktok.profile_info_failed` / `tiktok.profile_save_failed` (`warn`) | yes: the connection, its name and avatar; **no profile** |
-| 7 | a think, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
+| 7 | a think, an `explainer_write`, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:311`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
 | 7 | a tenant's AI call the layer cannot answer (no provider key, a budget spent, the provider down) — `generate`, **`tenantAi.ts:50`** | `ai.call_refused` / `ai.call_failed` (`warn`), an `ai_usage` row with the outcome | an infographic: no row, no job (409 / 429 / 503 / 502); a Monteur call: the attempt fails with the layer's words (Editor: the reel goes on without edits); a Studio draft: `failed` with them. **Never the Mac, never Gemini** |
 | 7 | the owner (or a listed tenant) with `monteur.brain: 'api'` stored — **`brain.ts:20`** | *(none)* | no: the call is the Mac's, as `claude_mac` is |
 | 8 | a callback with no cookie, or one that does not equal `state` — **`meta.ts:114`** | `meta.oauth_state_mismatch` | no (before the DB) |
@@ -2854,5 +3964,82 @@ error, and several write **no row at all**.
 | 9 | **a draft nobody advances** (no wizard open, worker not running): it stays `queued` | *(none)* until the sweep runs: `onboarding.sweep` | row untouched; ended `expired` by whoever finds it after 30 minutes |
 | 9 | a slow invocation whose lease ran out, or whose draft was superseded — owner-guarded writes | `onboarding.draft_lease_lost` | no (what it did is dropped) |
 | 9 | the draft is ready and nobody applies it | *(none)* | the draft stays a draft: nothing is applied to the profile by the engine |
+| 10 | a message from a group, or with no BSUID anywhere — **`whatsappPlan.ts:111`** | `wa.ignored` (`reason: group` / `no_user_id`) | **no job**, no row |
+| 10 | a `field` the build does not handle (`calls`, `message_template_status_update`, …) — **`whatsappPlan.ts:180`** | `wa.unhandled_field` | no job |
+| 10 | an entry with no changes, a `messages` change with nothing in it, value-level `errors[]` — **`whatsappPlan.ts:149`**, **:92**, **:104**, **:101** | `wa.empty_entry` / `wa.empty_change` / `wa.value_errors` (`warn`) | no job |
+| 10 | a status with no id — **`whatsappPlan.ts:126`** | `wa.status_ignored` | no job |
+| 10 | **no connection for the number** (never connected, revoked, a number that is not ours), or the tenant is switched off — **`whatsappInbound.ts:654`**, **`tenant.ts:217`** | `wa.no_creator` (`warn`), `wa.creator_inactive` | **no row**; Meta has its 200 and will not redeliver, so the message is gone. An `invalid` connection is NOT this: it stores |
+| 10 | an edit, a deletion, `request_welcome` or a message with no id — **`whatsappInbound.ts:691`** | `wa.ignored` | no row |
+| 10 | already handled — **`whatsappInbound.ts:353`**, **:410** | `wa.duplicate_ignored` | no change (the thread's `last_inbound_at` is deliberately not touched) |
+| 10 | **every message, once concluded** — **`whatsappInbound.ts:418`** | `wa.inbound_stored` (`no_reply_reason`, `answered`) | yes, `handled_at` set + `no_reply_reason` (NULL for an answer); for anyone not on the test list the row holds **no text, phone, username, name or raw event** |
+| 10 | a stranger's job ends (done, or failed for good) — **`whatsappInbound.ts:629`**, **`runner.ts`** | *(none: the payload is replaced in the ending statement)* | the job row stays with the audit minimum only (`change.redacted: true`); a retried failure keeps the whole payload until its last attempt |
+| 10 | a settings read that fails on the last attempt — **`whatsappInbound.ts:665`** | `wa.settings_unreadable` (`error`) | yes, stored as for a stranger (metadata only) |
+| 10 | two threads for one person after a BSUID change — **`whatsappInbound.ts:572`** | `wa.contact_rekey_conflict` (`warn`) | both threads kept, the system message on the new one; consents and the test-sender entry still follow |
+| 10 | a status for a message we have no row for — **`whatsappStatus.ts:133`** | `wa.status_unknown_message` | no (nothing to update; the job completes, nothing is retried) |
+| 10 | a status name Meta added later, or a status job with none — **`whatsappStatus.ts:156`**, **:151** | `wa.status_unrecognised` / `wa.status_empty` (`warn`) | no |
+| 10 | a delivery that could not be counted (the message row has no tenant, or the job no number) — **`whatsappStatus.ts:113`** | `wa.usage_not_counted` (`warn`) | the status is applied; **the ledger misses it** |
+| 10 | an account event Meta sent that this build cannot map, or one for a number nobody connected — **`whatsappAccount.ts:490`** | `wa.account_event_unhandled` (`warn`, with `reason`) / `wa.account_event_no_connection` (`warn`) | no (Meta got its 200 and will not resend; nothing is written) |
+| 10 | an account event that only says something about partners or pricing — **`whatsappAccount.ts:268`** | `wa.account_event` (`informational: true`) | no |
+| 10 | a repeat of an account change the owner was already told — **`whatsappAccount.ts:155`** | *(none: a duplicate is the point)* | no write, no second alert |
+| 10 | an owner alert while alerts are off, or Telegram unreachable — **`whatsappNotify.ts:243`** | `wa.alert_not_sent` (`info`) / `wa.alert_failed` (`warn`) | the state is stored; a failed send releases the claim and the job retries |
+| 10 | a quality event's follow-up read of the number fails — **`whatsappStatus.ts:180`** | `wa.account_health_read_failed` (`warn`) | the event is applied; the daily read tries again tomorrow |
+| 10 | the free-reply alert check fails — **`whatsappAccount.ts:550`** | `wa.free_tier_check_failed` (`warn`) | the delivery is counted; the next delivery decides again |
+| 10 | a preference change for a number nobody connected, or with no `phone_number_id` — **`whatsappStatus.ts:233`** | `wa.no_creator` (`warn`, `source: 'user_preferences'`) | no consent row: it names no tenant; Meta has its 200 and a retry would find the same nothing |
+| 10 | Meta's "interested / not interested" feedback buttons, or a preference value this build does not know — **`consentPreferences.ts`** | `consent.user_preference` (`warn`, `recorded: 0`, `ignored: n`) | no (only `stop` / `resume` of `marketing_messages` is a consent row) |
+| 10 | a stop phrase from a listed tester — **`whatsappInbound.ts:462`**, **`whatsappOptOut.ts:96`** | `wa.opted_out` (`newly`, `confirmation`), `consent.withdrawn_all` | yes: three `withdrawn` rows, the thread paused and `closed`, `opted_out_at`, follow-ups cancelled; the inbound row says `opted_out` and **the agent is never asked**. A stranger's «stop» is stored as metadata and not read |
+| 10 | a stop while the agent is off, the connection is refused or a person has the thread — **`whatsappOptOut.ts`** | `wa.optout_confirmation_skipped` (`reason: 'agent_cannot_speak'`) | the opt-out is recorded; **no confirmation is sent, and a repeat gets none either** |
+| 10 | the confirmation of a stop could not be sent — **`whatsappOptOut.ts`** | `wa.optout_confirmation_not_sent` (`warn` for a refusal, `error` for a thrown one; `effect: 'the opt-out stands'`) | the opt-out stands; **no outbound row**; nothing is retried |
+| 10 | a stop that could not be written, last attempt — **`whatsappInbound.ts:453`** | `wa.optout_not_recorded` (`error`); `wa.optout_retrying` while attempts remain | **nothing recorded**, nothing sent to the contact; the row says `failure` |
+| 10 | a stop the turn decided, whose consent history could not be written — **`whatsappAnswer.ts:209`** | `wa.optout_consent_unrecorded` (`error`) | the thread is opted out and the line went out; **the consent history misses this stop**; not retried |
+| 10 | a tester's file that could not be saved (no media id, no token, too large, expired, an unsupported type, a refused connection) — **`whatsappMediaInput.ts:96`** | `wa.media_not_saved` (`reason`), `whatsapp.media_failed` / `whatsapp.media_skipped` | the message is stored with its media id in the raw event; **no private copy, and Meta drops the file after 7 days** |
+| 10 | a voice note that could not be read — **`whatsappMediaInput.ts:193`** | `wa.voice_unreadable` (`reason`: `rate_limited`, `provider_unavailable`, `unsupported_media`, `empty`, `no_file`, …) | the one line asking for text goes out (row NULL); **a second unreadable voice note inside a day, with nothing typed between, gets none** (`wa.media_ack_skipped`, row `superseded`) |
+| 10 | a file with no caption — **`whatsappMediaInput.ts:219`** | `wa.media_ack_sent` / `wa.media_ack_skipped` / `wa.media_ack_not_sent` | the kit's one line, once per burst; the agent is never asked. A sticker, a location and a contact card get **nothing** (`unsupported_type`) |
+| 10 | a voice note or file for an agent that is off, or while a person has the thread — **`whatsappInbound.ts:469`** | `wa.inbound_stored` (`agent_off` / `bot_paused`) | the file is saved privately; **no transcription is paid for and no line is sent** |
+| 10 | a ` #ref` that is not one of the tenant's own, or labels that cannot be read — **`whatsappInbound.ts:331`** | `wa.entry_link_unreadable` (`warn`) for the second | the thread is `organic`; the customer's words are unchanged |
+| 10 | a `free_entry_point` status with no end, an end already past, or on a message with no row — **`whatsappStatus.ts:90`** | *(none)* / `wa.status_unknown_message` | `free_window_expires_at` is left as it was (never set from a referral, a link or an ad) |
+| 10 | a daily health read of one number fails (a timeout, a database error) — **`whatsappHealth.ts:149`** | `wa.health_sweep_row_failed` (`warn`); a listing failure is `wa.health_sweep_failed` (`error`) | that number is left as it was; the rest are read |
+| 10 | the meter's ledger cannot be read — **`routes/whatsapp.ts:76`** | `whatsapp.usage_unreadable` (`warn`) | no; the card answers `usage.unavailable: true` with zeros |
+| 10 | **a message nobody answers** — `noReplyReasonFor`, **`whatsappInbound.ts:123`** | `wa.inbound_stored` (`no_reply_reason`, `answered: false`) | yes: the inbound row, `handled_at` set, `no_reply_reason` = `agent_off` / `not_test_sender` / `unsupported_type` (a sticker, a location, a card, a reaction) / `connection_invalid` / `bot_paused` / `opted_out` / `superseded` |
+| 10 | the agent's reply could not be sent: a closed window, a billable reply nobody allowed, a refused connection — **`channels/send.ts:124`** | `wa.send_refused` (`warn`), `wa.answer_failed` (`error`) | the inbound row says `window_closed` / `billable_blocked` / `connection_invalid`; **no outbound row**; the thread is stamped "Needs you" and the owner is told; **Meta is not called** |
+| 10 | the model cannot answer (no allowed provider, a 429, a timeout, a budget) — **`turn.ts:402`** | `dm.engine_failed` (`fallback: 'never'`), `ai.call_refused` | the hand-off line goes out as the one reply; inbound `provider_unavailable`; the bot is paused. **Never Gemini** |
+| 10 | a send that may have landed (a timeout, a 5xx) — **`channels/send.ts`** `failedSend` | `wa.send_failed` (`may_have_landed: true`) | **never retried**; inbound `failure`; stamped; no outbound row, so a delivery that did happen is invisible in the thread |
+| 10 | a reply sent and its record failed — **`whatsappAnswer.ts`** | `wa.answered_unrecorded` (`error`) | the customer was answered; **no outbound row** and no state move; concluded as answered, never retried |
+| 10 | a follow-up for a WhatsApp conversation — **`followupJob.ts`** `scheduleFollowup` | `dm.followup_not_scheduled` (`reason: 'channel'`) | no job |
+| 10 | a person's reply from the inbox on a closed window — **`routes/api.ts`** `replyOnWhatsApp` | `wa.send_refused` (`reason: 'window_closed'`) | no: `409 WHATSAPP_WINDOW_CLOSED`, nothing stored, bot not paused |
+| 11 | ads are off for the tenant — **`routes/ads.ts:54`** | *(none)* | no: every `/api/ads` route answers 404 `ADS_DISABLED` |
+| 11 | the pacer refused (our own 45-point budget, or Meta's block) — **`ads/graph.ts:167`** | `ads.paced` (`retry_at`) | no Meta call at all; 429 `RATE_LIMITED` |
+| 11 | Meta throttled the ad account — **`ads/graph.ts:194`** | `ads.throttled` (`retry_at`) | `ads_pacer.blocked_until`; **never retried** |
+| 11 | the guard checked an hour ago, or failed under 10 minutes ago — **`ads/guard.ts:86`** | *(none)* | no |
+| 11 | a guard check failed (token, Meta, throttle) — **`ads/guard.ts:116`** | `ads.cap_check_failed` | `ads.cap_attempt` only; `guard_blind` after 2 h |
+| 11 | an alert already sent today for the same kind and object — **`ads/notify.ts:168`** | `ads.alert_duplicate` | no (the row exists) |
+| 11 | an alert kind the tenant switched off — `notifyAds` | `ads.alert_sent` (`telegram: 'off'`) | the `ads_alerts` row, channels `off` |
+| 11 | a request names another tenant's ad object, or one from an account the tenant left — **`ads/actions.ts`** `ownObject` | `ads.not_own_object` (`warn`), audit `ads.not_own_object` | no: 403 `NOT_OWN_OBJECT` |
+| 11 | a queued op whose target is another tenant's or another account's — **`ads/ops.ts`** `sendExec` | `ads.not_own_object` | the op `failed` with `NOT_OWN_OBJECT`; **Meta is not called**, no verify |
+| 11 | a queued op on a Meta id the stored copy has not seen yet (made in Ads Manager before the next sync) — `assertOpTarget` | `ads.op_target_unmirrored` (`warn`) | sent: the token is the tenant's own, so Meta refuses anything outside its business |
+| 11 | the overview cannot read alerts, spend or sign-offs (a table not migrated yet) — **`ads/tenantsOverview.ts`** | `admin.ads_alerts_unreadable` / `admin.ads_spend_unreadable` / `admin.ads_signoffs_unreadable` | the rest renders; cap use shows "unknown" |
+| 11.6 | a rule ran less than 55 minutes ago, is off, or was never approved — `rulesStore.dueRules` | *(none)* | no run row |
+| 11.6 | ads off, not configured, token dead, or no stored account snapshot — `rulesWiring` `account` | *(none)* | `ads_rule_runs` `blind` with the reason; `rule_blind` after 24 h |
+| 11.6 | today's results stale and the refresh refused (pacer, throttle) or failed — `rules.ts` `freshness` | *(none)* | `blind` (`throttled` / `stale`); nothing judged on old numbers |
+| 11.6 | every watched object below `min_data` | *(none)* | `skipped_no_data`; counts toward `rule_blind` |
+| 11.6 | matched, but skipped: an op already queued, already paused, no daily budget of its own, at Meta's minimum, 4 budget changes used this hour, acted on in the last 24 h, or claimed by an earlier rule | *(none)* | the run row, the reason in `matched[].skipped` |
+| 11.6 | a raise or resume matched | `ads.rule_acted` audit | an `open` `rule_raise` proposal: **nothing changes at Meta until the owner approves it** |
+| 7.5 | the Mac worker has no `ads_think` handler (aicourse-captions not pulled, or the worker not restarted) | the worker's "doesn't know the job kind" | the job `failed`, the proposal `failed` with that error |
+| 7.5 | the Mac is asleep or its worker stopped | none until the sweep | the proposal stays `drafting`; the daily cron fails it after 24 h |
+| 7.5 | a review found nothing worth changing — `advanceProposal` | `ads.proposal_nothing_to_propose` | the `drafting` row is deleted |
+| 7.5 | a tenant with ads on but < 3 days of results, or no AI for it — `runDailyReview` | `ads.daily_review` (`queued: 0`) | no |
+| 13 | **explainers are off for the tenant** — **`routes/studio.ts:545`** | *(none: the answer is 404 `EXPLAINERS_DISABLED`)* | no: every `/api/studio/explainers` route answers it; the worker's `draw-next` is not behind the switch (**`routes/studio.ts:269`**) |
+| 13 | **a result of a job that is no longer the explainer's** (a rewrite, a re-voice, a new drawing or a new render replaced it; the explainer was deleted or moved on) — **`explainers/apply.ts:77-89`** | `explainer.result_dropped` (`info`, with `reason`) | **no**: the job ends `done` with `{ dropped }`; a dropped render's three files are deleted (**`explainers/apply.ts:354-359`**) |
+| 13 | the failure of such a job — **`explainers/apply.ts:421-430`** | `explainer.failure_ignored` (`info`) | no: a job that is no longer the explainer's cannot fail it |
+| 13 | **a `draw-next` with the wrong `job_id`**, a job that is not a claimed `explainer_draw`, or an explainer that is not `drawing` — **`explainers/scenes.ts:158`** | `explainer.draw_next_refused` (`warn`) | no: **409 `EXPLAINER_BAD_STATE`**, nothing drawn and no unit reserved; the Mac's loop stops with the 409's words and reports its job failed |
+| 13 | **drawing paused**: the provider says the day's free allocation is used up, or the owner's daily cap is reached — **`explainers/pictures/allowance.ts:137`**, **`explainers/pictures/draw.ts:378`**, **`:399-403`** | `explainer.allowance_exhausted` (`warn`, the provider's own refusal only) | the scene back to `pending`; the explainer stays `drawing` with `draw_paused_until` and a note; the next `explainer_draw` is queued with `not_before` at the next 00:05 UTC: **nothing to press** |
+| 13 | **a busy Mac is never taken over** — **`explainers/writing.ts:222`** | *(none)* | no change: the write job stays `pending`; after 60 s the explainer's job line says the Mac is busy (`BUSY_MAC_NOTE`) |
+| 13 | the owner turned `writer_fallback` off — **`explainers/writing.ts:241`** | *(none)* | no: the explainer waits for the Mac, or fails with its reason |
+| 13 | **Gemini's research refused on a free key** (no Google Search grounding on Gemini 3's free tier) — **`explainers/writerGemini.ts:511-514`** | `explainer.gemini_request_refused` for each model, `explainer.gemini_run_failed` (`warn`) | yes: the job and the explainer `failed` at `write`, with `GROUNDING_HINT` in `error`; **no draft** |
+| 13 | a Gemini run that died — **`explainers/writing.ts:267-275`** | `explainer.gemini_run_stalled` (`warn`) | yes, when the next look finds it 5 minutes stale: the job `failed` ("Press Retry"); never run again by itself |
+| 13 | a script written with no web read (`research_rounds` 0) — **`explainers/apply.ts:132-134`** | `explainer.draft_written` (its `warnings` hold `research_limited`) | yes: a normal draft with the `research_limited` warning; approving it is allowed |
+| 13 | a voice that runs into Gemini's free allowance — **`explainers/apply.ts:433-447`** | `explainer.voice_limit_requeued` (`info`) | the explainer stays `voicing` with a `VOICE_LIMIT:` note; `explainer_voice` is queued with `not_before`, up to three times, then `failed` |
+| 13 | **a drawing that ends `done` with a scene that failed** — **`explainers/pictures/draw.ts:83`**, **`:502`** | `explainer.pictures_ready` | `review` is reached with a scene that has no picture; Approve pictures answers 409 `EXPLAINER_PICTURES_MISSING` with its position |
+| 13 | three scenes fail in a row (the Mac's loop gives up) — **`explainers/apply.ts:328-333`** | `explainer.draw_failed` (`warn`) | the explainer stays `drawing` with the last reason and no job; nothing retries by itself |
+| 13 | the daily look at the writing, on a database behind v59 — **`routes/api.ts:1165`** | *(none)* | no |
 
 `RUNBOOK.md` works these backwards from the symptom.

@@ -11,6 +11,11 @@
  * it), the 30-day series, the campaign table and the failure reasons each have
  * their own error panel whose Retry re-asks for that panel alone.
  *
+ * One success definition, everywhere on this page (audit OV-20): delivered ÷ (delivered + needs you). The server classifies every DM
+ * (src/services/outcomes.ts): delivered, handled by design, needs the owner, waiting, blocked. A DM skipped on purpose (the one-per-day
+ * cap, a person who already had their reply, a public reply sent instead) is neutral and is left out of the rate; red is only for the
+ * ones that need the owner.
+ *
  * A1: the tiles, the platform split and the campaign table
  * answer for one window — 7 / 28 / 90 days or all time — picked in a
  * segmented control and remembered per browser (`analytics:range`). Each of
@@ -112,6 +117,36 @@ const AnalyticsPage = {
         Motion.announce(t('analytics.range.loaded', { window: this.windowText(this.range) }));
     },
 
+    /**
+     * The success rate the server computed (delivered ÷ (delivered + actionable), a whole percent), or null: nothing has been attempted
+     * yet, or the answer predates the split. null is "no rate", never 0%: `Number(null)` is 0, which is why it is checked first.
+     */
+    successRateOf(stats) {
+        const raw = stats && stats.successRate;
+        if (raw === null || raw === undefined || raw === '') return null;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+    },
+
+    /** How many DMs of the window were skipped on purpose, from `/stats`' `outcomes`, or 0 when the answer carries no split. */
+    byDesignOf(stats) {
+        const outcomes = stats && stats.outcomes;
+        return outcomes && typeof outcomes === 'object' ? Number(outcomes.by_design) || 0 : 0;
+    },
+
+    /**
+     * What one row (a day, a campaign) says about its DMs, as `{ delivered, byDesign, actionable, split }`. A row without the outcome
+     * split is read as it always was (sent, failed), and says so in `split`: the old numbers, not a split made up from them.
+     */
+    outcomesOf(row, legacy) {
+        const r = row || {};
+        const n = (v) => Number(v) || 0;
+        if ('delivered' in r || 'actionable' in r) {
+            return { delivered: n(r.delivered), byDesign: n(r.by_design), actionable: n(r.actionable), split: true };
+        }
+        return { delivered: n(r[legacy.sent]), byDesign: 0, actionable: n(r[legacy.failed]), split: false };
+    },
+
     /** text-success / text-warning / text-danger for a 0–100 rate, or '' if unknown. */
     successRateClass(rate) {
         const n = Number(rate);
@@ -130,10 +165,12 @@ const AnalyticsPage = {
 
     skeleton() {
         return html`
+            ${UI.resultsTabs('numbers')}
             ${Motion.statsGrid(4)}
             ${Motion.chartGrid(2)}
             ${Motion.tableCard(6, [
-                t('table.keyword'), t('analytics.matches'), t('common.sent'), t('common.failed'), t('analytics.successRate'),
+                t('table.keyword'), t('analytics.matches'), t('status.outcome.delivered'), t('status.outcome.by_design'),
+                t('status.outcome.actionable'), t('analytics.successRate'),
             ])}
             ${Motion.busy()}
         `;
@@ -189,6 +226,8 @@ const AnalyticsPage = {
                 title: t('analytics.errorTitle'),
                 message: err.message,
                 hint: err.isNetworkError ? t('error.network') : '',
+                // The log is one click away even when the numbers failed to load.
+                before: UI.resultsTabs('numbers'),
             }, () => this.render());
             return;
         }
@@ -200,13 +239,17 @@ const AnalyticsPage = {
         // 24-hour `todayActivity` that also counted failures.
         const todayRow = daily.length ? (daily[daily.length - 1] || {}) : null;
         const todaySent = todayRow ? (Number(todayRow.sent) || 0) : (stats.todayActivity || 0);
-        const todayFailed = todayRow ? (Number(todayRow.failed) || 0) : null;
+        // What needs the owner today, not every row written FAILED: a DM skipped on purpose is not a failure.
+        const todayFailed = todayRow ? this.outcomesOf(todayRow, { sent: 'sent', failed: 'failed' }).actionable : null;
+        const rate = this.successRateOf(stats);
+        const byDesign = this.byDesignOf(stats);
         const total = stats.totalInteractions || 0;
         const split = this.platformSplit(stats.instagramCount, stats.facebookCount);
 
         const windowLabel = this.windowText(this.range);
 
         container.innerHTML = esc(html`
+            ${UI.resultsTabs('numbers')}
             <div class="analytics-toolbar">${this.rangeMarkup()}</div>
 
             <div class="stats-grid">
@@ -223,8 +266,10 @@ const AnalyticsPage = {
                         <span class="stat-label">${t('analytics.successRate')}</span>
                         <span class="stat-icon"><i data-lucide="trending-up" aria-hidden="true"></i></span>
                     </div>
-                    <p class="stat-value ${html.raw(this.successRateClass(stats.successRate))}">${UI.formatPercent(stats.successRate)}</p>
+                    <p class="stat-value ${html.raw(this.successRateClass(rate))}" id="analytics-success-rate">${rate === null ? '—' : UI.formatPercent(rate)}</p>
                     <p class="stat-sub" data-window>${windowLabel}</p>
+                    <p class="stat-sub">${t('analytics.successRate.definition')}</p>
+                    ${byDesign > 0 ? html`<p class="stat-sub" id="analytics-by-design">${t('analytics.successRate.byDesign', { n: UI.formatNumber(byDesign) })}</p>` : ''}
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -266,6 +311,7 @@ const AnalyticsPage = {
                         ${this.windowMeta()}
                     </div>
                     <div class="table-wrapper" id="analytics-campaigns"></div>
+                    <div class="table-wrapper analytics-ad-rows" id="analytics-ad-rows" hidden></div>
                 </div>
 
                 <div class="chart-card surface">
@@ -332,6 +378,78 @@ const AnalyticsPage = {
         this.fillStrip(dailyRes);
         this.fillCampaigns(campaignRes);
         this.fillFailures(failuresRes);
+        // The ads beside the DM campaigns (A6). Last, and on its own: it never holds up or takes down anything above.
+        this.fillAdRows(days, live);
+    },
+
+    /**
+     * The ads that ran in the window, under the DM campaigns, each labelled "Ad" (A6, research R20): what it spent, the conversations it
+     * started, and the app's own figures for it (tracked-link clicks, hand-offs to a person). From the ads stored copy, never Meta. A
+     * workspace without ads, a member Ads is hidden from, or any failure leaves the table hidden and says nothing: these rows are extra,
+     * the DM campaigns above are the panel. Spend excludes tax; there is no sales-based figure (sales happen on another website, out of Meta's and our sight).
+     */
+    async fillAdRows(days, live) {
+        const host = document.getElementById('analytics-ad-rows');
+        if (!host || typeof API.getAdsResults !== 'function') return;
+        const to = new Date().toISOString().slice(0, 10);
+        const from = new Date(Date.now() - (Math.max(1, Number(days) || 1) - 1) * 86400000).toISOString().slice(0, 10);
+        let answer;
+        try {
+            answer = await API.getAdsResults({ level: 'ad', from, to });
+        } catch {
+            return;
+        }
+        if (typeof live === 'function' && !live()) return;
+        const markup = this.adRowsMarkup(answer);
+        if (!markup) {
+            host.hidden = true;
+            host.innerHTML = '';
+            return;
+        }
+        host.innerHTML = esc(markup);
+        host.hidden = false;
+        UI.icons(host);
+    },
+
+    /** The rows: ads that are running or spent in the window, most spend first. Null when there are none. */
+    adRowsMarkup(answer) {
+        const objects = answer && Array.isArray(answer.objects) ? answer.objects : [];
+        const byId = new Map(objects.map((o) => [o && o.id, o]));
+        const rows = (answer && Array.isArray(answer.perObject) ? answer.perObject : [])
+            .filter((p) => p && ((Number(p.spend) || 0) > 0 || (byId.get(p.id) && byId.get(p.id).effectiveStatus === 'ACTIVE')))
+            .sort((a, b) => (Number(b.spend) || 0) - (Number(a.spend) || 0));
+        if (!rows.length) return null;
+        const money = (v, cur) => (v === null || v === undefined ? '—' : `⁦${UI.formatNumber(v)}${cur ? ` ${cur}` : ''}⁩`);
+        const count = (v) => (v === null || v === undefined ? '—' : UI.formatNumber(v));
+        return html`
+            <table class="data-table analytics-ads-table" aria-label="${t('analytics.adRow.tableLabel')}">
+                <thead>
+                    <tr>
+                        <th scope="col">${t('analytics.adRow.name')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.spend')}*</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.conversations')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.tracked')}</th>
+                        <th scope="col" class="cell-num">${t('analytics.adRow.handoffs')}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map((p) => {
+                        const o = byId.get(p.id);
+                        const tracked = (Number(p.trackedClicks && p.trackedClicks.direct) || 0) + (Number(p.trackedClicks && p.trackedClicks.viaChat) || 0);
+                        return html`
+                            <tr data-ad="${p.id}">
+                                <td><span class="badge badge-info analytics-ad-badge">${t('analytics.adRow.badge')}</span> <span dir="auto">${(o && o.name) || p.id}</span></td>
+                                <td class="cell-num text-strong">${money(p.spend, p.currency)}</td>
+                                <td class="cell-num">${count(p.conversations)}</td>
+                                <td class="cell-num">${count(tracked)}</td>
+                                <td class="cell-num">${count(p.handoffs)}</td>
+                            </tr>
+                        `;
+                    })}
+                </tbody>
+            </table>
+            <p class="text-meta analytics-ads-note">* ${t('ads.tax.note')} <a href="#/ads_results">${t('analytics.adRow.open')}</a></p>
+        `;
     },
 
     /**
@@ -352,26 +470,34 @@ const AnalyticsPage = {
     },
 
     /**
-     * A7: one line above the strip — "30 days: 412 sent · 9 failed (2%) ·
-     * busiest day Friday". The strip showed shape and no number; the busiest
-     * WEEKDAY (summed over the window) is the rhythm a posting plan can use,
-     * where the single busiest date is usually one viral post.
+     * A7: one line above the strip — "30 days: 412 delivered · 9 need you · 31 by
+     * design · success 98% · busiest day Friday". The strip showed shape and no
+     * number; the busiest WEEKDAY (summed over the window) is the rhythm a posting
+     * plan can use, where the single busiest date is usually one viral post.
+     *
+     * The success rate is the page's one definition (delivered ÷ (delivered +
+     * needs you)), the same as the tile above, and "—" before anything was attempted.
      */
     summary30(daily) {
         const rows = Array.isArray(daily) ? daily : [];
-        const sent = rows.reduce((s, d) => s + (Number(d.sent) || 0), 0);
-        const failed = rows.reduce((s, d) => s + (Number(d.failed) || 0), 0);
-        const total = sent + failed;
-        if (total === 0) return '';
+        const legacy = { sent: 'sent', failed: 'failed' };
+        let delivered = 0;
+        let actionable = 0;
+        let byDesign = 0;
         const byWeekday = [0, 0, 0, 0, 0, 0, 0];
         const sample = [];
         rows.forEach((d) => {
+            const day = this.outcomesOf(d, legacy);
+            delivered += day.delivered;
+            actionable += day.actionable;
+            byDesign += day.byDesign;
             const at = new Date(d.day);
             if (Number.isNaN(at.getTime())) return;
             const wd = at.getUTCDay();
-            byWeekday[wd] += (Number(d.sent) || 0) + (Number(d.failed) || 0);
+            byWeekday[wd] += day.delivered + day.actionable + day.byDesign;
             if (!sample[wd]) sample[wd] = at;
         });
+        if (delivered + actionable + byDesign === 0) return '';
         const best = byWeekday.indexOf(Math.max(...byWeekday));
         let day = '—';
         if (byWeekday[best] > 0 && sample[best]) {
@@ -381,10 +507,12 @@ const AnalyticsPage = {
                 day = UI.formatDayShort(sample[best]);
             }
         }
+        const attempted = delivered + actionable;
         return t('analytics.summary30', {
-            sent: UI.formatNumber(sent),
-            failed: UI.formatNumber(failed),
-            rate: UI.formatPercent(Math.round((failed / total) * 100)),
+            sent: UI.formatNumber(delivered),
+            failed: UI.formatNumber(actionable),
+            byDesign: UI.formatNumber(byDesign),
+            rate: attempted > 0 ? UI.formatPercent(Math.round((delivered / attempted) * 100)) : '—',
             day,
         });
     },
@@ -405,46 +533,69 @@ const AnalyticsPage = {
         const summary = this.summary30(daily);
         host.innerHTML = esc(html`
             ${summary ? html`<p class="chart-summary" id="analytics-summary">${summary}</p>` : ''}
-            ${Charts.dayStrip(daily, {
+            ${Charts.dayStrip(daily, Object.assign({
                 label: t('analytics.chart30'),
                 emptyMessage: t('analytics.noData'),
                 dayHeader: t('common.day'),
-                sentHeader: t('common.sent'),
-                failedHeader: t('common.failed'),
-            })}
+            }, this.stripOptions(daily)))}
         `);
         UI.icons(host);
     },
 
-    /** Sent ÷ (sent + failed), or null before anything was attempted. */
-    campaignRate(c) {
-        const sent = Number(c && c.sent_count) || 0;
-        const failed = Number(c && c.failed_count) || 0;
-        return sent + failed > 0 ? Math.round((sent / (sent + failed)) * 100) : null;
+    /**
+     * What the 30-day strip draws: the day's delivered DMs, the red foot for what needs the owner, and the by-design count in the
+     * tooltip and the table only (neutral, never red). A series without the split is drawn as it always was.
+     */
+    stripOptions(daily) {
+        const split = (Array.isArray(daily) ? daily : []).some((d) => d && 'delivered' in d);
+        return split
+            ? {
+                valueKey: 'delivered', badKey: 'actionable', noteKey: 'by_design',
+                valueHeader: t('status.outcome.delivered'), badHeader: t('status.outcome.actionable'), noteHeader: t('status.outcome.by_design'),
+            }
+            : { sentHeader: t('common.sent'), failedHeader: t('common.failed') };
     },
 
     /**
-     * A3: "Top performing" is now sorted by what was actually sent and says
+     * A campaign's DMs by what became of them (`/stats/campaigns` rows carry the split; a row without it is read as sent / failed).
+     * The rate is delivered ÷ (delivered + needs you): the page's one definition, null before anything was attempted.
+     */
+    campaignOutcomes(c) {
+        return this.outcomesOf(c, { sent: 'sent_count', failed: 'failed_count' });
+    },
+
+    campaignRate(c) {
+        const { delivered, actionable } = this.campaignOutcomes(c);
+        return delivered + actionable > 0 ? Math.round((delivered / (delivered + actionable)) * 100) : null;
+    },
+
+    /**
+     * A3: "Top performing" is now sorted by what was actually delivered and says
      * how well each did; it used to be the route's trigger order with no rate.
      * A4: a keyword opens the activity log filtered to that campaign.
+     *
+     * Delivered is green, "by design" is neutral (the product skipped it on purpose: nothing to do), and "needs you" is red only when
+     * it is more than 0: a column of red zeros says "failed" about campaigns that failed at nothing.
      */
     campaignsMarkup(rows) {
-        const list = [...rows].sort((a, b) => ((Number(b.sent_count) || 0) - (Number(a.sent_count) || 0))
+        const list = [...rows].sort((a, b) => (this.campaignOutcomes(b).delivered - this.campaignOutcomes(a).delivered)
             || ((Number(b.total_triggers) || 0) - (Number(a.total_triggers) || 0)));
         return html`
-            <table class="data-table">
+            <table class="data-table outcome-table">
                 <thead>
                     <tr>
                         <th scope="col">${t('table.keyword')}</th>
                         <th scope="col" class="cell-num">${t('analytics.matches')}</th>
-                        <th scope="col" class="cell-num" aria-sort="descending">${t('common.sent')}</th>
-                        <th scope="col" class="cell-num">${t('common.failed')}</th>
+                        <th scope="col" class="cell-num" aria-sort="descending">${t('status.outcome.delivered')}</th>
+                        <th scope="col" class="cell-num">${t('status.outcome.by_design')}</th>
+                        <th scope="col" class="cell-num">${t('status.outcome.actionable')}</th>
                         <th scope="col" class="cell-num">${t('analytics.successRate')}</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${list.map((c) => {
                         const rate = this.campaignRate(c);
+                        const out = this.campaignOutcomes(c);
                         const keyword = c.trigger_keyword || '—';
                         const query = c.id !== null && c.id !== undefined && c.id !== '' ? new URLSearchParams({ campaign: String(c.id) }).toString() : '';
                         return html`
@@ -456,8 +607,9 @@ const AnalyticsPage = {
                                             aria-label="${t('analytics.openInActivity', { keyword })}">${keyword}</button>
                                 ` : html`<span class="chip chip-accent" dir="auto">${keyword}</span>`}</td>
                                 <td class="cell-num text-strong">${UI.formatNumber(c.total_triggers)}</td>
-                                <td class="cell-num text-success">${UI.formatNumber(c.sent_count)}</td>
-                                <td class="cell-num text-danger">${UI.formatNumber(c.failed_count)}</td>
+                                <td class="cell-num text-success">${UI.formatNumber(out.delivered)}</td>
+                                <td class="cell-num text-muted">${UI.formatNumber(out.byDesign)}</td>
+                                <td class="cell-num${out.actionable > 0 ? html.raw(' text-danger') : ''}">${UI.formatNumber(out.actionable)}</td>
                                 <td class="cell-num ${html.raw(this.successRateClass(rate))}">${rate === null ? '—' : UI.formatPercent(rate)}</td>
                             </tr>
                         `;
@@ -504,6 +656,47 @@ const AnalyticsPage = {
         return r.sample;
     },
 
+    /**
+     * Folds the reasons into the two groups the owner reads them as. A reason the pipeline chose (`expected`) is by design; one it did
+     * not is something to fix; a MIXED one (code 100 is by design when the public reply went out and a fault when it did not) is
+     * listed under "needs you" with only the part that needs him, and says how many were answered publicly. An answer without
+     * `expected` (an older server) puts everything under "needs you": "we cannot tell" is never quietly fine.
+     */
+    splitReasons(reasons) {
+        const actionable = [];
+        const byDesign = [];
+        (Array.isArray(reasons) ? reasons : []).forEach((r) => {
+            const count = Number(r && r.count) || 0;
+            const expectedCount = r && r.expected === true
+                ? count
+                : Math.min(count, Math.max(0, Number(r && r.expected_count) || 0));
+            if (expectedCount >= count && count > 0) byDesign.push({ reason: r, count, mixed: 0 });
+            else actionable.push({ reason: r, count: count - expectedCount, mixed: expectedCount });
+        });
+        const byCount = (a, b) => b.count - a.count;
+        return { actionable: actionable.sort(byCount), byDesign: byDesign.sort(byCount) };
+    },
+
+    /** One reason as a row: its sentence, its Meta code and last time, and its count. */
+    failureItem(entry) {
+        const r = entry.reason || {};
+        const code = String(r.reason_code || '');
+        const isMetaCode = /^-?\d+$/.test(code);
+        return html`
+            <li class="failure-reason">
+                <div class="failure-reason-main">
+                    <p class="failure-reason-text" dir="auto" title="${r.sample || ''}">${this.failureSentence(r)}</p>
+                    <p class="text-meta">
+                        ${isMetaCode ? html`<span class="chip failure-reason-code">${t('analytics.failures.code', { code: `\u2066${code}\u2069` })}</span>` : ''}
+                        ${r.last_at ? html`<span>${t('analytics.failures.latest', { when: UI.formatDateTime(r.last_at) })}</span>` : ''}
+                        ${entry.mixed > 0 ? html`<span>${t('analytics.failures.mixedNote', { n: UI.formatNumber(entry.mixed) })}</span>` : ''}
+                    </p>
+                </div>
+                <strong class="failure-reason-count">${UI.formatNumber(entry.count)}</strong>
+            </li>
+        `;
+    },
+
     failuresMarkup(summary) {
         const data = summary && typeof summary === 'object' ? summary : {};
         const reasons = Array.isArray(data.reasons) ? data.reasons : [];
@@ -512,26 +705,36 @@ const AnalyticsPage = {
         if (total === 0 || reasons.length === 0) {
             return html`<p class="text-meta" id="analytics-failures-none">${t('analytics.failures.none', { days })}</p>`;
         }
+        const groups = this.splitReasons(reasons);
+        // The totals are the server's, over every failed DM of the window; the lists are only its top reasons.
+        const declaredExpected = Number(data.expected_total);
+        const byDesignTotal = data.expected_total !== undefined && data.expected_total !== null && Number.isFinite(declaredExpected)
+            ? declaredExpected
+            : groups.byDesign.reduce((sum, e) => sum + e.count, 0) + groups.actionable.reduce((sum, e) => sum + e.mixed, 0);
+        const declaredActionable = Number(data.actionable_total);
+        const actionableTotal = data.actionable_total !== undefined && data.actionable_total !== null && Number.isFinite(declaredActionable)
+            ? declaredActionable
+            : Math.max(0, total - byDesignTotal);
         return html`
-            <p class="chart-summary">${t('analytics.failures.total', { count: total, n: UI.formatNumber(total) })}</p>
-            <ol class="failure-reasons">
-                ${reasons.map((r) => {
-                    const code = String(r.reason_code || '');
-                    const isMetaCode = /^-?\d+$/.test(code);
-                    return html`
-                        <li class="failure-reason">
-                            <div class="failure-reason-main">
-                                <p class="failure-reason-text" dir="auto" title="${r.sample || ''}">${this.failureSentence(r)}</p>
-                                <p class="text-meta">
-                                    ${isMetaCode ? html`<span class="chip failure-reason-code">${t('analytics.failures.code', { code: `\u2066${code}\u2069` })}</span>` : ''}
-                                    ${r.last_at ? html`<span>${t('analytics.failures.latest', { when: UI.formatDateTime(r.last_at) })}</span>` : ''}
-                                </p>
-                            </div>
-                            <strong class="failure-reason-count">${UI.formatNumber(r.count)}</strong>
-                        </li>
-                    `;
-                })}
-            </ol>
+            <section class="failure-group" id="analytics-failures-actionable" aria-labelledby="analytics-failures-actionable-title">
+                <h3 class="failure-group-title" id="analytics-failures-actionable-title">
+                    ${UI.statusPill('outcome', 'actionable')}
+                    <span class="failure-group-count">${UI.formatNumber(actionableTotal)}</span>
+                </h3>
+                ${groups.actionable.length
+                    ? html`<ol class="failure-reasons">${groups.actionable.map((e) => this.failureItem(e))}</ol>`
+                    : html`<p class="text-meta" id="analytics-failures-allclear">${t('analytics.failures.allClear')}</p>`}
+            </section>
+            ${groups.byDesign.length ? html`
+                <section class="failure-group" id="analytics-failures-by-design" aria-labelledby="analytics-failures-by-design-title">
+                    <h3 class="failure-group-title" id="analytics-failures-by-design-title">
+                        ${UI.statusPill('outcome', 'by_design')}
+                        <span class="failure-group-count">${UI.formatNumber(byDesignTotal)}</span>
+                    </h3>
+                    <p class="text-meta failure-group-note">${t('analytics.failures.byDesignNote')}</p>
+                    <ol class="failure-reasons">${groups.byDesign.map((e) => this.failureItem(e))}</ol>
+                </section>
+            ` : ''}
         `;
     },
 

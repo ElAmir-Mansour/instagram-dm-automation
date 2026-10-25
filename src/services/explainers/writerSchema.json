@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Explainer draft written by Claude on the owner's Mac",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "scenes", "captions", "first_comment", "replies", "sources"],
+  "properties": {
+    "title": { "type": "string", "minLength": 5, "maxLength": 70 },
+    "scenes": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 300,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["narration", "spoken", "label", "brief", "characters", "continues", "source_ids"],
+        "properties": {
+          "narration": { "type": "string", "minLength": 2, "maxLength": 300, "description": "One sentence as shown on screen. Arabic must be Modern Standard Arabic." },
+          "spoken": { "type": "string", "minLength": 2, "maxLength": 400, "description": "What the narrator says; spell English terms the way an Arabic narrator says them." },
+          "label": { "type": "string", "maxLength": 40, "description": "At most 4 words or a number such as a year; empty string for no label." },
+          "brief": { "type": "string", "minLength": 10, "maxLength": 500, "description": "English picture brief: which characters (by key), pose, action, setting, objects. No text in the picture. Never women or girls." },
+          "characters": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 30 } },
+          "continues": { "type": "boolean", "description": "true to keep the previous scene's picture" },
+          "source_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Indexes into sources for the claims this sentence makes; empty for non-factual sentences." }
+        }
+      }
+    },
+    "captions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meta", "youtube", "tiktok"],
+      "properties": {
+        "meta": { "type": "string", "maxLength": 2200 },
+        "youtube": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "description"],
+          "properties": {
+            "title": { "type": "string", "maxLength": 100 },
+            "description": { "type": "string", "maxLength": 5000 }
+          }
+        },
+        "tiktok": { "type": "string", "maxLength": 2200 }
+      }
+    },
+    "first_comment": { "type": "string", "maxLength": 1500 },
+    "replies": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["q", "a"],
+        "properties": { "q": { "type": "string", "maxLength": 300 }, "a": { "type": "string", "maxLength": 600 } }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "by", "year", "url"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 300 },
+          "by": { "type": "string", "maxLength": 300 },
+          "year": { "type": "string", "maxLength": 10 },
+          "url": { "type": "string", "maxLength": 500 }
+        }
+      }
+    }
+  }
+}

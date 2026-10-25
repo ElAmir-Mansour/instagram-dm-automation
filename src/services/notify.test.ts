@@ -134,6 +134,50 @@ describe('buildNoticeText', () => {
         assert.ok(!/Reply window|Open:/.test(bare), bare);
     });
 
+    it('keeps the Instagram alert byte for byte what it was, whatever the platform field says about anything else', () => {
+        const ig = buildNoticeText({ ...base, windowMs: 0, username: null });
+        assert.equal(ig, [
+            'Needs you: refund request',
+            'Customer: Instagram user …0001',
+            'Last message: «I want my money back»',
+            'Reply window: closed, so reply from the Instagram app',
+            'Open: https://msg.example/dashboard#/inbox?c=abc',
+        ].join('\n'));
+        for (const platform of [undefined, null, 'instagram', 'facebook']) assert.equal(buildNoticeText({ ...base, windowMs: 0, username: null, platform }), ig, String(platform));
+        const ar = buildNoticeText({ ...base, lang: 'ar', windowMs: 0, username: null });
+        assert.match(ar, /\nالعميل: مستخدم إنستغرام …0001\n/);
+        assert.match(ar, /\nنافذة الرد: أُغلقت، يمكنك الرد من تطبيق إنستغرام\n/);
+    });
+
+    it('names WhatsApp and the dashboard, not Instagram, for a WhatsApp conversation, in English and in Arabic (review L1)', () => {
+        const wa = { ...base, platform: 'whatsapp', senderId: 'EG.13491208655302741918', username: null as string | null };
+        const en = buildNoticeText({ ...wa, windowMs: 0 });
+        assert.match(en, /\nCustomer: WhatsApp user …1918\n/);
+        assert.match(en, /\nReply window: closed, so reply from the dashboard once they write again\n/);
+        assert.ok(!/Instagram/.test(en), en);
+        const ar = buildNoticeText({ ...wa, lang: 'ar', windowMs: 0 });
+        assert.match(ar, /\nالعميل: مستخدم واتساب …1918\n/);
+        assert.match(ar, /\nنافذة الرد: أُغلقت، ويمكنك الرد من لوحة التحكم عندما يراسلك العميل من جديد\n/);
+        assert.ok(!/إنستغرام/.test(ar), ar);
+        // An open window reads the same on every channel.
+        assert.match(buildNoticeText({ ...wa }), /\nReply window: closes in 5 h 20 min\n/);
+    });
+
+    it('writes a WhatsApp contact\'s profile name as it is, with no @ (it is a name, not a handle)', () => {
+        const text = buildNoticeText({ ...base, platform: 'whatsapp', username: 'Zainab Al-Fassi' });
+        assert.match(text, /\nCustomer: Zainab Al-Fassi\n/);
+        assert.ok(!text.includes('@Zainab'));
+    });
+
+    it('says why a reply could not be sent when it could not: the window, the billable meter, the connection', () => {
+        const wa = { ...base, platform: 'whatsapp' };
+        assert.match(buildNoticeText({ ...wa, reason: 'window_closed' }), /^Needs you: the 24-hour window had closed, so no reply could be sent\n/);
+        assert.match(buildNoticeText({ ...wa, reason: 'billable_blocked' }), /^Needs you: the free WhatsApp replies are used up and paid replies are switched off\n/);
+        assert.match(buildNoticeText({ ...wa, reason: 'connection_invalid' }), /^Needs you: the WhatsApp connection needs reconnecting\n/);
+        assert.match(buildNoticeText({ ...wa, lang: 'ar', reason: 'connection_invalid' }), /^يحتاج ردك: اتصال واتساب يحتاج إلى إعادة ربط\n/);
+        assert.match(buildNoticeText({ ...wa, lang: 'ar', reason: 'window_closed' }), /^يحتاج ردك: انتهت نافذة الـ 24 ساعة فلم يمكن إرسال رد\n/);
+    });
+
     it('puts a customer\'s markup, links and reordering controls through the same filter: nothing a customer wrote becomes a link or a command', () => {
         const text = buildNoticeText({
             ...base, username: '<i>x</i>‮', lastMessage: '<a href="https://evil.example">click</a> visit evil.example⁦ `rm`',

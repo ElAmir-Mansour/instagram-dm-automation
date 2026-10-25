@@ -155,7 +155,7 @@ describe('loadProfile', () => {
     it('reads the settings rows itself: it does not go through getStudioSettings or getGrowthSettings', async () => {
         await loadProfile(OWNER);
         const sql = db.statements.map((s) => s.sql);
-        assert.ok(sql.some((s) => /^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings/.test(s)));
+        assert.ok(sql.some((s) => /^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings/.test(s)));
         assert.ok(sql.some((s) => /^SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings/.test(s)));
     });
 

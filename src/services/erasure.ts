@@ -38,6 +38,7 @@ import { pool } from '../config/db.js';
 import { queryRows } from '../db/query.js';
 import { signWithSessionSecret } from '../middleware/auth.js';
 import { log } from '../utils/log.js';
+import { leadPersonKeysForHandle } from './ads/leads.js';
 
 /** Long enough to read the preview and decide; short enough that a leaked token is stale. */
 export const ERASURE_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -53,9 +54,15 @@ export interface ErasureCounts {
     conversations: number;
     interactions: number;
     dmSendLog: number;
+    /**
+     * Lead-ad leads (A10, `ads_leads`) that gave this handle as their email or phone number. Found by keyed hash (`person_keys`), never by
+     * decrypting anyone's answers. Deleted as whole rows: erasure is not retention. A token minted before leads existed has no `leads`; it
+     * reads as 0.
+     */
+    leads: number;
 }
 
-const ZERO_COUNTS: ErasureCounts = { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0 };
+const ZERO_COUNTS: ErasureCounts = { messages: 0, conversations: 0, interactions: 0, dmSendLog: 0, leads: 0 };
 
 /**
  * Everything the handle resolved to.
@@ -72,6 +79,8 @@ export interface ErasureTarget {
     conversationIds: string[];
     usernames: string[];
     instagramUserIds: string[];
+    /** The handle as an email or a phone number, keyed-hashed (`ads/leads.ts leadPersonKeysForHandle`); empty for an Instagram handle. */
+    leadPersonKeys: string[];
 }
 
 /** Just enough of `pg`'s surface to run the same queries on the pool or inside a transaction. */
@@ -110,6 +119,7 @@ export async function resolveErasureTarget(handle: string, exec: Queryable = poo
         conversationIds,
         usernames: [...usernames],
         instagramUserIds: [...instagramUserIds],
+        leadPersonKeys: leadPersonKeysForHandle(needle),
     };
 }
 
@@ -120,8 +130,9 @@ export async function countErasure(target: ErasureTarget, exec: Queryable = pool
              (SELECT COUNT(*) FROM messages      WHERE conversation_id = ANY($1::uuid[]))::int AS messages,
              (SELECT COUNT(*) FROM conversations WHERE id = ANY($1::uuid[]))::int              AS conversations,
              (SELECT COUNT(*) FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))::int AS interactions,
-             (SELECT COUNT(*) FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))::int    AS dm_send_log`,
-        [target.conversationIds, target.usernames, target.instagramUserIds]
+             (SELECT COUNT(*) FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))::int    AS dm_send_log,
+             (SELECT COUNT(*) FROM ads_leads     WHERE person_keys && $4::text[])::int         AS leads`,
+        [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
     );
 
     const r = row.rows[0];
@@ -131,11 +142,12 @@ export async function countErasure(target: ErasureTarget, exec: Queryable = pool
         conversations: r.conversations ?? 0,
         interactions: r.interactions ?? 0,
         dmSendLog: r.dm_send_log ?? 0,
+        leads: r.leads ?? 0,
     };
 }
 
 export function countsTotal(counts: ErasureCounts): number {
-    return counts.messages + counts.conversations + counts.interactions + counts.dmSendLog;
+    return counts.messages + counts.conversations + counts.interactions + counts.dmSendLog + (counts.leads ?? 0);
 }
 
 /** Pure, so the "something changed since the preview" rule is testable. */
@@ -143,7 +155,8 @@ export function countsDrifted(expected: ErasureCounts, actual: ErasureCounts): b
     return expected.messages !== actual.messages
         || expected.conversations !== actual.conversations
         || expected.interactions !== actual.interactions
-        || expected.dmSendLog !== actual.dmSendLog;
+        || expected.dmSendLog !== actual.dmSendLog
+        || (expected.leads ?? 0) !== (actual.leads ?? 0);
 }
 
 // ─── The preview token ──────────────────────────────────────────────────────────────────
@@ -221,7 +234,9 @@ export function verifyErasureToken(raw: unknown, now = Date.now()): VerifiedToke
     }
     if (now > claims.exp) return { ok: false, reason: 'expired' };
 
-    return { ok: true, handle: claims.h, counts: c, expiresAt: claims.exp };
+    if (c.leads !== undefined && typeof c.leads !== 'number') return { ok: false, reason: 'malformed' };
+
+    return { ok: true, handle: claims.h, counts: { ...c, leads: c.leads ?? 0 }, expiresAt: claims.exp };
 }
 
 // ─── Preview ────────────────────────────────────────────────────────────────────────────
@@ -254,6 +269,32 @@ export interface ErasureSample {
     }>;
 }
 
+/**
+ * One workspace (tenant) that holds rows for the handle, and how many.
+ *
+ * Matching is cross-tenant on purpose (`resolveErasureTarget` has no `creator_id` filter): one erasure removes the person from every
+ * workspace, so the screen has to say which ones (UX audit ER-02). `rows` is every row the deletion would remove in that workspace, in
+ * the same four tables `ErasureCounts` counts, so the rows of `byTenant` add up to `countsTotal(counts)`. A row that belongs to no
+ * workspace at all (a legacy row from before migration v12) is grouped under `tenantId` and `name` null, not dropped.
+ */
+export interface ErasureTenantRows {
+    tenantId: string | null;
+    name: string | null;
+    rows: number;
+}
+
+/** The oldest and newest timestamp among the rows of one table; null when there are none. */
+export interface ErasureDateRange {
+    first: string | null;
+    last: string | null;
+}
+
+/**
+ * First and last date per data type, over ALL the matched rows. The sample is the newest five, so its dates cannot say when the
+ * oldest row is; these are MIN and MAX, which can. Dates only: nothing here is content.
+ */
+export type ErasureRanges = Record<keyof ErasureCounts, ErasureDateRange>;
+
 export interface ErasurePreview {
     handle: string;
     found: boolean;
@@ -263,6 +304,9 @@ export interface ErasurePreview {
         instagramUserIds: string[];
     };
     counts: ErasureCounts;
+    /** Rows per workspace, most first. See `ErasureTenantRows`. */
+    byTenant: ErasureTenantRows[];
+    ranges: ErasureRanges;
     sample: ErasureSample;
     /** Null when nothing matched — there is then nothing to authorise. */
     token: string | null;
@@ -277,7 +321,7 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
     const counts = await countErasure(target);
     const found = countsTotal(counts) > 0;
 
-    const [conversations, messages, interactions] = await Promise.all([
+    const [conversations, messages, interactions, tenantRows, rangeRows] = await Promise.all([
         queryRows<any>(
             `SELECT cv.id, cv.creator_id, c.name AS creator_name, cv.instagram_user_id,
                     cv.username, cv.last_message_at
@@ -309,7 +353,49 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
               LIMIT $2`,
             [target.usernames, SAMPLE_LIMIT]
         ),
+        // Rows per workspace. The same four predicates as `countErasure` and as the deletes in `executeErasure`, grouped by the owning
+        // workspace; messages take theirs from the conversation, as the delete does (`conversation_id = ANY(...)`).
+        queryRows<any>(
+            `SELECT t.creator_id, c.name, SUM(t.n)::int AS row_count
+               FROM (
+                    SELECT creator_id, COUNT(*) AS n FROM conversations
+                     WHERE id = ANY($1::uuid[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT cv.creator_id, COUNT(*) FROM messages m
+                      JOIN conversations cv ON cv.id = m.conversation_id
+                     WHERE m.conversation_id = ANY($1::uuid[]) GROUP BY cv.creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM interactions
+                     WHERE lower(sender_username) = ANY($2::text[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM dm_send_log
+                     WHERE recipient_id = ANY($3::text[]) GROUP BY creator_id
+                    UNION ALL
+                    SELECT creator_id, COUNT(*) FROM ads_leads
+                     WHERE person_keys && $4::text[] GROUP BY creator_id
+               ) t
+               LEFT JOIN creators c ON c.id = t.creator_id
+              GROUP BY t.creator_id, c.name
+              ORDER BY row_count DESC, c.name NULLS LAST`,
+            [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
+        ),
+        // The oldest and newest row of each table, over everything that matched.
+        queryRows<any>(
+            `SELECT
+                 (SELECT MIN(created_at)       FROM conversations WHERE id = ANY($1::uuid[]))                      AS conversations_first,
+                 (SELECT MAX(last_message_at)  FROM conversations WHERE id = ANY($1::uuid[]))                      AS conversations_last,
+                 (SELECT MIN(created_at)       FROM messages      WHERE conversation_id = ANY($1::uuid[]))         AS messages_first,
+                 (SELECT MAX(created_at)       FROM messages      WHERE conversation_id = ANY($1::uuid[]))         AS messages_last,
+                 (SELECT MIN(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_first,
+                 (SELECT MAX(timestamp)        FROM interactions  WHERE lower(sender_username) = ANY($2::text[]))  AS interactions_last,
+                 (SELECT MIN(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_first,
+                 (SELECT MAX(sent_at)          FROM dm_send_log   WHERE recipient_id = ANY($3::text[]))            AS dm_send_log_last,
+                 (SELECT MIN(created_time)     FROM ads_leads     WHERE person_keys && $4::text[])                AS leads_first,
+                 (SELECT MAX(created_time)     FROM ads_leads     WHERE person_keys && $4::text[])                AS leads_last`,
+            [target.conversationIds, target.usernames, target.instagramUserIds, target.leadPersonKeys]
+        ),
     ]);
+    const range = rangeRows[0] ?? {};
 
     const token = found ? mintErasureToken(target.handle, counts) : null;
     const verified = token ? verifyErasureToken(token) : null;
@@ -330,6 +416,18 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
             instagramUserIds: target.instagramUserIds,
         },
         counts,
+        byTenant: tenantRows.map((r) => ({
+            tenantId: r.creator_id ?? null,
+            name: r.name ?? null,
+            rows: Number(r.row_count) || 0,
+        })),
+        ranges: {
+            conversations: { first: iso(range.conversations_first), last: iso(range.conversations_last) },
+            messages: { first: iso(range.messages_first), last: iso(range.messages_last) },
+            interactions: { first: iso(range.interactions_first), last: iso(range.interactions_last) },
+            dmSendLog: { first: iso(range.dm_send_log_first), last: iso(range.dm_send_log_last) },
+            leads: { first: iso(range.leads_first), last: iso(range.leads_last) },
+        },
         sample: {
             conversations: conversations.map((r) => ({
                 id: r.id,
@@ -364,15 +462,63 @@ export async function previewErasure(handle: string): Promise<ErasurePreview> {
 // ─── Execute ────────────────────────────────────────────────────────────────────────────
 
 export type ErasureOutcome =
-    | { ok: true; handle: string; deleted: ErasureCounts; target: ErasureTarget; client: PoolClient }
-    | { ok: false; status: 400 | 409; code: 'INVALID_TOKEN' | 'COUNTS_DRIFTED'; error: string;
+    /** `mediaDeleted`: the contact's private uploads removed with them (migration v51). Not part of `deleted`, so the preview's counts and the token are unchanged. */
+    | { ok: true; handle: string; deleted: ErasureCounts; mediaDeleted?: number; target: ErasureTarget; client: PoolClient }
+    | { ok: false; status: 400 | 409; code: 'ERASURE_TOKEN_INVALID' | 'ERASURE_PREVIEW_EXPIRED' | 'ERASURE_COUNTS_DRIFTED'; error: string;
         expected?: ErasureCounts; actual?: ErasureCounts };
+
+/** The codes (src/services/errorCodes.ts): an expired token is the one a person can fix by pressing Preview again, so it has its own. */
+const TOKEN_FAILURE_CODE: Record<TokenFailure, 'ERASURE_TOKEN_INVALID' | 'ERASURE_PREVIEW_EXPIRED'> = {
+    malformed: 'ERASURE_TOKEN_INVALID',
+    bad_signature: 'ERASURE_TOKEN_INVALID',
+    expired: 'ERASURE_PREVIEW_EXPIRED',
+};
 
 const TOKEN_FAILURE_MESSAGE: Record<TokenFailure, string> = {
     malformed: 'That is not a valid erasure token. Run the preview again.',
     bad_signature: 'That erasure token does not verify. Run the preview again.',
     expired: 'That erasure token has expired. Run the preview again and confirm within 10 minutes.',
 };
+
+/**
+ * Delete the private uploads (customer files: WhatsApp voice notes, photos, documents; migration v51) that the contact's messages point at.
+ *
+ * Runs inside the erasure transaction and BEFORE the messages are deleted, because the messages are the only link from a person to a file:
+ * `messages.media_upload_id` (v50). Only rows with `is_private` are touched, so a message pointing at anything else can never take a post's
+ * media with it. Deleting a row also queues its Storage object (the v23 trigger, same transaction), and the daily sweep removes the object, so
+ * a rolled-back erasure keeps the file and a committed one loses it. The foreign key's ON DELETE SET NULL clears the message's pointer first.
+ *
+ * Not counted in `ErasureCounts`: the preview, the signed token and the drift check stay what they were, and a file is evidence of a message
+ * the counts already name. A file whose message was never stored has no link to follow and ages out with the retention sweep.
+ *
+ * Tolerant of a database behind the code: without v50 (`messages.media_upload_id`) or v51 (`is_private`) there is no customer media, and the
+ * statement fails with `undefined_column`. A failed statement aborts the whole transaction in Postgres, so it runs under a SAVEPOINT that is
+ * rolled back to, and the erasure goes on. Any other failure propagates and the transaction rolls back: a file that cannot be deleted must not
+ * be reported as erased.
+ */
+export async function eraseCustomerMedia(exec: Queryable, conversationIds: readonly string[]): Promise<number> {
+    if (conversationIds.length === 0) return 0;
+    await exec.query('SAVEPOINT erase_customer_media');
+    try {
+        const deleted = await exec.query(
+            `DELETE FROM media_uploads
+              WHERE is_private
+                AND id IN (SELECT media_upload_id FROM messages
+                            WHERE conversation_id = ANY($1::uuid[]) AND media_upload_id IS NOT NULL)`,
+            [conversationIds]
+        );
+        await exec.query('RELEASE SAVEPOINT erase_customer_media');
+        return deleted.rowCount ?? 0;
+    } catch (err) {
+        await exec.query('ROLLBACK TO SAVEPOINT erase_customer_media');
+        await exec.query('RELEASE SAVEPOINT erase_customer_media');
+        if ((err as { code?: string } | null)?.code === '42703') {
+            log('warn', 'erasure.media_columns_missing', { fix: 'npm run migrate (migration_v50 and migration_v51)' });
+            return 0;
+        }
+        throw err;
+    }
+}
 
 /**
  * Perform the deletion, inside one transaction, and hand the open client back to the caller.
@@ -391,7 +537,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
     const verified = verifyErasureToken(rawToken, now);
     if (!verified.ok) {
         return {
-            ok: false, status: 400, code: 'INVALID_TOKEN',
+            ok: false, status: 400, code: TOKEN_FAILURE_CODE[verified.reason],
             error: TOKEN_FAILURE_MESSAGE[verified.reason],
         };
     }
@@ -409,7 +555,7 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
         if (countsDrifted(verified.counts, actual)) {
             await client.query('ROLLBACK');
             return {
-                ok: false, status: 409, code: 'COUNTS_DRIFTED',
+                ok: false, status: 409, code: 'ERASURE_COUNTS_DRIFTED',
                 error:
                     'What this handle matches has changed since the preview — a new message or ' +
                     'comment arrived, or part of it has already been erased. Nothing was deleted. ' +
@@ -419,6 +565,8 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
             };
         }
 
+        // The customer's files first: the messages are the only thing that names them (see `eraseCustomerMedia`).
+        const mediaDeleted = await eraseCustomerMedia(client, target.conversationIds);
         const deletedMessages = await client.query(
             'DELETE FROM messages WHERE conversation_id = ANY($1::uuid[])',
             [target.conversationIds]
@@ -445,6 +593,10 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
             'DELETE FROM dm_send_log WHERE recipient_id = ANY($1::text[])',
             [target.instagramUserIds]
         );
+        // Lead-ad leads (A10) that gave this email or phone number: whole rows, answers and all. Leads hold no conversation or username, so
+        // the keyed hash is the only way to them; an Instagram handle has no key and deletes no lead.
+        const deletedLeads = target.leadPersonKeys.length === 0 ? 0
+            : (await client.query('DELETE FROM ads_leads WHERE person_keys && $1::text[]', [target.leadPersonKeys])).rowCount ?? 0;
 
         handedOff = true;
         return {
@@ -456,7 +608,9 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
                 conversations: deletedConversations.rowCount ?? 0,
                 interactions: deletedInteractions.rowCount ?? 0,
                 dmSendLog: deletedSendLog.rowCount ?? 0,
+                leads: deletedLeads,
             },
+            mediaDeleted,
             client,
         };
     } catch (err) {

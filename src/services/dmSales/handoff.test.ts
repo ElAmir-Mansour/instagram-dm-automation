@@ -337,6 +337,26 @@ describe('a handoff: the bot is paused, the customer is told, and then the owner
         ]);
     });
 
+    it('names WhatsApp for a WhatsApp conversation: its contact is the profile name, not an @handle, and a closed window says to reply from the dashboard', async () => {
+        const r = await run({
+            facts: {
+                platform: 'whatsapp', username: null, profile_name: 'Zainab Al-Fassi', wa_username: null, instagram_user_id: 'EG.13491208655302741918',
+                last_inbound_at: new Date(Date.now() - 26 * 3600_000),
+            },
+        });
+        assert.deepEqual(r.telegram[0]!.body.text.split('\n'), [
+            'Needs you: refund request',
+            'Customer: Zainab Al-Fassi',
+            'Last message: «I want a refund, give me my money back»',
+            'Reply window: closed, so reply from the dashboard once they write again',
+            `Open: ${BASE}/dashboard#/inbox?c=conv-1`,
+        ]);
+        const bare = await run({ facts: { platform: 'whatsapp', username: null, profile_name: null, wa_username: 'zainab_wa', instagram_user_id: 'EG.13491208655302741918' } });
+        assert.match(bare.telegram[0]!.body.text, /\nCustomer: zainab_wa\n/, 'the WhatsApp username when there is no profile name');
+        const neither = await run({ facts: { platform: 'whatsapp', username: null, profile_name: null, wa_username: null, instagram_user_id: 'EG.13491208655302741918' } });
+        assert.match(neither.telegram[0]!.body.text, /\nCustomer: WhatsApp user …1918\n/);
+    });
+
     it('is the Arabic alert for an Arabic profile, and the model\'s reason when the model handed over', async () => {
         const profile = withSales(FITNESS_EN, 'en');
         profile.language = { ...profile.language, primary: 'ar', register: 'gulf' } as typeof profile.language;

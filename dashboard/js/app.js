@@ -29,6 +29,39 @@
  * `navigate()` paints the incoming page's SKELETON inside a view transition,
  * so the old content cross-fades into the new page's shape instead of blinking
  * through an empty container. The page then fills that shape in place.
+ *
+ * ─── What a page change does besides painting ───────────────────────────────
+ * Each is the router's job, so no page has to remember it (UX audit SH-05, SH-07, SH-18):
+ *   - the tab title names the page: "<Page> · <app name>", with the "(3) " unread count in front of it;
+ *   - the change is announced to a screen reader (`Motion.announce`) and the new page opens at its top;
+ *   - after a keyboard or drawer navigation focus moves to `#page-title`, because the element that held it is gone or hidden;
+ *   - unsaved work is asked about BEFORE the page is torn down (the leave guard, below), and one shared `beforeunload`
+ *     asks the same question of a reload, a closed tab and the language switch, which reloads.
+ *
+ * ─── The leave guard: what a page may define ────────────────────────────────
+ *   canLeave()         false while the page holds work that leaving would lose. Anything else (true, nothing) means free to go.
+ *                      Asked before the router switches to ANOTHER page, and by the shared `beforeunload`. A page does not bind its
+ *                      own `beforeunload`. A dirty modal (`UI.isModalDirty()`) is covered with no help from the page.
+ *   discardChanges()   optional. Called once, after the person agreed to lose that work and before `destroy()`, so a page that
+ *                      keeps a copy of its edits (a parked draft, a local backup) drops it: the dialog said "discarded".
+ * On Cancel the address is put back to the one the person left (`history.replaceState`), so Back and a nav click both leave the screen
+ * and the address bar saying the same thing.
+ *
+ * ─── The sidebar (UX overhaul US6) ──────────────────────────────────────────
+ * Organised by the creator's job (Today · Replies · Content · Results), each group a `<ul role="list">` named by its heading, with
+ * Settings, Help and the account area at the foot and Administration as ONE collapsible group (`syncAdminGroup`: collapsed unless the
+ * viewer opened it, remembered per browser, open while an admin page is). A page with no item of its own reads as the item it belongs
+ * to (`navAs`: Monteur and Infographics as Studio, the Log as Results). The shell also owns what a nav item must not lose:
+ *   - a modified click (Cmd, Ctrl, Shift, middle button) is the browser's, so "open in a new tab" works (`isModifiedClick`, SH-24);
+ *   - at <= 860px the sidebar is a drawer, and a drawer nobody can see must not be reachable: closed it is `inert`, open the page behind
+ *     it is (`syncDrawerInert`, SH-06);
+ *   - a stored session opens on a static skeleton, not on the login form (`settleFirstFrame`, SH-03);
+ *   - two markers slide, one over the scrolling list and one over the foot, each measured from geometry (`moveNavIndicator`).
+ *
+ * ─── Addresses ──────────────────────────────────────────────────────────────
+ * `#/<page>?<query>`, built by `route()` and read by `hashParams()`. The query names the pages share are listed at `hashParams`.
+ * An entry in `App.pages` that is `{ aliasOf, tab }` is an OLD address that now lives inside another page: `#/old` is rewritten
+ * in place to `#/<aliasOf>?tab=<tab>` before anything renders, so old links, bookmarks and alert links keep working.
  */
 const App = {
     currentPage: null,
@@ -44,17 +77,29 @@ const App = {
     /** The scrim behind the mobile nav drawer — created once in init(). */
     _sidebarBackdrop: null,
 
+    /**
+     * The routes, and the modules behind them. An entry is one of:
+     *   { src, page, adminOnly?, navAs?, routable?, css? }
+     *       a page module, loaded on demand from /dashboard/js/pages/<src>.js. `css: true` also loads
+     *       /dashboard/css/pages/<src>.css (same `?v=`) and holds the module back until it has arrived, so the page never paints
+     *       unstyled. Declare it only for a page that HAS that file, or the request is a 404.
+     *   { aliasOf, tab? }
+     *       an old address that now opens another page, on that page's `tab`. It has no module and no CSS of its own.
+     */
     pages: {
-        overview: { src: 'overview', page: () => OverviewPage },
+        overview: { src: 'overview', page: () => OverviewPage, css: true },
         campaigns: { src: 'campaigns', page: () => CampaignsPage },
         posts: { src: 'posts', page: () => PostsPage },
         studio: { src: 'studio', page: () => StudioPage },
         // The Studio's second tab (#/monteur): reels cut from the creator's own videos,
-        // reviewed and approved into the scheduler. Its own sidebar entry, under Studio.
-        monteur: { src: 'monteur', page: () => MonteurPage },
+        // reviewed and approved into the scheduler. No sidebar entry of its own: while it is open the Studio item is current (`navAs`).
+        monteur: { src: 'monteur', page: () => MonteurPage, navAs: 'studio' },
         // The Studio's third tab (#/infographics): animated comparisons in the creator's own
-        // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4.
-        infographics: { src: 'infographics', page: () => InfographicsPage },
+        // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4. Studio's item is current here too.
+        infographics: { src: 'infographics', page: () => InfographicsPage, navAs: 'studio' },
+        // The Studio's fourth tab (#/explainers): researched, narrated, illustrated videos (v59). The owner's alone, behind the platform admin's switch.
+        // It owns its own stylesheet (css/pages/explainers.css) and its own Settings view (`?tab=settings`); Studio's item is current here too.
+        explainers: { src: 'explainers', page: () => ExplainersPage, navAs: 'studio', css: true },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -62,8 +107,31 @@ const App = {
         // content's (Meta insights), plus the SEO tools and the coach. `?tab=seo` is its
         // second view and is handled in place through `onHashChange`.
         growth: { src: 'growth', page: () => GrowthPage },
-        activity: { src: 'activity', page: () => ActivityPage },
-        settings: { src: 'settings', page: () => SettingsPage },
+        // Next to Growth: the content's numbers and the money spent promoting it. The workspace OWNER's (the page itself says so to anyone else, and the
+        // nav item is hidden for them: `data-owner-only`).
+        ads: { src: 'ads', page: () => AdsPage, css: true },
+        // Ads' second tab (#/ads_campaigns): the campaign → ad set → ad tree. No sidebar entry of its own: the Ads item is current while it is open
+        // (`navAs`). The Ads area shares ONE stylesheet, `css/pages/ads.css`, declared by the `ads` entry above; this module asks the shell for it
+        // (`loadPageCss('ads', ...)`) before it paints, so it has no `css` of its own (that would look for an `ads_campaigns.css`).
+        ads_campaigns: { src: 'ads_campaigns', page: () => AdsCampaignsPage, navAs: 'ads' },
+        // Ads' third tab (#/ads_results): what the money did, day by day, from the stored copy (A6). Same stylesheet rule as Campaigns.
+        ads_results: { src: 'ads_results', page: () => AdsResultsPage, navAs: 'ads' },
+        // Ads' fourth tab (#/ads_create): the full ad builder (A5). Quick mode stays Posts' Boost dialog. Same stylesheet rule as Campaigns.
+        ads_create: { src: 'ads_create', page: () => AdsCreatePage, navAs: 'ads' },
+        // Ads' AI proposals (#/ads_proposals, A7): Claude drafts a campaign or a change, the owner approves, edits in the builder or rejects.
+        ads_proposals: { src: 'ads_proposals', page: () => AdsProposalsPage, navAs: 'ads' },
+        // Ads' audiences (#/ads_audiences, A8): engagement, video and lookalike audiences, and customer lists behind the legal lock.
+        ads_audiences: { src: 'ads_audiences', page: () => AdsAudiencesPage, navAs: 'ads' },
+        // Ads' rules (#/ads_rules, A9): the owner's standing conditions. Pause / lower / notify run alone once saved; raises and resumes ask.
+        ads_rules: { src: 'ads_rules', page: () => AdsRulesPage, navAs: 'ads' },
+        // Ads' leads (#/ads_leads, A10): instant forms and the leads they collect, locked until the platform admin records a legal sign-off.
+        ads_leads: { src: 'ads_leads', page: () => AdsLeadsPage, navAs: 'ads' },
+        // Ads' split tests (#/ads_tests, A12): two versions of an ad or two audiences; Meta names the winner, a proposal keeps it.
+        ads_tests: { src: 'ads_tests', page: () => AdsTestsPage, navAs: 'ads' },
+        // The log is Results' second view (a link strip at the top of both pages): no sidebar entry of its own, and the Results item
+        // (`analytics`) is current while it is open.
+        activity: { src: 'activity', page: () => ActivityPage, navAs: 'analytics' },
+        settings: { src: 'settings', page: () => SettingsPage, css: true },
         // The Help Center owns sub-routes (`#/help/<slug>#<section>`) and
         // handles them itself through `onHashChange`, so opening an article
         // never tears the page down and rebuilds it.
@@ -75,6 +143,8 @@ const App = {
         operations: { src: 'operations', page: () => OperationsPage, adminOnly: true },
         tenants: { src: 'tenants', page: () => TenantsPage, adminOnly: true },
         tenant_detail: { src: 'tenant_detail', page: () => TenantDetailPage, adminOnly: true, navAs: 'tenants' },
+        // Ads for clients (A11): per workspace, whether ads are on, the ceiling, health, cap use, alerts, shared spend and legal sign-offs.
+        admin_ads: { src: 'admin_ads', page: () => AdminAdsPage, adminOnly: true, css: true },
         users: { src: 'users', page: () => UsersPage, adminOnly: true },
         jobs: { src: 'jobs', page: () => JobsPage, adminOnly: true },
         audit: { src: 'audit', page: () => AuditPage, adminOnly: true },
@@ -107,10 +177,19 @@ const App = {
         // The Instagram ice breakers and persistent menu editor (DM plan S13) on Settings: the owner's questions, Save, and the one Publish button. Loaded by Settings on
         // first use (for the tenant's owner only). It holds no state of its own across renders: Settings hands it the server's answer every time it draws the card.
         ice_breakers: { src: 'ice_breakers', page: () => IceBreakersCard, routable: false },
+        // The ad builder's quick mode (A4): the dialog Posts' Boost button opens, with the post chosen. Loaded by Posts on first use; if it cannot be, Posts opens the older Boost form.
+        ads_builder: { src: 'ads_builder', page: () => AdsBuilder, routable: false },
+        // The WhatsApp card on Settings (T025): connect a number (the access token is read once and never kept), its health and free-replies meter, who the
+        // assistant answers, and the paid-messages switch. Loaded by Settings on first use, for every member (the owner writes, the rest read), and reset
+        // with the other modules when the tenant changes (`resetTenantState`).
+        whatsapp_card: { src: 'whatsapp_card', page: () => WhatsAppCard, routable: false },
+        // The client's own block at the end of the Settings → Meta ads card (A11): the ceiling its account manager set and the switch that shares its ad spend. Loaded by Settings
+        // when the Ads card is shown, and it draws nothing when ads are off for the workspace.
+        ads_client_card: { src: 'ads_client_card', page: () => AdsClientCard, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.40',
+    ASSET_VERSION: '12.77',
 
     _modules: Object.create(null),
 
@@ -125,7 +204,9 @@ const App = {
      * reaches the URL.
      */
     loadPageModule(name) {
-        const entry = this.pages[name];
+        // An alias has no module of its own: it is its target's.
+        name = this.resolveAlias(name).page;
+        const entry = this.entryOf(name);
         if (!entry) return Promise.resolve(null);
 
         const resolve = () => {
@@ -137,9 +218,12 @@ const App = {
 
         if (!this._modules[name]) {
             this._modules[name] = new Promise((done) => {
+                // The stylesheet is asked for first and awaited before the module is handed over: the module's render() paints
+                // as soon as it gets the page, and a page that paints before its CSS arrives flashes unstyled.
+                const styled = this.loadPageCss(name, entry);
                 const script = document.createElement('script');
                 script.src = `/dashboard/js/pages/${entry.src}.js?v=${this.ASSET_VERSION}`;
-                script.onload = () => done(resolve());
+                script.onload = () => { styled.then(() => done(resolve())); };
                 script.onerror = () => {
                     // Let a retry try again instead of caching the failure.
                     delete this._modules[name];
@@ -151,19 +235,70 @@ const App = {
         return this._modules[name];
     },
 
+    /** The page stylesheets already requested, by page name: each `<link>` is added once, whoever asks first. */
+    _pageCss: Object.create(null),
+
+    /**
+     * The page's own stylesheet, `/dashboard/css/pages/<src>.css?v=<ASSET_VERSION>`, for an entry that declares `css: true`.
+     * Resolves when it has loaded OR failed: a missing page stylesheet must cost that page some styling, never the page. A failed
+     * request is forgotten (and its `<link>` removed) so a retry asks again, as a failed module does.
+     */
+    loadPageCss(name, entry) {
+        if (!entry || entry.css !== true) return Promise.resolve();
+        if (this._pageCss[name]) return this._pageCss[name];
+        this._pageCss[name] = new Promise((done) => {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = `/dashboard/css/pages/${entry.src}.css?v=${this.ASSET_VERSION}`;
+            link.setAttribute('data-page-css', name);
+            link.onload = () => done();
+            link.onerror = () => {
+                console.warn(`Page stylesheet for "${name}" did not load; the page opens without it.`);
+                delete this._pageCss[name];
+                if (typeof link.remove === 'function') link.remove();
+                done();
+            };
+            document.head.appendChild(link);
+        });
+        return this._pageCss[name];
+    },
+
     /** Fire-and-forget warm-up, for hover and focus. */
     prefetchPageModule(name) {
-        if (this.pages[name]) this.loadPageModule(name);
+        if (this.entryOf(name)) this.loadPageModule(name);
     },
 
     title(page) { return t(`nav.${page}`); },
     subtitle(page) { return t(`page.${page}.subtitle`); },
 
+    /** The entry named `name`, or null. Own keys only: an address is data, and `#/constructor` is not a page. */
+    entryOf(name) {
+        return typeof name === 'string' && Object.prototype.hasOwnProperty.call(this.pages, name) ? this.pages[name] : null;
+    },
+
+    /**
+     * The page that answers for `name`, and the tab an alias names: `{ page, tab }` (`tab` is '' for an ordinary page, and for an alias
+     * that names none). Aliases are followed to the page that has a module; the outermost alias's tab wins. A name that is not
+     * an entry, or a chain that never ends, resolves to the default page: an address never leads nowhere.
+     */
+    resolveAlias(name) {
+        let page = name;
+        let tab = '';
+        for (let hop = 0; hop < 4; hop++) {
+            const entry = this.entryOf(page);
+            if (!entry) return { page: this.DEFAULT_PAGE, tab: '' };
+            if (!entry.aliasOf) return { page, tab };
+            if (!tab && entry.tab) tab = String(entry.tab);
+            page = entry.aliasOf;
+        }
+        return { page: this.DEFAULT_PAGE, tab: '' };
+    },
+
     init() {
         I18N.init();
         I18N.applyStatic();
         this.renderLanguageToggle();
-        document.title = `${t('app.name')} — ${t('app.tagline')}`;
+        this.setBaseTitle(this.appTitle());
         // The shell's static description is the Arabic one; a reload on a language switch is what lets this follow the language.
         document.querySelector('meta[name="description"]')?.setAttribute('content', t('app.description'));
 
@@ -206,19 +341,7 @@ const App = {
             }
         });
 
-        // Sidebar navigation — real links, so they also work with the hash router.
-        // Hover and focus warm the page module so the click has nothing to wait
-        // for; `pointerenter` rather than `mouseover` so it fires once per item
-        // and not on touch, where there is no hover to warm from.
-        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.go(item.dataset.page);
-            });
-            const warm = () => this.prefetchPageModule(item.dataset.page);
-            item.addEventListener('pointerenter', warm, { once: true });
-            item.addEventListener('focus', warm, { once: true });
-        });
+        this.bindNavLinks();
 
         // The indicator is positioned from measured geometry, so it has to be
         // re-measured whenever the nav's box can change.
@@ -251,6 +374,11 @@ const App = {
             else this.openMobileDrawer();
         });
 
+        // Closed at drawer width the sidebar is `inert` (Tab and a screen reader's cursor skip its 15 off-screen links), and widening the
+        // window past the breakpoint with the drawer open puts everything back (SH-06).
+        this.syncDrawerInert();
+        this.watchDrawerLayout();
+
         // Click-outside-to-close: the scrim is the only thing behind the
         // drawer at this width, so any click on it is the operator asking to
         // dismiss — same contract as the modal overlay's click handler.
@@ -272,8 +400,11 @@ const App = {
             this.closeMobileDrawer(true);
         });
 
-        // Hash router — refresh lands on the same page, Back moves between pages
-        window.addEventListener('hashchange', () => this.onHashChange());
+        // Hash router — refresh lands on the same page, Back moves between pages. The event is passed on for `oldURL`: where the
+        // person was, which is the address to put back when they decide not to leave.
+        window.addEventListener('hashchange', (event) => this.onHashChange(event));
+
+        this.bindShellGuards();
 
         UI.icons();
 
@@ -286,6 +417,27 @@ const App = {
         } else {
             this.showLogin();
         }
+    },
+
+    /**
+     * The shell's own listeners, apart from `init()` so a test can bind them without booting the app.
+     *
+     * The ONE "leave this page?" for a reload, a closed tab and the language switch (which reloads): the page on screen, or an open
+     * dialog, holds work leaving would lose. Pages used to bind their own copy of this, so which screens were protected depended on
+     * which screen you happened to be on (SH-18); they define `canLeave()` instead, and this asks the same question the router does.
+     *
+     * And how the person last operated the page: a keyboard navigation moves focus to the new page's title, a mouse click does not,
+     * because the thing they clicked is still where they left it.
+     */
+    bindShellGuards() {
+        window.addEventListener('beforeunload', (event) => {
+            if (!this.unsavedKind()) return undefined;
+            event.preventDefault();
+            event.returnValue = '';
+            return '';
+        });
+        document.addEventListener('keydown', () => { this._modality = 'keyboard'; }, true);
+        document.addEventListener('pointerdown', () => { this._modality = 'pointer'; }, true);
     },
 
     /** Sign out: the page's timers stop first, so no poll survives into the login screen (the sidebar button and the wizard's link). */
@@ -313,6 +465,8 @@ const App = {
         sidebar.classList.add('open');
         if (this._sidebarBackdrop) this._sidebarBackdrop.classList.add('open');
         menuBtn.setAttribute('aria-expanded', 'true');
+        // Before the focus move: an `inert` drawer cannot take focus, and the page behind it must stop being reachable at once.
+        this.syncDrawerInert();
         const nav = document.getElementById('sidebar-nav');
         const target = (nav && nav.querySelector('.nav-item[data-page]')) || sidebar;
         if (typeof target.focus === 'function') target.focus();
@@ -332,7 +486,93 @@ const App = {
         sidebar.classList.remove('open');
         if (this._sidebarBackdrop) this._sidebarBackdrop.classList.remove('open');
         if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+        // Before the focus move: the page is `inert` while the drawer is open, and the menu button is on the page.
+        this.syncDrawerInert();
         if (returnFocus && menuBtn) menuBtn.focus();
+    },
+
+    /** At this width and below the sidebar is an off-canvas drawer (the `@media (max-width: 860px)` block in styles.css). */
+    DRAWER_QUERY: '(max-width: 860px)',
+
+    isDrawerLayout() {
+        try {
+            return typeof window.matchMedia === 'function' && !!window.matchMedia(this.DRAWER_QUERY).matches;
+        } catch {
+            return false;
+        }
+    },
+
+    /** `inert` on or off. The attribute, not the property, so it works wherever the attribute is understood and a test can read it. */
+    setInert(el, on) {
+        if (!el) return;
+        if (on) el.setAttribute('inert', '');
+        else el.removeAttribute('inert');
+    },
+
+    /**
+     * Who can be reached while the sidebar is a drawer (SH-06). Closed, the drawer is only translated off-screen, so Tab walked 13 to 19
+     * invisible links before it reached the page and focus left on a nav item after a tap sat in a panel nobody could see: it is `inert`.
+     * Open, the page behind the scrim is `inert` instead, so Tab cannot escape the drawer into content the person cannot see. Wider than
+     * the breakpoint the sidebar is a column of the layout and nothing is inert.
+     */
+    syncDrawerInert() {
+        const sidebar = document.getElementById('sidebar');
+        const main = document.getElementById('main-content');
+        const drawer = this.isDrawerLayout();
+        const open = !!(sidebar && sidebar.classList.contains('open'));
+        this.setInert(sidebar, drawer && !open);
+        this.setInert(main, drawer && open);
+    },
+
+    /** The window crossing the breakpoint: an open drawer is closed (the column layout has no scrim) and the inert state follows the width. */
+    watchDrawerLayout() {
+        let list = null;
+        try { list = typeof window.matchMedia === 'function' ? window.matchMedia(this.DRAWER_QUERY) : null; } catch { list = null; }
+        if (!list) return;
+        const changed = () => {
+            const sidebar = document.getElementById('sidebar');
+            if (!this.isDrawerLayout() && sidebar && sidebar.classList.contains('open')) this.closeMobileDrawer(false);
+            else this.syncDrawerInert();
+        };
+        if (typeof list.addEventListener === 'function') list.addEventListener('change', changed);
+        else if (typeof list.addListener === 'function') list.addListener(changed);
+    },
+
+    /**
+     * Sidebar navigation: real links, so they also work with the hash router. Hover and focus warm the page module so the click has
+     * nothing to wait for; `pointerenter` rather than `mouseover` so it fires once per item and not on touch, where there is no hover to
+     * warm from. The brand mark is the way home (SH-27): the same link rules as an item, without being one (it has no marker).
+     * Apart from `init()` so a test can bind them to fake links.
+     */
+    bindNavLinks() {
+        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+            item.addEventListener('click', (e) => { this.handleNavClick(e, item.dataset.page); });
+            const warm = () => this.prefetchPageModule(item.dataset.page);
+            item.addEventListener('pointerenter', warm, { once: true });
+            item.addEventListener('focus', warm, { once: true });
+        });
+        const home = document.querySelector('[data-nav-home]');
+        if (home) home.addEventListener('click', (e) => { this.handleNavClick(e, this.DEFAULT_PAGE); });
+    },
+
+    /** A click on a navigation link: the router's, unless it is a modified click, which is the browser's. True when the router took it. */
+    handleNavClick(event, page) {
+        if (this.isModifiedClick(event)) return false;
+        event.preventDefault();
+        this.go(page);
+        return true;
+    },
+
+    /**
+     * Is this click one the browser should handle itself? Cmd/Ctrl/Shift/Alt-click and the middle button open the link in a new tab,
+     * a new window or a download, and `preventDefault()` on them used to swallow all four (SH-24). A plain click and a keyboard
+     * activation (Enter on a link is a click with button 0 and no modifier) are the router's.
+     */
+    isModifiedClick(event) {
+        if (!event) return false;
+        if (event.defaultPrevented) return true;
+        if (typeof event.button === 'number' && event.button !== 0) return true;
+        return !!(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
     },
 
     // ─── Language & theme ────────────────────────────────────────────────────
@@ -399,7 +639,47 @@ const App = {
      */
     pageFromHash() {
         const raw = (location.hash || '').replace(/^#\/?/, '').split(/[/?#]/)[0];
-        return this.pages[raw] && this.pages[raw].routable !== false ? raw : this.DEFAULT_PAGE;
+        const entry = this.entryOf(raw);
+        // An alias answers with the page it points at, so every caller sees a page that has a module.
+        return entry && entry.routable !== false ? this.resolveAlias(raw).page : this.DEFAULT_PAGE;
+    },
+
+    /**
+     * `hash` with its page replaced by the page an alias points at and its `tab` set, or null when `hash` does not start with an alias.
+     * Pure. `#/analytics?x=1#top` with `analytics → results, tab: campaigns` becomes `#/results?tab=campaigns&x=1#top`; a `tab` the
+     * address already carries beats the alias's, so a link that names its tab keeps it.
+     */
+    aliasAddress(hash) {
+        const raw = String(hash || '').replace(/^#\/?/, '');
+        const head = raw.split(/[/?#]/)[0];
+        const entry = this.entryOf(head);
+        if (!entry || !entry.aliasOf) return null;
+        const { page, tab } = this.resolveAlias(head);
+        const rest = raw.slice(head.length); // "/sub?x=1#frag"
+        const fragAt = rest.indexOf('#');
+        const fragment = fragAt === -1 ? '' : rest.slice(fragAt);
+        const body = fragAt === -1 ? rest : rest.slice(0, fragAt);
+        const queryAt = body.indexOf('?');
+        const sub = queryAt === -1 ? body : body.slice(0, queryAt);
+        let typed;
+        try { typed = new URLSearchParams(queryAt === -1 ? '' : body.slice(queryAt + 1)); } catch { typed = new URLSearchParams(''); }
+        const query = new URLSearchParams();
+        const wanted = typed.get('tab') || tab;
+        if (wanted) query.set('tab', wanted);
+        typed.forEach((value, key) => { if (key !== 'tab') query.append(key, value); });
+        const search = query.toString();
+        return `#/${page}${sub}${search ? `?${search}` : ''}${fragment}`;
+    },
+
+    /**
+     * An old address that is an alias becomes the page's own address, in place: no history entry (Back does not return to the alias) and
+     * no `hashchange`. Done before routing, like `settleMetaPickAddress`, so the page reads `?tab=` as it would on any visit and a
+     * reload or a bookmark keeps the new address.
+     */
+    settleAliasAddress() {
+        const next = this.aliasAddress(location.hash);
+        if (!next) return;
+        try { history.replaceState(null, '', next); } catch { /* the address stays: pageFromHash still resolves it */ }
     },
 
     /**
@@ -408,8 +688,12 @@ const App = {
      * Center moves the reader without a teardown, a skeleton and a rebuild.
      * Every other change is a navigation, exactly as before.
      */
-    onHashChange() {
+    onHashChange(event) {
         this.settleMetaPickAddress();
+        this.settleAliasAddress();
+        // Where the person was: the address to put back if the leave guard is answered with Cancel. `oldURL` is accurate even when the
+        // page moved its own hash with `history.replaceState` (the Inbox's filter does), which no copy the router keeps could be.
+        this._hashBefore = this.hashOfUrl(event && event.oldURL);
         if (this.isInviteHash()) {
             this.showInvite();
             return;
@@ -446,6 +730,8 @@ const App = {
             if (instance && typeof instance.onHashChange === 'function') {
                 try {
                     instance.onHashChange();
+                    this._shownHash = String(location.hash || '');
+                    this._hashBefore = null;
                     return;
                 } catch (err) {
                     console.warn('In-page route failed, re-rendering:', err);
@@ -477,8 +763,75 @@ const App = {
         return value === null ? '' : value;
     },
 
-    /** The tab title as `init()` set it, before any "(3) " prefix. */
+    /**
+     * Every query parameter of the current hash, as `{ name: value }` (the first of a repeated name; no prototype, so a hostile name
+     * such as `__proto__` is an ordinary key). The values are DATA, escaped where drawn and encoded where they go into a path.
+     *
+     * The names the pages share, so the same word means the same thing everywhere:
+     *   tab      which tab of a tabbed page is open (Studio, Results, Platform); an alias's `tab` arrives here
+     *   filter   a list's quick filter: Inbox `todo|waiting|needs_you|hot|paused`, Scheduler `needs-you`
+     *   status   a status to show, as the API spells it: `FAILED` on the Log, a job's or a post's status
+     *   since    the earliest moment a log or list reaches back to, an ISO date or date-time
+     *   s        the Settings card or section to open (`#/settings?s=meta`)
+     *   post     a scheduled post's id, to open or highlight on the Scheduler
+     *   c        a conversation's id on the Inbox: the link in the owner's alerts (`#/inbox?c=<uuid>`)
+     * Any other name (`id`, `step`, `mode`, `focus` ...) belongs to the one page that reads it. `route()` writes the same shape.
+     */
+    hashParams() {
+        const out = Object.create(null);
+        this.hashQuery().forEach((value, key) => { if (!(key in out)) out[key] = value; });
+        return out;
+    },
+
+    /**
+     * The address of a page: `#/<page>` or `#/<page>?a=b`. Empty, null and undefined values are left out; the rest are encoded, so
+     * nothing a person typed or a response held lands in the address unescaped. An alias is written as the page it points at, on its
+     * tab (`route('analytics')` is `#/results?tab=campaigns`), and a `tab` in `params` beats the alias's. A name that is not a page
+     * is the default page's address, not a dead link.
+     */
+    route(page, params) {
+        const known = this.entryOf(page);
+        const { page: target, tab } = known ? this.resolveAlias(page) : { page: this.DEFAULT_PAGE, tab: '' };
+        const query = new URLSearchParams();
+        if (tab) query.set('tab', tab);
+        Object.keys(params || {}).forEach((key) => {
+            const value = params[key];
+            if (value !== null && value !== undefined && value !== '') query.set(key, String(value));
+        });
+        const search = query.toString();
+        return `#/${target}${search ? `?${search}` : ''}`;
+    },
+
+    /** The `#…` part of a URL, or ''. (`hashchange`'s `oldURL` is a whole URL; the address to restore is only its hash.) */
+    hashOfUrl(url) {
+        const raw = String(url || '');
+        const at = raw.indexOf('#');
+        return at === -1 ? '' : raw.slice(at);
+    },
+
+    /** The tab title before any "(3) " prefix: the app's own name, or "<Page> · <app name>" while a page is open. */
     _baseTitle: null,
+
+    /** How many conversations are waiting, as the tab title shows it. */
+    _waiting: 0,
+
+    /** What the tab says when no page is open: the login, the invite and the setup wizard. */
+    appTitle() {
+        return `${t('app.name')} — ${t('app.tagline')}`;
+    },
+
+    setBaseTitle(base) {
+        this._baseTitle = base;
+        this.applyDocumentTitle();
+    },
+
+    /** The base title with the "(n) " unread prefix: one place, so a page change and a count change cannot undo each other. */
+    applyDocumentTitle() {
+        if (this._baseTitle === null) this._baseTitle = document.title;
+        const n = this._waiting;
+        const title = n > 0 ? `(${n > 99 ? '99+' : n}) ${this._baseTitle}` : this._baseTitle;
+        if (document.title !== title) document.title = title;
+    },
 
     /**
      * How many conversations are waiting for a human, on the Inbox nav item and
@@ -489,6 +842,7 @@ const App = {
      */
     setInboxWaiting(count) {
         const n = Math.max(0, Math.floor(Number(count) || 0));
+        this._waiting = n;
         const item = document.querySelector('.nav-item[data-page="inbox"]');
         if (item) {
             let badge = item.querySelector('.nav-count');
@@ -500,15 +854,13 @@ const App = {
             badge.hidden = n === 0;
             badge.innerHTML = esc(html`<span aria-hidden="true">${n > 99 ? '99+' : UI.formatNumber(n)}</span><span class="sr-only">${t('nav.inboxWaiting', { count: n, n: UI.formatNumber(n) })}</span>`);
         }
-        if (this._baseTitle === null) this._baseTitle = document.title;
-        const title = n > 0 ? `(${n > 99 ? '99+' : n}) ${this._baseTitle}` : this._baseTitle;
-        if (document.title !== title) document.title = title;
+        this.applyDocumentTitle();
     },
 
     /** Navigate by updating the hash; hashchange does the actual render. */
     go(page) {
-        if (!this.pages[page]) return;
-        const target = `#/${page}`;
+        if (!this.entryOf(page)) return;
+        const target = this.route(page);
         if (location.hash === target) {
             this.show(page); // same hash, force a re-render
         } else {
@@ -522,14 +874,8 @@ const App = {
      * are encoded, so nothing operator-supplied lands in the hash unescaped.
      */
     goWithQuery(page, params) {
-        if (!this.pages[page]) return;
-        const query = new URLSearchParams();
-        Object.keys(params || {}).forEach((key) => {
-            const value = params[key];
-            if (value !== null && value !== undefined && value !== '') query.set(key, String(value));
-        });
-        const search = query.toString();
-        const target = `#/${page}${search ? `?${search}` : ''}`;
+        if (!this.entryOf(page)) return;
+        const target = this.route(page, params);
         if (location.hash === target) {
             this.show(page);
         } else {
@@ -545,10 +891,15 @@ const App = {
     showLogin(reason) {
         this.teardownCurrentPage();
         this.currentPage = null;
-        // A signed-out tab must not keep saying "(3)" in its title.
+        // A signed-out tab must not keep saying "(3)" in its title, nor the last page's name.
+        this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
+        this.rememberGated(false);
         // Lifted: the head script hid the login card from the first frame of an invite link (index.html), and this is where it is wanted.
         document.documentElement.removeAttribute('data-invite');
+        // And the stored-session skeleton (SH-03) has nothing left to stand in for: the session is gone or was never there.
+        this.settleFirstFrame();
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
@@ -662,7 +1013,10 @@ const App = {
         this.captureInvite();
         this.teardownCurrentPage();
         this.currentPage = null;
+        this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
+        this.settleFirstFrame();
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
         this.hideWelcome();
@@ -738,6 +1092,7 @@ const App = {
 
     async showApp() {
         this.settleMetaPickAddress();
+        this.settleAliasAddress();
         document.getElementById('login-screen').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
         if (inviteScreen) inviteScreen.classList.add('hidden');
@@ -754,6 +1109,7 @@ const App = {
         }
         this.hideWelcome();
         document.getElementById('app').classList.remove('hidden');
+        this.settleFirstFrame();
 
         this.applyChrome();
 
@@ -788,6 +1144,8 @@ const App = {
             const me = await API.getMe();
             this.session = {
                 userId: (me && me.userId) || null,
+                // The address, when the server says it (it does not today: the account area then falls back, see `identityLabel`).
+                email: (me && typeof me.email === 'string') ? me.email : '',
                 role: (me && me.role) || 'user',
                 tenantId: (me && me.tenantId) || null,
                 // The role INSIDE the current tenant, which is a different axis from
@@ -803,11 +1161,39 @@ const App = {
                 onboarding: (me && me.onboarding && typeof me.onboarding === 'object') ? me.onboarding : null,
                 available: true,
             };
+            this.rememberGated(this.mustOnboard());
         } catch (err) {
             if (err && err.status === 401) return false;
-            this.session = { userId: null, role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
+            this.session = { userId: null, email: '', role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
         }
         return true;
+    },
+
+    // ─── The first frame (SH-03) ─────────────────────────────────────────────
+
+    GATED_KEY: 'onboarding_gated',
+
+    /**
+     * The last `/auth/me` said whether this session is sent to the setup wizard. index.html's head script reads it before anything else
+     * runs, so a tenant that is about to be taken to the wizard is not shown a sidebar skeleton for the length of that answer. Written
+     * only from an answer (never from a failure), and forgotten at sign-out.
+     */
+    rememberGated(gated) {
+        try {
+            if (gated) localStorage.setItem(this.GATED_KEY, '1');
+            else localStorage.removeItem(this.GATED_KEY);
+        } catch { /* private mode: the first frame shows the sidebar skeleton, which is only a skeleton */ }
+    },
+
+    /**
+     * The stored-session skeleton has done its job (the dashboard, the wizard, the invite page or the login is on screen now): lift the
+     * attributes the head script set. Safe to call at any time and any number of times.
+     */
+    settleFirstFrame() {
+        const root = document.documentElement;
+        if (!root) return;
+        root.removeAttribute('data-session');
+        root.removeAttribute('data-gated');
     },
 
     // ─── The setup wizard (#/welcome) ────────────────────────────────────────
@@ -854,7 +1240,9 @@ const App = {
     async showWelcome() {
         this.teardownCurrentPage();
         this.currentPage = null;
+        this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
+        this.stopAdminStatusPoll();
         document.documentElement.removeAttribute('data-invite');
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
@@ -862,6 +1250,7 @@ const App = {
         if (invite) invite.classList.add('hidden');
         const screen = document.getElementById('welcome-screen');
         if (screen) screen.classList.remove('hidden');
+        this.settleFirstFrame();
         this.renderLanguageToggle();
 
         // Sent here from another route: the address says where they are.
@@ -922,6 +1311,12 @@ const App = {
             el.classList.toggle('hidden', !admin);
         });
 
+        // Items only the workspace owner can use (Ads): the link is not there rather than there and refused.
+        const owner = this.canAdminister();
+        document.querySelectorAll('[data-owner-only]').forEach((el) => {
+            el.classList.toggle('hidden', !owner);
+        });
+
         // Affordances that need a real user account rather than the shared
         // dashboard password — currently just "change my password".
         const identified = this.canChangeOwnPassword();
@@ -934,10 +1329,157 @@ const App = {
 
         this.renderTenantSwitcher();
         this.renderRoleBadge();
+        this.renderIdentity();
+
+        // Administration: its open/closed state follows the page on screen (or the one the address names, on the first paint), and the
+        // dot that says the platform has a problem is polled for as long as this session is an admin's.
+        this.syncAdminGroup(this.currentPage || this.pageFromHash());
+        if (admin) this.startAdminStatusPoll();
+        else this.stopAdminStatusPoll();
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
+        this.revealActiveNavItem();
         this.moveNavIndicator(false);
+    },
+
+    // ─── Who is signed in (SH-27) ────────────────────────────────────────────
+
+    /**
+     * The identity line in the sidebar's account area, as `{ kind, text }`, or null when the shell cannot say (an older deployment whose
+     * /auth/me did not answer: nothing is better than a guess). The shared dashboard password has no user: "Shared dashboard login". An
+     * account is its email when the session has one; `/auth/me` carries none today, so it is the address typed at this browser's last
+     * account sign-in (`rememberedEmail`, kept by both the login form and the invite), and without that, only the fact.
+     */
+    identityLabel() {
+        const s = this.session;
+        if (!s || !s.available) return null;
+        const email = typeof s.email === 'string' ? s.email.trim() : '';
+        if (email) return { kind: 'email', text: email };
+        if (s.userId) {
+            const remembered = this.rememberedEmail();
+            return remembered ? { kind: 'email', text: remembered } : { kind: 'account', text: t('nav.account.signedIn') };
+        }
+        return { kind: 'shared', text: t('nav.account.shared') };
+    },
+
+    renderIdentity() {
+        const line = document.getElementById('nav-identity');
+        const text = document.getElementById('nav-identity-text');
+        if (!line || !text) return;
+        const who = this.identityLabel();
+        line.hidden = !who;
+        if (!who) {
+            text.textContent = '';
+            line.removeAttribute('title');
+            return;
+        }
+        // An address is Latin text inside an Arabic sentence: its own left-to-right run (`dir`), so it never reorders against its neighbour
+        // and, cut at the end of the line, it is cut at the end of the address. The words are read in the interface's direction. The
+        // label before it ("Signed in as") is for a screen reader only, and the title carries the whole line when it is truncated.
+        text.setAttribute('dir', who.kind === 'email' ? 'ltr' : 'auto');
+        text.textContent = who.text;
+        line.setAttribute('title', who.text);
+    },
+
+    // ─── Administration: one collapsible group (SH-04) ───────────────────────
+
+    ADMIN_GROUP_KEY: 'dashboard_admin_group',
+
+    /** The viewer's remembered choice: open only if they opened it. A browser that will not store it opens the group closed. */
+    readAdminGroupPref() {
+        try { return localStorage.getItem(this.ADMIN_GROUP_KEY) === 'open'; } catch { return false; }
+    },
+
+    writeAdminGroupPref(open) {
+        try { localStorage.setItem(this.ADMIN_GROUP_KEY, open ? 'open' : 'closed'); } catch { /* private mode: it opens closed next time */ }
+    },
+
+    /** Is `page` an administration screen: one only a platform admin reaches, and a screen rather than a dialog module? */
+    isAdminPage(page) {
+        const entry = this.entryOf(page);
+        return !!(entry && entry.adminOnly === true && entry.routable !== false);
+    },
+
+    /** Draw the group open or closed: the button says so (`aria-expanded`), the list is not rendered, so its links are not focusable either. */
+    setAdminGroup(open) {
+        const toggle = document.getElementById('nav-admin-toggle');
+        const list = document.getElementById('nav-admin-list');
+        const group = document.getElementById('nav-admin');
+        if (!toggle || !list) return;
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        list.hidden = !open;
+        if (group) group.classList.toggle('is-open', !!open);
+    },
+
+    /**
+     * The group for the page on screen: open while an admin page is (the item that reads as current is in it, and a hidden current item
+     * is a marker pointing at nothing), otherwise as the viewer left it.
+     */
+    syncAdminGroup(page) {
+        this.setAdminGroup(this.isAdminPage(page) || this.readAdminGroupPref());
+    },
+
+    /** The heading button: flip the group, remember the choice, and re-measure (the marker may be in the group that just closed). */
+    toggleAdminGroup() {
+        const toggle = document.getElementById('nav-admin-toggle');
+        const open = !(toggle && toggle.getAttribute('aria-expanded') === 'true');
+        this.setAdminGroup(open);
+        this.writeAdminGroupPref(open);
+        this.moveNavIndicator(false);
+    },
+
+    // ─── Administration: the status dot ──────────────────────────────────────
+
+    /** How often the shell asks whether the platform has a problem, while the tab is visible. */
+    ADMIN_STATUS_MS: 120000,
+    _adminStatusTimer: null,
+
+    /** `counts.platform` of a `GET /api/attention` answer, as a whole number: 0 when absent, which is every non-admin session. */
+    platformProblemCount(summary) {
+        const n = summary && summary.counts ? Math.floor(Number(summary.counts.platform)) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+
+    /** The dot beside "Administration": there at one problem or more, gone at zero. It states a count of failures, so it is the danger tone. */
+    renderAdminStatus(count) {
+        const dot = document.getElementById('nav-admin-dot');
+        if (!dot) return;
+        dot.hidden = !(Number(count) > 0);
+    },
+
+    /**
+     * Ask the server. Only an admin's session is asked (`counts.platform` is sent to nobody else). A failed read leaves the dot as it was:
+     * the Operations screen is the place that says why, and a 401 has already sent the person to the login.
+     */
+    async refreshAdminStatus() {
+        if (!this.isAdmin()) {
+            this.renderAdminStatus(0);
+            return;
+        }
+        try {
+            const summary = await API.request('/attention');
+            if (!this.isAdmin()) return;
+            this.renderAdminStatus(this.platformProblemCount(summary));
+        } catch { /* keep what the dot said */ }
+    },
+
+    /** Start asking, once: now, then every ADMIN_STATUS_MS while the tab is visible. A second call while it runs changes nothing. */
+    startAdminStatusPoll() {
+        if (this._adminStatusTimer) return;
+        this.refreshAdminStatus();
+        this._adminStatusTimer = setInterval(() => {
+            if (document.visibilityState === 'visible') this.refreshAdminStatus();
+        }, this.ADMIN_STATUS_MS);
+    },
+
+    /** Stop asking and clear the dot: a signed-out tab, the wizard and a session that is not an admin's have none to show. */
+    stopAdminStatusPoll() {
+        if (this._adminStatusTimer) {
+            clearInterval(this._adminStatusTimer);
+            this._adminStatusTimer = null;
+        }
+        this.renderAdminStatus(0);
     },
 
     /**
@@ -1245,6 +1787,22 @@ const App = {
     },
 
     /**
+     * Scroll the sidebar's list just far enough to show the current item. A window too short for the whole sidebar scrolls the list, and
+     * an admin page opens the Administration group below the fold: the item that says where you are must never be out of sight. Nothing
+     * moves when it is already visible, and the marker is measured after this (its position is in the list's own coordinates, so it does
+     * not depend on how far the list is scrolled).
+     */
+    revealActiveNavItem() {
+        const nav = document.getElementById('sidebar-nav');
+        const item = nav && nav.querySelector('.nav-item.active');
+        if (!nav || !item || item.classList.contains('hidden') || !item.offsetParent) return;
+        const navRect = nav.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        if (itemRect.top < navRect.top) nav.scrollTop -= navRect.top - itemRect.top;
+        else if (itemRect.bottom > navRect.bottom) nav.scrollTop += itemRect.bottom - navRect.bottom;
+    },
+
+    /**
      * Put the active marker over the active item.
      *
      * `translateY` and `height` only — no horizontal component, so the same
@@ -1254,25 +1812,42 @@ const App = {
      * slide from the previous position would be motion with no meaning.
      */
     moveNavIndicator(animate) {
-        const nav = document.getElementById('sidebar-nav');
-        const indicator = document.getElementById('nav-indicator');
-        if (!nav || !indicator) return;
+        // Two scopes, two markers: the scrolling list (job groups and Administration) and the foot (Settings and Help). A marker is
+        // positioned inside the box that scrolls with its items, so one cannot reach across to the other.
+        this.placeIndicator(document.getElementById('sidebar-nav'), document.getElementById('nav-indicator'), animate);
+        this.placeIndicator(document.getElementById('sidebar-foot-nav'), document.getElementById('nav-indicator-foot'), animate);
+    },
 
-        const item = nav.querySelector('.nav-item.active');
+    /**
+     * Put `indicator` over the active item inside `host`, or hide it when `host` has none that can be seen: the item is in another
+     * scope, in a group that is closed, or its group is not shown to this session.
+     */
+    placeIndicator(host, indicator, animate) {
+        if (!host || !indicator) return;
+
+        const item = host.querySelector('.nav-item.active');
         if (!item || item.classList.contains('hidden') || !item.offsetParent) {
+            // Gone at once, and parked at the top of its scope: a marker that is not shown must not keep stretching the list's
+            // scrollable height with the position it last had (a transformed box still counts as overflow).
+            indicator.classList.add('no-transition');
             indicator.classList.remove('is-visible');
+            indicator.style.transform = 'translateY(0)';
+            void indicator.offsetHeight;
+            indicator.classList.remove('no-transition');
             return;
         }
 
-        const navRect = nav.getBoundingClientRect();
+        const hostRect = host.getBoundingClientRect();
         const itemRect = item.getBoundingClientRect();
-        const y = Math.round(itemRect.top - navRect.top + nav.scrollTop);
+        const y = Math.round(itemRect.top - hostRect.top + host.scrollTop);
 
-        if (!animate) indicator.classList.add('no-transition');
+        // A marker that was not showing has nowhere to slide from: it appears where it belongs, as it does on a re-measurement.
+        const instant = !animate || !indicator.classList.contains('is-visible');
+        if (instant) indicator.classList.add('no-transition');
         indicator.style.transform = `translateY(${y}px)`;
         indicator.style.blockSize = `${Math.round(itemRect.height)}px`;
         indicator.classList.add('is-visible');
-        if (!animate) {
+        if (instant) {
             // Force the value to be adopted before transitions come back, or
             // the next move would animate from the old position.
             void indicator.offsetHeight;
@@ -1291,8 +1866,111 @@ const App = {
         });
     },
 
+    /** The page module on screen, or null. */
+    currentInstance() {
+        const entry = this.currentPage ? this.entryOf(this.currentPage) : null;
+        if (!entry || typeof entry.page !== 'function') return null;
+        try { return entry.page() || null; } catch { return null; }
+    },
+
+    // ─── Leaving with unsaved work ───────────────────────────────────────────
+
+    /**
+     * Would leaving lose something? 'modal' when an open dialog holds edits (`UI.isModalDirty()`), 'page' when the page on screen says
+     * so (`canLeave() === false`), '' when nothing would be lost. A `canLeave()` that throws counts as clean: a broken guard must never
+     * be the reason somebody cannot leave a screen.
+     */
+    unsavedKind() {
+        if (typeof UI !== 'undefined' && typeof UI.isModalDirty === 'function' && UI.isModalDirty()) return 'modal';
+        const instance = this.currentInstance();
+        if (instance && typeof instance.canLeave === 'function') {
+            try {
+                if (instance.canLeave() === false) return 'page';
+            } catch (err) {
+                console.warn('canLeave() failed; treating the page as having nothing unsaved:', err);
+            }
+        }
+        return '';
+    },
+
+    /**
+     * "Discard changes?" Resolves true to leave and false to stay. Cancel, Escape and a click outside the dialog all mean stay.
+     *
+     * `UI.confirm` when there is one, else the administration confirm, which both draw a dialog. An open dialog that is itself dirty
+     * ('modal') cannot be answered that way while only `Admin.confirm` exists: it draws INTO the one modal, which would destroy the
+     * very fields being asked about. That case uses the browser's own confirm, the same single one `UI.requestCloseModal` uses.
+     * With nothing to ask with, the answer is stay: no edit is lost for want of a dialog.
+     */
+    confirmLeave(kind) {
+        return new Promise((resolve) => {
+            let answered = false;
+            const answer = (value) => {
+                if (answered) return;
+                answered = true;
+                resolve(value);
+            };
+            const ask = typeof UI !== 'undefined' && typeof UI.confirm === 'function' ? UI.confirm.bind(UI)
+                : (kind === 'page' && typeof Admin !== 'undefined' && typeof Admin.confirm === 'function' ? Admin.confirm.bind(Admin) : null);
+            if (!ask) {
+                answer(typeof confirm === 'function' ? !!confirm(t('common.leaveBody')) : false);
+                return;
+            }
+            const question = {
+                title: t('common.leaveTitle'),
+                body: t('common.leaveBody'),
+                confirmLabel: t('common.leaveConfirm'),
+                onConfirm: () => answer(true),
+            };
+            // Unsaved work inside an open dialog: ask OVER it (`stack`), never in place of it, or Cancel would come back to a
+            // dialog whose fields the question itself destroyed. The stacked layer reports "no" through `onCancel`.
+            if (kind === 'modal' && typeof UI !== 'undefined' && typeof UI.confirm === 'function') {
+                UI.confirm({ ...question, stack: true, onCancel: () => answer(false) });
+                return;
+            }
+            ask(question);
+            // The dialog closing without a confirm is a "stay". `showModal` runs the previous dialog's close hook before it draws
+            // this one, so this one is set afterwards.
+            UI._afterClose = () => answer(false);
+        });
+    },
+
+    /** The person agreed to lose what the page holds: tell it, so a copy it kept (a parked draft, a local backup) goes too. */
+    discardCurrent() {
+        const instance = this.currentInstance();
+        if (!instance || typeof instance.discardChanges !== 'function') return;
+        try { instance.discardChanges(); } catch (err) { console.warn('discardChanges() failed:', err); }
+    },
+
+    /** They chose to stay: the address goes back to what is on screen, in place (no history entry, no `hashchange`). */
+    restoreAddress() {
+        const back = this._hashBefore || this._shownHash || (this.currentPage ? `#/${this.currentPage}` : '');
+        this._hashBefore = null;
+        if (!back || String(location.hash || '') === back) return;
+        try { history.replaceState(null, '', back); } catch { /* the address stays; the page on screen is still the right one */ }
+    },
+
+    /** The key the person last used, for the focus decision in `navigate()`: 'keyboard' or 'pointer'. */
+    _modality: 'pointer',
+
+    /** Is focus on nothing a person can see? After a drawer closes or a page's controls are replaced it is on `<body>`. */
+    focusIsLost() {
+        const active = document.activeElement;
+        if (!active || active === document.body || active === document.documentElement) return true;
+        return typeof document.contains === 'function' && !document.contains(active);
+    },
+
+    /** Focus the page title, which is `tabindex="-1"` for exactly this. No scroll: the page has just been put at its top. */
+    focusPageTitle() {
+        const heading = document.getElementById('page-title');
+        if (!heading || typeof heading.focus !== 'function') return;
+        if (typeof heading.setAttribute === 'function') heading.setAttribute('tabindex', '-1');
+        heading.focus({ preventScroll: true });
+    },
+
     async navigate(page) {
-        if (!this.pages[page]) return;
+        if (!this.entryOf(page)) return;
+        // An alias is its target's page. (`go` and `route` already write the target's own address; this is for a caller that names the alias.)
+        page = this.resolveAlias(page).page;
 
         // The one place every route passes through: a tenant that has not finished setting up goes to the wizard instead.
         if (this.mustOnboard()) {
@@ -1315,13 +1993,36 @@ const App = {
             this.teardownCurrentPage();
             this.currentPage = null;
             this.markNavItem(page);
+            this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
             if (typeof HealthStrip !== 'undefined') HealthStrip.hide();
             this.renderSetup();
             return;
         }
 
-        const instance = await this.loadPageModule(page);
+        // The page being left, and whether this is a different page: only a change of page scrolls, announces, moves focus and asks.
+        // A re-render of the same page (a theme change, Retry) is none of those.
+        const previous = this.currentPage;
+        const changed = previous !== page;
+
+        // The module loads while the person is being asked, so Cancel costs nothing and "leave" does not then wait for the network.
+        const loading = this.loadPageModule(page);
+
+        if (previous && changed) {
+            const kind = this.unsavedKind();
+            if (kind) {
+                const leave = await this.confirmLeave(kind);
+                if (seq !== this._navSeq) return; // something newer took over while the dialog was open
+                if (!leave) {
+                    this.restoreAddress();
+                    return;
+                }
+                this.discardCurrent();
+            }
+        }
+
+        const instance = await loading;
         if (seq !== this._navSeq) return; // a later navigation already won
 
         const container = document.getElementById('page-container');
@@ -1337,6 +2038,11 @@ const App = {
 
         this.teardownCurrentPage();
         this.currentPage = page;
+        // What is on screen now has this address. `_hashBefore` was for the guard above and is not an answer to the next change.
+        this._shownHash = String(location.hash || '');
+        this._hashBefore = null;
+        const drawer = document.getElementById('sidebar');
+        const drawerWasOpen = !!(drawer && drawer.classList.contains('open'));
 
         // One motion: the chrome moves, the outgoing page cross-fades into the
         // incoming page's shape, and the browser morphs the nav marker between
@@ -1344,10 +2050,18 @@ const App = {
         // transition holds the frame while the callback runs.
         await Motion.transition(() => {
             this.markNavItem(page);
+            // The admin group opens for an admin page BEFORE the marker is measured: it is placed over an item that has a box. And the
+            // list is scrolled to show that item first, so a window too short for the whole sidebar never hides where you are.
+            this.syncAdminGroup(page);
+            this.revealActiveNavItem();
             this.moveNavIndicator(true);
 
             document.getElementById('page-title').textContent = this.title(page);
             document.getElementById('page-subtitle').textContent = this.subtitle(page);
+            // The tab, the browser's history, a bookmark and a tab strip all read this: it names the page, then the app (SH-05).
+            this.setBaseTitle(`${this.title(page)} · ${t('app.name')}`);
+            // A new page opens at its top, not at the offset the last one was left at (SH-07). The window is the scroller.
+            if (changed && typeof window.scrollTo === 'function') window.scrollTo({ top: 0 });
 
             // A nav-item click already reaches here through the router: same
             // dismissal the backdrop and Escape use, but the operator's focus
@@ -1367,6 +2081,13 @@ const App = {
         });
 
         if (seq !== this._navSeq) return;
+
+        if (changed) {
+            // The change is told to a screen reader (SH-05). Focus moves only after a keyboard navigation, from the drawer, or when it
+            // has nowhere to be; and not on the first page of a session, where it would skip the skip link and the nav.
+            Motion.announce(this.title(page));
+            if (previous && (drawerWasOpen || this._modality === 'keyboard' || this.focusIsLost())) this.focusPageTitle();
+        }
 
         const fail = (err) => {
             console.error('Page render failed:', err);
@@ -1536,6 +2257,10 @@ UI.registerActions('app', {
     },
     showPasswordModal() {
         App.showPasswordModal();
+    },
+    /** The Administration heading: open or close the group (and remember it). */
+    toggleAdminGroup() {
+        App.toggleAdminGroup();
     },
     handlePasswordChange(el, e) {
         const result = App.handlePasswordChange(el, e);

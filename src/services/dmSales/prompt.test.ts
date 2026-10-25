@@ -186,6 +186,131 @@ describe('buildSalesPrompt: a prefix that does not move', () => {
     });
 });
 
+describe('salesFactsBlock: the Instagram and Messenger facts block is byte for byte what it was (review M4)', () => {
+    // Pinned as literals, written down BEFORE the `channel` fact existed: a WhatsApp fact must not move a byte of what Instagram and Messenger send.
+    const en = contextFor(withSales(FITNESS_EN, 'en'), 'dm', null);
+    const ar = contextFor({ ...withSales(SHOP_EG, 'en'), language: { primary: 'ar', register: 'egyptian', digits: 'latin', surfaces: {} } } as CreatorProfile, 'dm', null);
+    const plain: SalesFacts = { stage: 'new', qualifierTurns: 0, linkSentFor: [] };
+    const full: SalesFacts = {
+        stage: 'link', qualifierTurns: 1, linkSentFor: ['plan'], comment: { keyword: 'plan', offerId: 'plan' }, tapped: { intent: 'price' },
+        variant: { opening: 'Open warmly.', cta: 'Offer the link softly.' },
+    };
+
+    it('English, a new conversation', () => {
+        assert.equal(
+            salesFactsBlock(en, plain),
+            '=== This conversation ===\nStage so far: new\nQualifying questions already asked: 0 of at most 2.\nNo link has been sent yet.'
+        );
+    });
+
+    it('English, with a comment, a tapped button, a link sent and the owner\'s wording arm', () => {
+        assert.equal(
+            salesFactsBlock(en, full),
+            '=== This conversation ===\nStage so far: link\nQualifying questions already asked: 1 of at most 2.\n'
+            + 'The link was already sent for: Twelve-week plan. Do not send it again unless they ask.\n'
+            + 'They commented «plan» and were sent the link to Twelve-week plan.\n'
+            + 'They tapped a ready-made button in the chat; it asks about: price. Answer that question directly.\n'
+            + 'How to open your first reply, from the account owner: Open warmly.\n'
+            + 'How to word the offer of the link, from the account owner: Offer the link softly.'
+        );
+    });
+
+    it('Arabic, a new conversation', () => {
+        assert.equal(
+            salesFactsBlock(ar, plain),
+            '=== هذه المحادثة ===\nالمرحلة الحالية: new\nأسئلة التأهيل التي طُرحت: 0 من 2 كحد أقصى.\nلم يُرسل أي رابط بعد.'
+        );
+    });
+
+    it('does not say a channel unless the turn is a WhatsApp one: no field, no line, in either language', () => {
+        for (const ctx of [en, ar]) {
+            const block = salesFactsBlock(ctx, full);
+            assert.ok(!/WhatsApp|واتساب/.test(block));
+            assert.equal(salesFactsBlock(ctx, { ...full, channel: undefined }), block);
+        }
+    });
+
+    it('says it for WhatsApp, after the link line and before the rest, and says never to name Instagram, Facebook or Messenger', () => {
+        assert.equal(
+            salesFactsBlock(en, { ...plain, channel: 'whatsapp' }),
+            '=== This conversation ===\nStage so far: new\nQualifying questions already asked: 0 of at most 2.\nNo link has been sent yet.\n'
+            + 'Channel: WhatsApp. This chat is on WhatsApp, so never mention Instagram, Facebook or Messenger.'
+        );
+        assert.equal(
+            salesFactsBlock(ar, { ...plain, channel: 'whatsapp' }),
+            '=== هذه المحادثة ===\nالمرحلة الحالية: new\nأسئلة التأهيل التي طُرحت: 0 من 2 كحد أقصى.\nلم يُرسل أي رابط بعد.\n'
+            + 'القناة: واتساب. هذه المحادثة على واتساب، فلا تذكر إنستغرام ولا فيسبوك ولا ماسنجر أبداً.'
+        );
+        const lines = salesFactsBlock(en, { ...full, channel: 'whatsapp' }).split('\n');
+        assert.ok(lines.findIndex((l) => l.startsWith('Channel:')) < lines.findIndex((l) => l.startsWith('They commented')), 'the channel is said before the comment line');
+    });
+
+    it('leaves the prefix, the persona and the rules alone: a WhatsApp fact is only in the facts block', () => {
+        const a = buildSalesPrompt(input(FILLED()), plain);
+        const b = buildSalesPrompt(input(FILLED()), { ...plain, channel: 'whatsapp' });
+        assert.equal(a.prefix, b.prefix);
+        assert.ok(!a.prefix.includes('WhatsApp'));
+        assert.deepEqual(a.claims, b.claims);
+    });
+});
+
+describe('salesFactsBlock: the ad context (A3, ads.bot_context), and nothing at all when it is off', () => {
+    // The goldens above were written before the `ad` fact existed; with the switch off (`ad` absent) every one of them still holds, byte for byte.
+    const en = contextFor(withSales(FITNESS_EN, 'en'), 'dm', null);
+    const ar = contextFor({ ...withSales(SHOP_EG, 'en'), language: { primary: 'ar', register: 'egyptian', digits: 'latin', surfaces: {} } } as CreatorProfile, 'dm', null);
+    const plain: SalesFacts = { stage: 'new', qualifierTurns: 0, linkSentFor: [] };
+    const ad = { name: 'Go — reel 3', offerTitle: 'Go Bootcamp', primaryText: 'Learn Go in 8 weeks', tapped: 'How much is it?' };
+
+    it('off: the block and the whole system prompt are byte for byte what they were, in both languages', () => {
+        assert.equal(
+            salesFactsBlock(en, { ...plain, ad: undefined }),
+            '=== This conversation ===\nStage so far: new\nQualifying questions already asked: 0 of at most 2.\nNo link has been sent yet.'
+        );
+        assert.equal(
+            salesFactsBlock(ar, { ...plain, ad: undefined }),
+            '=== هذه المحادثة ===\nالمرحلة الحالية: new\nأسئلة التأهيل التي طُرحت: 0 من 2 كحد أقصى.\nلم يُرسل أي رابط بعد.'
+        );
+        const before = buildSalesPrompt(input(FILLED()), plain);
+        const off = buildSalesPrompt(input(FILLED()), { ...plain, ad: undefined });
+        assert.equal(off.system, before.system);
+        assert.equal(off.prefix, before.prefix);
+    });
+
+    it('on: the AD CONTEXT lines, last in the facts block, in the contract\'s English words', () => {
+        assert.equal(
+            salesFactsBlock(en, { ...plain, ad }),
+            '=== This conversation ===\nStage so far: new\nQualifying questions already asked: 0 of at most 2.\nNo link has been sent yet.\n'
+            + 'AD CONTEXT: The person came from the ad "Go — reel 3" about Go Bootcamp.\n'
+            + 'The ad said: "Learn Go in 8 weeks".\n'
+            + 'They tapped: "How much is it?".'
+        );
+    });
+
+    it('on, with only what is known: an ad made outside the app has no offer, no text and maybe no tap', () => {
+        assert.equal(
+            salesFactsBlock(en, { ...plain, ad: { name: 'Autumn offer', offerTitle: null, primaryText: null, tapped: null } }).split('\n').pop(),
+            'AD CONTEXT: The person came from the ad "Autumn offer".'
+        );
+    });
+
+    it('on, in Arabic (فصحى)', () => {
+        const lines = salesFactsBlock(ar, { ...plain, ad }).split('\n');
+        assert.deepEqual(lines.slice(-3), [
+            'سياق الإعلان: جاء الشخص من الإعلان «Go — reel 3» عن Go Bootcamp.',
+            'قال الإعلان: «Learn Go in 8 weeks».',
+            'ضغط على: «How much is it?».',
+        ]);
+    });
+
+    it('on: the ad is only in the facts block; the cacheable prefix, the persona and the rules do not move', () => {
+        const a = buildSalesPrompt(input(FILLED()), plain);
+        const b = buildSalesPrompt(input(FILLED()), { ...plain, ad });
+        assert.equal(a.prefix, b.prefix);
+        assert.ok(!a.prefix.includes('AD CONTEXT'));
+        assert.ok(b.system.endsWith('They tapped: "How much is it?".'));
+    });
+});
+
 describe('buildSalesPrompt: the hours and the hand-off rule', () => {
     it('names the days in the week\'s own order, and the zone they are in', () => {
         const profile = structuredClone(FILLED());

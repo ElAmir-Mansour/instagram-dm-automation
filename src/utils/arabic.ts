@@ -24,6 +24,68 @@ export function normalizeArabic(text: string): string {
         .trim();
 }
 
+/** The characters {@link normalizeArabic} deletes outright: tatweel, then the tashkeel block U+064B-U+0655 and U+0670. */
+const REMOVED_BY_NORMALIZE = /[\u0640\u064B-\u0655\u0670]/;
+const WHITESPACE = /\s/;
+
+/**
+ * {@link normalizeArabic} that also says where every output character came from.
+ *
+ * Returns `text` (exactly what `normalizeArabic(input)` returns) and `map`, where `map[i]` is the
+ * UTF-16 index in the ORIGINAL string of the character that became `text[i]`, plus one final
+ * sentinel entry equal to `input.length` — so `map.length === text.length + 1` and an exclusive
+ * end offset can be mapped like any other. A run of whitespace collapses to one space that maps to
+ * the run's first character. It exists so a checker can match on the normalised text and still
+ * highlight the words the person actually typed (the ads policy check does).
+ *
+ * `text` is identical to `normalizeArabic(input)` — a test fuzzes that. Lower-casing is done one
+ * character at a time so every output character has an owner; the one context-sensitive case (the
+ * Greek final sigma) is resolved from the whole-string result.
+ */
+export function normalizeArabicWithMap(text: string): { text: string; map: number[] } {
+    if (!text) return { text: '', map: [0] };
+
+    // Lower-case code point by code point so every output character has an owner. The whole-string
+    // result is the reference (it resolves context-sensitive cases such as the final sigma); the
+    // per-character pieces are re-cut from it when the lengths agree.
+    const pieces: Array<{ at: number; lower: string }> = [];
+    for (let i = 0; i < text.length;) {
+        const cp = text.codePointAt(i) as number;
+        const ch = String.fromCodePoint(cp);
+        pieces.push({ at: i, lower: ch.toLowerCase() });
+        i += ch.length;
+    }
+    const whole = text.toLowerCase();
+    if (pieces.map(p => p.lower).join('') !== whole && pieces.reduce((n, p) => n + p.lower.length, 0) === whole.length) {
+        let off = 0;
+        for (const p of pieces) { p.lower = whole.slice(off, off + p.lower.length); off += p.lower.length; }
+    }
+
+    let out = '';
+    const map: number[] = [];
+    for (const { at, lower } of pieces) {
+        for (const c of lower) {
+            if (REMOVED_BY_NORMALIZE.test(c)) continue;
+            if (WHITESPACE.test(c)) {
+                // A run of whitespace is one space, and leading whitespace is dropped (the trim).
+                if (out === '' || out.endsWith(' ')) continue;
+                out += ' ';
+                map.push(at);
+                continue;
+            }
+            let n = c;
+            if (c === 'أ' || c === 'إ' || c === 'آ') n = 'ا';
+            else if (c === 'ة') n = 'ه';
+            else if (c === 'ى' || c === 'ي') n = 'ي';
+            out += n;
+            for (let k = 0; k < n.length; k++) map.push(at);
+        }
+    }
+    if (out.endsWith(' ')) { out = out.slice(0, -1); map.pop(); } // the trailing trim
+    map.push(text.length);
+    return { text: out, map };
+}
+
 /** Escapes a string so it can be embedded in a RegExp as a literal. */
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -4,9 +4,12 @@
  */
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from '../../config/db.js';
+import type { ErrorCode, ErrorParams } from '../errorCodes.js';
 
 /**
- * A refusal the route answers as-is: `status` and `{ error, problems?, code? }` (STUDIO.md §4).
+ * A refusal the route answers as-is: `status` and `{ error, problems?, code?, params? }` (STUDIO.md §4). A refusal with a
+ * `code` goes out through `sendError` (src/services/errorCodes.ts): the same `error` string as ever, plus `code` and `params`
+ * for the dashboard to translate. One without a code is answered exactly as it always was.
  *
  * Thrown from the services rather than returned, so a check deep inside a transaction rolls
  * everything back on its way out instead of each caller remembering to.
@@ -16,8 +19,10 @@ export class StudioError extends Error {
         readonly status: number,
         message: string,
         readonly problems?: string[],
-        /** A machine-readable reason the route sends beside `error`, e.g. `NEEDS_API_BRAIN`. */
-        readonly code?: string
+        /** A machine-readable reason the route sends beside `error`: a key of ERROR_CODES, e.g. `NEEDS_API_BRAIN`. */
+        readonly code?: ErrorCode,
+        /** Values the translated sentence for `code` interpolates. Plain data, never a secret. */
+        readonly params?: ErrorParams
     ) {
         super(message);
         this.name = 'StudioError';
@@ -25,9 +30,9 @@ export class StudioError extends Error {
 }
 
 /** A refusal made of validation problems: one sentence when there is one, a count otherwise. */
-export function problemsError(problems: string[], what: string, status = 400): StudioError {
+export function problemsError(problems: string[], what: string, status = 400, code?: ErrorCode, params?: ErrorParams): StudioError {
     const message = problems.length === 1 ? problems[0]! : `${problems.length} problems with ${what}.`;
-    return new StudioError(status, message, problems);
+    return new StudioError(status, message, problems, code, params);
 }
 
 /** The pool, or a client inside a transaction — every write helper here takes either. */

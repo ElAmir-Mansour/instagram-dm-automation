@@ -9,6 +9,7 @@
  */
 import { metaErrorCode, metaErrorSubcode, metaHttp, withRetry } from '../http.js';
 import { GRAPH_BASE } from '../instagram.js';
+import { usagePercent } from '../ads/metaUsage.js';
 
 /** Meta's throttling codes: app, user, Pages, custom, Pages BUC, Instagram BUC. */
 export const THROTTLE_CODES: ReadonlySet<number> = new Set([4, 17, 32, 613, 80001, 80002]);
@@ -40,38 +41,8 @@ export function graphFailure(err: any): GraphFailure {
 export const isPermissionFailure = (f: GraphFailure): boolean => f.code !== null && PERMISSION_CODES.has(f.code);
 export const isThrottleFailure = (f: GraphFailure): boolean => f.code !== null && THROTTLE_CODES.has(f.code);
 
-/**
- * The highest usage percentage in `X-App-Usage` / `X-Business-Use-Case-Usage`, or 0.
- *
- * The first is `{ call_count, total_cputime, total_time }`; the second is keyed by business
- * object id, each an array of those objects plus `type` and `estimated_time_to_regain_access`.
- */
-export function usagePercent(headers: unknown): number {
-    const h = headers as Record<string, unknown> | undefined;
-    if (!h || typeof h !== 'object') return 0;
-    let max = 0;
-    const visit = (value: unknown): void => {
-        if (Array.isArray(value)) { value.forEach(visit); return; }
-        if (!value || typeof value !== 'object') return;
-        for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-            if ((key === 'call_count' || key === 'total_cputime' || key === 'total_time') && typeof v === 'number') {
-                max = Math.max(max, v);
-            } else if (typeof v === 'object') {
-                visit(v);
-            }
-        }
-    };
-    for (const name of ['x-app-usage', 'x-business-use-case-usage']) {
-        const raw = typeof (h as any).get === 'function' ? (h as any).get(name) : h[name];
-        if (typeof raw !== 'string' || !raw) continue;
-        try {
-            visit(JSON.parse(raw));
-        } catch {
-            // An unreadable header is no headroom information, not a failure.
-        }
-    }
-    return max;
-}
+/** The highest usage percentage in `X-App-Usage` / `X-Business-Use-Case-Usage`, or 0. Lives in ads/metaUsage.ts, shared with the ads pacer. */
+export { usagePercent };
 
 export interface BatchItem {
     /** Relative to the versioned Graph base, e.g. `123/insights?metric=reach`. */

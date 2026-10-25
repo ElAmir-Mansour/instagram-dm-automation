@@ -1434,16 +1434,19 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.equal(en.t('nav.growth'), 'Growth');
     });
 
-    it('is a routed page, after Analytics in the nav, preloaded by its hash, at the new cache version', () => {
+    it('is a routed page, after Results (Analytics) in the nav, preloaded by its hash, at the new cache version', () => {
         const index = readFileSync('dashboard/index.html', 'utf8');
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         assert.match(app, /growth: \{ src: 'growth', page: \(\) => GrowthPage \}/);
         assert.match(index, /<a href="#\/growth" class="nav-item" data-page="growth">[\s\S]*?data-i18n="nav\.growth">النمو والتسويق</);
         const at = (needle: string): number => index.indexOf(needle);
-        assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
+        // The Activity Log left the sidebar (US6: it is Results' second view, a strip at the top of both pages), so Growth now closes the
+        // Results group: after the numbers, and before Settings and Help in the foot.
+        assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="settings"'));
+        assert.equal(at('data-page="activity"'), -1, 'no sidebar item of its own');
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.40');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.40']);
+        assert.equal(version, '12.77');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.77']);
     });
 });

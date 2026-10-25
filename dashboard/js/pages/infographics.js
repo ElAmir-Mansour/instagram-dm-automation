@@ -35,6 +35,9 @@ const InfographicsPage = {
     brand: null,
     settingsLoaded: false,
     editing: null,
+    /** What "the next free slot" is, read when the Schedule dialog opens: `{ status: 'loading'|'ready'|'none'|'error', next, timezone }`. */
+    slot: null,
+    _slotSeq: 0,
     _seq: 0,
     _timer: null,
     _onVisible: null,
@@ -57,6 +60,8 @@ const InfographicsPage = {
         this.brand = null;
         this.settingsLoaded = false;
         this.editing = null;
+        this.slot = null;
+        this._slotSeq++;
     },
 
     canUse() {
@@ -91,6 +96,8 @@ const InfographicsPage = {
             const s = settings.value && settings.value.settings;
             this.brand = this.normalizeBrand(s && s.infographic);
             this.settingsLoaded = true;
+            // Every time on this page is the tenant's: tell the shared zone what the settings carry (as the Monteur does).
+            if (s && s.schedule && s.schedule.timezone) UI.setZone(s.schedule.timezone);
         }
         this.worker = status.status === 'fulfilled' && status.value && status.value.worker ? status.value.worker : null;
         container.innerHTML = esc(html`
@@ -166,7 +173,7 @@ const InfographicsPage = {
     },
 
     // ─── Markup: toolbar, worker, new ────────────────────────────────────────
-    /** The Studio's tab bar with Infographics current; studio.js and monteur.js list the same links. */
+    /** The Studio's tab bar with Infographics current; studio.js, monteur.js and explainers.js list the same links. */
     toolbarMarkup() {
         const tab = (key, href, icon, label) => html`
             <a class="btn btn-sm btn-ghost" href="${href}"
@@ -180,6 +187,7 @@ const InfographicsPage = {
                     ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                     ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
                     ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
+                    ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
                     ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
                 </nav>
             </div>
@@ -242,7 +250,7 @@ const InfographicsPage = {
     // ─── Markup: the list ────────────────────────────────────────────────────
     listMarkup() {
         if (this.listError && !this.items.length) {
-            return html`<div class="surface pad-5">${UI.errorStrip(this.listError.message || t('error.unexpected'))}</div>`;
+            return html`<div class="surface pad-5">${UI.errorBox(this.listError)}</div>`;
         }
         if (!this.items.length) {
             return html`<div class="surface pad-5">${Admin.emptyState('images', t('infographics.empty.title'), t('infographics.empty.body'))}</div>`;
@@ -297,14 +305,14 @@ const InfographicsPage = {
                         <span class="badge badge-neutral">${t(`infographics.theme.${item.theme}`)}</span>
                         <span class="badge badge-neutral">${t(`infographics.lang.${item.language}`)}</span>
                     </div>
-                    ${item.status === 'failed' && item.error ? html`<p class="ig-error" dir="auto">${item.error}</p>` : ''}
+                    ${item.status === 'failed' && item.error ? html`<div class="ig-error">${UI.errorHtml(UI.failureError(item.error))}</div>` : ''}
                     ${ready && item.problems && item.problems.length ? html`
                         <ul class="ig-problems" aria-label="${t('infographics.problems')}">
                             ${item.problems.map((p) => html`<li dir="auto"><i data-lucide="alert-circle" aria-hidden="true"></i> ${p}</li>`)}
                         </ul>` : ''}
                     ${this.reviewMarkup(item)}
                     ${when ? html`<p class="ig-when"><i data-lucide="calendar-check" aria-hidden="true"></i>
-                        ${t('infographics.scheduledFor', { when: UI.formatDateTime(when) })}
+                        ${t('infographics.scheduledFor', { when: this.zoneLabel(when) })}
                         <a href="#/posts">${t('infographics.openPosts')}</a></p>` : ''}
                     <div class="ig-actions">
                         ${ready ? UI.button({ variant: 'primary', size: 'sm', icon: 'calendar-check', label: t('infographics.action.schedule'), action: 'infographics:openSchedule', data: { id } }) : ''}
@@ -487,8 +495,34 @@ const InfographicsPage = {
     },
 
     // ─── Schedule ────────────────────────────────────────────────────────────
+    // What the dialog says is what Schedule does (UX US1, IG-01): every time here is the tenant's, the slot option names the
+    // slot's real time and city, the field is dormant (disabled) until "at a time I choose" is the choice, and the submit button
+    // reads the time and city it will post at.
+
+    /** The tenant's zone: the one the slot answer carried, else the one the settings did, else the browser's. */
+    zone() {
+        return UI.zone(this.slot && this.slot.timezone);
+    },
+
+    /** "Sun, 28 Sep, 19:00 (Riyadh)": a time in the tenant's zone with the city it is in. '' when it is not a time. */
+    zoneLabel(value) {
+        const zone = this.zone();
+        const time = UI.zoneTime(value, { zone });
+        return time ? t('time.zoned', { time, city: UI.zoneCity(zone) }) : '';
+    },
+
+    /** The slot option's words: the real time and city once known; the plain label while looking or if it could not be read. */
+    slotText() {
+        const slot = this.slot;
+        if (slot && slot.status === 'ready' && slot.next) return t('infographics.schedule.slotAt', { when: this.zoneLabel(slot.next) });
+        if (slot && slot.status === 'none') return t('infographics.schedule.slotNone');
+        return t('infographics.schedule.slot');
+    },
+
     scheduleMarkup(item) {
         const platforms = (this.brand && this.brand.platforms) || [];
+        const none = !!(this.slot && this.slot.status === 'none');
+        const zone = this.zone();
         return html`
             ${Admin.modalHeader(t('infographics.schedule.title'))}
             <form id="ig-schedule" data-submit="infographics:schedule" data-id="${item.id}" novalidate>
@@ -496,19 +530,110 @@ const InfographicsPage = {
                 <p class="form-hint">${t('infographics.schedule.where', { platforms: platforms.map((p) => t(`infographics.platform.${p}`)).join(' · ') || '—' })}</p>
                 <fieldset class="ig-when-choice">
                     <legend class="form-label">${t('infographics.schedule.when')}</legend>
-                    <label class="ig-radio"><input type="radio" name="when" value="slot" checked> ${t('infographics.schedule.slot')}</label>
-                    <label class="ig-radio"><input type="radio" name="when" value="now"> ${t('infographics.schedule.now')}</label>
-                    <label class="ig-radio"><input type="radio" name="when" value="at"> ${t('infographics.schedule.at')}</label>
-                    <input class="field" type="datetime-local" name="at" aria-label="${t('infographics.schedule.at')}">
+                    <label class="ig-radio"><input type="radio" name="when" value="slot" data-change="infographics:whenChanged"${none ? html.raw(' disabled') : html.raw(' checked')}> <span id="ig-when-slot">${this.slotText()}</span></label>
+                    <label class="ig-radio"><input type="radio" name="when" value="now" data-change="infographics:whenChanged"> ${t('infographics.schedule.now')}</label>
+                    <label class="ig-radio"><input type="radio" name="when" value="at" data-change="infographics:whenChanged"${none ? html.raw(' checked') : ''}> ${t('infographics.schedule.at')}</label>
+                    <span class="ig-at-wrap">
+                        <input class="field" type="datetime-local" name="at" id="ig-when-at" data-input="infographics:atInput"${none ? '' : html.raw(' disabled')} aria-label="${t('infographics.schedule.at')}" aria-describedby="ig-when-at-hint">
+                        <span class="ig-at-claim" id="ig-when-at-claim" data-action="infographics:pickAt" aria-hidden="true"${none ? html.raw(' hidden') : ''}></span>
+                    </span>
+                    <span class="form-hint" id="ig-when-at-hint">${t('infographics.schedule.zoneHint', { city: UI.zoneCity(zone), zone })}</span>
                 </fieldset>
                 <p class="form-hint">${t('infographics.schedule.gifHint')}</p>
                 <div id="ig-schedule-error"></div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'calendar-check', label: t('infographics.action.schedule') })}
+                    <button type="submit" class="btn btn-primary" id="ig-schedule-submit"><i data-lucide="calendar-check" aria-hidden="true"></i> <span id="ig-schedule-submit-label">${t('infographics.action.schedule')}</span></button>
                 </div>
             </form>
         `;
+    },
+
+    /** Which option is chosen: 'slot', 'now' or 'at'. */
+    whenChoice(form) {
+        const checked = form && form.querySelector('input[name="when"]:checked');
+        return (checked && checked.value) || 'slot';
+    },
+
+    /** The typed time as an instant, read as wall time in the TENANT's zone (not the browser's); null when it is not one. */
+    atInstant(form) {
+        const field = form && form.elements && form.elements.at;
+        return field ? UI.zoneInput(field.value, this.zone()) : null;
+    },
+
+    /** What the submit button says it will do, for the choice as it stands. The plain "Schedule" only when there is no time to name. */
+    submitLabel(form) {
+        const choice = this.whenChoice(form);
+        if (choice === 'now') return t('infographics.schedule.submitNow');
+        const iso = choice === 'at' ? this.atInstant(form) : (this.slot && this.slot.status === 'ready' ? this.slot.next : null);
+        const when = iso ? this.zoneLabel(iso) : '';
+        return when ? t('infographics.schedule.submitAt', { when }) : t('infographics.action.schedule');
+    },
+
+    /** Make the dialog agree with the choice: the field is live only for "at", its claim layer covers it otherwise, the button names the time. */
+    syncSchedule(form) {
+        if (!form) return;
+        const at = form.elements && form.elements.at;
+        const claim = form.querySelector('#ig-when-at-claim');
+        const on = this.whenChoice(form) === 'at';
+        if (at) at.disabled = !on;
+        if (claim) claim.hidden = on;
+        const label = form.querySelector('#ig-schedule-submit-label');
+        if (label) label.textContent = this.submitLabel(form);
+    },
+
+    /** Choose "at a time I choose", open the field on the slot's time when it is empty (so the button names a real time at once), and sync. */
+    chooseAt(form) {
+        if (!form) return;
+        const radio = form.querySelector('input[name="when"][value="at"]');
+        if (radio) radio.checked = true;
+        const at = form.elements && form.elements.at;
+        if (at && !at.value && this.slot && this.slot.next) at.value = UI.zoneInputValue(this.slot.next, this.zone());
+        this.syncSchedule(form);
+    },
+
+    /** Focus landed on something in the dialog: when it is the time field, that is the choice. */
+    atFocus(target) {
+        if (!target || target.name !== 'at') return;
+        const form = target.closest && target.closest('form');
+        if (form && this.whenChoice(form) !== 'at') this.chooseAt(form);
+    },
+
+    /** The dialog that is open for `id`, or null: the preview may land after it was closed, or after another was opened. */
+    openScheduleForm(id) {
+        const form = document.getElementById('ig-schedule');
+        return form && form.dataset && form.dataset.id === id ? form : null;
+    },
+
+    /** Read "the next free slot" and say it in the dialog. A slot that can't be read leaves the plain label: Schedule still works. */
+    async loadSlot(id) {
+        const seq = ++this._slotSeq;
+        this.slot = { status: 'loading', next: null, timezone: '' };
+        let slot;
+        try {
+            const res = await API.getInfographicNextSlot();
+            if (res && typeof res.timezone === 'string') UI.setZone(res.timezone);
+            const next = res && typeof res.next_slot === 'string' && UI._date(res.next_slot) ? res.next_slot : null;
+            slot = { status: next ? 'ready' : 'none', next, timezone: UI.zone(res && res.timezone) };
+        } catch {
+            slot = { status: 'error', next: null, timezone: '' };
+        }
+        if (seq !== this._slotSeq || this._destroyed) return;
+        this.slot = slot;
+        const form = this.openScheduleForm(id);
+        if (!form) return;
+        const text = form.querySelector('#ig-when-slot');
+        if (text) text.textContent = this.slotText();
+        const hint = form.querySelector('#ig-when-at-hint');
+        if (hint) hint.textContent = t('infographics.schedule.zoneHint', { city: UI.zoneCity(this.zone()), zone: this.zone() });
+        if (slot.status === 'none') {
+            // Nothing for "next free slot" to mean: the choice moves to a time of his own, and the slot option says why it is off.
+            const radio = form.querySelector('input[name="when"][value="slot"]');
+            if (radio) radio.disabled = true;
+            this.chooseAt(form);
+        } else {
+            this.syncSchedule(form);
+        }
     },
 
     // ─── Brand ───────────────────────────────────────────────────────────────
@@ -646,7 +771,7 @@ const InfographicsPage = {
     /** A refused request's message, with the server's problem list when it sent one. */
     errorMarkup(err) {
         const problems = err && err.body && Array.isArray(err.body.problems) ? err.body.problems : [];
-        return html`${UI.errorStrip(err && err.message ? err.message : t('error.unexpected'))}
+        return html`${UI.errorBox(err)}
             ${problems.length ? html`<ul class="ig-problems">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : ''}`;
     },
 
@@ -751,7 +876,42 @@ UI.registerActions('infographics', {
     openSchedule(el) {
         const P = InfographicsPage;
         const item = P.find(el.dataset.id);
-        if (item) UI.showModal(P.scheduleMarkup(item));
+        if (!item) return;
+        P.slot = { status: 'loading', next: null, timezone: '' };
+        UI.showModal(P.scheduleMarkup(item));
+        const form = document.getElementById('ig-schedule');
+        // Focusing the time field, however it was reached, chooses "at a time I choose". (The field is only focusable once that is on,
+        // or through its claim layer, but a script or a screen reader can put focus there too.)
+        if (form) form.addEventListener('focusin', (event) => InfographicsPage.atFocus(event.target));
+        P.loadSlot(item.id);
+    },
+
+    /** A choice was made among the radios. */
+    whenChanged(el) {
+        const P = InfographicsPage;
+        const form = el.closest('form');
+        if (form && P.whenChoice(form) === 'at') P.chooseAt(form);
+        else P.syncSchedule(form);
+    },
+
+    /** Typing in the time field is choosing it. (It cannot be typed in while another option is chosen: this is for a field that is live.) */
+    atInput(el) {
+        const P = InfographicsPage;
+        const form = el.closest('form');
+        if (!form) return;
+        const radio = form.querySelector('input[name="when"][value="at"]');
+        if (radio && !radio.checked) radio.checked = true;
+        P.syncSchedule(form);
+    },
+
+    /** The layer over the dormant field was pressed or touched: choose "at", then put the cursor in the field. */
+    pickAt(el) {
+        const P = InfographicsPage;
+        const form = el.closest('form');
+        if (!form) return;
+        P.chooseAt(form);
+        const at = form.elements && form.elements.at;
+        if (at && typeof at.focus === 'function') at.focus();
     },
 
     async schedule(form, event) {
@@ -762,7 +922,8 @@ UI.registerActions('infographics', {
         const body = {};
         if (when === 'now') body.now = true;
         if (when === 'at') {
-            const at = UI.fromLocalInputValue(form.elements.at.value);
+            // Read in the tenant's zone, as the Monteur's override is: not in the zone of the browser this happens to be open in.
+            const at = P.atInstant(form);
             if (!at) {
                 P.showError('ig-schedule-error', new Error(t('infographics.schedule.atMissing')));
                 return;
@@ -775,7 +936,7 @@ UI.registerActions('infographics', {
             const res = await API.scheduleInfographic(id, body);
             UI.closeModal();
             P.put(res && res.infographic);
-            UI.toast(t('infographics.schedule.done', { when: UI.formatDateTime(res.scheduled_time) }));
+            UI.toast(t('infographics.schedule.done', { when: P.zoneLabel(res.scheduled_time) }));
         } catch (err) {
             P.showError('ig-schedule-error', err);
             restore();
@@ -790,7 +951,7 @@ UI.registerActions('infographics', {
             P.put(await API.copyInfographic(el.dataset.id, { theme: el.dataset.theme }));
             UI.toast(t('infographics.copy.started'));
         } catch (err) {
-            UI.toast(err.message || t('error.unexpected'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
             restore();
         }
     },
@@ -802,7 +963,7 @@ UI.registerActions('infographics', {
         try {
             P.put(await API.renderInfographic(el.dataset.id, {}));
         } catch (err) {
-            UI.toast(err.message || t('error.unexpected'), 'error');
+            UI.toast(UI.errorLine(err), 'error');
             restore();
         }
     },

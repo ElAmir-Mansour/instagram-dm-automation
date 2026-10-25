@@ -274,6 +274,7 @@ bdi { unicode-bidi: isolate; }
 .mbe-3 { margin-block-end: var(--space-3); }
 .mbe-4 { margin-block-end: var(--space-4); }
 .mbe-5 { margin-block-end: var(--space-5); }
+.mbs-2 { margin-block-start: var(--space-2); }
 .mbs-4 { margin-block-start: var(--space-4); }
 
 .section { margin-block-end: var(--space-6); }
@@ -304,10 +305,14 @@ bdi { unicode-bidi: isolate; }
     transition: transform var(--motion-slow) var(--ease-standard);
 }
 .sidebar-header {
-    padding: var(--space-5) var(--space-4);
+    /* As tall as the page header, so the two bottom borders are one line; the brand link keeps its 44px target inside it. */
+    min-block-size: var(--header-height);
+    padding-inline: var(--space-4);
+    display: flex; align-items: center;
     border-block-end: 1px solid var(--border-subtle);
 }
-.sidebar-logo { display: flex; align-items: center; gap: var(--space-3); }
+/* The way home (SH-27): a link that looks like the brand it always was. No rule here may touch the mark's paint (design-md.test.ts). */
+.sidebar-logo { display: flex; align-items: center; gap: var(--space-3); color: inherit; text-decoration: none; min-block-size: var(--tap-target); }
 .logo-mark {
     /* Kufi «رد» (DESIGN.md section 4). 32px, not 38: the master's every edge lands on a whole pixel at 32 and
        between pixels at 38. The rounded tile is the SVG's own (2 modules), so this box has no radius and no
@@ -324,7 +329,7 @@ bdi { unicode-bidi: isolate; }
 
 .sidebar-nav {
     flex: 1;
-    padding: var(--space-3) var(--space-2);
+    padding: var(--space-2);
     display: flex; flex-direction: column; gap: 2px;
     overflow-y: auto;
     /* Containing block for the indicator below. */
@@ -352,12 +357,13 @@ bdi { unicode-bidi: isolate; }
     opacity: 0;
     pointer-events: none;
     z-index: 0;
-    view-transition-name: nav-active;
     transition: transform var(--motion-base) var(--ease-standard),
                 block-size var(--motion-base) var(--ease-standard),
                 opacity var(--motion-fast) var(--ease-standard);
 }
-.nav-indicator.is-visible { opacity: 1; }
+.nav-indicator.is-visible { opacity: 1; view-transition-name: nav-active; }
+/* The second marker is over the foot (Settings, Help), which is not inside the padded list: it spans the foot's own box. */
+.nav-indicator--foot { inset-inline: 0; }
 /* First placement, and re-measurements after a resize or a font load: there is
    no previous position to travel from, so do not travel. */
 .nav-indicator.no-transition { transition: none; }
@@ -390,8 +396,34 @@ bdi { unicode-bidi: isolate; }
 .nav-item.active:hover { background: transparent; }
 
 .sidebar-footer { padding: var(--space-2); border-block-start: 1px solid var(--border-subtle); }
+.sidebar-foot-nav { position: relative; }
 .nav-logout { width: 100%; }
 .nav-logout:hover { color: var(--danger-text); background: var(--danger-soft); }
+/* The account area (SH-27): who is signed in, then your own password and sign-out. */
+.nav-account {
+    margin-block-start: var(--space-1); padding-block-start: var(--space-1);
+    border-block-start: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column; gap: 2px;
+}
+.nav-account .nav-item { inline-size: 100%; }
+.nav-identity {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    min-inline-size: 0;
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+}
+.nav-identity[hidden] { display: none; }
+.nav-identity [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; }
+/* One line, cut at its end: an address is read from its start, and the full one is the line's title. */
+.nav-identity-text { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A short window (a laptop with a toolbar, a phone on its side): the whole sidebar scrolls, so the foot is reachable instead of squeezing the
+   list to a few rows. */
+@media (max-height: 700px) {
+    .sidebar { overflow-y: auto; }
+    .sidebar-nav { flex: none; overflow-y: visible; }
+}
 
 .main-content {
     flex: 1;
@@ -1047,6 +1079,11 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .status-pill.failed { background: var(--danger-soft); color: var(--danger-text); }
 .status-pill.pending, .status-pill.publishing { background: var(--warning-soft); color: var(--warning-text); }
 .status-pill.user_blocked_dms { background: var(--warning-soft); color: var(--warning-text); }
+/* UI.statusPill: a glyph (its SHAPE says what the colour says), then the word. The tone comes from a .badge-* class, so there is one
+   set of token pairs. In-progress states pulse the glyph, like .dot-blink, and stop under reduced motion. */
+.status-pill-glyph { line-height: 1; }
+.status-pill-glyph.is-busy { animation: blink 1.5s infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .status-pill-glyph.is-busy { animation: none; } }
 
 .health-pill {
     display: inline-flex; align-items: center; gap: var(--space-2);
@@ -1176,6 +1213,14 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .inline-error strong { display: block; font-weight: var(--fw-semibold); }
 .inline-error-hint { display: block; margin-block-start: var(--space-1); font-size: var(--fs-100); color: var(--text-default); }
 
+/* UI.errorHtml: the sentence, what to do next, and the server's own words folded behind a native "Details". */
+.error-text { display: block; min-inline-size: 0; }
+.error-sentence { display: block; font-weight: var(--fw-semibold); }
+.error-next { display: block; margin-block-start: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
+.error-details { margin-block-start: var(--space-2); font-size: var(--fs-100); color: var(--text-default); }
+.error-details > summary { cursor: pointer; font-weight: var(--fw-semibold); min-block-size: var(--tap-target); align-content: center; }
+.error-details-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
+
 .loader { display: flex; align-items: center; justify-content: center; padding: var(--space-6); }
 .spinner {
     width: 30px; height: 30px;
@@ -1246,14 +1291,22 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 }
 
 /* ─── Toast ──────────────────────────────────────────────────────────────── */
-.toast-container {
+/* One stack holds both live regions (index.html): `#toast-alerts` for errors, announced at once, and
+   `#toast-container` for the rest, announced politely. The stack is what is fixed to the screen, so a toast
+   in one never lands on top of a toast in the other. `--toast-offset` lifts it above a sticky action bar
+   (set below, by the bars it knows); it is 0 when there is none. */
+.toast-stack {
     position: fixed;
-    inset-block-end: var(--space-5);
+    inset-block-end: calc(var(--space-5) + var(--toast-offset, 0px));
     inset-inline-end: var(--space-5);
     z-index: var(--z-toast);
     display: flex; flex-direction: column; gap: var(--space-2);
-    max-width: min(420px, calc(100vw - var(--space-6)));
+    max-inline-size: min(420px, calc(100vw - var(--space-6)));
+    /* An empty stack must not swallow a click meant for the page beneath it. */
+    pointer-events: none;
 }
+.toast-stack > .toast-container { pointer-events: auto; }
+.toast-container { display: flex; flex-direction: column; gap: var(--space-2); }
 .toast {
     display: flex; align-items: center; gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
@@ -1277,6 +1330,37 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .toast.success svg { color: var(--success-text); }
 .toast.error { border-color: var(--border-danger); }
 .toast.error svg { color: var(--danger-text); }
+.toast.info { border-color: var(--border-info); }
+.toast.info svg { color: var(--info-text); }
+.toast.warning { border-color: var(--border-warning); }
+.toast.warning svg { color: var(--warning-text); }
+/* The action (Undo, View): a text button at the end of the message, a full 44px target. */
+.toast-action {
+    flex-shrink: 0;
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-semibold);
+    color: var(--accent-text);
+    touch-action: manipulation;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+.toast-action:hover { background: var(--surface-glass-hover); }
+.toast-action:active { background: color-mix(in srgb, var(--text-strong) 14%, transparent); }
+/* On a phone the stack spans the screen between the gutters, and sits inside the safe area (the home bar). */
+@media (max-width: 768px) {
+    .toast-stack {
+        inset-inline: var(--space-3);
+        inset-block-end: calc(var(--space-3) + var(--toast-offset, 0px) + env(safe-area-inset-bottom, 0px));
+        max-inline-size: none;
+    }
+}
+/* A sticky action bar owns the bottom edge, so toasts rise above it. The bars name themselves here, so no page
+   has to tell the stack; a new bar opts in with `data-sticky-bar`. One bar height: a 44px button and its padding. */
+body:has(.studio-savebar, .welcome-bar, .post-composer .modal-actions, [data-sticky-bar]) {
+    --toast-offset: calc(var(--tap-target) + var(--space-3) * 3);
+}
 /* Physical exception 2/3: toasts slide in from the inline end. */
 @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
 html[dir='rtl'] .toast { animation-name: toastInRtl; }
@@ -1335,6 +1419,50 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .login-keep { align-items: center; }
 /* An invite link hides the login card from the first frame (index.html's head script); App.showLogin() lifts the attribute. */
 html[data-invite] #login-screen { display: none; }
+/* A stored session (SH-03): the head script sets data-session, the password form is not shown, and the shell's own shape stands in for
+   the app until App has the answer of /auth/me and lifts the attribute (App.settleFirstFrame). Static, with nothing to focus or read.
+   data-gated is a tenant that will be sent to the setup wizard, which has no sidebar to flash. */
+html[data-session] #login-screen { display: none; }
+.shell-skeleton { display: none; }
+html[data-session] .shell-skeleton { display: block; min-block-size: 100vh; min-block-size: 100dvh; background: var(--surface-page); }
+.shell-skeleton-side {
+    position: fixed; inset-block: 0; inset-inline-start: 0;
+    inline-size: var(--sidebar-width);
+    background: var(--surface-chrome);
+    border-inline-end: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column;
+}
+.shell-skeleton-brand {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-5) var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.shell-skeleton-rows { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-3); }
+.shell-skel-mark { inline-size: 32px; block-size: 32px; border-radius: var(--radius-sm); flex-shrink: 0; }
+.shell-skel-line { block-size: var(--space-3); border-radius: var(--radius-xs); }
+.shell-skel-row { block-size: var(--tap-target); border-radius: var(--radius-sm); }
+.shell-skel-w-xs { inline-size: 24%; }
+.shell-skel-w-md { inline-size: 55%; }
+.shell-skeleton-main { margin-inline-start: var(--sidebar-width); min-inline-size: 0; }
+.shell-skeleton-header {
+    min-block-size: var(--header-height);
+    padding-inline: var(--space-6);
+    display: flex; align-items: center;
+    background: var(--surface-chrome);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.shell-skeleton-header .shell-skel-line { max-inline-size: 280px; }
+.shell-skeleton-page { padding: var(--space-6); display: grid; gap: var(--space-4); }
+.shell-skel-card { display: block; block-size: 120px; border-radius: var(--radius-md); }
+.shell-skel-tall { block-size: 260px; }
+html[data-gated] .shell-skeleton-side { display: none; }
+html[data-gated] .shell-skeleton-main { margin-inline-start: 0; }
+@media (max-width: 860px) {
+    .shell-skeleton-side { display: none; }
+    .shell-skeleton-main { margin-inline-start: 0; }
+    .shell-skeleton-header { padding-inline: var(--space-4); }
+    .shell-skeleton-page { padding: var(--space-4); }
+}
 #login-email-group.hidden ~ .login-keep,
 #login-email-group.hidden ~ .login-use-password { display: none; }
 
@@ -1825,6 +1953,8 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .campaign-stat .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .campaign-stat .dot.ok { background: var(--success); }
 .campaign-stat .dot.bad { background: var(--danger); }
+/* Outcomes that need nothing from the owner (handled by design, waiting to send, a failed count of zero): a neutral dot, never red. */
+.campaign-stat .dot.neutral { background: var(--text-muted); }
 .card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-block-start: auto; }
 
 /* Keyword hazard inspector — the point-of-decision warning */
@@ -2928,14 +3058,41 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 }
 .erasure-sample li { overflow-wrap: anywhere; }
 
-/* ─── Sidebar group label ───────────────────────────────────────────────── */
+/* ─── Sidebar groups (UX overhaul US6) ──────────────────────────────────────
+   Each group is a heading and a list the heading names (`aria-labelledby`). The heading is a plain label, never letter-spaced small caps. */
+.nav-group { display: flex; flex-direction: column; }
 .nav-group-label {
     display: block;
-    padding: var(--space-4) var(--space-4) var(--space-2);
+    padding: var(--space-2) var(--space-3) var(--space-1);
     font-size: var(--fs-100);
     font-weight: var(--fw-semibold);
     color: var(--text-muted);
 }
+.nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav-list[hidden] { display: none; }
+
+/* Administration: ONE collapsible group, a heading that is a real button. The dot says the platform has a problem and is there only then. */
+.nav-group--admin { margin-block-start: var(--space-1); padding-block-start: var(--space-1); border-block-start: 1px solid var(--border-subtle); }
+.nav-group-toggle {
+    display: flex; align-items: center; gap: var(--space-2);
+    inline-size: 100%; min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+    text-align: start;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.nav-group-toggle:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
+/* A chevron down is the same in both directions (check-rtl-icons); open, it points up. */
+.nav-group-toggle [data-lucide] {
+    inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0;
+    margin-inline-start: auto;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+.nav-group-toggle[aria-expanded='true'] [data-lucide] { transform: rotate(180deg); }
+.nav-dot { inline-size: var(--space-2); block-size: var(--space-2); flex-shrink: 0; border-radius: var(--radius-pill); background: var(--danger); }
+.nav-dot[hidden] { display: none; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Responsive.  Every screen has to work at 375px.
@@ -2969,7 +3126,10 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
         box-shadow: var(--elev-3);
     }
     html[dir='rtl'] .sidebar { transform: translateX(100%); }
-    .sidebar.open { transform: none; }
+    /* The RTL selector above is more specific than `.sidebar.open` alone, so in Arabic the open drawer stayed off-screen: the open
+       state has to be as specific as the closed one it undoes. */
+    .sidebar.open,
+    html[dir='rtl'] .sidebar.open { transform: none; }
     /* Just below the drawer, above page content. Created and toggled by app.js —
        the drawer had no scrim, no Escape-to-close and no click-outside-to-close, unlike
        every other overlay in the app (the modal already has all three). */
@@ -3319,6 +3479,18 @@ html[lang='en'] .page-toolbar-count {
 @media (max-width: 560px) {
     .chart-line-y, .chart-line-svg { block-size: 132px; }
     .chart-line-x > span.is-minor { visibility: hidden; }
+}
+
+/* Compared magnitudes (Charts.compareBars): a label, a thin bar that grows from the reading edge, and the value in text ink. One hue;
+   the bar's track is the grid colour. On a phone the label takes its own line so a long ad name never squeezes the bar. */
+.chart-bars { display: flex; flex-direction: column; gap: var(--space-2); padding-block: var(--space-2); }
+.chart-bars-row { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+.chart-bars-label { color: var(--text-default); font-size: var(--fs-200); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-bars-svg { display: block; inline-size: 100%; block-size: 8px; }
+.chart-bars-value { color: var(--text-strong); font-variant-numeric: tabular-nums; font-size: var(--fs-200); white-space: nowrap; }
+@media (max-width: 560px) {
+    .chart-bars-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .chart-bars-label { grid-column: 1 / -1; }
 }
 
 /* ─── Shared patterns (UX audit VS15) ───────────────────────────────────────
@@ -4099,7 +4271,9 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     .slide-card-actions { inline-size: 100%; }
     .shot-field { flex-direction: column; }
     .shot-thumb { inline-size: 100%; }
-    .studio-tabs { inline-size: 100%; }
+    /* Five tabs no longer fit one row on a phone: they wrap onto a second row, each stretching to fill it, so none is clipped off the edge. */
+    .studio-tabs { inline-size: 100%; flex-wrap: wrap; }
+    .studio-tabs .btn { flex: 1 1 auto; justify-content: center; }
     .studio-step-label { display: none; }
     .studio-step.is-current .studio-step-label { display: inline; }
     .studio-lessons { max-block-size: 18rem; }
@@ -4452,6 +4626,9 @@ mark.help-hit {
 /* ─── Trend ─────────────────────────────────────────────────────────────── */
 .growth-trend-head { flex-wrap: wrap; }
 .growth-trend-summary { margin: 0 0 var(--space-2); }
+/* The ads' own card (A6), under the organic summary: a separate chart, never a second axis on the organic one. */
+.growth-paid { margin-block-start: var(--space-4); }
+.growth-paid .form-hint { margin: var(--space-2) 0 0; }
 
 /* ─── Sections with a heading, a line and an action ─────────────────────── */
 .growth-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-4); }
@@ -4801,13 +4978,14 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .text-meta.text-danger, .stat-sub.text-danger { color: var(--danger-text); }
 .stat-sub.text-success { color: var(--success-text); }
 
-/* SH3: the waiting count on the Inbox nav item. Data, not decoration: hidden at zero. */
+/* SH3: the waiting count on the Inbox nav item. Data, not decoration: hidden at zero. "Three people are waiting" is work, not a failure
+   (SH-31): the accent fill, which also stays visible over the active row's accent-soft marker. Red (`.nav-dot`) is for what broke. */
 .nav-count {
     margin-inline-start: auto;
     min-inline-size: 22px; block-size: 22px; padding-inline: var(--space-2);
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: var(--radius-pill);
-    background: var(--danger-soft); color: var(--danger-text);
+    background: var(--accent); color: var(--text-on-accent);
     font-size: var(--fs-100); font-weight: var(--fw-semibold);
     font-variant-numeric: tabular-nums;
 }
@@ -4872,6 +5050,32 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ai-state.is-on { color: var(--success-text); }
 .composer-hint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
 .composer-hint > span { flex: 1 1 24ch; min-inline-size: 0; }
+
+/* US1 (IN-01, IN-02): "Mark handled", and the effective assistant state. */
+/* The strip above the list: said once when nobody is being answered automatically, or sales is only in test. Neutral on purpose: it is
+   something to act on, not an error, and the glyph says which kind (○ off, ◔ test) so colour is never the only signal. */
+.assistant-strip {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+    padding: var(--space-3);
+    background: var(--surface-sunken);
+    border-block-end: 1px solid var(--border-subtle);
+    font-size: var(--fs-100); color: var(--text-default);
+}
+.assistant-strip.hidden { display: none; }
+.assistant-strip-glyph { line-height: 1; color: var(--text-muted); }
+.assistant-strip-text { flex: 1 1 24ch; min-inline-size: 0; }
+/* The row's own "Mark handled" sits beside the row's button, over its end corner, and the badges leave it room. */
+.threads-list > [role='listitem'] { position: relative; }
+.thread-row-actions:empty { display: none; }
+.thread-row-actions { position: absolute; inset-block-end: var(--space-1); inset-inline-end: var(--space-1); }
+.threads-list > [role='listitem']:has(.thread-row-action) .thread-badges { padding-inline-end: calc(var(--tap-target) + var(--space-1)); }
+/* In the header, the button and the state words share a row that wraps on a phone. */
+.chat-handled-slot { display: inline-flex; align-items: center; }
+.chat-handled-slot:empty { display: none; }
+/* Above the composer once the window has closed. */
+.composer-window { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-block-end: var(--space-2); }
+.composer-window:empty { display: none; }
+.composer-window-text { flex: 1 1 24ch; min-inline-size: 0; margin: 0; font-size: var(--fs-100); color: var(--text-default); }
 
 /* G6: a range switch dims the numbers it is replacing instead of blanking them. */
 /* Only the page's own regions: a busy BUTTON inside them (Sync) says so with its spinner. */
@@ -5146,6 +5350,15 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
     color: var(--accent-text);
 }
 
+/* What a voice note said (WhatsApp transcribes it), under its chip: a small label, then the words as in any other bubble. */
+.msg-transcript {
+    display: flex; flex-direction: column; gap: var(--space-1);
+    margin-block-start: var(--space-2); padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+}
+.msg-transcript-label { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); }
+.msg-transcript-text { margin: 0; overflow-wrap: anywhere; }
+
 /* A carousel button's destination, under its picture: a link out as a real (44px) link, a postback as the payload it sends back. */
 .carousel-btn-wrap { display: flex; flex-direction: column; }
 .carousel-btn-url {
@@ -5240,6 +5453,19 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .failure-reason-main .text-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .failure-reason-text { color: var(--text-strong); overflow-wrap: anywhere; }
 .failure-reason-count { font-size: var(--fs-300); color: var(--text-strong); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* The reasons in two groups: what needs the owner, and what the product did on purpose (UX US1 T043). The group's pill carries the
+   meaning (glyph, word, tone); only "Needs you" is red. */
+.failure-group + .failure-group { margin-block-start: var(--space-4); }
+.failure-group-title { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: var(--fs-300); }
+.failure-group-count { color: var(--text-strong); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.failure-group-note { margin: 0 0 var(--space-2); }
+/* The campaign table's outcome cells: green for delivered, red only where something needs the owner, muted for by design. `.data-table td`
+   sets a colour with more weight (0,1,1) than the one-class text utilities, so a cell that asked for one of them never got it; this says it
+   with the weight to win, for this table only. */
+.outcome-table td.text-success { color: var(--success-text); }
+.outcome-table td.text-danger { color: var(--danger-text); }
+.outcome-table td.text-warning { color: var(--warning-text); }
+.outcome-table td.text-muted { color: var(--text-muted); }
 
 @media (max-width: 560px) {
     .analytics-range { inline-size: 100%; }
@@ -5359,6 +5585,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ig-step-label { margin: 0 0 var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
 .ig-when-choice { border: 0; padding: 0; margin: 0 0 var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .ig-radio { display: flex; align-items: center; gap: var(--space-2); min-block-size: var(--tap-target); font-size: var(--fs-200); }
+/* The time field is disabled unless "at a time I choose" is the choice; the claim layer over it takes the press and makes it the choice (IG-01). */
+.ig-at-wrap { position: relative; display: block; }
+.ig-at-claim { position: absolute; inset: 0; cursor: pointer; }
+.ig-at-claim[hidden] { display: none; }
 .ig-brand { margin-block-end: var(--space-5); }
 .ig-brand-summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .ig-brand[open] .ig-brand-summary { margin-block-end: var(--space-4); }
@@ -5404,3 +5634,228 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .tp-problems { margin-block-start: var(--space-4); }
 .tp-problem-list { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); font-size: var(--fs-100); }
 .tp-missing { font-family: var(--font-mono); font-size: var(--fs-100); padding: 1px var(--space-2); border-radius: var(--radius-xs); background: var(--surface-sunken); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Shared patterns (UX foundation) — the styles of the builders in components.js
+   ═══════════════════════════════════════════════════════════════════════════
+   UI.pageHeader, UI.card, UI.emptyState, UI.confirm (stacked), UI.tabs, UI.secretField, UI.field, UI.filterBar,
+   UI.table and UI.pager. Tokens only, logical properties only, 44px targets; the focus ring is the global
+   `:focus-visible`. Motion uses the --motion tokens, which collapse to 1ms under prefers-reduced-motion. The toast's
+   own styles are with the toast, above. */
+
+/* ─── Page header ────────────────────────────────────────────────────────── */
+.ui-page-head {
+    display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-3) var(--space-4);
+    margin-block-end: var(--space-5);
+}
+.ui-page-head-main { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); flex: 1 1 16rem; min-inline-size: 0; }
+.ui-page-head-title { font-size: var(--fs-500); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+.ui-page-head-subtitle { max-inline-size: 60ch; font-size: var(--fs-200); color: var(--text-muted); }
+.ui-page-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+/* The back link is a ghost button; its label lines up with the title, not with the button's padding. */
+.ui-page-back { margin-inline-start: calc(var(--space-3) * -1); }
+@media (max-width: 768px) {
+    .ui-page-head-actions { inline-size: 100%; }
+    .ui-page-head-actions .btn { flex: 1; }
+}
+
+/* ─── Card ───────────────────────────────────────────────────────────────── */
+.ui-card { padding: var(--space-5); }
+.card-head {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    margin-block-end: var(--space-4);
+}
+.card-title { display: flex; align-items: center; gap: var(--space-2); min-inline-size: 0; font-size: var(--fs-400); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.card-title [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); flex-shrink: 0; }
+.card-head-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-inline-start: auto; }
+/* A tone is an edge and a glyph in the title: it never rests on colour alone. */
+.ui-card--info { border-inline-start: 4px solid var(--info); }
+.ui-card--success { border-inline-start: 4px solid var(--success); }
+.ui-card--warning { border-inline-start: 4px solid var(--warning); }
+.ui-card--danger { border-inline-start: 4px solid var(--danger); }
+.ui-card--info .card-title svg { color: var(--info-text); }
+.ui-card--success .card-title svg { color: var(--success-text); }
+.ui-card--warning .card-title svg { color: var(--warning-text); }
+.ui-card--danger .card-title svg { color: var(--danger-text); }
+@media (max-width: 768px) { .ui-card { padding: var(--space-4); } }
+
+/* ─── Empty state: the next step ─────────────────────────────────────────── */
+.empty-state-actions {
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    margin-block-start: var(--space-2);
+}
+
+/* ─── The question drawn over an open modal (UI.confirm with `stack`) ────── */
+.confirm-layer { z-index: calc(var(--z-modal) + 10); }
+.confirm-content { max-inline-size: 440px; }
+
+/* ─── Tabs: underline for navigation, a pill in a track for a view switch ── */
+.ui-tabs { display: flex; flex-wrap: wrap; align-items: center; max-inline-size: 100%; }
+.ui-tab {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-3);
+    font-size: var(--fs-200); font-weight: var(--fw-medium);
+    color: var(--text-default);
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.ui-tab [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; }
+.ui-tab:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.ui-tab-count {
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--surface-glass-hover);
+    color: var(--text-default);
+    font-size: var(--fs-100);
+    font-variant-numeric: tabular-nums;
+}
+/* Navigation: it changes the URL, so it reads as a place you are. */
+.ui-tabs--link { gap: var(--space-2); border-block-end: 1px solid var(--border-subtle); }
+/* The Results view strip (`UI.resultsTabs`), at the top of the numbers and the log. */
+.page-tabs { margin-block-end: var(--space-4); }
+.ui-tabs--link .ui-tab {
+    border-block-end: 2px solid transparent;
+    margin-block-end: -1px;
+    border-start-start-radius: var(--radius-xs); border-start-end-radius: var(--radius-xs);
+}
+.ui-tabs--link .ui-tab:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
+.ui-tabs--link .ui-tab[aria-current='page'] { color: var(--text-strong); font-weight: var(--fw-semibold); border-block-end-color: var(--accent); }
+/* A view switch: it changes what the page shows and nothing else, so it reads as a control you press. */
+.ui-tabs--toggle {
+    display: inline-flex; gap: var(--space-1);
+    padding: var(--space-1);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+}
+.ui-tabs--toggle .ui-tab { padding-inline: var(--space-4); border-radius: var(--radius-pill); }
+.ui-tabs--toggle .ui-tab:hover:not(:disabled) { color: var(--text-strong); }
+.ui-tabs--toggle .ui-tab[aria-pressed='true'] { background: var(--surface-solid); color: var(--text-strong); font-weight: var(--fw-semibold); box-shadow: var(--elev-1); }
+@media (max-width: 768px) {
+    .ui-tabs--toggle { inline-size: 100%; }
+    .ui-tabs--toggle .ui-tab { flex: 1; }
+}
+/* Forced colours drop backgrounds and shadows: the current tab keeps an outline there. */
+@media (forced-colors: active) {
+    .ui-tabs--toggle .ui-tab[aria-pressed='true'], .ui-tabs--link .ui-tab[aria-current='page'] { outline: 2px solid currentColor; outline-offset: -2px; }
+}
+
+/* ─── Form field ─────────────────────────────────────────────────────────── */
+.ui-field-error {
+    display: flex; align-items: flex-start; gap: var(--space-2);
+    margin-block-start: var(--space-2);
+    font-size: var(--fs-200);
+    color: var(--danger-text);
+}
+.ui-field-error [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; margin-block-start: 3px; }
+
+/* ─── Secret field ───────────────────────────────────────────────────────── */
+.ui-secret-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.ui-secret-state { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: 0; font-size: var(--fs-200); color: var(--text-strong); }
+.ui-secret-state [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; color: var(--text-muted); }
+.ui-secret-source { color: var(--text-muted); }
+.ui-secret-buttons, .ui-secret-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ui-secret-edit { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-2); }
+.ui-secret-error { margin: var(--space-2) 0 0; font-size: var(--fs-200); color: var(--danger-text); }
+.ui-secret-error:empty { display: none; }
+
+/* ─── Filter bar ─────────────────────────────────────────────────────────── */
+.ui-filter { gap: var(--space-2) var(--space-3); }
+.ui-filter-search { flex: 1 1 14rem; min-inline-size: 0; }
+.ui-filter-search .field { inline-size: 100%; min-inline-size: 0; }
+.ui-filter-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ui-chip {
+    min-block-size: var(--tap-target);
+    padding-inline: var(--space-4);
+    font-size: var(--fs-200);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.ui-chip:hover { border-color: var(--border-strong); color: var(--text-strong); }
+/* Pressed is the highlighter plus the selected ring (DESIGN.md: selected is an inset 2px accent, never the focus ring). */
+.ui-chip[aria-pressed='true'] { box-shadow: inset 0 0 0 2px var(--accent); font-weight: var(--fw-semibold); }
+.ui-chip-count { font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+
+/* ─── Table and pager ────────────────────────────────────────────────────── */
+.ui-sort {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: var(--tap-target);
+    padding-inline: 0;
+    font: inherit;
+    color: inherit;
+    text-align: start;
+}
+.ui-sort:hover { color: var(--text-strong); }
+.ui-sort [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; }
+.ui-table-grid th[aria-sort='ascending'], .ui-table-grid th[aria-sort='descending'] { color: var(--text-strong); }
+/* `.log-cards` is a list here; the reset above zeroes its padding, the bullets are this one line. */
+ul.log-cards { list-style: none; }
+.ui-card-fields { display: grid; gap: var(--space-2); margin: 0; }
+.ui-card-field { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.ui-card-field dd { margin: 0; min-inline-size: 0; text-align: end; overflow-wrap: anywhere; }
+
+/* Boost (Meta ads) on a published post card, and the dialog's summary. */
+.boost-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.boost-box { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.boost-box-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.boost-metrics { gap: var(--space-3); }
+.boost-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.boost-summary { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); }
+.boost-summary p { margin: 0; }
+.boost-summary p + p { margin-block-start: var(--space-1); }
+.boost-summary strong { font-size: var(--fs-300); color: var(--text-strong); }
+.boost-summary-lead { font-size: var(--fs-200); color: var(--text-muted); }
+.boost-actions .btn { min-block-size: var(--tap-target); }
+.boost-link { display: inline-flex; align-items: center; gap: var(--space-1); min-block-size: var(--tap-target); }
+
+/* Ad builder, quick mode (ads_builder.js): the dialog Boost opens. Logical properties only; every target is 44px. */
+.adsb-caption { margin: 0; padding: var(--space-3); border-inline-start: 3px solid var(--border-strong, var(--border-subtle)); background: var(--surface-sunken); border-radius: var(--radius-sm); max-block-size: 7.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.adsb-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.adsb-subtitle { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.adsb-dests { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.adsb-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-4); }
+.adsb-ice-row { display: flex; align-items: flex-start; gap: var(--space-2); padding-block: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.adsb-ice-fields { flex: 1; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.adsb-ice-row .btn { min-block-size: var(--tap-target); min-inline-size: var(--tap-target); }
+.adsb-ice-add { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-block-start: var(--space-2); }
+.adsb-ice-add .btn { min-block-size: var(--tap-target); }
+.adsb-policy-box { display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-fields, .adsb-findings, .adsb-review ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.adsb-field { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.adsb-field-name { margin: 0 0 var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
+.adsb-snippet { margin: 0 0 var(--space-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.adsb-mark { background: var(--warning-soft); color: var(--text-strong); border-radius: 2px; padding-inline: 2px; text-decoration: underline wavy var(--warning-text); text-underline-offset: 3px; }
+.adsb-finding--block .adsb-mark, .adsb-field:has(.adsb-finding--block) .adsb-mark { background: var(--danger-soft); text-decoration-color: var(--danger-text); }
+.adsb-finding { display: flex; flex-direction: column; gap: var(--space-1); padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--warning-text); }
+.adsb-finding--block { border-inline-start-color: var(--danger-text); }
+.adsb-finding .badge { align-self: flex-start; }
+.adsb-why, .adsb-rewrite { margin: 0; font-size: var(--fs-200); }
+.adsb-clean { margin: 0; display: flex; align-items: center; gap: var(--space-2); }
+.adsb-review { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.adsb-review p, .adsb-block p { margin: 0; display: flex; align-items: flex-start; gap: var(--space-2); }
+.adsb-review li { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-200); }
+.adsb-review li a { min-block-size: var(--tap-target); display: inline-flex; align-items: center; }
+.adsb-ack { margin-block-start: var(--space-2); }
+
+/* The Meta ads readiness steps and the alert kinds are drawn by the Settings card (Settings does not load pages/ads.css); every other `.ads-` rule lives in css/pages/ads.css. */
+.ads-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ads-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ads-check [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex-shrink: 0; color: var(--text-muted); }
+.ads-check--done [data-lucide] { color: var(--success-text); }
+.ads-step { align-items: flex-start; }
+.ads-step > [data-lucide] { margin-block-start: 2px; }
+.ads-step-text { display: flex; flex-direction: column; gap: var(--space-1); flex: 1 1 auto; min-inline-size: 0; }
+.ads-step-text .form-hint { margin: 0; }
+.ads-step .help-link { margin-inline-start: auto; }
+.ads-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-2) var(--space-4); }
+.ads-test-summary { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--fs-200); }
+.ads-test-summary p { margin: 0; }
+@media (max-width: 480px) {
+    .ads-test-actions .btn { flex: 1 1 auto; }
+}

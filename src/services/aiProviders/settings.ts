@@ -18,7 +18,7 @@ import { inspect } from 'node:util';
 import { log } from '../../utils/log.js';
 import { APP_SETTING_KEYS, getSettings, last4, setSetting, type AppSettingKey } from '../appSettings.js';
 import { type PriceTable } from '../llm/cost.js';
-import { AI_PURPOSES, isAiPurpose, PURPOSE_DEFAULT_EFFORT, type AiPurpose } from './purposes.js';
+import { AI_PURPOSES, isAiPurpose, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, type AiPurpose } from './purposes.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, providerById, type ProviderId } from '../llm/registry.js';
 import { EFFORTS, isJsonMode, type Effort, type JsonMode } from '../llm/types.js';
 
@@ -412,6 +412,13 @@ export function planAiPatch(body: unknown, current: AiConfig): PlanResult {
             }
             const route = routeEntry(purpose, value);
             if (!route.ok) { problems.push(route.problem); continue; }
+            // Refused when SAVED, not when read: a stored route on a provider that may not answer this purpose is still loaded, so `pickRoute` can name it
+            // in the refusal and the card can show it, instead of the route vanishing and another provider answering without anyone having chosen it.
+            const allowed = PURPOSE_PROVIDER_ALLOWLIST[purpose];
+            if (allowed && !allowed.includes(route.route.provider)) {
+                problems.push(`routing.${purpose}.provider must be one of ${allowed.join(', ')}: only providers whose terms forbid training on what they are sent may answer this purpose.`);
+                continue;
+            }
             next[purpose] = route.route;
             plan.changes.routes[purpose] = `${route.route.provider}/${route.route.model || 'default'}/${route.route.effort}`;
         }

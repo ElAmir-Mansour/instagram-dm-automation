@@ -15,7 +15,9 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { pool } from '../config/db.js';
 import { decryptSecret, isEncrypted } from '../config/crypto.js';
+import { metaHttp } from './http.js';
 import { setLogSink } from '../utils/log.js';
 import { AUDIT_ACTIONS } from './audit.js';
 import { FakeDb, FakeGraph, page, type GraphPage } from './metaLoginHarness.js';
@@ -27,7 +29,8 @@ import {
 } from './metaLogin.js';
 import { readPick } from './oauthState.js';
 import { REQUIRED_SCOPES } from './tokenHealth.js';
-import { APP_SETTING_KEYS } from './appSettings.js';
+import { APP_SETTING_KEYS, tenantSettingKey, TENANT_SETTING_PREFIXES } from './appSettings.js';
+import { ADS_SCOPES } from './metaLogin.js';
 
 const NEW_TENANT = '11111111-1111-4111-8111-111111111111';
 const OTHER_TENANT = '22222222-2222-4222-8222-222222222222';
@@ -140,6 +143,14 @@ describe('buildLoginUrl', () => {
         const url = new URL(buildLoginUrl({ ...base, configId: null }));
         assert.equal(url.searchParams.get('config_id'), null);
         assert.equal(url.searchParams.get('scope'), LOGIN_SCOPES.join(','));
+    });
+
+    it('adds the ads permissions only when the operator switched them on (Boost)', () => {
+        const off = new URL(buildLoginUrl({ ...base, configId: null })).searchParams.get('scope')!.split(',');
+        for (const s of ['ads_read', 'ads_management']) assert.ok(!off.includes(s), `not asked by default: ${s}`);
+        const on = new URL(buildLoginUrl({ ...base, configId: null, adsScopes: true })).searchParams.get('scope')!.split(',');
+        for (const s of [...LOGIN_SCOPES, ...ADS_SCOPES]) assert.ok(on.includes(s), s);
+        assert.equal(new URL(buildLoginUrl({ ...base, configId: '987654321098765', adsScopes: true })).searchParams.get('scope'), null, 'a configuration still carries the permissions');
     });
 
     it('asks for what the app needs, plus the two insights permissions', () => {
@@ -388,7 +399,28 @@ describe('subscribePage and unsubscribePage', () => {
         assert.equal(post!.authorization, `Bearer ${TOKEN}`);
         assert.equal(`${get!.method} ${get!.path}`, 'GET /200000000000001/subscribed_apps');
         assert.equal(get!.authorization, `Bearer ${TOKEN}`);
-        assert.deepEqual(WEBHOOK_FIELDS, ['feed', 'messages', 'messaging_postbacks']);
+        assert.deepEqual(WEBHOOK_FIELDS, ['feed', 'messages', 'messaging_postbacks', 'messaging_referrals']);
+    });
+
+    it('with extra fields (lead ads, A10) POSTs WEBHOOK_FIELDS + them, deduped, and confirms every one on the read-back', async () => {
+        // `leadgen` is subscribed only for a tenant with a lead_ads sign-off, so it rides in as an argument: WEBHOOK_FIELDS stays the four it was.
+        const result = await subscribePage('200000000000001', TOKEN, APP.appId, ['leadgen', 'feed', 'leadgen']);
+        assert.deepEqual(result, { confirmed: true, warning: null });
+        const post = graph.called(/POST \/200000000000001\/subscribed_apps/)[0]!;
+        assert.equal(post.body, `subscribed_fields=${encodeURIComponent([...WEBHOOK_FIELDS, 'leadgen'].join(','))}`);
+        assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS, 'leadgen']);
+    });
+
+    it('is not confirmed when Meta keeps the base fields but drops the extra one (a POST that answered success proves nothing)', async () => {
+        const inner = (metaHttp as any).post;
+        (metaHttp as any).post = (url: string, body: any, cfg: any) => inner(url, body instanceof URLSearchParams && body.has('subscribed_fields')
+            ? new URLSearchParams({ subscribed_fields: body.get('subscribed_fields')!.split(',').filter((f) => f !== 'leadgen').join(',') }) : body, cfg);
+        assert.deepEqual(await subscribePage('200000000000001', TOKEN, APP.appId, ['leadgen']), { confirmed: false, warning: 'subscribe_unconfirmed' });
+    });
+
+    it('without extra fields still asks for exactly WEBHOOK_FIELDS', async () => {
+        await subscribePage('200000000000001', TOKEN, APP.appId, []);
+        assert.equal(graph.called(/POST \/200000000000001\/subscribed_apps/)[0]!.body, `subscribed_fields=${encodeURIComponent(WEBHOOK_FIELDS.join(','))}`);
     });
 
     it('a failed POST is a warning, not a throw', async () => {
@@ -459,6 +491,31 @@ describe('completeMetaConnection', () => {
             pageId: p.id, pageName: 'Page 1', instagramId: p.instagram_business_account!.id, instagramUsername: 'page1',
             replaced: false, webhookSubscribed: true, warnings: [], missingScopes: [], affectedFeatures: [],
         });
+    });
+
+    it('a tenant with a lead_ads sign-off keeps `leadgen` across a reconnect; one without, or whose sign-off cannot be read, subscribes the usual four', async () => {
+        let signoff: 'active' | 'none' | 'error' = 'active';
+        const inner = (pool as any).query;
+        (pool as any).query = async (sql: string, params: unknown[] = []) => {
+            if (/FROM ads_legal_signoffs/.test(sql)) {
+                if (signoff === 'error') throw new Error('relation "ads_legal_signoffs" does not exist');
+                return { rows: signoff === 'active' ? [{ id: 's1', creator_id: NEW_TENANT, scope: 'lead_ads', countries: ['EG'], recorded_by: null, recorded_at: new Date(), note: 'n', revoked_at: null }] : [], rowCount: signoff === 'active' ? 1 : 0 };
+            }
+            return inner(sql, params);
+        };
+        try {
+            await completeMetaConnection(complete({ reconnect: false }));
+            assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS, 'leadgen']);
+            for (const state of ['none', 'error'] as const) {
+                signoff = state;
+                db.creators.get(NEW_TENANT)!.page_access_token = null;
+                graph.subscribed.clear();
+                await completeMetaConnection(complete({ reconnect: false }));
+                assert.deepEqual(graph.subscribed.get('200000000000001'), [...WEBHOOK_FIELDS], state);
+            }
+        } finally {
+            (pool as any).query = inner;
+        }
     });
 
     it('validates the token, checks the Page is free, THEN subscribes, THEN writes', async () => {
@@ -755,6 +812,74 @@ describe('finishLogin', () => {
 });
 
 // ─── Disconnect, and the summary ────────────────────────────────────────────────────────
+
+describe('finishLogin: Boost in one click', () => {
+    const input = { creatorId: NEW_TENANT, userId: USER, code: CODE, redirectUri: REDIRECT, reconnect: false, returnTo: null };
+    const tokenKey = tenantSettingKey(TENANT_SETTING_PREFIXES.adsToken, NEW_TENANT);
+    const settingsKey = tenantSettingKey(TENANT_SETTING_PREFIXES.adsSettings, NEW_TENANT);
+
+    beforeEach(() => {
+        db.addCreator(NEW_TENANT, { name: 'New Tenant' });
+        graph.pages = [page(1)];
+    });
+
+    it('stores the ads token, encrypted, and the only active ad account, when the ads permissions were granted', async () => {
+        graph.granted = [...LOGIN_SCOPES, ...ADS_SCOPES];
+        graph.adAccounts = [
+            { account_id: '509787248064459', name: 'Shop', currency: 'USD', account_status: 1 },
+            { account_id: '354996612787363', name: 'Old', currency: 'EGP', account_status: 2 },
+        ];
+        assert.equal((await finishLogin(input)).kind, 'connected', 'the Page connects as before');
+        const stored = db.settings.get(tokenKey)!;
+        assert.ok(isEncrypted(stored), 'encrypted at rest');
+        assert.equal(decryptSecret(stored), graph.longToken, 'the long-lived user token');
+        const settings = JSON.parse(db.settings.get(settingsKey)!);
+        assert.equal(settings.adAccountId, '509787248064459');
+        assert.equal(settings.tokenSource, 'connect');
+        assert.equal(settings.maxDailyBudget ?? null, null, 'the money limits are the owner\'s to set, never filled in');
+        assert.deepEqual(leaks([graph.longToken, graph.shortToken]), [], 'no token in the clear anywhere');
+    });
+
+    it('leaves a real choice of ad accounts to the owner', async () => {
+        graph.granted = [...LOGIN_SCOPES, ...ADS_SCOPES];
+        graph.adAccounts = [
+            { account_id: '509787248064459', name: 'A', currency: 'USD', account_status: 1 },
+            { account_id: '354996612787363', name: 'B', currency: 'EGP', account_status: 1 },
+        ];
+        await finishLogin(input);
+        assert.ok(db.settings.get(tokenKey));
+        assert.equal(JSON.parse(db.settings.get(settingsKey)!).adAccountId, null);
+    });
+
+    it('changes nothing about ads when they were not granted, and asks Meta nothing about them', async () => {
+        await finishLogin(input);
+        assert.equal(db.settings.get(tokenKey), undefined);
+        assert.equal(graph.called(/adaccounts/).length, 0);
+    });
+
+    it('never stops the connection when reading the ad accounts fails', async () => {
+        graph.granted = [...LOGIN_SCOPES, ...ADS_SCOPES];
+        graph.fail(/GET \/me\/adaccounts/, 500, { message: 'boom', code: 2 }, 5);
+        assert.equal((await finishLogin(input)).kind, 'connected');
+        assert.ok(db.settings.get(tokenKey), 'the token is kept; the card picks the account later');
+    });
+
+    it('a Disconnect takes the Connect ads token with it, and leaves a pasted one alone', async () => {
+        graph.granted = [...LOGIN_SCOPES, ...ADS_SCOPES];
+        graph.adAccounts = [{ account_id: '509787248064459', name: 'Shop', currency: 'USD', account_status: 1 }];
+        await finishLogin(input);
+        await disconnectMeta({ creatorId: NEW_TENANT, userId: USER });
+        assert.equal(db.settings.get(tokenKey), undefined, 'gone');
+        assert.equal(JSON.parse(db.settings.get(settingsKey)!).tokenSource, null);
+
+        db.settings.set(tokenKey, 'pasted-system-user-token-xxxxxxxxxxxx');
+        db.settings.set(settingsKey, JSON.stringify({ adAccountId: '509787248064459', tokenSource: 'pasted' }));
+        graph.granted = [...LOGIN_SCOPES];
+        await finishLogin(input);
+        await disconnectMeta({ creatorId: NEW_TENANT, userId: USER });
+        assert.equal(db.settings.get(tokenKey), 'pasted-system-user-token-xxxxxxxxxxxx', 'kept');
+    });
+});
 
 describe('disconnectMeta', () => {
     beforeEach(async () => {

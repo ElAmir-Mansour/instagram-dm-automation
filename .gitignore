@@ -3,7 +3,10 @@ node_modules
 .vercel/
 dist/
 .DS_Store
-docs/
+# docs/ holds the maintainers' local notes and specs (kept out of this public repo), EXCEPT the operator
+# guides: any docs/*_GUIDE.md is tracked by default, so a new guide can't silently stay local.
+docs/*
+!docs/*_GUIDE.md
 .env*.local
 .env.production
 

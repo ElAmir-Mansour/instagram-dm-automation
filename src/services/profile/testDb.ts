@@ -31,7 +31,7 @@ export interface State {
     growth: Map<string, Row>;
 }
 
-export const STUDIO_COLUMNS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
+export const STUDIO_COLUMNS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic', 'explainer'] as const;
 export const GROWTH_COLUMNS = ['keywords', 'hashtag_sets', 'competitors', 'audience', 'goal_followers', 'goal_views'] as const;
 
 export const missingTable = (name: string): Error => Object.assign(new Error(`relation "${name}" does not exist`), { code: '42P01' });
@@ -184,7 +184,7 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
         return { rows: [] };
     });
 
-    route(/^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = \$1( FOR UPDATE)?$/, ([id]) => {
+    route(/^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic, explainer FROM studio_settings WHERE creator_id = \$1( FOR UPDATE)?$/, ([id]) => {
         const row = state.studio.get(id);
         return { rows: row ? [Object.fromEntries(STUDIO_COLUMNS.map((c) => [c, jsonb(row[c] ?? null)]))] : [] };
     });

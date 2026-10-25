@@ -11,13 +11,18 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
-import { MEDIA_BUCKET, setStorageFetch } from './supabaseStorage.js';
+import { MEDIA_BUCKET, PRIVATE_MEDIA_BUCKET, setStorageFetch } from './supabaseStorage.js';
 import {
+    DEFAULT_RETENTION_DEPS,
+    EXPLAINER_FILES_GRACE_DAYS,
     JOB_PRUNE_BATCH_SIZE,
     MAX_SWEEP_PASSES,
     MIN_RETENTION_DAYS,
     PRUNE_BATCH_SIZE,
     pruneOrphanedMedia,
+    pruneOrphanedPrivateMedia,
+    PRIVATE_MEDIA_ORPHAN_DAYS,
+    PRIVATE_ORPHANS_SQL,
     previewMediaCleanup,
     resetProfileTableWarning,
     resolveRetention,
@@ -171,6 +176,76 @@ describe('runRetentionSweep', () => {
         assert.deepEqual(order, ['raw', 'jobs', 'media', 'raw', 'jobs', 'media', 'objects']);
         assert.equal(result.mediaObjectsRemoved, 3);
         assert.equal(result.passes, 2);
+    });
+
+    it('sweeps the image allowance once, after the passes and the object queue, however many passes the others need (T054)', async () => {
+        const order: string[] = [];
+        let raw = 0;
+        const result = await runRetentionSweep({
+            pruneRaw: async () => { order.push('raw'); return { cleared: raw++ < 2 ? PRUNE_BATCH_SIZE : 0, skipped: false }; },
+            pruneJobs: async () => ({ deleted: 0 }),
+            pruneMedia: async () => ({ deleted: 0 as const, skipped: false as const }),
+            removeObjects: async () => { order.push('objects'); return { removed: 0, failed: 0, skipped: false as const }; },
+            pruneAllowance: async () => { order.push('allowance'); return 9; },
+        });
+        assert.equal(result.passes, 3);
+        assert.deepEqual(order, ['raw', 'raw', 'raw', 'objects', 'allowance']);
+        assert.equal(result.allowanceRowsDeleted, 9);
+    });
+
+    it('reports zero, and calls nothing, when a test passes dependencies without the allowance sweep', async () => {
+        const result = await runRetentionSweep(scripted([0], [0]));
+        assert.equal(result.allowanceRowsDeleted, 0);
+    });
+
+    it('never throws because of the allowance sweep: no table before v59, or a failure, is read as zero and logged', async () => {
+        const lines: { level: string; line: string }[] = [];
+        const previous = setLogSink((level, line) => lines.push({ level, line }));
+        try {
+            const noTable = await runRetentionSweep({
+                ...scripted([0]),
+                pruneAllowance: async () => { throw Object.assign(new Error('relation "image_allowance" does not exist'), { code: '42P01' }); },
+            });
+            assert.equal(noTable.allowanceRowsDeleted, 0);
+            assert.equal(lines.length, 0, 'a database behind v59 has nothing to sweep, and that is not an error');
+
+            const broken = await runRetentionSweep({
+                ...scripted([0]),
+                pruneAllowance: async () => { throw new Error('connection terminated'); },
+            });
+            assert.equal(broken.allowanceRowsDeleted, 0);
+            assert.equal(lines.filter((l) => l.level === 'error' && l.line.includes('retention.allowance_sweep_failed')).length, 1);
+        } finally {
+            setLogSink(previous);
+        }
+    });
+
+    describe('the real sweep carries the allowance sweep in its default dependencies (T054)', () => {
+        const originalQuery = pool.query;
+        let statements: string[] = [];
+        beforeEach(() => {
+            statements = [];
+            (pool as unknown as { query: unknown }).query = async (sql: string) => { statements.push(sql.replace(/\s+/g, ' ').trim()); return { rows: [], rowCount: 4 }; };
+        });
+        afterEach(() => { (pool as unknown as { query: unknown }).query = originalQuery; });
+
+        it('is there, and deletes the allowance rows older than 90 days on the pool, counting what it deleted', async () => {
+            assert.equal(typeof DEFAULT_RETENTION_DEPS.pruneAllowance, 'function');
+            assert.equal(await DEFAULT_RETENTION_DEPS.pruneAllowance!(), 4);
+            assert.deepEqual(statements, ["DELETE FROM image_allowance WHERE day < (NOW() AT TIME ZONE 'UTC')::date - 90"]);
+        });
+
+        it('is run by the sweep, once, and its count is in the result', async () => {
+            const result = await runRetentionSweep({
+                pruneRaw: async () => ({ cleared: 0, skipped: false }),
+                pruneJobs: async () => ({ deleted: 0 }),
+                pruneMedia: async () => ({ deleted: 0 as const, skipped: false as const }),
+                removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
+                pruneAllowance: DEFAULT_RETENTION_DEPS.pruneAllowance,
+            });
+            assert.equal(result.allowanceRowsDeleted, 4);
+            assert.equal(statements.filter((sql) => /image_allowance/.test(sql)).length, 1);
+        });
     });
 
     it('gives up after the pass cap rather than running until the invocation dies', async () => {
@@ -340,13 +415,76 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(cp\.profile->'brand'->>'portrait_url', ''\) \|\| ' ' \|\| COALESCE\(cp\.profile->'brand'->>'logo_url', ''\) \|\| ' ' \|\| COALESCE\(\(cp\.profile->'offers'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
+    it('keeps every picture of a scene, the chosen one and the last three, whatever the explainer\u2019s status (v59)', async () => {
+        // A scene's pictures are the product of an allowance that resets daily: collecting one that the owner can still pick is a
+        // picture drawn twice. They are kept by their scene alone; the scene goes with its explainer.
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM explainer_scenes es WHERE \(COALESCE\(es\.picture::text, ''\) \|\| ' ' \|\| es\.pictures::text\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+        const scenes = clause.slice(clause.indexOf('FROM explainer_scenes'), clause.indexOf('FROM explainers e'));
+        assert.doesNotMatch(scenes, /status|NOW\(\)|INTERVAL/, 'no state of the explainer, and no clock, lets a picture of an existing scene go');
+    });
+
+    it('keeps an explainer\u2019s voiceover, both videos and cover until 30 days after its posting time, and for as long as it is not scheduled', async () => {
+        // A `ready` explainer is waiting for Schedule and no post names its files until then. Once it is scheduled they stay for
+        // the 30 days of FR-031, and after them go like any posted file (the posts' own guard keeps what a post may still fetch).
+        const clause = await keepClause();
+        assert.equal(EXPLAINER_FILES_GRACE_DAYS, 30);
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM explainers e WHERE \(e\.status <> 'scheduled' OR COALESCE\(\(e\.schedule->>'scheduled_time'\)::timestamptz \+ INTERVAL '30 days' > NOW\(\), TRUE\)\)/);
+        assert.match(clause, /AND \(COALESCE\(e\.audio->>'media_id', ''\) \|\| ' ' \|\| COALESCE\(e\.audio->>'url', ''\) \|\| ' ' \|\| COALESCE\(e\.render->>'vertical_url', ''\) \|\| ' ' \|\| COALESCE\(e\.render->>'horizontal_url', ''\) \|\| ' ' \|\| COALESCE\(e\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    it('a scheduled explainer whose time cannot be read keeps its files: unknown is never a reason to delete', async () => {
+        // `NULL + 30 days > NOW()` is NULL, and a NULL in a NOT EXISTS condition reads as "not named": the COALESCE to TRUE is what
+        // keeps the file when the row is malformed.
+        const clause = await keepClause();
+        const timeCheck = /COALESCE\(\(e\.schedule->>'scheduled_time'\)::timestamptz \+ INTERVAL '30 days' > NOW\(\), TRUE\)/;
+        assert.match(clause, timeCheck);
+        // And the window is measured from the time it was scheduled FOR, not from when the row was written.
+        assert.doesNotMatch(clause.slice(clause.indexOf('FROM explainers e')), /e\.updated_at|e\.created_at/);
+    });
+
+    it('keeps the reference pictures of the characters and the music tracks the explainer settings name', async () => {
+        // A track is the owner's file and no post names it; a reference picture is sent with every draw that names its character.
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM studio_settings st WHERE \(COALESCE\(\(st\.explainer->'characters'\)::text, ''\) \|\| ' ' \|\| COALESCE\(\(st\.explainer->'music'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    describe('each kind of explainer file is named by the guard that keeps it (v59): a sweep deletes none of them while the explainer or its settings name it', () => {
+        // The files are named only inside JSON, so the guard reads that JSON. One test per kind, so that a guard that loses one of them is the test that says which.
+        // (The statements were also run against a real Postgres, with a row of every kind: see the PR.)
+        const KINDS: [string, RegExp][] = [
+            ['a scene\u2019s chosen picture (`picture.media_id`)', /FROM explainer_scenes es WHERE \(COALESCE\(es\.picture::text, ''\)/],
+            ['a scene\u2019s earlier pictures (`pictures[].media_id`)', /\|\| ' ' \|\| es\.pictures::text\) LIKE '%' \|\| m\.id::text \|\| '%'/],
+            ['a character\u2019s approved reference picture (`explainer.characters[].ref_media_id`)', /COALESCE\(\(st\.explainer->'characters'\)::text, ''\)/],
+            ['a music track of the library (`explainer.music[].media_id`)', /COALESCE\(\(st\.explainer->'music'\)::text, ''\)/],
+            ['the voiceover, by its id and by its address (`audio.media_id`, `audio.url`)', /COALESCE\(e\.audio->>'media_id', ''\) \|\| ' ' \|\| COALESCE\(e\.audio->>'url', ''\)/],
+            ['the vertical video (`render.vertical_url`)', /COALESCE\(e\.render->>'vertical_url', ''\)/],
+            ['the horizontal video (`render.horizontal_url`)', /COALESCE\(e\.render->>'horizontal_url', ''\)/],
+            ['the cover (`render.cover_url`)', /COALESCE\(e\.render->>'cover_url', ''\)/],
+        ];
+        for (const [what, pattern] of KINDS) {
+            it(`keeps ${what}`, async () => {
+                assert.match(await keepClause(), pattern);
+            });
+        }
+
+        it('keeps the voiceover and the videos by the explainer’s state, not by the settings or the scenes: the three guards are three separate EXISTS', async () => {
+            const clause = await keepClause();
+            const explainerGuard = clause.slice(clause.indexOf('FROM explainers e'), clause.indexOf('FROM studio_settings st'));
+            assert.match(explainerGuard, /e\.audio/);
+            assert.doesNotMatch(explainerGuard, /es\.|st\./, 'the explainer guard reads only the explainer');
+            const settingsGuard = clause.slice(clause.indexOf('FROM studio_settings st'));
+            assert.doesNotMatch(settingsGuard, /e\.render|e\.audio/, 'and the settings guard only the settings');
+        });
+    });
+
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
         // An OR between them would delete anything any single table does not name — a render
         // slide is named by no scheduled post, so it would go.
         await pruneOrphanedMedia();
         const sql = statements[0]!;
-        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 7);
-        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 7);
+        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 10);
+        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 10);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
     });
 
@@ -363,7 +501,7 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
             assert.equal(statements.length, 2);
             assert.match(statements[0]!, /creator_profiles/);
             assert.doesNotMatch(statements[1]!, /creator_profiles/);
-            assert.equal((statements[1]!.match(/AND NOT EXISTS/g) ?? []).length, 6, 'every other guard is still there');
+            assert.equal((statements[1]!.match(/AND NOT EXISTS/g) ?? []).length, 9, 'every other guard is still there, the explainers\u2019 too');
             assert.deepEqual(params[1], params[0], 'with the same window, flag and batch size');
         });
 
@@ -395,6 +533,77 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
             assert.equal(statements.length, 2);
             assert.match(statements[0]!, /creator_profiles/);
             assert.doesNotMatch(statements[1]!, /creator_profiles/);
+        });
+    });
+
+    describe('before migration v59 is applied', () => {
+        const missing = (table: string): Error => Object.assign(new Error(`relation "${table}" does not exist`), { code: '42P01' });
+        const noColumn = (column: string): Error => Object.assign(new Error(`column ${column} does not exist`), { code: '42703' });
+        const explainerGuards = /explainer_scenes|FROM explainers|st\.explainer/;
+
+        it('runs again without the three explainer guards, instead of stopping the whole sweep', async () => {
+            // With no explainer tables no explainer names a file, so the guards are vacuous: the sweep deletes what it deleted before
+            // v59. Without the retry the query fails whole and no media is cleaned up until `npm run migrate` runs.
+            failWith = (sql) => (explainerGuards.test(sql) ? missing('explainer_scenes') : null);
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 3, skipped: false });
+            assert.equal(statements.length, 2);
+            assert.match(statements[0]!, explainerGuards);
+            assert.doesNotMatch(statements[1]!, explainerGuards);
+            assert.equal((statements[1]!.match(/AND NOT EXISTS/g) ?? []).length, 7, 'every other guard is still there, the profile\u2019s too');
+            assert.deepEqual(params[1], params[0], 'with the same window, flag and batch size');
+        });
+
+        it('falls back for each of the three ways the database can say it, and only for them', async () => {
+            for (const error of [missing('explainer_scenes'), missing('explainers'), noColumn('st.explainer')]) {
+                statements = [];
+                resetProfileTableWarning();
+                failWith = (sql) => (explainerGuards.test(sql) ? error : null);
+                const out = await pruneOrphanedMedia();
+                assert.deepEqual(out, { deleted: 3, skipped: false }, error.message);
+                assert.equal(statements.length, 2, error.message);
+            }
+            // A column that is missing from another table is not this migration's.
+            statements = [];
+            failWith = () => noColumn('e.render_x');
+            assert.deepEqual(await pruneOrphanedMedia(), { deleted: 0, skipped: true, reason: 'error' });
+            assert.equal(statements.length, 1);
+        });
+
+        it('warns once, not on every sweep', async () => {
+            const lines: string[] = [];
+            const previous = setLogSink((_level, line) => lines.push(line));
+            try {
+                failWith = (sql) => (explainerGuards.test(sql) ? missing('explainers') : null);
+                await pruneOrphanedMedia();
+                await pruneOrphanedMedia();
+            } finally {
+                setLogSink(previous);
+            }
+            assert.equal(lines.filter((l) => l.includes('retention.explainer_tables_missing')).length, 1);
+        });
+
+        it('a database behind both v33 and v59 drops both guards, one retry each, and still keeps everything else', async () => {
+            failWith = (sql) => (/creator_profiles/.test(sql) ? missing('creator_profiles') : explainerGuards.test(sql) ? missing('explainers') : null);
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 3, skipped: false });
+            assert.equal(statements.length, 3);
+            assert.equal((statements[2]!.match(/AND NOT EXISTS/g) ?? []).length, 6);
+            assert.doesNotMatch(statements[2]!, new RegExp(`creator_profiles|${explainerGuards.source}`));
+        });
+
+        it('does not retry a failure about any other table', async () => {
+            failWith = () => missing('clip_drafts');
+            assert.deepEqual(await pruneOrphanedMedia(), { deleted: 0, skipped: true, reason: 'error' });
+            assert.equal(statements.length, 1);
+        });
+
+        it('the Clean up now preview falls back the same way', async () => {
+            failWith = (sql) => (explainerGuards.test(sql) ? missing('explainer_scenes') : null);
+            await previewMediaCleanup();
+            assert.equal(statements.length, 2);
+            assert.match(statements[0]!, explainerGuards);
+            assert.doesNotMatch(statements[1]!, explainerGuards);
         });
     });
 
@@ -466,6 +675,8 @@ describe('the media retention sweep deletes the object as well as the row', () =
         ]);
         (pool as unknown as { query: unknown }).query = async (sql: string, params: any[] = []) => {
             const flat = sql.replace(/\s+/g, ' ').trim();
+            // The customer-file prune (migration v51) is its own statement, tested in its own describe below: nothing to delete here.
+            if (/^DELETE FROM media_uploads WHERE id IN \( SELECT m\.id FROM media_uploads m WHERE m\.is_private/.test(flat)) return { rows: [], rowCount: 0 };
             if (/^DELETE FROM media_uploads/.test(flat)) {
                 // Two eligible rows: one in Storage, one legacy BYTEA. The trigger queues only
                 // the first.
@@ -529,5 +740,256 @@ describe('the media retention sweep deletes the object as well as the row', () =
         const second = await runRetentionSweep();
         assert.equal(second.mediaObjectsRemoved, 1);
         assert.equal(queue.size, 0);
+    });
+});
+
+/**
+ * A customer's file (a private upload, migration v51) follows its own rule, not a post's.
+ *
+ * There is no database in this suite, so what is pinned is the SQL each statement is made of: which conditions it carries, that they are
+ * ANDed, and in what order the sweep runs them. The posts' prune must never reach a private row; the private prune deletes a private row
+ * only when it is older than `PRIVATE_MEDIA_ORPHAN_DAYS` AND no message names it (`messages.media_upload_id`), so a file a message still
+ * points at survives every sweep, however old; and erasure (not retention) is what removes a file together with its message.
+ */
+describe('private uploads follow their own retention rule', () => {
+    const originalQuery = pool.query;
+    let saved: string | undefined;
+    let statements: string[];
+    let params: unknown[][];
+    let failWith: ((sql: string) => Error | null) | null;
+    let restoreSink: (() => void) | undefined;
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        saved = process.env.MEDIA_RETENTION_DAYS;
+        process.env.MEDIA_RETENTION_DAYS = '30';
+        statements = [];
+        params = [];
+        failWith = null;
+        resetProfileTableWarning();
+        (pool as unknown as { query: unknown }).query = async (sql: string, values: unknown[] = []) => {
+            if (/FROM app_settings/.test(sql)) return { rows: [], rowCount: 0 };
+            statements.push(sql.replace(/\s+/g, ' ').trim());
+            params.push(values);
+            const failure = failWith?.(sql);
+            if (failure) throw failure;
+            return { rows: [], rowCount: 3 };
+        };
+    });
+    afterEach(() => {
+        (pool as unknown as { query: unknown }).query = originalQuery;
+        if (saved === undefined) delete process.env.MEDIA_RETENTION_DAYS;
+        else process.env.MEDIA_RETENTION_DAYS = saved;
+    });
+
+    const missingColumn = (column: string): Error => Object.assign(new Error(`column m.${column} does not exist`), { code: '42703' });
+    const missingTable = (table: string): Error => Object.assign(new Error(`relation "${table}" does not exist`), { code: '42P01' });
+
+    describe('the posts\' prune never reaches one', () => {
+        it('carries `AND NOT m.is_private` BEFORE every other guard, outside the age/published OR, so no age and no published post can select a private row', async () => {
+            await pruneOrphanedMedia();
+            const sql = statements[0]!;
+            const where = sql.slice(sql.indexOf('WHERE ('));
+            assert.match(where, /make_interval\(days => \$1\) OR \(\$2::boolean AND EXISTS \(.*\)\) \) AND NOT m\.is_private AND NOT EXISTS \(/,
+                'the private line follows the closing of the OR group and precedes the first keep-guard');
+            assert.equal((sql.match(/NOT m\.is_private/g) ?? []).length, 1);
+        });
+
+        it('the Clean up now preview and its delete leave private files out too', async () => {
+            await previewMediaCleanup();
+            assert.match(statements[0]!, /AND NOT m\.is_private AND NOT EXISTS \(/);
+        });
+
+        it('is unchanged in everything else: the same window, flag and batch, and the same ten keep-guards ANDed', async () => {
+            await pruneOrphanedMedia();
+            assert.deepEqual(params[0], [30, false, 5000]);
+            assert.equal((statements[0]!.match(/AND NOT EXISTS/g) ?? []).length, 10);
+            assert.doesNotMatch(statements[0]!, /OR NOT EXISTS/);
+        });
+
+        it('before v51 (no is_private column) runs again without that line, instead of stopping the sweep: no file is private yet', async () => {
+            failWith = (sql) => (/is_private/.test(sql) ? missingColumn('is_private') : null);
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 3, skipped: false });
+            assert.equal(statements.length, 2);
+            assert.match(statements[0]!, /is_private/);
+            assert.doesNotMatch(statements[1]!, /is_private/);
+            assert.equal((statements[1]!.match(/AND NOT EXISTS/g) ?? []).length, 10, 'every keep-guard is still there');
+            assert.deepEqual(params[1], params[0]);
+        });
+
+        it('behind both v33 and v51 it drops both lines, one at a time, and still runs', async () => {
+            failWith = (sql) => (/creator_profiles/.test(sql) ? missingTable('creator_profiles') : /is_private/.test(sql) ? missingColumn('is_private') : null);
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 3, skipped: false });
+            assert.equal(statements.length, 3);
+            assert.doesNotMatch(statements[2]!, /creator_profiles|is_private/);
+            assert.equal((statements[2]!.match(/AND NOT EXISTS/g) ?? []).length, 9);
+        });
+
+        it('does not retry a missing column that is not is_private', async () => {
+            failWith = () => missingColumn('something_else');
+            assert.deepEqual(await pruneOrphanedMedia(), { deleted: 0, skipped: true, reason: 'error' });
+            assert.equal(statements.length, 1);
+        });
+    });
+
+    describe('their own rule', () => {
+        const flat = PRIVATE_ORPHANS_SQL.replace(/\s+/g, ' ').trim();
+
+        it('is 30 days, a named constant', () => {
+            assert.equal(PRIVATE_MEDIA_ORPHAN_DAYS, 30);
+        });
+
+        it('deletes a private row only when it is older than the window AND no message names it: all ANDed, oldest first, in batches', async () => {
+            assert.equal(flat,
+                'DELETE FROM media_uploads WHERE id IN ( SELECT m.id FROM media_uploads m WHERE m.is_private AND m.created_at < NOW() - make_interval(days => $1) AND NOT EXISTS (SELECT 1 FROM messages x WHERE x.media_upload_id = m.id) ORDER BY m.created_at LIMIT $2 )');
+            assert.doesNotMatch(flat, /\bOR\b/, 'no way around any condition');
+
+            assert.deepEqual(await pruneOrphanedPrivateMedia(), { deleted: 3, skipped: false });
+            assert.equal(statements[0], flat);
+            assert.deepEqual(params[0], [PRIVATE_MEDIA_ORPHAN_DAYS, PRUNE_BATCH_SIZE]);
+        });
+
+        it('a file a message points at is kept however old: the reference alone, with no age, is a reason to keep it', () => {
+            // The reference test is a NOT EXISTS over messages on this very upload id, and the age test is a separate AND:
+            // so "older than 30 days" never overrides "a message names it".
+            assert.match(flat, /AND NOT EXISTS \(SELECT 1 FROM messages x WHERE x\.media_upload_id = m\.id\)/);
+            assert.match(flat, /AND m\.created_at < NOW\(\) - make_interval\(days => \$1\)/);
+            assert.doesNotMatch(flat, /OR NOT EXISTS|OR m\.created_at/);
+        });
+
+        it('does not delete a public upload: it only ever selects is_private rows', () => {
+            assert.match(flat, /WHERE m\.is_private AND/);
+        });
+
+        it('runs even with media retention OFF (MEDIA_RETENTION_DAYS unset): it is a privacy rule, not storage housekeeping', async () => {
+            delete process.env.MEDIA_RETENTION_DAYS;
+            assert.deepEqual(await pruneOrphanedMedia(), { deleted: 0, skipped: true, reason: 'disabled' });
+            assert.equal(statements.length, 0, 'the posts\' prune did nothing');
+            assert.deepEqual(await pruneOrphanedPrivateMedia(), { deleted: 3, skipped: false });
+            assert.equal(statements.length, 1);
+        });
+
+        it('never throws: a database behind v50/v51 reads as nothing to prune, any other failure as an error', async () => {
+            failWith = () => missingColumn('is_private');
+            assert.deepEqual(await pruneOrphanedPrivateMedia(), { deleted: 0, skipped: true, reason: 'unmigrated' });
+            failWith = () => missingColumn('media_upload_id');
+            assert.deepEqual(await pruneOrphanedPrivateMedia(), { deleted: 0, skipped: true, reason: 'unmigrated' });
+            failWith = () => new Error('connection terminated');
+            assert.deepEqual(await pruneOrphanedPrivateMedia(), { deleted: 0, skipped: true, reason: 'error' });
+        });
+    });
+
+    describe('in the sweep', () => {
+        const base = {
+            pruneRaw: async () => ({ cleared: 0, skipped: false }),
+            pruneJobs: async () => ({ deleted: 0 }),
+            pruneMedia: async () => ({ deleted: 0 as const, skipped: true as const, reason: 'disabled' as const }),
+        };
+
+        it('runs once after the passes and BEFORE the object queue drains, so the files\' objects go in the same run', async () => {
+            const order: string[] = [];
+            const result = await runRetentionSweep({
+                pruneRaw: async () => { order.push('raw'); return { cleared: 0, skipped: false }; },
+                pruneJobs: async () => { order.push('jobs'); return { deleted: 0 }; },
+                pruneMedia: async () => { order.push('media'); return { deleted: 0 as const, skipped: true as const, reason: 'disabled' as const }; },
+                prunePrivateMedia: async () => { order.push('private'); return { deleted: 4, skipped: false as const }; },
+                removeObjects: async () => { order.push('objects'); return { removed: 4, failed: 0, skipped: false as const }; },
+            });
+            assert.deepEqual(order, ['raw', 'jobs', 'media', 'private', 'objects']);
+            assert.equal(result.privateMediaDeleted, 4);
+            assert.equal(result.mediaObjectsRemoved, 4);
+        });
+
+        it('keeps going while its batches come back full, and says so when the cap stops it', async () => {
+            const counts = [PRUNE_BATCH_SIZE, PRUNE_BATCH_SIZE, 7];
+            let call = 0;
+            const result = await runRetentionSweep({
+                ...base,
+                prunePrivateMedia: async () => ({ deleted: counts[call++] ?? 0, skipped: false as const }),
+                removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
+            });
+            assert.equal(result.privateMediaDeleted, PRUNE_BATCH_SIZE * 2 + 7);
+            assert.equal(call, 3);
+            assert.equal(result.moreRemaining, false);
+
+            const endless = await runRetentionSweep({
+                ...base,
+                prunePrivateMedia: async () => ({ deleted: PRUNE_BATCH_SIZE, skipped: false as const }),
+                removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
+            });
+            assert.equal(endless.moreRemaining, true);
+            assert.equal(endless.privateMediaDeleted, PRUNE_BATCH_SIZE * MAX_SWEEP_PASSES);
+        });
+
+        it('a sweep without the dependency (an older caller) still works and reports none', async () => {
+            const result = await runRetentionSweep({ ...base, removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }) });
+            assert.equal(result.privateMediaDeleted, 0);
+        });
+    });
+
+    describe('the whole sweep, against a fake database and a fake Storage', () => {
+        const CREATOR = '11111111-1111-4111-8111-111111111111';
+        const PRIVATE_PATH = `private/${CREATOR}/bbbbbbbb-0000-4000-8000-000000000002.ogg`;
+        const KEY = 'sb_secret_0123456789abcdefghijKLMNOP';
+        let queue: Set<string>;
+        let storageCalls: Array<{ bucket: string; prefixes: string[] }>;
+        let previousFetch: ReturnType<typeof setStorageFetch> = null;
+        let savedEnc: string | undefined;
+
+        beforeEach(() => {
+            queue = new Set();
+            storageCalls = [];
+            delete process.env.MEDIA_RETENTION_DAYS; // media retention OFF, as it is by default
+            savedEnc = process.env.TOKEN_ENCRYPTION_KEY;
+            process.env.TOKEN_ENCRYPTION_KEY = 'ef'.repeat(32);
+            const settings = new Map([
+                ['storage.supabase_url', { value: 'https://abcd1234.supabase.co', is_secret: false }],
+                ['storage.supabase_service_key', { value: encryptSecret(KEY), is_secret: true }],
+            ]);
+            (pool as unknown as { query: unknown }).query = async (sql: string, vals: any[] = []) => {
+                const text = sql.replace(/\s+/g, ' ').trim();
+                if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(text)) {
+                    const row = settings.get(String(vals[0]));
+                    return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+                }
+                // The orphaned customer file is deleted, and the v23 trigger queues its object.
+                if (/^DELETE FROM media_uploads WHERE id IN \( SELECT m\.id FROM media_uploads m WHERE m\.is_private/.test(text)) {
+                    queue.add(PRIVATE_PATH);
+                    return { rows: [], rowCount: 1 };
+                }
+                if (/^DELETE FROM jobs/.test(text)) return { rows: [], rowCount: 0 };
+                if (/^SELECT storage_path FROM media_object_deletions/.test(text)) return { rows: [...queue].map((storage_path) => ({ storage_path })), rowCount: queue.size };
+                if (/^DELETE FROM media_object_deletions/.test(text)) { for (const path of vals[0] as string[]) queue.delete(path); return { rows: [], rowCount: 1 }; }
+                throw new Error(`no result arranged for SQL: ${text}`);
+            };
+            previousFetch = setStorageFetch(async (input, init) => {
+                assert.equal(init?.method, 'DELETE');
+                storageCalls.push({ bucket: new URL(input).pathname.split('/').pop()!, prefixes: JSON.parse(String(init?.body)).prefixes });
+                return new Response(JSON.stringify(JSON.parse(String(init?.body)).prefixes.map((name: string) => ({ name }))), { status: 200 });
+            });
+        });
+        afterEach(() => {
+            setStorageFetch(previousFetch);
+            if (savedEnc === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+            else process.env.TOKEN_ENCRYPTION_KEY = savedEnc;
+        });
+
+        it('deletes an orphaned customer file with media retention off, and removes its object from the PRIVATE bucket only, in the same run', async () => {
+            const result = await runRetentionSweep();
+
+            assert.equal(result.privateMediaDeleted, 1);
+            assert.equal(result.mediaDeleted, 0, 'the posts\' prune is off and did nothing');
+            assert.equal(result.mediaObjectsRemoved, 1);
+            assert.deepEqual(storageCalls, [{ bucket: PRIVATE_MEDIA_BUCKET, prefixes: [PRIVATE_PATH] }]);
+            assert.ok(!storageCalls.some((c) => c.bucket === MEDIA_BUCKET), 'the public bucket was not touched');
+            assert.equal(queue.size, 0);
+        });
     });
 });

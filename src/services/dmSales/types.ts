@@ -85,6 +85,17 @@ export interface SalesFacts {
      * says nothing about it) and how to word the offer of the link. Wording only: the rules above it in the prompt still hold.
      */
     variant?: { opening: string | null; cta: string | null };
+    /**
+     * The channel, said only for a WhatsApp conversation: the rules and the persona were written for Instagram and Messenger, and the model must not
+     * call this chat one of them. Absent for Instagram and Messenger, whose facts block is therefore byte for byte what it was before the field existed
+     * (`prompt.test.ts` pins it).
+     */
+    channel?: 'whatsapp';
+    /**
+     * A3: the click-to-message ad this conversation began from, when the owner switched `ads.bot_context` on (`ads/attribution.ts` `adFactsFor`).
+     * Absent (the default, and every conversation that did not begin from an ad), the facts block is byte for byte what it was (`prompt.test.ts`).
+     */
+    ad?: { name: string; offerTitle: string | null; primaryText: string | null; tapped: string | null };
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */

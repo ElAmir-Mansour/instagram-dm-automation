@@ -41,6 +41,7 @@ function fakeEl(id: string): FakeEl {
 
 interface Loaded {
     Inbox: Json;
+    Attention: Json;
     UI: Json;
     motion: Json;
     t: (key: string, params?: Record<string, unknown>) => string;
@@ -90,11 +91,11 @@ function load(lang: 'ar' | 'en' = 'en'): Loaded {
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const f of [
-        'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js',
+        'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js',
         'dashboard/js/pages/inbox.js',
     ]) vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     vm.runInContext(`I18N.lang = ${JSON.stringify(lang)};`, ctx);
-    const got = vm.runInContext('({ Inbox: InboxPage, UI, t, strings: I18N.strings, motion: Motion })', ctx);
+    const got = vm.runInContext('({ Inbox: InboxPage, Attention, UI, t, strings: I18N.strings, motion: Motion })', ctx);
     got.UI.icons = noop;
     got.UI.captureFocus = () => null;
     got.UI.restoreFocus = () => true;
@@ -105,7 +106,7 @@ function load(lang: 'ar' | 'en' = 'en'): Loaded {
         dom.set(panel.id, panel);
         return { toggle, panel };
     };
-    return { Inbox: got.Inbox, UI: got.UI, motion: got.motion, t: got.t, hash, api, calls, dom, mount, strings: got.strings };
+    return { Inbox: got.Inbox, Attention: got.Attention, UI: got.UI, motion: got.motion, t: got.t, hash, api, calls, dom, mount, strings: got.strings };
 }
 
 const text = (markup: unknown): string => String(markup).replace(/<[^>]+>/g, ' ').replace(/[⁦⁩]/g, '')
@@ -206,35 +207,35 @@ describe('Inbox sales view: Hot', () => {
     const click = (clicks: number, over: Json = {}): Json => ({ links: 1, clicks, prefetch: 0, last_click_at: at(HOUR), ...over });
 
     it('is a person who opened the link we sent, or who said they are ready to buy, or a lead the bot flagged', () => {
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'link', link_clicks: click(1) }), true, 'a person opened the link');
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'recommend', last_intent: 'ready_to_buy' }), true, 'ready to buy');
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'handoff', handoff_reason: 'hot_lead' }), true, 'flagged by the bot');
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'link', link_clicks: click(1) }), true, 'a person opened the link');
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'recommend', last_intent: 'ready_to_buy' }), true, 'ready to buy');
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'handoff', handoff_reason: 'hot_lead' }), true, 'flagged by the bot');
     });
 
     it('is not a link that only crawlers opened, a link nobody opened, or any other intent', () => {
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'link', link_clicks: click(0, { prefetch: 6 }) }), false, 'previews are not people');
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'link', link_clicks: click(0) }), false);
-        for (const intent of INTENTS.filter((i) => i !== 'ready_to_buy')) assert.equal(L.Inbox.isHot({ id: 'a', last_intent: intent }), false, intent);
-        for (const reason of HANDOFF_REASONS.filter((r) => r !== 'hot_lead')) assert.equal(L.Inbox.isHot({ id: 'a', handoff_reason: reason }), false, reason);
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'link', link_clicks: click(0, { prefetch: 6 }) }), false, 'previews are not people');
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'link', link_clicks: click(0) }), false);
+        for (const intent of INTENTS.filter((i) => i !== 'ready_to_buy')) assert.equal(L.Attention.isHot({ id: 'a', last_intent: intent }), false, intent);
+        for (const reason of HANDOFF_REASONS.filter((r) => r !== 'hot_lead')) assert.equal(L.Attention.isHot({ id: 'a', handoff_reason: reason }), false, reason);
     });
 
     it('is never someone who asked to be left alone, or whose conversation is closed: an old click is not a lead', () => {
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'closed', link_clicks: click(3), last_intent: 'ready_to_buy' }), false);
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'link', opted_out_at: at(HOUR), link_clicks: click(3) }), false);
-        assert.equal(L.Inbox.isHot({ id: 'a', stage: 'closed', handoff_reason: 'hot_lead' }), false);
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'closed', link_clicks: click(3), last_intent: 'ready_to_buy' }), false);
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'link', opted_out_at: at(HOUR), link_clicks: click(3) }), false);
+        assert.equal(L.Attention.isHot({ id: 'a', stage: 'closed', handoff_reason: 'hot_lead' }), false);
     });
 
     it('reads what the server sends as it comes: a database that is behind has no hot threads, and nonsense is not a click', () => {
         for (const thread of [null, undefined, {}, { id: 'a' }, { id: 'a', link_clicks: null }, { id: 'a', link_clicks: 'many' }, { id: 'a', link_clicks: { clicks: 'abc' } },
             { id: 'a', link_clicks: { clicks: -3 } }, { id: 'a', link_clicks: { clicks: NaN } }, { id: 'a', link_clicks: [] }]) {
-            assert.equal(L.Inbox.isHot(thread), false, JSON.stringify(thread));
+            assert.equal(L.Attention.isHot(thread), false, JSON.stringify(thread));
         }
-        assert.equal(L.Inbox.isHot({ id: 'a', link_clicks: { clicks: '2' } }), true, 'a count that arrives as text is still a count');
+        assert.equal(L.Attention.isHot({ id: 'a', link_clicks: { clicks: '2' } }), true, 'a count that arrives as text is still a count');
     });
 
     it('is its own filter, between Needs you and AI paused, and keeps only these threads', () => {
         const I = load().Inbox;
-        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused']);
+        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']);
         I.threads = [
             { id: 'a', link_clicks: click(2), stage: 'link' }, { id: 'b', stage: 'link', link_clicks: click(0) }, { id: 'c', last_intent: 'ready_to_buy' },
             { id: 'd', stage: 'closed', link_clicks: click(5) }, { id: 'e', is_bot_active: false },
@@ -243,6 +244,28 @@ describe('Inbox sales view: Hot', () => {
         assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'c']);
         I.filter = 'all';
         assert.equal(I.visibleThreads().length, 5, 'All still shows everything');
+    });
+
+    it('A3: the Ads filter keeps threads that began from an ad or came back through one; the row says which ad, and Business AI', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const s = load(lang);
+            const I = s.Inbox;
+            I.threads = [
+                { id: 'a', ad: { kind: 'ctm', platform: 'instagram', adId: '1', name: 'Autumn' }, adTouches: 0 },
+                { id: 'b', ad: null, adTouches: 2 },
+                { id: 'c', ad: { kind: 'ctwa', platform: 'whatsapp', adId: '2', name: null }, adTouches: 0 },
+                { id: 'd', ad: null, adTouches: 0, noReplyReason: 'business_ai_owns_thread' },
+            ];
+            I.filter = 'ads';
+            assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'b', 'c']);
+            assert.ok(String(I.threadRow(I.threads[0])).includes(s.t('inbox.ad.from', { name: 'Autumn' })));
+            assert.ok(String(I.threadRow(I.threads[2])).includes(s.t('inbox.ad.fromUnnamed')));
+            assert.ok(!String(I.threadRow(I.threads[1])).includes('data-from-ad'));
+            assert.ok(String(I.threadRow(I.threads[3])).includes(s.t('inbox.ad.businessAi')));
+            assert.ok(String(I.metaMarkup(I.threads[3])).includes('#/help/ads#business-ai'));
+            assert.ok(String(I.emptyMarkup('ads')).includes(s.t('inbox.noAds')));
+            for (const key of ['inbox.filter.ads', 'inbox.noAds', 'inbox.ad.from', 'inbox.ad.businessAi']) assert.notEqual(s.t(key), key);
+        }
     });
 
     it('is seeded from the address like the other filters, and the address is data', () => {

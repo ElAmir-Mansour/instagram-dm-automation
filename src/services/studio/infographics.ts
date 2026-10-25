@@ -36,7 +36,7 @@ import { legacyBase } from '../profile/legacy.js';
 import { getPlatformOwnerId } from '../tenant.js';
 import { clipText, type Exec, isPlainObject, lockTenantPublishing, problemsError, requireId, StudioError, withTransaction } from './common.js';
 import {
-    captionProblems, dirFor, headline, payloadBrand, specProblems, THEMES, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
+    captionIssues, captionProblems, dirFor, headline, payloadBrand, primaryCaptionIssue, specProblems, THEMES, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
     type InfographicSpec, type InfographicWriterContext,
 } from './infographicSpec.js';
 import { writeInfographicOnServer, type ServerWritten } from './infographicWriter.js';
@@ -105,9 +105,9 @@ async function lockRow(exec: Exec, creatorId: string, id: string): Promise<Infog
 
 /** An open job means its result is still coming; anything that would queue another waits for it. */
 function assertIdle(row: Pick<InfographicRow, 'status'>): void {
-    if (row.status === 'writing') throw new StudioError(409, 'Claude is still writing this infographic.');
-    if (row.status === 'rendering') throw new StudioError(409, 'This infographic is still rendering.');
-    if (row.status === 'scheduled') throw new StudioError(409, 'This infographic is already scheduled. Make a copy to change it.');
+    if (row.status === 'writing') throw new StudioError(409, 'Claude is still writing this infographic.', undefined, 'INFOGRAPHIC_WRITING');
+    if (row.status === 'rendering') throw new StudioError(409, 'This infographic is still rendering.', undefined, 'INFOGRAPHIC_RENDERING');
+    if (row.status === 'scheduled') throw new StudioError(409, 'This infographic is already scheduled. Make a copy to change it.', undefined, 'INFOGRAPHIC_SCHEDULED');
 }
 
 function parseTheme(raw: unknown, fallback: InfographicTheme): InfographicTheme {
@@ -331,7 +331,7 @@ export async function updateInfographic(creatorId: string, rawId: unknown, body:
             await client.query('UPDATE infographics SET spec = $3::jsonb, caption = $4 WHERE id = $1 AND creator_id = $2', [id, creatorId, JSON.stringify(spec), caption]);
             await queue(client, creatorId, id, renderPayload(id, row, row.theme, settings!, spec), 'rendering');
         } else {
-            if (!row.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: there is no caption to edit.');
+            if (!row.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: there is no caption to edit.', undefined, 'INFOGRAPHIC_NOT_WRITTEN');
             // A ready row's error is its list of problems, so it is worked out again; a failed row keeps why it failed.
             const problems = [...specProblems(row.spec), ...captionProblems(caption, row.spec)];
             const error = row.status === 'ready' ? (problems.length ? problems.join('\n') : null) : row.error;
@@ -394,7 +394,7 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
     const settings = await getStudioSettings(creatorId);
     return withTransaction(async (client) => {
         const source = await lockRow(client, creatorId, id);
-        if (!source.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: wait for it, then copy it.');
+        if (!source.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: wait for it, then copy it.', undefined, 'INFOGRAPHIC_NOT_WRITTEN');
         const theme = parseTheme(b.theme, source.theme === 'dark' ? 'light' : 'dark');
         // The copy has the source's words, so it has the source's stamp, none if it has none: the profile current
         // now did not write them (profile/stamp.ts).
@@ -408,6 +408,32 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
         await queue(client, creatorId, copyId, renderPayload(copyId, source, theme, settings, source.spec), 'rendering');
         return loadView(client, creatorId, copyId);
     });
+}
+
+/**
+ * The free posting slots an infographic would take, soonest first: the Monteur's `post_at`, in the tenant's zone, that no pending
+ * Meta post holds. ONE definition, shared by Schedule (which takes the first) and by the preview the Schedule dialog shows
+ * (`nextInfographicSlot`), so what the dialog says and what Schedule does cannot drift apart (UX US1, IG-01).
+ */
+async function freeInfographicSlots(creatorId: string, settings: StudioSettings, now: number, exec?: Exec): Promise<string[]> {
+    return nextFreeSlots(creatorId, { timezone: settings.schedule.timezone, slots: settings.monteur.post_at }, SLOT_LOOKAHEAD, now, exec ? { exec } : {});
+}
+
+export interface InfographicNextSlot {
+    /** ISO instant of the slot "the next free slot" would post at; null when there is none in the look-ahead window. */
+    next_slot: string | null;
+    /** The tenant's IANA zone: what the slot's wall time, and a typed time, are read in. */
+    timezone: string;
+}
+
+/**
+ * GET /infographics/next-slot: when "the next free slot" would post, and in which zone, so the Schedule dialog can say the actual
+ * time and city instead of "the next free slot". Read-only: it reads the settings and the pending posts, and writes nothing.
+ */
+export async function nextInfographicSlot(creatorId: string, now: number = Date.now()): Promise<InfographicNextSlot> {
+    const settings = await getStudioSettings(creatorId);
+    const free = await freeInfographicSlots(creatorId, settings, now);
+    return { next_slot: free[0] ?? null, timezone: settings.schedule.timezone };
 }
 
 export interface InfographicScheduleOutcome {
@@ -428,27 +454,30 @@ export async function scheduleInfographic(creatorId: string, rawId: unknown, bod
     if (b.now === true) requested = new Date(now);
     else if (b.scheduled_time !== undefined && b.scheduled_time !== null) {
         requested = typeof b.scheduled_time === 'string' ? new Date(b.scheduled_time) : new Date(NaN);
-        if (Number.isNaN(requested.getTime())) throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-14T16:00:00Z.');
+        if (Number.isNaN(requested.getTime())) throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-14T16:00:00Z.', undefined, 'INVALID_SCHEDULE_TIME');
     }
     const settings = await getStudioSettings(creatorId);
     const platforms = settings.infographic.platforms;
     const meta = metaPlatformFor(platforms);
     const youtube = platforms.includes('youtube');
-    if (!meta && !youtube) throw new StudioError(409, 'Choose where infographics are posted in the brand settings first.');
+    if (!meta && !youtube) throw new StudioError(409, 'Choose where infographics are posted in the brand settings first.', undefined, 'INFOGRAPHIC_NO_PLATFORMS');
 
     return withTransaction(async (client) => {
         await lockTenantPublishing(client, creatorId);
         const row = await lockRow(client, creatorId, id);
         if (row.status !== 'ready' || !row.render) {
-            throw new StudioError(409, row.status === 'scheduled' ? 'This infographic is already scheduled.' : `This infographic is ${row.status}; only a ready one can be scheduled.`);
+            throw row.status === 'scheduled'
+                ? new StudioError(409, 'This infographic is already scheduled.', undefined, 'INFOGRAPHIC_SCHEDULED')
+                : new StudioError(409, `This infographic is ${row.status}; only a ready one can be scheduled.`, undefined, 'INFOGRAPHIC_NOT_READY', { status: row.status });
         }
-        const problems = captionProblems(row.caption, row.spec);
-        if (problems.length) throw problemsError(problems, 'this caption', 409);
+        const issues = captionIssues(row.caption, row.spec);
+        const primary = primaryCaptionIssue(issues);
+        if (primary) throw problemsError(issues.map((issue) => issue.message), 'this caption', 409, primary.code, primary.params);
 
         let when = requested;
         if (!when) {
-            const free = await nextFreeSlots(creatorId, { timezone: settings.schedule.timezone, slots: settings.monteur.post_at }, SLOT_LOOKAHEAD, now, { exec: client });
-            if (!free[0]) throw new StudioError(409, 'There is no free posting slot in the next weeks: choose a time.');
+            const free = await freeInfographicSlots(creatorId, settings, now, client);
+            if (!free[0]) throw new StudioError(409, 'There is no free posting slot in the next weeks: choose a time.', undefined, 'NO_FREE_SLOT');
             when = new Date(free[0]);
         }
         const groupId = crypto.randomUUID();

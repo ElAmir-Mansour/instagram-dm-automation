@@ -165,7 +165,7 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
             const h2 = [...doc.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
             assert.deepEqual([...toc.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]), h2, lang);
         }
-        assert.ok(privacy.ar.includes('آخر تحديث: 15 أكتوبر 2026') && privacy.en.includes('Last updated: 15 October 2026'));
+        assert.ok(privacy.ar.includes('آخر تحديث: 25 أكتوبر 2026') && privacy.en.includes('Last updated: 25 October 2026'));
     });
 });
 

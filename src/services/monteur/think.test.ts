@@ -411,8 +411,8 @@ describe('migration v28', () => {
         const list = sql.match(/ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/);
         assert.ok(list, 'the constraint is re-added');
         const kinds = [...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
-        // v31 re-creates it again with render_infographic (infographics.test.ts holds it to the full list).
-        assert.deepEqual(kinds, STUDIO_JOB_KINDS.filter((k) => k !== 'render_infographic').sort());
+        // v31 re-creates it again with render_infographic (infographics.test.ts holds it to the full list), v55 adds ads_think and v59 the explainer kinds.
+        assert.deepEqual(kinds, STUDIO_JOB_KINDS.filter((k) => k !== 'render_infographic' && k !== 'ads_think' && !k.startsWith('explainer_')).sort());
         assert.ok(kinds.includes('monteur_think'));
     });
 

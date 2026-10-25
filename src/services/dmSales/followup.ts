@@ -15,6 +15,9 @@
  * What counts as a click: a person's. The tracked-link route marks HEAD requests, link-preview crawlers and speculative loads `is_prefetch`
  * (`links.ts`), and Meta's own crawler fetches a link the moment it is sent, so a prefetch is not interest and is not a reason to hold the nudge.
  */
+import type { ConversationEntrySource } from '../../db/rows.js';
+import { windowEndsAt } from '../ads/attribution.js';
+import type { AdPlatform } from '../ads/switches.js';
 import { answersWithSales, type SalesSettings } from './mode.js';
 import type { Stage } from './types.js';
 
@@ -53,7 +56,11 @@ export function followupMinutesInput(input: unknown): { minutes: number | null }
 /** One nudge per conversation, ever (the owner's decision). The plan's §7 allowed two; the stricter of the two holds. */
 export const MAX_FOLLOWUPS_PER_CONVERSATION = 1;
 
-/** Meta's window is 24 hours from the person's last message; a nudge is never sent after 23 (plan §2). */
+/**
+ * Meta's window is 24 hours from the person's last message; a nudge is never sent after 23 (plan §2). This stays the DEFAULT: the clock check
+ * itself is `windowEndsAt` (`ads/attribution.ts`), which gives the same 23 hours for every conversation but an ad-started one on a platform whose
+ * `ads.extended_window` switch is on (7 days from the click, less an hour).
+ */
 export const FOLLOWUP_WINDOW_MS = 23 * 60 * 60 * 1000;
 
 /** When the nudge for a link sent at `linkAt` is due. */
@@ -85,6 +92,11 @@ export interface FollowupState {
     lastInboundAt: Date | null;
     optedOutAt: Date | null;
     handoffAt: Date | null;
+    /**
+     * `conversations.entry_source`, as far as the window needs it: a click-to-message ad conversation (`kind: 'ctm'`) has its own, longer window when
+     * the tenant switched `ads.extended_window` on for its platform. Absent or null is an ordinary conversation, whose window is 23 hours.
+     */
+    entrySource?: Pick<ConversationEntrySource, 'kind' | 'platform' | 'at'> | null;
 }
 
 /** One visit to one of the conversation's tracked links. */
@@ -102,6 +114,11 @@ export interface FollowupRules {
     linkAt: Date;
     /** The operator's delay as it is now; 0 is "follow-ups are off". */
     delayMinutes: number;
+    /**
+     * The tenant's `ads.extended_window` switches as they are now, per platform. Absent means both off: the 23 hour rule for everyone, exactly as
+     * before the switch existed. Only a `ctm` conversation on a platform that is on is ever given more.
+     */
+    extendedWindow?: Record<AdPlatform, boolean>;
 }
 
 export const FOLLOWUP_REASONS = [
@@ -120,7 +137,7 @@ export const FOLLOWUP_REASONS = [
     'no_inbound',         // no message from the person on record: the window cannot be shown to be open
     'replied',            // they wrote since the link
     'clicked',            // a person opened the link
-    'window_expired',     // 23 hours or more since their last message
+    'window_expired',     // the window has closed: 23 hours since their last message (an ad conversation with the switch on: 7 days less an hour from the click)
 ] as const;
 export type FollowupReason = (typeof FOLLOWUP_REASONS)[number];
 
@@ -158,6 +175,7 @@ export function followupEligible(state: FollowupState, now: Date, clicks: readon
     if (state.lastInboundAt.getTime() > state.lastLinkAt.getTime()) return no('replied');
     if (clicks.some((click) => !click.isPrefetch)) return no('clicked');
 
-    if (now.getTime() >= state.lastInboundAt.getTime() + FOLLOWUP_WINDOW_MS) return no('window_expired');
+    const switches = { extendedWindow: rules.extendedWindow ?? { instagram: false, messenger: false } };
+    if (now.getTime() >= windowEndsAt({ entry_source: state.entrySource ?? null }, state.lastInboundAt, switches).getTime()) return no('window_expired');
     return { send: true, reason: 'ok' };
 }

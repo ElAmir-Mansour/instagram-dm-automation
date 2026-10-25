@@ -130,7 +130,7 @@ export interface TokenInspection {
  * a never-expiring page token whose `expires_at` is 0, a data-access window that has already
  * lapsed, a valid token missing `instagram_manage_messages`.
  */
-export function describeInspection(data: any): TokenInspection {
+export function describeInspection(data: any, now: number = Date.now()): TokenInspection {
     const isValid = Boolean(data?.is_valid);
     const type = typeof data?.type === 'string' ? data.type : null;
     const scopes: string[] = Array.isArray(data?.scopes)
@@ -159,7 +159,7 @@ export function describeInspection(data: any): TokenInspection {
     } else if (type && type !== 'PAGE') {
         error = `Wrong token type: "${type}". A PAGE access token is required — a USER token `
             + 'cannot post private replies or publish.';
-    } else if (dataAccessExpiresAt && dataAccessExpiresAt.getTime() < Date.now()) {
+    } else if (dataAccessExpiresAt && dataAccessExpiresAt.getTime() < now) {
         // Separate from expiry and easy to miss: data access lapses 90 days after the user
         // last re-authorised, and reads start failing while the token still reports valid.
         error = 'Data access has expired — the account must re-authorise the app. '
@@ -172,6 +172,20 @@ export function describeInspection(data: any): TokenInspection {
 }
 
 /**
+ * What `GET /api/settings/token/status` says when Meta did not give an answer about the token (a timeout, a network failure, a 5xx, a rate
+ * limit, a body that is not an inspection). The dashboard shows its own sentence for `status: 'unknown'`; this is the text behind it.
+ */
+export const TOKEN_CHECK_UNANSWERED_MESSAGE = 'Meta could not be reached to check the token just now. This is not a verdict on the token: try again in a minute.';
+
+/**
+ * Is `data` the shape of an answer to `debug_token`: an object with a boolean `is_valid`? An empty 200, an error page or a proxy's body is
+ * not one, and `describeInspection` would read all of them as "not valid", which is the one reading a check that could not run must not make.
+ */
+export function isDebugTokenAnswer(data: unknown): data is { is_valid: boolean } {
+    return typeof data === 'object' && data !== null && !Array.isArray(data) && typeof (data as { is_valid?: unknown }).is_valid === 'boolean';
+}
+
+/**
  * The status this inspection should write to `creators.token_status`.
  *
  * A token Meta accepts but which is the wrong type, or has lost data access, is not `valid` in
@@ -180,10 +194,10 @@ export function describeInspection(data: any): TokenInspection {
  * the operator to regenerate something that is not broken. That case stays `valid` with the
  * reason in `token_error`.
  */
-export function inspectionStatus(inspection: TokenInspection): 'valid' | 'invalid' {
+export function inspectionStatus(inspection: TokenInspection, now: number = Date.now()): 'valid' | 'invalid' {
     if (!inspection.isValid) return 'invalid';
     if (inspection.type && inspection.type !== 'PAGE') return 'invalid';
-    if (inspection.dataAccessExpiresAt && inspection.dataAccessExpiresAt.getTime() < Date.now()) return 'invalid';
+    if (inspection.dataAccessExpiresAt && inspection.dataAccessExpiresAt.getTime() < now) return 'invalid';
     return 'valid';
 }
 

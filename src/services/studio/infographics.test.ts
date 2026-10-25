@@ -19,12 +19,12 @@ import { contextFor } from '../profile/context.js';
 import { legacyBase } from '../profile/legacy.js';
 import { StudioError } from './common.js';
 import {
-    BUDGETS, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, specProblems, WRITE_SCHEMA, writeSystemPrompt,
-    writeUserPrompt, type InfographicSpec,
+    BUDGETS, captionIssues, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, primaryCaptionIssue, specProblems,
+    WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt, type InfographicSpec,
 } from './infographicSpec.js';
 import { answerToWritten, layerWriteSchema, writeInfographicOnServer } from './infographicWriter.js';
 import {
-    copyInfographic, createInfographic, deleteInfographic, normaliseSpec, renderPayload, rerenderInfographic, scheduleInfographic, updateInfographic,
+    copyInfographic, createInfographic, deleteInfographic, nextInfographicSlot, normaliseSpec, renderPayload, rerenderInfographic, scheduleInfographic, updateInfographic,
 } from './infographics.js';
 import { completeJob, failJob, STUDIO_JOB_KINDS } from './jobs.js';
 import { ELAMIR_SETTINGS } from './testFixtures.js';
@@ -157,6 +157,32 @@ describe('captionProblems — the caption is about the GIF', () => {
         assert.match(captionProblems(`${CAPTION}${'x'.repeat(BUDGETS.caption)}`, SPEC).join(), /Instagram takes 2200/);
     });
 
+    it('says which problem each one is, in the order it always listed them, and `captionProblems` is just their sentences', () => {
+        const long = `RAG ${'x'.repeat(BUDGETS.caption)}`;
+        for (const caption of ['', '  ', 'RAG وحده', long, CAPTION, 7, null]) {
+            assert.deepEqual(captionProblems(caption, SPEC), captionIssues(caption, SPEC).map((issue) => issue.message), JSON.stringify(caption)?.slice(0, 20));
+        }
+        assert.deepEqual(captionIssues('', SPEC).map((i) => i.code), ['CAPTION_EMPTY']);
+        assert.deepEqual(captionIssues(long, SPEC).map((i) => i.code), ['CAPTION_TOO_LONG', 'CAPTION_MISSING_COLUMNS']);
+        assert.deepEqual(captionIssues('RAG وحده', SPEC), [{
+            code: 'CAPTION_MISSING_COLUMNS', params: { columns: ['CAG', 'KAG'], list: '«CAG», «KAG»' },
+            message: 'The caption doesn\'t mention «CAG», «KAG»: it must talk about what the infographic shows.',
+        }]);
+        assert.deepEqual(captionIssues(CAPTION, SPEC), []);
+    });
+
+    it('picks the owner’s rule (name every column) as the one code when several apply, and merges every issue’s params', () => {
+        assert.equal(primaryCaptionIssue([]), null);
+        const long = `RAG ${'x'.repeat(BUDGETS.caption)}`;
+        const primary = primaryCaptionIssue(captionIssues(long, SPEC));
+        assert.equal(primary?.code, 'CAPTION_MISSING_COLUMNS');
+        assert.deepEqual(primary?.params, { length: long.length, max: BUDGETS.caption, columns: ['CAG', 'KAG'], list: '«CAG», «KAG»' });
+        assert.equal(primaryCaptionIssue(captionIssues(' ', SPEC))?.code, 'CAPTION_EMPTY');
+        // Too long alone, with every column named.
+        const tooLong = `${CAPTION}${'x'.repeat(BUDGETS.caption)}`;
+        assert.equal(primaryCaptionIssue(captionIssues(tooLong, SPEC))?.code, 'CAPTION_TOO_LONG');
+    });
+
     it('makes the headline from the names and the subtitle', () => {
         assert.equal(headline(SPEC), 'RAG vs CAG vs KAG: كيف يصل الذكاء الاصطناعي إلى المعرفة الخارجية');
     });
@@ -249,10 +275,13 @@ describe('parseInfographicResult', () => {
 describe('migration v31', () => {
     const sql = fs.readFileSync(new URL('../../config/migration_v31_infographics.sql', import.meta.url), 'utf8');
 
-    it('re-creates the kind CHECK with exactly the kinds the queue knows', () => {
+    it('re-creates the kind CHECK with exactly the kinds the queue knew then (v55 adds ads_think and v59 the explainer kinds, migrations.test.ts holds it to the full list)', () => {
         const list = sql.match(/ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/);
         assert.ok(list);
-        assert.deepEqual([...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort(), [...STUDIO_JOB_KINDS].sort());
+        assert.deepEqual(
+            [...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort(),
+            STUDIO_JOB_KINDS.filter((k) => k !== 'ads_think' && !k.startsWith('explainer_')).sort()
+        );
         assert.ok(sql.indexOf('DROP CONSTRAINT IF EXISTS studio_jobs_kind_check') < sql.indexOf('ADD CONSTRAINT studio_jobs_kind_check'));
     });
 
@@ -423,6 +452,29 @@ describe('scheduleInfographic', () => {
         infographicSettings = { ...BRAND, platforms: ['instagram'] };
         await scheduleInfographic(TENANT, ID, {}, NOW);
         assert.deepEqual(posts.map((p) => p.platform), ['instagram']);
+    });
+});
+
+describe('nextInfographicSlot: what the Schedule dialog says "the next free slot" is (UX US1, IG-01)', () => {
+    it('is the instant Schedule would take with no time given, and the tenant’s zone, so the dialog can say time and city', async () => {
+        const preview = await nextInfographicSlot(TENANT, NOW);
+        assert.deepEqual(preview, { next_slot: '2026-10-13T16:00:00.000Z', timezone: 'Asia/Riyadh' }, '19:00 in Riyadh, the fixture’s post_at');
+        await scheduleInfographic(TENANT, ID, {}, NOW);
+        assert.equal((posts[0]!.scheduled_time as Date).toISOString(), preview.next_slot, 'the same slot the preview named');
+    });
+
+    it('skips a slot a pending post already holds, exactly as Schedule does', async () => {
+        posts = [{ platform: 'both', scheduled_time: new Date('2026-10-13T16:00:00Z') }];
+        const preview = await nextInfographicSlot(TENANT, NOW);
+        assert.equal(preview.next_slot, '2026-10-14T16:00:00.000Z', 'today’s 19:00 is taken: tomorrow’s');
+        await scheduleInfographic(TENANT, ID, {}, NOW);
+        assert.equal((posts[1]!.scheduled_time as Date).toISOString(), preview.next_slot);
+    });
+
+    it('writes nothing: it is a read', async () => {
+        await nextInfographicSlot(TENANT, NOW);
+        assert.equal(db.statements.filter((s) => /^(INSERT|UPDATE|DELETE)/i.test(s.sql)).length, 0);
+        assert.equal(db.ran(/pg_advisory_xact_lock/).length, 0, 'and takes no publishing lock');
     });
 });
 
