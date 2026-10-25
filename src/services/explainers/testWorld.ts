@@ -43,6 +43,8 @@ export interface World {
     scenes: ExplainerSceneRow[];
     jobs: FakeJob[];
     uploads: Map<string, FakeUpload>;
+    /** The `scheduled_posts` rows `insertVideoPost` wrote, as the statement returns them. */
+    posts: Record<string, any>[];
     /** `media_uploads` ids that `deleteUnreferencedUploads` was asked to delete, per call. */
     deletedUploads: string[][];
     /** The ids a `scheduled_posts` row (or anything else the real statement guards on) still names: never deleted. */
@@ -82,6 +84,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         explainers: new Map<string, ExplainerRow>(),
         scenes: [] as ExplainerSceneRow[],
         jobs: [] as FakeJob[],
+        posts: [] as Record<string, any>[],
         uploads: new Map<string, FakeUpload>(),
         deletedUploads: [] as string[][],
         keptUploads: new Set<string>(),
@@ -119,7 +122,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
     };
 
     // ── Transactions: BEGIN takes a snapshot, ROLLBACK gives it back ──
-    const snapshots: { explainers: Map<string, ExplainerRow>; scenes: ExplainerSceneRow[]; jobs: FakeJob[] }[] = [];
+    const snapshots: { explainers: Map<string, ExplainerRow>; scenes: ExplainerSceneRow[]; jobs: FakeJob[]; posts: Record<string, any>[] }[] = [];
     const clone = <T>(value: T): T => structuredClone(value);
 
     const jobView = (job: FakeJob) => ({
@@ -149,7 +152,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
 
     const routes: Route[] = [
         // transactions
-        [/^BEGIN$/, () => { snapshots.push({ explainers: clone(world.explainers), scenes: clone(world.scenes), jobs: clone(world.jobs) }); return { rows: [] }; }],
+        [/^BEGIN$/, () => { snapshots.push({ explainers: clone(world.explainers), scenes: clone(world.scenes), jobs: clone(world.jobs), posts: clone(world.posts) }); return { rows: [] }; }],
         [/^COMMIT$/, () => { snapshots.pop(); return { rows: [] }; }],
         [/^ROLLBACK$/, () => {
             const snapshot = snapshots.pop();
@@ -158,6 +161,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
                 for (const [id, row] of snapshot.explainers) world.explainers.set(id, row);
                 world.scenes.splice(0, world.scenes.length, ...snapshot.scenes);
                 world.jobs.splice(0, world.jobs.length, ...snapshot.jobs);
+                world.posts.splice(0, world.posts.length, ...snapshot.posts);
             }
             return { rows: [] };
         }],
@@ -324,6 +328,16 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
                 counts.set(key, (counts.get(key) ?? 0) + 1);
             }
             return { rows: [...counts].map(([status, n]) => ({ status, n })) };
+        }],
+
+        // scheduled_posts: what `insertVideoPost` writes
+        [/^INSERT INTO scheduled_posts \(creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options\) VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL\) RETURNING \*$/, (p) => {
+            const post = {
+                id: world.uuid(), creator_id: p[0], platform: p[1], post_type: 'video', caption: p[2], media_url: p[3], media_urls: null, scheduled_time: p[4], status: 'PENDING',
+                cover_url: p[5], group_id: p[6], platform_options: p[7] ? JSON.parse(p[7]) : null, meta_options: null,
+            };
+            world.posts.push(post);
+            return { rows: [post] };
         }],
 
         // media_uploads

@@ -34,6 +34,8 @@ export const EXPLAINER_ERROR_STATUS = {
     EXPLAINER_AUDIO_STALE: 409,
     /** Pictures cannot be approved while a scene has none: `count` of them, `positions` says which. */
     EXPLAINER_PICTURES_MISSING: 409,
+    /** The video was rendered before the narration or the sound last changed, so it is not the script's: render again before scheduling. */
+    EXPLAINER_RENDER_STALE: 409,
 } as const;
 
 export type ExplainerErrorCode = keyof typeof EXPLAINER_ERROR_STATUS;

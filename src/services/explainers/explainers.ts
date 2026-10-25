@@ -172,7 +172,8 @@ export function presentExplainer(
     };
 }
 
-async function loadView(exec: Exec, creatorId: string, id: string, extras: { worker?: ExplainerView['worker']; allowance?: unknown } = {}): Promise<ExplainerView> {
+/** The explainer and its scenes, read through `exec` (a transaction's client, or the pool). A 404 when it is not this tenant's. */
+export async function loadView(exec: Exec, creatorId: string, id: string, extras: { worker?: ExplainerView['worker']; allowance?: unknown } = {}): Promise<ExplainerView> {
     const { rows } = await exec.query<DetailRow>(DETAIL_SQL, [id, creatorId]);
     if (!rows[0]) throw notFound();
     return presentExplainer(rows[0], await loadScenes(exec, creatorId, id), extras);
