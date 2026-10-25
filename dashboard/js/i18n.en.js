@@ -854,6 +854,7 @@
     'inbox.attach.open': 'Open',
 
     'ai.configTitle': 'Agent configuration',
+    'ai.readOnly': 'Your role is Viewer: you can read the DM assistant’s settings but not change them or test it.',
     'ai.enableTitle': 'Turn on auto-replies',
     'ai.enableDesc': 'Reply to incoming direct messages automatically using AI.',
     'ai.enableLabel': 'Turn on auto-replies',
@@ -1284,7 +1285,7 @@
     'settings.tiktok.return.generic': 'Couldn’t connect TikTok. Try again.',
     'settings.tiktok.disconnectTitle': 'Disconnect TikTok?',
     'settings.tiktok.disconnectBody': 'The app’s access is revoked with TikTok and the stored connection is deleted.',
-    'settings.tiktok.disconnectHint': 'Scheduled TikTok posts stay in your queue, but they won’t be sent until you reconnect.',
+    'settings.tiktok.disconnectHint': 'Scheduled TikTok posts stay in your queue. One whose time comes while TikTok is disconnected fails; after you reconnect, press “Publish now” on it.',
     'settings.tiktok.disconnected': 'TikTok disconnected.',
     'settings.tiktok.app.title': 'TikTok app (platform admin)',
     'settings.tiktok.app.hint': 'From developers.tiktok.com → your app. Register the addresses below in the developer portal exactly as shown.',

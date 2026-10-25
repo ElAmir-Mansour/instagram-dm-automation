@@ -979,8 +979,8 @@ const HelpContent = {
                             ] },
                             { ul: [
                                 'الربط يدوم **سنة وحدة**. قبل ما يخلص تشوف تاريخاً وتنبيهاً، فاضغط **أعد الربط** قبل ذاك اليوم.',
-                                'لو شفت **يحتاج إلى إعادة الربط**، اضغط **أعد الربط** وبس. منشوراتك المجدولة تظل في الطابور.',
-                                '**فصل تيك توك** يلغي صلاحية التطبيق عند تيك توك ويحذف الربط. المنشورات المجدولة تبقى، لكنها ما تنرسل لين تربط من جديد.',
+                                'لو شفت **يحتاج إلى إعادة الربط**، اضغط **أعد الربط** بسرعة. منشوراتك المجدولة تظل في الطابور، لكن أي منشور يجي موعده قبل ما تعيد الربط يطلع **فشلت**. وبعد ما يرجع الربط اضغط **انشر الآن** على المنشور.',
+                                '**فصل تيك توك** يلغي صلاحية التطبيق عند تيك توك ويحذف الربط. المنشورات المجدولة تبقى في الطابور، واللي ما جا موعده منها ينتظر. أما أي منشور يجي موعده وتيك توك مفصول فيطلع **فشلت**، وسبب الفشل أن تيك توك غير مربوط. اربط من جديد، وبعدها اضغط **انشر الآن** على المنشور.',
                             ] },
                         ],
                         en: [
@@ -991,8 +991,8 @@ const HelpContent = {
                             ] },
                             { ul: [
                                 'A connection lasts **one year**. Before it runs out you’ll see a date and a warning: press **Reconnect** before that day.',
-                                'If you see **Needs reconnecting**, just press **Reconnect**. Your scheduled posts stay in the queue.',
-                                '**Disconnect TikTok** revokes the app’s access with TikTok and deletes the connection. Scheduled posts stay, but nothing is sent until you connect again.',
+                                'If you see **Needs reconnecting**, press **Reconnect** soon. Your scheduled posts stay in the queue, but a post whose time comes before you reconnect shows **Failed**. Once TikTok is connected again, press **Publish now** on it.',
+                                '**Disconnect TikTok** revokes the app’s access with TikTok and deletes the connection. Your scheduled posts stay in the queue, and the ones not due yet wait for their time. A post whose time comes while TikTok is disconnected shows **Failed**, with the reason that TikTok is not connected. Connect again, then press **Publish now** on it.',
                             ] },
                         ],
                     },
@@ -1057,14 +1057,16 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'المنشورات تنزل **عامة تلقائياً**، بالخصوصية اللي تختارها، وما تحتاج تخلي حسابك خاصاً.',
+                                'المنشورات اللي يجهّزها لك الاستوديو، أي الكاروسيل والريلز من تبويب **المونتير**، تنزل **عامة تلقائياً**: التطبيق يضبطها على **الجميع**، وما تحتاج تخلي حسابك خاصاً.',
+                                'أما المنشور اللي تسوّيه بنفسك من **الجدولة** فيبدأ بلا خصوصية مختارة، وما ينزل عاماً من نفسه. تحت **إعدادات منشور تيك توك** اختر **من يمكنه مشاهدة هذا الفيديو** (أو **من يمكنه مشاهدة هذا المنشور** للصور): **الجميع** يخليه عاماً، و**المتابِعون** و**الأصدقاء (المتابَعون المتبادَلون)** و**أنا فقط** تحصره في ناس أقل. وما تقدر تجدول المنشور لين تختار.',
                                 'في الاستوديو يظهر خيار **النشر على تيك توك في الموعد نفسه**، فينزل مع منشور إنستجرام بدون دفعة يدوية.',
                                 'وزر **انشر منشورات الكاروسيل المنتظرة على تيك توك** يختفي، لأنه ما عاد له داعي.',
                             ] },
                         ],
                         en: [
                             { ul: [
-                                'Posts go up **public automatically**, with the privacy you choose, and your account no longer has to be private.',
+                                'Posts the Studio makes for you, its carousels and the reels from its **Monteur** tab, go up **public automatically**: the app sets them to **Everyone**, and your account no longer has to be private.',
+                                'A post you make yourself in the **Scheduler** starts with nothing chosen, so it is not public by itself. Under **TikTok post settings**, pick **Who can see this video** (**Who can see this post** for photos): **Everyone** makes it public, while **Followers**, **Friends (followers you follow back)** and **Only me** keep it narrower. The post can’t be scheduled until you pick one.',
                                 'The Studio offers **Post to TikTok at the same time**, so TikTok goes out with the Instagram post, with no manual batch.',
                                 'The **Post queued TikTok carousels** button disappears, because nothing needs it any more.',
                             ] },
@@ -1534,42 +1536,56 @@ const HelpContent = {
                     title: { ar: 'التنبيهات', en: 'Alerts' },
                     body: {
                         ar: [
-                            'ترسل أوتوريبلاي تنبيهاً حين يحدث ما يستحق انتباهك. هذه هي الأنواع:',
-                            { dl: [
-                                ['إيقاف الإنفاق عند السقف', 'أوقف الحارس الحملات لأن الإنفاق وصل إلى سقفك الشهري أو كاد.'],
-                                ['مشكلة في الدفع', 'فشل الخصم أو لا توجد وسيلة دفع صالحة في الحساب الإعلاني.'],
-                                ['تعطيل الحساب الإعلاني', 'عطّلت ميتا الحساب أو قيّدته.'],
-                                ['توقف الرمز عن العمل', 'انتهت صلاحية الرمز أو أُلغي، فلا تستطيع أوتوريبلاي قراءة الحساب ولا إيقاف الحملات.'],
-                                ['اقتراب انتهاء الرمز', 'ينتهي الرمز قريباً. يخص الرموز التي لها تاريخ انتهاء، مثل رمز الاتصال عبر فيسبوك.'],
-                                ['تعذّر فحص الإنفاق', 'لم يستطع الحارس فحص الحساب ساعتين متتاليتين.'],
-                                ['تغيّر إصدار الواجهة', 'ردّت ميتا بإصدار غير الإصدار الذي نثبّته، فقد تختلف بعض السلوكيات.'],
+                            'ترسل أوتوريبلاي تنبيهاً حين يحدث ما يستحق انتباهك. هذه هي الأنواع بالأسماء التي تعرضها خانات الاختيار في **الإعدادات** ← **إعلانات ميتا (الترويج)** ← **مستلمو التنبيهات**، وما يعنيه كل منها:',
+                            { ul: [
+                                '**إيقاف الحملات لأن السقف بُلغ:** أوقف الحارس كل الحملات النشطة لأن إنفاق هذا الشهر بلغ سقفك الشهري، أو لأن يوماً آخر من الإنفاق سيتجاوزه. مطلوب: لا يمكن إيقافه.',
+                                '**مشكلات الدفع:** على الحساب مبلغ مستحق لم يُدفع، أو هو في مهلة سداد، أو لا توجد فيه وسيلة دفع صالحة.',
+                                '**تعطيل الحساب الإعلاني:** عطّلت ميتا الحساب، أو هو قيد الإغلاق أو مغلق.',
+                                '**رفض إعلان:** لا يُرسَل حالياً. مفتاحه في القائمة، لكن لا شيء في التطبيق يطلق هذا التنبيه اليوم. لتعرف حين ترفض ميتا إعلاناً استخدم قالب القاعدة الخاص به: [[ads#rule-templates]].',
+                                '**وجود مشكلات في إعلان:** لا يُرسَل حالياً أيضاً، ويغطيه قالب القاعدة نفسه: [[ads#rule-templates]].',
+                                '**توقف وصول الإعلانات عن العمل:** رفضت ميتا الرمز لأنه انتهى أو أُلغي، فلا تستطيع أوتوريبلاي قراءة الحساب ولا إيقاف الحملات. مطلوب: لا يمكن إيقافه.',
+                                '**قرب انتهاء وصول الإعلانات:** ينتهي الرمز خلال 14 يوماً. يخص الرموز التي لها تاريخ انتهاء، مثل رمز الاتصال عبر فيسبوك.',
+                                '**الإنفاق غير مُراقَب:** لم يستطع الحارس فحص سقفك الشهري ساعتين متتاليتين، فتواصل الحملات النشطة الإنفاق دون أن يوقفها السقف. مطلوب: لا يمكن إيقافه.',
+                                '**تغيّر إصدار واجهة ميتا الذي تجيب عليه:** ردّت ميتا بإصدار غير الإصدار الذي نثبّته، فقد تختلف بعض السلوكيات.',
+                                '**تولّى ذكاء ميتا للأعمال محادثة (لا يستطيع المساعد الرد):** ذكاء ميتا نفسها يتولى محادثة على إنستغرام ويرفض رسائل المساعد فيها. التفاصيل في [[ads#business-ai]].',
+                                '**رفضت ميتا ردًّا خارج النافذة (أُطفئت النافذة الأطول):** رُفض رد في محادثة بدأت من إعلان لأنه خارج نافذة المراسلة، فأطفأ التطبيق النافذة الأطول لتلك المنصة من تلقاء نفسه. التفاصيل في [[ads#reply-window]].',
+                                '**اقترح Claude تغييرات على إعلاناتك الجارية (المراجعة اليومية):** أعدّت المراجعة اليومية مقترحات. لا يتغير شيء ولا يُنفَق شيء قبل أن توافق، وتنتهي صلاحيتها بعد 7 أيام. التفاصيل في [[ads#ai-proposals]].',
+                                '**نفّذت قاعدة إجراءً: إيقافًا أو خفضًا أو مقترحًا أو تنبيهًا:** طابقت إحدى قواعدك إعلاناً أو مجموعة إعلانية أو حملة، ونفّذت ما ضبطتها عليه. التفاصيل في [[ads#rules]].',
+                                '**قاعدة لا تراقب إعلاناتك منذ 24 ساعة:** لم تستطع القاعدة قراءة أرقام حديثة منذ يوم كامل، فلا تتخذ أي إجراء في هذه الأثناء، ويبقى السقف الشهري نافذاً. التفاصيل في [[ads#rules]].',
                             ] },
                             'لا يصلك التنبيه نفسه عن الشيء نفسه أكثر من مرة واحدة في اليوم، حتى لا تُغرَق بالرسائل.',
                             { ul: [
-                                'يصل التنبيه إلى **رقم محادثتك** في تيليجرام و/أو إلى بريدك الإلكتروني، وتحدّدهما في **الإعدادات** ← **إعلانات ميتا (الترويج)** ← **مستلمو التنبيهات**. ويصل إلى مدير المنصة نسخة منه.',
-                                'ولمعرفة رقم محادثتك في تيليجرام: افتح حساب التنبيهات الذي يعطيك اسمه مدير المنصة واضغط **Start**، ثم أرسل أي رسالة إلى `@userinfobot` فيردّ عليك برقم Id. الصقه في خانة **رقم محادثتك**.',
-                                'اضغط **أرسل رسالة تجريبية** بعد الحفظ، لتتأكد أن التنبيه يصلك.',
-                                'يمكنك إطفاء أنواع التنبيه بمفتاح لكل نوع، عدا ثلاثة لا يمكن إطفاؤها: إيقاف الإنفاق عند السقف، وتعذّر فحص الإنفاق، وتوقف الرمز عن العمل. فهي التي تحمي مالك.',
+                                'يصل التنبيه إلى محادثة تيليجرام و/أو إلى بريدك الإلكتروني، وتحدّدهما في **الإعدادات** ← **إعلانات ميتا (الترويج)** ← **مستلمو التنبيهات**. ويصل إلى مدير المنصة نسخة منه.',
+                                'ولمعرفة معرّف محادثتك في تيليجرام: افتح حساب التنبيهات الذي يعطيك اسمه مدير المنصة واضغط **Start**، ثم أرسل أي رسالة إلى `@userinfobot` فيردّ عليك برقم Id. الصقه في خانة **معرّف محادثة تيليجرام**.',
+                                'اضغط **أرسل تنبيهاً تجريبياً** لتتأكد أن التنبيه يصلك. يحفظ الزر ما كتبته، ثم يرسل رسالة تجريبية واحدة، ويعرض بجانب تيليجرام والبريد هل أُرسلت أم فشلت أم أن القناة غير مُعدّة.',
+                                'تحت **ما الذي تريد أن تُبلَّغ به** لكل نوع خانته، عدا ثلاثة عليها علامة **(مطلوب)**: لا يمكن إيقافها، لأنها التي تحمي مالك.',
                             ] },
                             { tip: 'ضع الوسيلتين معاً، تيليجرام وبريداً، إن كان الإنفاق كبيراً. فقد تفوتك رسالة واحدة.' },
                         ],
                         en: [
-                            'AutoReply sends an alert when something happens that deserves your attention. These are the kinds:',
-                            { dl: [
-                                ['Spending paused at the cap', 'The guard paused campaigns because spend reached or was about to pass your monthly cap.'],
-                                ['Payment problem', 'A charge failed or the ad account has no valid payment method.'],
-                                ['Ad account disabled', 'Meta disabled or restricted the account.'],
-                                ['Token stopped working', 'The token expired or was revoked, so AutoReply can neither read the account nor pause campaigns.'],
-                                ['Token expiring', 'The token ends soon. This applies to tokens with an end date, such as the Facebook Connect one.'],
-                                ['Guard can’t check', 'The guard could not check the account for two hours in a row.'],
-                                ['API version changed', 'Meta answered with a version other than the one we pin, so some behaviour may differ.'],
+                            'AutoReply sends an alert when something happens that deserves your attention. These are the kinds, with the names the checkboxes under **Settings** → **Meta ads (Boost)** → **Alert recipients** give them, and what each one means:',
+                            { ul: [
+                                '**Campaigns paused because the cap was reached:** the guard paused every active campaign because this month’s spend reached your monthly cap, or one more day of spending would carry it past. Required: it cannot be switched off.',
+                                '**Payment problems:** the account has an unpaid balance or is in a grace period, or it has no valid payment method.',
+                                '**The ad account was disabled:** Meta disabled the account, or it is pending closure or closed.',
+                                '**An ad was rejected:** not sent yet. The switch is on the list, but nothing in the app raises this alert today. To hear when Meta rejects an ad, use the rule template for it: [[ads#rule-templates]].',
+                                '**An ad has issues:** not sent yet either, and the same rule template covers it: [[ads#rule-templates]].',
+                                '**The ads access stopped working:** Meta refused the token because it expired or was revoked, so AutoReply can neither read the account nor pause campaigns. Required: it cannot be switched off.',
+                                '**The ads access is about to expire:** the token ends within 14 days. This applies to tokens with an end date, such as the Facebook Connect one.',
+                                '**Spending is not being watched:** the guard could not check your monthly cap for two hours in a row, so active campaigns keep spending with nothing to stop them at the cap. Required: it cannot be switched off.',
+                                '**Meta changed the API version it answers on:** Meta answered with a version other than the one we pin, so some behaviour may differ.',
+                                '**Meta Business AI took over a conversation (the assistant cannot reply):** Meta’s own assistant holds an Instagram conversation and refuses the AutoReply assistant’s messages in it. See [[ads#business-ai]].',
+                                '**Meta refused a reply outside the window (the longer window was switched off):** a reply in a conversation that began from an ad was refused for being outside the messaging window, so the app switched the longer window off for that platform by itself. See [[ads#reply-window]].',
+                                '**Claude proposed changes to your running ads (the daily review):** the daily review made proposals. Nothing changes or spends until you approve, and they expire after 7 days. See [[ads#ai-proposals]].',
+                                '**A rule paused, lowered, proposed or told you something:** one of your rules matched an ad, an ad set or a campaign and did what you set it to do. See [[ads#rules]].',
+                                '**A rule has not watched your ads for 24 hours:** the rule could not read fresh numbers for a day, so it takes no action meanwhile. The monthly cap still applies. See [[ads#rules]].',
                             ] },
                             'You never get the same alert about the same thing more than once a day, so you are not flooded.',
                             { ul: [
                                 'An alert goes to your Telegram chat id and/or your email, both set in **Settings** → **Meta ads (Boost)** → **Alert recipients**. The platform administrator gets a copy.',
-                                'To find your Telegram chat id: open the alerts account whose name the platform administrator gives you and press **Start**, then send any message to `@userinfobot`, which replies with your Id. Paste it into **Your chat id**.',
-                                'Press **Send test message** after saving, to be sure the alert reaches you.',
-                                'You can switch each kind off with its own toggle, except three that cannot be switched off: spending paused at the cap, guard can’t check, and token stopped working. Those are the ones that protect your money.',
+                                'To find your Telegram chat id: open the alerts account whose name the platform administrator gives you and press **Start**, then send any message to `@userinfobot`, which replies with your Id. Paste it into **Telegram chat ID**.',
+                                'Press **Send a test** to be sure the alert reaches you. It saves what you typed, sends one test message, and shows beside Telegram and Email whether it was sent, failed or is not set up.',
+                                'Under **What to be told about**, each kind has its own checkbox, except three marked **(required)**: they cannot be switched off, because they are the ones that protect your money.',
                             ] },
                             { tip: 'Set both, Telegram and email, if the spend is large. A single message can be missed.' },
                         ],
@@ -2060,7 +2076,7 @@ const HelpContent = {
                         ar: [
                             'يرشدك المُنشئ في ثماني خطوات، وهي نفسها أيًّا كان الهدف. لا يعرض في كل خطوة إلا الخيارات التي تقبلها ميتا لهذا الهدف، ومع كل خيار جملة تشرحه.',
                             { ol: [
-                                '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. إعلانات العملاء المحتملين تأتي لاحقًا.',
+                                '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. وهدف **العملاء المحتملون** في القائمة أيضًا، لكنه يظهر **مقفل** حتى يسجّل مدير المنصة اعتمادًا قانونيًا لمساحة عملك: [[ads#lead-ads]].',
                                 '**الوجهة:** أين تصل الرسائل (إنستجرام أو ماسنجر أو واتساب)، أو الرابط الذي تُفتح عليه الزيارات. رابط العرض يكون رابطًا متتبَّعًا افتراضيًا حتى تُحسب النقرات.',
                                 '**التصميم:** منشور منشور من قبل، أو صورة أو فيديو ترفعه من جهازك، ومعه نسخة عمودية 9:16 إن شئت.',
                                 '**النص:** النص الأساسي والعنوان وزر الدعوة إلى الإجراء.',
@@ -2075,7 +2091,7 @@ const HelpContent = {
                         en: [
                             'The builder takes you through eight steps, the same whatever the goal. Each step offers only the choices Meta accepts for that goal, each with a one-line explanation.',
                             { ol: [
-                                '**Goal:** messages, reach, engagement or traffic to a link. Lead ads come later.',
+                                '**Goal:** messages, reach, engagement or traffic to a link. **Leads** is on the list too, but it shows **Locked** until the platform admin records a legal sign-off for your workspace: [[ads#lead-ads]].',
                                 '**Destination:** where messages arrive (Instagram, Messenger or WhatsApp), or the link the traffic opens. An offer link is a tracked link by default, so its clicks are counted.',
                                 '**Creative:** a post you already published, or an image or video uploaded from your computer, with an optional 9:16 version.',
                                 '**Text:** the primary text, the headline and the call-to-action button.',
@@ -2096,7 +2112,7 @@ const HelpContent = {
                         ar: [
                             { dl: [
                                 ['الدول', 'دولة واحدة أو أكثر، مثل مصر والسعودية معًا. دول الاتحاد الأوروبي غير متاحة الآن، لأن ميتا تطلب لها بيانات إضافية عن الممول والمستفيد.'],
-                                ['المدن', 'ابحث عن المدينة باسمها، ثم اختر نصف قطر بين 10 و80 كيلومترًا حولها.'],
+                                ['المدن', 'ابحث عن المدينة باسمها، ثم اختر نصف قطر بين 17 و80 كيلومترًا حولها.'],
                                 ['العمر', 'من 18 إلى 65.'],
                                 ['الجنس', 'الكل، أو الرجال، أو النساء.'],
                                 ['اللغات', 'تقصد بها ميتا من يستخدمون لغة غير لغة البلد الشائعة. في مصر والسعودية العربية هي اللغة الشائعة، فلا تحتاج إلى اختيارها عادةً.'],
@@ -2109,7 +2125,7 @@ const HelpContent = {
                         en: [
                             { dl: [
                                 ['Countries', 'One or more, such as Egypt and Saudi Arabia together. EU countries are not available yet: Meta asks for extra details about who pays and who benefits.'],
-                                ['Cities', 'Search a city by name, then choose a radius of 10 to 80 km around it.'],
+                                ['Cities', 'Search a city by name, then choose a radius of 17 to 80 km around it.'],
                                 ['Age', '18 to 65.'],
                                 ['Gender', 'All, men or women.'],
                                 ['Languages', 'Meta means people who use a language other than the country\'s common one. In Egypt and Saudi Arabia Arabic is the common language, so you rarely need it.'],
