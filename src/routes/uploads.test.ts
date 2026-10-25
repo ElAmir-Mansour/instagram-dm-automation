@@ -21,7 +21,7 @@ import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import { setMediaStore } from '../services/storage.js';
 import { MEDIA_BUCKET, setStorageFetch } from '../services/supabaseStorage.js';
-import apiRouter from './api.js';
+import apiRouter, { SERVED_MIME_TYPES } from './api.js';
 
 const PROJECT = 'https://abcd1234.supabase.co';
 const KEY = 'sb_secret_0123456789abcdefghijKLMNOP';
@@ -344,6 +344,74 @@ describe('GET /uploads/:id — a legacy row whose bytes are still in Postgres', 
         assert.equal((await serve('2b8a7a0e-3c1f-4f7e-9d0a-1234567890ab')).statusCode, 404);
         assert.equal((await serve('not-a-uuid.jpg')).statusCode, 404);
         assert.deepEqual(fetched, []);
+    });
+});
+
+// ─── Sound (illustrated explainers) ─────────────────────────────────────────────────────────
+//
+// The dashboard plays the narration (an m4a) and a music track's preview from this URL. An `audio/*` type that was not on the list came back as
+// `application/octet-stream`, which a player refuses to play; anything else unknown must still come back as an opaque download.
+
+describe('GET /uploads/:id — the sound of an explainer', () => {
+    const AUDIO = '2c8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const AUDIO_PATH = `${CREATOR}/${AUDIO}.m4a`;
+
+    for (const mime of ['audio/mp4', 'audio/mpeg', 'audio/wav']) {
+        it(`serves ${mime} as itself, and a piece of it with 206, so a player can seek`, async () => {
+            storageConfigured();
+            rows.set(AUDIO, { mime_type: mime, storage_path: AUDIO_PATH, size_bytes: '4096', data: null });
+            upstream = () => new Response(Buffer.alloc(1024, 3), { status: 206, headers: { 'content-length': '1024', 'content-range': 'bytes 0-1023/4096' } });
+
+            const piece = await serve(AUDIO, 'GET', { range: 'bytes=0-1023' });
+
+            assert.equal(piece.headers['content-type'], mime, 'not application/octet-stream');
+            assert.equal(piece.statusCode, 206);
+            assert.deepEqual(fetchedRanges, ['bytes=0-1023'], 'Supabase was asked for the piece, not the file');
+            assert.equal(piece.headers['content-range'], 'bytes 0-1023/4096');
+            assert.equal(piece.headers['accept-ranges'], 'bytes');
+            assert.equal(piece.headers['x-content-type-options'], 'nosniff');
+            assert.equal(piece.body().length, 1024);
+
+            upstream = () => new Response(Buffer.alloc(4096, 3), { status: 200, headers: { 'content-length': '4096' } });
+            const whole = await serve(AUDIO);
+            assert.equal(whole.statusCode, 200);
+            assert.equal(whole.headers['content-type'], mime);
+            assert.equal(whole.body().length, 4096);
+        });
+    }
+
+    it('answers HEAD for a track with its type and its size, and fetches nothing', async () => {
+        storageConfigured();
+        rows.set(AUDIO, { mime_type: 'audio/mpeg', storage_path: AUDIO_PATH, size_bytes: '4096', data: null });
+        const res = await serve(AUDIO, 'HEAD');
+        assert.equal(res.headers['content-type'], 'audio/mpeg');
+        assert.equal(res.headers['content-length'], '4096');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.deepEqual(fetched, []);
+    });
+
+    it('slices a legacy BYTEA sound itself, with the right type', async () => {
+        rows.set(AUDIO, { mime_type: 'audio/wav', storage_path: null, size_bytes: null, data: Buffer.from('RIFFxxxxWAVEdata') });
+        const res = await serve(AUDIO, 'GET', { range: 'bytes=0-3' });
+        assert.equal(res.statusCode, 206);
+        assert.equal(res.headers['content-type'], 'audio/wav');
+        assert.deepEqual(res.sent, Buffer.from('RIFF'));
+    });
+
+    it('still serves a type nobody named as an opaque download: this origin also serves the dashboard', async () => {
+        storageConfigured();
+        for (const mime of ['text/html', 'audio/webm', 'audio/x-evil', 'application/javascript', 'image/svg+xml']) {
+            rows.set(AUDIO, { mime_type: mime, storage_path: AUDIO_PATH, size_bytes: '10', data: null });
+            upstream = () => new Response(Buffer.from('0123456789'), { status: 200, headers: { 'content-length': '10' } });
+            const res = await serve(AUDIO);
+            assert.equal(res.headers['content-type'], 'application/octet-stream', mime);
+        }
+    });
+
+    it('names exactly the audio types the explainers upload, and no other audio', () => {
+        const audio = [...SERVED_MIME_TYPES].filter((type) => type.startsWith('audio/')).sort();
+        assert.deepEqual(audio, ['audio/mp4', 'audio/mpeg', 'audio/wav']);
+        assert.equal(SERVED_MIME_TYPES.has('image/gif'), true, 'what was served before still is');
     });
 });
 

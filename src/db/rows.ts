@@ -1578,6 +1578,11 @@ export interface ExplainerWriteResult {
     written: ExplainerWriterOutput;
     model: string;
     usage?: unknown;
+    /**
+     * How many rounds of web reading the Mac's writer did: 0 means it wrote from memory, with no page read. Absent means unknown, which is NOT 0
+     * (an older worker does not send it, and the server's Gemini writer has grounding instead). The app flags a 0 as `research_limited`.
+     */
+    research_rounds?: number;
 }
 
 /** `explainer_voice`: the narration voiced and timed. `version` is the `draft_version` it was asked for: a result for another is stale. */
