@@ -1553,6 +1553,36 @@ describe('Explainers: the words', () => {
         for (const needle of ['Workers Free', '$0 rule', 'Pixabay', 'incompetech', 'Free Music Archive', 'YouTube Audio Library', 'engagement bait', 'women or girls', '/login']) assert.ok(english.includes(needle), needle);
     });
 
+    it('says where the voice is made and what the sound effects are: Gemini on Google’s servers, the project’s own whoosh and Kenney’s CC0 pop', () => {
+        const h = loadDashboard({ files: ['dashboard/js/help-content.js'] });
+        const article = h.run<Json>('HelpContent').articles.find((a: Json) => a.slug === 'explainers');
+        const body = (lang: 'ar' | 'en'): string => JSON.stringify(article.sections.map((s: Json) => s.body[lang]));
+        const en = body('en');
+        const ar = body('ar');
+        // The voice: the Mac sends the approved script to Google's Gemini, which reads it aloud; then the Mac times every scene. Never "on your Mac".
+        assert.ok(en.includes('your Mac sends the approved script to Google’s Gemini, which reads it aloud, and then your Mac times every scene'), 'the flow list');
+        assert.ok(en.includes('your Mac sends the script to Google’s Gemini, which runs on Google’s servers, not on your Mac, and reads it aloud'), 'the voice section');
+        assert.equal(/Gemini reads the (approved )?script on your Mac/.test(en), false);
+        assert.ok(ar.includes('يرسل جهازك الماك النص المعتمد إلى Gemini من Google فيقرؤه بصوت مسموع، ثم يضبط جهازك الماك توقيت كل مشهد'), 'the flow list, in Arabic');
+        assert.ok(ar.includes('يرسل جهازك الماك النص إلى Gemini من Google، وهو يعمل على خوادم Google لا على جهازك'), 'the voice section, in Arabic');
+        assert.equal(/يقرأ Gemini النص[^"]*على جهازك الماك/.test(ar), false);
+        // The sound effects: the project's own whoosh at each cut, Kenney's public-domain (CC0) pop when a label appears; no licence needed from the owner.
+        assert.ok(en.includes('**Sound effects only** uses the project’s own whoosh at each cut and a public-domain (CC0) pop from Kenney when a label appears, and needs no licence from you'));
+        assert.equal(en.includes('free (CC0) set'), false);
+        assert.ok(ar.includes('وصوت «بوب» (pop) من Kenney في الملكية العامة (CC0) حين تظهر تسمية، ولا تحتاج إلى ترخيص منك'));
+        assert.ok(ar.includes('صوت «ووش» (whoosh) من إنتاج المشروع نفسه عند كل قطع'));
+        assert.equal(ar.includes('مجموعة مجانية (CC0)'), false);
+        // The words of the interface say the same: the working panel and the approval dialog name Gemini, and none puts the reading on the Mac.
+        for (const lang of ['en', 'ar'] as const) {
+            const dict = strings(lang);
+            for (const key of ['explainers.voice.workingBody', 'explainers.approve.body']) {
+                assert.ok(dict[key]!.includes(lang === 'en' ? 'Google’s Gemini' : 'Gemini من Google'), `${lang} ${key} names Gemini at Google`);
+            }
+            assert.equal(/Gemini reads|يقرأ Gemini/.test(dict['explainers.voice.workingBody']!), false, `${lang}: Gemini does not read “on your Mac”`);
+            assert.equal(/Mac voices|يسجّل (جهازك )?الماك الصوت/.test(Object.keys(dict).filter((k) => k.startsWith('explainers.')).map((k) => dict[k]).join('\n')), false, `${lang}: the Mac does not voice, it runs the step`);
+        }
+    });
+
     it('links every step to its section of the article, and every link names a section that exists', () => {
         const source = readFileSync('dashboard/js/pages/explainers.js', 'utf8');
         const linked = new Set([...source.matchAll(/UI\.helpLink\(\s*'explainers#([a-z0-9-]+)'/g)].map((m) => m[1]));

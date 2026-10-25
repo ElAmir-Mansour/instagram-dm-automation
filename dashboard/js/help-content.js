@@ -3829,7 +3829,7 @@ const HelpContent = {
                             'الشرح المصوّر فيديو بتعليق صوتي وصور ثابتة، لكل مشهد صورة وتسمية قصيرة عليها. تعطي الموضوع، فيبحث فيه Claude ويكتب النص، وتعتمده أنت، ثم تُرسم الصور، وتعتمدها، ثم يُجهَّز الفيديو، ثم تجدوله.',
                             { ol: [
                                 '**النص:** يبحث Claude على جهازك الماك بالبحث في الويب، ويكتب جملة واحدة لكل مشهد، مع وصف صورة كل مشهد وتسميته، والأوصاف، والتعليق الأول بالمصادر، والردود المتوقعة. تعدّله وتعتمده: هذه البوابة الأولى.',
-                                '**الصوت:** يقرأ Gemini النص المعتمد على جهازك الماك، ويُضبط توقيت كل مشهد على التسجيل.',
+                                '**الصوت:** يرسل جهازك الماك النص المعتمد إلى Gemini من Google فيقرؤه بصوت مسموع، ثم يضبط جهازك الماك توقيت كل مشهد على التسجيل.',
                                 '**الصور:** صورة لكل مشهد بالأسلوب والشخصية المتكررة اللذين اخترتهما. تعيد رسم ما لا يعجبك، ثم تعتمد الصور: هذه البوابة الثانية.',
                                 '**الفيديو:** يجهّز جهازك الماك فيديو عموديًا 9:16 وفيديو أفقيًا 16:9 وغلافًا، بموسيقى أو بمؤثرات صوتية فقط.',
                                 '**النشر:** تنشره الجدولة، أو تنسخ ما تحتاجه إلى لينكدإن بنفسك.',
@@ -3841,7 +3841,7 @@ const HelpContent = {
                             'An illustrated explainer is a narrated video made of still pictures, one per scene, with a short label on each. You give a topic. Claude researches it and writes the script, you approve it, the pictures are drawn, you approve those, the videos are rendered, and then you schedule it.',
                             { ol: [
                                 '**Script:** Claude, on your Mac, researches with web search and writes one sentence per scene, with each scene’s picture brief and label, the captions, the first comment with the sources and the likely replies. You edit it and approve it: the first gate.',
-                                '**Voice:** Gemini reads the approved script on your Mac, and every scene is timed to the audio.',
+                                '**Voice:** your Mac sends the approved script to Google’s Gemini, which reads it aloud, and then your Mac times every scene to the recording.',
                                 '**Pictures:** one picture per scene, in the style and with the recurring character you chose. You redraw any you don’t like, then approve them: the second gate.',
                                 '**Video:** your Mac renders a vertical 9:16 video, a horizontal 16:9 video and a cover, with music or with sound effects only.',
                                 '**Publish:** Schedule posts it, or you copy what you need to LinkedIn yourself.',
@@ -3934,7 +3934,7 @@ const HelpContent = {
                     title: { ar: 'الخطوة 2: الصوت', en: 'Step 2: the voice' },
                     body: {
                         ar: [
-                            'بعد الاعتماد يقرأ Gemini النص على جهازك الماك. يستغرق النص القصير بضع دقائق، والنص الطويل يُسجَّل على أجزاء تُضمّ في تسجيل واحد بصوت واحد. ثم يُضبط توقيت كل مشهد على التسجيل بحيث يقع القطع عند أول كلمة منه.',
+                            'بعد الاعتماد يرسل جهازك الماك النص إلى Gemini من Google، وهو يعمل على خوادم Google لا على جهازك، فيقرؤه بصوت مسموع. يستغرق النص القصير بضع دقائق، والنص الطويل يُسجَّل على أجزاء تُضمّ في تسجيل واحد بصوت واحد. ثم يضبط جهازك الماك توقيت كل مشهد على التسجيل بحيث يقع القطع عند أول كلمة منه.',
                             'في الخطوة مشغّل للتسجيل، وقائمة «وقت كل مشهد» بزر تشغيل لكل مشهد.',
                             { ul: [
                                 '**راجع التوقيت:** تظهر حين تعذّرت مطابقة بعض الكلمات مع التسجيل، فتتبع القطعات هناك عدد الكلمات. استمع كاملًا، وإن جاء قطع مبكرًا أو متأخرًا فعدّل ذلك المشهد وسجّل الصوت من جديد.',
@@ -3943,7 +3943,7 @@ const HelpContent = {
                             'إن بلغ مزوّد الصوت حدّه اليومي المجاني فاقرأ [[explainers#troubleshooting]].',
                         ],
                         en: [
-                            'After approval, Gemini reads the script on your Mac. A short script takes a few minutes, and a long one is voiced in parts that are joined into one recording in one voice. Then every scene is timed to the audio, so the cut lands on its first spoken word.',
+                            'After approval, your Mac sends the script to Google’s Gemini, which runs on Google’s servers, not on your Mac, and reads it aloud. A short script takes a few minutes, and a long one is voiced in parts that are joined into one recording in one voice. Then your Mac times every scene to the audio, so the cut lands on its first spoken word.',
                             'The step has a player for the recording, and a list called “Time of each scene” with a play button for each scene.',
                             { ul: [
                                 '**Check the timing:** appears when some words could not be matched to the audio, so the cuts there follow word counts instead. Listen through. If a cut lands early or late, edit that scene and voice it again.',
@@ -4170,7 +4170,7 @@ const HelpContent = {
                                 ['Free Music Archive', 'استخدم CC BY أو CC0 فقط، ولا تستخدم أبدًا ما فيه NC أو ND أو SA.'],
                                 ['مكتبة صوت يوتيوب', 'لليوتيوب وحده، فلا تصلح لفيسبوك ولا إنستغرام ولا تيك توك.'],
                             ] },
-                            'أما **المؤثرات الصوتية فقط** فتأتي من مجموعة مجانية (CC0)، ولا تحتاج إلى ترخيص منك.',
+                            'أما **المؤثرات الصوتية فقط** فيستخدم المزج صوت «ووش» (whoosh) من إنتاج المشروع نفسه عند كل قطع، وصوت «بوب» (pop) من Kenney في الملكية العامة (CC0) حين تظهر تسمية، ولا تحتاج إلى ترخيص منك.',
                             { warn: 'إن لم تكن متأكدًا من الترخيص فاختر **المؤثرات الصوتية فقط**.' },
                         ],
                         en: [
@@ -4182,7 +4182,7 @@ const HelpContent = {
                                 ['Free Music Archive', 'Use CC BY or CC0 only, and never anything marked NC, ND or SA.'],
                                 ['YouTube Audio Library', 'For YouTube only, so it does not suit Facebook, Instagram or TikTok.'],
                             ] },
-                            '**Sound effects only** uses a free (CC0) set of effects, and needs no licence from you.',
+                            '**Sound effects only** uses the project’s own whoosh at each cut and a public-domain (CC0) pop from Kenney when a label appears, and needs no licence from you.',
                             { warn: 'If you are not sure of a licence, choose **Sound effects only**.' },
                         ],
                     },
