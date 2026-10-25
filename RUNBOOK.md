@@ -287,15 +287,20 @@ repo (`src/config/crypto.ts:4-8`).
 ### 3.3 Rotating a token
 
 1. `node scripts/diagnose.mjs` — confirm the current state and note the fingerprint.
-2. Graph API Explorer → select the app → **User Token**, not a Page token → add the required
-   scopes → generate.
-3. `node scripts/exchange-token.mjs <short-lived-user-token>` — exchanges via `/me/accounts`
-   for a permanent PAGE token. Starting from a Page token instead only ever gets you 60 days.
-4. Paste it into the dashboard Settings page. That encrypts it on write and sets
-   `token_status = 'valid'` (`recordTokenStatus`, `src/routes/api.ts:1579`).
+2. Graph API Explorer → select the app → **User Token**, not a Page token → add the twelve
+   required scopes (listed in `docs/TOKEN_GUIDE.md`, step 1), plus `instagram_manage_insights`
+   and `read_insights` for the Growth screen → generate. (Where the operator has set up
+   **Connect with Facebook**, connecting from Settings asks for all fourteen and replaces steps 2–4.)
+3. `node --env-file=.env scripts/exchange-token.mjs <short-lived-user-token>` — exchanges via
+   `/me/accounts` for a permanent PAGE token. It needs `META_APP_ID` and `META_APP_SECRET` in
+   `.env` and exits without them. Starting from a Page token instead only ever gets you 60 days.
+4. Paste it into the dashboard: **Settings** → **Advanced** → **Update access token** → **Validate & save**.
+   That checks it with Meta, encrypts it on write and records `token_status = 'valid'`
+   (`recordTokenStatus` in `src/routes/api.ts`). Never write the token with SQL (see
+   `docs/TOKEN_GUIDE.md`, step 4).
 5. `node scripts/diagnose.mjs` — expect `token is PAGE, valid, never expires, all 12 required
-   scopes present`. The 12 required scopes are listed at `scripts/diagnose.mjs:89-104`; the
-   live token carries 13.
+   scopes present`. The 12 are `REQUIRED_SCOPES` in `scripts/diagnose.mjs`, the same list as
+   `src/services/tokenHealth.ts`.
 
 A missing scope disables a path **silently**: `instagram_manage_messages` is DMs,
 `instagram_content_publish` is scheduling, `pages_manage_engagement` is public replies
@@ -568,8 +573,12 @@ All migrations use `IF NOT EXISTS` and are idempotent, so re-running is safe.
   On a database that genuinely lacks the columns it is how you get code expecting a schema that
   isn't there.
 
-Alternative route: paste the SQL into the Supabase SQL editor. It will not update the ledger,
-so follow with `--baseline` if you do.
+If you pasted a file's SQL into the Supabase SQL editor instead, the ledger does not know.
+**Do not follow it with `--baseline`**: that records *every* pending file as applied, not just the
+one you pasted, and the others then never run (`scripts/migrate.mjs:101-108`). Run
+`npm run migrate` instead: the files are idempotent (above), so the pasted one runs again
+harmlessly and is recorded, and anything else pending is applied too. Check first with
+`npm run migrate:status`.
 
 ---
 
