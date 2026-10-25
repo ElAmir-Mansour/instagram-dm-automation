@@ -165,7 +165,7 @@ const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').repla
 
 const REQUIRED = [
     'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'growth', 'seo', 'tiktok', 'whatsapp', 'ads', 'studio', 'worker',
-    'library', 'create', 'studio-schedule', 'studio-settings', 'ai-usage', 'troubleshooting', 'faq',
+    'library', 'create', 'studio-schedule', 'studio-settings', 'explainers', 'ai-usage', 'troubleshooting', 'faq',
 ];
 
 const ARABIC = /[\u0600-\u06FF]/g;
@@ -404,7 +404,7 @@ describe('Help Center — deep links', () => {
 });
 
 describe('Help Center — every article in both languages', () => {
-    it('has the eighteen articles the Help Center promises, each slug once', () => {
+    it('has the nineteen articles the Help Center promises, each slug once', () => {
         const s = load();
         const slugs = Array.from(s.content.articles, (a) => String(a.slug));
         assert.deepEqual(slugs, REQUIRED);

@@ -97,8 +97,8 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         assert.equal(new Set(all).size, all.length, 'no page twice');
     });
 
-    it('has no item for what lives inside another screen: Monteur and Infographics (Studio), the Activity Log (Results)', () => {
-        for (const page of ['monteur', 'infographics', 'activity']) {
+    it('has no item for what lives inside another screen: Monteur, Infographics and Explainers (Studio), the Activity Log (Results)', () => {
+        for (const page of ['monteur', 'infographics', 'explainers', 'activity']) {
             assert.equal(INDEX.includes(`data-page="${page}"`), false, `${page}: no item of its own`);
             assert.equal(INDEX.includes(`href="#/${page}" class="nav-item`), false, `${page}: no nav link`);
         }
@@ -189,14 +189,15 @@ describe('sidebar: a page with no item of its own reads as the item it belongs t
         const { App } = rig();
         assert.equal(App.pages.monteur.navAs, 'studio');
         assert.equal(App.pages.infographics.navAs, 'studio');
+        assert.equal(App.pages.explainers.navAs, 'studio');
         assert.equal(App.pages.activity.navAs, 'analytics');
-        for (const old of ['monteur', 'infographics', 'activity', 'analytics', 'operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']) {
+        for (const old of ['monteur', 'infographics', 'explainers', 'activity', 'analytics', 'operations', 'tenants', 'users', 'jobs', 'audit', 'erasure']) {
             assert.ok(App.entryOf(old) && !App.entryOf(old).aliasOf, `#/${old} is still a page`);
         }
     });
 
     for (const [page, reads] of [
-        ['studio', 'studio'], ['monteur', 'studio'], ['infographics', 'studio'],
+        ['studio', 'studio'], ['monteur', 'studio'], ['infographics', 'studio'], ['explainers', 'studio'],
         ['analytics', 'analytics'], ['activity', 'analytics'],
         ['overview', 'overview'], ['posts', 'posts'], ['settings', 'settings'], ['help', 'help'],
     ] as const) {

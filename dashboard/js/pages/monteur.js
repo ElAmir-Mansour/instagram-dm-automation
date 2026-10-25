@@ -686,8 +686,8 @@ const MonteurPage = {
 
     // ─── Toolbar ─────────────────────────────────────────────────────────────
     /**
-     * The Studio's own tab bar, with the Monteur current. StudioPage.tabsMarkup() and
-     * InfographicsPage.toolbarMarkup() list the same four links in the same order;
+     * The Studio's own tab bar, with the Monteur current. StudioPage.tabsMarkup(), InfographicsPage.toolbarMarkup()
+     * and ExplainersPage.toolbarMarkup() list the same five links in the same order;
      * monteur.test.ts holds them together.
      */
     toolbarMarkup() {
@@ -703,6 +703,7 @@ const MonteurPage = {
                     ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                     ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
                     ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
+                    ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
                     ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
                 </nav>
             </div>

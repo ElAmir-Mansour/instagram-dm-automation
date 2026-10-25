@@ -94,7 +94,7 @@ describe('navigation labels name the job, in both languages (T118, SH-02)', () =
 
     it('titles the pages that moved inside another screen as what they still are', () => {
         // Reels and infographics are Studio's tabs and the Log is Results' second view, but each is still a page with its own title.
-        for (const page of ['monteur', 'infographics', 'activity']) {
+        for (const page of ['monteur', 'infographics', 'explainers', 'activity']) {
             assert.ok(ar.t(`nav.${page}`) && ar.t(`nav.${page}`) !== `nav.${page}`, `ar nav.${page}`);
             assert.ok(en.t(`nav.${page}`) && en.t(`nav.${page}`) !== `nav.${page}`, `en nav.${page}`);
         }

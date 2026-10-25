@@ -1017,13 +1017,13 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.equal((index.match(/data-page="studio"/g) ?? []).length, 1, 'Studio is one entry');
         assert.match(index, /var PAGES = \[[^\]]*'monteur'/);
 
-        // All three tab bars list the same four links in the same order, and each marks its own.
+        // All four tab bars list the same five links in the same order, and each marks its own.
         const hrefs = (markup: string): string[] => [...markup.matchAll(/<a class="btn btn-sm btn-ghost" href="([^"]+)"/g)].map((m) => m[1]!);
         const studio = load(['dashboard/js/pages/studio.js'], 'StudioPage');
         const studioTabs = String(studio.Page.tabsMarkup('home'));
         const monteur = loadMonteur('en');
         const monteurTabs = String(monteur.Page.toolbarMarkup());
-        assert.deepEqual(hrefs(studioTabs), ['#/studio', '#/monteur', '#/infographics', '#/studio?tab=settings']);
+        assert.deepEqual(hrefs(studioTabs), ['#/studio', '#/monteur', '#/infographics', '#/explainers', '#/studio?tab=settings']);
         assert.deepEqual(hrefs(monteurTabs), hrefs(studioTabs));
         assert.match(monteurTabs, /href="#\/monteur"\s+aria-current="page"/);
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
@@ -1031,18 +1031,23 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         const infographicsTabs = String(infographics.Page.toolbarMarkup());
         assert.deepEqual(hrefs(infographicsTabs), hrefs(studioTabs));
         assert.match(infographicsTabs, /href="#\/infographics"\s+aria-current="page"/);
+        const explainers = load(['dashboard/js/pages/explainers.js'], 'ExplainersPage');
+        const explainersTabs = String(explainers.Page.toolbarMarkup('videos'));
+        assert.deepEqual(hrefs(explainersTabs), hrefs(studioTabs));
+        assert.match(explainersTabs, /href="#\/explainers"\s+aria-current="page"/);
+        assert.doesNotMatch(studioTabs, /href="#\/explainers"\s+aria-current/);
     });
 
-    it('ships at cache version 12.75: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.76: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.75');
+        assert.equal(version, '12.76');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.75']);
+        assert.deepEqual([...new Set(refs)], ['12.76']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.75'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.76'], page);
         }
     });
 });
