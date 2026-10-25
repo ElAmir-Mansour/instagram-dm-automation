@@ -237,6 +237,38 @@ export class PostgresJobQueue implements JobQueue {
     }
 
     /**
+     * Give claimed jobs back unrun.
+     *
+     * A claim takes a whole batch in one statement: every row becomes `running` with an attempt counted, whether or not the drain gets
+     * to it. When the drain's time budget runs out partway, the rest of the batch is `running` and nothing is going to start it, so it
+     * waits for `reapStale` (`CLAIM_VISIBILITY_SECONDS`, five minutes) and, if that claim was on the job's LAST attempt, is failed
+     * "[abandoned …]" without ever having run. The inline drain claims three at a time, so one slow DM held the other two back by
+     * about five minutes.
+     *
+     * It is the reaper's requeue plus a refund: the job never ran, so the attempt the claim counted did not happen. `GREATEST` keeps
+     * a row that somehow reads 0 from going negative. `run_after` and `last_error` are left alone: it is not a failure and it keeps
+     * its place in the line, due now and claimable by the very next drain.
+     *
+     * `status = 'running'` is the guard. A row that has finished, failed or already been taken back by the reaper is
+     * not this caller's to touch. One UPDATE does the whole batch, and it returns how many rows it really moved: fewer than were
+     * asked for means some were no longer `running`.
+     */
+    async releaseUnrun(jobIds: readonly string[]): Promise<number> {
+        if (jobIds.length === 0) return 0;
+
+        return queryCount(
+            `UPDATE jobs
+                SET status = 'pending',
+                    claimed_at = NULL,
+                    attempts = GREATEST(attempts - 1, 0),
+                    updated_at = NOW()
+              WHERE id = ANY($1::uuid[])
+                AND status = 'running'`,
+            [jobIds]
+        );
+    }
+
+    /**
      * Delete completed jobs.
      *
      * Named in ARCHITECTURE.md §9 as deliberately deferred: `done` rows accumulate forever, in

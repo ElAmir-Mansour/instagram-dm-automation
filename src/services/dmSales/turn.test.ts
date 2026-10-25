@@ -121,7 +121,7 @@ function recordingQueue(behaviour: 'ok' | 'keyed' | 'throw' = 'ok') {
             stored.push(input as EnqueueInput);
             return `job-${stored.length}`;
         },
-        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async pruneCompleted() { return 0; },
+        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async releaseUnrun() { return 0; }, async pruneCompleted() { return 0; },
     };
     return queue;
 }

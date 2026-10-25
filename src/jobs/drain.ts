@@ -16,7 +16,7 @@ import { CLAIM_VISIBILITY_SECONDS, drainJobs, type DrainResult } from './runner.
  *
  * Deliberately short. The webhook has already acknowledged Meta, so this is opportunistic
  * work — getting the common case (one comment, one DM) done immediately rather than waiting
- * for the next drain. Anything it does not finish stays `pending` and costs nothing.
+ * for the next drain. Anything it does not finish is left `pending` and costs nothing.
  */
 function inlineBudgetMs(): number {
     const configured = Number(process.env.JOB_INLINE_BUDGET_MS);

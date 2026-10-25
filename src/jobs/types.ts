@@ -233,6 +233,7 @@ export type JobHandlerRegistry = { [K in JobKind]: JobHandler<K> };
  *   claim    -> receive (with a visibility timeout)
  *   complete -> delete / ack
  *   fail     -> nack with a delay
+ *   release  -> nack with no delay: a message received and never started goes straight back
  *   reap     -> handled by the broker's visibility timeout; a no-op in a hosted impl
  */
 export interface JobQueue {
@@ -252,6 +253,16 @@ export interface JobQueue {
     fail(jobId: string, error: string, retryInSeconds: number | null, redact?: PayloadRedaction): Promise<void>;
     /** Return claims older than the visibility timeout to `pending`. Returns how many. */
     reapStale(olderThanSeconds: number): Promise<number>;
+    /**
+     * Hand back jobs that were claimed and never started: `pending` again with the claim cleared, and the attempt the claim counted
+     * given back (never below 0), so the next claim finds each exactly as it was. The drain calls this when its time budget ends
+     * partway through a batch (`drainJobs`). Left alone, those jobs sit `running` until `reapStale` frees them
+     * `CLAIM_VISIBILITY_SECONDS` later, and one claimed on its last attempt is failed "abandoned" without ever having run.
+     *
+     * Only rows still `running` are touched: a job that has since finished, failed or been reaped is not the caller's to give back.
+     * Only for jobs that did NOT run; the refund is true of those and of nothing else. Returns how many were handed back.
+     */
+    releaseUnrun(jobIds: readonly string[]): Promise<number>;
     /** Delete `done` rows older than the retention window. Returns how many. */
     pruneCompleted(olderThanDays: number, limit: number): Promise<number>;
 }

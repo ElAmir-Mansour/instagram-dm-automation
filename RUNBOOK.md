@@ -159,12 +159,19 @@ Both must name *this* deployment, and the fields list must contain what you depe
 ### 2.3 Was the signature rejected?
 
 **A webhook signature failure is invisible from the database.** The 403 happens before
-anything is written (`src/index.ts:175-186`), so it is indistinguishable from silence. The only
+anything is written (`src/index.ts:365-374`), so it is indistinguishable from silence. The only
 evidence is the Vercel log line:
 
 ```
-webhook.signature_rejected  { secrets_tried: N, instagram_secret_set: true|false }
+webhook.signature_rejected  { app_keys_tried: N, instagram_app_configured: true|false, probe: true|false }
 ```
+
+`app_keys_tried` is how many app secrets the signature was checked against (`0` means neither is
+set), `instagram_app_configured` says whether `INSTAGRAM_APP_SECRET` is one of them, and
+`probe: true` is `diagnose.mjs --probe-signature` proving the guard still holds, not an incident.
+Until 2026-10-25 the first two were named `secrets_tried` and `instagram_secret_set`, and the
+logger printed both as `"[redacted]"` (it blanks any field whose name contains `secret`), so older
+lines show no count at all.
 
 The app verifies against `META_APP_SECRET` **and** `INSTAGRAM_APP_SECRET`, because Instagram
 API with Instagram Login is a *separate Meta app with its own secret*. Dropping either silently
@@ -488,6 +495,11 @@ before claiming (`src/jobs/drain.ts:53-58`, `:87`), so **draining is also how yo
 stale claim**. A job with attempts left goes back to `pending`; one without becomes `failed`
 with `[abandoned: the claim went stale and no attempts remain]` appended
 (`src/jobs/queue.ts:183-202`).
+
+A drain that only ran out of its time budget does not leave claims for this: it hands the jobs it
+claimed but did not reach back to `pending` itself, with the attempt given back (`job.released`
+in the logs; `src/jobs/runner.ts:163`, `src/jobs/queue.ts:256`). So a row that stays `running`
+means its drain was frozen or killed, or that handing it back failed (`job.release_failed`).
 
 Retries are exponential with jitter: roughly **30s, 2m, 8m**, `max_attempts` 3 by default
 (`src/jobs/runner.ts:36-40`, `src/config/migration_v13_jobs.sql:43`). Jittered because the

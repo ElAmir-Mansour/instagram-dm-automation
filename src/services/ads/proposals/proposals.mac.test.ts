@@ -155,7 +155,7 @@ beforeEach(() => {
     installTables(db);
     const queue: JobQueue = {
         async enqueue(input) { enqueued.push({ kind: input.kind, payload: input.payload }); return `job-${enqueued.length}`; },
-        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async pruneCompleted() { return 0; },
+        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async releaseUnrun() { return 0; }, async pruneCompleted() { return 0; },
     } as JobQueue;
     const prevQueue = setJobQueue(queue);
     const prevWait = setWaitUntil((work) => { pending.push(work.catch(() => undefined)); });

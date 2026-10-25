@@ -12,6 +12,7 @@ import { after, before, describe, it } from 'node:test';
 import { cachedForRequest, withProfileCache } from '../services/profile/cache.js';
 import { setLogSink } from '../utils/log.js';
 import { backoffSeconds, drainJobs } from './runner.js';
+import { memoryQueue } from './testSupport.js';
 import type { EnqueueInput, Job, JobHandlerRegistry, JobKind, JobQueue } from './types.js';
 
 // The drain logs an event per job by design. Swallow it here so the assertions are not
@@ -35,11 +36,14 @@ function fakeQueue(batches: Job[][]): JobQueue & {
     failed: FailCall[];
     claims: number[];
     enqueued: EnqueueInput[];
+    /** One entry per `releaseUnrun` call: the ids it was given. */
+    released: string[][];
 } {
     const completed: string[] = [];
     const failed: FailCall[] = [];
     const claims: number[] = [];
     const enqueued: EnqueueInput[] = [];
+    const released: string[][] = [];
     let next = 0;
 
     return {
@@ -47,6 +51,7 @@ function fakeQueue(batches: Job[][]): JobQueue & {
         failed,
         claims,
         enqueued,
+        released,
         async enqueue(input) {
             enqueued.push(input as EnqueueInput);
             return 'job-new';
@@ -64,10 +69,27 @@ function fakeQueue(batches: Job[][]): JobQueue & {
         async reapStale() {
             return 0;
         },
+        async releaseUnrun(jobIds) {
+            released.push([...jobIds]);
+            return jobIds.length;
+        },
         async pruneCompleted() {
             return 0;
         },
     };
+}
+
+/** Run `body` with the log captured and parsed. The file-wide sink that swallows output is put back afterwards. */
+async function logged<T>(body: () => Promise<T>): Promise<{ value: T; lines: Array<Record<string, any>> }> {
+    const lines: Array<Record<string, any>> = [];
+    const previous = setLogSink((_level, line) => {
+        lines.push(JSON.parse(line));
+    });
+    try {
+        return { value: await body(), lines };
+    } finally {
+        setLogSink(previous);
+    }
 }
 
 function job(overrides: Partial<Job> = {}): Job {
@@ -262,6 +284,127 @@ describe('drainJobs', () => {
         assert.deepEqual(queue.completed, ['a']);
         assert.equal(result.claimed, 1);
         assert.equal(result.budgetExhausted, true);
+        // b and c were claimed with a, in the same statement, and will not run in this drain. Left alone they would sit `running`
+        // (with an attempt counted) until the 300 s reaper; they must go back to the queue now.
+        assert.deepEqual(queue.released, [['b', 'c']], 'the jobs it did not reach are handed back, in claim order');
+        assert.equal(queue.failed.length, 0, 'handing a job back is not failing it');
+        assert.equal(queue.claims.length, 1, 'and the drain does not go round for another batch');
+    });
+
+    it('hands back only the jobs after the one that used up the budget', async () => {
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' }), job({ id: 'd' }), job({ id: 'e' })]]);
+        const { registry } = handlersThat((j) => {
+            if (j.id === 'b') clock += 5_000;
+        });
+
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 1_000, batchSize: 5, now: () => clock });
+
+        assert.deepEqual(queue.completed, ['a', 'b'], 'both jobs the loop reached ran');
+        assert.deepEqual(queue.released, [['c', 'd', 'e']], 'neither of them is handed back');
+        assert.equal(result.claimed, 2);
+    });
+
+    it('hands back nothing when the budget ends on the last job of the batch', async () => {
+        // Nothing was claimed and left unrun, so there is nothing to give back and no statement to send.
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' })]]);
+        const { registry } = handlersThat((j) => {
+            if (j.id === 'b') clock += 5_000;
+        });
+
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 1_000, now: () => clock });
+
+        assert.equal(result.budgetExhausted, true);
+        assert.deepEqual(queue.completed, ['a', 'b']);
+        assert.deepEqual(queue.released, []);
+    });
+
+    it('hands back nothing when the queue empties inside the budget', async () => {
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' })], []]);
+        const { registry } = handlersThat(() => {});
+
+        const result = await drainJobs({ queue, handlers: registry, ...budget });
+
+        assert.equal(result.budgetExhausted, false);
+        assert.deepEqual(queue.released, []);
+    });
+
+    it('never hands back a job that ran, even one that failed, and still hands back the ones after it', async () => {
+        // The refund is only true of a job that never started. a ran and threw: it is retried through `fail`, with its attempt spent.
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' })]]);
+        const { registry } = handlersThat((j) => {
+            if (j.id === 'a') {
+                clock += 5_000;
+                throw new Error('Gemini timed out');
+            }
+        });
+
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 1_000, now: () => clock, random: () => 0.5 });
+
+        assert.deepEqual(queue.failed.map((f) => f.jobId), ['a']);
+        assert.deepEqual(queue.released, [['b', 'c']]);
+        assert.deepEqual([result.succeeded, result.failed], [0, 1]);
+    });
+
+    it('does not throw when handing the jobs back fails, and says so', async () => {
+        // The drain runs after the response, and from a cron whose body nobody reads: an exception has nowhere to go. A failed release
+        // only leaves the jobs where they were, for the reaper, which is how every one of them used to be freed.
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' })]]);
+        queue.releaseUnrun = async () => {
+            throw new Error('connection terminated');
+        };
+        const { registry } = handlersThat(() => {
+            clock += 5_000;
+        });
+
+        const { value: result, lines } = await logged(() => drainJobs({ queue, handlers: registry, budgetMs: 1_000, now: () => clock }));
+
+        assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, budgetExhausted: true });
+        const failure = lines.find((l) => l['event'] === 'job.release_failed');
+        assert.ok(failure, 'the failure is logged');
+        assert.equal(failure['level'], 'error');
+        assert.equal(failure['unrun'], 2);
+        assert.deepEqual(failure['job_ids'], ['b', 'c']);
+        assert.match(String(failure['message']), /connection terminated/);
+        assert.ok(lines.some((l) => l['event'] === 'job.drain_complete'), 'and the drain still reports itself');
+    });
+
+    it('logs what it handed back', async () => {
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' })]]);
+        const { registry } = handlersThat(() => {
+            clock += 5_000;
+        });
+
+        const { lines } = await logged(() => drainJobs({ queue, handlers: registry, budgetMs: 1_000, now: () => clock }));
+
+        const released = lines.find((l) => l['event'] === 'job.released');
+        assert.ok(released, 'a release is logged');
+        assert.equal(released['level'], 'info');
+        assert.equal(released['released'], 2);
+        assert.equal(released['unrun'], 2);
+        assert.deepEqual(released['job_ids'], ['b', 'c']);
+        const events = lines.map((l) => l['event']);
+        assert.ok(events.indexOf('job.released') < events.indexOf('job.drain_complete'), 'before the drain says it is done');
+    });
+
+    it('logs how many it really moved when some were no longer running', async () => {
+        // The reaper can get there first. The UPDATE leaves such a row alone, so the count it returns is the one worth logging.
+        let clock = 0;
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' })]]);
+        queue.releaseUnrun = async () => 1;
+        const { registry } = handlersThat(() => {
+            clock += 5_000;
+        });
+
+        const { lines } = await logged(() => drainJobs({ queue, handlers: registry, budgetMs: 1_000, now: () => clock }));
+
+        const released = lines.find((l) => l['event'] === 'job.released');
+        assert.equal(released?.['released'], 1);
+        assert.equal(released?.['unrun'], 2);
     });
 
     it('honours maxJobs as a hard ceiling', async () => {
@@ -337,6 +480,50 @@ describe('drainJobs', () => {
 
         await drainJobs({ queue, handlers: registry, ...budget });
         assert.deepEqual(calls, ['comment', 'dm']);
+    });
+});
+
+describe('a drain that runs out of budget mid-batch, against the in-memory queue', () => {
+    // `memoryQueue` gives `claim` and `releaseUnrun` the semantics the SQL in queue.ts gives them (claim: `running`, attempt + 1;
+    // release: `pending`, attempt - 1, only if still `running`), so these read what the table would hold afterwards.
+    const planned = (n: number): EnqueueInput[] =>
+        Array.from({ length: n }, (_, i) => ({ kind: 'comment.process', payload: { change: {}, entryId: `e${i + 1}` } }) as EnqueueInput);
+
+    it('leaves the jobs it did not reach pending, with the attempt the claim counted given back', async () => {
+        const { jobs, queue } = memoryQueue(planned(3));
+        let clock = 0;
+        const { registry } = handlersThat(() => {
+            clock += 5_000;
+        });
+
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 1_000, batchSize: 3, now: () => clock });
+
+        assert.equal(result.budgetExhausted, true);
+        assert.deepEqual(
+            jobs.map((j) => [j.id, j.status, j.attempts]),
+            [['job-1', 'done', 1], ['job-2', 'pending', 0], ['job-3', 'pending', 0]],
+            'the one that ran is done and spent its attempt; the others are back as they were, not left `running`'
+        );
+    });
+
+    it('runs a job claimed on its LAST attempt and not reached by the next drain, instead of leaving it to be abandoned', async () => {
+        // maxAttempts 1: every claim is a job's last attempt. Left `running`, the reaper would have failed job-2 "[abandoned: the claim
+        // went stale and no attempts remain]" five minutes later without it ever having run.
+        const { jobs, queue } = memoryQueue(planned(2), 1);
+        let clock = 0;
+        const { registry, seen } = handlersThat(() => {
+            clock += 5_000;
+        });
+
+        await drainJobs({ queue, handlers: registry, budgetMs: 1_000, batchSize: 2, now: () => clock });
+        assert.deepEqual(seen.map((j) => j.id), ['job-1'], 'the first drain ran only the first job');
+        assert.deepEqual([jobs[1]!.status, jobs[1]!.attempts], ['pending', 0]);
+
+        const second = await drainJobs({ queue, handlers: registry, budgetMs: 1_000_000, now: () => clock });
+
+        assert.deepEqual(seen.map((j) => j.id), ['job-1', 'job-2'], 'the second drain claimed it and ran it');
+        assert.equal(second.succeeded, 1);
+        assert.deepEqual([jobs[1]!.status, jobs[1]!.attempts], ['done', 1]);
     });
 });
 

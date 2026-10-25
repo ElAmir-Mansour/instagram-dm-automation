@@ -341,6 +341,69 @@ describe('reapStale', () => {
     });
 });
 
+describe('releaseUnrun', () => {
+    // A claim takes a whole batch in one statement and counts an attempt on every row. The jobs a drain never reached (its budget ran
+    // out partway) did not run, so what the claim counted did not happen. The guarantees below live in the SQL, not in TypeScript,
+    // so they are asserted on the statement; `pool.query` is the stand-in, as for every other test in this file.
+
+    it('hands the jobs back as they were: pending, claim cleared, the attempt the claim counted refunded', async () => {
+        await withDb([[/UPDATE jobs/, { rowCount: 2 }]], async (executed) => {
+            const released = await queue.releaseUnrun(['job-2', 'job-3']);
+
+            assert.equal(released, 2, 'the return value is how many rows the UPDATE moved');
+            assert.equal(executed.length, 1, 'one statement for the whole batch');
+            assert.match(flat(executed[0]!.sql), /SET status = 'pending', claimed_at = NULL, attempts = GREATEST\(attempts - 1, 0\)/);
+            assert.deepEqual(executed[0]!.params, [['job-2', 'job-3']], 'the ids reach the query as one array');
+        });
+    });
+
+    it('refunds with GREATEST, so a row that already reads 0 cannot go negative', async () => {
+        // A bare `attempts - 1` would write -1, and `attempts >= max_attempts` / `attempts < max_attempts` in the reaper and the
+        // runner would then read a job that has had no attempts as having a spare one.
+        await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async (executed) => {
+            await queue.releaseUnrun(['job-1']);
+
+            const sql = flat(executed[0]!.sql);
+            assert.match(sql, /GREATEST\(attempts - 1, 0\)/);
+            assert.equal(/attempts = attempts - 1/.test(sql), false);
+        });
+    });
+
+    it('only touches rows that are still running, picked by id', async () => {
+        // The guard that stops it undoing a job that has since finished, failed, or been taken back by the reaper.
+        await withDb([[/UPDATE jobs/, { rowCount: 0 }]], async (executed) => {
+            await queue.releaseUnrun(['job-1']);
+
+            assert.match(flat(executed[0]!.sql), /WHERE id = ANY\(\$1::uuid\[\]\) AND status = 'running'$/);
+        });
+    });
+
+    it('does not reschedule the job or touch its error: it is not a failure, and it keeps its place in the line', async () => {
+        // `run_after` is what `fail` writes to push a retry out; a job handed back is due now, so the next drain's claim takes it.
+        await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async (executed) => {
+            await queue.releaseUnrun(['job-1']);
+
+            const sql = flat(executed[0]!.sql);
+            assert.equal(/run_after/.test(sql), false);
+            assert.equal(/last_error/.test(sql), false);
+        });
+    });
+
+    it('returns how many rows it really moved, which is fewer when some were no longer running', async () => {
+        await withDb([[/UPDATE jobs/, { rowCount: 1 }]], async () => {
+            assert.equal(await queue.releaseUnrun(['job-1', 'job-2', 'job-3']), 1);
+        });
+    });
+
+    it('sends nothing at all for an empty list', async () => {
+        // No route is arranged, so any statement would throw. `ANY('{}')` would be harmless, but a round trip for nothing is not.
+        await withDb([], async (executed) => {
+            assert.equal(await queue.releaseUnrun([]), 0);
+            assert.equal(executed.length, 0);
+        });
+    });
+});
+
 describe('pruneCompleted', () => {
     it('deletes only finished jobs, in bounded batches', async () => {
         // A `failed` row is the one an operator needs to look at, and `pending`/`running` are
