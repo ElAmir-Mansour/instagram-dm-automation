@@ -31,7 +31,7 @@ import type { ExplainerLanguage, ExplainerLengthTier, ExplainerSoundMode, Studio
 import { workerSummary } from '../studio/worker.js';
 import { ExplainerError } from './errors.js';
 import { drawPayload, previousDraftOf, renderPayload, voicePayload } from './payloads.js';
-import { checkDraft, type DraftFinding, type DraftInput, LENGTH_TIERS, LIMITS, MAX_SCENES } from './spec.js';
+import { checkDraft, type DraftFinding, type DraftInput, LENGTH_TIERS, MAX_SCENES } from './spec.js';
 import { isAudioStale, RETRY_STATUS, transitionExplainer } from './state.js';
 import { type ExplainerFields, loadScenes, lockExplainer, replaceScenes, type SceneInput, updateExplainerFields, updateSceneText } from './store.js';
 import { queueWrite, reconcileWriting, startGeminiRun, type GeminiRun } from './writing.js';
@@ -366,7 +366,8 @@ function parseEdit(body: unknown, settings: StudioSettings): Edit {
     const edit: Edit = {};
 
     if (body.title !== undefined) {
-        const title = text(body.title, 'title', LIMITS.title, problems, true);
+        // The length is a finding of `checkDraft` (field_too_long), like every other limit, so that it comes back with the rest.
+        const title = text(body.title, 'title', 100_000, problems, true);
         if (title !== undefined) edit.title = title;
     }
     if (body.draft !== undefined) {

@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { ExplainerDraft } from '../../db/rows.js';
+import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
 import { completeJob, failJob } from '../studio/jobs.js';
 import { StudioError } from '../studio/common.js';
@@ -18,7 +19,7 @@ import { EXPLAINER, JOB, SENTENCE, TENANT, validWriterOutput, writerScene } from
 import { BASE, explainerSettings, installWorld, type World } from './testWorld.js';
 import { presentExplainer } from './explainers.js';
 
-const id = (n: number) => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
+const id = (n: number) => `${String(n).padStart(2, '0').repeat(4)}-1111-4111-8111-111111111111`;
 const up = (n: number) => `${BASE}/api/uploads/${id(n)}`;
 const KARIM = { key: 'karim', name: 'Karim', description: 'a curious young man', ref_media_id: null, ref_url: null, approved_at: null };
 
@@ -566,7 +567,7 @@ describe('a job that fails: the explainer fails at that step', () => {
 
     it('says something when a worker fails a job without saying why', async () => {
         waiting('rendering', 'explainer_render');
-        await applyExplainerFailure(world.db as never, { id: JOB, creator_id: TENANT, kind: 'explainer_render', payload: { explainer_id: EXPLAINER } }, '   ', {
+        await applyExplainerFailure(pool, { id: JOB, creator_id: TENANT, kind: 'explainer_render', payload: { explainer_id: EXPLAINER } }, '   ', {
             enqueue: async () => ({ id: 'x' }), checkFiles: async () => undefined, deleteFiles: async () => 0,
         }).catch(() => undefined);
     });
@@ -624,7 +625,7 @@ describe('a voice that ran into Gemini’s limit is asked again at the reset', (
 
 describe('applyExplainerResult, called directly', () => {
     it('returns what completeJob stores, and applies nothing for a payload with no explainer', async () => {
-        const applied = await applyExplainerResult(world.db as never, { id: JOB, creator_id: TENANT, kind: 'explainer_draw', payload: { nothing: true } as never }, { state: 'done' }, {
+        const applied = await applyExplainerResult(pool, { id: JOB, creator_id: TENANT, kind: 'explainer_draw', payload: { nothing: true } as never }, { state: 'done' }, {
             enqueue: async () => ({ id: 'x' }), checkFiles: async () => undefined, deleteFiles: async () => 0,
         });
         assert.deepEqual(applied, { outcome: 'dropped', stored: { dropped: 'no_explainer' } });
