@@ -485,6 +485,52 @@ describe('a rate-limited upload is not retried: the post fails once, and says wh
     });
 });
 
+describe('a limit hit while the cover is set: the Short is up, so the note must not send the owner to Publish now', () => {
+    const CONNECTION = { id: 'conn-1', status: 'active', refresh_token: 'refresh', access_token: 'tok', access_expires_at: new Date(Date.now() + 3_600_000), scopes: [SCOPE_UPLOAD] };
+    type Reply = { status: number; data?: unknown; headers?: Record<string, string> };
+
+    /** Publish a Short with a cover, against a Google that refuses the thumbnail with `reason`. Returns the note the PUBLISHED row was written with. */
+    async function noteWhenThumbnailRefused(reason: string, status: number, message?: string): Promise<string> {
+        const db = installProfileDb(emptyState());
+        db.routes.unshift([/FROM platform_connections WHERE creator_id = \$1 AND platform = 'youtube'/, () => ({ rows: [CONNECTION] })]);
+        setPlatformOwner(db, OWNER);
+        stub((s): Reply => {
+            if (s.method === 'GET') {
+                return /cover\.jpg$/.test(s.url)
+                    ? { status: 200, data: Buffer.from('jpg'), headers: { 'content-type': 'image/jpeg' } }
+                    : { status: 200, data: Buffer.from('reel'), headers: { 'content-type': 'video/mp4' } };
+            }
+            if (/\/thumbnails\/set$/.test(s.url)) return { status, data: { error: { code: status, ...(message ? { message } : {}), errors: [{ reason }] } } };
+            if (s.method === 'POST') return { status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U2' } };
+            return { status: 200, data: { id: 'vid2', status: { privacyStatus: 'private' } } };
+        });
+        const sink = setLogSink(() => {});
+        try {
+            const row = { id: 'post-1', creator_id: OTHER, post_type: 'video' as const, caption: 'سطر\n#ai', media_url: 'https://cdn.example/reel.mp4', external_publish_id: null, platform_options: null, cover_url: 'https://cdn.example/cover.jpg' };
+            assert.equal(await publishYouTubePost(row), 'PUBLISHED', 'a refused cover never fails a Short that is up');
+        } finally {
+            setLogSink(sink);
+            db.restore();
+        }
+        const published = db.ran(/SET status = 'PUBLISHED'/);
+        assert.equal(published.length, 1);
+        return String(published[0]!.params[2]);
+    }
+
+    it('the daily quota and a rate limit say what happened and to set the thumbnail in YouTube Studio, and never "Publish now"', async () => {
+        for (const [reason, status] of [['quotaExceeded', 403], ['rateLimitExceeded', 429]] as const) {
+            const note = await noteWhenThumbnailRefused(reason, status);
+            assert.ok(note.includes('Thumbnail not set: YouTube’s quota or a rate limit was hit just then. The Short is up — set the thumbnail in YouTube Studio.'), `${reason}: ${note}`);
+            assert.doesNotMatch(note, /Publish now|upload goes ahead/, `${reason}: nothing is left to publish`);
+        }
+    });
+
+    it('any other refusal keeps YouTube\'s own words', async () => {
+        const note = await noteWhenThumbnailRefused('forbidden', 403, 'The authenticated user cannot set custom video thumbnails.');
+        assert.ok(note.includes('Thumbnail not set: YouTube thumbnail: The authenticated user cannot set custom video thumbnails.'), note);
+    });
+});
+
 describe('getMyChannel keeps what the answer already carries (docs/onboarding/03 §1)', () => {
     it('maps the description, the country and the default language: no extra quota, they come with the same `channels.list`', async () => {
         const seen = stub(() => ({

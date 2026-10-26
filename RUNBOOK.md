@@ -1749,12 +1749,13 @@ is `youtube.publish_failed`.
 | *…reconnect YouTube in Settings.* | 14.1 | 14.1 |
 | *…takes MP4, MOV or WebM here — this file is …* | the video is another type | upload an MP4 |
 | *The YouTube upload did not finish — retry it, and it resumes where it stopped.* | the upload timed out part way | **Publish now**. It first asks Google how far the saved session (`external_publish_id = 'YTU:…'`) got and carries on from there, so it never posts the same Short twice |
-| *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, or the channel may not set custom thumbnails). The Short is up | nothing |
+| *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, the channel may not set custom thumbnails, or the quota or a rate limit was hit just then: the note says so). The Short is up | nothing; set the thumbnail in YouTube Studio |
 
 **Nothing retries a failed Short**, and the quota and rate-limit sentences say so (they used to promise a retry). The sweep takes
 only `PENDING` rows, and a failed Short stays `FAILED` (`RETRYABLE_REASONS` in `src/services/youtube.ts` is read by no one;
 `youtubeHttp` has no retry wrapper). After the reset, or a minute after a rate limit, press **Publish now** on the card, or edit
-and save the post (that flips `FAILED` to `PENDING`). `helpTruth.test.ts` and `youtube.test.ts` pin both.
+and save the post (that flips `FAILED` to `PENDING`). `helpTruth.test.ts` and `youtube.test.ts` pin both. A limit hit while the cover
+is set does not fail the post (the Short is up), so its note sends the owner to YouTube Studio, not to **Publish now**.
 
 ### 14.3 "A Short is private", or "no longer public"
 
