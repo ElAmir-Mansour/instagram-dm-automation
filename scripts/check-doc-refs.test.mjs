@@ -28,6 +28,16 @@ describe('refsOnLine', () => {
     it('skips patterns and placeholders', () => {
         assert.deepEqual(refsOnLine('`src/config/migration_v*.sql`, `src/routes/<name>.ts`, `src/{a,b}.ts`'), []);
     });
+    it('reads a bare anchor as the last full path before it on the line, in bold or in code', () => {
+        const refs = refsOnLine('see `src/a.ts:3` and (**:7**), then `:9-10`');
+        assert.deepEqual(refs.map((r) => [r.ref, r.line, r.lineEnd, r.bare]), [
+            ['src/a.ts', 3, null, false], ['src/a.ts', 7, null, true], ['src/a.ts', 9, 10, true],
+        ]);
+    });
+    it('leaves a bare anchor it cannot place: no full path before it, or a file named alone in between', () => {
+        assert.deepEqual(refsOnLine('as above (**:32**)'), []);
+        assert.deepEqual(refsOnLine('see `src/a.ts:3`, **`ai.ts:5`** (**:7**)').map((r) => r.line), [3]);
+    });
     it('knows the worker repo’s paths', () => {
         assert.equal(isWorkerPath('scripts/studio/explainerWrite.mjs'), true);
         assert.equal(isWorkerPath('scripts/migrate.mjs'), false);
@@ -48,6 +58,9 @@ describe('checkDoc', () => {
         const found = check('docs/X_GUIDE.md', 'plan: `docs/specs/001/` and [notes](../CLAUDE.md)').join('\n');
         assert.match(found, /folder not in the repo: docs\/specs\/001\//);
         assert.match(found, /link to a file that is not in the repo: \.\.\/CLAUDE\.md/);
+    });
+    it('flags a bare anchor past the end of its file', () => {
+        assert.match(check('FLOWS.md', '`src/a.ts:3` and (**:11**)').join('\n'), /src\/a\.ts:11 is past the end of the file \(10 lines\)/);
     });
     it('leaves the worker repo’s paths alone', () => {
         assert.deepEqual(check('FLOWS.md', 'the worker: `scripts/studio/explainerDraw.mjs:12`'), []);
@@ -109,6 +122,13 @@ describe('reanchorDoc', () => {
         const out = reanchorDoc('FLOWS.md', '`src/a.ts:2`', at(then, current));
         assert.equal(out.text, '`src/a.ts:2`');
         assert.deepEqual(out.ambiguous, ['FLOWS.md:1  src/a.ts:2']);
+    });
+    it('moves a bare anchor with its file, keeping its markup', () => {
+        const then = ['alpha line', 'beta line', 'function run() {', 'const x = 1;', 'return x;', '}'];
+        const current = ['header line', 'new line', ...then];
+        const out = reanchorDoc('FLOWS.md', '`src/a.ts:3` (**:4**) and `:3-4`', at(then, current));
+        assert.equal(out.text, '`src/a.ts:5` (**:6**) and `:5-6`');
+        assert.equal(out.moved, 3);
     });
     it('treats a dated doc as a snapshot', () => {
         assert.equal(isSnapshotDoc('docs/UX_AUDIT_2026-09-27.md'), true);

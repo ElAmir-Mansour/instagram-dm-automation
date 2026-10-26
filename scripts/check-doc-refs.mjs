@@ -54,6 +54,16 @@ const ROOTS = '(?:src|dashboard|scripts|public|heroku-worker|\\.github|docs)';
 const EXT = '(?:json|tsx|mts|mjs|ts|js|sql|html|css|yaml|yml|md|sh|py|txt|svg|png|jpg|webmanifest)';
 /** `src/a/b.ts`, `src/a/b.ts:12`, `src/a/b.ts:12-18` (also an en dash), and folders `src/jobs/`. */
 const PATH_RE = new RegExp(`(?<![\\w/.@-])(${ROOTS}/[\\w./@-]*?(?:\\.${EXT}(?![\\w])|/(?![\\w.@-])))(?::(\\d+)(?:[-–](\\d+))?)?`, 'g');
+/**
+ * A bare anchor, `**:N**` or `` `:N` `` (also `:N-M`): a line in the same file as the last full path cited before it on the
+ * same line. FLOWS.md alone has about 370 of them.
+ */
+const BARE_RE = /(\*\*|`):(\d+)(?:[-–](\d+))?\1/g;
+/**
+ * A file cited by its name alone (`ai.ts:311`). When one sits between the full path and a bare anchor, the bare anchor may mean
+ * either file, so it is not resolved.
+ */
+const SHORT_RE = new RegExp(`(?<![\\w/.@-])[\\w.@-]+\\.${EXT}:\\d+`, 'g');
 /** A markdown link with a relative target: `[text](../FLOWS.md)`, `[t](docs/X.md#part)`. */
 const LINK_RE = /\[[^\]\n]*\]\(([^)\s]+)\)/g;
 
@@ -67,16 +77,33 @@ export function isWorkerPath(p) {
     return WORKER_PREFIXES.some((prefix) => p === prefix || p.startsWith(prefix));
 }
 
-/** Every path reference on one doc line: `{ ref, line, lineEnd, index }`. */
+/**
+ * Every path reference on one doc line: `{ ref, line, lineEnd, index, length, bare }`, in the order they appear. A bare anchor
+ * (`bare: true`) takes the `ref` of the last full path before it on the line; its `index`/`length` cover only `:N` / `:N-M`, so a
+ * rewrite keeps its markup. One with no full path before it, or with a file named alone in between, is left out: it cannot be
+ * placed with certainty.
+ */
 export function refsOnLine(text) {
     const out = [];
     for (const m of text.matchAll(PATH_RE)) {
         const ref = m[1];
         // A pattern (`migration_v*.sql`, `routes/<name>.ts`, `{a,b}`) names no single file, even when its prefix parses as one.
         if (/[*<{]/.test(ref) || /[*<{]/.test(text[m.index + m[0].length] ?? '')) continue;
-        out.push({ ref, line: m[2] ? Number(m[2]) : null, lineEnd: m[3] ? Number(m[3]) : null, index: m.index, length: m[0].length });
+        out.push({ ref, line: m[2] ? Number(m[2]) : null, lineEnd: m[3] ? Number(m[3]) : null, index: m.index, length: m[0].length, bare: false });
     }
-    return out;
+    const full = [...out];
+    const shortNames = [...text.matchAll(SHORT_RE)].map((m) => m.index);
+    for (const m of text.matchAll(BARE_RE)) {
+        const colon = m.index + m[1].length;
+        const owner = full.filter((r) => r.index + r.length <= colon).at(-1);
+        if (!owner) continue;
+        if (shortNames.some((i) => i >= owner.index + owner.length && i < colon)) continue;
+        out.push({
+            ref: owner.ref, line: Number(m[2]), lineEnd: m[3] ? Number(m[3]) : null,
+            index: colon, length: m[0].length - 2 * m[1].length, bare: true,
+        });
+    }
+    return out.sort((a, b) => a.index - b.index);
 }
 
 /** The problems in one doc, given the tracked files. Pure apart from reading the cited files. */
@@ -88,8 +115,10 @@ export function checkDoc(doc, text, tracked, readLines) {
     const lines = text.split('\n');
     lines.forEach((lineText, i) => {
         const at = `${doc}:${i + 1}`;
-        for (const { ref, line } of refsOnLine(lineText)) {
+        for (const { ref, line, bare } of refsOnLine(lineText)) {
             if (isWorkerPath(ref)) continue;
+            // A bare anchor's file was checked at its full path; only its line is new.
+            if (bare && !trackedSet.has(ref)) continue;
             if (ref.endsWith('/')) {
                 if (!folders.has(ref)) problems.push(`${at}  folder not in the repo: ${ref}`);
                 continue;
@@ -178,7 +207,8 @@ export function reanchorDoc(doc, text, { commitOfLine, readAt, readNow }) {
             if (top < MIN_CONTEXT || winners.length !== 1) { ambiguous.push(`${doc}:${i + 1}  ${r.ref}:${r.line}`); continue; }
             const best = winners[0].h;
             const shift = best - r.line;
-            const replacement = r.lineEnd !== null ? `${r.ref}:${best}-${r.lineEnd + shift}` : `${r.ref}:${best}`;
+            const lines = r.lineEnd !== null ? `${best}-${r.lineEnd + shift}` : `${best}`;
+            const replacement = r.bare ? `:${lines}` : `${r.ref}:${lines}`;
             out += lineText.slice(last, r.index) + replacement;
             last = r.index + r.length;
             moved++;

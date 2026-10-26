@@ -870,9 +870,9 @@ words as an `operator` row keyed on Meta's message id, and sends nothing.
    count, and the newest person's click. It is its own optional lookup: a database without v38 logs `inbox.detail_failed` and answers the list
    without counts. `conversationView` (**:155**) pins the v39 columns (`salesView`, **:83**: `stage` only if it is one of `STAGES`, else null) and
    attaches `link_clicks`.
-2. **The inbox** (`dashboard/js/pages/inbox.js`) draws a stage chip per thread (`stageChip`, **:848**), the Hot filter (`isHot`, **:562**: a person
+2. **The inbox** (`dashboard/js/pages/inbox.js`) draws a stage chip per thread (`stageChip`, **:921**), the Hot filter (`Attention.isHot`, **`dashboard/js/attention.js:52`**: a person
    opened the link, or `last_intent = ready_to_buy`, or `handoff_reason = hot_lead`; never a closed or opted-out thread), the link clicks in the
-   header (`linkChips`, **:1364**) and, under each AI reply, what `messages.ai_meta` says the bot decided (`aiMetaDetail`, **:2024**: intent, stage,
+   header (`linkChips`, **:1479**) and, under each AI reply, what `messages.ai_meta` says the bot decided (`aiMetaDetail`, **:2272**: intent, stage,
    next action, offer, engine, handoff reason). Every value but the offer id is looked up in a closed list that `inboxSales.test.ts` compares with
    `dmSales/types.ts`; any other value is shown as escaped text and never used as a key.
 3. **`GET /api/dm/funnel?days=7|30|90`** (**`routes/api.ts:3499`**, any role, `Cache-Control: no-store`) runs three read-only statements with the
