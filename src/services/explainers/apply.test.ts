@@ -4,7 +4,7 @@
  * the stateful fake of testDb.ts: a result lands on rows a test can read back, and a transaction that fails gives its rows back.
  */
 import assert from 'node:assert/strict';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import type { ExplainerDraft } from '../../db/rows.js';
 import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
@@ -396,10 +396,22 @@ describe('resumeAt', () => {
     });
 });
 
+/**
+ * The day these instants are written for. A paused drawing and a voice at Gemini's limit are queued for a time worked out from the clock
+ * (`resumeAt`, `voiceRetryAt`, through `Date.now()` in jobs.ts's deps), and the tests below spell those times out. Written on 2026-10-25,
+ * they read the real clock and failed the next day (CI, 2026-10-26: 2026-10-27T00:05 where 2026-10-26T00:05 was expected), so the clock
+ * is pinned to that day for them.
+ */
+const PINNED_NOW = Date.parse('2026-10-25T12:00:00.000Z');
+const pinClock = (): void => { mock.timers.enable({ apis: ['Date'], now: PINNED_NOW }); };
+const unpinClock = (): void => { mock.timers.reset(); };
+
 describe('explainer_draw: how a drawing ends', () => {
     beforeEach(() => {
+        pinClock();
         waiting('drawing', 'explainer_draw', { draft_version: 1 });
     });
+    afterEach(unpinClock);
 
     it('done, with the explainer already in review (the draw-next route moved it): applied, and the job is not the explainer’s any more', async () => {
         world.addScenes(2, () => ({ draw_status: 'done' }));
@@ -577,6 +589,8 @@ describe('a job that fails: the explainer fails at that step', () => {
 });
 
 describe('a voice that ran into Gemini’s limit is asked again at the reset', () => {
+    beforeEach(pinClock);
+    afterEach(unpinClock);
     const DAY = 'VOICE_LIMIT: Gemini\'s free voice allowance is used up (HTTP 429 RESOURCE_EXHAUSTED; the day\'s limit, GenerateRequestsPerDayPerProjectPerModel-FreeTier); Gemini asks to retry after 34s. You exceeded your current quota.';
     const MINUTE = 'VOICE_LIMIT: Gemini\'s free voice allowance is used up (HTTP 429; the minute\'s limit, GenerateRequestsPerMinutePerProjectPerModel-FreeTier); Gemini asks to retry after 34s.';
 
