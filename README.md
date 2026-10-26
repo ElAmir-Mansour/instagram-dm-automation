@@ -59,7 +59,7 @@ The maintainers also keep local notes and specs outside this public repository.
 
 ### 1. Prerequisites
 
-- Node.js 22 or newer. CI runs Node 22, and `npm test` gives glob patterns to `node --test`, which Node 20 reads as file names.
+- Node.js 24. Production (Vercel) and CI both run 24.x, and `package.json` pins it (`engines`), so a move to the next major is a deliberate change. A newer Node works locally with an engine warning from npm; Node 20 does not, because `npm test` gives glob patterns to `node --test`, which Node 20 reads as file names.
 - A Postgres database. This project runs on Supabase. On Vercel, use its pooler address (port 6543).
 - A Meta developer app, and a Vercel account.
 - Serving accounts you do not own needs Meta Advanced Access (Business Verification and App Review). See [`RUNBOOK.md`](RUNBOOK.md) §8.3.
