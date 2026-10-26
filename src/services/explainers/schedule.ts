@@ -104,7 +104,7 @@ export async function scheduleExplainer(creatorId: string, rawId: unknown, body:
     const meta = metaPlatformFor(settings.infographic.platforms);
     const youtube = settings.infographic.platforms.includes('youtube');
     const tiktok = settings.infographic.platforms.includes('tiktok');
-    if (!meta && !youtube && !tiktok) throw new StudioError(409, 'Choose where explainers are posted in the brand settings first.', undefined, 'EXPLAINER_NO_PLATFORMS');
+    if (!meta && !youtube && !tiktok) throw new ExplainerError('EXPLAINER_NO_PLATFORMS', 'Choose where explainers are posted in the brand settings first.');
 
     return withTransaction(async (client) => {
         await lockTenantPublishing(client, creatorId);
