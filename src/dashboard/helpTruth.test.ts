@@ -223,8 +223,7 @@ describe('Help Center — the alerts the Settings card lists', () => {
 
     it('says "not sent yet" for a kind exactly while nothing raises it: every kind the card lists is raised now, so none says it, and the day one is not the row says it again', () => {
         const notRaised = SHOWN_ALERT_KINDS.filter((kind) => raisedBy(kind).length === 0);
-        assert.deepEqual([...notRaised], [], 'the kinds no source file raises. `ad_rejected` and `ad_issues` were the two that were not, and the hourly update of the ad account raises them since: '
-            + 'if they are listed here, the Help article below says they are sent while nothing sends them (its wording is ahead of the code). A kind added to the card with no raiser belongs in this list, with its row saying "not sent yet".');
+        assert.deepEqual([...notRaised], [], 'the kinds no source file raises (a kind raised now is one more row to re-read, and one less "not sent yet")');
 
         for (const lang of LANGS) {
             const items = listOf('ads', 'alerts', lang, 'ul') as string[];

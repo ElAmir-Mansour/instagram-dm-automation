@@ -6,7 +6,9 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { setLogSink } from '../../utils/log.js';
 import { installFakeDb, type FakeDb, type Rows } from '../monteur/testDb.js';
+import { setAdStatusAlertSink, type AdStatusAlert } from './adStatusAlerts.js';
 import { AdsGraphError } from './graph.js';
 import { resetBreakdownAvailability } from './mirror.js';
 import type { PacerStatus } from './pacer.js';
@@ -73,6 +75,8 @@ interface World {
     pacer: PacerStatus | null;
     /** Rows the missing-rows SELECT answers. */
     missingRows: { id: string; missing: string | null }[];
+    /** The stored copy before the sync, by Meta id: its `effective_status`. A Meta id that is not here is a row the sync meets for the first time. */
+    before: Map<string, string | null>;
     sql(pattern: RegExp): { sql: string; params: any[] }[];
 }
 
@@ -84,7 +88,7 @@ function world(): World {
         [`ads.enabled.${C}`, 'true'],
     ]);
     const w: World = {
-        db, settings, calls: [], clock: { ms: NOW.getTime() }, pacer: null, missingRows: [],
+        db, settings, calls: [], clock: { ms: NOW.getTime() }, pacer: null, missingRows: [], before: new Map(),
         get: () => ({ data: [] }),
         post: () => ({}),
         sql: (pattern) => db.ran(pattern),
@@ -109,7 +113,7 @@ function world(): World {
         [/^INSERT INTO app_settings/, (p) => { settings.set(p[0], p[1]); return row([]); }],
         [/^SELECT key FROM app_settings WHERE key LIKE 'ads.enabled/, () => row([...settings.keys()].filter((k) => k.startsWith('ads.enabled.')).map((key) => ({ key })))],
         [/^SELECT id, campaign_id, adset_id, ad_id, creative_id FROM ad_boosts/, () => row([])],
-        [/^INSERT INTO ads_objects/, (p) => row([{ id: uuidFor(p[3]) }])],
+        [/^INSERT INTO ads_objects/, (p) => row([{ id: uuidFor(p[3]), previous_status: w.before.get(p[3]) ?? null, existed: w.before.has(p[3]) }])],
         [/^SELECT id, app_meta->>'sync_missing' AS missing FROM ads_objects/, () => row(w.missingRows)],
     );
     // The account read every sync starts with.
@@ -408,6 +412,126 @@ describe('syncStructure', () => {
         const r = await syncStructure(C, { deadline: NOW.getTime() }, w.deps);
         assert.equal(r.skipped, 'deadline');
         assert.equal(w.calls.length, 0);
+    });
+});
+
+// ─── Ads that were rejected or have issues ──────────────────────────────────────────────────
+
+describe('syncStructure: the ads whose delivery state changed are announced (ad_rejected, ad_issues)', () => {
+    interface Raised { creatorId: string; alert: AdStatusAlert; now: Date; openTransactions: number; adsStored: number }
+    let raised: Raised[];
+    let lines: Record<string, any>[];
+    let restoreLog: () => void;
+
+    /** What the stored copy held for the page `campaignsPage()`: every object already there, none of them rejected. */
+    const storedBefore = (over: Record<string, string | null> = {}) => {
+        for (const [metaId, status] of Object.entries({ '111111': 'PAUSED', '222222': 'CAMPAIGN_PAUSED', '333333': 'ACTIVE', '333334': 'ADSET_PAUSED', '444444': null, ...over })) w.before.set(metaId, status);
+    };
+
+    beforeEach(() => {
+        w.get = (path) => (path === `act_${ACCOUNT}` ? { currency: 'USD', timezone_name: 'Asia/Baghdad' } : campaignsPage());
+        raised = [];
+        lines = [];
+        setAdStatusAlertSink(async (creatorId, alert, now) => {
+            raised.push({
+                creatorId, alert, now,
+                // Statements so far: a BEGIN with no COMMIT or ROLLBACK after it would be a transaction still open around this alert.
+                openTransactions: w.sql(/^BEGIN$/).length - w.sql(/^(COMMIT|ROLLBACK)$/).length,
+                adsStored: w.sql(/^INSERT INTO ads_objects/).length,
+            });
+        });
+        const previous = setLogSink((_level, line) => lines.push(JSON.parse(line)));
+        restoreLog = () => setLogSink(previous);
+    });
+    afterEach(() => {
+        setAdStatusAlertSink(null);
+        restoreLog();
+    });
+
+    const syncLine = () => lines.find((l) => l['event'] === 'ads.sync_structure');
+
+    it('an ad that was ACTIVE and is DISAPPROVED now raises exactly one ad_rejected alert: Meta\'s reasons, the ad\'s id, after the rows are stored and with no transaction open', async () => {
+        storedBefore();
+        const r = await syncStructure(C, {}, w.deps);
+        assert.equal(r.complete, true);
+        assert.equal(raised.length, 1, 'the other ad (ADSET_PAUSED, as before) and the campaign, ad set and creative say nothing');
+        assert.equal(raised[0]!.creatorId, C);
+        assert.deepEqual(raised[0]!.alert, { kind: 'ad_rejected', adId: '333333', adName: 'Reel ad', reason: 'Ad disapproved; We removed it' });
+        assert.equal(raised[0]!.openTransactions, 0, 'never a network call while a transaction is open');
+        assert.equal(raised[0]!.adsStored, 5, 'every object was stored before the alert went out');
+        assert.equal(raised[0]!.now.toISOString(), NOW.toISOString(), 'the sync\'s clock names the alert\'s day');
+        assert.equal(syncLine()!['status_alerts'], 1, 'the count is in the ads.sync_structure line');
+    });
+
+    it('a row the sync meets for the first time raises none, however bad it looks: the first import of an account is silent', async () => {
+        const r = await syncStructure(C, {}, w.deps);   // nothing is stored yet: all five rows are new, and ad 333333 is DISAPPROVED
+        assert.equal(r.complete, true);
+        assert.equal(w.sql(/^INSERT INTO ads_objects/).length, 5);
+        assert.deepEqual(raised, []);
+        assert.equal(syncLine()!['status_alerts'], 0);
+    });
+
+    it('an ad that was already DISAPPROVED raises none: it was announced when it got there', async () => {
+        storedBefore({ '333333': 'DISAPPROVED' });
+        await syncStructure(C, {}, w.deps);
+        assert.deepEqual(raised, []);
+    });
+
+    it('an ad the app made, which had no state until its first sync, counts as a change', async () => {
+        storedBefore({ '333333': null });
+        await syncStructure(C, {}, w.deps);
+        assert.deepEqual(raised.map((x) => [x.alert.kind, x.alert.adId]), [['ad_rejected', '333333']]);
+    });
+
+    it('an ad that has ISSUES now raises ad_issues, with the reason Meta gave (or none)', async () => {
+        storedBefore({ '333334': 'ACTIVE' });
+        const base = w.get;
+        w.get = (path, params) => {
+            const answer = base(path, params);
+            if (path.endsWith('/campaigns')) {
+                const ads = answer.data[0].adsets.data[0].ads.data;
+                ads[0].effective_status = 'ACTIVE';
+                ads[1].effective_status = 'WITH_ISSUES';
+            }
+            return answer;
+        };
+        await syncStructure(C, {}, w.deps);
+        assert.deepEqual(raised.map((x) => x.alert), [{ kind: 'ad_issues', adId: '333334', adName: 'Second ad', reason: null }]);
+    });
+
+    it('a failing alert channel does not fail the sync: the rows are stored and the sync records itself done', async () => {
+        storedBefore();
+        setAdStatusAlertSink(async () => { throw new Error('the settings could not be read'); });
+        const r = await syncStructure(C, {}, w.deps);
+        assert.equal(r.complete, true);
+        assert.ok(stateOf(w).structureAt);
+        assert.equal(w.sql(/^INSERT INTO ads_objects/).length, 5);
+        assert.equal(lines.find((l) => l['event'] === 'ads.alert_failed')?.['ad_id'], '333333');
+        assert.equal(syncLine()!['status_alerts'], 0, 'nothing was handed over');
+    });
+
+    it('an error after the rows were stored (the deletion marking) does not lose the alert: the next sync would find nothing changed', async () => {
+        storedBefore();
+        w.db.routes.unshift([/^SELECT id, app_meta->>'sync_missing'/, () => { throw new Error('connection terminated'); }]);
+        await assert.rejects(() => syncStructure(C, {}, w.deps), /connection terminated/);
+        assert.deepEqual(raised.map((x) => x.alert.adId), ['333333']);
+    });
+
+    it('a chunk that fails the sync still has its alerts announced, and the chunk that rolled back has none', async () => {
+        // One campaign and one ad set, then 60 ads: the first transaction (50 rows) holds the campaign, the ad set and ads 7000-7047; the second the other 12.
+        const ads = Array.from({ length: 60 }, (_, i) => ({ id: String(7000 + i), name: `Ad ${7000 + i}`, status: 'ACTIVE', effective_status: 'DISAPPROVED' }));
+        w.get = (path) => (path === `act_${ACCOUNT}`
+            ? { currency: 'USD', timezone_name: 'Asia/Baghdad' }
+            : { data: [{ id: '111111', name: 'Spring', objective: 'OUTCOME_TRAFFIC', status: 'ACTIVE', effective_status: 'ACTIVE', adsets: { data: [{ id: '222222', name: 'Riyadh', status: 'ACTIVE', effective_status: 'ACTIVE', ads: { data: ads } }] } }] });
+        for (const ad of ads) w.before.set(ad.id, 'ACTIVE');
+        w.db.routes.unshift([/^INSERT INTO ads_objects/, (p) => {
+            if (p[3] === '7055') throw new Error('deadlock detected');
+            return { rows: [{ id: uuidFor(p[3]), previous_status: w.before.get(p[3]) ?? null, existed: w.before.has(p[3]) }] };
+        }]);
+        await assert.rejects(() => syncStructure(C, {}, w.deps), /deadlock/);
+        assert.deepEqual(raised.map((x) => x.alert.adId), ads.slice(0, 48).map((a) => a.id), 'the 48 ads of the committed transaction, and not the 12 of the one that rolled back');
+        assert.ok(raised.every((x) => x.openTransactions === 0));
+        assert.equal(stateOf(w).structureAt ?? null, null, 'the failed sync does not record itself as done');
     });
 });
 
