@@ -5113,7 +5113,7 @@ const HelpContent = {
                                 ['**أيقونات الحسابات**', 'إنستجرام ويوتيوب ولينكدإن وإكس وتيك توك وفيسبوك وغيت هب: علّم على اللي تبي يظهر.'],
                                 ['**اللون الأساسي** و**لون التمييز**', 'ألوان الصفحة.'],
                                 ['**الصورة الشخصية**', '**ارفع صورة** (JPEG أو PNG أو WebP): تُصغَّر في متصفحك إلى مربع 512 بكسل، وتظهر دائرية وبالأبيض والأسود. وأفضلها صورة مربعة لوجهك. و**إزالة** تشيلها.'],
-                                ['**تنشر الجدولة ملف MP4 على**', 'إنستجرام وفيسبوك ويوتيوب، ولازم واحد على الأقل.'],
+                                ['**تنشر الجدولة ملف MP4 على**', 'إنستجرام وفيسبوك ويوتيوب، ولازم واحد منها على الأقل. وتيك توك للشروحات المصوّرة فقط: مسودّة في صندوق تيك توك.'],
                                 ['**التصميم الافتراضي** و**اللغة الافتراضية**', 'لما لا تغيّرهما في الإنفوجرافيك الجديد.'],
                             ] },
                             'اضغط **احفظ الهوية**. الإنفوجرافيك الجديد يستخدمها، والقديم يبقى بشكله لين يُرسم من جديد (بتعديل، أو نسخة بالتصميم الثاني، أو **أعد المحاولة**).',
@@ -5126,7 +5126,7 @@ const HelpContent = {
                                 ['**Social icons**', 'Instagram, YouTube, LinkedIn, X, TikTok, Facebook and GitHub: tick the ones to show.'],
                                 ['**Main colour** and **Accent colour**', 'The colours of the page.'],
                                 ['**Portrait**', '**Upload** a photo (JPEG, PNG or WebP): it is cut to a 512-pixel square in your browser, and shown round and in black and white. A square photo of your face works best. **Remove** takes it off.'],
-                                ['**Schedule posts the MP4 to**', 'Instagram, Facebook and YouTube, with at least one ticked.'],
+                                ['**Schedule posts the MP4 to**', 'Instagram, Facebook and YouTube, with at least one ticked. TikTok applies to explainers only, as a draft in your TikTok inbox.'],
                                 ['**Default theme** and **Default language**', 'What a new infographic starts with, until you change it there.'],
                             ] },
                             'Press **Save brand**. New infographics use it, and one you already made keeps its look until it is drawn again (by an edit, a copy in the other theme or **Try again**).',
@@ -5376,11 +5376,11 @@ const HelpContent = {
                     title: { ar: 'الخطوة 5: النشر', en: 'Step 5: publish' },
                     body: {
                         ar: [
-                            'اضغط **جدولة**، واختر أقرب موعد نشر متاح، أو الآن، أو وقتًا تحدده بتوقيت مساحتك. وهذا ما يُنشر وأين، في مجموعة واحدة. إنستغرام وفيسبوك ويوتيوب تتبع المنصات المحددة في **تنشر الجدولة ملف MP4 على** في إعدادات علامة الإنفوجرافيك، وتيك توك يُجهَّز دائمًا:',
+                            'اضغط **جدولة**، واختر أقرب موعد نشر متاح، أو الآن، أو وقتًا تحدده بتوقيت مساحتك. وهذا ما يُنشر وأين، في مجموعة واحدة. إنستغرام وفيسبوك ويوتيوب وتيك توك تتبع المنصات المحددة في **تنشر الجدولة ملف MP4 على** في إعدادات علامة الإنفوجرافيك:',
                             { dl: [
                                 ['إنستغرام وفيسبوك', 'الفيديو العمودي مع غلافه.'],
                                 ['يوتيوب', 'الفيديو الأفقي مع عنوان يوتيوب ووصفه إن زادت المدة على 3 دقائق، وإلا فالفيديو العمودي بصيغة Shorts.'],
-                                ['تيك توك', 'مسودة في صندوق تيك توك الوارد، تنشرها من تطبيق تيك توك.'],
+                                ['تيك توك', 'إن كان معلَّمًا هناك فقط: مسودة في صندوق تيك توك الوارد، تنشرها من تطبيق تيك توك.'],
                                 ['لينكدإن', 'ليس تلقائيًا: استخدم [[explainers#linkedin]].'],
                             ] },
                             'لكل منصة وصفها الخاص، وتعدّله في خطوة النص. وإن كان مقطع الموسيقى يشترط الإسناد أُضيف سطره إلى كل وصف تلقائيًا.',
@@ -5388,11 +5388,11 @@ const HelpContent = {
                             { note: 'تُسجَّل الجدولة على الملفات كما هي لحظة الضغط. إن عدّلت بعدها فجهّز فيديو جديدًا قبل الجدولة التالية.' },
                         ],
                         en: [
-                            'Press **Schedule** and choose the next free slot, now, or a time you pick in your workspace’s time zone. This is what is posted, and where, as one group. Instagram, Facebook and YouTube follow the platforms set under **Schedule posts the MP4 to** in the Infographics brand settings, and TikTok is always made:',
+                            'Press **Schedule** and choose the next free slot, now, or a time you pick in your workspace’s time zone. This is what is posted, and where, as one group. Instagram, Facebook, YouTube and TikTok follow the platforms set under **Schedule posts the MP4 to** in the Infographics brand settings:',
                             { dl: [
                                 ['Instagram and Facebook', 'The vertical video with its cover.'],
                                 ['YouTube', 'The horizontal video with the YouTube title and description when it runs longer than 3 minutes, otherwise the vertical video as a Short.'],
-                                ['TikTok', 'A draft in your TikTok inbox, which you post from the TikTok app.'],
+                                ['TikTok', 'Only when it is ticked there: a draft in your TikTok inbox, which you post from the TikTok app.'],
                                 ['LinkedIn', 'Not automatic: use [[explainers#linkedin]].'],
                             ] },
                             'Each platform has its own caption, and you edit it in the script step. If the music track asks for credit, its line is added to every caption automatically.',

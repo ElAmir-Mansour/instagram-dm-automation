@@ -26,7 +26,7 @@ const InfographicsPage = {
     THEMES: ['dark', 'light'],
     LANGUAGES: ['ar', 'en'],
     SOCIALS: ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'],
-    PLATFORMS: ['instagram', 'facebook', 'youtube'],
+    PLATFORMS: ['instagram', 'facebook', 'youtube', 'tiktok'],
     /** The diagrams the template draws (infographicSpec.ts DIAGRAMS). */
     DIAGRAMS: ['docs', 'chunk-db', 'topk', 'augment', 'window', 'preload', 'kv', 'instant', 'graph', 'graph-build', 'hops', 'grounded', 'chat', 'loop', 'icon'],
 
@@ -521,7 +521,8 @@ const InfographicsPage = {
     },
 
     scheduleMarkup(item) {
-        const platforms = (this.brand && this.brand.platforms) || [];
+        // TikTok in the list is for explainers: an infographic is never sent there.
+        const platforms = ((this.brand && this.brand.platforms) || []).filter((p) => p !== 'tiktok');
         const none = !!(this.slot && this.slot.status === 'none');
         const zone = this.zone();
         return html`

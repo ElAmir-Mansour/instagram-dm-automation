@@ -22,6 +22,8 @@ export const EXPLAINER_ERROR_STATUS = {
     EXPLAINER_PROVIDER_ERROR: 502,
     /** Sound is music and the explainer has no track to use: none chosen, or the one chosen is no longer in the library. */
     EXPLAINER_NO_TRACK: 409,
+    /** Scheduling when the brand's `infographic.platforms` names none of Instagram, Facebook, YouTube or TikTok (schedule.ts). */
+    EXPLAINER_NO_PLATFORMS: 409,
     EXPLAINER_NEEDS_REFERENCE: 409,
     /** Explainers can only be switched on for the platform owner in this version (switch.ts). */
     EXPLAINERS_OWNER_ONLY: 409,

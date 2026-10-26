@@ -1108,13 +1108,13 @@ describe('Explainers routes', () => {
             // 7. Schedule: now.
             view = (await api('POST', `/explainers/${id}/schedule`, { when: 'now' })).body;
             assert.equal(view.status, 'scheduled');
-            assert.deepEqual(world.posts.map((p) => p.platform), ['both', 'tiktok'], 'the neutral brand posts to Instagram and Facebook; TikTok is always an inbox draft');
-            assert.equal(view.schedule.row_ids.length, 2);
+            assert.deepEqual(world.posts.map((p) => p.platform), ['both'], 'the neutral brand posts to Instagram and Facebook; no TikTok draft unless the brand ticks TikTok');
+            assert.equal(view.schedule.row_ids.length, 1);
 
             // 8. The trail the gates leave.
             assert.deepEqual(world.audit.map((a) => a.action), ['explainer.created', 'explainer.approved', 'explainer.pictures_approved', 'explainer.scheduled']);
             assert.deepEqual(world.audit[1]!.detail, { version: 1, scenes: 12 });
-            assert.deepEqual(world.audit[3]!.detail.platforms, ['both', 'tiktok']);
+            assert.deepEqual(world.audit[3]!.detail.platforms, ['both']);
             assert.ok(!JSON.stringify(world.audit).includes('Why AI answers'), 'no word of the topic, ever');
 
             // 9. Deleted: the files of the render stay with the posts that name them.
