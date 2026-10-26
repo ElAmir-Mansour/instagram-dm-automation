@@ -215,7 +215,7 @@ describe('Help Center — the alerts the Settings card lists', () => {
         const defined = new Set(['src/services/ads/settings.ts', 'src/services/ads/notify.ts']);
         const raisedBy = (kind: string) => sources().filter((f) => !defined.has(f.replace(/\\/g, '/'))).filter((f) => new RegExp(`['"]${kind}['"]`).test(readFileSync(f, 'utf8')));
         const notRaised = SHOWN_ALERT_KINDS.filter((kind) => raisedBy(kind).length === 0);
-        assert.deepEqual([...notRaised], ['ad_rejected', 'ad_issues'], 'the kinds no source file raises (a kind raised now is one more row to re-read, and one less "not sent yet")');
+        assert.deepEqual([...notRaised], [], 'the kinds no source file raises (a kind raised now is one more row to re-read, and one less "not sent yet")');
 
         for (const lang of LANGS) {
             const items = listOf('ads', 'alerts', lang, 'ul') as string[];

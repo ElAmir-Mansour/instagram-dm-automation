@@ -221,30 +221,61 @@ export function effectiveLabelKey(effectiveStatus: string | null | undefined): s
 
 // ─── Objects: writes ────────────────────────────────────────────────────────────────────────
 
-interface ObjectInsert { id: string }
+/** What the upsert statement answers: the row's id, and (from the same statement) what the row was before it. */
+interface ObjectInsert { id: string; previous_status: string | null; existed: boolean }
+
+/**
+ * What the structure sync saw of one AD as it wrote it: the delivery state the stored row had BEFORE this write, and whether the row existed
+ * at all. `adStatusAlerts.ts` decides from it whether Meta's verdict on the ad changed; this file only reports. Postgres answers both in the
+ * statement that does the write (see `upsertOne`), so nothing is read beforehand and nothing can change in between.
+ */
+export interface AdSighting {
+    metaId: string;
+    name: string | null;
+    /** The row was already in the stored copy. False for an ad this sync met for the first time: it has no earlier state to differ from. */
+    existed: boolean;
+    /** `effective_status` before this write. Null for a new row, and for an existing one that never had a state (an ad the app made, before its first sync). */
+    previousStatus: string | null;
+    /** `effective_status` as Meta says it now (and as it is stored after this write). */
+    effectiveStatus: string | null;
+    /** `issues_info` and `ad_review_feedback` as Meta sent them with this read: where Meta's reasons come from (`reviewReasons`). */
+    review: ParsedObject['review'];
+}
 
 /**
  * Store what the structure sync read. New rows get origin `boost` when the object is Boost's (its name carries a v1 boost id, or the
  * `ad_boosts` row lists its Meta id) and `meta` otherwise; an existing row keeps its origin and `app_meta` whatever Meta says now.
  * Parents are stored before their children (campaign, ad set, creative, ad) so every link resolves; chunks of 50 are one short transaction
  * each. Returns Meta id → the app's row id.
+ *
+ * `sightings`, when given, receives one `AdSighting` per AD (never a campaign, ad set or creative) of every chunk that COMMITTED, appended after
+ * that chunk's transaction ends: a chunk that rolled back leaves nothing in it, and the caller reads it after this function has returned (or
+ * thrown), so whatever it does with it happens with no transaction open. Callers that do not care leave it out.
  */
-export async function upsertObjects(creatorId: string, adAccountId: string, currency: string, objs: ParsedObject[], syncedAt: Date): Promise<Map<string, string>> {
+export async function upsertObjects(
+    creatorId: string, adAccountId: string, currency: string, objs: ParsedObject[], syncedAt: Date, sightings?: AdSighting[]
+): Promise<Map<string, string>> {
     const ids = new Map<string, string>();
     if (objs.length === 0) return ids;
     const boostLinks = await loadBoostLinks(creatorId);
     const ordered = [...objs].sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
     for (let i = 0; i < ordered.length; i += UPSERT_CHUNK) {
         const chunk = ordered.slice(i, i + UPSERT_CHUNK);
+        const seen: AdSighting[] = [];
         await withTransaction(async (tx) => {
             const relink: { id: string; creative: string | null }[] = [];
             for (const o of chunk) {
-                const id = await upsertOne(tx, creatorId, adAccountId, currency, o, ids, boostLinks, syncedAt);
-                ids.set(o.metaId, id);
-                relink.push({ id, creative: o.level === 'ad' ? o.creativeMetaId : null });
+                const row = await upsertOne(tx, creatorId, adAccountId, currency, o, ids, boostLinks, syncedAt);
+                ids.set(o.metaId, row.id);
+                relink.push({ id: row.id, creative: o.level === 'ad' ? o.creativeMetaId : null });
+                if (o.level === 'ad') {
+                    seen.push({ metaId: o.metaId, name: o.name, existed: row.existed, previousStatus: row.previousStatus, effectiveStatus: o.effectiveStatus, review: o.review });
+                }
             }
             await relinkSyncKeys(tx, creatorId, relink);
         });
+        // Only here is the chunk committed: a throw above skips this line, so a rolled-back chunk reports nothing.
+        sightings?.push(...seen);
     }
     return ids;
 }
@@ -266,7 +297,10 @@ function budgetOf(o: ParsedObject, currency: string): { kind: 'daily' | 'lifetim
     return { kind: 'none', amount: null };
 }
 
-async function upsertOne(tx: Exec, creatorId: string, adAccountId: string, currency: string, o: ParsedObject, ids: Map<string, string>, boostLinks: Map<string, string>, syncedAt: Date): Promise<string> {
+/** One row written: its id, and what it was before this write (`existed` false = this statement inserted it). */
+interface UpsertedRow { id: string; existed: boolean; previousStatus: string | null }
+
+async function upsertOne(tx: Exec, creatorId: string, adAccountId: string, currency: string, o: ParsedObject, ids: Map<string, string>, boostLinks: Map<string, string>, syncedAt: Date): Promise<UpsertedRow> {
     const boostId = boostIdFromName(o.name) ?? boostLinks.get(o.metaId) ?? null;
     const appMeta: Record<string, unknown> = {};
     if (boostId) appMeta['boost_id'] = boostId;
@@ -274,6 +308,9 @@ async function upsertOne(tx: Exec, creatorId: string, adAccountId: string, curre
     const budget = budgetOf(o, currency);
     const parentId = o.parentMetaId ? (ids.get(o.parentMetaId) ?? null) : null;
     // The DO UPDATE list names every Meta-owned column and neither `origin` nor `app_meta`: a Boost row stays `boost`, whatever Meta says.
+    // RETURNING also answers what the row was BEFORE this statement: a sub-select in RETURNING reads the table as the statement's snapshot
+    // had it, so `previous_status` is the stored `effective_status` and `existed` is false for a row this statement inserted (verified on
+    // PostgreSQL 17: ACTIVE -> DISAPPROVED gives 'ACTIVE', true; a new row gives NULL, false; an existing NULL gives NULL, true).
     const res = await tx.query<ObjectInsert>(
         `INSERT INTO ads_objects (creator_id, ad_account_id, level, meta_id, parent_id, name, origin, status, effective_status, objective,
                                   destination_type, optimization_goal, budget_kind, budget_amount, currency, start_time, end_time,
@@ -286,7 +323,9 @@ async function upsertOne(tx: Exec, creatorId: string, adAccountId: string, curre
              budget_kind = EXCLUDED.budget_kind, budget_amount = EXCLUDED.budget_amount, currency = EXCLUDED.currency,
              start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, targeting_summary = EXCLUDED.targeting_summary,
              review = EXCLUDED.review, raw = EXCLUDED.raw, synced_at = EXCLUDED.synced_at, updated_at = NOW()
-         RETURNING id`,
+         RETURNING id,
+             (SELECT p.effective_status FROM ads_objects p WHERE p.id = ads_objects.id AND p.creator_id = ads_objects.creator_id) AS previous_status,
+             EXISTS (SELECT 1 FROM ads_objects p WHERE p.id = ads_objects.id AND p.creator_id = ads_objects.creator_id) AS existed`,
         [
             creatorId, adAccountId, o.level, o.metaId, parentId, o.name, boostId ? 'boost' : 'meta', o.status, o.effectiveStatus, o.objective,
             o.destinationType, o.optimizationGoal, budget.kind, budget.amount, currency, iso(o.startTime), iso(o.endTime),
@@ -294,9 +333,10 @@ async function upsertOne(tx: Exec, creatorId: string, adAccountId: string, curre
             JSON.stringify(appMeta), JSON.stringify(o.raw), syncedAt,
         ]
     );
-    const id = res.rows[0]?.id;
-    if (!id) throw new Error('upsertObjects: the database returned no id for an upserted object.');
-    return id;
+    const row = res.rows[0];
+    if (!row?.id) throw new Error('upsertObjects: the database returned no id for an upserted object.');
+    // Strictly `true`: an answer without the column (a stub, an older statement) is "met for the first time", which never alerts.
+    return { id: row.id, existed: row.existed === true, previousStatus: row.previous_status ?? null };
 }
 
 /**

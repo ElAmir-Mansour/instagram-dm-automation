@@ -3578,13 +3578,17 @@ found again → `failed`. A non-create write in `verify` reads the object back a
    keeps `origin` and `app_meta`, so a Boost's rows stay `boost` and new ones carrying a boost id in their name are linked to it), and
    **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:683`**; `upsertInsights` **`mirror.ts:371`**).
    Each sync is skipped when the pacer cannot spend, and stops at a throttle.
-2. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:329`**); a read cut
+2. Right after the rows are stored, never inside a transaction, an ad that was already in the stored copy and has just moved into
+   `DISAPPROVED` or `WITH_ISSUES` raises `ad_rejected` or `ad_issues` (`raiseAdStatusAlerts`, `src/services/ads/adStatusAlerts.ts`; the state
+   before comes back from the upsert statement itself, `upsertObjects` in `src/services/ads/mirror.ts`). A row met for the first time never
+   alerts. The count is `status_alerts` in the `ads.sync_structure` log line.
+3. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:329`**); a read cut
    short (a page not read, a nested edge with a next page) marks nothing.
-3. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:801`**), the trailing **28 days** at `level=ad` (an async report
+4. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:801`**), the trailing **28 days** at `level=ad` (an async report
    when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
    `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:437`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
    older than **37 months** (**`ads/health.ts:178`**).
-4. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:742`**, else 429 `RATE_LIMITED` +
+5. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:742`**, else 429 `RATE_LIMITED` +
    `retryAt`), run under `waitUntil`; the drain is the backstop.
 
 **E. Disconnecting deletes the stored copy**
@@ -4183,6 +4187,8 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 11 | a guard check failed (token, Meta, throttle) — **`ads/guard.ts:116`** | `ads.cap_check_failed` | `ads.cap_attempt` only; `guard_blind` after 2 h |
 | 11 | an alert already sent today for the same kind and object — **`ads/notify.ts:168`** | `ads.alert_duplicate` | no (the row exists) |
 | 11 | an alert kind the tenant switched off — `notifyAds` | `ads.alert_sent` (`telegram: 'off'`) | the `ads_alerts` row, channels `off` |
+| 11 | an ad is `DISAPPROVED` / `WITH_ISSUES`, but the sync met it for the first time, or it already was in that state — `adStatusAlertFor`, `src/services/ads/adStatusAlerts.ts` | *(none)* | no alert and no `ads_alerts` row: the first import of an account is silent, and an ad made in Ads Manager and rejected before its first sync is never announced (it is in the Ads screen's needs-attention list, and the rule template **Ad rejected → tell me** catches it) |
+| 11 | an `ad_rejected` / `ad_issues` alert cannot be handed to the alert channel (the tenant's settings unreadable) — `raiseAdStatusAlerts` | `ads.alert_failed` (`error`) | no `ads_alerts` row; **not retried**: the stored ad already holds the new state, so the next sync sees no change |
 | 11 | a request names another tenant's ad object, or one from an account the tenant left — **`ads/actions.ts`** `ownObject` | `ads.not_own_object` (`warn`), audit `ads.not_own_object` | no: 403 `NOT_OWN_OBJECT` |
 | 11 | a queued op whose target is another tenant's or another account's — **`ads/ops.ts`** `sendExec` | `ads.not_own_object` | the op `failed` with `NOT_OWN_OBJECT`; **Meta is not called**, no verify |
 | 11 | a queued op on a Meta id the stored copy has not seen yet (made in Ads Manager before the next sync) — `assertOpTarget` | `ads.op_target_unmirrored` (`warn`) | sent: the token is the tenant's own, so Meta refuses anything outside its business |

@@ -117,8 +117,8 @@ alert per kind and object per day. `ads_alerts` rows are kept one year.
 | `cap_paused` | Campaigns paused because the cap was reached | the guard paused campaigns at the cap (also writes an audit row). **Cannot be switched off** |
 | `payment` | Payment problems | the daily check finds a payment problem (unsettled account, failed funding) |
 | `account_disabled` | The ad account was disabled | the daily check finds the account disabled or closed |
-| `ad_rejected` | An ad was rejected | **Not raised yet.** The checkbox is on the card, but nothing in the app sends this alert today (`src/services/ads/notify.ts` defines it; no caller). The rule template **Ad rejected → tell me** (Rules tab) catches rejected ads instead |
-| `ad_issues` | An ad has issues | **Not raised yet**, as above; the same rule template catches an ad Meta marks `WITH_ISSUES` |
+| `ad_rejected` | An ad was rejected | the hourly structure sync finds an ad that was already in the stored copy and is now `DISAPPROVED`; the alert names the ad and gives Meta's reasons. Not sent for an ad the sync meets for the first time, or one that was already rejected (see "When `ad_rejected` and `ad_issues` are sent", below) |
+| `ad_issues` | An ad has issues | the same sync finds an ad that was already in the stored copy and is now `WITH_ISSUES`. Same rule |
 | `token_dead` | The ads access stopped working | Meta answered `190` or `102`; the tenant's queue stops and `token.health` becomes `dead`. **Cannot be switched off** |
 | `token_expiring` | The ads access is about to expire | a token with an end date (Connect) is within 14 days of it |
 | `guard_blind` | Spending is not being watched | no successful guard check for 2 hours (dead token, throttling, Meta error). **Cannot be switched off** |
@@ -131,6 +131,24 @@ alert per kind and object per day. `ads_alerts` rows are kept one year.
 
 Fourteen kinds are on the card (`SHOWN_ALERT_KINDS`, `src/services/ads/settings.ts`); a fifteenth, `lead_received`, belongs to
 lead ads (A10). The three marked above cannot be switched off (`REQUIRED_ALERT_KINDS`).
+
+**When `ad_rejected` and `ad_issues` are sent.** They come from the hourly structure sync (`syncStructure`, `src/services/ads/sync.ts`), the
+only code that reads each ad's delivery state from Meta, so one arrives within about an hour of Meta's verdict, not at once. The rule is
+`adStatusAlertFor` in `src/services/ads/adStatusAlerts.ts`:
+
+- Only a **change**, seen on an ad the stored copy already had. A move into `DISAPPROVED` sends `ad_rejected`; a move into `WITH_ISSUES`
+  sends `ad_issues`. An ad with no stored state yet (one the app made, before its first sync) counts as a change.
+- **An ad the sync sees for the first time is never announced**, so the first import of an account full of old rejected ads is silent.
+  The cost: an ad made in Meta's Ads Manager and rejected before the sync first sees it is not announced. It still shows in the Ads
+  screen's needs-attention list, and the rule template **Ad rejected → tell me** (Rules tab) catches it.
+- Not announced: an ad that stays rejected (it was announced when it got there), one that leaves the state (a fix), and any other state.
+- The alert names the ad (its name, or its Meta id when it has none) and gives Meta's own reasons (`issues_info` and `ad_review_feedback`, read by
+  `reviewReasons` in `src/services/ads/mirror.ts`: at most six, joined with "; ", none when Meta gave none).
+- The `ads_alerts` row's `object_key` is the ad's Meta id, so an ad is announced once per kind per day.
+- Best effort. The new state is stored first and the alert goes out after the sync's transactions end (`raiseAdStatusAlerts`). An alert
+  that cannot be handed over is logged (`ads.alert_failed`) and not tried again: the stored ad already holds the new state, so the next
+  sync sees no change. The `ads.sync_structure` log line carries `status_alerts`, how many a run raised.
+- The rule template is a separate way in: it judges what is rejected right now and sends a `rule_acted` alert, not these two kinds.
 
 Tenant side: **Settings → Connections → Meta ads (Boost) → Alert recipients** has the chat id, email, language, one toggle per kind and
 **Send a test** (`POST /api/ads/settings/alerts` with `test: true`). To find a Telegram chat id: press Start on the

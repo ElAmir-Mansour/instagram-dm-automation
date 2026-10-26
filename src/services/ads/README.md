@@ -31,6 +31,7 @@ v1's `adsManager.ts` and its `/campaigns/:id` routes were removed after A12 (the
 | `guard.ts` | The hourly cap guard: pause all at the cap, `cap_checked` only after success, `guard_blind` |
 | `health.ts` | The daily token / account / funding / version check, Test connection, the Settings card's view |
 | `notify.ts` | Alerts: typed union, once a day per kind and object, per-tenant recipients, admin copy |
+| `adStatusAlerts.ts` | `ad_rejected` / `ad_issues`: the rule (an ad the stored copy already had moves into `DISAPPROVED` / `WITH_ISSUES`), raised by the structure sync after its transactions; best effort, never throws |
 | `settings.ts` | The `ads.*` settings families, ceilings, alert recipients, the setup steps |
 | `spendCap.ts` | Meta's account spending limit: set, read back, 10 a day |
 | `ops.ts` | The paced write queue: enqueue, claim, execute, verify, reap, `drainAdsOps`, `runOpInline` |

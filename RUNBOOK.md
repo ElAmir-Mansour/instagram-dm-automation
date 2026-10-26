@@ -1663,11 +1663,19 @@ switch back on only after a real day-2 reply was accepted (guide, A3).
   or `off` for Telegram, email and the admin copy. A channel is used only when the recipient is set
   (**Alert recipients**, then **Send a test**; `POST /api/ads/settings/alerts` with `test: true`)
   and the deployment has the bot token or the email key (Settings → Messages & alerts).
-  `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason. Two kinds
-  never arrive, whatever the card says: **An ad was rejected** (`ad_rejected`) and **An ad has
-  issues** (`ad_issues`) have a checkbox, but nothing in the app raises them yet
-  (`docs/ADS_GUIDE.md`, *Alerts*). The rule template **Ad rejected → tell me** (Ads → Rules)
-  catches a rejected ad instead.
+  `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason.
+  **An ad was rejected** (`ad_rejected`) and **An ad has issues** (`ad_issues`) come from the
+  hourly structure sync (`syncStructure`, `src/services/ads/sync.ts`; the rule is `adStatusAlertFor`,
+  `src/services/ads/adStatusAlerts.ts`) and only for a CHANGE on an ad the stored copy already had:
+  into `DISAPPROVED` or into `WITH_ISSUES`. So none arrives for an ad the sync met for the first
+  time (the first import of an account is silent, and so is an ad made in Ads Manager and rejected
+  before its first sync), for an ad that was already in that state, or within the hour before the
+  next sync. `ads.ad_status_alert` in the log (`kind`, `ad_id`, `from`, `to`) says one was raised,
+  the `status_alerts` count in `ads.sync_structure` says how many a run raised, and the
+  `ads_alerts` row has the ad's Meta id as `object_key`. `ads.alert_failed` (error) means the alert
+  could not be handed to the alert channel; it is not tried again, because the stored ad already
+  holds the new state (`docs/ADS_GUIDE.md`, *Alerts*). The rule template **Ad rejected → tell me**
+  (Ads → Rules) is the other way to hear about an ad that is rejected right now.
 - **A change or a create is stuck.** `GET /api/ads/ops/<id>` shows one op. An op `running` for over
   5 minutes is reaped. A create that timed out is `verify`: the app searches Meta for its
   `AR·<op id>` tag, resends at most once, and never creates twice (FLOWS.md §11.2 C). Ads Manager
