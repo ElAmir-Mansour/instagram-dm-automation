@@ -31,7 +31,7 @@ function setup(opts: { platforms?: string[]; music?: ExplainerTrack[]; tz?: stri
     world = installWorld();
     world.settingsRow = {
         ...explainerSettings({ music: opts.music ?? [TRACK, FREE_TRACK] }),
-        infographic: { ...defaultInfographicConfig(), platforms: opts.platforms ?? ['instagram', 'facebook', 'youtube'] },
+        infographic: { ...defaultInfographicConfig(), platforms: opts.platforms ?? ['instagram', 'facebook', 'youtube', 'tiktok'] },
         schedule: { timezone: opts.tz ?? 'UTC', slots: ['12:00'] },
         monteur: { post_at: ['16:00'] },
     };
@@ -118,21 +118,34 @@ describe('scheduleExplainer: what is posted where', () => {
         assert.equal(out.scheduled_time, '2026-10-25T09:00:00.000Z');
     });
 
-    it('follows the brand’s platforms for Instagram, Facebook and YouTube, and always makes the TikTok inbox draft', async () => {
+    it('follows the brand’s platforms for every platform: a TikTok inbox draft only when TikTok is ticked', async () => {
         setup({ platforms: ['facebook'] });
         ready();
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
-        assert.deepEqual(posts().map((p) => p.platform), ['facebook', 'tiktok']);
+        assert.deepEqual(posts().map((p) => p.platform), ['facebook'], 'no TikTok draft unless the list has it');
         world.restore();
-        setup({ platforms: ['youtube'] });
+        setup({ platforms: ['instagram', 'facebook', 'youtube'] });
+        ready();
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        assert.deepEqual(posts().map((p) => p.platform), ['both', 'youtube']);
+        world.restore();
+        setup({ platforms: ['youtube', 'tiktok'] });
         ready();
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
         assert.deepEqual(posts().map((p) => p.platform), ['youtube', 'tiktok']);
         world.restore();
-        setup({ platforms: [] });
+        // The settings refuse TikTok alone (no infographic would be posted), but a stored list can still say it.
+        setup({ platforms: ['tiktok'] });
         ready();
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
         assert.deepEqual(posts().map((p) => p.platform), ['tiktok']);
+    });
+
+    it('refuses a brand with no platform, before anything is written', async () => {
+        setup({ platforms: [] });
+        ready();
+        await assert.rejects(scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW), (err: unknown) => (err as { code?: string }).code === 'EXPLAINER_NO_PLATFORMS');
+        assert.deepEqual(posts(), []);
     });
 
     it('falls back to the video’s title when YouTube’s caption has none', async () => {

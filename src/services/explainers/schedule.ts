@@ -7,15 +7,16 @@
  *                            (its title and description), `{ title, language }`. A long video gets no thumbnail of ours: the cover is a vertical frame, and
  *                            YouTube picks its own for a horizontal video. A Short gets the cover. A long video is not a Short, so its row says
  *                            `shorts: false` and no `#Shorts` is added to its title or description; a Short's row is tagged as every YouTube row is.
- *   TikTok                   the vertical video as an inbox draft (`{ mode: 'inbox' }`): the creator posts it from the TikTok app; `captions.tiktok`
+ *   TikTok                   when the list has it: the vertical video as an inbox draft (`{ mode: 'inbox' }`), which the creator posts from the TikTok
+ *                            app; `captions.tiktok`
  *
  * One `group_id` for all of them, and each platform has its own caption. When the track the sound used requires credit, its credit line goes at the end of every
  * caption (FR-025). The time is the next free slot (the Monteur's `post_at`, in the tenant's zone, as infographics take it), a time the owner names, or now.
  *
- * Which platforms: spec.md lists them (Instagram and Facebook, YouTube, TikTok) and names no setting for them. Instagram, Facebook and YouTube follow the
- * brand's `infographic.platforms`, the one setting that already says where this owner's videos are posted; TikTok has no entry there and is an inbox draft that
- * the owner posts by hand anyway, so it is always made. A platform that is not connected is not checked here: its row fails in Posts, saying so, and does not
- * keep the others off (the infographics' rule).
+ * Which platforms: spec.md lists them (Instagram and Facebook, YouTube, TikTok) and names no setting for them. All four follow the brand's
+ * `infographic.platforms`, the one setting that already says where this owner's videos are posted (the owner's call, 2026-10-26: he posts TikTok by hand, so
+ * no draft is made unless TikTok is ticked there). A list with none of them is refused, as an infographic's is. A platform that is not connected is not checked
+ * here: its row fails in Posts, saying so, and does not keep the others off (the infographics' rule).
  *
  * Refused (409): an explainer that is not `ready`, a render that is older than the edits (its video is not the script's), and sound that is music when the track
  * is no longer in the library (its credit line cannot be written).
@@ -102,6 +103,8 @@ export async function scheduleExplainer(creatorId: string, rawId: unknown, body:
     const settings = await getStudioSettings(creatorId);
     const meta = metaPlatformFor(settings.infographic.platforms);
     const youtube = settings.infographic.platforms.includes('youtube');
+    const tiktok = settings.infographic.platforms.includes('tiktok');
+    if (!meta && !youtube && !tiktok) throw new StudioError(409, 'Choose where explainers are posted in the brand settings first.', undefined, 'EXPLAINER_NO_PLATFORMS');
 
     return withTransaction(async (client) => {
         await lockTenantPublishing(client, creatorId);
@@ -142,11 +145,13 @@ export async function scheduleExplainer(creatorId: string, rawId: unknown, body:
                 options: { title: captions.youtube.title.trim() || row.title || row.topic, language: row.language, ...(long ? { shorts: false as const } : {}) },
             }));
         }
-        const inbox = validateTikTokInboxOptions(null, 'video');
-        if (!inbox.ok) throw new StudioError(400, inbox.error);
-        rows.push(await insertVideoPost(client, {
-            creatorId, platform: 'tiktok', caption: caption('tiktok', captions.tiktok), mediaUrl: render.vertical_url, coverUrl: null, when: at, groupId, options: inbox.options,
-        }));
+        if (tiktok) {
+            const inbox = validateTikTokInboxOptions(null, 'video');
+            if (!inbox.ok) throw new StudioError(400, inbox.error);
+            rows.push(await insertVideoPost(client, {
+                creatorId, platform: 'tiktok', caption: caption('tiktok', captions.tiktok), mediaUrl: render.vertical_url, coverUrl: null, when: at, groupId, options: inbox.options,
+            }));
+        }
 
         const schedule = { scheduled_time: at.toISOString(), group_id: groupId, row_ids: rows.map((r) => r.id) };
         await transitionExplainer(client, id, ['ready'], 'scheduled', { schedule }, creatorId);

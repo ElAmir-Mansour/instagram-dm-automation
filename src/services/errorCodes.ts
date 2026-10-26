@@ -135,6 +135,7 @@ export const ERROR_CODES = {
     EXPLAINERS_DISABLED: { status: [404], meaning: 'Any Explainers route for a tenant the platform admin has not switched Explainers on for (`explainers.enabled.<tenant>`).' },
     EXPLAINER_NOT_FOUND: { status: [404], meaning: 'An explainer that does not exist, is another tenant\'s, or was deleted.' },
     EXPLAINER_BAD_STATE: { status: [409], meaning: 'A move the explainer\'s status machine does not allow from where it is (approve a script that is voiced, retry one that did not fail, edit one that is scheduled).', params: ['status', 'to'] },
+    EXPLAINER_NO_PLATFORMS: { status: [409], meaning: 'Scheduling an explainer when the brand settings choose no platform to post to.' },
     EXPLAINER_PROMPT_REFUSED: { status: [422], meaning: 'A picture brief or character description that names a woman or a girl, or breaks another picture rule: nothing was sent to the image provider.' },
     EXPLAINER_NO_PROVIDER: { status: [409], meaning: 'Drawing a picture when no image provider is set up (the platform admin\'s Settings → Explainers card).' },
     EXPLAINER_ALLOWANCE_PAUSED: { status: [429], meaning: 'The image provider\'s free allowance, or the owner\'s daily cap, is used up: drawing waits. `retryAt` says until when.', params: ['retryAt'] },

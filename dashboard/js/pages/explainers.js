@@ -2002,7 +2002,8 @@ const ExplainersPage = {
 
     /**
      * The platforms and what each gets, as the server's Schedule makes them (schedule.ts): Instagram and Facebook as one row, and YouTube, when the brand's
-     * platforms (`infographic.platforms`, in the settings) include them; TikTok always, as an inbox draft. YouTube gets the horizontal video over three minutes
+     * platforms (`infographic.platforms`, in the settings) include them; TikTok too, as an inbox draft, only when it is in that list. YouTube gets the horizontal
+     * video over three minutes
      * and the vertical one as a Short otherwise. LinkedIn is never a post: the kit below is for it.
      */
     planMarkup() {
@@ -2014,12 +2015,13 @@ const ExplainersPage = {
         const fb = !platforms || platforms.includes('facebook');
         const meta = ig && fb ? 'both' : ig ? 'instagram' : fb ? 'facebook' : '';
         const youtube = !!platforms && platforms.includes('youtube');
+        const tiktok = !!platforms && platforms.includes('tiktok');
         // Not `icon` as a parameter name: scripts/build-icons.mjs reads the matching argument of every same-named call in the dashboard as an icon.
         const plan = (glyph, name, what) => html`<li><i data-lucide="${glyph}" aria-hidden="true"></i><span><strong>${name}</strong> ${what}</span></li>`;
         return html`<ul class="ex-plan">
             ${meta ? plan('instagram', t(`explainers.rowPlatform.${meta}`), t('explainers.plan.meta')) : ''}
             ${youtube ? plan('youtube', t('explainers.platform.youtube'), t(longVideo ? 'explainers.plan.youtubeLong' : 'explainers.plan.youtubeShort')) : ''}
-            ${plan('music', t('explainers.platform.tiktok'), t('explainers.plan.tiktok'))}
+            ${tiktok ? plan('music', t('explainers.platform.tiktok'), t('explainers.plan.tiktok')) : ''}
             ${plan('share-2', t('explainers.platform.linkedin'), t('explainers.plan.linkedin'))}
         </ul>`;
     },

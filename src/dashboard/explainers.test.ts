@@ -1129,13 +1129,13 @@ describe('Explainers: publish and the LinkedIn kit', () => {
         open(long, { status: 'ready', render: { vertical_url: '/v', horizontal_url: '/h', cover_url: '/c', duration: 181, sound_mode: 'sfx', version: 3, job_id: 'j' } }, 'publish');
         assert.ok(text(long.P.planMarkup()).includes(long.t('explainers.plan.youtubeLong')));
         const short = world();
-        short.P.platforms = ['instagram', 'facebook', 'youtube'];
+        short.P.platforms = ['instagram', 'facebook', 'youtube', 'tiktok'];
         open(short, { status: 'ready', render: { vertical_url: '/v', horizontal_url: '/h', cover_url: '/c', duration: 180, sound_mode: 'sfx', version: 3, job_id: 'j' } }, 'publish');
         assert.ok(text(short.P.planMarkup()).includes(short.t('explainers.plan.youtubeShort')));
         assert.ok(text(short.P.planMarkup()).includes(short.t('explainers.plan.tiktok')));
     });
 
-    it('lists the platforms Schedule will really post to: Instagram, Facebook and YouTube follow the brand’s settings, TikTok is always made, LinkedIn never', async () => {
+    it('lists the platforms Schedule will really post to: all four follow the brand’s settings, LinkedIn never', async () => {
         const plan = (platforms: string[] | null): string => {
             const w = world({ lang: 'en' });
             w.P.platforms = platforms;
@@ -1146,7 +1146,9 @@ describe('Explainers: publish and the LinkedIn kit', () => {
         const byDefault = plan(['instagram', 'facebook']);
         assert.ok(byDefault.includes('Instagram and Facebook'));
         assert.equal(byDefault.includes('YouTube'), false, 'YouTube is not posted unless the brand says so');
-        assert.ok(byDefault.includes('TikTok') && byDefault.includes('LinkedIn'));
+        assert.equal(byDefault.includes('TikTok'), false, 'no TikTok draft unless the brand ticks it');
+        assert.ok(byDefault.includes('LinkedIn'));
+        assert.ok(plan(['instagram', 'tiktok']).includes('TikTok'), 'TikTok, ticked, is a draft');
         const all = plan(['instagram', 'facebook', 'youtube']);
         assert.ok(all.includes('YouTube'));
         assert.ok(plan(['instagram']).includes('Instagram the vertical video'), 'one Meta platform is named alone');

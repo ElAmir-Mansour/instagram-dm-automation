@@ -135,7 +135,7 @@ export type MonteurConfig = {
 
 export type InfographicSocial = 'instagram' | 'youtube' | 'linkedin' | 'x' | 'tiktok' | 'facebook' | 'github';
 export type InfographicTheme = 'dark' | 'light';
-export type InfographicPlatform = 'instagram' | 'facebook' | 'youtube';
+export type InfographicPlatform = 'instagram' | 'facebook' | 'youtube' | 'tiktok';
 
 /**
  * The personal brand an infographic is drawn in (v31). It is not `brand`, the carousels'
@@ -157,7 +157,10 @@ export type InfographicConfig = {
     /** For a new infographic. */
     theme: InfographicTheme;
     language: 'ar' | 'en';
-    /** Where Schedule posts the MP4. At least one. */
+    /**
+     * Where Schedule posts the MP4: at least one of Instagram, Facebook and YouTube. Explainers follow the same list, and `tiktok` adds an explainer's
+     * TikTok inbox draft; an infographic is never sent to TikTok.
+     */
     platforms: InfographicPlatform[];
 };
 
