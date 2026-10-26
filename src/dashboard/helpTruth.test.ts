@@ -8,6 +8,9 @@
  * and the article has to say it. When a test here fails, the code changed under a sentence: read the sentence again before changing the test.
  *
  * Read from the code, never retyped: the alert kinds from `settings.ts`, the radius from `spec.ts` and `ads_create.js`, the labels from the dictionaries.
+ *
+ * Two more (2026-10-26): what a rate-limited YouTube upload tells the owner to do, and the alerts for a rejected ad and an ad with issues, which the
+ * Help said were "not sent yet" until the hourly update was made to raise them.
  */
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -15,6 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
 import { decideAgent, HISTORY_WINDOW } from '../services/ai.js';
+import { buildAdsAlertText } from '../services/ads/notify.js';
 import { REQUIRED_ALERT_KINDS, SHOWN_ALERT_KINDS } from '../services/ads/settings.js';
 import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
 import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, FOLLOWUP_WINDOW_MS, MAX_FOLLOWUPS_PER_CONVERSATION } from '../services/dmSales/followup.js';
@@ -60,8 +64,8 @@ function sectionBody(slug: string, id: string, lang: Lang): unknown[] {
     return section!.body[lang] as unknown[];
 }
 
-/** The items of the n-th list block (`ul`, `ol` or `dl`) of a section. */
-function listOf(slug: string, id: string, lang: Lang, kind: 'ul' | 'ol' | 'dl', n = 0): any[] {
+/** The items of the n-th list block (`ul`, `ol`, `dl` or `qa`) of a section. */
+function listOf(slug: string, id: string, lang: Lang, kind: 'ul' | 'ol' | 'dl' | 'qa', n = 0): any[] {
     const lists = sectionBody(slug, id, lang).filter((b): b is Json => !!b && typeof b === 'object' && Array.isArray((b as Json)[kind]));
     assert.ok(lists[n], `${slug}#${id} (${lang}) has a ${kind} list number ${n}`);
     return lists[n]![kind] as any[];
@@ -211,17 +215,73 @@ describe('Help Center — the alerts the Settings card lists', () => {
         });
     }
 
-    it('says "not sent yet" for the kinds nothing raises, and only for them: the day one is wired, this fails and the row changes', () => {
+    /** The source files that raise a kind: everything under src that is not a test, bar the two files that DEFINE the kinds and render them. */
+    const raisedBy = (kind: string): string[] => {
         const defined = new Set(['src/services/ads/settings.ts', 'src/services/ads/notify.ts']);
-        const raisedBy = (kind: string) => sources().filter((f) => !defined.has(f.replace(/\\/g, '/'))).filter((f) => new RegExp(`['"]${kind}['"]`).test(readFileSync(f, 'utf8')));
+        return sources().filter((f) => !defined.has(f.replace(/\\/g, '/'))).filter((f) => new RegExp(`['"]${kind}['"]`).test(readFileSync(f, 'utf8')));
+    };
+
+    it('says "not sent yet" for a kind exactly while nothing raises it: every kind the card lists is raised now, so none says it, and the day one is not the row says it again', () => {
         const notRaised = SHOWN_ALERT_KINDS.filter((kind) => raisedBy(kind).length === 0);
-        assert.deepEqual([...notRaised], ['ad_rejected', 'ad_issues'], 'the kinds no source file raises (a kind raised now is one more row to re-read, and one less "not sent yet")');
+        assert.deepEqual([...notRaised], [], 'the kinds no source file raises. `ad_rejected` and `ad_issues` were the two that were not, and the hourly update of the ad account raises them since: '
+            + 'if they are listed here, the Help article below says they are sent while nothing sends them (its wording is ahead of the code). A kind added to the card with no raiser belongs in this list, with its row saying "not sent yet".');
 
         for (const lang of LANGS) {
             const items = listOf('ads', 'alerts', lang, 'ul') as string[];
             const unsent = lang === 'en' ? /not sent yet/ : /لا يُرسَل حالياً/;
             SHOWN_ALERT_KINDS.forEach((kind, i) => assert.equal(unsent.test(items[i]!), (notRaised as readonly string[]).includes(kind), `${lang} ${kind}`));
         }
+    });
+
+    const AD_KINDS = ['ad_rejected', 'ad_issues'] as const;
+    const adTarget = { creatorId: 'c1', adAccountId: 'act_1', accountName: 'The account', offsetHours: 3 };
+
+    for (const lang of LANGS) {
+        it(`describes the alert for a rejected ad and the one for an ad with issues as the rule that raises them: the hourly update, once per ad per day, Meta's reason, only a change (${lang})`, () => {
+            const items = listOf('ads', 'alerts', lang, 'ul') as string[];
+            const en = lang === 'en';
+            const item = (kind: (typeof AD_KINDS)[number]): string => items[SHOWN_ALERT_KINDS.indexOf(kind)]!;
+            const has = (kind: (typeof AD_KINDS)[number], ...parts: string[]): void => {
+                for (const part of parts) assert.ok(item(kind).includes(part), `${lang} ${kind} says «${part}»: ${item(kind)}`);
+            };
+            for (const kind of AD_KINDS) {
+                assert.ok(item(kind).startsWith(`**${label(lang, `settings.ads.alert.kind.${kind}`)}:**`), `${kind} still leads with the card's own name for it`);
+                assert.equal((en ? /not sent yet|nothing in the app raises|never arrive/ : /لا يُرسَل حالياً|لا شيء في التطبيق يطلق/).test(item(kind)), false, `${lang} ${kind}: no longer says it is not sent`);
+                // What the two share: when it is sent, how often, with what, and what it is not sent for.
+                has(kind, ...(en
+                    ? ['the hourly update', 'once per ad per day', 'Meta’s reason when Meta gives one', 'first saw it']
+                    : ['كل ساعة', 'مرة واحدة لكل إعلان في اليوم', 'سبب ميتا إن ذكرت سبباً', 'أول مرة']));
+                assert.ok(en ? /[Oo]nly (a change|for a change)/.test(item(kind)) : item(kind).includes('ولا يُعلَن إلا التغيّر'), `${lang} ${kind}: says only a change is announced`);
+                assert.ok(item(kind).includes('[[ads#rule-templates]]'), `${lang} ${kind}: keeps the rule template as the other way`);
+            }
+            // The status each one is raised for, in the Ads screen's own word for it.
+            has('ad_rejected', bold(label(lang, 'ads.status.disapproved')));
+            has('ad_issues', bold(label(lang, 'ads.status.with_issues')));
+            // The channels, the two cases it is not sent for, and where those are shown, by the names the screens use.
+            has('ad_rejected', ...(en
+                ? ['Telegram chat and/or email', 'the first time AutoReply read the account', 'made in Meta Ads Manager']
+                : ['محادثة تيليجرام و/أو بريدك الإلكتروني', 'حين قرأ التطبيق الحساب أول مرة', 'مدير إعلانات ميتا (Ads Manager)']));
+            has('ad_rejected', bold(label(lang, 'ads.attn.title')), bold(label(lang, 'ads.rules.tpl.rejected_notify')));
+            // The template it names is the one the rule templates section lists, under the same name.
+            const templates = listOf('ads', 'rule-templates', lang, 'dl') as string[][];
+            assert.ok(templates.some((row) => row[0] === bold(label(lang, 'ads.rules.tpl.rejected_notify'))), `${lang}: the rule templates section has that template`);
+        });
+    }
+
+    it('is what the code does behind those sentences: Meta\'s reason is in the message only when Meta gave one, one alert per kind, ad and day, and the Ads screen lists both statuses', () => {
+        for (const lang of LANGS) {
+            for (const kind of AD_KINDS) {
+                const reason = lang === 'en' ? 'Reason: Disapproved for a policy' : 'السبب: Disapproved for a policy';
+                const said = buildAdsAlertText({ kind, adId: '120001', adName: 'An ad', reason: 'Disapproved for a policy' }, adTarget, lang);
+                const silent = buildAdsAlertText({ kind, adId: '120001', adName: 'An ad', reason: null }, adTarget, lang);
+                assert.ok(said.includes(reason), `${lang} ${kind}: Meta's reason is in the message: ${said}`);
+                assert.equal(silent.includes(lang === 'en' ? 'Reason:' : 'السبب:'), false, `${lang} ${kind}: and there is no empty reason line when it gave none: ${silent}`);
+            }
+        }
+        const notify = readFileSync('src/services/ads/notify.ts', 'utf8');
+        assert.match(notify, /ON CONFLICT \(creator_id, kind, object_key, day\) DO NOTHING RETURNING id/, 'a second alert of one kind about one object the same day is dropped: with the ad as the object, once per ad per day');
+        assert.match(readFileSync('src/services/ads/overview.ts', 'utf8'), /\{ DISAPPROVED: 'rejected', WITH_ISSUES: 'issues', PENDING_BILLING_INFO: 'billing' \}/, 'the Needs attention list shows a rejected ad and one with issues, which is where the ones already rejected are');
+        assert.match(readFileSync('src/services/ads/rulesEval.ts', 'utf8'), /id: 'rejected_notify',/, 'and the rule template the Help keeps as the other way exists');
     });
 
     it('is what the code does for the three that cannot be switched off', () => {
@@ -424,6 +484,53 @@ describe('Help Center — YouTube', () => {
             assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), `${lang}: Publish now is the way to retry`);
             assert.ok(text.includes(message), `${lang}: the article quotes the reason as the code words it`);
             assert.equal((lang === 'en' ? /whatever the message may suggest/i : /حتى لو قالت الرسالة/).test(text), false, `${lang}: and no longer argues with it`);
+        }
+    });
+
+    it('says the rate limit as the code does, and that nothing retries it either: the message and the article both say wait a minute, then press Publish now', () => {
+        // The reason as a failed upload writes it on the post, built by the function that builds it and never retyped here. Google sends it as a 403 or a 429.
+        for (const status of [403, 429]) {
+            const refused = toYouTubeError('YouTube upload start', { response: { status, data: { error: { code: status, message: 'rate', errors: [{ reason: 'rateLimitExceeded' }] } } } });
+            assert.ok(refused instanceof YouTubeApiError && refused.reason === 'rateLimitExceeded', `a ${status} with that reason`);
+            assert.equal(refused.message, 'YouTube upload start: YouTube is rate-limiting this app — wait a minute, then press Publish now and the upload goes ahead.', `${status}`);
+        }
+        const message = toYouTubeError('YouTube upload start', { response: { status: 403, data: { error: { errors: [{ reason: 'rateLimitExceeded' }] } } } }).message.replace(/^YouTube upload start: /, '');
+        // It tells the owner to do the retrying, with the button's own name, so nothing else may: the set that names the reason is read by no one…
+        assert.ok(message.includes(label('en', 'posts.publishNow')) && message.includes('wait a minute'), message);
+        assert.doesNotMatch(message, /retried|retry|retrying|will be/i, 'it promises no retry');
+        const youtube = readFileSync('src/services/youtube.ts', 'utf8');
+        assert.equal((youtube.match(/RETRYABLE_REASONS/g) || []).length, 1, 'RETRYABLE_REASONS is declared and consulted nowhere in this file');
+        // …no YouTube module wraps a call in a retry, and the client is a bare axios instance…
+        for (const file of ['src/services/youtube.ts', 'src/services/youtubePublish.ts', 'src/services/youtubeConnections.ts', 'src/routes/youtube.ts']) {
+            assert.doesNotMatch(readFileSync(file, 'utf8'), /withRetry|axios-retry|interceptors/, `${file} has no retry wrapper`);
+        }
+        assert.match(youtube, /export const youtubeHttp = axios\.create\(\{ timeout: 30_000 \}\);/, 'the client is a bare axios instance');
+        // …and nothing puts a FAILED row back to PENDING for the sweep: the three statements that set PENDING are the stale-claim reaper (PUBLISHING rows only),
+        // the Instagram hold inside attemptPublish, and TikTok's inbox hold. A YouTube row is handed to publishYouTubePost before attemptPublish is reached.
+        // The one other way back is the owner's own edit of the post (the RUNBOOK's "edit and save"), which is a person doing it, not a sweep.
+        const putBack = sources().filter((f) => /SET status = 'PENDING'/.test(readFileSync(f, 'utf8'))).map((f) => f.replace(/\\/g, '/')).sort();
+        assert.deepEqual(putBack, ['src/routes/api.ts', 'src/services/tiktokPublish.ts']);
+        const api = readFileSync('src/routes/api.ts', 'utf8');
+        assert.match(api, /SET status = 'PENDING'\s+WHERE status = 'PUBLISHING'\s+AND claimed_at < NOW\(\) - INTERVAL '15 minutes'\s+AND attempts < 5/, 'the reaper takes a row that was claimed and went stale, never a FAILED one');
+        assert.match(api, /if \(post\.platform === 'youtube'\) \{\s*return publishYouTubePost\(/, 'a YouTube row goes to publishYouTubePost');
+        const edit = api.slice(api.indexOf("router.put('/posts/scheduled/:id'"));
+        assert.equal((api.match(/THEN 'PENDING'/g) || []).length, 1, 'one place turns a FAILED row PENDING by a CASE…');
+        assert.match(edit.slice(0, edit.indexOf('\nrouter.', 10)), /status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END/, '…and it is the owner saving an edit of the post');
+        // Publish now takes a FAILED row (pinned for the whole YouTube card in the test below), and the sweep only a PENDING one.
+        assert.match(api, /WHERE id = \$1 AND creator_id = \$2 AND status IN \('PENDING', 'FAILED'\)/);
+        assert.match(api, /WHERE s\.status = 'PENDING' AND s\.scheduled_time <= NOW\(\) AND s\.archived_at IS NULL/);
+        for (const lang of LANGS) {
+            const text = textOf('youtube', 'quota', lang);
+            assert.ok(text.includes(message), `${lang}: the article quotes the reason as the code words it`);
+            assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), `${lang}: Publish now is the way to retry`);
+            assert.ok(text.includes(bold(label(lang, 'state.failed'))), `${lang}: the post shows ${label(lang, 'state.failed')}`);
+            assert.ok(lang === 'en' ? text.includes('Nothing retries it by itself here either') : text.includes('ولا شي يعيد المحاولة لحاله هنا كذلك'), `${lang}: and says nothing retries it`);
+            const stale = lang === 'en' ? /it will be retried/ : /سيُعاد المحاولة|ستُعاد/;
+            assert.equal(stale.test(text), false, `${lang}: and no longer promises it`);
+            // The troubleshooting row that points at the section names it too.
+            const rows = listOf('youtube', 'troubleshooting', lang, 'qa') as string[][];
+            const row = rows.find((r) => r[1]!.includes('[[youtube#quota]]'));
+            assert.ok(row && (lang === 'en' ? row[0]!.includes('rate limit') : row[0]!.includes('تقييد الطلبات')), `${lang}: the troubleshooting row for the quota covers a rate limit too`);
         }
     });
 

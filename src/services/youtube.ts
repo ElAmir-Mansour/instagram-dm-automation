@@ -101,7 +101,7 @@ const REASON_MESSAGES: Record<string, string> = {
     youtubeSignupRequired: 'This Google account has no YouTube channel — create one on youtube.com, then reconnect.',
     quotaExceeded: 'The YouTube API’s daily quota is used up (about six uploads a day) — press Publish now after midnight Pacific time and the upload goes ahead.',
     uploadLimitExceeded: 'YouTube’s upload limit for this channel is reached for today — retry tomorrow.',
-    rateLimitExceeded: 'YouTube is rate-limiting this app — it will be retried.',
+    rateLimitExceeded: 'YouTube is rate-limiting this app — wait a minute, then press Publish now and the upload goes ahead.',
     invalidTitle: 'YouTube refused the title (at most 100 characters, no < or >).',
     invalidDescription: 'YouTube refused the description (at most 5,000 bytes, no < or >).',
     invalidTags: 'YouTube refused the tags.',
@@ -109,7 +109,7 @@ const REASON_MESSAGES: Record<string, string> = {
     channelSuspended: 'This YouTube channel is suspended.',
 };
 
-/** Reasons where the post itself is not at fault: the next sweep may try again. */
+/** Reasons where the post itself is not at fault. Nothing reads this set: no sweep retries a failed Short, so the quota and rate-limit messages above tell the owner to press Publish now. */
 export const RETRYABLE_REASONS: ReadonlySet<string> = new Set(['quotaExceeded', 'rateLimitExceeded', 'backendError']);
 
 /** Pull a Google error out of an axios failure (OAuth's `{error, error_description}` or the API's `{error: {errors}}`). */

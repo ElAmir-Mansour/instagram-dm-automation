@@ -428,6 +428,63 @@ describe('publishing a row that is not a Short (an explainer’s horizontal vide
     });
 });
 
+describe('a rate-limited upload is not retried: the post fails once, and says what to do', () => {
+    const CONNECTION = { id: 'conn-1', status: 'active', refresh_token: 'refresh', access_token: 'tok', access_expires_at: new Date(Date.now() + 3_600_000), scopes: [SCOPE_UPLOAD] };
+    const SENTENCE = 'YouTube is rate-limiting this app — wait a minute, then press Publish now and the upload goes ahead.';
+    const post = { id: 'post-1', creator_id: OTHER, post_type: 'video' as const, caption: 'سطر\n#ai', media_url: 'https://cdn.example/reel.mp4', external_publish_id: null, platform_options: null, cover_url: null };
+    const refusal = (status: number) => ({ status, data: { error: { code: status, message: 'Too many requests', errors: [{ reason: 'rateLimitExceeded' }] } } });
+
+    /** Publish `post` against a Google that answers `reply`; what it was asked, and the statements the row was written with. */
+    type Reply = { status: number; data?: unknown; headers?: Record<string, string> };
+    async function publishAgainst(reply: (s: Seen) => Reply) {
+        const db = installProfileDb(emptyState());
+        db.routes.unshift([/FROM platform_connections WHERE creator_id = \$1 AND platform = 'youtube'/, () => ({ rows: [CONNECTION] })]);
+        setPlatformOwner(db, OWNER);
+        const seen = stub(reply);
+        const sink = setLogSink(() => {});
+        let outcome: unknown;
+        try {
+            outcome = await publishYouTubePost(post).catch((err: unknown) => err);
+        } finally {
+            setLogSink(sink);
+            db.restore();
+        }
+        return { seen, db, outcome };
+    }
+
+    for (const status of [403, 429]) {
+        it(`a ${status} \`rateLimitExceeded\` when the session is opened asks Google once, and ends the post FAILED with the sentence that says to wait a minute and press Publish now`, async () => {
+            const { seen, db, outcome } = await publishAgainst((s): Reply => (s.method === 'GET'
+                ? { status: 200, data: Buffer.from('reel'), headers: { 'content-type': 'video/mp4' } }
+                : refusal(status)));
+            assert.ok(outcome instanceof YouTubeApiError && outcome.reason === 'rateLimitExceeded', String(outcome));
+            // The media, then one request to open the session: nothing asked again, whatever the sentence once promised.
+            assert.deepEqual(seen.map((s) => s.method), ['GET', 'POST']);
+            const failed = db.ran(/SET status = 'FAILED'/);
+            assert.equal(failed.length, 1, 'the post is failed, once');
+            assert.equal(failed[0]!.params[1], `YouTube upload start: ${SENTENCE}`, 'with the words the card shows');
+            assert.equal(db.ran(/SET status = 'PENDING'/).length, 0, 'and nothing puts it back for a sweep to take');
+        });
+    }
+
+    it('a rate limit while the bytes go up fails the post once too, and keeps the open session, so Publish now resumes where it stopped', async () => {
+        const { seen, db, outcome } = await publishAgainst((s): Reply => {
+            if (s.method === 'GET') return { status: 200, data: Buffer.from('reel'), headers: { 'content-type': 'video/mp4' } };
+            if (s.method === 'POST') return { status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U1' } };
+            return refusal(429);
+        });
+        assert.ok(outcome instanceof YouTubeApiError && outcome.reason === 'rateLimitExceeded', String(outcome));
+        assert.deepEqual(seen.map((s) => s.method), ['GET', 'POST', 'PUT'], 'one attempt to send, and no second');
+        const session = db.ran(/SET external_publish_id = \$2/);
+        assert.equal(session.length, 1);
+        assert.match(String(session[0]!.params[1]), /^YTU:https:\/\/www\.googleapis\.com\/upload\/youtube\/v3\/videos\?upload_id=U1$/, 'the session was saved before the first byte');
+        const failed = db.ran(/SET status = 'FAILED'/);
+        assert.equal(failed.length, 1);
+        assert.equal(failed[0]!.params[1], `YouTube upload: ${SENTENCE}`);
+        assert.doesNotMatch(failed[0]!.sql, /external_publish_id/, 'and failing the post leaves that session where Publish now finds it');
+    });
+});
+
 describe('getMyChannel keeps what the answer already carries (docs/onboarding/03 §1)', () => {
     it('maps the description, the country and the default language: no extra quota, they come with the same `channels.list`', async () => {
         const seen = stub(() => ({

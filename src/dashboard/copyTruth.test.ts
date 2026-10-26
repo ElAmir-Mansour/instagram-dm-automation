@@ -1,5 +1,5 @@
 /**
- * Interface copy pinned to what the code does (2026-10-26): four sentences in the dictionaries said something the code does not do.
+ * Interface copy pinned to what the code does (2026-10-26): five statements in the dictionaries said something the code does not do.
  *
  * `helpTruth.test.ts` ties the Help Center's sentences to the code, and `help-labels.test.ts` ties its NAMES to the interface. The interface's
  * own strings (`dashboard/js/i18n.*.js`) carry the same risk and had no such test: each of these was true once, or true of one kind of
@@ -13,6 +13,9 @@
  *      `studio.mac_brain_tenants`; every other workspace's is written through the AI providers layer, by whichever provider the operator routed.
  *   4. `ai.sandboxAgentOff` ("the agent is switched off, so the test did not run") could never be shown: the test box answers while the
  *      assistant is off.
+ *   5. Six more infographics strings named Claude as the writer: the worker-offline notice, "Add notes for Claude", the started toast, the progress
+ *      line and the two lines of the Rewrite dialog. Every workspace sees them, and Claude writes only the owner's and `studio.mac_brain_tenants`'s
+ *      pages. They say "the AI" now, and the offline notice says only what the worker does for all of them: it renders.
  *
  * The number, the rule or the label is read from the code (or from the dictionary entry the sentence names), never retyped. When a test
  * here fails, the code changed under a sentence: read the sentence again before changing the test.
@@ -150,6 +153,59 @@ describe('Interface copy — who writes the infographic the form asks for', () =
             assert.ok(lang === 'en' ? hint.includes('the caption always describes the GIF') : /مطابقاً للـ GIF/.test(hint), `${lang}: ${hint}`);
         });
     }
+
+    /** The other strings of the form, the list and the Rewrite dialog that name who writes the page: every workspace is shown them. */
+    const WRITER_STRINGS = ['infographics.new.more', 'infographics.new.started', 'infographics.progress.writing', 'infographics.rewrite.title', 'infographics.rewrite.body'] as const;
+
+    for (const lang of LANGS) {
+        it(`the other strings that name the writer say the AI too, and none names Claude (${lang})`, () => {
+            for (const key of WRITER_STRINGS) {
+                const text = label(lang, key);
+                assert.equal(/Claude/i.test(text), false, `${key} does not name Claude, who writes only some workspaces' pages: ${text}`);
+                // «للذكاء الاصطناعي» has no ال of its own: the match starts after it.
+                assert.ok(lang === 'en' ? /\bthe AI\b/i.test(text) : /ذكاء الاصطناعي/.test(text), `${lang} ${key} says the AI: ${text}`);
+            }
+        });
+
+        it(`the worker-offline notice says what the worker does for every workspace, which is render, and not who wrote the page (${lang})`, () => {
+            const text = label(lang, 'infographics.worker.offline');
+            assert.equal(/Claude/i.test(text), false, `it does not name Claude: ${text}`);
+            assert.ok(lang === 'en' ? text.includes('Infographics are rendered there') : text.includes('يُرسم الإنفوجرافيك هناك'), `${lang}: the worker renders them: ${text}`);
+            assert.equal(lang === 'en' ? /\bwrit/i.test(text) : /يكتب/.test(text), false, `${lang}: and it does not say the worker writes: a workspace the Mac is not for has its page written on the server: ${text}`);
+            // It is still the Mac's worker, as the Workers card and the Help call it, and still says they wait.
+            assert.ok(lang === 'en' ? text.includes('Mac’s Studio worker is offline') && text.includes('they wait until it’s back') : text.includes('جهازك الماك غير متصل') && text.includes('فينتظر حتى يعود'), `${lang}: ${text}`);
+        });
+    }
+
+    it('names Claude in no infographics string of either dictionary: a new string that does has to be true of the workspaces Claude does not write for', () => {
+        for (const lang of LANGS) {
+            const keys = Object.keys(STRINGS[lang]).filter((k) => /^(infographics\.|page\.infographics\.|nav\.infographics$|studio\.tabs\.infographics$)/.test(k));
+            // A scan that matched nothing would pass.
+            assert.ok(keys.length > 100, `${keys.length} infographics strings in ${lang}`);
+            assert.deepEqual(keys.filter((k) => /Claude/i.test(STRINGS[lang][k]!)), [], `${lang}: these name Claude`);
+        }
+    });
+
+    it('is what the code does about the rows those strings are shown for: a workspace written on the server is born rendering, a Mac one writing, and the offline notice is drawn for any open row', () => {
+        const source = readFileSync('src/services/studio/infographics.ts', 'utf8');
+        /** One function's text: the same INSERT is in several of them (a copy has its own), so each is read where it is. */
+        const between = (from: string, to: string): string => {
+            const start = source.indexOf(from);
+            const text = source.slice(start, source.indexOf(to, start));
+            assert.ok(start > 0 && text.length > 200, `${from} was found`);
+            return text;
+        };
+        assert.match(between('export async function createInfographic', 'async function insertWritten'), /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, 'writing', \$7\) RETURNING id/, 'the Mac path: the row waits as writing while Claude writes it inside the render job');
+        assert.match(between('async function insertWritten', 'async function createOnServer'), /VALUES \(\$1, \$2, \$3, \$4, \$5, 'rendering', \$6::jsonb, \$7, \$8::jsonb, \$9\) RETURNING id/, 'the server path: written before the row exists, so born rendering with its spec');
+        assert.match(between('async function createOnServer', 'async function rewriteOnServer'), /await queue\(client, creatorId, id, renderPayload\(id, first, theme, settings, written\.spec\), 'rendering'\);/, 'and only the drawing is queued for the worker');
+        // The page draws the worker's notice for any open row, whoever wrote it: so it may say only what is true of both.
+        const page = readFileSync('dashboard/js/pages/infographics.js', 'utf8');
+        const start = page.indexOf('workerMarkup() {');
+        const notice = page.slice(start, page.indexOf('newFormMarkup()', start));
+        assert.ok(start > 0 && notice.length > 100, 'the notice was found');
+        assert.match(notice, /const waiting = this\.items\.some\(\(i\) => this\.open\(i\)\);\s*if \(!waiting \|\| !this\.worker \|\| this\.worker\.online\) return '';/);
+        assert.doesNotMatch(notice, /mac_brain|written|writer|owner/i, 'and asks nothing about who wrote the page');
+    });
 });
 
 // ─── 4. The test box with the assistant off ──────────────────────────────────────────────────────────────────────────

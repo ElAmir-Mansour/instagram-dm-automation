@@ -1038,16 +1038,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/explainers"\s+aria-current/);
     });
 
-    it('ships at cache version 12.80: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.81: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.80');
+        assert.equal(version, '12.81');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.80']);
+        assert.deepEqual([...new Set(refs)], ['12.81']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.80'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.81'], page);
         }
     });
 });
@@ -1754,12 +1754,13 @@ describe('Infographics page', () => {
         assert.equal(s.timers.length, 0, 'nothing open: no poll');
     });
 
-    it('one being written: says Claude is writing it, offers no download, and polls', async () => {
+    it('one being written: says the AI is writing it (not Claude: only some workspaces\' pages are Claude\'s), offers no download, and polls', async () => {
         const s = loadPage([ready({ status: 'writing', render: null, spec: null, job: { status: 'claimed', progress: null } })]);
         await s.Page.render();
         await settle();
         const page = s.dom.get('page-container')!.innerHTML;
-        assert.match(page, /Claude is writing it/);
+        assert.match(page, /The AI is writing it/);
+        assert.doesNotMatch(page, /Claude/);
         assert.doesNotMatch(page, /download=/);
         assert.equal(s.timers.length, 1);
         assert.equal(s.timers[0]!.ms, 5000);
@@ -1773,6 +1774,9 @@ describe('Infographics page', () => {
         const page = s.dom.get('page-container')!.innerHTML;
         assert.match(page, /Waiting for your Mac \(offline\)/);
         assert.match(page, /Studio worker is offline/);
+        // The notice shows for any open row of any workspace, whoever wrote it, so it says only what the worker does for all of them.
+        assert.match(page, /Infographics are rendered there/);
+        assert.doesNotMatch(page, /Claude/);
     });
 
     it('lists what to fix on a ready one', async () => {

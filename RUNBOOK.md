@@ -1745,15 +1745,16 @@ is `youtube.publish_failed`.
 |---|---|---|
 | *…daily quota is used up (about six uploads a day)…* (`quotaExceeded`) | `videos.insert` costs 1,600 of the 10,000 units Google gives the project a day, and a thumbnail 50: about six Shorts a day. The quota resets at midnight Pacific time | wait for the reset, then **Publish now** (below) |
 | *…upload limit for this channel is reached for today…* (`uploadLimitExceeded`) | YouTube's own limit for the channel | retry tomorrow |
+| *…YouTube is rate-limiting this app…* (`rateLimitExceeded`) | too many requests in a short time (Google sends a 403 or a 429) | wait a minute, then **Publish now** |
 | *…reconnect YouTube in Settings.* | 14.1 | 14.1 |
 | *…takes MP4, MOV or WebM here — this file is …* | the video is another type | upload an MP4 |
 | *The YouTube upload did not finish — retry it, and it resumes where it stopped.* | the upload timed out part way | **Publish now**. It first asks Google how far the saved session (`external_publish_id = 'YTU:…'`) got and carries on from there, so it never posts the same Short twice |
 | *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, or the channel may not set custom thumbnails). The Short is up | nothing |
 
-**The quota sentence over-promises.** It says the upload "is retried after midnight Pacific
-time". Nothing retries it: the sweep takes only `PENDING` rows, and a failed Short stays `FAILED`
-(`RETRYABLE_REASONS` in `src/services/youtube.ts` is not used by it). After the reset press
-**Publish now** on the card, or edit and save the post (that flips `FAILED` to `PENDING`).
+**Nothing retries a failed Short**, and the quota and rate-limit sentences say so (they used to promise a retry). The sweep takes
+only `PENDING` rows, and a failed Short stays `FAILED` (`RETRYABLE_REASONS` in `src/services/youtube.ts` is read by no one;
+`youtubeHttp` has no retry wrapper). After the reset, or a minute after a rate limit, press **Publish now** on the card, or edit
+and save the post (that flips `FAILED` to `PENDING`). `helpTruth.test.ts` and `youtube.test.ts` pin both.
 
 ### 14.3 "A Short is private", or "no longer public"
 
