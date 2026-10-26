@@ -2765,7 +2765,7 @@ routes in `src/routes/adsAudiences.ts`, mounted in `adsRouter` after the ADS_DIS
 2. **Lookalikes.** Same route, `kind: lookalike`: the seed must be the tenant's, not a lookalike, have a Meta id, not be flagged or
    still building, and have `size_lower ≥ 100` (409 `SEED_TOO_SMALL`). Params `subtype: LOOKALIKE`, `origin_audience_id`,
    `lookalike_spec {ratio 0.01–0.20, country}`.
-3. **Size and status.** `syncStructure` → `syncAudiences` (**`sync.ts:568`**), only when the tenant has a live audience:
+3. **Size and status.** `syncStructure` → `syncAudiences` (**`sync.ts:582`**), only when the tenant has a live audience:
    `adoptCreatedMetaIds` (**`audiences.ts:604`**: `meta_id` from the done `audience_create` op's `result.id`), then
    `GET act_<id>/customaudiences` (≤ 2 pages, 1 point each) → `applyAudienceReads` (**`:612`**) → `classifyAudienceRead`
    (**`:420`**): `operation_status 471` → `flagged` (unusable; Meta reviews only in its own UI), `delivery_status 300` or an upper
@@ -3573,28 +3573,28 @@ found again → `failed`. A non-create write in `verify` reads the object back a
 
 1. `/api/jobs/drain` (**`routes/api.ts:439`**), after the guard so the guard is never starved of points: `drainAdsOps(deadline)`
    (**`ops.ts:943`**: reap, then every account with something due, skipping one Meta has blocked), then `syncAllAds(deadline)`
-   (**`ads/sync.ts:779`**, **`api.ts:441`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:539`**: one paged
-   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:166`**; `upsertObjects` **`mirror.ts:232`**
+   (**`ads/sync.ts:793`**, **`api.ts:441`**): per enabled tenant, the **structure** hourly (`syncStructure`, **`sync.ts:543`**: one paged
+   `GET act_<id>/campaigns` with nested ad sets, ads and creatives; `parseStructure` **`:167`**; `upsertObjects` **`mirror.ts:255`**
    keeps `origin` and `app_meta`, so a Boost's rows stay `boost` and new ones carrying a boost id in their name are linked to it), and
-   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:683`**; `upsertInsights` **`mirror.ts:371`**).
+   **today's results** every 4 h or on request (`syncInsights(…, 'today')`, **`sync.ts:697`**; `upsertInsights` **`mirror.ts:411`**).
    Each sync is skipped when the pacer cannot spend, and stops at a throttle.
 2. Right after the rows are stored, never inside a transaction, an ad that was already in the stored copy and has just moved into
    `DISAPPROVED` or `WITH_ISSUES` raises `ad_rejected` or `ad_issues` (`raiseAdStatusAlerts`, `src/services/ads/adStatusAlerts.ts`; the state
    before comes back from the upsert statement itself, `upsertObjects` in `src/services/ads/mirror.ts`). A row met for the first time never
    alerts. The count is `status_alerts` in the `ads.sync_structure` log line.
-3. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:329`**); a read cut
+3. A row missing from a COMPLETE structure read twice in a row is marked `DELETED` (`markMissing`, **`mirror.ts:369`**); a read cut
    short (a page not read, a nested edge with a next page) marks nothing.
-4. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:801`**), the trailing **28 days** at `level=ad` (an async report
+4. The daily cron (**`api.ts:1149`**): `syncDailyAds` (**`sync.ts:815`**), the trailing **28 days** at `level=ad` (an async report
    when the range is large, resumed next time) plus level=campaign/account reach, and the **country** and **placement** breakdowns into
-   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:437`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
+   `ads_insights_breakdown` (`upsertBreakdowns`, **`mirror.ts:477`**). The last 3 days are `provisional`. `runAdsHealth` deletes results
    older than **37 months** (**`ads/health.ts:178`**).
-5. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:742`**, else 429 `RATE_LIMITED` +
+5. `POST /api/ads/sync` (Refresh results): the structure, then today's results, once per 15 minutes (`requestTodaySync`, **`sync.ts:756`**, else 429 `RATE_LIMITED` +
    `retryAt`), run under `waitUntil`; the drain is the backstop.
 
 **E. Disconnecting deletes the stored copy**
 
 Removing the token, choosing another ad account (`saveAdsSettings`, **`ads/settings.ts:188`**) or disconnecting Meta with a Connect token
-(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:875`**): `ads_objects`, `ads_insights_daily` and
+(`forgetConnectedAdsAccess`) calls `forgetStoredCopy` (**`mirror.ts:915`**): `ads_objects`, `ads_insights_daily` and
 `ads_insights_breakdown` for the tenant are deleted, and pending ops are cancelled. The op history stays for its 180 days.
 
 ### 11.3 — Create: spec → ops → Meta (A4: message ads and the policy check)
@@ -3649,7 +3649,7 @@ from Review:
 Advantage+ audience) → step D with origin `boost`. The v1 objectives (engagement, reach, link clicks) keep v1's synchronous path and
 `ad_boosts`.
 
-**F. Results the app can count and Meta cannot.** `trackedClicksFor` (**`ads/mirror.ts:792`**), on every ad row of `/objects`:
+**F. Results the app can count and Meta cannot.** `trackedClicksFor` (**`ads/mirror.ts:832`**), on every ad row of `/objects`:
 `direct` = people's clicks (`link_clicks.is_prefetch = FALSE`) on the ad's own `/r/` link (`tracked_links.ads_object_id`), `viaChat` =
 people's clicks on links the bot sent in conversations the ad started (`conversations.entry_source->>'ad_id'`).
 
