@@ -158,7 +158,7 @@ Confirmed false positives, run through the real matcher:
 
 **`scripts/diagnose.mjs` will not warn you about `عيد`.** Its threshold is
 `k.length < MIN_SAFE_KEYWORD_LEN` with `MIN_SAFE_KEYWORD_LEN = 3`
-(`scripts/diagnose.mjs:86`, `:560`), so a 3-character keyword passes the check silently while
+(`scripts/diagnose.mjs:86`, `:576`), so a 3-character keyword passes the check silently while
 still matching inside a longer word. `عيد` and `eid` are in that blind spot today.
 
 The fix per campaign is `match_mode = 'word'`, which anchors the keyword to token boundaries
@@ -482,7 +482,7 @@ node scripts/diagnose.mjs        # read the `queue` section
 | Finding | Threshold | Meaning |
 |---|---|---|
 | `queue is drained` | — | Healthy: nothing pending, stuck or dead-lettered. |
-| `N job(s) pending, oldest due Xm ago` | warn >15m, **crit >90m** | Nothing is draining. See §5.1. (`scripts/diagnose.mjs:83-84`, `:595-601`) |
+| `N job(s) pending, oldest due Xm ago` | warn >15m, **crit >90m** | Nothing is draining. See §5.1. (`scripts/diagnose.mjs:83-84`, `:611-617`) |
 | `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:75`, `src/jobs/runner.ts:31`) |
 | `job … exhausted its retries` | `attempts >= max_attempts` | Permanent. Read the printed error; retrying will not help. |
 
@@ -752,7 +752,7 @@ via `src/index.ts:256-258`) makes four promises:
 
 `messages.raw_payload` holds that verbatim event. The sweep that clears it is **opt-in**: with
 `RAW_PAYLOAD_RETENTION_DAYS` unset, `pruneRawPayloads` is a no-op and payloads are kept forever
-(`src/services/retention.ts:25-27`, `:102-115`). Clearing `messages.text` while `raw_payload`
+(`src/services/retention.ts:25-27`, `:108-121`). Clearing `messages.text` while `raw_payload`
 holds the same text deletes nothing — this is the mechanism by which the promise is otherwise
 untrue (`src/services/retention.ts:14-18`).
 
@@ -1105,7 +1105,7 @@ Two ways to retry:
   it. Edits are refused once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`:2395-2398`).
 
 **No TikTok init is retried on failure** — a 5xx may already have created the post or the draft
-(`src/services/tiktok.ts:362-372`, `:501-504`, `:582-585`). The one exception is an inbox video
+(`src/services/tiktok.ts:362-372`, `:501-504`, `:652-655`). The one exception is an inbox video
 whose caption TikTok refuses as invalid, which is sent once more without it. So a `FAILED` TikTok
 row stays `FAILED` until someone acts; nothing re-queues it.
 
