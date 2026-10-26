@@ -9,7 +9,7 @@ import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import {
     boostIdFromName, breakdownsUnavailable, childrenOf, effectiveLabelKey, getObject, listObjects, markMissing, missDecision, resetBreakdownAvailability,
     resultsFor, reviewReasons, spendFromMirror, toObjectRow, toObjectView, TRACKED_DIRECT_SQL, TRACKED_VIA_CHAT_SQL, trackedClicksFor, upsertBreakdowns, upsertInsights, upsertObjects, type BreakdownRow, type InsightRow,
-    type ObjectRow, type ParsedObject, type QueuedOp, type ResultTotals,
+    type AdSighting, type ObjectRow, type ParsedObject, type QueuedOp, type ResultTotals,
 } from './mirror.js';
 
 const C = '11111111-1111-4111-8111-111111111111';
@@ -86,6 +86,102 @@ describe('upsertObjects', () => {
         assert.match(relink!.sql, /\(o\.app_meta - 'sync_missing'\) \|\|/);
         assert.match(relink!.sql, /o\.creator_id = \$3/);
         assert.deepEqual(relink!.params, [['id-111111', 'id-333'], [null, '444'], C]);
+    });
+});
+
+describe('upsertObjects: what each ad was before this write (the ad status alerts)', () => {
+    /** The state a stored row had before the statement, by Meta id: what Postgres answers from RETURNING. A Meta id not listed is a new row. */
+    let before: Map<string, string | null>;
+    beforeEach(() => {
+        before = new Map();
+        db.routes.push(
+            [/^SELECT id, campaign_id, adset_id, ad_id, creative_id FROM ad_boosts/, () => ({ rows: [] })],
+            [/^INSERT INTO ads_objects/, (p) => ({
+                rows: [{ id: `id-${p[3]}`, previous_status: before.get(p[3]) ?? null, existed: before.has(p[3]) }],
+            })],
+        );
+    });
+
+    const ad = (metaId: string, over: Partial<ParsedObject> = {}): ParsedObject => parsed({ level: 'ad', metaId, parentMetaId: '222222', name: `Ad ${metaId}`, effectiveStatus: 'DISAPPROVED', ...over });
+
+    it('asks the same statement that writes the row, scoped to the tenant: no read beforehand, so nothing can change in between', async () => {
+        await upsertObjects(C, ACCOUNT, 'USD', [ad('333')], new Date());
+        const [insert] = db.ran(/^INSERT INTO ads_objects/);
+        const returning = insert!.sql.slice(insert!.sql.indexOf('RETURNING'));
+        assert.equal(
+            returning,
+            'RETURNING id, (SELECT p.effective_status FROM ads_objects p WHERE p.id = ads_objects.id AND p.creator_id = ads_objects.creator_id) AS previous_status, ' +
+            'EXISTS (SELECT 1 FROM ads_objects p WHERE p.id = ads_objects.id AND p.creator_id = ads_objects.creator_id) AS existed'
+        );
+        assert.equal(db.ran(/^SELECT .*FROM ads_objects/).length, 0, 'the previous state is not read in a statement of its own');
+    });
+
+    it('reports each ad with the state it had before, and whether it existed: a changed ad, an ad with no state yet, an unchanged ad, a new ad', async () => {
+        before.set('333', 'ACTIVE');
+        before.set('334', null);
+        before.set('335', 'DISAPPROVED');
+        const review = { issues_info: [{ error_summary: 'Ad disapproved' }], ad_review_feedback: null, learning_stage_info: null };
+        const sightings: AdSighting[] = [];
+        await upsertObjects(C, ACCOUNT, 'USD', [
+            ad('333', { review }),
+            ad('334', { effectiveStatus: 'WITH_ISSUES' }),
+            ad('335'),
+            ad('336'),
+        ], new Date(), sightings);
+        assert.deepEqual(sightings, [
+            { metaId: '333', name: 'Ad 333', existed: true, previousStatus: 'ACTIVE', effectiveStatus: 'DISAPPROVED', review },
+            { metaId: '334', name: 'Ad 334', existed: true, previousStatus: null, effectiveStatus: 'WITH_ISSUES', review: null },
+            { metaId: '335', name: 'Ad 335', existed: true, previousStatus: 'DISAPPROVED', effectiveStatus: 'DISAPPROVED', review: null },
+            { metaId: '336', name: 'Ad 336', existed: false, previousStatus: null, effectiveStatus: 'DISAPPROVED', review: null },
+        ]);
+    });
+
+    it('reports ads only: a campaign, an ad set or a creative whose state changed is not an ad\'s verdict', async () => {
+        before.set('111111', 'ACTIVE');
+        before.set('222222', 'ACTIVE');
+        before.set('444', 'ACTIVE');
+        const sightings: AdSighting[] = [];
+        await upsertObjects(C, ACCOUNT, 'USD', [
+            parsed({ effectiveStatus: 'WITH_ISSUES' }),
+            parsed({ level: 'adset', metaId: '222222', parentMetaId: '111111', effectiveStatus: 'WITH_ISSUES' }),
+            parsed({ level: 'creative', metaId: '444', effectiveStatus: 'DISAPPROVED' }),
+            ad('333'),
+        ], new Date(), sightings);
+        assert.deepEqual(sightings.map((s) => s.metaId), ['333']);
+    });
+
+    it('takes an answer without the two columns (a stub, an older statement) for a first sighting, which never alerts', async () => {
+        db.routes.unshift([/^INSERT INTO ads_objects/, (p) => ({ rows: [{ id: `id-${p[3]}` }] })]);
+        const sightings: AdSighting[] = [];
+        await upsertObjects(C, ACCOUNT, 'USD', [ad('333')], new Date(), sightings);
+        assert.deepEqual([sightings[0]!.existed, sightings[0]!.previousStatus], [false, null]);
+    });
+
+    it('puts a chunk\'s sightings in the list only after that chunk\'s COMMIT, so a caller reading the list holds no transaction open', async () => {
+        const sightings: AdSighting[] = [];
+        const push = sightings.push.bind(sightings);
+        const seen: { commits: number; rollbacks: number; length: number }[] = [];
+        sightings.push = (...items: AdSighting[]) => {
+            seen.push({ commits: db.ran(/^COMMIT$/).length, rollbacks: db.ran(/^ROLLBACK$/).length, length: items.length });
+            return push(...items);
+        };
+        const many = Array.from({ length: 60 }, (_, i) => ad(`5${String(i).padStart(2, '0')}`));
+        await upsertObjects(C, ACCOUNT, 'USD', many, new Date(), sightings);
+        assert.deepEqual(seen, [{ commits: 1, rollbacks: 0, length: 50 }, { commits: 2, rollbacks: 0, length: 10 }], 'chunks of 50, each listed once its own COMMIT has run');
+        assert.equal(sightings.length, 60);
+    });
+
+    it('lists nothing for a chunk that rolled back, and keeps what the chunks before it committed', async () => {
+        const many = Array.from({ length: 60 }, (_, i) => ad(`5${String(i).padStart(2, '0')}`));
+        db.routes.unshift([/^INSERT INTO ads_objects/, (p) => {
+            if (p[3] === '555') throw new Error('deadlock detected');
+            return { rows: [{ id: `id-${p[3]}`, previous_status: 'ACTIVE', existed: true }] };
+        }]);
+        const sightings: AdSighting[] = [];
+        await assert.rejects(() => upsertObjects(C, ACCOUNT, 'USD', many, new Date(), sightings), /deadlock/);
+        assert.deepEqual(sightings.map((s) => s.metaId), many.slice(0, 50).map((m) => m.metaId), 'the first 50 committed; the second chunk, rolled back at the 56th ad, is not listed');
+        assert.equal(db.ran(/^COMMIT$/).length, 1);
+        assert.equal(db.ran(/^ROLLBACK$/).length, 1);
     });
 });
 

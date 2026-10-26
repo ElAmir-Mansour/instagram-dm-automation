@@ -1,10 +1,11 @@
 /**
  * Infographics — animated comparisons in the creator's personal brand (v31).
  *
- * The server's contract is src/services/studio/infographics.ts. A topic goes to Claude on the
- * creator's Mac, which writes the page and its caption in one answer; the Mac renders it as an
- * MP4 (posted to Instagram, Facebook and YouTube by Schedule), a GIF (downloaded here for
- * LinkedIn, X and anywhere else) and a cover. This page is three parts:
+ * The server's contract is src/services/studio/infographics.ts. A topic goes to the AI, which writes the
+ * page and its caption in one answer (Claude on the Mac for the owner and studio.mac_brain_tenants, the AI
+ * providers layer for every other workspace), so the strings say "the AI", never "Claude" (copyTruth.test.ts).
+ * The Mac renders it as an MP4 (posted to Instagram, Facebook and YouTube by Schedule), a GIF (downloaded
+ * here for LinkedIn, X and anywhere else) and a cover. This page is three parts:
  *
  *   New        the topic, the language and the theme (dark, light or both)
  *   List       each infographic: its GIF, what to fix, Download, Schedule, Edit, the other theme
@@ -263,7 +264,7 @@ const InfographicsPage = {
         return html`<span class="badge badge-${tone}">${t(`infographics.status.${item.status}`)}</span>`;
     },
 
-    /** What an open job is doing, in words: waiting for the Mac, Claude writing, or the render's own line. */
+    /** What an open job is doing, in words: waiting for the Mac, the AI writing, or the render's own line. */
     progressText(item) {
         if (item.job && item.job.status === 'pending') {
             return this.worker && !this.worker.online ? t('infographics.progress.waitingOffline') : t('infographics.progress.waiting');

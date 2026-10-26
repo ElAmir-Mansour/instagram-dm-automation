@@ -1663,11 +1663,19 @@ switch back on only after a real day-2 reply was accepted (guide, A3).
   or `off` for Telegram, email and the admin copy. A channel is used only when the recipient is set
   (**Alert recipients**, then **Send a test**; `POST /api/ads/settings/alerts` with `test: true`)
   and the deployment has the bot token or the email key (Settings → Messages & alerts).
-  `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason. Two kinds
-  never arrive, whatever the card says: **An ad was rejected** (`ad_rejected`) and **An ad has
-  issues** (`ad_issues`) have a checkbox, but nothing in the app raises them yet
-  (`docs/ADS_GUIDE.md`, *Alerts*). The rule template **Ad rejected → tell me** (Ads → Rules)
-  catches a rejected ad instead.
+  `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason.
+  **An ad was rejected** (`ad_rejected`) and **An ad has issues** (`ad_issues`) come from the
+  hourly structure sync (`syncStructure`, `src/services/ads/sync.ts`; the rule is `adStatusAlertFor`,
+  `src/services/ads/adStatusAlerts.ts`) and only for a CHANGE on an ad the stored copy already had:
+  into `DISAPPROVED` or into `WITH_ISSUES`. So none arrives for an ad the sync met for the first
+  time (the first import of an account is silent, and so is an ad made in Ads Manager and rejected
+  before its first sync), for an ad that was already in that state, or within the hour before the
+  next sync. `ads.ad_status_alert` in the log (`kind`, `ad_id`, `from`, `to`) says one was raised,
+  the `status_alerts` count in `ads.sync_structure` says how many a run raised, and the
+  `ads_alerts` row has the ad's Meta id as `object_key`. `ads.alert_failed` (error) means the alert
+  could not be handed to the alert channel; it is not tried again, because the stored ad already
+  holds the new state (`docs/ADS_GUIDE.md`, *Alerts*). The rule template **Ad rejected → tell me**
+  (Ads → Rules) is the other way to hear about an ad that is rejected right now.
 - **A change or a create is stuck.** `GET /api/ads/ops/<id>` shows one op. An op `running` for over
   5 minutes is reaped. A create that timed out is `verify`: the app searches Meta for its
   `AR·<op id>` tag, resends at most once, and never creates twice (FLOWS.md §11.2 C). Ads Manager
@@ -1745,15 +1753,17 @@ is `youtube.publish_failed`.
 |---|---|---|
 | *…daily quota is used up (about six uploads a day)…* (`quotaExceeded`) | `videos.insert` costs 1,600 of the 10,000 units Google gives the project a day, and a thumbnail 50: about six Shorts a day. The quota resets at midnight Pacific time | wait for the reset, then **Publish now** (below) |
 | *…upload limit for this channel is reached for today…* (`uploadLimitExceeded`) | YouTube's own limit for the channel | retry tomorrow |
+| *…YouTube is rate-limiting this app…* (`rateLimitExceeded`) | too many requests in a short time (Google sends a 403 or a 429) | wait a minute, then **Publish now** |
 | *…reconnect YouTube in Settings.* | 14.1 | 14.1 |
 | *…takes MP4, MOV or WebM here — this file is …* | the video is another type | upload an MP4 |
 | *The YouTube upload did not finish — retry it, and it resumes where it stopped.* | the upload timed out part way | **Publish now**. It first asks Google how far the saved session (`external_publish_id = 'YTU:…'`) got and carries on from there, so it never posts the same Short twice |
-| *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, or the channel may not set custom thumbnails). The Short is up | nothing |
+| *Thumbnail not set: …*, on a `PUBLISHED` row | the cover was refused (over 2 MB, not JPEG or PNG, the channel may not set custom thumbnails, or the quota or a rate limit was hit just then: the note says so). The Short is up | nothing; set the thumbnail in YouTube Studio |
 
-**The quota sentence over-promises.** It says the upload "is retried after midnight Pacific
-time". Nothing retries it: the sweep takes only `PENDING` rows, and a failed Short stays `FAILED`
-(`RETRYABLE_REASONS` in `src/services/youtube.ts` is not used by it). After the reset press
-**Publish now** on the card, or edit and save the post (that flips `FAILED` to `PENDING`).
+**Nothing retries a failed Short**, and the quota and rate-limit sentences say so (they used to promise a retry). The sweep takes
+only `PENDING` rows, and a failed Short stays `FAILED` (`RETRYABLE_REASONS` in `src/services/youtube.ts` is read by no one;
+`youtubeHttp` has no retry wrapper). After the reset, or a minute after a rate limit, press **Publish now** on the card, or edit
+and save the post (that flips `FAILED` to `PENDING`). `helpTruth.test.ts` and `youtube.test.ts` pin both. A limit hit while the cover
+is set does not fail the post (the Short is up), so its note sends the owner to YouTube Studio, not to **Publish now**.
 
 ### 14.3 "A Short is private", or "no longer public"
 
