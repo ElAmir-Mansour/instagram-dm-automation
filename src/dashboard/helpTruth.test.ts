@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
 import { decideAgent, HISTORY_WINDOW } from '../services/ai.js';
+import { adStatusAlertFor } from '../services/ads/adStatusAlerts.js';
+import type { AdSighting } from '../services/ads/mirror.js';
 import { buildAdsAlertText } from '../services/ads/notify.js';
 import { REQUIRED_ALERT_KINDS, SHOWN_ALERT_KINDS } from '../services/ads/settings.js';
 import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
@@ -236,7 +238,7 @@ describe('Help Center — the alerts the Settings card lists', () => {
     const adTarget = { creatorId: 'c1', adAccountId: 'act_1', accountName: 'The account', offsetHours: 3 };
 
     for (const lang of LANGS) {
-        it(`describes the alert for a rejected ad and the one for an ad with issues as the rule that raises them: the hourly update, once per ad per day, Meta's reason, only a change (${lang})`, () => {
+        it(`describes the alert for a rejected ad and the one for an ad with issues as the rule that raises them: the hourly update sees a change, once per ad per day, Meta's reason, never an ad first seen in that state (${lang})`, () => {
             const items = listOf('ads', 'alerts', lang, 'ul') as string[];
             const en = lang === 'en';
             const item = (kind: (typeof AD_KINDS)[number]): string => items[SHOWN_ALERT_KINDS.indexOf(kind)]!;
@@ -250,7 +252,7 @@ describe('Help Center — the alerts the Settings card lists', () => {
                 has(kind, ...(en
                     ? ['the hourly update', 'once per ad per day', 'Meta’s reason when Meta gives one', 'first saw it']
                     : ['كل ساعة', 'مرة واحدة لكل إعلان في اليوم', 'سبب ميتا إن ذكرت سبباً', 'أول مرة']));
-                assert.ok(en ? /[Oo]nly (a change|for a change)/.test(item(kind)) : item(kind).includes('ولا يُعلَن إلا التغيّر'), `${lang} ${kind}: says only a change is announced`);
+                assert.ok(en ? /[Oo]nly (that change|for that change)/.test(item(kind)) : item(kind).includes('ولا يُعلَن إلا هذا التغيّر'), `${lang} ${kind}: says only the change to that status is announced`);
                 assert.ok(item(kind).includes('[[ads#rule-templates]]'), `${lang} ${kind}: keeps the rule template as the other way`);
             }
             // The status each one is raised for, in the Ads screen's own word for it.
@@ -258,8 +260,8 @@ describe('Help Center — the alerts the Settings card lists', () => {
             has('ad_issues', bold(label(lang, 'ads.status.with_issues')));
             // The channels, the two cases it is not sent for, and where those are shown, by the names the screens use.
             has('ad_rejected', ...(en
-                ? ['Telegram chat and/or email', 'the first time AutoReply read the account', 'made in Meta Ads Manager']
-                : ['محادثة تيليجرام و/أو بريدك الإلكتروني', 'حين قرأ التطبيق الحساب أول مرة', 'مدير إعلانات ميتا (Ads Manager)']));
+                ? ['Telegram chat and/or email', 'an ad change to', 'stays rejected or is approved again', 'the first time AutoReply read the account', 'made in Meta Ads Manager']
+                : ['محادثة تيليجرام و/أو بريدك الإلكتروني', 'تغيّرت عند ميتا إلى', 'يبقى مرفوضاً أو يُقبل من جديد', 'حين قرأ التطبيق الحساب أول مرة', 'مدير إعلانات ميتا (Ads Manager)']));
             has('ad_rejected', bold(label(lang, 'ads.attn.title')), bold(label(lang, 'ads.rules.tpl.rejected_notify')));
             // The template it names is the one the rule templates section lists, under the same name.
             const templates = listOf('ads', 'rule-templates', lang, 'dl') as string[][];
@@ -281,6 +283,29 @@ describe('Help Center — the alerts the Settings card lists', () => {
         assert.match(notify, /ON CONFLICT \(creator_id, kind, object_key, day\) DO NOTHING RETURNING id/, 'a second alert of one kind about one object the same day is dropped: with the ad as the object, once per ad per day');
         assert.match(readFileSync('src/services/ads/overview.ts', 'utf8'), /\{ DISAPPROVED: 'rejected', WITH_ISSUES: 'issues', PENDING_BILLING_INFO: 'billing' \}/, 'the Needs attention list shows a rejected ad and one with issues, which is where the ones already rejected are');
         assert.match(readFileSync('src/services/ads/rulesEval.ts', 'utf8'), /id: 'rejected_notify',/, 'and the rule template the Help keeps as the other way exists');
+    });
+
+    it('is what the sync decides behind those sentences: an alert for a change into Rejected or With issues on an ad the stored copy already had, with Meta\'s reason, and for nothing else', () => {
+        const seen = (over: Partial<AdSighting>): AdSighting => ({
+            metaId: '120001', name: 'An ad', existed: true, previousStatus: 'ACTIVE', effectiveStatus: 'DISAPPROVED',
+            review: { issues_info: [{ error_summary: 'The ad breaks a policy' }], ad_review_feedback: null, learning_stage_info: null }, ...over,
+        });
+        // The two changes the Help names, under the two kinds the card lists them as, with Meta's reason when it gave one.
+        assert.deepEqual(adStatusAlertFor(seen({})), { kind: 'ad_rejected', adId: '120001', adName: 'An ad', reason: 'The ad breaks a policy' });
+        assert.equal(adStatusAlertFor(seen({ effectiveStatus: 'WITH_ISSUES' }))?.kind, 'ad_issues');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: 'DISAPPROVED', effectiveStatus: 'WITH_ISSUES' }))?.kind, 'ad_issues', 'a move from one to the other is a change into the second');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: null }))?.kind, 'ad_rejected', 'an ad the app made has no state before its first sync, and that is a change too');
+        assert.equal(adStatusAlertFor(seen({ review: null }))!.reason, null, 'no reason when Meta gave none');
+        // Nothing else: not an ad first met (the first read of an account, or one made in Ads Manager and rejected before the sync saw it), not one that stays or is approved again.
+        assert.equal(adStatusAlertFor(seen({ existed: false, previousStatus: null })), null, 'an ad the sync meets for the first time');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: 'DISAPPROVED' })), null, 'an ad that stays rejected');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: 'WITH_ISSUES', effectiveStatus: 'WITH_ISSUES' })), null, 'an ad that keeps its issues');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: 'DISAPPROVED', effectiveStatus: 'ACTIVE' })), null, 'an ad approved again');
+        assert.equal(adStatusAlertFor(seen({ previousStatus: 'ACTIVE', effectiveStatus: 'PAUSED' })), null, 'any other state');
+        // It is the hourly structure sync that asks, after the ads are stored.
+        const sync = readFileSync('src/services/ads/sync.ts', 'utf8');
+        assert.match(sync, /const HOUR_MS = 3_600_000;\s*export const STRUCTURE_EVERY_MS = HOUR_MS;/, 'the structure sync is hourly');
+        assert.match(sync, /statusAlerts = await raiseAdStatusAlerts\(creatorId, sightings, ctx\.deps\.now\(\)\);/, 'and it raises the alerts');
     });
 
     it('is what the code does for the three that cannot be switched off', () => {
