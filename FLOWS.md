@@ -500,7 +500,7 @@ up as a sender is the sign it does not.
 
 **`src/webhook/comments.ts:414-434`**. Each follow-up waits 500 ms to preserve ordering
 (**:357**) then goes out via `sendDirectMessage` (**:358**,
-**`src/services/instagram.ts:318`**) — a normal DM to `senderId`, not another private reply,
+**`src/services/instagram.ts:323`**) — a normal DM to `senderId`, not another private reply,
 because the thread is already open.
 
 A failure logs `dm.split_part_failed` (**:360**), calls `noteMetaFailure` (**:363**), appends to
@@ -511,7 +511,7 @@ part 2 reads worse to the recipient than stopping short. `status` stays SENT thr
 ### 1.18 — Auto-like
 
 **`src/webhook/comments.ts:438`** — `likeComment(commentId, token)`, at
-**`src/services/instagram.ts:570`** (`POST /{comment-id}/likes`, same edge on both platforms).
+**`src/services/instagram.ts:575`** (`POST /{comment-id}/likes`, same edge on both platforms).
 Purely best-effort algorithmic boost: a failure is a `warn` (**:382**) and nothing else.
 
 ### 1.18b — The DM can't be delivered: a public reply instead
@@ -535,9 +535,13 @@ public reply (1.19) is skipped, since it says to check the DMs.
   (**`src/webhook/comments.ts:448-449`**) so a post's comment thread does not fill with the
   same sentence.
 - `{username}` substituted (**:391**).
-- `sendPublicReply` (**:394**, **`src/services/instagram.ts:288`**) — Instagram posts to
+- `sendPublicReply` (**:394**, **`src/services/instagram.ts:293`**) — Instagram posts to
   `/{comment-id}/replies`, Facebook to `/{comment-id}/comments`
-  (**`src/services/instagram.ts:294`**).
+  (**`src/services/instagram.ts:299`**).
+- **Never repeated when it may have landed** (2026-10-27): `withRetry(..., { creates: true })`, the
+  rule of [3.4b](#34b--a-reel-instagram-is-still-processing-and-facebook-creates). A timeout, a reset or
+  a 5xx may come after Meta posted the reply, so only a refusal (429, codes 4/17/32/613) or a connection
+  that never went out is retried; otherwise the commenter could see the same reply twice.
 - **`src/webhook/comments.ts:461`** — `rememberSelfAuthored(posted?.id)`, closing the loop from
   [1.8](#18--the-self-authored-loop-guard).
 
@@ -1114,8 +1118,8 @@ messaging event, so the signal is whether the page id the event is addressed to
 threaded this through; the DM path never did, so every Facebook Messenger reply went to `/me`.
 
 **Send** — **`src/webhook/messaging.ts:652`**, `sendDirectMessage`
-(**`src/services/instagram.ts:318`**), `messaging_type: 'RESPONSE'`
-(**`src/services/instagram.ts:338`** — without it the send is evaluated outside the standard
+(**`src/services/instagram.ts:323`**), `messaging_type: 'RESPONSE'`
+(**`src/services/instagram.ts:343`** — without it the send is evaluated outside the standard
 messaging window and rejected once that window matters).
 
 **`ai_disclosed_at` is written only after a successful send**
@@ -1341,10 +1345,10 @@ publish, not just this one.
   `published_post_id`, then throws `InstagramProcessingHeldError` (**`src/routes/api.ts:817`**).
   `publishDuePosts` logs it as held (**`src/routes/api.ts:1003`**). The next sweep reads the saved
   container (**`src/routes/api.ts:763`**) and calls `resumeInstagramContainer`
-  (**`src/services/instagram.ts:739`**): publish if FINISHED, start over if ERROR/EXPIRED, hold again
+  (**`src/services/instagram.ts:744`**): publish if FINISHED, start over if ERROR/EXPIRED, hold again
   if still processing. After `IG_PROCESSING_MAX_ATTEMPTS` (15) it fails as before.
 - **Facebook creates are never repeated when they may have landed.** `publishFacebookPost` and the
-  carousel's `/feed` call `withRetry(..., { creates: true })` (**`src/services/instagram.ts:640`**,
+  carousel's `/feed` call `withRetry(..., { creates: true })` (**`src/services/instagram.ts:645`**,
   **`:452`**): only a refusal (429, codes 4/17/32/613) or a connection that never went out is
   retried. `/videos` gets 60 s, `/photos` 30 s.
 
@@ -1436,11 +1440,11 @@ Facebook-then-Instagram order, the same `FB:… | IG:…` bookkeeping as
 
 1. **:591** — a carousel row with no `media_urls` fails closed, rather than going out as its
    first slide and being recorded as the whole post.
-2. **:604** → `publishFacebookCarousel` (**`src/services/instagram.ts:656`**): each image
+2. **:604** → `publishFacebookCarousel` (**`src/services/instagram.ts:661`**): each image
    `POST /{page}/photos` with `published: false` (**:350**) — otherwise every slide appears on
    the Page as a post of its own — then one `POST /{page}/feed` carrying the caption and
    `attached_media: [{ media_fbid }, …]` (**:357**).
-3. **`src/routes/api.ts:767`** → `publishInstagramCarousel` (**`src/services/instagram.ts:905`**): one child
+3. **`src/routes/api.ts:767`** → `publishInstagramCarousel` (**`src/services/instagram.ts:910`**): one child
    container per image, `is_carousel_item: true` and no caption (**:555**); then the parent,
    `media_type: 'CAROUSEL'`, `children` comma-joined, with the caption (**:563**); then the
    same `waitForContainer` poll on the parent (**:370**) and `publishContainer` (**:410**), with
@@ -1493,7 +1497,7 @@ A YouTube post is its own `scheduled_posts` row (`platform = 'youtube'`, `post_t
 Meta row like TikTok's. The composer accepts one (`unsupportedPlatformCombination`, **`src/routes/api.ts:522`**: a video only),
 but three writers make nearly all of them: the Monteur when `youtube` is in `monteur.platforms`
 (**`src/services/monteur/clips.ts:486`**), and infographics and explainers, which follow `infographic.platforms`
-(**`src/services/studio/infographics.ts:491`**, **`src/services/explainers/schedule.ts:104`**). It rides the same sweep and
+(**`src/services/studio/infographics.ts:491`**, **`src/services/explainers/schedule.ts:105`**). It rides the same sweep and
 claim as every row (§3.3); `publishClaimedPost` hands it to `publishYouTubePost` (**`src/services/youtubePublish.ts:151`**).
 Synchronous, unlike TikTok: Google answers the upload with the video's id.
 
@@ -1723,7 +1727,7 @@ until it has one, the virtual profile its legacy settings describe (`version: nu
    (a stored profile is merged over the defaults, so a field a later release adds reads as its
    default), else `loadLegacyProfile` — the tenant's settings rows read directly and described by
    `profileFromLegacy`. A database without v33 reads as "no stored profile" (logged once).
-3. **`src/services/studio/settings.ts:391`**, **`src/services/growth/settings.ts:266`** — the settings
+3. **`src/services/studio/settings.ts:392`**, **`src/services/growth/settings.ts:266`** — the settings
    readers overlay the stored profile on their own row (`studioView` / `growthView`). A tenant with
    no stored profile, or one written by a *newer* release, gets its row unchanged.
 4. **`src/services/profile/context.ts:282`** — `profileContext(creatorId, purpose)` is `loadProfile`
@@ -4022,7 +4026,7 @@ A render of a `ready` explainer (a label, a picture or the sound changed) is the
 
 ### 13.13 — Schedule
 
-`POST /explainers/:id/schedule { when? }` (**`src/routes/studio.ts:629`**) → `scheduleExplainer` (**`src/services/explainers/schedule.ts:99`**). It is how an infographic is scheduled, through the same `insertVideoPost` (**`src/services/monteur/clips.ts:360`**) the Monteur's approve writes rows with, so the usual sweeps publish what it makes.
+`POST /explainers/:id/schedule { when? }` (**`src/routes/studio.ts:629`**) → `scheduleExplainer` (**`src/services/explainers/schedule.ts:100`**). It is how an infographic is scheduled, through the same `insertVideoPost` (**`src/services/monteur/clips.ts:360`**) the Monteur's approve writes rows with, so the usual sweeps publish what it makes.
 
 1. `when` is `next` (the default), `now` or a date and time; anything else is 400 `INVALID_SCHEDULE_TIME` (`parseWhen`, **`schedule.ts:72-78`**).
 2. One transaction, under the tenant's **publishing lock** (`lockTenantPublishing`, **`schedule.ts:107`**: the one the Monteur's approve and the infographics take, so two schedules cannot take one slot) and the locked explainer row (**`schedule.ts:108`**).

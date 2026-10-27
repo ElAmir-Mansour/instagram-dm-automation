@@ -282,6 +282,11 @@ export async function sendPrivateReply(
  * - Instagram: POST /{comment-id}/replies
  * - Facebook:  POST /{comment-id}/comments
  *
+ * Never repeated when it may have landed: a timeout, a reset or a 5xx can come after Meta posted the
+ * reply, and a retry then puts the same reply under the comment twice. Only a refusal that proves Meta
+ * did nothing (a rate limit) or a connection that never went out is retried: the rule the reel posted
+ * twice on 2026-09-26 made for posts (`RetryOptions.creates`, src/services/http.ts).
+ *
  * @see https://developers.facebook.com/docs/instagram-api/reference/ig-comment/replies
  * @see https://developers.facebook.com/docs/graph-api/reference/comment#Creating
  */
@@ -301,7 +306,7 @@ export async function sendPublicReply(
             }, {
                 headers: { Authorization: `Bearer ${accessToken}` }
             }),
-            { label: `sendPublicReply[${edge}]` }
+            { label: `sendPublicReply[${edge}]`, creates: true }
         );
         return response.data;
     } catch (error: any) {
