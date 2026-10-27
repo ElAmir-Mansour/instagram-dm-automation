@@ -1057,7 +1057,7 @@ Nothing about any one creator is written into the code or the prompts (STUDIO.md
   changes.
 - **Defaults:** a new account starts neutral: English, generic wording, the dark-grid theme, the
   default palette, no product, no library folder (`defaultStudioSettings()`,
-  `src/services/studio/settingsTypes.ts:317`). The creator's own account was seeded once, after
+  `src/services/studio/settingsTypes.ts:320`). The creator's own account was seeded once, after
   deploy, by `scripts/seed-studio-settings.mjs`. Those are the *Example* values below.
 
 ### Brand kit

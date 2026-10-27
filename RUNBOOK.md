@@ -55,7 +55,7 @@ node scripts/diagnose.mjs --env /path/to/repo/.env
 
 Reads the deployed app and the production database and prints a verdict, then `CRITICAL`,
 then `WARNINGS`, then `HEALTHY`, then a `DETAIL` block of context
-(`scripts/diagnose.mjs:916-973`).
+(`scripts/diagnose.mjs:918-975`).
 
 Exit codes, so this can gate a deploy or drive an alert (`scripts/diagnose.mjs:22-26`):
 
@@ -98,7 +98,7 @@ The `jobs` table is what breaks the tie. Every verified **comment** delivery is 
 > out comment traffic; it does not by itself rule out DM traffic that was all receipts.
 
 > **An empty `jobs` table is the one thing "nothing matched" cannot explain.**
-> (`scripts/diagnose.mjs:596-602`)
+> (`scripts/diagnose.mjs:598-604`)
 
 ```
 ! queue    the jobs table is EMPTY — no webhook delivery has ever been enqueued
@@ -158,7 +158,7 @@ Confirmed false positives, run through the real matcher:
 
 **`scripts/diagnose.mjs` will not warn you about `عيد`.** Its threshold is
 `k.length < MIN_SAFE_KEYWORD_LEN` with `MIN_SAFE_KEYWORD_LEN = 3`
-(`scripts/diagnose.mjs:86`, `:576`), so a 3-character keyword passes the check silently while
+(`scripts/diagnose.mjs:88`, `:578`), so a 3-character keyword passes the check silently while
 still matching inside a longer word. `عيد` and `eid` are in that blind spot today.
 
 The fix per campaign is `match_mode = 'word'`, which anchors the keyword to token boundaries
@@ -171,7 +171,7 @@ using explicit Unicode lookarounds — JavaScript's `\b` is useless for Arabic
 
 There is **one callback URL per object type, app-wide**, and the `instagram` object once
 pointed at an unrelated project while Facebook worked fine. `diagnose.mjs` checks both
-(`scripts/diagnose.mjs:235-245`). Healthy:
+(`scripts/diagnose.mjs:237-247`). Healthy:
 
 ```
 ✔ meta     all 2 webhook subscriptions point at this deployment
@@ -275,13 +275,13 @@ as a warning:
 Data access is **separate from token expiry**. The token is a PAGE token that never expires,
 but Meta lapses *data access* after 90 days without re-authorisation, and when it does, reads
 start failing while `/debug_token` still answers `is_valid: true`
-(`scripts/diagnose.mjs:435-442`).
+(`scripts/diagnose.mjs:437-444`).
 
 Two things now watch for it, and both start only inside 14 days of the date. The daily check
 asks Meta about every connected tenant's Page token and raises **Reconnect due** for a
 data-access date less than 14 days away (`recheckAllMetaTokens`,
 `src/services/metaTokenRecheck.ts`; §3.1). `diagnose.mjs` turns its `DETAIL` line into a warning
-inside the same 14 days (`scripts/diagnose.mjs:440`). That is later than you want to find out, so
+inside the same 14 days (`scripts/diagnose.mjs:442`). That is later than you want to find out, so
 **diarise the date** your own `node scripts/diagnose.mjs` prints (it was 2026-12-19 on 2026-09-21;
 a reconnect moves it). Fixing it means re-authorising the app (Settings → Instagram & Facebook →
 **Reconnect**) or re-exchanging the token (§3.3), not pasting the same one back.
@@ -332,7 +332,7 @@ Two operational consequences:
 
 - **A value without the `enc:v1:` prefix is returned unchanged** (`src/config/crypto.ts:58-60`),
   so a legacy plaintext token keeps working. `diagnose.mjs` warns when it finds one and the fix
-  is to re-save the token from Settings (`scripts/diagnose.mjs:397-401`).
+  is to re-save the token from Settings (`scripts/diagnose.mjs:399-403`).
 - `TOKEN_ENCRYPTION_KEY` is **not** required at startup, but it **is** required to save a token
   or create a tenant, and those endpoints say so (`src/routes/admin.ts:763-771`, `:1061-1069`,
   `.env.example:32-39`). Generate with `openssl rand -hex 32`.
@@ -380,7 +380,7 @@ it). Keep a copy of the key where the database is not.
 
 A missing scope disables a path **silently**: `instagram_manage_messages` is DMs,
 `instagram_content_publish` is scheduling, `pages_manage_engagement` is public replies
-(`scripts/diagnose.mjs:447-449`).
+(`scripts/diagnose.mjs:449-451`).
 
 ---
 
@@ -457,11 +457,11 @@ on that vocabulary and a half-published post is not a finished post
   Facebook Page stories need a `/photo_stories` + `/video_stories` upload that is not
   implemented (`unsupportedPlatformCombination`, `src/routes/api.ts:510`, called at `:1937`).
   `publishFacebookPost` also throws on it rather than degrading, because a degraded publish
-  still returns a post id and is recorded as a success (`src/services/instagram.ts:603-608`).
+  still returns a post id and is recorded as a success (`src/services/instagram.ts:608-613`).
 - For cross-posting a video, prefer **`video`** over `reel`. This entry used to say
   `publishFacebookPost` "does not handle `reel` and falls through to a text-only feed post" —
   **that is no longer true**: `reel` and `video` are the same asset to Facebook and both now
-  publish through `/videos` (`src/services/instagram.ts:622-628`). `video` remains the value to
+  publish through `/videos` (`src/services/instagram.ts:627-633`). `video` remains the value to
   use because it is what the dashboard offers, and legacy `reel` rows are mapped onto it.
 
 Also always set `cover_url`, or Instagram takes frame 0 as the thumbnail and any video fading
@@ -482,8 +482,8 @@ node scripts/diagnose.mjs        # read the `queue` section
 | Finding | Threshold | Meaning |
 |---|---|---|
 | `queue is drained` | — | Healthy: nothing pending, stuck or dead-lettered. |
-| `N job(s) pending, oldest due Xm ago` | warn >15m, **crit >90m** | Nothing is draining. See §5.1. (`scripts/diagnose.mjs:83-84`, `:611-617`) |
-| `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:75`, `src/jobs/runner.ts:31`) |
+| `N job(s) pending, oldest due Xm ago` | warn >15m, **crit >90m** | Nothing is draining. See §5.1. (`scripts/diagnose.mjs:85-86`, `:613-619`) |
+| `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:77`, `src/jobs/runner.ts:31`) |
 | `job … exhausted its retries` | `attempts >= max_attempts` | Permanent. Read the printed error; retrying will not help. |
 
 ### 5.1 What drains the queue, and how to check it is still doing so
@@ -717,7 +717,7 @@ All migrations use `IF NOT EXISTS` and are idempotent, so re-running is safe.
 - **Never edit an applied migration.** The ledger stores a checksum; a changed file prints
   `⚠️ <name> changed since it was applied` and is **not re-run**, so the ledger no longer
   describes the database (`scripts/migrate.mjs:85-90`). `diagnose.mjs` reports the same drift
-  independently (`scripts/diagnose.mjs:795`). Add a new migration instead.
+  independently (`scripts/diagnose.mjs:797`). Add a new migration instead.
 - **`--baseline` marks everything applied and runs nothing** (`scripts/migrate.mjs:101-110`).
   Correct only for a database whose schema is already current and which predates the ledger.
   On a database that genuinely lacks the columns it is how you get code expecting a schema that
