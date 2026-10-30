@@ -2234,7 +2234,8 @@ const InboxPage = {
         if (!words) return '';
         const model = this.plainText(p.model);
         const sure = this.confidenceText(p.confidence);
-        const owner = this.PERCEPTION_OWNERS.includes(p.about_owner) ? t(`inbox.perception.owner.${p.about_owner}`) : '';
+        // Whose content it is belongs to a picture, a reel or a story; a voice note is the customer's own voice and has no owner to name.
+        const owner = !audio && this.PERCEPTION_OWNERS.includes(p.about_owner) ? t(`inbox.perception.owner.${p.about_owner}`) : '';
         return html`
             <div class="msg-transcript msg-seen" data-perception="ok">
                 <span class="msg-transcript-label"><i data-lucide="${audio ? 'music' : 'eye'}" aria-hidden="true"></i>${t(audio ? 'inbox.perception.heard' : 'inbox.perception.seen')}${model ? html` · <bdi class="ltr-text" dir="ltr">${model}</bdi>` : ''}${sure ? html` · ${t('inbox.perception.sure', { percent: sure })}` : ''}</span>
@@ -2459,14 +2460,14 @@ const InboxPage = {
         const steps = [];
         if (saw || recalled) {
             steps.push(html`
-                <span class="msg-trace-step">
+                <span class="msg-trace-step" data-step="saw">
                     <i data-lucide="${saw ? 'eye' : 'film'}" aria-hidden="true"></i>
                     ${saw ? html`${key('inbox.trace.saw')} ${t('inbox.trace.sawMedia')}` : ''}${saw && recalled ? ' · ' : ''}${recalled ? html`${key('inbox.trace.recalled')} ${t('inbox.trace.recalledVideo')}` : ''}
                 </span>
             `);
         }
-        if (action) steps.push(html`<span class="msg-trace-step"><i data-lucide="sparkles" aria-hidden="true"></i>${key('inbox.trace.decided')} <bdi dir="auto">${action}</bdi></span>`);
-        if (reason) steps.push(html`<span class="msg-trace-step msg-trace-why"><i data-lucide="lightbulb" aria-hidden="true"></i>${key('inbox.trace.why')} <bdi dir="auto">${reason}</bdi></span>`);
+        if (action) steps.push(html`<span class="msg-trace-step" data-step="decided"><i data-lucide="sparkles" aria-hidden="true"></i>${key('inbox.trace.decided')} <bdi dir="auto">${action}</bdi></span>`);
+        if (reason) steps.push(html`<span class="msg-trace-step" data-step="why"><i data-lucide="lightbulb" aria-hidden="true"></i>${key('inbox.trace.why')} <bdi dir="auto">${reason}</bdi></span>`);
         const joined = steps.map((step, i) => (i === 0 ? step : html`<i data-lucide="arrow-right" class="msg-trace-arrow" aria-hidden="true"></i>${step}`));
         return { decided: !!action, markup: html`<div class="msg-detail msg-trace" data-ai-trace role="group" aria-label="${t('inbox.trace.label')}">${joined}</div>` };
     },

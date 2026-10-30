@@ -1107,7 +1107,7 @@ const AiSettingsPage = {
                     <div class="form-group">
                         <label class="form-label" for="muse-daily-usd">${t('muse.cap')}</label>
                         <span class="field-desc" id="muse-cap-desc">${t('muse.capDesc')}</span>
-                        <input class="field" id="muse-daily-usd" type="number" inputmode="decimal" dir="ltr" lang="en" min="0" max="50" step="0.01"
+                        <input class="field muse-cap" id="muse-daily-usd" type="number" inputmode="decimal" dir="ltr" lang="en" min="0" max="50" step="0.01"
                                autocomplete="off" aria-describedby="muse-cap-desc muse-spent muse-cap-hint"${lock}>
                         <p class="form-hint" id="muse-spent"></p>
                         <p class="form-hint hidden" id="muse-cap-hint" role="status" aria-live="polite"></p>

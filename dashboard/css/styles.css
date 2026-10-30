@@ -5158,10 +5158,15 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .muse-card { grid-column: 1 / -1; }
 .muse-body { display: grid; gap: var(--space-4); max-inline-size: 760px; }
 .muse-body .toggle-block, .muse-body .form-group { margin: 0; }
+/* The grid's gap is the space between its parts: a divider adds a hairline, not a second gap. */
+.muse-body > .divider { margin-block: 0; }
+/* An amount of dollars is a short field, not a full-width one. */
+.muse-cap { max-inline-size: 12rem; }
 .muse-soon { margin-inline-start: var(--space-2); vertical-align: middle; }
 /* The key line: a badge, then what it means. Empty until the answer is in. */
 .muse-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-block-end: var(--space-4); font-size: var(--fs-100); color: var(--text-muted); }
 .muse-status:empty { display: none; }
+.muse-card #muse-error:not(:empty) { margin-block-end: var(--space-4); }
 /* The people it answers: the growth chips' look, the handle the inbox shows, and the name quietly beside it. */
 .muse-people-block { display: grid; gap: var(--space-3); }
 .muse-people-block > .form-label { margin: 0; }
@@ -5175,7 +5180,7 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
     display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
     inline-size: 100%; min-block-size: var(--tap-target);
     padding: var(--space-2) var(--space-3);
-    background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+    background: none; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
     font: inherit; font-size: var(--fs-200); text-align: start; color: var(--text-strong); cursor: pointer;
 }
 .muse-choice:hover { background: var(--surface-glass-hover); }
@@ -5419,12 +5424,12 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .msg-detail--meta { row-gap: var(--space-1); }
 .msg-detail-key { color: var(--text-muted); }
 
-/* The decision under a reply: saw -> decided -> why, on one line that wraps. The arrow is the stylesheet's mirrored one, so it points the reading way in Arabic. */
-.msg-trace { column-gap: var(--space-2); row-gap: var(--space-1); }
-.msg-trace-step { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); min-inline-size: 0; }
-.msg-trace-step [data-lucide] { align-self: center; inline-size: var(--icon-xs); block-size: var(--icon-xs); flex-shrink: 0; }
-.msg-trace-arrow { inline-size: var(--icon-xs); block-size: var(--icon-xs); flex-shrink: 0; }
-.msg-trace-why { overflow-wrap: anywhere; }
+/* The decision under a reply: saw -> decided -> why, as one sentence that wraps like text (not as boxes that wrap apart), kept to the reading width and aligned
+   to where the bubble is. The arrow is the stylesheet's mirrored one, so it points the reading way in Arabic. */
+.msg-trace { display: block; text-align: start; max-inline-size: min(100%, 38rem); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.msg-trace-step { display: inline; }
+.msg-trace [data-lucide] { display: inline-block; vertical-align: -0.15em; inline-size: var(--icon-xs); block-size: var(--icon-xs); margin-inline-end: var(--space-1); }
+.msg-trace .msg-trace-arrow { margin-inline: var(--space-1); }
 
 /* The funnel card: a closed toggle between the search block and the list, 44px tall, that opens a panel with its own scroll so a long card never
    pushes the list off a phone. It sits in the sidebar, so it is as wide as the list (one column on a phone, 340px beside the chat). */

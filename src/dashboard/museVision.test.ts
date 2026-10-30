@@ -20,6 +20,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { MUSE_DAILY_USD_MAX } from '../services/perception/switches.js';
 import { loadDashboard, settle, type Dashboard, type Json } from './_harness.js';
 
 type Role = 'owner' | 'operator' | 'viewer';
@@ -168,7 +169,7 @@ describe('Meta vision card: the shell', () => {
         const select = /<select class="select" id="muse-who"[^>]*>([\s\S]*?)<\/select>/.exec(shell);
         assert.ok(select);
         assert.deepEqual([...select![1]!.matchAll(/<option value="([^"]*)">([^<]*)/g)].map((m) => [m[1], m[2]]), [['list', t('muse.whoList')], ['everyone', t('muse.whoEveryone')]]);
-        assert.match(shell, /<input class="field" id="muse-daily-usd" type="number" inputmode="decimal" dir="ltr" lang="en" min="0" max="50" step="0.01"/);
+        assert.match(shell, /<input class="field muse-cap" id="muse-daily-usd" type="number" inputmode="decimal" dir="ltr" lang="en" min="0" max="50" step="0.01"/);
         assert.match(shell, /<button type="button" class="btn btn-primary" id="muse-save-btn" data-action="muse:save">/);
         assert.match(shell, /data-input="muse:changed" data-change="muse:changed"/);
         assert.match(shell, /<select class="select" id="muse-who" data-change="muse:whoChanged"/);
@@ -734,5 +735,68 @@ describe('Meta vision card: the words', () => {
         assert.match(t('muse.soonNote'), /only saves your choice/);
         assert.match(t('muse.intro'), /not stored by us/);
         assert.match(t('muse.capDesc'), /0 keeps it off/);
+    });
+});
+
+// ─── The Help section ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('Meta vision card: the Help section it links to', () => {
+    const h = loadDashboard({ lang: 'en', files: ['dashboard/js/help-content.js'] });
+    const content = h.run<Json>('HelpContent');
+    const article = (content.articles as Json[]).find((a) => a.slug === 'ai-usage')!;
+    const section = (article.sections as Json[]).find((x) => x.id === 'meta-vision')!;
+    const textOf = (lang: Lang): string => {
+        const out: string[] = [];
+        const walk = (value: unknown): void => {
+            if (typeof value === 'string') out.push(value);
+            else if (Array.isArray(value)) value.forEach(walk);
+            else if (value && typeof value === 'object') Object.values(value).forEach(walk);
+        };
+        walk(section.body[lang]);
+        return out.join('\n');
+    };
+    const strings = (lang: Lang): Record<string, string> => open({ lang, skipAdopt: true }).h.I18N.strings[lang];
+
+    it('is a section of the article the card links to, after the one on Meta\'s models, in both languages', () => {
+        assert.ok(section, 'ai-usage#meta-vision exists');
+        const ids = (article.sections as Json[]).map((x) => x.id);
+        assert.ok(ids.indexOf('meta-vision') === ids.indexOf('meta-muse') + 1, ids.join(', '));
+        assert.ok(section.title.ar && section.title.en, 'a title in each');
+        assert.match(section.title.en, /Meta vision/);
+        assert.match(section.title.ar, /رؤية ميتا/);
+    });
+
+    for (const lang of ['en', 'ar'] as const) {
+        it(`names the switches, the choices, the cap and the Save button as the card does, and says what it keeps, that it is Instagram only and Standard models only (${lang})`, () => {
+            const body = textOf(lang);
+            const labels = strings(lang);
+            for (const key of ['muse.title', 'muse.dmMedia', 'muse.voice', 'muse.memory', 'muse.whoList', 'muse.whoEveryone', 'muse.add', 'muse.cap', 'muse.save']) {
+                assert.ok(body.includes(`**${labels[key]}**`), `${lang}: **${labels[key]}**`);
+            }
+            assert.ok(body.includes(lang === 'en' ? `from 0 to ${MUSE_DAILY_USD_MAX}` : `من 0 إلى ${MUSE_DAILY_USD_MAX}`), `${lang}: the cap's bounds are the server's`);
+            const terms = (section.body[lang] as Json[]).find((b) => b && Array.isArray(b.dl))!.dl.map((row: string[]) => row[0]);
+            assert.equal(terms.length, 6, 'the switches, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
+        });
+    }
+
+    it('says in English that the file is not stored and a short description is, that Messenger and WhatsApp are not read, and that Standard models only are used', () => {
+        const body = textOf('en');
+        assert.match(body, /we do not store the file/);
+        assert.match(body, /a short description, or the words of a voice note/);
+        assert.match(body, /Messenger and WhatsApp are not read/);
+        assert.match(body, /Standard models/);
+        assert.match(body, /coming soon/);
+        assert.match(body, /only saves your choice/);
+    });
+
+    it('says the same in Arabic, and in the Help Center\'s own voice, without the words the product never says', () => {
+        const body = textOf('ar');
+        assert.match(body, /ما نحفظ الملف/);
+        assert.match(body, /ماسنجر وواتساب/);
+        assert.match(body, /النماذج القياسية/);
+        for (const banned of [/بوت/, /ذكي/, /\bbots?\b/i, /instant/i]) {
+            assert.doesNotMatch(body, banned);
+            assert.doesNotMatch(textOf('en'), banned);
+        }
     });
 });

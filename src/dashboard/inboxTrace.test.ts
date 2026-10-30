@@ -30,7 +30,7 @@ const tagsOf = (markup: unknown): string[] => [...String(markup).matchAll(/<\/?(
 const attrNames = (markup: unknown): string[] => [...String(markup).matchAll(/<[a-zA-Z][^>]*>/g)]
     .flatMap((m) => [...m[0].replace(/"[^"]*"/g, '""').matchAll(/\s([a-zA-Z-]+)=/g)].map((a) => a[1]!.toLowerCase()));
 const SAFE_TAGS = new Set(['div', 'span', 'p', 'i', 'bdi', 'a', 'img', 'button']);
-const SAFE_ATTRS = new Set(['class', 'data-perception', 'data-lucide', 'aria-hidden', 'dir', 'lang', 'data-ai-trace', 'data-ai-meta', 'role', 'aria-label', 'src', 'alt', 'loading',
+const SAFE_ATTRS = new Set(['class', 'data-perception', 'data-step', 'data-lucide', 'aria-hidden', 'dir', 'lang', 'data-ai-trace', 'data-ai-meta', 'role', 'aria-label', 'src', 'alt', 'loading',
     'decoding', 'referrerpolicy', 'href', 'target', 'rel', 'title', 'type', 'data-action', 'data-id']);
 
 interface Rig {
@@ -106,6 +106,7 @@ describe('Inbox: what Meta Muse saw, under a message with no words', () => {
         assert.equal((voice.match(/كام سعر الكورس/g) ?? []).length, 1, 'the transcript is there once: the old transcript block does not repeat it');
         assert.ok(!voice.includes(t('inbox.voiceTranscript')), 'and it is the perception\'s block, not the WhatsApp one');
         assert.ok(!/lang="en"/.test(voice), 'a transcript is the customer\'s own language');
+        assert.ok(!voice.includes('msg-seen-owner'), 'and a voice note has no owner to name, whatever the row says');
         // A voice note that Meta Muse did not read keeps the old behaviour: the transcript block, when its text is a transcript.
         const whatsapp = String(Inbox.messageBubble(reel({ message_type: 'audio', text: 'Hello there', raw_payload: null }, null)));
         assert.ok(whatsapp.includes(t('inbox.voiceTranscript')) && whatsapp.includes('Hello there'));
@@ -276,7 +277,7 @@ describe('Inbox: the decision under a reply', () => {
     it('cuts a long reason to a line, collapses its breaks, shows an action the flow does not know as escaped text, and ignores a reason that is not text', () => {
         const { Inbox, t } = load();
         // The why step is the trace's last: from its opening tag to the end of the trace's own div.
-        const whyOf = (markup: string): string => text(/msg-trace-why">([\s\S]*?)<\/span><\/div>/.exec(markup)![1]!);
+        const whyOf = (markup: string): string => text(/data-step="why">([\s\S]*?)<\/span><\/div>/.exec(markup)![1]!);
         const why = whyOf(trace(Inbox, { ...META, reason: `${'a '.repeat(300)}\n\n  end` }));
         assert.ok(why.startsWith(`${t('inbox.trace.why')}: a a`) && why.endsWith('…'), why.slice(-20));
         assert.ok(Array.from(why.slice(`${t('inbox.trace.why')}: `.length)).length <= 200, 'at most 200 characters of it');
@@ -376,7 +377,7 @@ describe('Inbox: where the data and the look come from', () => {
     it('mirrors the trace\'s arrow for Arabic, and styles the block it adds in the transcript\'s own way', () => {
         const css = readFileSync('dashboard/css/styles.css', 'utf8');
         assert.match(css, /html\[dir='rtl'\] \[data-lucide='arrow-right'\]/, 'the arrow points the reading way');
-        for (const rule of ['.msg-seen .msg-transcript-label', '.msg-trace {', '.msg-trace-step', '.msg-trace-arrow', '.msg-trace-why']) assert.ok(css.includes(rule), rule);
+        for (const rule of ['.msg-seen .msg-transcript-label', '.msg-trace {', '.msg-trace-step', '.msg-trace-arrow']) assert.ok(css.includes(rule), rule);
         assert.equal(/\.(msg-seen|msg-trace)[^{]*\{[^}]*\b(margin-left|margin-right|padding-left|padding-right|left|right|text-align:\s*(left|right))\b/.test(css), false, 'logical properties only');
     });
 });
