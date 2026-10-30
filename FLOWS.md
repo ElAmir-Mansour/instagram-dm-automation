@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Thirteen flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Fourteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 Walked elsewhere, not here: the Monteur's pipeline (`MONTEUR.md`), the daily growth sync (`GROWTH.md`), data-subject
@@ -36,7 +36,8 @@ bug it was written to fix.
 [10. WhatsApp message → stored thread → answered](#10-whatsapp-message--stored-thread--answered-w3b-to-w5) ·
 [11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard) ·
 [12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3) ·
-[13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule)
+[13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule) ·
+[14. Video memory: a published reel → watched once → the library](#14-video-memory-a-published-reel--watched-once--the-library)
 
 ---
 
@@ -4167,6 +4168,72 @@ The image allowance's own rows are swept too. `sweepAllowance` (**`src/services/
 
 `GET /api/cron/publish` (**`src/routes/api.ts:1022`**, [3.5](#35--daily-maintenance-only-on-the-daily-cron)) does two things for explainers, both fail-soft. `runRetentionSweep()` (**`api.ts:1059`**) ends with `sweepAllowance` ([13.15](#1315--retention)). `sweepWriting()` (**`api.ts:1162`**, **`src/services/explainers/writing.ts:314`**) looks at up to 25 explainers that are `writing`, or `failed` at `write`, oldest first, and runs `reconcileWriting` on each: the backstop for the lazy check, for a dashboard nobody opens. A script the Mac never claimed in ten minutes while it was off, or whose write failed with a sign-in error, is handed to Gemini here; the run starts under `waitUntil` and finishes after the response. It logs only when it started something (`cron.explainers_writing`), and a database behind v59 is not an error (**`api.ts:1165`**). **Nothing else of an explainer is scheduled:** the Mac's own polling moves its jobs, and the drain ([flow 5](#5-job-lifecycle)) knows nothing of them.
 
+## 14. Video memory: a published reel → watched once → the library
+
+The agent can remember what each of the **account owner's own** published reels shows and says, not only what was said in it: on-screen text, code, characters, key moments with their seconds, topics. Every reel is **watched once** by Meta's Muse Spark (the open-weights **Muse Spark Open** served by Baseten when the operator routes it there, Meta's hosted model otherwise) and the answer is kept in `reel_analyses` (migration v60). Later, recall ([flow 2](#2-dm--ai-reply)) reads that library to answer "do you have a video about X?" with the right reel and second; this flow is only the writing of it. It is **owner-only and dark by default**: nothing runs for a tenant until its `memory` switch is on ([14.1](#141--the-gate-the-switch-a-route-and-the-days-cap)). **No follower, message or comment is ever read by it**, and none of it reaches Baseten: what Baseten is sent is the fixed prompt and the video ([14.4](#144--what-is-asked-and-of-whom)).
+
+Code: `src/services/perception/reelIndex.ts` (`indexReel`: one reel; `runReelIndexJob`: the job's body; `parseReelAnalysis`: what an answer is trusted to be), `src/services/perception/reelLibrary.ts` (the table's readers and writers, the listing of the owner's reels, the queue, the daily call), the job kind `muse.reel_index` (`src/jobs/types.ts`, `src/jobs/handlers.ts`), the routes in `src/routes/museLibrary.ts`, and the table in migration v60 (`src/config/migration_v60_muse_perception.sql`). The Baseten provider and the rule that keeps it to this one job are `src/services/aiProviders/purposes.ts` (`PROVIDER_PURPOSE_ALLOWLIST`, `providerMayAnswer`), `src/services/aiProviders/route.ts` (`pickRoute`, `assertProviderMayAnswer`) and `src/services/aiProviders/settings.ts` (`planAiPatch`).
+
+```
+(no row) ──queue──→ pending ──job: watched──→ ok ──queue again (re-index): a fresh analysis replaces it──→ ok
+                       │  └──job: cannot be watched (final, or the last attempt)──→ failed ──queue (the daily run)──→ pending
+                       └──job: switch off / no route / cap spent──→ stays pending (queued again tomorrow)
+ a failure NEVER replaces an ok row: the library keeps yesterday's answer, which is what recall reads
+```
+
+### 14.1 — The gate: the switch, a route and the day's cap
+
+`gateIndexing` (**`src/services/perception/reelIndex.ts`**) runs first in every job, cheapest check first, and any refusal leaves the reel **exactly as it was**, with no Graph read, no download and no model call: the tenant's `memory` switch (`muse.switches.<tenant>`, `readMuseSettings`: every tenant's default is off, and a settings read that fails reads as off), a route that can answer the purpose `reel_index` (`reelRouteReady`: only "no provider" is a no), and today's spend against the tenant's cap (`muse.daily_usd.<tenant>`, shared with perception: `reel_index` is one of the purposes `spentTodayUsd` counts). The sender allow-list does not apply: this is the owner's own content, not what a follower sent. **When the cap is what stopped it, the owner is told once a day** (`tellOwnerBudgetReached`, the same notice perception uses); a cap of 0 tells him nothing, and a spend that cannot be read counts as spent without telling him. The refusal is `muse.reel_index_skipped` with its reason.
+
+### 14.2 — Queueing: the daily run and the owner's two buttons
+
+All three go through `queueReels` / `queueOneReel` (**`src/services/perception/reelLibrary.ts`**). They write rows and jobs and **call no model**.
+
+- **The daily run.** `GET /api/cron/publish` calls `queueNewReelsForMemoryTenants` once, in a try/catch of its own, after the sweeps that matter more (a failure is `cron.muse_reels_failed` and can break nothing): for each active tenant with a Meta connection it reads the `memory` switch (one settings read; off is the default and costs nothing more), checks a route can answer, and calls `queueReels`. Only the owner's reels that have **no `ok` row** are queued: the ones published since the last run, and any that failed or were never reached.
+- **`POST /api/settings/ai/muse/library/index`** ("index all my reels") is the same call for the session's tenant, owner only, 202. It first answers **409 `MUSE_MEMORY_OFF`** with the switch off and **409 `AI_NOT_CONFIGURED`** with no route, so it never queues jobs that would all do nothing.
+- **`POST /api/settings/ai/muse/library/:id/index`** ("re-index") queues one reel again, whatever its state.
+
+`queueReels` lists the owner's media with `listPublishedReels`: `GET /{ig-user}/media` through `GraphSession` (the page credential in a header, never the query), `fields=id,media_type,media_product_type,permalink,timestamp` (no `media_url`, no caption), 50 a page, at most six pages (the 300 newest posts; `truncated` says it was cut), and **videos only** (`media_type = VIDEO`: reels and feed videos). Then, in this order: a `pending` row for every reel without an `ok` one (`upsertPending`, one statement; a `failed` row reads as queued again; an `ok` row is untouched), one `muse.reel_index` job per reel, and `linkYouTubeSiblings` ([14.5](#145--what-is-kept)). The job's payload is `{ creatorId, igMediaId }` and nothing else.
+
+> **Why the dedupe key ends in the day.** The key is `reel:<ig_media_id>:<yyyy-mm-dd>` (UTC, `reelJobKey`), and the queue's dedupe index is **permanent**, whatever state the first job reached. So a reel is queued once a day however often the buttons and the cron are used, and a reel that failed today is queued again **tomorrow** by the daily run. A re-index the owner asks for has its own key, `…:redo:<hhmm>` (`reelRedoKey`): it must not be swallowed by the job that made today's analysis, and the minute keeps a double click to one job.
+
+A Graph failure while listing is a **result**, not a throw (`graphProblem`): `graph_auth` (a dead credential; the route answers **409 `TOKEN_INVALID`**, never 401, which the dashboard reads as "signed out"), `graph_unavailable` (502), `not_found`, `graph_failed` (502). Nothing is written for it.
+
+### 14.3 — The job: one reel, in order
+
+`muse.reel_index` is a job kind (no migration: `jobs.kind` has no CHECK). **One reel per job**, because a reel takes about a minute. It is a **background kind** (`BACKGROUND_JOB_KINDS`, `src/jobs/types.ts`): `drainJobs` runs a claimed batch with these **last** (`orderForRunning`, `src/jobs/runner.ts`), so a DM or a comment claimed in the same batch is answered first and, when the drain's budget ends the batch, it is the reel that is handed back unrun. A worker drain (45 s budget) therefore runs about one reel per call.
+
+`runReelIndexJob` → `indexReel` (**`src/services/perception/reelIndex.ts`**):
+
+1. The gate ([14.1](#141--the-gate-the-switch-a-route-and-the-days-cap)), then the tenant's Page credential and Instagram id (`getTenant`).
+2. **The reel, read fresh:** `GET /{ig_media_id}?fields=id,media_type,media_product_type,permalink,timestamp,media_url` (`readNode`). `media_url` is a short-lived link on Meta's CDN: it is read again for every reel and **never stored or logged** (not in the row, a statement, a parameter, a log line or a request to a provider). Not a `VIDEO` is `failed / not_a_video`; no link is `failed / no_media_url`.
+3. **The video, capped:** `fetchMedia` (`src/services/perception/media.ts`: HTTPS to Meta's CDN hosts only, three redirects at most, the cap enforced while the body streams, 60 s in all here) at **35 MB**. A reel over the cap is **`failed / too_large` and no model is called**; nothing is ever uploaded anywhere (the Files API is not used), so there is no file for the privacy page's "deleted or given an expiry" to cover. It is final and stored at once: it will not get smaller.
+4. **The watching** ([14.4](#144--what-is-asked-and-of-whom)): `generate({ purpose: 'reel_index' })`, with **one** fallback.
+5. **The answer is cleaned** (`parseReelAnalysis`): every text becomes one bounded line with no control, invisible or direction-changing character (a reel's own words are data, never instructions), the narration keeps only its line breaks, topics and notes are de-duplicated and counted, the moments are whole seconds in order with a second kept once, `hook_score` is clamped to 1 to 10. An answer with no summary, or with none of narration, moments, notes and topics, is `bad_output`.
+6. **Kept** (`storeAnalysis`): the row is `ok` with the analysis, **the model that answered** (the row's `model` column, a model id: `meta-models/muse-spark-open-1026` or `muse-spark-1.3`), how long the call took and what it cost (the answer's own cost, plus any billed answer that was unusable), and `permalink` and `posted_at` from the node.
+
+**Failures.** The reason is stored in `result.error` with a short `result.detail` (`baseten:server:503 | meta:server:503`: which provider failed how, never a message or a link): `too_large`, `fetch_failed`, `expired_url`, `timeout`, `no_media_url`, `not_a_video`, `not_found`, `graph_auth`, `graph_unavailable`, `graph_failed`, `provider_error`, `bad_output`. A failure **that may pass** (Meta or the model unavailable, a download that broke, an answer that was no use) is **thrown** by the handler while the runner has an attempt left (`reel_index_<reason>`, the job's three attempts with the runner's backoff) and is **stored only on the last attempt**, so a reel that will be tried again does not flap to `failed`. A final failure is stored at once and the job ends done. `storeFailure` writes `WHERE status <> 'ok'`: **a failure never replaces a good analysis**.
+
+**Time.** The pieces have deadlines (the download 60 s, each model call 90 s) and the whole job has a **200 s budget**: it decides whether the fallback may still start (it needs 30 s) and clips the fallback's own deadline to what is left (less 5 s), so a job ends inside the runner's 300 s claim whichever way it goes. **A video that runs out of time on BOTH providers is final** (`failed / timeout`, stored at once, tried again by tomorrow's daily run): it is a long video, not a blip, and the runner does not spend three more rounds of two long calls on it. A claim the runner reaped is retried like any other.
+
+### 14.4 — What is asked, and of whom
+
+`generate` is called with the purpose `reel_index` for the **tenant** (so the cost is on its `ai_usage` rows and counts against its cap), the fixed system text and prompt (`REEL_INDEX_SYSTEM`, `REEL_INDEX_PROMPT`), **one video part**, `effort: 'low'`, `maxTokens: 8000` and the strict schema `REEL_ANALYSIS_SCHEMA`. **That is the whole request.** A test pins the request body to exactly this and checks that no message, comment, follower, handle, id, caption or credential is in it, and that no statement of the indexer touches a table of anyone's messages.
+
+Who answers is the operator's route for `reel_index` (Settings → AI providers): **`baseten`** (`meta-models/muse-spark-open-1026`, Meta's open weights, about 40 s a reel) or **`meta`** (`muse-spark-1.3`, about 30 s); with none saved, Meta's hosted model when it has a key (it is earlier in the default order), Baseten only when it is the only provider with one. **After a failure of Baseten the same reel is tried once on Meta's hosted model** (`avoid: ['baseten']` on `generate`, `skip` on `pickRoute`: a call can only say who must NOT answer, never name the provider, so a tenant's call still follows the operator's routing). The video is downloaded once and sent twice. Only Baseten's own failures earn it (a refused key, no credit, a throttle, a timeout, a cut-off or unusable answer). The platform's budget being spent and a missing route are skips when nothing has been tried yet; if Baseten failed and the second try cannot be made (no key for Meta's hosted model, or the budget was spent meanwhile) the reel **failed on Baseten**, which is stored (`detail`: `baseten:server:503 | meta:no_provider`) and retried like any failure, not skipped. **Meta's hosted model failing has no second try** (the runner retries the job).
+
+**Baseten answers only `reel_index`, in three places** (`PROVIDER_PURPOSE_ALLOWLIST`, the other direction of the allow-list): `planAiPatch` refuses to **save** a route to it for any other purpose, `pickRoute` refuses a **saved** one by name and the **default** order never reaches it for another purpose (even when it is the only provider with a key), and `generate` asserts it again on the route it is about to call. The privacy page promises that no message, comment or follower data goes to Baseten; an allow-list on `reel_index` alone could not keep that, because it says which providers may answer a purpose and not which purposes a provider may answer.
+
+### 14.5 — What is kept, and what reads it
+
+`reel_analyses` (**`src/config/migration_v60_muse_perception.sql`**): one row per reel per tenant (`UNIQUE (creator_id, ig_media_id)`, so indexing a reel twice is one row), `status` `pending | ok | failed`, `result` (the analysis, or `{ error, detail? }`), `model`, `ms`, `usd`, `permalink` (the only link recall may send), `youtube_url`, `posted_at`. **Every statement names `creator_id`**, and the rows go with the creator (`ON DELETE CASCADE`); no column can hold a video, a picture or a link to one. A reel posted to YouTube in the same composer submission has its watch address in `youtube_url` (`youtubeLinksFor`: the `youtube` row with `status = 'PUBLISHED'` and `YT:<id>` that shares a `group_id` with the Meta row holding `IG:<media id>`), set when the reel is watched and again whenever it is queued, with no model call, so recall can link it at a second (`&t=`).
+
+Readers, for what comes next: `listLibrary` (the owner's list), `getLibraryRow` (one row, only the tenant's), `listOkForRecall` (the reels that were watched and understood, newest first: the library recall reads whole) and `findByMediaId` (a reel the agent was sent has `reel_video_id` or `ig_post_media_id` equal to `ig_media_id`).
+
+### 14.6 — The owner's routes
+
+All under `/api/settings/ai/muse/library`, mounted below `resolveTenant`, **owner only on every route, reads included** (`requireTenantRole('owner')`). `GET /` is the list (`[ { id, ig_media_id, permalink, youtube_url, posted_at, status, summary, hook_score, error, model, usd, updated_at } ]`, newest reel first) and works with the switch off, so what was indexed stays viewable; `GET /:id` is the row's full `result`; a row of another tenant, an unknown id and a malformed one are the same 404 `REEL_NOT_FOUND`. The two POSTs are in [14.2](#142--queueing-the-daily-run-and-the-owners-two-buttons). No audit row is written; every press is the log line `muse.library_index_requested` and, for what it spends, `ai_usage`.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -4333,5 +4400,15 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 13 | **a drawing that ends `done` with a scene that failed** — **`explainers/pictures/draw.ts:83`**, **`:502`** | `explainer.pictures_ready` | `review` is reached with a scene that has no picture; Approve pictures answers 409 `EXPLAINER_PICTURES_MISSING` with its position |
 | 13 | three scenes fail in a row (the Mac's loop gives up) — **`explainers/apply.ts:328-333`** | `explainer.draw_failed` (`warn`) | the explainer stays `drawing` with the last reason and no job; nothing retries by itself |
 | 13 | the daily look at the writing, on a database behind v59 — **`routes/api.ts:1165`** | *(none)* | no |
+| 14 | **the `memory` switch is off** (every tenant's default) — `gateIndexing`, `queueNewReelsForMemoryTenants` | `muse.reel_index_skipped` (`switch_off`) for a queued job; the daily run says nothing | no: a reel stays as it was; the library routes answer 409 `MUSE_MEMORY_OFF` |
+| 14 | no route can answer `reel_index` (no key saved for the provider it is routed to, or no provider at all) — `gateIndexing`, `reelRouteReady` | `muse.reel_index_skipped` (`no_key`), `muse.reel_queue_skipped` (`warn`) | no: reels stay `pending`; the library routes answer 409 `AI_NOT_CONFIGURED` |
+| 14 | **the day's cap is spent** — `gateIndexing` | `muse.reel_budget_reached` (`warn`), `muse.reel_index_skipped` (`budget`), and the owner's notice once a day | no: reels stay `pending` and the next daily run queues them again; a cap of 0 tells him nothing |
+| 14 | **a reel over 35 MB** — `indexReel`, `fetchMedia` | `muse.reel_index_failed` (`too_large`) | yes: `failed`, `result.error = 'too_large'`; no model was called and nothing was uploaded; it is queued again tomorrow and fails the same way |
+| 14 | a failure that may pass, with attempts left — `runReelIndexJob` | `muse.reel_index_failed` (`retryable: true`, `stored: false`), `job.retrying` | **no**: the row stays as it was; the runner retries with its backoff |
+| 14 | a failed refresh of a reel that is already `ok` — `storeFailure` | `muse.reel_index_failed` (`stored: false` once it is final) | no: the good analysis is kept |
+| 14 | **a reel's job already exists for today** — `reelJobKey` | `job.deduped` *(debug)* | no: queued once a day; a failed reel is tried again tomorrow |
+| 14 | Baseten failed and Meta's hosted model took the reel — `analyse` | `muse.reel_index_fallback` (`warn`), then `muse.reel_indexed` (`fell_back: true`) | yes: `ok` with `model` = the hosted model |
+| 14 | the daily call breaks — `GET /api/cron/publish` | `cron.muse_reels_failed` | no; nothing else in the cron is affected |
+| 14 | a `memory`-on tenant whose Instagram does not answer when the reels are listed — `queueReels` | `muse.reel_list_failed` (`warn`) | no; tried again at the next daily run |
 
 `RUNBOOK.md` works these backwards from the symptom.

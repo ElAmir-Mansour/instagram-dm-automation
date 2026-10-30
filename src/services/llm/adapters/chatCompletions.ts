@@ -86,6 +86,20 @@
  *   - `GET /models` is the key check and the list: the usual `{data: [{id}]}`, mixed with Muse Image,
  *     Muse Voice Transcribe, SAM and the `-contributor` ids, none of which can answer here (`metaModels`).
  *
+ * Baseten (inference.baseten.co/v1) serves Meta's open-weights Muse Spark (`meta-models/muse-spark-open-1026`) in the same format, and is treated as Meta's model
+ * is, in the places the model decides: tried live on 2026-10-29 (strict `json_schema`, base64 `image_url` and `video_url`, a 37 s reel analysed in 42 s), and read
+ * from docs.baseten.co on 2026-10-30.
+ *
+ *   - Structured output, media and reasoning: as for Meta: a strict `json_schema` with an object root, a user turn's pictures and video as base64 `data:` URLs
+ *     (`MEDIA_PROVIDERS`), and `reasoning_effort` from the call's effort (`metaReasoningEffort`: the model always reasons, takes `low` to `xhigh`, and a `max` goes
+ *     as `xhigh`; Baseten's reasoning page lists exactly those four for it). The reasoning text comes back as `reasoning_content`, which nothing here reads, and is
+ *     billed as output inside `completion_tokens`, so `limits.ts` floors the limit as it does for Meta.
+ *   - Usage: `prompt_tokens` whole, and no cached-input discount (`usageOf` knows Meta's `cached_tokens` alone): a call can only be over-counted, the safe side.
+ *   - Auth: `Authorization: Bearer <key>`, which Baseten recommends (its older `Api-Key` scheme is not used). The model list is `GET /models`, the same call that
+ *     checks a key, narrowed to Meta's own open models (`basetenModels`): Baseten hosts many others, and this provider answers one job with Meta's model alone.
+ *   - What may be sent here is not decided by this adapter, which cannot tell a reel from a message: a provider that may answer only some purposes is refused
+ *     for every other one before a request exists (`PROVIDER_PURPOSE_ALLOWLIST`, route.ts, generate.ts).
+ *
  * Custom's JSON mode (`jsonMode`, the operator's setting): `schema` as above, or `object` for an
  * endpoint that only does JSON mode: `{type: 'json_object'}` plus the schema described in the
  * system prompt (JSON mode errors unless the word "JSON" is in the conversation, and promises
@@ -138,15 +152,19 @@ export function groqReasoningEffort(model: string, effort: AdapterArgs['effort']
  */
 export const META_MIN_OUTPUT = 4_000;
 
-/** The providers on this wire format that are sent pictures and video. A provider is added here only once its privacy terms name it for them. */
-export const MEDIA_PROVIDERS: ReadonlySet<string> = new Set(['meta']);
+/**
+ * The providers on this wire format that are sent pictures and video. A provider is added here only once its privacy terms name it for them: Meta's, and Baseten's,
+ * which runs Meta's open model on the owner's own published reels alone (the privacy page says so, and a provider that may answer only some purposes is refused for the rest).
+ */
+export const MEDIA_PROVIDERS: ReadonlySet<string> = new Set(['meta', 'baseten']);
 
 /** The two models Meta documents `reasoning_effort: "max"` for (dev.meta.ai/docs/reasoning): Muse Spark 1.3 and Muse Wonder. */
 const META_MAX_EFFORT_MODEL = /^muse-(?:spark-1\.3|wonder-1\.0)$/i;
 
 /**
- * The `reasoning_effort` a Muse model is sent. Meta takes our five names as they are (and refuses `none`, which is not one of them); `max` is
- * documented only for `muse-spark-1.3` and `muse-wonder-1.0`, so on any other model it is sent as `xhigh` and not left to a 400.
+ * The `reasoning_effort` a Muse model is sent, at Meta or at Baseten. Meta takes our five names as they are (and refuses `none`, which is not one of them); `max` is
+ * documented only for `muse-spark-1.3` and `muse-wonder-1.0`, so on any other model it is sent as `xhigh` and not left to a 400. That includes Baseten's
+ * `meta-models/muse-spark-open-1026`, whose documented levels are `low`, `medium`, `high` and `xhigh`.
  */
 export function metaReasoningEffort(model: string, effort: AdapterArgs['effort']): AdapterArgs['effort'] {
     return effort === 'max' && !META_MAX_EFFORT_MODEL.test(model.trim()) ? 'xhigh' : effort;
@@ -209,7 +227,7 @@ export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record
         system = `${a.system.trim()}\n\n${describedSchema(a)}`.trim();
         responseFormat = { type: 'json_object' };
     } else {
-        responseFormat = { type: 'json_schema', json_schema: { name: SCHEMA_NAME, strict: true, schema: strictSchemaFor(a, { objectRoot: a.provider === 'meta' }) } };
+        responseFormat = { type: 'json_schema', json_schema: { name: SCHEMA_NAME, strict: true, schema: strictSchemaFor(a, { objectRoot: a.provider === 'meta' || a.provider === 'baseten' }) } };
     }
 
     // Before anything is built: a provider that is not sent media refuses a turn that has some, so none of it is ever put in a body.
@@ -217,8 +235,8 @@ export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record
 
     const reasoning = openrouter ? openRouterReasoning(a.model, a.effort) : undefined;
     const groqEffort = a.provider === 'groq' ? groqReasoningEffort(a.model, a.effort) : undefined;
-    // Every Muse model reasons, so it is always told how hard: left out, it would pick a level of its own.
-    const metaEffort = a.provider === 'meta' ? metaReasoningEffort(a.model, a.effort) : undefined;
+    // Every Muse model reasons, so it is always told how hard: left out, it would pick a level of its own (Baseten's default for it is the highest, `xhigh`).
+    const metaEffort = a.provider === 'meta' || a.provider === 'baseten' ? metaReasoningEffort(a.model, a.effort) : undefined;
     return {
         url: `${base}/chat/completions`,
         // The key is here and nowhere else: not in the URL, not in the body. A keyless endpoint sends none.
@@ -383,6 +401,16 @@ function metaModels(body: unknown): string[] {
     return modelIdsFrom(body).filter((id) => META_CHAT_MODEL.test(id));
 }
 
+/**
+ * Baseten's list is every open model it serves, and this provider is for Meta's alone (`meta-models/muse-spark-open`, and the dated `…-1026` the key works with):
+ * the ids under `meta-models/` are offered and nothing else. Any other id can still be typed in; whether it may answer a purpose is `PROVIDER_PURPOSE_ALLOWLIST`'s.
+ */
+const BASETEN_META_MODEL = /^meta-models\//i;
+
+function basetenModels(body: unknown): string[] {
+    return modelIdsFrom(body).filter((id) => BASETEN_META_MODEL.test(id));
+}
+
 /** A list, or a check, of an OpenAI-compatible endpoint's models; `404` is "this server has no list", for the caller to read. */
 async function getModels(q: ProviderQuery) {
     // OpenRouter's list is public, and a Custom endpoint may need no key: neither is required here. Groq's list needs one, and is what proves it.
@@ -405,7 +433,7 @@ export const chatCompletionsFamily: FamilyAdapter = {
     listModels: async (q) => {
         try {
             const body = await getModels(q);
-            return q.provider === 'openrouter' ? openRouterModels(body) : q.provider === 'groq' ? groqModels(body) : q.provider === 'meta' ? metaModels(body) : modelIdsFrom(body);
+            return q.provider === 'openrouter' ? openRouterModels(body) : q.provider === 'groq' ? groqModels(body) : q.provider === 'meta' ? metaModels(body) : q.provider === 'baseten' ? basetenModels(body) : modelIdsFrom(body);
         } catch (err) {
             if (q.provider === 'custom' && isNoList(err)) {
                 throw prepareQuery(q, { needsKey: false }).fail('bad_request', `${providerName(q.provider)} has no model list: GET /models answered 404. Type the model id instead.`, 404);

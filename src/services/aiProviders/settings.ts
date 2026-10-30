@@ -18,8 +18,10 @@ import { inspect } from 'node:util';
 import { log } from '../../utils/log.js';
 import { APP_SETTING_KEYS, getSettings, last4, setSetting, type AppSettingKey } from '../appSettings.js';
 import { type PriceTable } from '../llm/cost.js';
-import { AI_PURPOSES, isAiPurpose, isContributorModel, PURPOSE_ALLOWLIST_REASON, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, type AiPurpose } from './purposes.js';
-import { checkBaseUrl, isProviderId, PROVIDER_IDS, providerById, type ProviderId } from '../llm/registry.js';
+import {
+    AI_PURPOSES, isAiPurpose, isContributorModel, providerMayAnswer, providerPurposeReason, PURPOSE_ALLOWLIST_REASON, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, type AiPurpose,
+} from './purposes.js';
+import { checkBaseUrl, isProviderId, PROVIDER_IDS, providerById, providerName, type ProviderId } from '../llm/registry.js';
 import { EFFORTS, isJsonMode, type Effort, type JsonMode } from '../llm/types.js';
 
 // ─── Which rows ──────────────────────────────────────────────────────────────────────────────
@@ -32,6 +34,7 @@ export const PROVIDER_KEY_SETTING: Readonly<Record<ProviderId, AppSettingKey>> =
     openrouter: APP_SETTING_KEYS.aiProviderKeyOpenrouter,
     groq: APP_SETTING_KEYS.aiProviderKeyGroq,
     meta: APP_SETTING_KEYS.aiProviderKeyMeta,
+    baseten: APP_SETTING_KEYS.aiProviderKeyBaseten,
     custom: APP_SETTING_KEYS.aiProviderKeyCustom,
 };
 
@@ -43,6 +46,7 @@ export const PROVIDER_KEY_ENV: Readonly<Record<ProviderId, string | null>> = {
     openrouter: 'OPENROUTER_API_KEY',
     groq: 'GROQ_API_KEY',
     meta: 'META_MODEL_API_KEY',
+    baseten: 'BASETEN_API_KEY',
     custom: null,
 };
 
@@ -422,6 +426,12 @@ export function planAiPatch(body: unknown, current: AiConfig): PlanResult {
             }
             const route = routeEntry(purpose, value);
             if (!route.ok) { problems.push(route.problem); continue; }
+            // A provider that may answer only some purposes (Baseten: the reel indexer alone) is refused for every other, FIRST, so the refusal is the privacy reason
+            // and not a list of providers: nothing a person sent, commented or followed with may reach it, whatever purpose the card was saving.
+            if (!providerMayAnswer(route.route.provider, purpose)) {
+                problems.push(`routing.${purpose}.provider ${providerPurposeReason(providerName(route.route.provider), route.route.provider)}`);
+                continue;
+            }
             // Refused when SAVED, not when read: a stored route on a provider that may not answer this purpose is still loaded, so `pickRoute` can name it
             // in the refusal and the card can show it, instead of the route vanishing and another provider answering without anyone having chosen it.
             const allowed = PURPOSE_PROVIDER_ALLOWLIST[purpose];

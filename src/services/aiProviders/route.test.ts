@@ -8,7 +8,7 @@ import { loadAiSettings, type AiConfig } from './settings.js';
 import { isAiError } from '../llm/errors.js';
 import { AI_PURPOSES, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT } from './purposes.js';
 import { PROVIDER_IDS } from '../llm/registry.js';
-import { MacBrainTenantRefused, pickRoute, resolveRoute } from './route.js';
+import { assertProviderMayAnswer, MacBrainTenantRefused, pickRoute, resolveRoute } from './route.js';
 import { installAiDb, type AiDb } from './testDb.js';
 import { FAKE_KEYS } from './testKeys.js';
 
@@ -16,7 +16,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const LISTED = '22222222-2222-4222-8222-222222222222';
 const OTHER = '33333333-3333-4333-8333-333333333333';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 
@@ -70,7 +70,7 @@ describe('the default pick: the first provider that has a key', () => {
         assert.deepEqual(route, { purpose: 'onboarding_draft', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high', source: 'default' });
     });
 
-    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Groq, Meta, Custom', async () => {
+    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Groq, Meta, Custom (Baseten is in it, and answers the reel indexer alone: see below)', async () => {
         const expected: string[] = [];
         for (const id of ['custom', 'meta', 'groq', 'openrouter', 'gemini', 'openai', 'anthropic'] as const) {
             if (id === 'custom') {
@@ -81,7 +81,7 @@ describe('the default pick: the first provider that has a key', () => {
             expected.push(id);
             assert.equal((await pick('tenant_studio')).provider, id, `after adding ${id}`);
         }
-        assert.deepEqual(expected, [...PROVIDER_IDS].reverse());
+        assert.deepEqual(expected, [...PROVIDER_IDS].filter((id) => id !== 'baseten').reverse());
     });
 
     it('gives each purpose its own default effort', async () => {
@@ -445,7 +445,8 @@ describe('Meta (Muse): the provider and the four purposes only it answers', () =
             saveRouting({ [purpose]: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low' } });
             const err = await failure(resolveRoute(purpose, null));
             assert.equal(err.kind, 'no_provider', purpose);
-            assert.match(err.message, new RegExp(`The route for ${purpose} uses Anthropic, which is not on the list of providers that may answer this purpose \\(Meta\\)`), purpose);
+            const list = purpose === 'reel_index' ? 'Meta, Baseten' : 'Meta';
+            assert.match(err.message, new RegExp(`The route for ${purpose} uses Anthropic, which is not on the list of providers that may answer this purpose \\(${list}\\)`), purpose);
         }
     });
 
@@ -472,6 +473,112 @@ describe('Meta (Muse): the provider and the four purposes only it answers', () =
         // With nothing saved the default skips Meta too.
         saveRouting({});
         assert.equal((await pick('dm_whatsapp')).provider, 'groq');
+    });
+});
+
+describe('Baseten (Meta\'s open model): answers the reel indexer and no other purpose, however it is chosen', () => {
+    const OTHERS = AI_PURPOSES.filter((purpose) => purpose !== 'reel_index');
+    const MODEL = 'meta-models/muse-spark-open-1026';
+    const refusal = (purpose: string, via = purpose) => new RegExp(`The route for ${via.replace(/[()]/g, '\\$&')} uses Baseten\\. Baseten may answer only reel_index: it watches the owner's own published reels, and no message, comment or follower data goes to it\\. Choose another provider\\.`);
+
+    it('is what the reel indexer lands on when it is the only provider with a key, at its model and effort low; and nothing else lands on it, whatever the purpose', async () => {
+        saveKey('baseten');
+        assert.deepEqual(await pick('reel_index'), { purpose: 'reel_index', provider: 'baseten', model: MODEL, effort: 'low', source: 'default' });
+        assert.equal(OTHERS.length, 12);
+        for (const purpose of OTHERS) {
+            const err = await failure(resolveRoute(purpose, null));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.equal(err.retryable, false, purpose);
+            assert.match(err.message, /No AI provider is ready/, `${purpose}: the default order never reaches Baseten, so there is no provider at all`);
+        }
+    });
+
+    it('is never what a purpose with no route is moved to, even with a key, while another provider can answer: Anthropic or Groq or Gemini keeps `dm` and every default pick', async () => {
+        saveKey('baseten');
+        saveKey('groq');
+        for (const purpose of ['dm', 'dm_whatsapp', 'tenant_studio', 'onboarding_draft', 'ads_draft'] as const) assert.equal((await pick(purpose)).provider, 'groq', purpose);
+        // And a Muse purpose that only Meta answers still needs Meta: Baseten does not stand in for it (it is on reel_index's list alone).
+        for (const purpose of ['perception_dm', 'recall', 'comment_intent'] as const) assert.equal((await failure(resolveRoute(purpose, null))).kind, 'no_provider', purpose);
+    });
+
+    it('comes after Meta in the default order for the reel indexer: with both keys and no route, Meta\'s hosted model answers, and the open model only when the operator routes it', async () => {
+        saveKey('baseten');
+        saveKey('meta');
+        assert.deepEqual(await pick('reel_index'), { purpose: 'reel_index', provider: 'meta', model: 'muse-spark-1.3', effort: 'low', source: 'default' });
+        saveRouting({ reel_index: { provider: 'baseten', model: '', effort: 'low' } });
+        assert.deepEqual(await pick('reel_index'), { purpose: 'reel_index', provider: 'baseten', model: MODEL, effort: 'low', source: 'saved' });
+        saveRouting({ reel_index: { provider: 'baseten', model: 'meta-models/muse-spark-open', effort: 'medium' } });
+        assert.deepEqual(await pick('reel_index'), { purpose: 'reel_index', provider: 'baseten', model: 'meta-models/muse-spark-open', effort: 'medium', source: 'saved' });
+    });
+
+    it('refuses a saved route to Baseten for every other purpose, by name and before its key is looked at, whether or not the key is there, and never moves to another provider', async () => {
+        saveKey('anthropic');
+        saveKey('meta');
+        for (const withKey of [false, true]) {
+            if (withKey) saveKey('baseten');
+            for (const purpose of OTHERS) {
+                saveRouting({ [purpose]: { provider: 'baseten', model: MODEL, effort: 'low' } });
+                const err = await failure(resolveRoute(purpose, null));
+                assert.equal(err.kind, 'no_provider', `${purpose} key=${withKey}`);
+                assert.match(err.message, refusal(purpose), `${purpose} key=${withKey}`);
+            }
+        }
+    });
+
+    it('refuses WhatsApp\'s borrowed route the same way and names where it came from: dm_whatsapp takes the dm route, and a dm route on Baseten is refused for both', async () => {
+        saveKey('baseten');
+        saveKey('groq');
+        saveRouting({ dm: { provider: 'baseten', model: MODEL, effort: 'low' } });
+        assert.match((await failure(resolveRoute('dm', null))).message, refusal('dm'));
+        assert.match((await failure(resolveRoute('dm_whatsapp', null))).message, refusal('dm_whatsapp', 'dm_whatsapp (taken from the dm route)'));
+    });
+
+    it('refuses a Muse purpose routed to Baseten with the privacy reason and not a list of providers: the rule on the provider comes first', async () => {
+        saveKey('baseten');
+        for (const purpose of ['perception_dm', 'recall', 'comment_intent'] as const) {
+            saveRouting({ [purpose]: { provider: 'baseten', model: MODEL, effort: 'low' } });
+            assert.match((await failure(resolveRoute(purpose, null))).message, refusal(purpose), purpose);
+        }
+    });
+
+    it('is no_provider naming Baseten, never a move to another provider, when the reel indexer\'s route has no key or the provider is switched off', async () => {
+        saveKey('meta');
+        saveRouting({ reel_index: { provider: 'baseten', model: '', effort: 'low' } });
+        assert.match((await failure(resolveRoute('reel_index', null))).message, /reel_index uses Baseten, which has no API key saved/);
+        saveKey('baseten');
+        saveProviders({ baseten: { enabled: false } });
+        assert.match((await failure(resolveRoute('reel_index', null))).message, /reel_index uses Baseten, which is switched off/);
+    });
+
+    it('takes BASETEN_API_KEY as Baseten\'s key', async () => {
+        process.env.BASETEN_API_KEY = FAKE_KEYS.baseten;
+        assert.equal((await pick('reel_index')).provider, 'baseten');
+    });
+
+    it('is what `skip` passes over: the indexer\'s second try on Meta\'s hosted model after Baseten failed, and only a narrowing, never a way to name a provider', async () => {
+        saveKey('baseten');
+        saveKey('meta');
+        saveRouting({ reel_index: { provider: 'baseten', model: '', effort: 'low' } });
+        const { config, keys } = await loadAiSettings();
+        // Skipping the saved route's provider falls to the default order: the first allowed provider with a key, at its default model.
+        assert.deepEqual(pickRoute('reel_index', config, keys, { skip: ['baseten'] }), { purpose: 'reel_index', provider: 'meta', model: 'muse-spark-1.3', effort: 'low', source: 'default' });
+        // Skipping a provider the route does not name changes nothing.
+        assert.equal(pickRoute('reel_index', config, keys, { skip: ['meta'] }).provider, 'baseten');
+        assert.equal(pickRoute('reel_index', config, keys, { skip: [] }).provider, 'baseten');
+        // With nobody left to answer, it is no_provider, not a return to the provider that was skipped.
+        assert.throws(() => pickRoute('reel_index', config, keys, { skip: ['baseten', 'meta'] }), (err: unknown) => isAiError(err) && err.kind === 'no_provider');
+        // Skipping can never reach Baseten for another purpose: the deny holds for the default order.
+        for (const purpose of OTHERS) {
+            assert.throws(() => pickRoute(purpose, { ...config, routing: {} }, keys, { skip: ['meta', 'anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom'] }), (err: unknown) => isAiError(err) && err.kind === 'no_provider', purpose);
+        }
+    });
+
+    it('is asserted on its own too, for a caller that has a route in hand: Baseten for reel_index passes, and for any other purpose is a final no_provider', () => {
+        assert.doesNotThrow(() => assertProviderMayAnswer('baseten', 'reel_index'));
+        for (const provider of PROVIDER_IDS.filter((id) => id !== 'baseten')) for (const purpose of AI_PURPOSES) assert.doesNotThrow(() => assertProviderMayAnswer(provider, purpose), `${provider} ${purpose}`);
+        for (const purpose of OTHERS) {
+            assert.throws(() => assertProviderMayAnswer('baseten', purpose), (err: unknown) => isAiError(err) && err.kind === 'no_provider' && !err.retryable && err.message.startsWith('Baseten may answer only reel_index') && err.message.endsWith(`It cannot be used for ${purpose}.`), purpose);
+        }
     });
 });
 

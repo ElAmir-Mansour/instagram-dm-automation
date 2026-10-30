@@ -51,6 +51,12 @@ describe('minOutputTokens', () => {
         }
     });
 
+    it('is the same 4 000 for Baseten\'s Muse Spark Open at every effort: it always reasons too, and the reasoning is billed as output', () => {
+        for (const model of ['meta-models/muse-spark-open-1026', 'meta-models/muse-spark-open', '']) {
+            for (const effort of EFFORTS) assert.equal(minOutputTokens('baseten', model, effort), META_MIN_OUTPUT, `${model} ${effort}`);
+        }
+    });
+
     it('gives the admin\'s Test button, which asks for 200 tokens, a floor far above it: it is raised to what Muse needs, never lowered', () => {
         assert.ok(minOutputTokens('meta', 'muse-spark-1.3', 'low') > 200);
     });

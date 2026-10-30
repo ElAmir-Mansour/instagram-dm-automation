@@ -18,7 +18,7 @@
 import { withProfileCache } from '../services/profile/cache.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { failureRedaction } from './redaction.js';
-import type { Job, JobHandlerRegistry, JobQueue, JobResult } from './types.js';
+import { BACKGROUND_JOB_KINDS, type Job, type JobHandlerRegistry, type JobQueue, type JobResult } from './types.js';
 
 /**
  * How long a claim is considered live before a reaper may take it back.
@@ -179,6 +179,16 @@ async function handBackUnrun(queue: JobQueue, jobs: Job[]): Promise<void> {
 }
 
 /**
+ * The order a claimed batch runs in: what a person is waiting for first, slow background work (`BACKGROUND_JOB_KINDS`: watching a reel takes about a minute) last.
+ * The claim returns a batch in no order anyone chose, and the jobs of a batch run one after another, so a reel that happened to come first would hold a DM
+ * claimed with it for the length of the reel. A stable sort: every other order is exactly what the claim returned, and a batch with no background job is untouched.
+ * The drain's budget is also checked between jobs, so when it ends the batch it is the slow job that is handed back unrun, not the quick one that was behind it.
+ */
+export function orderForRunning(batch: readonly Job[]): Job[] {
+    return [...batch].sort((a, b) => Number(BACKGROUND_JOB_KINDS.has(a.kind)) - Number(BACKGROUND_JOB_KINDS.has(b.kind)));
+}
+
+/**
  * Drain until the queue is empty, the budget is spent, or `maxJobs` is reached.
  *
  * Never throws: a drain is called from a webhook that has already answered Meta and from a
@@ -213,6 +223,7 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
         }
 
         if (batch.length === 0) break;
+        batch = orderForRunning(batch);
 
         for (const [index, job] of batch.entries()) {
             result.claimed++;

@@ -28,7 +28,7 @@ import { AiError, isAiError } from '../llm/errors.js';
 import { generateJson, type GenerateJsonResult } from '../llm/generate.js';
 import { minOutputTokens } from '../llm/limits.js';
 import { EVAL, isAiPurpose, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
-import { assertNotMacBrainWork, pickRoute } from './route.js';
+import { assertNotMacBrainWork, assertProviderMayAnswer, pickRoute } from './route.js';
 import { isProviderId, type ProviderId } from '../llm/registry.js';
 import type { LlmSchema } from '../llm/schema.js';
 import type { Billed, Effort, FetchLike, LlmTurn } from '../llm/types.js';
@@ -57,6 +57,11 @@ export interface AiGenerateArgs {
      * `effort` here is the route's, and `args.effort` still wins. The result says `route: 'saved'`: it was named, not found.
      */
     route?: { provider: ProviderId; model: string; effort?: Effort };
+    /**
+     * Providers this call must not use, because the caller already tried them (`PickOptions.skip`): the reel indexer asks again with `['baseten']` after Baseten failed,
+     * and Meta's hosted model answers. It only narrows, so it is allowed for a tenant's call, which `route` is not: a caller cannot choose who answers, only who does not.
+     */
+    avoid?: readonly ProviderId[];
     /**
      * Cache the system prompt: Anthropic's `cache_control` on the system block, 5-minute lifetime (other providers ignore it). Off unless the
      * caller asks, because a write costs 1.25x the input price and only pays back when the same prompt is sent again within minutes. What the
@@ -176,8 +181,11 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
                 : config,
             keys,
             // Made-up cases only: a call that belongs to no tenant and is recorded as `eval` (the evaluation harness) may name a Contributor-mode model.
-            { allowContributor: label === EVAL && args.creatorId === null },
+            { allowContributor: label === EVAL && args.creatorId === null, ...(args.avoid?.length ? { skip: args.avoid } : {}) },
         );
+        // Once more, on the route that is about to be called and for the purpose it is called for: a provider that may answer only some purposes (Baseten, the reel
+        // indexer alone) is never sent anything for another, whatever `pickRoute` or a later change to it decided. Refused here is recorded and logged like any refusal.
+        assertProviderMayAnswer(route.provider, args.purpose);
     } catch (err) {
         if (isAiError(err)) {
             await recordCall({ creatorId: args.creatorId, purpose: label, provider: 'none', model: '', outcome: err.kind, tokensIn: 0, tokensOut: 0, usd: 0, priced: true, elapsedMs: 0 });

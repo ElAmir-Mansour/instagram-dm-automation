@@ -27,7 +27,7 @@ import { ProposalError, type ApplyPort, type CampaignSpec, type MoneyPort, type 
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const TENANT = '44444444-4444-4444-8444-444444444444';
 const POST = '22222222-2222-4222-8222-222222222222';
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY', 'GEMINI_API_KEY'] as const;
 
 // ─── The tables, in memory ────────────────────────────────────────────────────────────────────────────────────────────────
 

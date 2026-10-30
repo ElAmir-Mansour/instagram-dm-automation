@@ -189,7 +189,7 @@ export function proofProfile(over: Partial<CreatorProfile> = {}): CreatorProfile
     };
 }
 
-const KEY_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY'] as const;
+const KEY_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY'] as const;
 
 /**
  * No provider has a key (every key the layer reads from the environment is taken away; the database has none), or one does. Returns what
