@@ -1,6 +1,6 @@
 /**
  * Tests only: an in-memory stand-in for the tables the video memory touches (`reel_analyses`, the `creators` columns the indexer reads, and the `scheduled_posts` rows
- * that link a reel to its YouTube copy), installed over `pool.query` in FRONT of whatever is there (the AI layer's own stand-in, `aiProviders/testDb.ts`, for `app_settings`
+ * that link a reel to its YouTube copy), installed over `pool.query` in FRONT of whatever is there (the AI layer's own stand-in, `../../aiProviders/testDb.ts`, for `app_settings`
  * and `ai_usage`). Not a test file itself, so `npm test` does not run it.
  *
  * It answers the exact statements of `reelLibrary.ts` and throws on any other statement that names one of its tables, so a changed query fails a test instead of passing
@@ -8,7 +8,7 @@
  * index as the conflict target, a failure that never replaces an `ok` row (`DO UPDATE … WHERE status <> 'ok'` returns no row), `NUMERIC(12,6)` read back as text, and the
  * `jsonb_to_recordset` insert.
  */
-import { pool } from '../../config/db.js';
+import { pool } from '../../../config/db.js';
 
 export interface FakeReel {
     id: string;
@@ -179,7 +179,7 @@ export function installReelDb(): ReelDb {
         if (/^SELECT ig_media_id, status FROM reel_analyses WHERE creator_id = \$1 AND ig_media_id IS NOT NULL$/.test(sql)) {
             return ok(db.reels.filter((r) => r.creator_id === params[0] && r.ig_media_id !== null).map((r) => ({ ig_media_id: r.ig_media_id, status: r.status })));
         }
-        throw new Error(`reelTestDb: unexpected SQL ${sql}`);
+        throw new Error(`perception/testing/testDb: unexpected SQL ${sql}`);
     };
     return db;
 }

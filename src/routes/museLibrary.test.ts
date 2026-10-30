@@ -1,7 +1,7 @@
 /**
  * `/api/settings/ai/muse/library` (T054, contracts/api.md "Video memory"): the owner's own reels, as the agent remembers them, and the two buttons that get them watched.
  *
- * Run through each route's WHOLE stack (guard, then handler) with the video memory's in-memory world (`perception/reelTestWorld.ts`): the settings and the cap, the
+ * Run through each route's WHOLE stack (guard, then handler) with the video memory's in-memory world (`perception/testing/testSupport.ts`): the settings and the cap, the
  * library table, Instagram's media list and the job queue, none of it real. What is pinned:
  *
  *   - **who**: the tenant's owner on every route, reads included; an operator or a viewer is refused with 403 before anything is read; and the router is mounted on the API
@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { INSUFFICIENT_ROLE_CODE, invalidateTenantCache, resolveTenant } from '../services/tenant.js';
-import { configure, graphError, installWorld, OTHER_TENANT, PAGE_TOKEN, TENANT, type World } from '../services/perception/reelTestWorld.js';
+import { configure, graphError, installWorld, OTHER_TENANT, PAGE_TOKEN, TENANT, type World } from '../services/perception/testing/testSupport.js';
 import { storeAnalysis, storeFailure, upsertPending } from '../services/perception/reelLibrary.js';
 import apiRouter from './api.js';
 import { museLibraryRouter } from './museLibrary.js';

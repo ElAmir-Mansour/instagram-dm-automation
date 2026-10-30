@@ -2,7 +2,7 @@
  * The reel indexer (`reelIndex.ts`, docs/specs/005-muse-sees T053, T058): what one reel goes through from the Graph API to a row in `reel_analyses`.
  *
  * Everything runs through the REAL code: the settings and the cap, the providers layer (routes, budget rows, the Baseten and Meta adapters) and the download, against the
- * in-memory world of `reelTestWorld.ts`, which records every request a provider would have been sent, every Graph read and every URL downloaded. What is pinned:
+ * in-memory world of `testing/testSupport.ts`, which records every request a provider would have been sent, every Graph read and every URL downloaded. What is pinned:
  *
  *   - **a fresh link for every reel**: the node is read from Graph each time, its `media_url` is what is downloaded, and it is in no row, no statement and no log line;
  *   - **a reel over 35 MB is never sent anywhere**: `failed / too_large`, no model called, stored at once (it will not get smaller);
@@ -25,7 +25,7 @@ import { MEDIA_LIMITS } from './media.js';
 import { findByMediaId } from './reelLibrary.js';
 import {
     addReel, answerOn, BASETEN_MODEL, chatAnswer, configure, GOOD_ANALYSIS, graphError, graphUnreachable, IG_USER, installWorld, OTHER_TENANT, PAGE_TOKEN, TENANT, VIDEO_BASE64, VIDEO_BYTES, type World,
-} from './reelTestWorld.js';
+} from './testing/testSupport.js';
 import { upsertPending } from './reelLibrary.js';
 
 let world: World;

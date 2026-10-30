@@ -1,7 +1,7 @@
 /**
  * The video memory's library and its queue (`reelLibrary.ts`, docs/specs/005-muse-sees T054): the owner's own reels listed from Instagram, a `pending` row and ONE
  * `muse.reel_index` job for each reel that has no `ok` row, once a day, and the daily run for the tenants that switched the memory on. Against the in-memory world of
- * `reelTestWorld.ts` (the table's statements were first run on a real PostgreSQL 17 holding migration v60's table). What is pinned:
+ * `testing/testSupport.ts` (the table's statements were first run on a real PostgreSQL 17 holding migration v60's table). What is pinned:
  *
  *   - **dedupe by day**: the key is `reel:<id>:<yyyy-mm-dd>` (UTC), so a reel is queued once a day however often the queue is asked, and a reel that failed is queued
  *     again tomorrow; a re-index the owner asks for has a per-minute key of its own, so it is not swallowed by today's;
@@ -19,7 +19,7 @@ import {
 } from './reelLibrary.js';
 import {
     configure, graphError, graphUnreachable, IG_USER, installWorld, OTHER_TENANT, PAGE_TOKEN, TENANT, type World,
-} from './reelTestWorld.js';
+} from './testing/testSupport.js';
 import { GraphSession } from '../growth/graph.js';
 
 let world: World;

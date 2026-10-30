@@ -796,7 +796,7 @@ describe('Baseten (Meta\'s open model), through generate: the reel indexer only'
             route({ [purpose]: { provider: 'baseten', model: MODEL, effort: 'low' } });
             const { calls } = viaWire(answerOf(MODEL));
             db.usage.length = 0;
-            const err = await failure(call({ purpose, creatorId: TENANT, user: 'CUSTOMER-WORDS-SENTINEL do you have a course on APIs?', system: 'SYSTEM-SENTINEL you answer customers.' }));
+            const err = await failure(call({ purpose, creatorId: TENANT, user: 'CUSTOMER-WORDS-SENTINEL do you have a video on APIs?', system: 'SYSTEM-SENTINEL you answer customers.' }));
             assert.equal(err.kind, 'no_provider', purpose);
             assert.equal(err.retryable, false, purpose);
             assert.match(err.message, /Baseten may answer only reel_index/, purpose);

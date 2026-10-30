@@ -2,8 +2,8 @@
  * Tests only: the whole world the video memory runs in, in memory, for the tests of the indexer, the library and its routes. Not a test file itself, so `npm test` does
  * not run it. Nothing here reaches a database, Meta, Baseten or a CDN.
  *
- *   ai          the AI layer's own stand-in (`aiProviders/testDb.ts`): `app_settings` (the switches, the cap, the provider keys, the routes) and `ai_usage`
- *   reel        the video memory's tables (`reelTestDb.ts`): `reel_analyses`, the tenant's `creators` row and the `scheduled_posts` that link a YouTube copy
+ *   ai          the AI layer's own stand-in (`../../aiProviders/testDb.ts`): `app_settings` (the switches, the cap, the provider keys, the routes) and `ai_usage`
+ *   reel        the video memory's tables (`testDb.ts`): `reel_analyses`, the tenant's `creators` row and the `scheduled_posts` that link a YouTube copy
  *   graph       `metaHttp.get`, answering the two reads the video memory makes: a media node (`GET /{id}`) and the media list (`GET /{ig-user}/media`)
  *   providers   `setProviderFetch`: every request the providers layer makes, by host, so a test can read EXACTLY what Baseten or Meta would have been sent
  *   downloads   the `fetch` handed to `fetchMedia`: the bytes behind each media URL, by URL
@@ -12,17 +12,17 @@
  *
  * Every key and link in it is made up and built at run time; the "video" is a few bytes.
  */
-import { setLogSink } from '../../utils/log.js';
-import { metaHttp } from '../http.js';
-import { GRAPH_BASE } from '../instagram.js';
-import { setJobQueue } from '../../jobs/queue.js';
-import type { EnqueueInput, Job, JobQueue } from '../../jobs/types.js';
-import { installAiDb, type AiDb } from '../aiProviders/testDb.js';
-import { setProviderFetch } from '../aiProviders/generate.js';
-import { FAKE_KEYS } from '../aiProviders/testKeys.js';
-import type { FetchLike } from '../llm/types.js';
-import { jsonResponse, type Recorded, type Scripted } from '../llm/testFetch.js';
-import { installReelDb, type ReelDb } from './reelTestDb.js';
+import { setLogSink } from '../../../utils/log.js';
+import { metaHttp } from '../../http.js';
+import { GRAPH_BASE } from '../../instagram.js';
+import { setJobQueue } from '../../../jobs/queue.js';
+import type { EnqueueInput, Job, JobQueue } from '../../../jobs/types.js';
+import { installAiDb, type AiDb } from '../../aiProviders/testDb.js';
+import { setProviderFetch } from '../../aiProviders/generate.js';
+import { FAKE_KEYS } from '../../aiProviders/testKeys.js';
+import type { FetchLike } from '../../llm/types.js';
+import { jsonResponse, type Recorded, type Scripted } from '../../llm/testFetch.js';
+import { installReelDb, type ReelDb } from './testDb.js';
 
 export const OWNER = '11111111-1111-4111-8111-111111111111';
 export const TENANT = '44444444-4444-4444-8444-444444444444';
