@@ -172,6 +172,7 @@ describe('Row Level Security on every table', () => {
         for (const known of [
             'creators', 'campaigns', 'users', 'jobs', 'studio_settings', 'growth_settings', 'infographics', 'creator_profiles', 'creator_profile_versions',
             'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage', 'explainers', 'explainer_scenes', 'image_allowance',
+            'reel_analyses',
         ]) {
             assert.ok(created.includes(known), `${known} is found`);
         }
@@ -179,7 +180,7 @@ describe('Row Level Security on every table', () => {
         const enabled = files.flatMap((f) => [...rlsEnabledTables(f.sql)]);
         for (const known of [
             'creators', 'studio_settings', 'creator_profiles', 'creator_profile_versions', 'onboarding', 'invites', 'profile_drafts', 'voice_examples',
-            'onboarding_events', 'ai_usage', 'explainers', 'explainer_scenes', 'image_allowance',
+            'onboarding_events', 'ai_usage', 'explainers', 'explainer_scenes', 'image_allowance', 'reel_analyses',
         ]) {
             assert.ok(enabled.includes(known), `${known} has RLS enabled somewhere`);
         }
@@ -1499,6 +1500,77 @@ describe('migration v59: illustrated explainers (explainers, explainer_scenes, i
         assert.equal(sql.match(/\bDROP\b/g)?.length, 1);
         const altered = new Set([...sql.matchAll(/ALTER TABLE (\w+)/g)].map((m) => m[1]));
         assert.deepEqual([...altered].sort(), ['explainer_scenes', 'explainers', 'image_allowance', 'studio_jobs', 'studio_settings']);
+    });
+});
+
+// ─── v60: Meta Muse perception ─────────────────────────────────────────────────────────────────
+
+describe('migration v60: Meta Muse perception (messages.perception, reel_analyses)', () => {
+    const FILE = 'migration_v60_muse_perception.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v59, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v59_explainers.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first statement (it locks messages, the DM path\'s hot table)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('adds exactly one column to messages: perception, JSONB, nullable with no default, no CHECK and no REFERENCES, only if absent (a catalog-only change)', () => {
+        assert.deepEqual([...sql.matchAll(/ALTER TABLE messages ADD COLUMN IF NOT EXISTS (\w+) ([^;]*);/g)].map((m) => [m[1], m[2]]), [['perception', 'JSONB']]);
+        assert.equal((sql.match(/ALTER TABLE messages\b/g) ?? []).length, 1, 'no other change to messages');
+    });
+
+    it('creates reel_analyses and no other table, idempotently, with row level security on', () => {
+        assert.deepEqual(createdTables(raw), ['reel_analyses']);
+        assert.doesNotMatch(sql, /CREATE TABLE (?!IF NOT EXISTS)/);
+        assert.match(sql, /CREATE TABLE IF NOT EXISTS reel_analyses \(/);
+        assert.match(sql, /ALTER TABLE reel_analyses ENABLE ROW LEVEL SECURITY;/);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+    });
+
+    it('keys a reel by the tenant and deletes it with the tenant: every query of the memory names creator_id', () => {
+        assert.match(sql, /creator_id UUID NOT NULL REFERENCES creators\(id\) ON DELETE CASCADE/);
+        assert.equal(sql.match(/REFERENCES/g)?.length, 1, 'the tenant is the only reference');
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_reel_analyses_creator ON reel_analyses \(creator_id, posted_at DESC\);/);
+    });
+
+    it('holds one analysis per reel per tenant: unique on (creator_id, ig_media_id) only where the id is set, under a name this file creates (IF NOT EXISTS matches names, v15)', () => {
+        assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_reel_analyses_creator_media ON reel_analyses \(creator_id, ig_media_id\) WHERE ig_media_id IS NOT NULL;/);
+        assert.match(sql, /ig_media_id TEXT,/, 'nullable: a reel known only by its link has none');
+        assert.ok(createdTables(raw).includes('reel_analyses'), 'the table the unique index sits on is created by this very file');
+    });
+
+    it('closes the status vocabulary and holds the fields the indexer and recall rely on', () => {
+        assert.match(sql, /status TEXT NOT NULL DEFAULT 'pending' CHECK \(status IN \('pending', 'ok', 'failed'\)\)/);
+        assert.match(sql, /result JSONB NOT NULL DEFAULT '\{\}'::jsonb,/);
+        assert.match(sql, /permalink TEXT,/);
+        assert.match(sql, /youtube_url TEXT,/);
+        assert.match(sql, /posted_at TIMESTAMPTZ,/);
+        assert.match(sql, /model TEXT,/);
+        assert.match(sql, /ms INT,/);
+        assert.match(sql, /usd NUMERIC\(12, 6\),/, 'the width ai_usage.usd has');
+        assert.match(sql, /created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\),/);
+        assert.match(sql, /updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/);
+    });
+
+    it('does not create what the build cut: no interactions.intent and no offer_cards table, and nothing for the settings (they are app_settings rows)', () => {
+        assert.doesNotMatch(sql, /\binteractions\b/i);
+        assert.doesNotMatch(sql, /\boffer_cards\b/i);
+        assert.doesNotMatch(sql, /\bapp_settings\b/i);
+        assert.doesNotMatch(sql, /\bai_usage\b/i, 'ai_usage.purpose is plain text, so the new purposes need no change there');
+    });
+
+    it('touches only messages and the table it makes, changes no existing row and removes nothing', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b|CONCURRENTLY/i);
+        const altered = new Set([...sql.matchAll(/ALTER TABLE (\w+)/g)].map((m) => m[1]));
+        assert.deepEqual([...altered].sort(), ['messages', 'reel_analyses']);
     });
 });
 

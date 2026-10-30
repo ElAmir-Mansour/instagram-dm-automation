@@ -312,8 +312,8 @@ The pooler does saturate briefly after back-to-back deploys (EMAXCONN for about 
 
 ### 3.4 Smaller data-layer notes
 
-- **No single artifact describes the live schema.** `schema.sql` plus 53 migration files (to v59; v43 and v46–v49 were never
-  used), 54 ledger entries in all (`EXPECTED_MIGRATIONS`, `src/config/migrations.ts`). The ledger fixes *forward* drift and
+- **No single artifact describes the live schema.** `schema.sql` plus 54 migration files (to v60; v43 and v46–v49 were never
+  used), 55 ledger entries in all (`EXPECTED_MIGRATIONS`, `src/config/migrations.ts`). The ledger fixes *forward* drift and
   `src/services/health.ts` reports it on a live deployment, but neither reconstructs the present. Dumping the live schema to
   `schema/current.sql` in CI would.
 - `interactions` has no index on `(creator_id, timestamp DESC)`, which is the dashboard's main
