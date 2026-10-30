@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { handlers, isLastAttempt } from '../../jobs/handlers.js';
 import { drainJobs } from '../../jobs/runner.js';
 import { memoryQueue } from '../../jobs/testSupport.js';
+import { generate } from '../aiProviders/generate.js';
 import { FAKE_KEYS } from '../aiProviders/testKeys.js';
 import { jsonResponse } from '../llm/testFetch.js';
 import { ANALYSIS_TIMEOUT_MS, gateIndexing, indexReel, JOB_BUDGET_MS, LIMITS, MIN_FALLBACK_MS, multiLine, parseReelAnalysis, REEL_ANALYSIS_SCHEMA, REEL_INDEX_PROMPT, REEL_INDEX_SYSTEM, REEL_MAX_TOKENS, REEL_NODE_FIELDS, runReelIndexJob, type ReelIndexDeps } from './reelIndex.js';
@@ -514,6 +515,35 @@ describe('the fallback: one retry on Meta\'s hosted model, and only after a fail
         assert.deepEqual(out, { status: 'failed', reason: 'provider_error', retryable: true, stored: true });
         assert.equal((row('9001')!.result as any).detail, 'baseten:server:503 | meta:budget');
         assert.equal(meta().length, 0);
+    });
+
+    it('is final, and stored at once, when BOTH providers run out of time on the video: it is the video that is long, so the runner does not spend three more rounds on it', async () => {
+        const timeout = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+        addReel(world, '9001');
+        answerOn(world, 'inference.baseten.co', timeout());
+        answerOn(world, 'api.meta.ai', timeout());
+        const out = await index('9001', { lastAttempt: false });
+        assert.deepEqual(out, { status: 'failed', reason: 'timeout', retryable: false, stored: true });
+        assert.deepEqual([baseten().length, meta().length], [1, 1]);
+        assert.deepEqual(row('9001')!.result, { error: 'timeout', detail: 'baseten:timeout | meta:timeout' });
+        // One provider timing out is a moment, and the other's answer is what the reel gets.
+        world.reel.reels.length = 0;
+        addReel(world, '9002');
+        answerOn(world, 'inference.baseten.co', timeout());
+        answerOn(world, 'api.meta.ai', chatAnswer('muse-spark-1.3', GOOD_ANALYSIS));
+        assert.equal((await index('9002')).status, 'ok');
+    });
+
+    it('gives each try its own deadline, the second clipped to what the job\'s budget has left, so the whole job ends inside it', async () => {
+        addReel(world, '9001');
+        const deadlines: number[] = [];
+        let clock = 5_000_000;
+        world.providers.scripts['inference.baseten.co'] = [() => { clock += 120_000; return jsonResponse(503, { error: { message: 'slow' } }); }];
+        answerOn(world, 'api.meta.ai', chatAnswer('muse-spark-1.3', GOOD_ANALYSIS));
+        const out = await index('9001', { deps: { now: () => clock, generate: ((a: Parameters<typeof generate>[0]) => { deadlines.push(a.timeoutMs); return generate(a); }) as typeof generate } });
+        assert.equal(out.status, 'ok');
+        assert.deepEqual(deadlines, [ANALYSIS_TIMEOUT_MS, JOB_BUDGET_MS - 120_000 - 5_000], 'the first try has its full deadline; the second has the 80 s left, less 5 s');
+        assert.ok(deadlines[1]! < ANALYSIS_TIMEOUT_MS);
     });
 
     it('does not start the second try when the job has no time left for it: the failure is a timeout, and the detail says why', async () => {

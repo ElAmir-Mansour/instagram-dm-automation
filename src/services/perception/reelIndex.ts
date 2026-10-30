@@ -328,11 +328,11 @@ type Analysed =
 const note = (err: AiError): string => [err.provider || 'none', err.kind, err.status ?? ''].filter((p) => p !== '').join(':');
 
 async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, base64: string, mime: string): Promise<Analysed> {
-    const ask = (avoid: readonly ('baseten')[]): Promise<AiGenerateResult> => deps.generate({
+    const ask = (avoid: readonly ('baseten')[], timeoutMs: number): Promise<AiGenerateResult> => deps.generate({
         purpose: REEL_INDEX_PURPOSE, creatorId: args.creatorId,
         system: REEL_INDEX_SYSTEM,
         user: [{ role: 'user', text: REEL_INDEX_PROMPT, media: [{ kind: 'video', mime, base64 }] }],
-        schema: REEL_ANALYSIS_SCHEMA, maxTokens: REEL_MAX_TOKENS, timeoutMs: ANALYSIS_TIMEOUT_MS, effort: 'low',
+        schema: REEL_ANALYSIS_SCHEMA, maxTokens: REEL_MAX_TOKENS, timeoutMs, effort: 'low',
         ...(avoid.length ? { avoid } : {}),
     });
 
@@ -349,7 +349,8 @@ async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, ba
         }
         let failedOn: Failed;
         try {
-            const out = await ask(attempt === 0 ? [] : ['baseten']);
+            // The second try's deadline is what the job's budget has left (less a margin), never more than a try's own: the whole job ends inside its budget.
+            const out = await ask(attempt === 0 ? [] : ['baseten'], attempt === 0 ? ANALYSIS_TIMEOUT_MS : Math.min(ANALYSIS_TIMEOUT_MS, left - 5_000));
             const analysis = parseReelAnalysis(out.json);
             if (analysis) return { ok: true, analysis, out, fellBack, spentUsd };
             // Billed, and not usable: its cost is part of what this reel cost, and it is a failure of whoever answered.
@@ -377,7 +378,10 @@ async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, ba
             log('warn', 'muse.reel_index_fallback', { creator_id: args.creatorId, ig_media_id: args.igMediaId, from: 'baseten', kind: failedOn.kind });
             continue;
         }
-        return { ok: false, reason: failedOn.reason, retryable: failedOn.retryable, detail: notes.join(' | '), spentUsd };
+        // Two providers that both ran out of time on the same video are telling us about the VIDEO (a long one), not about a moment: it is final, stored at once, and the
+        // daily run tries it once more tomorrow, instead of the runner spending three more rounds of two long calls on it.
+        const slowEverywhere = first?.reason === 'timeout' && failedOn.reason === 'timeout';
+        return { ok: false, reason: failedOn.reason, retryable: failedOn.retryable && !slowEverywhere, detail: notes.join(' | '), spentUsd };
     }
     // Unreachable: the loop returns on its second pass.
     return { ok: false, reason: 'provider_error', retryable: false, detail: notes.join(' | '), spentUsd };
