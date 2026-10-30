@@ -99,6 +99,19 @@
       idea and product facts (src/services/studio/prompts.ts:149-212,
       generate.ts:242-262).
 
+  OWNER ALERTS (added 2026-10-25) — section 5's "Alerts to the operator". When a
+  conversation with the platform owner's own account needs a person, he may be
+  sent an alert by Telegram and/or by email through Resend, carrying the
+  person's @username (or the last four characters of their id) and up to 200
+  characters of their last message: notifyOwner(),
+  src/services/dmSales/handoff.ts:123-218; noticeWho() and buildNoticeText(),
+  src/services/notify.ts:354-371; emailSubject()/emailBody(),
+  src/services/notifyEmail.ts:359-371. /privacy's ledger has the triggers. No
+  copy of an alert is kept in our database (the hourly allowance is a
+  rate_limit_counters row, pruned after 48 h), so the erasure route has nothing
+  of it to delete; the copies in the operator's Telegram chat and mailbox, and
+  Telegram's and Resend's, are beyond it, which is what the bullet says.
+
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
     · Contact email for deletion requests: the contact email in Settings → Public site —
       section 2 (the first route) and section 8, both languages.
@@ -995,7 +1008,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>حذف بياناتك</h1>
-                <p class="stamp">آخر تحديث: 15 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 أكتوبر 2026</p>
 
                 <p>
                     إن علّقت على منشور أو أرسلت رسالة خاصة إلى حساب يستخدم «أوتوريبلاي برو»،
@@ -1125,9 +1138,17 @@
                         <strong>مزوّدو الذكاء الاصطناعي:</strong> إن كنتَ صاحب حساب وفعّل مُشغّل الأداة مزوّداً مثل
                         <bdi lang="en" dir="ltr">Anthropic</bdi> أو <bdi lang="en" dir="ltr">OpenAI</bdi> أو جوجل
                         (<bdi lang="en" dir="ltr">Gemini</bdi>) أو <bdi lang="en" dir="ltr">OpenRouter</bdi> أو <bdi lang="en" dir="ltr">Groq</bdi>، أو خدمة أضاف عنوانها
-                        بنفسه، فقد تكون مادة من ملفك ومحتواك وصلته لتُكتب لك مسودّة. ونسخة كل مزوّد تخضع لسياسته،
-                        ولا نستطيع حذفها نيابةً عنك. لا يصلهم شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك. القائمة وما
-                        يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
+                        بنفسه، فقد تكون مادة من ملفك ومحتواك وصلته لتُكتب لك مسودّة. وإن راسلتَ حساباً يجعل المُشغّل أحد هؤلاء
+                        المزوّدين يكتب ردوده، فقد وصل نصّ محادثتك إلى ذلك المزوّد بدلاً من جوجل (القسم 3 من <a href="/privacy">سياسة الخصوصية</a>).
+                        ونسخة كل مزوّد تخضع لسياسته، ولا نستطيع حذفها نيابةً عنك. ولا يصلهم شيء غير ذلك عمّن يعلّق أو يراسل على
+                        إنستجرام أو فيسبوك. القائمة وما يُرسَل في القسم 5 من <a href="/privacy">سياسة الخصوصية</a>.
+                    </li>
+                    <li>
+                        <strong>تنبيهات المُشغّل:</strong> إن احتاجت محادثةٌ مع حساب مُشغّل الأداة نفسه إلى شخص، فقد يكون تنبيهٌ أُرسل
+                        إليه على تيليجرام و/أو بالبريد الإلكتروني عبر <bdi lang="en" dir="ltr">Resend</bdi> قد ذكر اسم المستخدم الخاص بك
+                        (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها (القسم 3 من
+                        <a href="/privacy">سياسة الخصوصية</a>). تلك النسخ في محادثة تيليجرام وصندوق البريد الخاصّين به، ونسختا تيليجرام
+                        و<bdi lang="en" dir="ltr">Resend</bdi> تخضعان لسياستيهما؛ وحذف بياناتك هنا لا يصل إليها.
                     </li>
                     <li>
                         <strong>سجلّات التشغيل:</strong> تحتوي سجلّات المنصّة المستضيفة على أسماء
@@ -1260,7 +1281,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Deleting your data</h1>
-                <p class="stamp">Last updated: 15 October 2026</p>
+                <p class="stamp">Last updated: 25 October 2026</p>
 
                 <p>
                     If you commented on a post or sent a direct message to an account running
@@ -1403,9 +1424,19 @@
                         <strong>AI providers:</strong> if you are an account owner and the operator of the tool has switched on a
                         provider such as Anthropic, OpenAI, Google (Gemini), OpenRouter or Groq, or a service at an address the operator
                         added, material from your profile and content may have reached it so that a draft could be written for you.
-                        Each provider's copy is governed by its own policy and we cannot delete it on your behalf. Nothing about
+                        If you messaged an account whose replies the operator has one of these providers write, the text of your
+                        conversation reached that provider instead of Google (section 3 of the <a href="/privacy">privacy policy</a>).
+                        Each provider's copy is governed by its own policy and we cannot delete it on your behalf. Nothing else about
                         people who comment or message on Instagram or Facebook is sent to them. The list, and what is sent, is in
                         section 5 of the <a href="/privacy">privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Alerts to the operator:</strong> if a conversation with the operator's own account needed a
+                        person, an alert sent to him by Telegram and/or by email through Resend may have carried your
+                        username (or the last four characters of your account ID) and up to 200 characters of your last
+                        message (section 3 of the <a href="/privacy">privacy policy</a>). Those copies are in his Telegram
+                        chat and mailbox, and Telegram's and Resend's copies are governed by their own policies; deleting
+                        your data here does not reach them.
                     </li>
                     <li>
                         <strong>Operational logs:</strong> the hosting platform's logs contain
