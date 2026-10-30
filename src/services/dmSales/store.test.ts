@@ -59,13 +59,33 @@ describe('loadSalesState', () => {
 });
 
 describe('supersession', () => {
-    it('compares with the message\'s own created_at: a later unhandled inbound, and any reply after it', async () => {
+    it('compares with the moment the message was ready to be answered, which for a text is its own created_at: a later unhandled inbound, and any reply after it', async () => {
         answering([{ newer_unhandled: true, answered: false }]);
         assert.deepEqual(await supersession('conv-1', 'msg-1'), { newerUnhandled: true, answered: false });
-        assert.match(asked[0]!.sql, /n\.direction = 'inbound' AND n\.id <> \$2 AND n\.handled_at IS NULL AND n\.created_at > \(SELECT created_at FROM messages WHERE id = \$2\)/);
-        assert.match(asked[0]!.sql, /o\.direction = 'outbound' AND o\.created_at > \(SELECT created_at FROM messages WHERE id = \$2\)/);
+        assert.match(asked[0]!.sql, /n\.direction = 'inbound' AND n\.id <> \$2 AND n\.handled_at IS NULL AND CASE WHEN COALESCE\(n\.message_type, 'text'\) = ANY\(\$3::text\[\]\)/);
+        assert.match(asked[0]!.sql, /ELSE n\.created_at END > \(SELECT ready_at FROM me\)/);
+        assert.match(asked[0]!.sql, /o\.direction = 'outbound' AND o\.created_at > \(SELECT ready_at FROM me\)/);
+        assert.match(asked[0]!.sql, /WITH me AS \(SELECT CASE WHEN COALESCE\(m\.message_type, 'text'\) = ANY\(\$3::text\[\]\) AND m\.perception->>'status' = 'ok' THEN COALESCE\(\(m\.perception->>'stored_at'\)::timestamptz, m\.created_at\) ELSE m\.created_at END AS ready_at FROM messages m WHERE m\.id = \$2\)/);
         assert.match(asked[0]!.sql, /n\.conversation_id = \$1/);
         assert.match(asked[0]!.sql, /o\.conversation_id = \$1/);
+    });
+
+    it('is ONE statement, and a text is compared exactly as before: only a word-less message that was read has another moment than its created_at', async () => {
+        answering([{ newer_unhandled: false, answered: false }]);
+        await supersession('conv-1', 'msg-1');
+        assert.equal(asked.length, 1);
+        // The only thing that is not a message's created_at is the stored perception time, and it needs the word-less types AND an ok perception.
+        const readyAt = [...asked[0]!.sql.matchAll(/CASE WHEN [^]*?END/g)].map((m) => m[0]);
+        assert.equal(readyAt.length, 2, 'one for this message, one for the later one');
+        for (const r of readyAt) {
+            assert.match(r, /= ANY\(\$3::text\[\]\) AND \w\.perception->>'status' = 'ok' THEN COALESCE\(\(\w\.perception->>'stored_at'\)::timestamptz, \w\.created_at\) ELSE \w\.created_at END/);
+        }
+    });
+
+    it('a word-less message that was read is a message waiting, a story mention that was read is not (it is thanked, not answered), and one nobody read still is not', async () => {
+        answering([{ newer_unhandled: false, answered: false }]);
+        await supersession('conv-1', 'msg-1');
+        assert.match(asked[0]!.sql, /AND \(COALESCE\(n\.message_type, 'text'\) <> ALL\(\$3::text\[\]\) OR \(n\.perception->>'status' = 'ok' AND n\.message_type <> 'story_mention'\)\)\) AS newer_unhandled/);
     });
 
     it('does not count a message with no words as "a later message is waiting", nor the ack as "already answered": the word-less types and the ack type are its params', async () => {
@@ -76,7 +96,7 @@ describe('supersession', () => {
             ['story_reply', 'image', 'video', 'audio', 'file', 'sticker', 'share', 'reel', 'story_share', 'story_mention', 'attachment'],
             'attachment_ack',
         ]);
-        assert.match(asked[0]!.sql, /AND COALESCE\(n\.message_type, 'text'\) <> ALL\(\$3::text\[\]\)\) AS newer_unhandled/);
+        assert.match(asked[0]!.sql, /COALESCE\(n\.message_type, 'text'\) <> ALL\(\$3::text\[\]\)/);
         assert.match(asked[0]!.sql, /AND COALESCE\(o\.message_type, ''\) <> \$4\) AS answered/);
     });
 
