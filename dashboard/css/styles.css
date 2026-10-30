@@ -5392,6 +5392,12 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .msg-transcript-label { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); }
 .msg-transcript-text { margin: 0; overflow-wrap: anywhere; }
 
+/* What Meta Muse understood of a message with no words, under the attachment chip (messages.perception): the transcript's own look, with a small mark and the
+   model beside it. A note, when it could not read it, has the same shape. The description is English: it wraps like any other text. */
+.msg-seen .msg-transcript-label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.msg-seen .msg-transcript-label [data-lucide] { inline-size: var(--icon-xs); block-size: var(--icon-xs); flex-shrink: 0; }
+.msg-seen-owner { align-self: flex-start; }
+
 /* A carousel button's destination, under its picture: a link out as a real (44px) link, a postback as the payload it sends back. */
 .carousel-btn-wrap { display: flex; flex-direction: column; }
 .carousel-btn-url {
@@ -5412,6 +5418,13 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
    timing line, in the same muted type; the label is a quiet noun before the value. */
 .msg-detail--meta { row-gap: var(--space-1); }
 .msg-detail-key { color: var(--text-muted); }
+
+/* The decision under a reply: saw -> decided -> why, on one line that wraps. The arrow is the stylesheet's mirrored one, so it points the reading way in Arabic. */
+.msg-trace { column-gap: var(--space-2); row-gap: var(--space-1); }
+.msg-trace-step { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); min-inline-size: 0; }
+.msg-trace-step [data-lucide] { align-self: center; inline-size: var(--icon-xs); block-size: var(--icon-xs); flex-shrink: 0; }
+.msg-trace-arrow { inline-size: var(--icon-xs); block-size: var(--icon-xs); flex-shrink: 0; }
+.msg-trace-why { overflow-wrap: anywhere; }
 
 /* The funnel card: a closed toggle between the search block and the list, 44px tall, that opens a panel with its own scroll so a long card never
    pushes the list off a phone. It sits in the sidebar, so it is as wide as the list (one column on a phone, 340px beside the chat). */

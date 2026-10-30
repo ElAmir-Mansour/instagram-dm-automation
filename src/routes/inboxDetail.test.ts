@@ -235,6 +235,68 @@ describe('GET /conversations/:id/messages — the AI’s model and a failing rep
     });
 });
 
+// ─── GET /conversations/:id/messages — what Meta Muse saw, and why it answered (docs/specs/005-muse-sees T039) ───────────────────────────
+describe('GET /conversations/:id/messages — the perception and the decision trace ride with the rows', () => {
+    // What the pipeline stores (migration v60 `messages.perception`; v39 `ai_meta`, to which the turn adds `reason`, `perceived` and `recalled`), as `pg` hands JSONB back: objects.
+    const perception = {
+        v: 1, kind: 'reel', status: 'ok', seen: 'A 37-second reel showing a Python decorator.', transcript: '', about_owner: 'own_content', confidence: 0.92,
+        model: 'muse-spark-1.3', stored_at: '2026-10-30T10:00:05.000Z', ms: 8200, usd: 0.021,
+    };
+    const unreadable = { v: 1, kind: 'image', status: 'unreadable', reason: 'low_confidence', model: 'muse-spark-1.3', stored_at: '2026-10-30T11:00:05.000Z', ms: 3000, usd: 0.004 };
+    const meta = { engine: 'providers', intent: 'info', stage: 'recommend', next_action: 'recommend', perceived: true, recalled: false, reason: 'The reel is about decorators, which the Python course covers.' };
+    // Newest first, as the query orders them; the route reverses.
+    const stored = () => [
+        { id: 'a1', direction: 'outbound', sender: 'ai', text: 'ده بيشرح الـ decorators', message_type: 'text', meta_message_id: null, ai_meta: meta, perception: null, created_at: '2026-10-30T10:00:12Z' },
+        { id: 'p2', direction: 'inbound', sender: 'customer', text: '[photo]', message_type: 'image', meta_message_id: 'mid-2', ai_meta: null, perception: unreadable, created_at: '2026-10-30T11:00:00Z' },
+        { id: 'q1', direction: 'inbound', sender: 'customer', text: '[shared reel] A 37-second reel showing a Python decorator.', message_type: 'reel', meta_message_id: 'mid-1', ai_meta: null, perception, created_at: '2026-10-30T10:00:00Z' },
+        { id: 't0', direction: 'inbound', sender: 'customer', text: 'hello', message_type: 'text', meta_message_id: 'mid-0', ai_meta: null, perception: null, created_at: '2026-10-30T09:00:00Z' },
+    ];
+    const answer = (sql: string) => {
+        if (/SELECT 1 FROM conversations/.test(sql)) return { rows: [{ '?column?': 1 }] };
+        if (/FROM messages WHERE conversation_id/.test(sql)) return { rows: stored() };
+        return { rows: [] };
+    };
+
+    it('reads the whole row, so the column v60 added comes back with it and the route has no list of columns to forget', async () => {
+        const { sent } = await call('get', '/conversations/:id/messages', { params: { id: CONV } }, answer);
+        const read = sent.find((s) => /FROM messages WHERE conversation_id/.test(s.sql))!;
+        assert.match(read.sql, /^SELECT \* FROM messages WHERE conversation_id = \$1 ORDER BY created_at DESC LIMIT 100$/);
+        assert.deepEqual(read.params, [CONV]);
+    });
+
+    it('answers `perception` on the customer\'s messages and `ai_meta` on the reply as the objects the pipeline stored, untouched, oldest first', async () => {
+        const { res } = await call('get', '/conversations/:id/messages', { params: { id: CONV } }, answer);
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(res.body.map((r: any) => r.id), ['t0', 'q1', 'p2', 'a1']);
+        const byId = new Map(res.body.map((r: any) => [r.id, r]));
+        assert.deepEqual((byId.get('q1') as any).perception, perception, 'what was understood, field for field');
+        assert.equal(typeof (byId.get('q1') as any).perception, 'object', 'an object, not a string the page has to parse');
+        assert.deepEqual((byId.get('p2') as any).perception, unreadable, 'and an honest failure is a row\'s too');
+        assert.equal((byId.get('t0') as any).perception, null, 'a message perception never ran for is null');
+        assert.deepEqual((byId.get('a1') as any).ai_meta, meta, 'the decision: the action, the reason and the flags');
+        assert.equal((byId.get('a1') as any).ai_meta.perceived, true);
+        assert.equal((byId.get('a1') as any).ai_meta.reason, meta.reason);
+    });
+
+    it('answers the readable text the pipeline stored beside it, so the page can tell a description from words the customer wrote', async () => {
+        const { res } = await call('get', '/conversations/:id/messages', { params: { id: CONV } }, answer);
+        const reel = res.body.find((r: any) => r.id === 'q1');
+        assert.equal(reel.message_type, 'reel');
+        assert.match(reel.text, /^\[shared reel\] A 37-second reel/);
+        assert.equal(res.body.find((r: any) => r.id === 't0').text, 'hello');
+    });
+
+    it('gives a row from before v60 (no column at all) back as it is, and the page reads that as "perception never ran"', async () => {
+        const { res } = await call('get', '/conversations/:id/messages', { params: { id: CONV } }, (sql) => (
+            /SELECT 1 FROM conversations/.test(sql)
+                ? { rows: [{ '?column?': 1 }] }
+                : { rows: [{ id: 'old', direction: 'inbound', sender: 'customer', text: '[photo]', message_type: 'image', meta_message_id: null, created_at: '2026-10-01T09:00:00Z' }] }
+        ));
+        assert.equal(res.statusCode, 200);
+        assert.equal('perception' in res.body[0], false);
+    });
+});
+
 // ─── POST /conversations/:id/refresh-profile ─────────────────────────────────────────────────
 describe('POST /conversations/:id/refresh-profile — the lazy backfill', () => {
     const THREAD = { id: CONV, instagram_user_id: '17841400003051', platform: 'instagram', page_access_token: 'EAAGplain' };
