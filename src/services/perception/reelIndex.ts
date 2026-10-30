@@ -204,8 +204,11 @@ export type ReelFailReason =
     | GraphProblem['reason']
     | 'provider_error' | 'bad_output';
 
-/** Why a reel was left alone with nothing changed: the switch is off, the day's cap is spent, or no route can answer. The reel stays as it was and is queued again tomorrow. */
-export type ReelSkipReason = 'switch_off' | 'budget' | 'no_key' | 'not_connected';
+/**
+ * Why a reel was left alone with nothing changed: the switch is off, the day's cap is spent, no route can answer, the tenant has no Meta connection any more, or the
+ * tenant was deactivated after the job was queued (nothing is spent for a tenant the operator switched off). The reel stays as it was and is queued again tomorrow.
+ */
+export type ReelSkipReason = 'switch_off' | 'budget' | 'no_key' | 'not_connected' | 'inactive';
 
 export type ReelIndexOutcome =
     | { status: 'ok'; id: string | null; model: string; provider: string; ms: number; usd: number; fellBack: boolean; bytes: number }
@@ -393,10 +396,11 @@ export async function indexReel(args: IndexArgs, depsIn: Partial<ReelIndexDeps> 
         return { status: 'skipped', reason: gate.reason };
     }
 
-    const tenant = await getTenant(creatorId, ['id', 'page_access_token']);
-    if (!tenant?.page_access_token) {
-        log('info', 'muse.reel_index_skipped', { ...logBase, reason: 'not_connected' });
-        return { status: 'skipped', reason: 'not_connected' };
+    const tenant = await getTenant(creatorId, ['id', 'page_access_token', 'is_active']);
+    if (!tenant?.page_access_token || tenant.is_active === false) {
+        const reason = tenant && tenant.is_active === false ? 'inactive' : 'not_connected';
+        log('info', 'muse.reel_index_skipped', { ...logBase, reason });
+        return { status: 'skipped', reason };
     }
 
     /** A reel that could not be watched. A failure that may pass is stored only on the last attempt: while the runner will try again, the row stays as it was. */

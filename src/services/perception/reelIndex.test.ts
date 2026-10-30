@@ -572,6 +572,14 @@ describe('the gate: the switch, a route and the day\'s cap', () => {
         assert.ok(MUSE_BUDGET_PURPOSES.includes('reel_index'));
     });
 
+    it('does nothing for a tenant the operator deactivated after the job was queued: no Graph read, no download, no model, nothing spent', async () => {
+        configure(world, { route: 'baseten' });
+        addReel(world, '9001');
+        world.reel.creators.get(TENANT)!.is_active = false;
+        assert.deepEqual(await index('9001'), { status: 'skipped', reason: 'inactive' });
+        untouched();
+    });
+
     it('is nothing without a Meta connection for the tenant, and a reel id that cannot be one is not looked up', async () => {
         configure(world, { route: 'baseten' });
         world.reel.creators.get(TENANT)!.page_access_token = null;
