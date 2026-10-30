@@ -130,6 +130,87 @@
       not the name (src/routes/youtube.ts, the callback);
     · no third-party content, ads or cookies: the YouTube code has none.
 
+  DM REPLIES THROUGH AN AI PROVIDER — ADDED 2026-10-15, RE-VERIFIED 2026-10-25
+  (section 3's third paragraph, and the DM sentences in section 5 and on
+  /data-deletion and /terms). Gemini is the default engine; the operator can
+  change it per account, and the claims are what the code does when they do:
+    · the engine is per account, `gemini` by default, `providers` the other:
+      DM_ENGINES / DEFAULT_DM_ENGINE, src/services/dmEngine.ts:37-43;
+    · `providers` sends the same persona, knowledge base and history window as
+      Gemini (HISTORY_WINDOW = 8, src/services/ai.ts:97) through the `dm` route,
+      and NO notes about the conversation: generateDmViaLayer(),
+      dmEngine.ts:145-201. Hence "In sales mode" before the notes on the page;
+    · sales mode (ai_agents.sales_mode, read per message in
+      src/webhook/messaging.ts:525-533) always uses the `dm` route
+      (generate({ purpose: 'dm' }), src/services/dmSales/turn.ts:454-457), with up
+      to 12 messages: SALES_HISTORY_WINDOW, turn.ts:78, and the turn's facts
+      (stage, link sent, button tapped, the CAMPAIGN'S keyword, never the
+      comment's text): salesFactsBlock(), src/services/dmSales/prompt.ts:163-176,
+      the keyword from bridge.ts:138;
+    · the ad the person came from joins those facts ONLY when the tenant switched
+      ads.bot_context on ("Give the assistant the ad's context"; section 1's ads
+      list says the same): adContextFor(), messaging.ts:755-766, handed to the
+      sales turn only (messaging.ts:537-551, turn.ts:400), as the ad's name, its
+      offer, its text (cut to 200 characters) and the button tapped (adFactsFor(),
+      src/services/ads/attribution.ts:285-303; the lines, src/services/profile/
+      kits.ts:314-318 and :577-581). Never the media links or the ad id;
+    · each turn is direction and text only (dmTurns(), dmEngine.ts:105-113;
+      salesTurns(), dmSales/history.ts:114): no username, account id or
+      conversation id is in any request the layer builds, and no adapter adds
+      one (the request bodies: src/services/llm/adapters/anthropic.ts,
+      chatCompletions.ts, openai.ts and gemini.ts carry model, system text,
+      turns, schema and limits only);
+    · a provider that fails is answered once by Gemini when the account's
+      fallback is on (generateDmReply(), dmEngine.ts:235-283; the sales turn's
+      modelFailed(), turn.ts:408-450), and otherwise handed to a person, which
+      may alert the operator (next block).
+
+  OWNER ALERTS WHEN A PERSON IS NEEDED — ADDED 2026-10-25 (section 3's last
+  paragraph, the alerts line in section 2, the Resend and Telegram lines in
+  section 5, section 7's dashboard line, and "Alerts to the operator" in section
+  5 of /data-deletion). What triggers an alert, where it goes, what it carries:
+    · a reply that fails on its LAST attempt (not a permanent Meta error, not a
+      message with no words), in EVERY sales_mode, and the `providers` engine
+      failing with its fallback off or failed too: handOver(),
+      src/webhook/messaging.ts:490-499, called at :577-581 and :721 →
+      handoffAfterFailure(), src/services/dmSales/failureHandoff.ts:115-162,
+      which calls notifyOwner() at :150-153 (reason engine_failed);
+    · sales mode only: a turn that ends in the handoff stage (asked for a
+      person, a refund, a complaint, an answer the data could not support, a
+      loop) or a reply that sent the link to a buying intent (ready_to_buy,
+      price, level_fit): noticeFor(), src/services/dmSales/handoff.ts:76-84,
+      HOT_INTENTS :52, called once the turn is recorded (turn.ts:248-252);
+    · ONLY the platform owner's tenant (the first creator, getPlatformOwnerId(),
+      src/services/tenant.ts:100-106) is ever alerted, on the deployment's own
+      channels (app_settings notify.*): handoff.ts:138-141. Any other tenant
+      gets the inbox flag only. Hence "the operator ... only about
+      conversations with his own account";
+    · only when a channel is switched on AND complete (Telegram: token and chat
+      id; email: a Resend key and an address): telegramReady(), notify.ts:71-73;
+      emailReady(), notifyEmail.ts:140-142; handoff.ts:130-136. Hot leads have
+      their own switch per channel (Telegram on unless turned off, email off
+      unless turned on: notify.ts:61, notifyEmail.ts:105). At most 3 hand-off
+      alerts and 1 hot-lead alert per conversation per hour (handoff.ts:55-56,
+      :145-155; the counter is a rate_limit_counters row, pruned after 48 h,
+      src/utils/rateLimiter.ts:179). Hence "may be alerted";
+    · what it carries: the reason; the person (noticeWho(), notify.ts:354-359:
+      the @username when the conversation has one, else the LAST FOUR
+      characters of the platform-scoped id); the last inbound message cut to
+      200 characters, links replaced by «[link]», bidi and control characters
+      removed (excerpt(), notify.ts:251-261; buildNoticeText(), :362-371); the
+      time Meta's 24 h window has left; the inbox link (inboxLink(),
+      notify.ts:264-266, which holds the conversation's internal id). The email
+      adds the channel and puts noticeWho() in its subject (emailSubject() and
+      emailBody(), notifyEmail.ts:359-371);
+    · how it travels: Telegram's Bot API, plain text, link previews off
+      (sendTelegramMessage(), notify.ts:188-208; TELEGRAM_API :23); Resend's API
+      (sendEmail(), notifyEmail.ts:299-321; RESEND_API :44). Nothing of the
+      alert is stored in our database. Resend's policy URL,
+      https://resend.com/legal/privacy-policy, was opened on 2026-10-25;
+    · NOT the ads alerts: section 1's "never customer data" is about
+      src/services/ads/notify.ts, which renders only the ad account, amounts and
+      Meta's status, and it stays true. The new paragraph says the two differ.
+
   META ADS (BOOST) — ADDED 2026-10-22 WITH PR #225 (migration v52). Section 1
   "When the account owner boosts a post" and the ads lines in sections 2, 4,
   5, 6 and 7 claim the following, and the code does it:
@@ -1586,6 +1667,7 @@
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
+                    <li>تنبيه مُشغّل الأداة حين تحتاج محادثةٌ مع حسابه هو إلى شخص (القسم 3).</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
                     <li>ترويج المنشورات التي يختارها صاحب الحساب بإعلانات في حسابه الإعلاني لدى ميتا، ضمن الحدود التي وضعها، وإظهار ما أنفقه كل ترويج ونتائجه.</li>
@@ -1596,7 +1678,7 @@
                 <h2 id="gemini-ar">3. الردّ الآلي و«جيميناي» من جوجل</h2>
                 <p>
                     الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
-                    يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
+                    يُرسَل افتراضياً <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة <bdi lang="en" dir="ltr">Gemini API</bdi></a>
                     من جوجل.
                 </p>
@@ -1606,8 +1688,30 @@
                     إلى جوجل إطلاقاً — مسار التعليقات لا يستخدم الذكاء الاصطناعي.
                 </p>
                 <p>
+                    ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
+                    الاصطناعي المذكورين في القسم 5، والحساب الذي يستخدم وضع المبيعات في الأداة تُكتب ردوده بهذه
+                    الطريقة دائماً. وعندئذٍ يُرسَل <strong>نصّ رسالتك وما يصل إلى آخر اثنتي عشرة رسالة من المحادثة</strong>،
+                    مع اتجاه كل رسالة، إلى ذلك المزوّد بدلاً من جوجل. وفي وضع المبيعات تُرسَل معها ملاحظات عن المحادثة
+                    نفسها: كأن يُذكر هل أُرسل إليك رابط من قبل، وأيّ أزرار الحساب ضغطت، أو أنك علّقت على منشور بالكلمة
+                    المفتاحية التي حدّدها الحساب (الكلمة نفسها، لا تعليقك)، وإن جئتَ من أحد إعلانات الحساب وشغّل صاحب
+                    الحساب «أعطِ المساعد سياق الإعلان»، فاسمُ ذلك الإعلان وعرضُه ونصُّه (القسم 1). <strong>ولا يُرسَل إليه
+                    كذلك اسمك ولا معرّف حسابك ولا معرّف المحادثة.</strong> وإن تعذّر على ذلك المزوّد الردّ، فقد يكتب الردَّ
+                    «جيميناي» كما سبق.
+                </p>
+                <p>
                     وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
                     بأنك تتحدّث إلى خدمة آلية.
+                </p>
+                <p>
+                    <strong>حين تحتاج محادثتك إلى شخص:</strong> قد يُنبَّه مُشغّل الأداة (القسم 9) إذا تعذّرت كتابة ردّ على
+                    رسالتك (عطل تقني)، وكذلك في وضع المبيعات حين يحوّل المساعد محادثتك إلى شخص (كأن تطلب التحدّث إلى شخص
+                    أو استرجاع مالك أو تشتكي)، أو حين يرسل إليك الرابط بعد أن سألت عن الشراء أو عن السعر أو عن مناسبته لك.
+                    ولا يحدث ذلك إلا في المحادثات مع حسابه هو، وإلا إن فعّل التنبيهات. والتنبيه رسالة على تيليجرام و/أو بريد
+                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). <strong>يُذكر فيه اسم المستخدم الخاص بك،
+                    أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم مستخدم لك، وما يصل إلى 200 حرف من آخر رسالة
+                    كتبتَها</strong>، وتُستبدَل الروابط فيها بـ«<bdi lang="en" dir="ltr">[link]</bdi>». ويُذكر فيه أيضاً سبب
+                    الحاجة إلى شخص، والوقت الباقي من نافذة الردّ لدى ميتا، ورابط إلى المحادثة في لوحة التحكم. وهذه التنبيهات
+                    غير تنبيهات الإعلانات الموصوفة في القسم 1، التي لا تحتوي شيئاً عنك.
                 </p>
 
                 <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
@@ -1726,12 +1830,23 @@
                         ولا تحتوي على نصوص الرسائل.
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Vercel</bdi></a>.
                     </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Resend</bdi></strong> — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة:
+                        تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك (أو آخر أربعة أحرف
+                        من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.
+                        <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Resend</bdi></a>.
+                    </li>
+                    <li>
+                        <strong>تيليجرام</strong> (<bdi lang="en" dir="ltr">Telegram</bdi>) — يوصل التنبيهات نفسها رسائلَ إلى محادثة
+                        تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة.
+                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيليجرام</a>.
+                    </li>
                 </ul>
 
                 <h3 id="ai-providers-ar">مزوّدو الذكاء الاصطناعي (جهات معالجة فرعية)</h3>
                 <p>
                     يستطيع مُشغّل الأداة (القسم 9) أن يفعّل مزوّداً أو أكثر من المزوّدين التاليين ليكتب مسودّات بالذكاء
-                    الاصطناعي لحساب صاحب الحساب. <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
+                    الاصطناعي لحساب صاحب الحساب، والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3). <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
                     وما لم يفعل ذلك لا يصله شيء.
                 </p>
                 <ul>
@@ -1764,9 +1879,9 @@
                 </ul>
                 <p>
                     <strong>ما يُرسَل إليهم:</strong> ملف صاحب الحساب ومحتواه — ما يكتبه عن نفسه وعن نشاطه، ونصوص موقعه
-                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. <strong>لا يُرسَل عبر هذا المسار
-                    شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong> (أما نصوص الرسائل الخاصة التي تصل إلى جوجل فموضّحة
-                    في القسم 3). ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
+                    وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ
+                    على رسائله الخاصة، <strong>يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً</strong>، على النحو الموضّح في القسم 3 تماماً؛
+                    <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
                     وما يصل إلى كل منهم يخضع لسياسته هو، ولا نستطيع حذفه نيابةً عنك.
                 </p>
 
@@ -1805,7 +1920,10 @@
                         <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
-                    <li>لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات — محميّة بكلمة مرور.</li>
+                    <li>
+                        لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات كاملةً — محميّة بكلمة مرور. ولا يحمل
+                        التنبيه (القسم 3) إلا المقتطف الموصوف هناك.
+                    </li>
                 </ul>
                 <p>
                     ولا نزعم أكثر من ذلك: لا يوجد تشفير من طرف إلى طرف، ونصوص الرسائل مخزّنة
@@ -2313,6 +2431,7 @@
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
+                    <li>To alert the operator of the tool when a conversation with his own account needs a person (section 3).</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
                     <li>To boost the posts the account owner chooses with ads in their own Meta ad account, within the limits they set, and to show what each boost spent and achieved.</li>
@@ -2323,7 +2442,7 @@
                 <h2 id="gemini-en">3. Automated replies and Google Gemini</h2>
                 <p>
                     Replies to direct messages are written by an AI model, not a person. To
-                    generate one, <strong>the text of your message and the last eight messages
+                    generate one, by default, <strong>the text of your message and the last eight messages
                     in the thread</strong> are sent to Google's
                     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API</a>.
                 </p>
@@ -2334,8 +2453,34 @@
                     all — the comment path does not use AI.
                 </p>
                 <p>
+                    The operator of the tool (section 9) can instead have an account's replies written by one
+                    of the AI providers listed in section 5, and an account that uses the tool's sales mode
+                    always has them written that way. Then <strong>the text of your message and up to the last
+                    twelve messages in the thread</strong>, with the direction of each, are sent to that provider
+                    in place of Google. In sales mode they go together with notes about the conversation itself:
+                    for example, whether you have already been sent a link, which of the account's buttons you
+                    tapped, or that you commented the account's keyword on a post (the keyword, not your comment),
+                    and, if you came from one of the account's ads and the account owner has turned on "Give the
+                    assistant the ad's context", that ad's name, offer and text (section 1). <strong>Your
+                    username, your account ID and the conversation ID are not sent to it either.</strong> If that
+                    provider cannot answer, the reply may be written by Gemini as described above.
+                </p>
+                <p>
                     As Meta's policy requires, the first message in a thread — and another one
                     after a long gap — tells you that you are talking to an automated service.
+                </p>
+                <p>
+                    <strong>When your conversation needs a person:</strong> the operator of the tool (section 9) may be
+                    alerted when no reply to your message could be written (a technical failure), and, in sales mode,
+                    when the assistant hands your conversation to a person (for example because you asked for one, asked
+                    for a refund or complained) or has just sent you the link after you asked to buy, asked the price or
+                    asked whether it suits you. This happens only for conversations with his own account, and only if he
+                    has switched the alerts on. The alert is a Telegram message and/or an email sent through Resend
+                    (section 5). <strong>It names you by your username, or, if we have none, by the last four characters
+                    of your account ID, and quotes up to 200 characters of the last message you wrote</strong>, with any
+                    link in it replaced by “[link]”. It also says why a person is needed, how long Meta's reply window
+                    has left, and links to the conversation in the dashboard. These alerts are not the ads alerts in
+                    section 1, which contain nothing about you.
                 </p>
 
                 <h2 id="retention-en">4. How long it is kept</h2>
@@ -2465,12 +2610,25 @@
                         and do not contain message text.
                         <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Vercel's privacy policy</a>.
                     </li>
+                    <li>
+                        <strong>Resend</strong> — sends the alert emails, when they are switched on: the alerts about a
+                        conversation that needs a person, described in section 3, which carry your username (or the last
+                        four characters of your account ID) and up to 200 characters of your last message, and the ads
+                        alerts in section 1.
+                        <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Resend's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Telegram</strong> — delivers the same alerts as Telegram messages, to the chat set in
+                        Settings, when they are switched on.
+                        <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">Telegram's privacy policy</a>.
+                    </li>
                 </ul>
 
                 <h3 id="ai-providers-en">AI providers (sub-processors)</h3>
                 <p>
                     The operator of the tool (section 9) can switch on one or more of the providers below to write
-                    AI drafts for an account owner. <strong>None of them is used unless the operator has added its key and left it
+                    AI drafts for an account owner and, where the operator chooses, the replies to its direct messages
+                    (section 3). <strong>None of them is used unless the operator has added its key and left it
                     switched on</strong>; until then nothing reaches it.
                 </p>
                 <ul>
@@ -2503,9 +2661,10 @@
                 <p>
                     <strong>What is sent to them:</strong> the account owner's profile and content — what they write about
                     themselves and their work, the text of their site and the links they provide, and the posts being written
-                    for them and their captions — so that a draft can be written for them. <strong>Nothing about people who
-                    comment or message on Instagram or Facebook is sent through this route</strong> (the direct-message text
-                    that reaches Google is described in section 3). Each provider is used with the operator's key, not the
+                    for them and their captions — so that a draft can be written for them. When the operator has a provider write
+                    an account's direct-message replies, <strong>the text of the conversation is sent to that provider
+                    too</strong>, exactly as section 3 describes; <strong>nothing else about people who comment or message
+                    on Instagram or Facebook is sent through this route</strong>. Each provider is used with the operator's key, not the
                     account owner's. What reaches each of them is governed by its own
                     policy, and we cannot delete it on your behalf.
                 </p>
@@ -2548,7 +2707,10 @@
                         and refresh tokens, are <strong>encrypted before they are stored</strong>,
                         with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
-                    <li>The dashboard — the only place conversations are read from — is password-protected.</li>
+                    <li>
+                        The dashboard — the only place whole conversations are read from — is password-protected. An
+                        alert (section 3) carries only the excerpt described there.
+                    </li>
                 </ul>
                 <p>
                     We claim no more than that: there is no end-to-end encryption, and message
