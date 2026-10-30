@@ -108,7 +108,8 @@ describe('Baseten may answer one purpose: reel_index (PROVIDER_PURPOSE_ALLOWLIST
 
     it('gives the refusal words that name Baseten, the one purpose and what never reaches it, and the same shape for any provider that gets a list', () => {
         const reason = providerPurposeReason('Baseten', 'baseten');
-        assert.equal(reason, 'Baseten may answer only reel_index: it runs Meta\'s open model on the account owner\'s own published reels, and what people send, comment or follow with never goes to it.');
+        assert.equal(reason, 'Baseten may answer only reel_index: it watches the owner\'s own published reels, and no message, comment or follower data goes to it.');
+        assert.ok(reason.length <= 140, 'short enough to sit inside an AiError\'s 240 characters with a route\'s name and advice around it');
     });
 
     it('keeps the two directions apart: reel_index lists Baseten as a provider that may answer it, and no other purpose lists it', () => {

@@ -135,10 +135,13 @@ export function providerMayAnswer(provider: ProviderId, purpose: AiPurpose): boo
     return !only || only.includes(purpose);
 }
 
-/** The words a refusal uses, for a provider that may answer only some purposes. `providerLabel` is the name the operator knows it by ("Baseten"). */
+/**
+ * The words a refusal uses, for a provider that may answer only some purposes. `providerLabel` is the name the operator knows it by ("Baseten"). Short on purpose: an
+ * `AiError` keeps 240 characters of its message, and this one has a route's name and a piece of advice around it in `pickRoute`.
+ */
 export function providerPurposeReason(providerLabel: string, provider: ProviderId): string {
     const only = PROVIDER_PURPOSE_ALLOWLIST[provider] ?? [];
-    return `${providerLabel} may answer only ${only.join(', ')}: it runs Meta's open model on the account owner's own published reels, and what people send, comment or follow with never goes to it.`;
+    return `${providerLabel} may answer only ${only.join(', ')}: it watches the owner's own published reels, and no message, comment or follower data goes to it.`;
 }
 
 /**

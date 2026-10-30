@@ -19,7 +19,7 @@ import { PROVIDER_IDS } from '../llm/registry.js';
 import { installAiDb, type AiDb } from './testDb.js';
 import { assertNoKey, FAKE_KEYS } from './testKeys.js';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY', 'GEMINI_API_KEY'] as const;
 
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
@@ -544,8 +544,8 @@ describe('planAiPatch: what a change may be', () => {
         assert.match(problems({ providers: { baseten: { baseUrl: 'https://llm.example.com/v1' } } })[0]!, /providers\.baseten\.baseUrl: only Custom has a base URL/);
     });
 
-    it('refuses to SAVE a route to Baseten for every purpose but reel_index, with the reason that nothing people send, comment or follow with goes to it, and saves nothing', () => {
-        const reason = 'Baseten may answer only reel_index: it runs Meta\'s open model on the account owner\'s own published reels, and what people send, comment or follow with never goes to it.';
+    it('refuses to SAVE a route to Baseten for every purpose but reel_index, with the reason that no message, comment or follower data goes to it, and saves nothing', () => {
+        const reason = 'Baseten may answer only reel_index: it watches the owner\'s own published reels, and no message, comment or follower data goes to it.';
         const others = AI_PURPOSES.filter((purpose) => purpose !== 'reel_index');
         assert.equal(others.length, 12);
         for (const purpose of others) {

@@ -99,7 +99,7 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
         const named = own ? purpose : `${purpose} (taken from the ${fallback} route)`;
         // Before the provider's key is looked at, like the allow-list below: a route that may not be used is refused whatever its key says.
         if (!providerMayAnswer(saved.provider, purpose)) {
-            throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}. ${providerPurposeReason(providerName(saved.provider), saved.provider)} Choose another provider for this purpose.`);
+            throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}. ${providerPurposeReason(providerName(saved.provider), saved.provider)} Choose another provider.`);
         }
         if (allowed && !allowed.includes(saved.provider)) {
             throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which is not on the list of providers that may answer this purpose (${allowed.map(providerName).join(', ')}). Choose one of them.`);

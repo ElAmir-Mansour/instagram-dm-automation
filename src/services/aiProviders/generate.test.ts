@@ -10,6 +10,7 @@ import { estimateUsd, generate, IMAGE_TOKENS, setAiCaller, setProviderFetch, VID
 import { AiError, isAiError } from '../llm/errors.js';
 import type { GeminiSchema } from '../llm/geminiSchema.js';
 import { setLlmCaller, type GenerateJsonArgs, type GenerateJsonResult } from '../llm/generate.js';
+import { AI_PURPOSES } from './purposes.js';
 import { MacBrainTenantRefused } from './route.js';
 import { BudgetRefused, monthStart } from './usage.js';
 import { installAiDb, type AiDb } from './testDb.js';
@@ -20,7 +21,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const TENANT = '44444444-4444-4444-8444-444444444444';
 const SCHEMA: GeminiSchema = { type: 'OBJECT', properties: { reply: { type: 'STRING' } }, required: ['reply'] };
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: { level: string; line: string }[];
@@ -736,6 +737,142 @@ describe('the whole path, through the real Meta adapter', () => {
         assert.deepEqual([sent.provider, sent.model, sent.effort, sent.apiKey], ['meta', 'muse-spark-1.3', 'low', FAKE_KEYS.meta]);
         assert.equal(sent.maxTokens, 20_000, 'a caller\'s limit above the floor is its own');
         assert.deepEqual([out.route, out.effort], ['default', 'low']);
+    });
+});
+
+describe('Baseten (Meta\'s open model), through generate: the reel indexer only', () => {
+    const MODEL = 'meta-models/muse-spark-open-1026';
+    const VIDEO = { kind: 'video' as const, mime: 'video/mp4', base64: 'VklERU9CWVRFUw==' };
+    const OTHERS = AI_PURPOSES.filter((purpose) => purpose !== 'reel_index');
+    const answerOf = (model: string, usage: Record<string, unknown> = { prompt_tokens: 5863, completion_tokens: 3371 }) => jsonResponse(200, {
+        id: 'chatcmpl-1', object: 'chat.completion', model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"reply":"a reel about APIs"}', reasoning_content: 'thinking' } }],
+        usage,
+    });
+    /** Provider calls go to the real adapters through a stub `fetch`: what is sent to Baseten is what the wire shows. */
+    const viaWire = (...script: Parameters<typeof stubFetch>) => {
+        restoreCaller?.();
+        restoreCaller = undefined;
+        const stub = stubFetch(...script);
+        setProviderFetch(stub.fetchImpl);
+        return stub;
+    };
+    const route = (routing: Record<string, unknown>) => db.setSetting('ai.routing', JSON.stringify(routing));
+    beforeEach(() => db.setSetting('ai.providers.baseten.api_key', FAKE_KEYS.baseten, true));
+
+    it('answers the reel indexer on a saved route: one POST to inference.baseten.co, the Bearer key in the header only, the video as a data URL, effort low, and a priced row of its own', async () => {
+        route({ reel_index: { provider: 'baseten', model: MODEL, effort: 'low' } });
+        const { calls } = viaWire(answerOf(MODEL));
+        const out = await call({ purpose: 'reel_index', maxTokens: 8000, user: [{ role: 'user', text: 'Watch the whole reel.', media: [VIDEO] }] });
+        assert.deepEqual(out.json, { reply: 'a reel about APIs' });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.url, 'https://inference.baseten.co/v1/chat/completions');
+        assert.equal(calls[0]!.headers['authorization'], `Bearer ${FAKE_KEYS.baseten}`);
+        assert.ok(!calls[0]!.url.includes(FAKE_KEYS.baseten) && !calls[0]!.raw.includes(FAKE_KEYS.baseten), 'never in the URL or the body');
+        assert.equal(calls[0]!.body.model, MODEL);
+        assert.equal(calls[0]!.body.reasoning_effort, 'low');
+        assert.equal(calls[0]!.body.max_tokens, 8000);
+        assert.deepEqual(calls[0]!.body.messages[1].content.map((p: { type: string }) => p.type), ['text', 'video_url']);
+        const row = db.usage[0]!;
+        assert.deepEqual(
+            [row.purpose, row.provider, row.model, row.outcome, row.input_tokens, row.output_tokens, row.priced, row.usd, row.creator_id],
+            ['reel_index', 'baseten', MODEL, 'ok', 5863, 3371, true, 0.0216555, TENANT],
+        );
+        assert.deepEqual([out.priced, out.costSource, out.route], [true, 'table', 'saved']);
+        assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
+        assert.ok(!(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n')).includes(VIDEO.base64), 'the reel is in no row and no log line');
+    });
+
+    it('raises a small limit to the 4 000 floor, as it does for Meta: the model always reasons', async () => {
+        route({ reel_index: { provider: 'baseten', model: MODEL, effort: 'low' } });
+        const { calls } = viaWire(answerOf(MODEL));
+        await call({ purpose: 'reel_index', maxTokens: 200 });
+        assert.equal(calls[0]!.body.max_tokens, 4000);
+    });
+
+    it('is refused for EVERY other purpose on a saved route, however the call is made: `no_provider`, a refusal row, no request, and the customer\'s words are never sent', async () => {
+        assert.equal(OTHERS.length, 12);
+        for (const purpose of OTHERS) {
+            route({ [purpose]: { provider: 'baseten', model: MODEL, effort: 'low' } });
+            const { calls } = viaWire(answerOf(MODEL));
+            db.usage.length = 0;
+            const err = await failure(call({ purpose, creatorId: TENANT, user: 'CUSTOMER-WORDS-SENTINEL do you have a course on APIs?', system: 'SYSTEM-SENTINEL you answer customers.' }));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.equal(err.retryable, false, purpose);
+            assert.match(err.message, /Baseten may answer only reel_index/, purpose);
+            assert.equal(calls.length, 0, `${purpose}: nothing went out`);
+            assert.deepEqual(db.usage.map((u) => [u.purpose, u.provider, u.outcome, u.usd]), [[purpose, 'none', 'no_provider', 0]], purpose);
+        }
+        assert.ok(logs.some((l) => l.line.includes('"event":"ai.call_refused"')), 'a refusal is logged');
+    });
+
+    it('is refused when it is the only provider with a key and no route is saved: the default order never reaches it for another purpose, so there is no provider at all', async () => {
+        db.settings.delete('ai.providers.anthropic.api_key');
+        for (const purpose of OTHERS) {
+            const { calls } = viaWire(answerOf(MODEL));
+            const err = await failure(call({ purpose, creatorId: TENANT, user: 'CUSTOMER-WORDS-SENTINEL' }));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.match(err.message, /No AI provider is ready/, purpose);
+            assert.equal(calls.length, 0, purpose);
+        }
+        // And the one purpose it answers is answered by default, at its model and effort.
+        const { calls } = viaWire(answerOf(MODEL));
+        const out = await call({ purpose: 'reel_index' });
+        assert.deepEqual([calls[0]!.url, calls[0]!.body.model, calls[0]!.body.reasoning_effort, out.route], ['https://inference.baseten.co/v1/chat/completions', MODEL, 'low', 'default']);
+    });
+
+    it('is refused for a named route too (a call that belongs to no tenant: the benchmark, the admin\'s Test): reel_index may name Baseten, every other purpose may not', async () => {
+        const { calls } = viaWire(answerOf(MODEL));
+        for (const purpose of OTHERS) {
+            const err = await failure(call({ purpose, creatorId: null, usageAs: 'eval', route: { provider: 'baseten', model: MODEL } }));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.match(err.message, /Baseten may answer only reel_index/, purpose);
+        }
+        assert.equal(calls.length, 0);
+        const out = await call({ purpose: 'reel_index', creatorId: null, usageAs: 'eval', route: { provider: 'baseten', model: MODEL } });
+        assert.equal(out.provider, 'baseten');
+        assert.equal(calls.length, 1);
+        assert.equal(db.usage.at(-1)!.purpose, 'eval');
+    });
+
+    it('is refused for the operator\'s Test of a route (`key_test`) for any purpose but reel_index, like any other call', async () => {
+        route({ dm: { provider: 'baseten', model: MODEL, effort: 'low' } });
+        const { calls } = viaWire(answerOf(MODEL));
+        const err = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'key_test' }));
+        assert.equal(err.kind, 'no_provider');
+        assert.equal(calls.length, 0);
+    });
+
+    it('lets a tenant\'s call say who must NOT answer (`avoid`), and then Meta\'s hosted model answers the reel indexer: the move after a Baseten failure, with both calls on the books', async () => {
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        route({ reel_index: { provider: 'baseten', model: MODEL, effort: 'low' } });
+        const { calls } = viaWire(
+            jsonResponse(503, { error: { message: 'overloaded' } }),
+            answerOf('muse-spark-1.3', { prompt_tokens: 10_475, completion_tokens: 2000 }),
+        );
+        const first = await failure(call({ purpose: 'reel_index', maxTokens: 8000 }));
+        assert.deepEqual([first.kind, first.provider], ['server', 'baseten']);
+        const second = await call({ purpose: 'reel_index', maxTokens: 8000, avoid: ['baseten'] });
+        assert.deepEqual([calls[0]!.url, calls[1]!.url], ['https://inference.baseten.co/v1/chat/completions', 'https://api.meta.ai/v1/chat/completions']);
+        assert.equal(calls[1]!.headers['authorization'], `Bearer ${FAKE_KEYS.meta}`);
+        assert.deepEqual([second.provider, second.model, second.route], ['meta', 'muse-spark-1.3', 'default']);
+        assert.deepEqual(db.usage.map((u) => [u.purpose, u.provider, u.model, u.outcome]), [
+            ['reel_index', 'baseten', MODEL, 'server'],
+            ['reel_index', 'meta', 'muse-spark-1.3', 'ok'],
+        ]);
+    });
+
+    it('does not let `avoid` name a provider or reach Baseten: with Baseten the only key left, avoiding Meta still gives nothing for another purpose', async () => {
+        const { calls } = viaWire(answerOf(MODEL));
+        const err = await failure(call({ purpose: 'dm', creatorId: TENANT, avoid: ['meta', 'anthropic'] }));
+        assert.equal(err.kind, 'no_provider');
+        assert.equal(calls.length, 0);
+    });
+
+    it('still refuses a named route for a call that belongs to a tenant: `avoid` is the only thing a tenant\'s call may say', async () => {
+        const err = await failure(call({ purpose: 'reel_index', creatorId: TENANT, route: { provider: 'baseten', model: MODEL } }));
+        assert.equal(err.kind, 'bad_request');
+        assert.match(err.message, /A route can be named only for a call that belongs to no tenant/);
     });
 });
 
