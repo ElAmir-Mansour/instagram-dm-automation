@@ -72,7 +72,7 @@ export const REEL_INDEX_PROMPT = [
     '- summary: 2 to 4 sentences: what the reel is about and the point it makes.',
     '- topics: 3 to 10 short phrases someone might search for: concepts, tools, languages, problems, products. Include what is only SHOWN on screen and never said. Give each in English, and when the reel speaks Arabic add the Arabic term it uses as an entry of its own.',
     '- seen_on_screen: up to 12 short notes of what is shown and not only said: on-screen text (quoted exactly), code, diagrams, characters, tools, prices, numbers.',
-    '- narration: the speech, as close to word for word as you can, in the language spoken. Empty if nobody speaks.',
+    '- narration: the speech, as close to word for word as you can, in the language spoken ("" if nobody speaks).',
     '- key_moments: 4 to 10 moments in time order. second is whole seconds from the start; what is one short sentence on what happens or is shown then.',
     '- hook_first_3s: what the first 3 seconds show and say.',
     '- hook_score: 1 to 10, how strongly those 3 seconds make a viewer stay.',
