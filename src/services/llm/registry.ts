@@ -7,7 +7,9 @@
  * which adding Groq touched: its key setting and environment variable (aiProviders/settings.ts),
  * the shape of its key and its own status codes (errors.ts), what its reasoning models need
  * (adapters/chatCompletions.ts, limits.ts), the privacy and data-deletion pages' lists of who
- * receives a request, and the dashboard's names for the environment variables.
+ * receives a request, and the dashboard's names for the environment variables. Meta (Muse) touched
+ * the same places and added two of its own: a cached-input rate in its prices (cost.ts) and the
+ * rule that a `-contributor` model id may carry no customer's words (purposes.ts).
  *
  * Gemini is deliberately the same provider the DM bot and the Studio already use. Its key is the
  * existing `gemini.api_key` setting (P20c), not a second one.
@@ -22,9 +24,11 @@ export type ProviderFamily = 'anthropic' | 'openai_responses' | 'gemini' | 'chat
 
 /**
  * In `resolveRoute`'s fallback order (P20c): with no saved route, the first of these that has a
- * key is used, at its default model.
+ * key is used, at its default model. Meta is late on purpose: a purpose that names no provider is
+ * not moved to it while any provider before it can answer, and the purposes only Meta may answer
+ * (`PURPOSE_PROVIDER_ALLOWLIST`) are the ones it is for.
  */
-export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom'] as const;
+export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface ProviderDef {
@@ -104,6 +108,19 @@ export const PROVIDERS: readonly ProviderDef[] = [
         // be offering a model that fails. Any other id can still be typed.
         defaultModel: 'openai/gpt-oss-120b',
         suggestedModels: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
+    },
+    {
+        id: 'meta',
+        label: 'Meta (Muse)',
+        family: 'chat_completions',
+        baseUrl: 'https://api.meta.ai/v1',
+        editableBaseUrl: false,
+        keyRequired: true,
+        // Muse Spark 1.3 is the version Meta recommends for new work, and the one that read the Arabic reels and screenshots in the live tests
+        // of 2026-10-28; 1.2 is the previous version. The Standard models only: a `-contributor` id is the same model at a discount that
+        // lets Meta train on what is sent, so none is suggested and none can be routed (purposes.ts).
+        defaultModel: 'muse-spark-1.3',
+        suggestedModels: ['muse-spark-1.3', 'muse-spark-1.2'],
     },
     {
         id: 'custom',

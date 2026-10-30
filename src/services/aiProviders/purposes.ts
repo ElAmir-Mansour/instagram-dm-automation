@@ -7,7 +7,12 @@
 import type { ProviderId } from '../llm/registry.js';
 import type { Effort } from '../llm/types.js';
 
-export const AI_PURPOSES = ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review'] as const;
+export const AI_PURPOSES = [
+    'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+    // The four that only Meta's Muse models answer (docs/specs/005-muse-sees): what a word-less DM shows, which of the owner's reels a question is about,
+    // what each reel says and shows, and what an unmatched comment wants. Nothing calls them until the perception PRs; a route for each is the operator's.
+    'perception_dm', 'recall', 'reel_index', 'comment_intent',
+] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 
 export const isAiPurpose = (value: unknown): value is AiPurpose => typeof value === 'string' && (AI_PURPOSES as readonly string[]).includes(value);
@@ -22,11 +27,15 @@ export const isAiPurpose = (value: unknown): value is AiPurpose => typeof value 
  * by `pickRoute` to the first provider with a key at its chat default), and a speech model is none of that. Listed there it would show the
  * operator a row whose "Automatic" resolved to a chat model that cannot transcribe, and let a chat model be saved on it. Which providers may
  * serve it is not a routing choice but a privacy rule (only those whose terms forbid training: `TRANSCRIBE_PROVIDERS`).
+ *
+ * And `perception_voice`, a voice note heard by Meta's Muse Voice Transcribe (`/asr/transcribe`, billed by the hour of audio and not by tokens). A
+ * label for the same reason as `transcribe`: a speech model is not a chat model, so there is no route to save and no row for it in the routing table.
  */
 export const KEY_TEST = 'key_test';
 export const EVAL = 'eval';
 export const TRANSCRIBE = 'transcribe';
-export type UsagePurpose = AiPurpose | typeof KEY_TEST | typeof EVAL | typeof TRANSCRIBE;
+export const PERCEPTION_VOICE = 'perception_voice';
+export type UsagePurpose = AiPurpose | typeof KEY_TEST | typeof EVAL | typeof TRANSCRIBE | typeof PERCEPTION_VOICE;
 
 /**
  * How hard each purpose thinks when its route does not say (06's table). Always sent explicitly: Opus 5.5's own default is medium,
@@ -47,6 +56,12 @@ export const PURPOSE_DEFAULT_EFFORT: Readonly<Record<AiPurpose, Effort>> = {
     // MAC_BRAIN_PURPOSES, which means "refuse on the layer": a tenant on the Mac never asks the layer for them in the first place.
     ads_draft: 'medium',
     ads_review: 'medium',
+    // The perception purposes are answered while a person waits, one short structured answer each, and Muse Spark always reasons first (limits.ts
+    // floors its output at 4 000 tokens), so they think as little as a route lets them.
+    perception_dm: 'low',
+    recall: 'low',
+    reel_index: 'low',
+    comment_intent: 'low',
 };
 
 /** The effort of a `key_test` call: it asks for one word of JSON, so it asks for no thinking. */
@@ -58,6 +73,10 @@ export const KEY_TEST_EFFORT: Effort = 'low';
  * operator's API key and billed (06 §2, "The owner's rules, enforced in code").
  */
 export const MAC_BRAIN_PURPOSES: ReadonlySet<AiPurpose> = new Set<AiPurpose>(['tenant_monteur_think', 'tenant_infographic']);
+
+/** The providers that may answer the Muse purposes: Meta alone (see `PURPOSE_PROVIDER_ALLOWLIST`). */
+const META_ONLY: readonly ProviderId[] = Object.freeze(['meta'] as const);
+const META_ONLY_REASON = 'only Meta (Muse) is set up to answer this purpose.';
 
 /**
  * The providers whose terms forbid training on what is sent through their API: Anthropic, OpenAI and Groq (research R4). A WhatsApp customer's words
@@ -73,6 +92,23 @@ export const NO_TRAINING_PROVIDERS: readonly ProviderId[] = Object.freeze(['groq
  */
 export const PURPOSE_PROVIDER_ALLOWLIST: Readonly<Partial<Record<AiPurpose, readonly ProviderId[]>>> = Object.freeze({
     dm_whatsapp: NO_TRAINING_PROVIDERS,
+    // Meta's Muse models alone: they are the only ones in this layer that are sent a picture or a video (`LlmTurn.media`), and the library of reels
+    // that `recall` reads is built by Muse too. NOT `NO_TRAINING_PROVIDERS`, which gates WhatsApp: adding Meta there would open WhatsApp to it.
+    perception_dm: META_ONLY,
+    recall: META_ONLY,
+    reel_index: META_ONLY,
+    comment_intent: META_ONLY,
+});
+
+/**
+ * Why a purpose has an allow-list, in the words a refused route is told (`planAiPatch`): WhatsApp's is a privacy rule about training; the Muse
+ * purposes' is that only Meta is set up for them. A purpose with an allow-list and no entry here is told the first sentence, as before.
+ */
+export const PURPOSE_ALLOWLIST_REASON: Readonly<Partial<Record<AiPurpose, string>>> = Object.freeze({
+    perception_dm: META_ONLY_REASON,
+    recall: META_ONLY_REASON,
+    reel_index: META_ONLY_REASON,
+    comment_intent: META_ONLY_REASON,
 });
 
 /**
@@ -82,3 +118,12 @@ export const PURPOSE_PROVIDER_ALLOWLIST: Readonly<Partial<Record<AiPurpose, read
 export const PURPOSE_ROUTE_FALLBACK: Readonly<Partial<Record<AiPurpose, AiPurpose>>> = Object.freeze({
     dm_whatsapp: 'dm',
 });
+
+/**
+ * Meta sells each Muse Spark model twice: the Standard id, whose content Meta does not train on, and a `-contributor` twin that costs a fraction in
+ * exchange for Meta's right to train on what it is sent (dev.meta.ai/docs/pricing-rate-limits). What people send this product is never offered to
+ * that bargain, so an id ending `-contributor` is refused on every route: as a saved route, as a provider's default model (`planAiPatch`), and when
+ * a call would use it (`pickRoute`). The one exception is an evaluation of made-up cases, which belongs to no tenant and is recorded as `eval`
+ * (`allowContributor`, `generate`): nothing real is in it.
+ */
+export const isContributorModel = (model: string): boolean => /-contributor$/i.test(model.trim());

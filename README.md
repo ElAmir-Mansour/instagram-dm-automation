@@ -7,7 +7,7 @@ Express 5, TypeScript and Postgres, on Vercel. Live: <https://msg-response-auto.
 ## What it does
 
 - **Comment → DM campaigns:** a trigger word in a comment on an Instagram or Facebook post sends the commenter a DM and, if you want, a public reply. Arabic spellings are normalised. Matching is by `substring` (the default) or whole `word`.
-- **AI replies to DMs:** Instagram and Messenger messages are answered by Gemini, or by Anthropic, OpenAI, OpenRouter, Groq or a custom endpoint when a workspace picks the providers engine. The optional sales mode adds offers, tracked links (`/r/<code>`), one follow-up inside Meta's 24-hour window, and a hand-off to a person.
+- **AI replies to DMs:** Instagram and Messenger messages are answered by Gemini, or by Anthropic, OpenAI, OpenRouter, Groq, Meta (Muse) or a custom endpoint when a workspace picks the providers engine. The optional sales mode adds offers, tracked links (`/r/<code>`), one follow-up inside Meta's 24-hour window, and a hand-off to a person.
 - **Inbox and analytics:** read and answer conversations, pause the AI on one thread, see stats and an activity log, export the log as CSV.
 - **WhatsApp:** connect a WhatsApp Business number (Cloud API). For now the AI agent answers only the test senders you list, and only their messages are stored in full: from anyone else the app keeps a bare record (no text, name or number) until the privacy pages name WhatsApp, and "everyone" is refused until then.
 - **Scheduled publishing:** posts go to Instagram, Facebook, TikTok (inbox drafts, or Direct Post once switched on) and YouTube Shorts: images, videos, reels, carousels and, on Instagram, stories. What each platform accepts is checked when you save.

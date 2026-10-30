@@ -11,8 +11,8 @@ import { isAiError } from './errors.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
 
 describe('PROVIDERS', () => {
-    it('lists the six providers in the order resolveRoute falls back through them', () => {
-        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
+    it('lists the seven providers in the order resolveRoute falls back through them, Meta late and Custom last', () => {
+        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom']);
         assert.deepEqual([...PROVIDER_IDS], PROVIDERS.map((p) => p.id));
     });
 
@@ -24,8 +24,27 @@ describe('PROVIDERS', () => {
             gemini: 'gemini',
             openrouter: 'chat_completions',
             groq: 'chat_completions',
+            meta: 'chat_completions',
             custom: 'chat_completions',
         });
+    });
+
+    it('has Meta (Muse) at its own fixed address, key required, defaulting to Muse Spark 1.3 and suggesting only the Standard models', () => {
+        const meta = providerById('meta')!;
+        assert.equal(meta.label, 'Meta (Muse)');
+        assert.equal(meta.family, 'chat_completions');
+        assert.equal(meta.baseUrl, 'https://api.meta.ai/v1');
+        assert.equal(meta.editableBaseUrl, false);
+        assert.equal(meta.keyRequired, true);
+        assert.equal(meta.defaultModel, 'muse-spark-1.3');
+        assert.deepEqual([...meta.suggestedModels], ['muse-spark-1.3', 'muse-spark-1.2']);
+        // A Contributor-mode twin lets Meta train on what is sent, so none is ever a click (and none can be routed: purposes.ts).
+        for (const model of [meta.defaultModel, ...meta.suggestedModels]) assert.doesNotMatch(model, /contributor/i, model);
+    });
+
+    it('knows Meta by its id, and an error names it "Meta", not "Meta (Muse)"', () => {
+        assert.equal(isProviderId('meta'), true);
+        assert.equal(providerName('meta'), 'Meta');
     });
 
     it('has Groq at its fixed OpenAI-compatible address, key required, defaulting to a gpt-oss model and suggesting no Llama', () => {

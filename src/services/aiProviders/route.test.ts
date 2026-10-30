@@ -16,7 +16,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const LISTED = '22222222-2222-4222-8222-222222222222';
 const OTHER = '33333333-3333-4333-8333-333333333333';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 
@@ -70,9 +70,9 @@ describe('the default pick: the first provider that has a key', () => {
         assert.deepEqual(route, { purpose: 'onboarding_draft', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high', source: 'default' });
     });
 
-    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Groq, Custom', async () => {
+    it('takes the registry\'s order: Anthropic, OpenAI, Gemini, OpenRouter, Groq, Meta, Custom', async () => {
         const expected: string[] = [];
-        for (const id of ['custom', 'groq', 'openrouter', 'gemini', 'openai', 'anthropic'] as const) {
+        for (const id of ['custom', 'meta', 'groq', 'openrouter', 'gemini', 'openai', 'anthropic'] as const) {
             if (id === 'custom') {
                 saveProviders({ custom: { baseUrl: 'https://llm.example.com/v1', defaultModel: 'my-model' } });
             } else {
@@ -86,8 +86,10 @@ describe('the default pick: the first provider that has a key', () => {
 
     it('gives each purpose its own default effort', async () => {
         saveKey('anthropic');
+        // The Muse purposes answer from Meta alone, so a key for it is what lets them pick at all.
+        saveKey('meta');
         for (const purpose of AI_PURPOSES) assert.equal((await pick(purpose)).effort, PURPOSE_DEFAULT_EFFORT[purpose], purpose);
-        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low', 'low', 'medium', 'medium']);
+        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low', 'low', 'medium', 'medium', 'low', 'low', 'low', 'low']);
     });
 
     it('answers the `dm` purpose at low effort on the default model, until a route is saved for it', async () => {
@@ -384,5 +386,142 @@ describe('the `dm_whatsapp` purpose: WhatsApp replies answer only from providers
         saveKey('gemini');
         assert.equal((await pick('dm')).provider, 'gemini');
         assert.equal((await pick('tenant_studio')).provider, 'gemini');
+    });
+});
+
+describe('Meta (Muse): the provider and the four purposes only it answers', () => {
+    const MUSE = ['perception_dm', 'recall', 'reel_index', 'comment_intent'] as const;
+
+    it('lands on Meta, at Muse Spark 1.3 and effort low, only when it is the first provider with a key; any earlier one keeps the default pick', async () => {
+        saveKey('meta');
+        assert.deepEqual(await pick('onboarding_draft'), { purpose: 'onboarding_draft', provider: 'meta', model: 'muse-spark-1.3', effort: 'high', source: 'default' });
+        saveKey('groq');
+        assert.equal((await pick('onboarding_draft')).provider, 'groq', 'Groq is ahead of Meta in the registry\'s order');
+        saveKey('anthropic');
+        assert.equal((await pick('dm')).provider, 'anthropic');
+    });
+
+    it('is never what a purpose with no route is moved to while the owner\'s existing providers can answer: Gemini (the DM agent\'s key) is ahead of it', async () => {
+        saveKey('gemini');
+        saveKey('meta');
+        for (const purpose of ['dm', 'tenant_studio', 'onboarding_draft', 'ads_draft'] as const) assert.equal((await pick(purpose)).provider, 'gemini', purpose);
+    });
+
+    it('answers a Muse purpose with Meta and nobody else, whatever other keys there are, and says so when there is no key for it', async () => {
+        saveKey('anthropic');
+        saveKey('gemini');
+        saveKey('groq');
+        for (const purpose of MUSE) {
+            const err = await failure(resolveRoute(purpose, null));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.equal(err.retryable, false);
+            assert.match(err.message, /No AI provider is ready/, purpose);
+        }
+        saveKey('meta');
+        for (const purpose of MUSE) {
+            assert.deepEqual(await pick(purpose), { purpose, provider: 'meta', model: 'muse-spark-1.3', effort: 'low', source: 'default' }, purpose);
+        }
+    });
+
+    it('takes a saved route to Meta for a Muse purpose, at that route\'s own model and effort', async () => {
+        saveKey('meta');
+        saveRouting({ perception_dm: { provider: 'meta', model: 'muse-spark-1.2', effort: 'medium' } });
+        assert.deepEqual(await pick('perception_dm'), { purpose: 'perception_dm', provider: 'meta', model: 'muse-spark-1.2', effort: 'medium', source: 'saved' });
+        assert.equal((await pick('recall')).source, 'default', 'a route for one Muse purpose is no route for another');
+    });
+
+    it('with no model on it uses Meta\'s default model as it is when the call is made, so the operator moving it moves every such route', async () => {
+        saveKey('meta');
+        saveRouting({ reel_index: { provider: 'meta', model: '', effort: 'low' } });
+        assert.equal((await pick('reel_index')).model, 'muse-spark-1.3');
+        saveProviders({ meta: { defaultModel: 'muse-spark-1.2' } });
+        assert.equal((await pick('reel_index')).model, 'muse-spark-1.2');
+    });
+
+    it('refuses a Muse route that names another provider, naming the list (Meta) and where it came from, and never moves to Meta or to the provider that has a key', async () => {
+        saveKey('meta');
+        saveKey('anthropic');
+        for (const purpose of MUSE) {
+            saveRouting({ [purpose]: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low' } });
+            const err = await failure(resolveRoute(purpose, null));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.match(err.message, new RegExp(`The route for ${purpose} uses Anthropic, which is not on the list of providers that may answer this purpose \\(Meta\\)`), purpose);
+        }
+    });
+
+    it('is no_provider naming Meta, never a move to the provider that has a key, when a Muse route\'s key is missing or the provider is switched off', async () => {
+        saveKey('anthropic');
+        saveRouting({ perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' } });
+        assert.match((await failure(resolveRoute('perception_dm', null))).message, /perception_dm uses Meta, which has no API key saved/);
+        saveKey('meta');
+        saveProviders({ meta: { enabled: false } });
+        assert.match((await failure(resolveRoute('perception_dm', null))).message, /perception_dm uses Meta, which is switched off/);
+    });
+
+    it('takes META_MODEL_API_KEY as Meta\'s key', async () => {
+        process.env.META_MODEL_API_KEY = FAKE_KEYS.meta;
+        assert.equal((await pick('perception_dm')).provider, 'meta');
+    });
+
+    it('does not open WhatsApp to Meta: it is not one of the providers that forbid training, so a WhatsApp route on it is refused', async () => {
+        saveKey('meta');
+        saveKey('groq');
+        saveRouting({ dm_whatsapp: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' } });
+        const err = await failure(resolveRoute('dm_whatsapp', null));
+        assert.match(err.message, /The route for dm_whatsapp uses Meta, which is not on the list of providers that may answer this purpose \(Groq, Anthropic, OpenAI\)/);
+        // With nothing saved the default skips Meta too.
+        saveRouting({});
+        assert.equal((await pick('dm_whatsapp')).provider, 'groq');
+    });
+});
+
+describe('a Contributor-mode model is never what a purpose answers with: Meta may train on what it is sent', () => {
+    const CONTRIBUTOR = 'muse-spark-1.3-contributor';
+
+    it('refuses a saved route that names one, by name, for any purpose, whichever provider the route is on', async () => {
+        saveKey('meta');
+        saveKey('anthropic');
+        for (const [purpose, provider] of [['dm', 'meta'], ['perception_dm', 'meta'], ['tenant_studio', 'anthropic']] as const) {
+            saveRouting({ [purpose]: { provider, model: CONTRIBUTOR, effort: 'low' } });
+            const err = await failure(resolveRoute(purpose, null));
+            assert.equal(err.kind, 'no_provider', purpose);
+            assert.equal(err.retryable, false);
+            assert.match(err.message, new RegExp(`The route for ${purpose} uses ${CONTRIBUTOR}, a Contributor-mode model: ${provider === 'meta' ? 'Meta' : 'Anthropic'} may train on what it is sent, so no purpose may use it\\. Choose the Standard model instead\\.`), purpose);
+        }
+    });
+
+    it('refuses one that arrives as the provider\'s default model, though the route names none, and the Standard model is fine', async () => {
+        saveKey('meta');
+        saveRouting({ perception_dm: { provider: 'meta', model: '', effort: 'low' } });
+        saveProviders({ meta: { defaultModel: CONTRIBUTOR } });
+        assert.match((await failure(resolveRoute('perception_dm', null))).message, /uses muse-spark-1\.3-contributor, a Contributor-mode model/);
+        saveProviders({ meta: { defaultModel: 'muse-spark-1.3' } });
+        assert.equal((await pick('perception_dm')).model, 'muse-spark-1.3');
+    });
+
+    it('passes over a provider whose default model is one when no route is saved, as it does a provider with no key, and falls to the next that can answer', async () => {
+        saveKey('groq');
+        saveKey('meta');
+        saveProviders({ groq: { defaultModel: 'some-model-contributor' } });
+        assert.equal((await pick('onboarding_draft')).provider, 'meta');
+        saveKey('anthropic');
+        assert.equal((await pick('onboarding_draft')).provider, 'anthropic');
+    });
+
+    it('is allowed only when the caller says it is an evaluation of made-up cases (`allowContributor`), and only then', async () => {
+        saveKey('meta');
+        saveRouting({ dm: { provider: 'meta', model: CONTRIBUTOR, effort: 'low' } });
+        const { config, keys } = await loadAiSettings();
+        assert.throws(() => pickRoute('dm', config, keys), /a Contributor-mode model/);
+        assert.throws(() => pickRoute('dm', config, keys, {}), /a Contributor-mode model/);
+        assert.throws(() => pickRoute('dm', config, keys, { allowContributor: false }), /a Contributor-mode model/);
+        assert.deepEqual(pickRoute('dm', config, keys, { allowContributor: true }), { purpose: 'dm', provider: 'meta', model: CONTRIBUTOR, effort: 'low', source: 'saved' });
+    });
+
+    it('is shown to the card the way it is for any route that cannot answer: as an error naming the model, not as a route in use', async () => {
+        saveKey('meta');
+        saveRouting({ dm: { provider: 'meta', model: CONTRIBUTOR, effort: 'low' } });
+        const err = await failure(resolveRoute('dm', null));
+        assert.match(err.message, /^The route for dm uses muse-spark-1\.3-contributor/);
     });
 });

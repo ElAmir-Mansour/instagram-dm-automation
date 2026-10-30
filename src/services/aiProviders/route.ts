@@ -3,7 +3,7 @@
  *
  *   1. A saved route wins. If its provider cannot answer (no key, switched off, no base URL) that is `no_provider`, naming the cause:
  *      never a quiet move to another provider, which would bill someone the operator did not choose and hide a broken key.
- *   2. With none saved, the first provider that can answer, in the registry's order (Anthropic, OpenAI, Gemini, OpenRouter, Groq, Custom),
+ *   2. With none saved, the first provider that can answer, in the registry's order (Anthropic, OpenAI, Gemini, OpenRouter, Groq, Meta, Custom),
  *      at its default model. Gemini's key is the DM bot's, so on a deployment that has only that one, drafts spend the bot's quota:
  *      the Operations card says so beside any route that lands there.
  *   3. With no provider at all, `no_provider`. That error is final; the wizard falls back to its deterministic prefill.
@@ -17,7 +17,7 @@
 import { isMacBrainAllowed } from '../macBrain.js';
 import { defaultModelOf, loadAiSettings, providerProblem, type AiConfig, type ProviderKeys } from './settings.js';
 import { AiError } from '../llm/errors.js';
-import { MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, type AiPurpose } from './purposes.js';
+import { isContributorModel, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, type AiPurpose } from './purposes.js';
 import { PROVIDER_IDS, providerById, providerName, type ProviderId } from '../llm/registry.js';
 import type { Effort, JsonMode } from '../llm/types.js';
 
@@ -50,8 +50,16 @@ export class MacBrainTenantRefused extends AiError {
 
 const noProvider = (message: string): AiError => new AiError({ kind: 'no_provider', provider: '', model: '', message });
 
+export interface PickOptions {
+    /**
+     * Let a Contributor-mode model (`-contributor`: Meta may train on what it is sent) answer. Only for an evaluation of made-up cases, which belongs to
+     * no tenant and is recorded as `eval` (`generate` decides that): everywhere else such a model is refused, saved or not (purposes.ts).
+     */
+    allowContributor?: boolean;
+}
+
 /** The choice, from settings already read. Throws `no_provider` with the reason; never touches the database. */
-export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKeys): ResolvedRoute {
+export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKeys, opts: PickOptions = {}): ResolvedRoute {
     const route = (provider: ProviderId, model: string, effort: Effort, source: ResolvedRoute['source']): ResolvedRoute => {
         const custom = providerById(provider)?.editableBaseUrl;
         return {
@@ -76,6 +84,10 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
         if (problem) throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which ${problem}. Fix the key or choose another provider for this purpose.`);
         const model = saved.model || defaultModelOf(saved.provider, config);
         if (!model) throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which has no model: name one on the route or set the provider's default model.`);
+        // Said by name, like a provider that may not answer, and for a model that came from the provider's default as well as one the route names.
+        if (!opts.allowContributor && isContributorModel(model)) {
+            throw noProvider(`The route for ${named} uses ${model}, a Contributor-mode model: ${providerName(saved.provider)} may train on what it is sent, so no purpose may use it. Choose the Standard model instead.`);
+        }
         return route(saved.provider, model, saved.effort, 'saved');
     }
 
@@ -83,6 +95,8 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
         if (allowed && !allowed.includes(id)) continue;
         if (providerProblem(id, config, keys)) continue;
         const model = defaultModelOf(id, config);
+        // A provider whose default model trains on what it is sent cannot answer on its own say-so, the same as one with no key.
+        if (!opts.allowContributor && isContributorModel(model)) continue;
         if (model) return route(id, model, PURPOSE_DEFAULT_EFFORT[purpose], 'default');
     }
     throw noProvider('No AI provider is ready: save an API key for one in Operations → AI providers.');

@@ -27,7 +27,7 @@ import { billedFromUsage, costOf, totalUsage, usdFor, type PriceTable } from '..
 import { AiError, isAiError } from '../llm/errors.js';
 import { generateJson, type GenerateJsonResult } from '../llm/generate.js';
 import { minOutputTokens } from '../llm/limits.js';
-import { isAiPurpose, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
+import { EVAL, isAiPurpose, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
 import { assertNotMacBrainWork, pickRoute } from './route.js';
 import { isProviderId, type ProviderId } from '../llm/registry.js';
 import type { LlmSchema } from '../llm/schema.js';
@@ -98,18 +98,42 @@ const isPositiveInteger = (n: unknown): n is number => typeof n === 'number' && 
 const badRequest = (message: string): AiError => new AiError({ kind: 'bad_request', provider: '', model: '', message });
 
 /**
+ * What a picture or a video is worth in input tokens, for the reservation. Measured on Muse Spark 1.3 on 2026-10-28: a screenshot read at about
+ * 800, and a 37 s reel at about 280 a second (10,475 prompt tokens with its question). A video whose length the caller did not say is taken as
+ * 12,000, about 43 s, which is a long reel; a longer one is under-counted by the difference, a few cents at most, and settled at what it cost.
+ */
+export const IMAGE_TOKENS = 800;
+export const VIDEO_TOKENS_PER_SECOND = 280;
+export const VIDEO_TOKENS_UNKNOWN_LENGTH = 12_000;
+
+/** The input tokens of every picture and video in the turns; a plain string and a turn with no media are worth none. */
+function mediaTokens(user: AiGenerateArgs['user']): number {
+    if (typeof user === 'string') return 0;
+    let tokens = 0;
+    for (const turn of user) {
+        for (const media of turn.media ?? []) {
+            if (media.kind === 'image') tokens += IMAGE_TOKENS;
+            else tokens += Number.isFinite(media.seconds) && (media.seconds as number) > 0 ? Math.ceil((media.seconds as number) * VIDEO_TOKENS_PER_SECOND) : VIDEO_TOKENS_UNKNOWN_LENGTH;
+        }
+    }
+    return tokens;
+}
+
+/**
  * The most a call can cost: its whole `maxTokens` at the output price, on an input estimate. A character is at most half a token
- * (Arabic and code run about 2 to 3 characters a token, English 4), so the estimate is high on purpose. An unpriced model is estimated
+ * (Arabic and code run about 2 to 3 characters a token, English 4), so the estimate is high on purpose; a picture or a video is counted
+ * in tokens, not characters (`mediaTokens`: its base64 is not what it is billed for). An unpriced model is estimated
  * at the table's ceiling, the same figure it will be charged. A call that caches its system prompt is estimated as if it wrote all of it
  * (1.25x the input price): a read is cheaper and a prefix under the model's minimum is not cached at all, so a write is the ceiling.
  */
 export function estimateUsd(args: Pick<AiGenerateArgs, 'system' | 'user' | 'schema' | 'cacheSystem'>, maxTokens: number, model: string, prices: PriceTable): { usd: number; priced: boolean } {
     const user = typeof args.user === 'string' ? args.user.length : args.user.reduce((n, turn) => n + turn.text.length, 0);
     const rest = user + JSON.stringify(args.schema).length;
+    const media = mediaTokens(args.user);
     if (args.cacheSystem === true) {
-        return usdFor({ in: Math.ceil(rest / 2), cacheWrite: Math.ceil(args.system.length / 2), out: maxTokens }, model, prices);
+        return usdFor({ in: Math.ceil(rest / 2) + media, cacheWrite: Math.ceil(args.system.length / 2), out: maxTokens }, model, prices);
     }
-    return usdFor({ in: Math.ceil((args.system.length + rest) / 2), out: maxTokens }, model, prices);
+    return usdFor({ in: Math.ceil((args.system.length + rest) / 2) + media, out: maxTokens }, model, prices);
 }
 
 /** The cache counts for a log line, only when there were some. Not `*_tokens`: the logger redacts any field whose name contains "token". */
@@ -151,6 +175,8 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
                 ? { ...config, routing: { ...config.routing, [args.purpose]: { provider: named.provider, model: named.model, effort: named.effort ?? PURPOSE_DEFAULT_EFFORT[args.purpose] } } }
                 : config,
             keys,
+            // Made-up cases only: a call that belongs to no tenant and is recorded as `eval` (the evaluation harness) may name a Contributor-mode model.
+            { allowContributor: label === EVAL && args.creatorId === null },
         );
     } catch (err) {
         if (isAiError(err)) {

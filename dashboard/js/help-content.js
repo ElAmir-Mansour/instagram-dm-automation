@@ -5664,8 +5664,8 @@ const HelpContent = {
             icon: 'bot',
             title: { ar: 'استخدام الذكاء الاصطناعي وتكلفته', en: 'AI usage and costs' },
             summary: {
-                ar: 'وين يستخدم أوتوريبلاي برو Gemini، وحدود الاستخدام، وليش تفعيل الفوترة يفرق.',
-                en: 'Where AutoReply Pro uses Gemini, the usage limits, and why turning on billing matters.',
+                ar: 'وين يستخدم أوتوريبلاي برو Gemini، وحدود الاستخدام، وليش تفعيل الفوترة يفرق، وما يكلّفه Muse من Meta.',
+                en: 'Where AutoReply Pro uses Gemini, the usage limits, why turning on billing matters, and what Meta’s Muse models cost.',
             },
             related: ['dm-assistant', 'troubleshooting', 'worker', 'create'],
             sections: [
@@ -5746,6 +5746,32 @@ const HelpContent = {
                                 'You pay for what you use: each carousel is a few requests, and each lesson is indexed once. Your real numbers are on the usage page in Google AI Studio.',
                                 'Set a budget alert in Google Cloud so the bill never surprises you.',
                             ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'meta-muse',
+                    title: { ar: 'نماذج Meta (Muse)', en: 'Meta (Muse)' },
+                    body: {
+                        ar: [
+                            'نماذج Muse من Meta مزوّد إضافي يقدر مسؤول المنصة يضيفه من **التشغيل** ← **مزوّدو الذكاء الاصطناعي**. نموذج Muse Spark يستقبل النص والصور والفيديو والصوت ويجاوب نصاً، ولهذا فيه مهام في جدول المسارات ما يجيب عليها غيره: قراءة الصور والفيديو اللي توصل في الرسائل، وإيجاد الريل المناسب، وقراءة الريلز، وقراءة التعليقات. وما يُرسل شي إلى Meta قبل ما يُحفظ مفتاحها.',
+                            { dl: [
+                                ['المفتاح', 'يجي من منصة المطوّرين عند Meta الخاصة بواجهة النماذج (dev.meta.ai). الصقه في **مفتاح جديد** واضغط **افحص واحفظ**: قبل الحفظ تُسأل Meta عن قائمة نماذجها، والمفتاح اللي ترفضه ما يُحفظ. يُخزَّن مشفّراً ولا يظهر مرة ثانية.'],
+                                ['النماذج', 'النماذج القياسية فقط. `muse-spark-1.3` هو الافتراضي والنسخة اللي توصي بها Meta للعمل الجديد، و`muse-spark-1.2` النسخة السابقة. **حمّل النماذج** يعرض النماذج القياسية ويترك باقي كتالوج Meta. وتبيع Meta نسخة أرخص من Muse Spark مقابل حقها في التدريب على ما يُرسل إليها: ما تُستخدم هنا أبداً، وأي مسار أو نموذج افتراضي يسمّي واحدة منها يُرفض.'],
+                                ['الخصوصية', 'حسب شروط Meta للنماذج القياسية، المحتوى المُرسل ما تدرّب عليه Meta نماذجها.'],
+                                ['السعر', 'بالاستخدام، لكل مليون رمز: 1.25 دولار لما يُرسل، و4.25 دولار لما يرجع، و0.15 دولار للجزء من المُرسل اللي يتكرر من طلب حديث. Muse Spark يفكّر دائماً قبل ما يجاوب، وهذا التفكير يُحسب مع ما يرجع، فحتى الجواب بكلمة وحدة يكلّف مئات الرموز. والصورة نحو 800 رمز مُدخل والفيديو نحو 280 رمزاً في الثانية. وتحاسبك Meta على الحساب اللي يخصّه المفتاح، فخلّ لك ميزانية في البطاقة وحداً للصرف عند Meta.'],
+                            ] },
+                            { tip: 'جرّب أي مسار قبل ما تعتمد عليه: **جرّب** يرسل طلباً صغيراً جداً ويعرض النموذج والزمن والتكلفة.' },
+                        ],
+                        en: [
+                            'Meta’s Muse models are one more provider the platform administrator can add in **Operations** → **AI providers**. Muse Spark takes text, pictures, video and audio in and answers in text, so a few jobs in the routing table can be answered only by Meta: reading the photos and videos people send in DMs, finding the right reel, reading reels, and reading comments. Nothing is sent to Meta until its key is saved.',
+                            { dl: [
+                                ['The key', 'It comes from Meta’s developer platform for its Model API (dev.meta.ai). Paste it in **New key** and press **Check and save**: before it is saved, Meta is asked to list its models, and a key Meta refuses is not saved. It is stored encrypted and never shown again.'],
+                                ['The models', 'The Standard models only. `muse-spark-1.3` is the default and the version Meta recommends for new work; `muse-spark-1.2` is the previous one. **Load models** lists the Standard models and leaves out the rest of Meta’s catalogue. Meta also sells a cheaper copy of Muse Spark in exchange for the right to train on what is sent to it; it is never used here, and a route or a default model that names one is refused.'],
+                                ['Privacy', 'Under Meta’s terms for the Standard models, what is sent is not used to train Meta’s models.'],
+                                ['The price', 'Pay as you go, per million tokens: $1.25 for what is sent, $4.25 for what comes back, and $0.15 for the part of what is sent that repeats a recent request. Muse Spark always thinks before it answers, and that thinking is billed with what comes back, so even a one-word answer costs a few hundred tokens. A picture is about 800 tokens of input and a video about 280 a second. Meta bills the account the key belongs to, so keep a budget in the card and a spending limit in your Meta billing.'],
+                            ] },
+                            { tip: 'Try a route before you rely on it: **Test** sends one tiny call and shows the model, the time and the cost.' },
                         ],
                     },
                 },

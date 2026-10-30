@@ -20,6 +20,7 @@ const KEYS = {
     openrouter: 'sk-or-v1-' + '3f9a'.repeat(16),
     // Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
     groq: 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh',
+    meta: 'meta-key-Hb7vQm3xTz9RnYd2KfP5aLc8JgSe4UoWiNtXrBwEs6Vq',
     custom: 'llm-key-Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq',
 } satisfies Record<ProviderId, string>;
 const CUSTOM_BASE = 'https://llm.example.com/v1';
@@ -114,6 +115,14 @@ const groqList = () => jsonResponse(200, {
     ],
 });
 
+// Meta's list is the whole catalogue, newest first (as GET /v1/models answered on 2026-10-28): the chat models, each chat model's `-contributor` twin (the
+// same model at a discount that lets Meta train on what is sent), and the models that answer on other endpoints (images, speech to text, segmentation).
+const metaList = () => jsonResponse(200, {
+    object: 'list',
+    data: ['muse-wonder-1.0', 'sam-3.1', 'muse-spark-1.3-contributor', 'muse-voice-transcribe-1.0', 'muse-spark-1.3', 'muse-image-1.0', 'muse-spark-1.2-contributor', 'muse-spark-1.2', 'muse-spark-1.1']
+        .map((id) => ({ id, object: 'model', created: 0, owned_by: 'meta' })),
+});
+
 const customList = () => jsonResponse(200, { object: 'list', data: [{ id: 'llama-4-maverick', object: 'model' }, { id: 'qwen-4-72b', object: 'model' }] });
 
 const openRouterKey = () => jsonResponse(200, { data: { label: 'sk-or-v1-abc...f3a', limit: null, limit_remaining: null, usage: 1.25, is_free_tier: false } });
@@ -138,6 +147,10 @@ const rows: Array<{
     {
         provider: 'groq', list: groqList, models: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'],
         listUrl: 'https://api.groq.com/openai/v1/models', checkUrl: 'https://api.groq.com/openai/v1/models', header: 'authorization', value: (k) => `Bearer ${k}`,
+    },
+    {
+        provider: 'meta', list: metaList, models: ['muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1'],
+        listUrl: 'https://api.meta.ai/v1/models', checkUrl: 'https://api.meta.ai/v1/models', header: 'authorization', value: (k) => `Bearer ${k}`,
     },
     {
         provider: 'custom', list: customList, models: ['llama-4-maverick', 'qwen-4-72b'],
@@ -236,6 +249,47 @@ describe('listProviderModels', () => {
             const { fetchImpl } = stubFetch(jsonResponse(200, { data: [{ object: 'model' }, null, { id: 'whisper-large-v3' }, { id: 'llama-3.1-8b-instant' }] }));
             assert.deepEqual(await listProviderModels(query('groq', fetchImpl)), ['llama-3.1-8b-instant']);
             assert.deepEqual(await listProviderModels(query('groq', stubFetch(jsonResponse(200, { ok: true })).fetchImpl)), []);
+        });
+    });
+
+    describe('meta', () => {
+        it('offers the Standard chat models only: not the Contributor twins that may train on what is sent, and not the models of other endpoints', async () => {
+            const { fetchImpl } = stubFetch(metaList());
+            const models = await listProviderModels(query('meta', fetchImpl));
+            assert.deepEqual(models, ['muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1']);
+            for (const gone of ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor', 'sam-3.1', 'muse-voice-transcribe-1.0', 'muse-image-1.0']) {
+                assert.ok(!models.includes(gone), gone);
+            }
+        });
+
+        it('goes by what a model is called, so a version Meta adds later is offered and its Contributor twin is not', async () => {
+            const body = { data: [{ id: 'muse-spark-1.4' }, { id: 'muse-spark-1.4-contributor' }, { id: 'muse-wonder-2.0' }, { id: 'MUSE-SPARK-1.5' }, { id: 'muse-spark-1.4-contributor-20261101' }, { id: 'muse-spark-open-1026' }] };
+            assert.deepEqual(await listProviderModels(query('meta', stubFetch(jsonResponse(200, body)).fetchImpl)), ['muse-spark-1.4', 'muse-wonder-2.0', 'MUSE-SPARK-1.5']);
+        });
+
+        it('needs a key: with none no request is made, and the list is not asked for anonymously', async () => {
+            const { fetchImpl, calls } = stubFetch(metaList());
+            for (const apiKey of ['', '  ']) {
+                const err = await rejection(listProviderModels(query('meta', fetchImpl, { apiKey })));
+                assert.equal(err.kind, 'no_provider');
+                assert.equal(err.provider, 'meta');
+                assert.match(err.message, /No API key is saved for Meta\./);
+            }
+            assert.equal(calls.length, 0);
+        });
+
+        it('says so when Meta refuses the key: a 401 is auth, and it is the list that said it', async () => {
+            const { fetchImpl } = stubFetch(jsonResponse(401, { error: { message: 'Invalid API key', type: 'invalid_request_error', code: 'invalid_api_key' } }));
+            const err = await rejection(listProviderModels(query('meta', fetchImpl)));
+            assert.equal(err.kind, 'auth');
+            assert.equal(err.status, 401);
+            assert.match(err.message, /Invalid API key/);
+        });
+
+        it('keeps no entry whose id it cannot read, and is an empty list for a body with none', async () => {
+            const { fetchImpl } = stubFetch(jsonResponse(200, { data: [{ object: 'model' }, null, { id: 'sam-3.1' }, { id: 'muse-spark-1.3' }] }));
+            assert.deepEqual(await listProviderModels(query('meta', fetchImpl)), ['muse-spark-1.3']);
+            assert.deepEqual(await listProviderModels(query('meta', stubFetch(jsonResponse(200, { ok: true })).fetchImpl)), []);
         });
     });
 
@@ -366,6 +420,35 @@ describe('checkProviderKey', () => {
         });
     });
 
+    describe('meta', () => {
+        it('asks /models with the key, which is where Meta proves it, and needs one: with none no request is made', async () => {
+            const { fetchImpl, calls } = stubFetch(metaList());
+            assert.deepEqual(await checkProviderKey(query('meta', fetchImpl)), { ok: true });
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0]!.method, 'GET');
+            assert.equal(calls[0]!.url, 'https://api.meta.ai/v1/models');
+            assert.equal(calls[0]!.headers['authorization'], `Bearer ${KEYS.meta}`);
+            const none = stubFetch(metaList());
+            const err = await rejection(checkProviderKey(query('meta', none.fetchImpl, { apiKey: '' })));
+            assert.equal(err.kind, 'no_provider');
+            assert.equal(none.calls.length, 0);
+        });
+
+        it('fails a key Meta refuses, and a 404 is a fault to show, not the pass with a warning that only a Custom endpoint may have', async () => {
+            const refused = await rejection(checkProviderKey(query('meta', stubFetch(jsonResponse(401, { error: { message: 'Invalid API key', type: 'invalid_request_error', code: 'invalid_api_key' } })).fetchImpl)));
+            assert.equal(refused.kind, 'auth');
+            const missing = await rejection(checkProviderKey(query('meta', stubFetch(jsonResponse(404, { error: { message: 'Not found' } })).fetchImpl)));
+            assert.equal(missing.kind, 'bad_request');
+            assert.equal(missing.status, 404);
+        });
+
+        it('is the free call: a GET with no body, so a check cannot spend a token', async () => {
+            const { fetchImpl, calls } = stubFetch(metaList());
+            await checkProviderKey(query('meta', fetchImpl));
+            assert.equal(calls[0]!.raw, '');
+        });
+    });
+
     describe('custom', () => {
         it('passes with a warning when the endpoint has no /models: it cannot say whether the key is good', async () => {
             const { fetchImpl, calls } = stubFetch(jsonResponse(404, { error: { message: 'Not found' } }));
@@ -402,6 +485,8 @@ describe('checkProviderKey', () => {
             ['openrouter', 401, { error: { code: 401, message: 'No auth credentials found' } }, 'auth'],
             ['groq', 401, { error: { message: 'Invalid API Key', type: 'invalid_request_error', code: 'invalid_api_key' } }, 'auth'],
             ['groq', 403, { error: { message: 'Forbidden', type: 'permission_denied', code: 'permission_denied' } }, 'auth'],
+            ['meta', 401, { error: { message: 'Invalid API key', type: 'invalid_request_error', code: 'invalid_api_key' } }, 'auth'],
+            ['meta', 403, { error: { message: 'Forbidden', type: 'permission_denied', code: 'permission_denied' } }, 'auth'],
         ];
         for (const [provider, status, body, kind] of refusals) {
             it(`${provider} ${status} is ${kind}, final, and names the provider but no model`, async () => {
@@ -520,7 +605,7 @@ describe('the front door', () => {
     });
 
     it('is no_provider for a provider that needs a key and has none, before any request', async () => {
-        for (const provider of ['anthropic', 'openai', 'gemini', 'groq'] as const) {
+        for (const provider of ['anthropic', 'openai', 'gemini', 'groq', 'meta'] as const) {
             for (const run of [listProviderModels, checkProviderKey]) {
                 const { fetchImpl, calls } = stubFetch(anthropicList());
                 const err = await rejection(run(query(provider, fetchImpl, { apiKey: '   ' })));
