@@ -317,6 +317,12 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *   adsLeadsCaughtUp when the 6-hourly lead catch-up last ran for the tenant (A10, `src/services/ads/leads.ts`), an ISO instant. Not a secret.
  *   explainersEnabled 'true': the platform admin switched illustrated explainers on for the tenant (v59, `src/services/explainers/switch.ts`). Absent is
  *                   off, and in this version only the platform owner can be switched on. Not a secret.
+ *   museSwitches    Meta Muse perception, per capability, as JSON: `{ dm_media, voice, memory }`, each only when it is exactly `true`
+ *                   (`src/services/perception/switches.ts`). Absent is all off. The owner's, set from the AI settings card. Not a secret.
+ *   museAllowSenders who the perception features answer: a JSON list of sender ids, or `["*"]` for everyone. Absent or empty is nobody. Not a secret.
+ *   museDailyUsd    the most the perception features may spend in a UTC day, in USD: a number from 0 to 50. Absent is 3. Not a secret.
+ *   museBudgetNotice the UTC day (`YYYY-MM-DD`) the owner was last told the daily cap was reached, so the notice goes out once a day
+ *                   (`src/services/perception/gate.ts`). Written by the code, never by a person. Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -336,6 +342,10 @@ export const TENANT_SETTING_PREFIXES = {
     adsMedia: 'ads.media.',
     adsLeadsCaughtUp: 'ads.leads_caught_up.',
     explainersEnabled: 'explainers.enabled.',
+    museSwitches: 'muse.switches.',
+    museAllowSenders: 'muse.allow_senders.',
+    museDailyUsd: 'muse.daily_usd.',
+    museBudgetNotice: 'muse.budget_notice.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */
