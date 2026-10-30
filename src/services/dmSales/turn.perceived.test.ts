@@ -293,7 +293,7 @@ describe('a perceived turn: a model that fails is a hand-off, never Gemini', () 
     });
 
     it('a story reply the person typed words to is the same: the fallback is not used when a perception went into the prompt', async () => {
-        const r = await run({ text: 'Is this in the course?', perceived: { kind: 'story_reply', describedText: false, sent: factOf({ kind: 'story_reply' }) }, layer: failing('timeout') });
+        const r = await run({ text: 'Is this in the plan?', perceived: { kind: 'story_reply', describedText: false, sent: factOf({ kind: 'story_reply' }) }, layer: failing('timeout') });
         assert.equal(r.geminiCalls, 0);
         assert.equal(record(r).pauseBot, true);
     });
@@ -412,7 +412,7 @@ describe('a perceived turn: a burst of messages with no words is ONE answer', ()
     });
 
     it('is not made for words the person typed (a reply to a story with some): a text turn checks once, as ever', async () => {
-        const r = await run({ text: 'Is this in the course?', perceived: { kind: 'story_reply', describedText: false, sent: factOf({ kind: 'story_reply' }) }, supersession: [{ newer_unhandled: false, answered: false }] });
+        const r = await run({ text: 'Is this in the plan?', perceived: { kind: 'story_reply', describedText: false, sent: factOf({ kind: 'story_reply' }) }, supersession: [{ newer_unhandled: false, answered: false }] });
         assert.equal(supersessionCount(r), 1);
         assert.equal(messages(r).length, 1);
     });

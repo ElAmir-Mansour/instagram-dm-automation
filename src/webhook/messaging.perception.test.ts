@@ -56,7 +56,7 @@ const STORED_AT = '2026-10-30T10:00:20.000000+00:00';
 
 /** What a perception answer looks like, readable by default. */
 const reading = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    readable: true, seen: 'A screenshot of the course price list.', transcript: '', about_owner: 'unclear', confidence: 0.92, mention_summary: '', ...over,
+    readable: true, seen: 'A screenshot of the plan price list.', transcript: '', about_owner: 'unclear', confidence: 0.92, mention_summary: '', ...over,
 });
 /** What a sales answer looks like. */
 const salesReply = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -303,17 +303,17 @@ describe('Meta Muse on: a photo', () => {
         assert.equal(r.fetched[0], PHOTO_URL, 'the link Meta sent');
         const stored = storeOf(r)!;
         assert.deepEqual(stored.params.slice(0, 2), ['msg-1', 'creator-1']);
-        assert.equal(stored.params[3], '[photo] A screenshot of the course price list.', 'the row\'s text becomes what was read');
+        assert.equal(stored.params[3], '[photo] A screenshot of the plan price list.', 'the row\'s text becomes what was read');
         assert.match(stored.sql, /WHERE id = \$1 AND creator_id = \$2 AND perception IS NULL/);
         assert.deepEqual(storedRecord(r), {
-            v: 1, kind: 'image', status: 'ok', seen: 'A screenshot of the course price list.', about_owner: 'unclear', confidence: 0.92, model: 'muse-spark-1.3', ms: storedRecord(r).ms, usd: 0.011,
+            v: 1, kind: 'image', status: 'ok', seen: 'A screenshot of the plan price list.', about_owner: 'unclear', confidence: 0.92, model: 'muse-spark-1.3', ms: storedRecord(r).ms, usd: 0.011,
         });
 
         // The sales turn answers the description, with what Muse saw told as a fact, and says in its record that it was perceived and why.
         assert.equal(r.salesCalls.length, 1);
         assert.equal(r.salesCalls[0]!.purpose, 'dm');
-        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a photo. What it shows: A screenshot of the course price list.'));
-        assert.ok(lastUser(r.salesCalls[0]!).endsWith('[photo] A screenshot of the course price list.'));
+        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a photo. What it shows: A screenshot of the plan price list.'));
+        assert.ok(lastUser(r.salesCalls[0]!).endsWith('[photo] A screenshot of the plan price list.'));
         const reply = recordedReply(r)!;
         assert.equal(reply.aiMeta.perceived, true);
         assert.equal(reply.aiMeta.reason, 'Read a photo; answered from the account\'s own information, because they want to know more.');
@@ -519,19 +519,19 @@ describe('Meta Muse on: a story mention', () => {
 
 describe('Meta Muse on: a reply to a story', () => {
     it('with NO words, the story is read and answered: "The story they replied to shows …"', async () => {
-        const r = await run(storyReply(), { media: { 'asset_id=555': JPEG }, perceive: async () => resultOf(reading({ seen: 'A story announcing the new Python course.', about_owner: 'unclear' })) });
+        const r = await run(storyReply(), { media: { 'asset_id=555': JPEG }, perceive: async () => resultOf(reading({ seen: 'A story announcing the new workout plan.', about_owner: 'unclear' })) });
 
         assert.equal(r.error, null);
         assert.equal(storedRecord(r).kind, 'story_reply');
         assert.equal(storedRecord(r).about_owner, 'own_content', 'the account\'s own story');
-        assert.equal(storeOf(r)!.params[3], '[story reply] A story announcing the new Python course.');
-        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a reply to the account\'s story. The story they replied to shows: A story announcing the new Python course.'));
+        assert.equal(storeOf(r)!.params[3], '[story reply] A story announcing the new workout plan.');
+        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a reply to the account\'s story. The story they replied to shows: A story announcing the new workout plan.'));
         assert.equal(r.fetched[0], STORY_URL);
     });
 
     it('with words, the words stay what they asked and the story is context: the row\'s text is NOT overwritten, and the sales turn reads the typed words', async () => {
         const r = await run(storyReply('كم سعر هذا؟'), {
-            media: { 'asset_id=555': JPEG }, perceive: async () => resultOf(reading({ seen: 'A story showing the course bundle.' })),
+            media: { 'asset_id=555': JPEG }, perceive: async () => resultOf(reading({ seen: 'A story showing the starter bundle.' })),
             history: [{ direction: 'inbound', text: 'كم سعر هذا؟' }],
         });
 
@@ -540,7 +540,7 @@ describe('Meta Muse on: a reply to a story', () => {
         assert.equal(storedRecord(r).kind, 'story_reply');
         assert.equal(r.salesCalls.length, 1);
         const last = lastUser(r.salesCalls[0]!);
-        assert.ok(last.includes('The story they replied to shows: A story showing the course bundle.'));
+        assert.ok(last.includes('The story they replied to shows: A story showing the starter bundle.'));
         assert.ok(last.endsWith('كم سعر هذا؟'));
         assert.match(String((r.perceiveCalls[0]!.user as any[])[0].text), /wrote a message with it \(you are not shown it\)/);
         assert.ok(!JSON.stringify(r.perceiveCalls[0]!.user).includes('كم سعر'), 'the words are not sent to Muse');
@@ -707,11 +707,11 @@ describe('Meta Muse on: a read that fails is today\'s line, never nothing', () =
 // ─── Retries and bursts ─────────────────────────────────────────────────────────────────────
 
 describe('Meta Muse on: retries and bursts', () => {
-    const STORED = { v: 1, kind: 'image', status: 'ok', seen: 'A screenshot of the course price list.', about_owner: 'unclear', confidence: 0.92, model: 'muse-spark-1.3', stored_at: STORED_AT, ms: 3000, usd: 0.011 };
+    const STORED = { v: 1, kind: 'image', status: 'ok', seen: 'A screenshot of the plan price list.', about_owner: 'unclear', confidence: 0.92, model: 'muse-spark-1.3', stored_at: STORED_AT, ms: 3000, usd: 0.011 };
     const resumed = { inboundInsert: [] as Row[], resumeClaim: [{ id: 'msg-1', reply_attempts: 2 }] };
 
     it('a retry reuses the stored perception: no gate, no typing, no download, no model call for it, and the sales turn answers the description', async () => {
-        const r = await run(photo(), { ...resumed, storedPerception: STORED, history: [{ direction: 'inbound', text: '[photo] A screenshot of the course price list.' }] });
+        const r = await run(photo(), { ...resumed, storedPerception: STORED, history: [{ direction: 'inbound', text: '[photo] A screenshot of the plan price list.' }] });
 
         assert.equal(r.error, null);
         assert.equal(r.perceiveCalls.length, 0);
@@ -721,8 +721,8 @@ describe('Meta Muse on: retries and bursts', () => {
         assert.equal(actions(r).includes('typing_on'), true, 'the sales turn shows typing as it always does');
         assert.equal(r.timeline.filter((c) => c === 'META typing_on').length, 1, 'once, by the sales turn, and not before the read');
         assert.equal(r.salesCalls.length, 1);
-        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a photo. What it shows: A screenshot of the course price list.'));
-        assert.ok(lastUser(r.salesCalls[0]!).endsWith('[photo] A screenshot of the course price list.'));
+        assert.ok(lastUser(r.salesCalls[0]!).includes('What the customer sent: a photo. What it shows: A screenshot of the plan price list.'));
+        assert.ok(lastUser(r.salesCalls[0]!).endsWith('[photo] A screenshot of the plan price list.'));
         assert.equal(logs(r, 'perception.reused').length, 1);
     });
 
@@ -735,7 +735,7 @@ describe('Meta Muse on: retries and bursts', () => {
     });
 
     it('a perception that another attempt stored first is the one used: the write finds a row that already has one', async () => {
-        const r = await run(photo(), { media: { 'asset_id=111': JPEG }, storeRows: [], storedPerception: STORED, history: [{ direction: 'inbound', text: '[photo] A screenshot of the course price list.' }] });
+        const r = await run(photo(), { media: { 'asset_id=111': JPEG }, storeRows: [], storedPerception: STORED, history: [{ direction: 'inbound', text: '[photo] A screenshot of the plan price list.' }] });
         assert.equal(r.error, null);
         assert.equal(r.executed.filter((e) => /SELECT perception FROM messages/.test(e.sql)).length, 1, 'read back');
         assert.equal(r.salesCalls.length, 1);

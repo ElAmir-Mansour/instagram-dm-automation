@@ -106,8 +106,8 @@ const strings = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.fil
 
 /**
  * The library's analysis of a reel as the perception of a shared one, or null when it holds no summary to say. The summary, the topics and what is on screen make
- * the description; the narration is the speech. It is the account's own content by construction (the library holds only the creator's reels), costs nothing now,
- * and is as sure as it is: the notes are what a model said it saw when it watched the whole reel. Pure.
+ * the description; the narration is the speech. It is the account's own content by construction (the library holds only the creator's reels) and costs nothing now.
+ * It has NO confidence: that number is a model's own about one answer, and these notes were not asked a question. Pure.
  */
 export function libraryPerception(kind: Draft['kind'], analysis: ReelAnalysis): Draft | null {
     if (!isObj(analysis.result)) return null;
@@ -124,14 +124,13 @@ export function libraryPerception(kind: Draft['kind'], analysis: ReelAnalysis): 
         seen: oneLine(`${HOW_PREFIX.library} ${seen}`, SEEN_MAX_CHARS),
         ...(narration ? { transcript: narration } : {}),
         about_owner: 'own_content',
-        confidence: 1,
         model: analysis.model?.trim() || 'library',
         ms: 0,
         usd: 0,
     };
 }
 
-/** A caption read on its own, as the perception of a reel nobody could be shown: the caption verbatim in the description, no model, no cost. Pure. */
+/** A caption read on its own, as the perception of a reel nobody could be shown: the caption verbatim in the description, no model, no cost, no confidence. Pure. */
 export function captionPerception(kind: Draft['kind'], caption: string, owner: Owner): Draft {
     return {
         v: 1,
@@ -139,7 +138,6 @@ export function captionPerception(kind: Draft['kind'], caption: string, owner: O
         status: 'ok',
         seen: oneLine(`${HOW_PREFIX.caption} It says: «${oneLine(caption, 450)}»`, SEEN_MAX_CHARS),
         about_owner: ownerAbout(owner) ?? 'unclear',
-        confidence: 1,
         model: 'caption',
         ms: 0,
         usd: 0,

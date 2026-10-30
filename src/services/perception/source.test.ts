@@ -153,6 +153,7 @@ describe('a shared reel: anyone else\'s, or one that cannot be told', () => {
         assert.equal(out.perception.usd, 0);
         assert.equal(out.perception.status, 'ok');
         assert.equal(out.perception.seen, 'Read the caption. It says: «Backend in 37 seconds»');
+        assert.equal(out.perception.confidence, undefined);
         assert.equal(p.downloads.length, 0, 'there is no cover: the reel\'s url is a page');
     });
 
@@ -336,7 +337,7 @@ describe('libraryPerception', () => {
         assert.equal(d.model, 'library');
         assert.match(d.seen!, /Topics: a, b, c, d, e, f\. On screen: 1 2; x; y; z\.$/);
         assert.equal(d.transcript, 'n n');
-        assert.equal(d.confidence, 1);
+        assert.equal(d.confidence, undefined, 'the notes are not a model\'s answer to a question: they have no confidence of their own');
     });
 });
 

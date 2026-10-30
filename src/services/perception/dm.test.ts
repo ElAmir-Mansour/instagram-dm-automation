@@ -262,7 +262,7 @@ describe('perceiveDm: what is shown, and what is stored', () => {
     });
 
     it('the library\'s notes and a caption are stored with no model asked and no typing skipped', async () => {
-        const ready: Source = { source: 'ready', how: 'library', perception: { v: 1, kind: 'reel', status: 'ok', seen: 'Watched the reel earlier (the library\'s notes on it). A reel.', about_owner: 'own_content', confidence: 1, model: 'muse-spark-1.3', ms: 0, usd: 0 } };
+        const ready: Source = { source: 'ready', how: 'library', perception: { v: 1, kind: 'reel', status: 'ok', seen: 'Watched the reel earlier (the library\'s notes on it). A reel.', about_owner: 'own_content', model: 'muse-spark-1.3', ms: 0, usd: 0 } };
         const p = probe({ source: ready });
         await perceiveDm(input({ ref: { ...REF, kind: 'reel' } }), p.deps);
         assert.deepEqual(p.calls, ['gate', 'typing', 'resolve', 'store'], 'no model for it');
