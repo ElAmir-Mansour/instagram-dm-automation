@@ -15,6 +15,9 @@
  *     POST /disconnect      owner: unsubscribe the Page, delete the ids and the token ({ confirm: true })
  *     GET  /app-settings    platform admin: the switch, the configuration id, what to register in Meta's dashboard
  *     POST /app-settings    platform admin: save them
+ *     GET  /webhooks        platform admin: where Meta sends each event type NOW (a live read of the app's subscriptions), the plan the button would apply, and when
+ *                           an event of each kind last reached this workspace
+ *     POST /webhooks/repair platform admin: send everything back to this deployment ({ confirm: true }); a step Meta refuses is that step's result, not an error
  *
  * What the callback does after the state is spent lives in `src/services/metaLogin.ts`; this file is cookies, redirects and
  * response shapes. FLOWS.md §8 walks the whole flow.
@@ -42,6 +45,7 @@ import {
     readIntent, readMetaApp, readPickPayload, replacesConnection, WEBHOOK_FIELDS,
 } from '../services/metaLogin.js';
 import { readCommentCheck } from '../services/metaCommentCheck.js';
+import { checkMetaWebhooks, readLastEvents, repairSubscriptions, viewOf } from '../services/metaWebhooks.js';
 import { DEAUTHORIZE_PATH, disconnectMetaUser, parseSignedRequest, SIGNED_REQUEST_MAX_CHARS } from '../services/metaDeauth.js';
 import { appSecrets } from '../utils/signature.js';
 import { describeError, log } from '../utils/log.js';
@@ -490,5 +494,65 @@ metaRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
         res.json({ success: true, changed });
     } catch (err) {
         fail(res, err, 'api.meta_app_settings_save_failed', 'Failed to save the Meta login settings.');
+    }
+});
+
+// ─── Where Meta sends each kind of event (platform admin) ───────────────────────────────
+
+/**
+ * What the Settings card shows. A live read of the Meta app's subscriptions (`checkMetaWebhooks({ force: true })`, which also stores the answer the hourly check
+ * and the banners read), judged against this deployment's own address, with the plan the button would apply and, for the acting workspace, when an event of each
+ * kind last arrived. Meta not answering, or nothing to ask it with, is the status and code the service gives it (409 `NOT_CONFIGURED` / `NO_BASE_URL`, 502
+ * `GRAPH_FAILED`): never a 401, which the dashboard reads as signed out. Platform admin only, and a 404 for anyone else, like the app settings beside it.
+ */
+metaRouter.get('/webhooks', requirePlatformAdmin, async (req, res) => {
+    try {
+        const result = await checkMetaWebhooks({ force: true });
+        if (result.failure) {
+            fail(res, result.failure, 'api.meta_webhooks_read_failed', 'Failed to read where Meta sends the events.');
+            return;
+        }
+        if (!result.status) {
+            res.status(500).json({ error: 'Failed to read where Meta sends the events.' });
+            return;
+        }
+        // A quiet platform and a platform whose events go elsewhere look the same in `lastWebhookAt`, which is the newest of all of them: this is per platform.
+        // A read that fails leaves the card without it.
+        const lastEvents = await readLastEvents(getTenantId(req)).catch((err) => {
+            log('warn', 'api.meta_webhooks_last_events_failed', describeError(err));
+            return null;
+        });
+        res.json({ ...viewOf(result.status), lastEvents });
+    } catch (err) {
+        fail(res, err, 'api.meta_webhooks_read_failed', 'Failed to read where Meta sends the events.');
+    }
+});
+
+/**
+ * "Send everything to AutoReply": every Meta subscription that points elsewhere, is off or lacks a field is set back to this deployment, then each connected Page is
+ * subscribed again if it needs it (`repairSubscriptions`). It rewrites where Meta sends events for the WHOLE Meta app, and another project using the app stops getting
+ * the ones taken back, so it needs `{ "confirm": true }`: no retry, double click or client that forgot may do it. A step Meta refuses is reported in `steps` (200, `ok: false`,
+ * Meta's own words): the dashboard treats a 401 as signed out, and a refusal by Meta is not that. Not configured, no public address and no verify token are 409s that
+ * come before anything is sent. The write carries `canAdminister` too (a platform admin always acts as owner), because every mutating route here must carry a role guard;
+ * it runs second, so anyone who is not a platform admin still gets the 404.
+ */
+metaRouter.post('/webhooks/repair', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        if (req.body?.confirm !== true) {
+            res.status(400).json({ error: 'This changes where Meta sends events for the whole Meta app. Send { "confirm": true } to go ahead.', code: 'CONFIRMATION_REQUIRED' });
+            return;
+        }
+        const outcome = await repairSubscriptions(await actorFromSession(req.session));
+        res.json({
+            success: true,
+            steps: outcome.steps,
+            pages: outcome.pages,
+            before: outcome.before,
+            // False: the subscriptions could not be read back, so `objects` below is what was known before the change, not what Meta says now.
+            confirmed: outcome.after !== null,
+            ...viewOf(outcome.status),
+        });
+    } catch (err) {
+        fail(res, err, 'api.meta_webhooks_repair_failed', 'Failed to send the events to AutoReply.');
     }
 });

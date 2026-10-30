@@ -101,6 +101,7 @@ export type MetaLoginReason =
     | 'not_configured'          // META_APP_ID / META_APP_SECRET missing
     | 'disabled'                // the operator's switch is off
     | 'no_base_url'             // app.public_base_url unset: no redirect URI can be built
+    | 'no_verify_token'         // no webhook verify token is saved (env or Settings): Meta's callback check could not be passed
     | 'code_exchange_failed'    // Meta refused the code (expired, already used, redirect URI mismatch)
     | 'token_exchange_failed'   // Meta refused the long-lived exchange
     | 'graph_failed'            // a read after the exchange failed
@@ -119,7 +120,7 @@ export type MetaLoginReason =
     | 'not_connected';          // disconnect: there is nothing to disconnect
 
 const HTTP_STATUS: Record<MetaLoginReason, number> = {
-    not_configured: 409, disabled: 409, no_base_url: 409,
+    not_configured: 409, disabled: 409, no_base_url: 409, no_verify_token: 409,
     code_exchange_failed: 400, token_exchange_failed: 502, graph_failed: 502,
     not_tester: 403, permissions_missing: 409, no_pages: 409,
     page_unusable: 400, instagram_not_linked: 400, token_invalid: 400,
@@ -171,7 +172,7 @@ export function scrubSecrets(text: string, known: readonly (string | null | unde
 }
 
 /** Wrap anything thrown by a Graph call: the Meta error's message and codes, scrubbed, and nothing else of the request. */
-function graphError(reason: MetaLoginReason, label: string, err: unknown, secrets: readonly (string | null | undefined)[]): MetaLoginError {
+export function graphError(reason: MetaLoginReason, label: string, err: unknown, secrets: readonly (string | null | undefined)[]): MetaLoginError {
     const metaMessage = (err as any)?.response?.data?.error?.message;
     const detail = typeof metaMessage === 'string' ? metaMessage : String((err as any)?.message ?? 'no answer');
     return new MetaLoginError(reason, `${label}: ${detail}`, {
