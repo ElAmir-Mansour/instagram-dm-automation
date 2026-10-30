@@ -6,7 +6,7 @@
  *   Messages & alerts  Instagram ice breakers, handoff alerts
  *   Appearance         language and theme
  *   Advanced           (platform admin) the access token, the webhook verify token, the page ids
- *   Platform           (platform admin) what every workspace shares: the provider apps, media storage, the public site, onboarding
+ *   Platform           (platform admin) what every workspace shares: where Meta sends each kind of event, the provider apps, media storage, the public site, onboarding
  *
  * The tab is the address: `#/settings?s=<tab>` (`App.route` writes it, `App.hashParams` reads it), so it survives a reload, Back works and
  * another screen can link to a tab, or to a card: `?s=meta` and `?s=<tab>&card=<id>` both open the card and put focus on it.
@@ -98,6 +98,7 @@ const SettingsPage = {
         Object.freeze({ id: 'token', group: 'advanced', who: 'admin', dom: 'settings-token' }),
         Object.freeze({ id: 'webhook', group: 'advanced', who: 'admin', dom: 'settings-webhook' }),
         Object.freeze({ id: 'account', group: 'advanced', who: 'admin', dom: 'settings-account' }),
+        Object.freeze({ id: 'meta-events', group: 'platform', who: 'admin', dom: 'settings-meta-events', platform: true }),
         Object.freeze({ id: 'meta-app', group: 'platform', who: 'admin', dom: 'settings-meta-app', platform: true, details: true }),
         Object.freeze({ id: 'tiktok-app', group: 'platform', who: 'admin', dom: 'settings-tiktok-app', platform: true, details: true }),
         Object.freeze({ id: 'youtube-app', group: 'platform', who: 'admin', dom: 'settings-youtube-app', platform: true, details: true }),
@@ -213,6 +214,8 @@ const SettingsPage = {
             explainers: null, explainersError: null,
             // Instagram & Facebook (P28), with the module that draws the card (loaded on first use, and shared with the wizard).
             meta: null, metaError: null, metaApp: null, metaAppError: null,
+            // Where Meta sends each kind of event (src/services/metaWebhooks.ts): a LIVE read of the Meta app's subscriptions, platform admin only.
+            metaEvents: null, metaEventsError: null,
             // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses
             // them anyway). Reading them sends nothing to Instagram.
             iceBreakers: null, iceBreakersError: null,
@@ -224,7 +227,7 @@ const SettingsPage = {
             // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex] = await Promise.allSettled([
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
@@ -255,6 +258,7 @@ const SettingsPage = {
                 return settings;
             }) : Promise.resolve(null),
             App.isAdmin() ? API.getAdminExplainers() : Promise.resolve(null),
+            App.isAdmin() ? API.getMetaWebhooks() : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -284,6 +288,7 @@ const SettingsPage = {
         if (nt.status === 'fulfilled') ctx.notify = nt.value; else ctx.notifyError = nt.reason;
         if (ob.status === 'fulfilled') ctx.onboarding = ob.value; else ctx.onboardingError = ob.reason;
         if (ex.status === 'fulfilled') ctx.explainers = ex.value; else ctx.explainersError = ex.reason;
+        if (mev.status === 'fulfilled') ctx.metaEvents = mev.value; else ctx.metaEventsError = mev.reason;
         return ctx;
     },
 
@@ -387,6 +392,7 @@ const SettingsPage = {
             case 'token': return this.accessTokenSection(ctx);
             case 'webhook': return this.webhookSection(ctx);
             case 'account': return this.accountSection(ctx);
+            case 'meta-events': return this.metaEventsSection(ctx);
             case 'meta-app': return this.metaAppSection(ctx);
             case 'tiktok-app': return this.tiktokAppSection(ctx);
             case 'youtube-app': return this.youtubeAppSection(ctx);
@@ -1088,6 +1094,11 @@ const SettingsPage = {
                                 action: 'settings:testWebhook', id: 'settings-webhook-test',
                             })}
                             <span class="form-hint">${t('settings.webhookTestHint')}</span>
+                            ${UI.button({
+                                variant: 'ghost', size: 'sm', icon: 'plug-zap',
+                                label: t('settings.webhookTestSeeEvents'),
+                                action: 'settings:openCard', data: { card: 'meta-events' },
+                            })}
                         </div>
                         <div id="settings-webhook-test-result" class="mbe-4" aria-live="polite"></div>
                     ` : ''}
@@ -1177,6 +1188,22 @@ const SettingsPage = {
         return html`
             <section class="section" id="${id}">
                 <div class="settings-card surface">${block}</div>
+            </section>
+        `;
+    },
+
+    /**
+     * "Where Meta sends your events": one row per Meta object (Instagram, Facebook Page, WhatsApp, anything else the Meta app subscribes), where each goes, and the
+     * button that sends everything back to AutoReply. The words and the markup are `MetaConnect.eventsBlock`; this only gives it a card and what `load()` read.
+     */
+    metaEventsSection(ctx) {
+        if (typeof MetaConnect === 'undefined' || typeof MetaConnect.eventsBlock !== 'function') return '';
+        const body = MetaConnect.eventsBlock(ctx.metaEvents, ctx.metaEventsError);
+        if (!body) return '';
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('meta.events.title')}</h2>
+                <div class="settings-card surface">${body}</div>
             </section>
         `;
     },

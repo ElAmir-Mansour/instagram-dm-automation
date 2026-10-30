@@ -466,6 +466,14 @@ const API = {
     getMetaCommentCheck: () => API.request('/meta/comment-check'),
     getMetaAppSettings: () => API.request('/meta/app-settings'),
     saveMetaAppSettings: (data) => API.request('/meta/app-settings', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Where Meta sends each kind of event (platform admin). `getMetaWebhooks()` reads the Meta app's subscriptions NOW and answers
+     * `{ checkedAt, ok, expected: { url, host }, objects, problems, plan, lastEvents }`; `repairMetaWebhooks()` is the "Send everything to AutoReply" button
+     * (always with `confirm: true`: the server refuses without it) and answers `{ steps, pages, confirmed, ok, objects, problems, plan, before }`. A step Meta
+     * refused is `ok: false` inside `steps`, in a 200.
+     */
+    getMetaWebhooks: () => API.request('/meta/webhooks'),
+    repairMetaWebhooks: () => API.request('/meta/webhooks/repair', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
 
     // Posts Scheduler
     getScheduledPosts: () => API.request('/posts/scheduled'),

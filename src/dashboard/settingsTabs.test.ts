@@ -120,10 +120,10 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
         assert.deepEqual(where('messages'), ['iceb', 'alerts']);
         assert.deepEqual(where('appearance'), ['appearance']);
         assert.deepEqual(where('advanced'), ['token', 'webhook', 'account']);
-        assert.deepEqual(where('platform'), ['meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding']);
+        assert.deepEqual(where('platform'), ['meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding']);
         const owner = load('en', 'owner').Settings;
         const ownerCards = Array.from<Json>(owner.visibleGroups()).flatMap((g) => Array.from<Json>(owner.visibleCards(g.id)).map((c) => c.id));
-        for (const developer of ['token', 'webhook', 'account', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding', 'alerts']) {
+        for (const developer of ['token', 'webhook', 'account', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding', 'alerts']) {
             assert.equal(ownerCards.includes(developer), false, `a tenant owner never sees ${developer}`);
         }
         assert.ok(ownerCards.includes('iceb'), 'the owner keeps their ice breakers');
@@ -215,7 +215,7 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
             assert.ok(text(bar).includes(badge), 'on the tab');
             const platform = panels(container.innerHTML).find((p) => p.id === 'platform')!.html;
             assert.ok(text(platform).includes(t('settings.platform.lead')));
-            for (const id of ['storage', 'site', 'onboarding', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers']) {
+            for (const id of ['storage', 'site', 'onboarding', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers']) {
                 const at = platform.indexOf(`data-settings-card="${id}"`);
                 assert.ok(at >= 0, `${id} is in the Platform tab`);
                 assert.ok(platform.slice(at, at + 400).includes('settings-scope'), `${id} carries the badge`);
@@ -230,6 +230,7 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         const html = container.innerHTML;
         // The Meta module is not loaded here, so its operator block has nothing to draw; the TikTok and YouTube apps say why theirs failed.
         assert.equal(html.includes('data-settings-card="meta-app"'), false);
+        assert.equal(html.includes('data-settings-card="meta-events"'), false, 'and neither has where Meta sends the events');
         assert.ok(html.includes('data-settings-card="tiktok-app"') && html.includes('data-settings-card="youtube-app"'));
         // Handoff alerts, the TikTok and YouTube apps, Explainers (its read failed here, and says so), storage, the public site, onboarding: seven
         // cards, seven badges, and none for the missing one.
@@ -242,7 +243,7 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         await settle();
         const html = container.innerHTML;
         assert.deepEqual(panels(html).map((p) => p.id), ['connections', 'messages', 'appearance']);
-        for (const id of ['token', 'webhook', 'account', 'storage', 'site', 'onboarding', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'alerts']) {
+        for (const id of ['token', 'webhook', 'account', 'storage', 'site', 'onboarding', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'alerts']) {
             assert.equal(html.includes(`data-settings-card="${id}"`), false, id);
         }
         assert.equal(html.includes('token-form'), false, 'no token paste');
