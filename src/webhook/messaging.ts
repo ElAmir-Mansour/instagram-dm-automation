@@ -13,14 +13,18 @@ import {
 import { readBotContext } from '../services/ads/switches.js';
 import { generateDmReply } from '../services/dmEngine.js';
 import { answersWithSales, readSalesSettings } from '../services/dmSales/mode.js';
-import { runSalesTurn } from '../services/dmSales/turn.js';
+import { runSalesTurn, type PerceivedTurn, type SalesTurnResult } from '../services/dmSales/turn.js';
+import { perceiveDm, primaryRef, storyReplyRef } from '../services/perception/dm.js';
+import { planOf, type WordlessPlan } from '../services/perception/plan.js';
+import { perceivedFact } from '../services/perception/text.js';
 import { profileContextOrLegacy, type ProfileContext } from '../services/profile/context.js';
+import { kitFor } from '../services/profile/kits.js';
 import { handoffAfterFailure } from '../services/dmSales/failureHandoff.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
 import { PROFILE_WAIT_MS, refreshSenderProfile, settleWithin } from '../services/senderProfile.js';
 import { noteMetaFailure } from '../services/tokenHealth.js';
-import { getCreatorByPageId, type Creator } from '../services/tenant.js';
+import { getCreatorByPageId, type ConnectedCreator, type Creator } from '../services/tenant.js';
 import { checkFairSendQuota } from '../utils/rateLimiter.js';
 import { acknowledgeWordless } from './attachmentAck.js';
 import { describeWordless, WORDLESS_PLACEHOLDERS, type Wordless } from './attachments.js';
@@ -498,21 +502,71 @@ async function answerDm(
         replied,
     });
 
+    /**
+     * What this pipeline does once the sales turn has concluded: the claim is handled, or released for a retry when the send quota stopped it (the catch below
+     * still decides what a thrown error means). Shared by a message with words and by a message with none that Meta Muse read: one rule, not two.
+     */
+    const settleSalesTurn = async (turn: SalesTurnResult): Promise<void> => {
+        if (turn.kind === 'quota') {
+            if (mayRetry) {
+                await releaseInbound(claim.id);
+                throw new Error(`Send quota exhausted (${turn.blockedBy}: ${turn.count}/${turn.limit}).`);
+            }
+            await markHandled(claim.id);
+            return;
+        }
+        // Something went out, so Meta Business AI no longer holds the thread (A3): the Inbox notice goes away. No statement unless one was set.
+        if (conversation.no_reply_reason && SENT_OUTCOMES.has(turn.outcome)) await clearNoReplyReason(conversationId);
+        await markHandled(claim.id);
+    };
+
+    // A message with no words that Meta Muse READ and the sales turn is now answering: a failure from here is a customer who asked something and is owed an answer,
+    // so the last-attempt hand-over below applies to it as it does to words (a photo that was only acknowledged asked nothing).
+    let answeringRead = false;
+
     try {
-        // A message with no words never reaches a brain, in any `sales_mode`: not Gemini, not the providers engine, not the sales turn. It is
-        // already stored (as its kind); what is left is one fixed line from the kit, or nothing for a sticker (src/webhook/attachmentAck.ts).
+        // A message with no words is not answered by a model unless Meta Muse read it first (below): it is stored as its kind, and what is left is one fixed line from the
+        // kit, or nothing for a sticker (src/webhook/attachmentAck.ts). With the tenant's switches off, the default, nothing about that has changed.
         // First in the `try` so the catch below keeps its meaning for it: a transient send failure is retried, a permanent Meta error is final.
         // Always terminal otherwise: a refused quota or a claim that found an answer already on its way is not retried for an acknowledgement.
         if (dm.wordless) {
             const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+            const disclosure = { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) };
+            const pageId = resolveDmPageId(creator, [recipientId, entryId]);
+
+            // Meta Muse (docs/specs/005-muse-sees): may this one be READ? Only an Instagram DM of a kind it reads, for a tenant whose sales mode answers this sender and
+            // whose switch is on for this sender; every "no" is today's line, below. What it was is a plan: answer it, or send a line.
+            const plan = await planWordless({
+                dm, message: event?.message, creator, platform, pageId, conversationId, messageId: claim.id, resumed: claim.resumed, ctx: dmCtx, mayRetry,
+            });
+
+            if (plan.kind === 'answer') {
+                handoffCtx = dmCtx;
+                answeringRead = true;
+                const ad = entrySource?.kind === 'ctm' ? await adContextFor(creator.id, entrySource, dmCtx.offers, null) : null;
+                const turn = await runSalesTurn({
+                    creator: { id: creator.id, page_access_token: creator.page_access_token },
+                    pageId,
+                    conversation: { id: conversationId },
+                    inbound: { id: claim.id, senderId: dm.senderId, text: plan.text },
+                    ctx: dmCtx,
+                    disclosure,
+                    ...(ad ? { ad } : {}),
+                    perceived: plan.perceived,
+                });
+                await settleSalesTurn(turn);
+                return;
+            }
+
             const ack = await acknowledgeWordless({
                 creator: { id: creator.id, page_access_token: creator.page_access_token },
-                pageId: resolveDmPageId(creator, [recipientId, entryId]),
+                pageId,
                 conversation: { id: conversationId },
                 inbound: { id: claim.id, senderId: dm.senderId },
                 wordless: dm.wordless,
+                ...(plan.perception ? { perception: plan.perception } : {}),
                 ctx: dmCtx,
-                disclosure: { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) },
+                disclosure,
             });
             log('info', 'dm.wordless_handled', { wordless_kind: dm.wordless.kind, ack });
             await markHandled(claim.id);
@@ -537,6 +591,13 @@ async function answerDm(
             const ad = entrySource?.kind === 'ctm'
                 ? await adContextFor(creator.id, entrySource, dmCtx.offers, event?.postback && dm.text ? dm.text : null)
                 : null;
+            // Meta Muse: a reply to the account's story WITH words. The words stay what they asked; when the tenant's switch is on and the sender is allowed, the story
+            // they replied to is read too and told to the model as a fact ("The story they replied to shows …"), so that "how much is this?" can be answered. A message
+            // that is not a reply to a story costs not one statement here, and a story that cannot be read is the turn it would have been.
+            const storyRef = platform === 'instagram' && dm.text ? storyReplyRef(event?.message) : null;
+            const perceived = storyRef
+                ? await readStoryContext({ creator, senderId: dm.senderId, messageId: claim.id, resumed: claim.resumed, ctx: dmCtx, ref: storyRef })
+                : null;
             // The sales turn owns the reply, its quota check, the disclosure and the record of both (src/services/dmSales/turn.ts); this
             // function keeps the claim: handled once the turn has concluded, released for a retry when the quota stopped it, and the
             // catch below still decides what a thrown error means.
@@ -548,18 +609,9 @@ async function answerDm(
                 ctx: dmCtx,
                 disclosure: { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) },
                 ...(ad ? { ad } : {}),
+                ...(perceived ? { perceived } : {}),
             });
-            if (turn.kind === 'quota') {
-                if (mayRetry) {
-                    await releaseInbound(claim.id);
-                    throw new Error(`Send quota exhausted (${turn.blockedBy}: ${turn.count}/${turn.limit}).`);
-                }
-                await markHandled(claim.id);
-                return;
-            }
-            // Something went out, so Meta Business AI no longer holds the thread (A3): the Inbox notice goes away. No statement unless one was set.
-            if (conversation.no_reply_reason && SENT_OUTCOMES.has(turn.outcome)) await clearNoReplyReason(conversationId);
-            await markHandled(claim.id);
+            await settleSalesTurn(turn);
             return;
         }
 
@@ -715,10 +767,10 @@ async function answerDm(
         // every `sales_mode` that is a handoff, never silence (found live 2026-10-14: Gemini failed all three attempts and the DM got
         // nothing): the thread is stamped as handed over (the bot is NOT paused), the customer is sent the handoff line once, the owner is
         // told. `handoffAfterFailure` never throws and never loops, so the message is marked handled below whatever it did. A permanent Meta
-        // error (a blocked recipient, a dead token) is as it always was: nothing can be sent to them. Not for a message with no words (a
-        // photo, a voice note, a sticker): it asked nothing, so a failed acknowledgement leaves nobody waiting for an answer, and is not
-        // worth an alert.
-        if (!permanent && !dm.wordless) await handOver();
+        // error (a blocked recipient, a dead token) is as it always was: nothing can be sent to them. Not for a message with no words that was only
+        // acknowledged (a photo, a voice note, a sticker): it asked nothing, so a failed acknowledgement leaves nobody waiting for an answer, and is not
+        // worth an alert. One that Meta Muse READ and the sales turn was answering is different: it asked, so it is handed over like words.
+        if (!permanent && (!dm.wordless || answeringRead)) await handOver();
 
         await markHandled(claim.id);
     }
@@ -726,6 +778,73 @@ async function answerDm(
 
 /** The sales turn's outcomes that mean Meta took a message from the bot. */
 const SENT_OUTCOMES: ReadonlySet<string> = new Set(['sent', 'handoff', 'opt_out', 'calm']);
+
+/** What the account is called in the language of the schema the reading is asked to answer in. */
+const readingLanguage = (ctx: ProfileContext<'dm'>) => kitFor(ctx.language).dm.schemaLanguage;
+
+/**
+ * What to do with a message that has no words (docs/specs/005-muse-sees T032): the line it has always got, unless Meta Muse can READ it. In this order, each step
+ * only if the one before passed, and every "no" is today's line with not one statement more than it cost before, except the reads the questions need:
+ *
+ *   1. The DM is Instagram's (`platform`, the body's `object`) and holds a thing Muse reads (`primaryRef`): a sticker, a file, a voice note, a view-once and a
+ *      Messenger DM stop here, with no reads at all.
+ *   2. The tenant's sales mode answers this sender (`answersWithSales`): a read is only for a message the sales turn will answer.
+ *   3. `perceiveDm`: the tenant's switch, the sender's allow-list, a Meta key, the day's cap; then `typing_on`, what to show, Muse, and the record, stored once.
+ *
+ * A read that throws (a database that could not take the record, or anything unforeseen) is retried while attempts remain, and on the last one is today's line,
+ * never nothing. `planOf` turns what was read into the plan.
+ */
+async function planWordless(a: {
+    dm: NormalizedDm; message: unknown; creator: ConnectedCreator; platform: ConversationPlatform | null; pageId: string | undefined;
+    conversationId: string; messageId: string; resumed: boolean; ctx: ProfileContext<'dm'>; mayRetry: boolean;
+}): Promise<WordlessPlan> {
+    const TODAYS: WordlessPlan = { kind: 'ack' };
+    if (a.platform !== 'instagram') return TODAYS;
+    const ref = primaryRef(a.message);
+    if (!ref) return TODAYS;
+
+    const sales = await readSalesSettings(a.creator.id);
+    if (!answersWithSales(sales, a.dm.senderId)) {
+        log('info', 'perception.skipped:sales_off', { creator_id: a.creator.id, kind: ref.kind });
+        return TODAYS;
+    }
+
+    try {
+        const reading = await perceiveDm({
+            creator: { id: a.creator.id, page_access_token: a.creator.page_access_token, instagram_page_id: a.creator.instagram_page_id },
+            pageId: a.pageId, senderId: a.dm.senderId, messageId: a.messageId, ref, typed: false, resumed: a.resumed,
+            language: readingLanguage(a.ctx), handle: a.ctx.links.handle,
+        });
+        if (reading.kind === 'declined') return TODAYS;
+        return planOf(reading.perception, kitFor(a.ctx.language).attachments);
+    } catch (err) {
+        log('error', 'perception.step_failed', { creator_id: a.creator.id, kind: ref.kind, ...describeError(err) });
+        if (a.mayRetry) throw err;
+        return TODAYS;
+    }
+}
+
+/**
+ * The story a person replied to WITH words, read, as the fact the sales turn is told: or null. Never throws and never holds the answer back: what the person asked is
+ * answered whether or not the story could be read, so a failure of any kind here is a turn with no story in it.
+ */
+async function readStoryContext(a: {
+    creator: ConnectedCreator; senderId: string; messageId: string; resumed: boolean; ctx: ProfileContext<'dm'>; ref: NonNullable<ReturnType<typeof storyReplyRef>>;
+}): Promise<PerceivedTurn | null> {
+    try {
+        const reading = await perceiveDm({
+            creator: { id: a.creator.id, page_access_token: a.creator.page_access_token, instagram_page_id: a.creator.instagram_page_id },
+            pageId: undefined, senderId: a.senderId, messageId: a.messageId, ref: a.ref, typed: true, resumed: a.resumed,
+            language: readingLanguage(a.ctx), handle: a.ctx.links.handle,
+        });
+        if (reading.kind !== 'read' || reading.perception.about_owner === 'personal') return null;
+        const sent = perceivedFact(reading.perception);
+        return sent ? { kind: reading.perception.kind, describedText: false, sent } : null;
+    } catch (err) {
+        log('warn', 'perception.story_context_failed', { creator_id: a.creator.id, ...describeError(err) });
+        return null;
+    }
+}
 
 /**
  * A referral with nothing to answer (A3): find or make the thread and record the ad on it. The thread's `last_message_at` and `handled_at` are
