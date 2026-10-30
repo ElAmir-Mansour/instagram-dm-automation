@@ -72,8 +72,11 @@ export interface Wordless {
     ack: WordlessAck;
 }
 
-/** An attachment's Meta `type` as a kind. A sticker is also an `image` that carries a `sticker_id` (Messenger, until 2026-08-30). */
-function kindOfAttachment(attachment: unknown): WordlessKind {
+/**
+ * An attachment's Meta `type` as a kind. A sticker is also an `image` that carries a `sticker_id` (Messenger, until 2026-08-30). Exported for
+ * `services/perception/media.ts`, which pairs each attachment's kind with its link: `describeWordless` says which kinds a message holds, not which link is which.
+ */
+export function kindOfAttachment(attachment: unknown): WordlessKind {
     const att = attachment && typeof attachment === 'object' ? (attachment as { type?: unknown; payload?: { sticker_id?: unknown } | null }) : null;
     const type = typeof att?.type === 'string' ? att.type.toLowerCase() : '';
     switch (type) {
