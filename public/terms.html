@@ -24,6 +24,12 @@
         src/webhook/comments.ts (sendPrivateReply, sendPublicReply, likeComment)
     DM replies written by Gemini, or by a provider the operator routes `dm` to
         src/services/ai.ts, src/services/dmEngine.ts, src/services/dmSales/turn.ts
+    the list of AI providers in section 2 (added 2026-10-30, ahead of the code)
+        PROVIDER_IDS, src/services/llm/registry.ts, plus Meta (Muse) and
+        Baseten from the hackathon PRs. The block at the top of
+        public/privacy.html says why every sentence about them is conditional
+        until that code is live; section 2's new bullet (media, reels) is the
+        same promise in a line, and is off unless the account owner switches it on
     publishing is a queue, not a clock
         see the note at the top of public/pricing.html (drain every ~5-15 min)
     Meta connected by a Page access token, never a password
@@ -977,7 +983,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>شروط خدمة <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: <time datetime="2026-10-25" dir="ltr">2026-10-25</time></p>
+                <p class="stamp">آخر تحديث: <time datetime="2026-10-30" dir="ltr">2026-10-30</time></p>
                 <p class="applies">تحكم شروط الخدمة هذه استخدامك لتطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     بما في ذلك ربطه بحساباتك على إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1050,9 +1056,21 @@
                         <strong>ردود ورسائل آلية نيابةً عنك:</strong> حين يُطابِق تعليقٌ كلمة مفتاحية
                         حدّدتها، تُرسَل رسالة خاصة إلى كاتبه (وردّ علني على التعليق إن فعّلته)،
                         ويُسجَّل إعجاب بذلك التعليق؛ كما يُرَدّ على الرسائل الخاصة الواردة إلى حسابك.
-                        الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي
-                        (<bdi lang="en" dir="ltr">Google Gemini</bdi> افتراضياً، أو مزوّد ذكاء اصطناعي آخر يختاره المُشغّل
-                        كما توضّح <a href="/privacy">سياسة الخصوصية</a>)، لا إنسان.
+                        الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان:
+                        <bdi lang="en" dir="ltr">Google Gemini</bdi> افتراضياً، أو مزوّد ذكاء اصطناعي آخر يختاره المُشغّل.
+                        والمزوّدون هم <bdi lang="en" dir="ltr">Anthropic</bdi> (<bdi lang="en" dir="ltr">Claude</bdi>)
+                        و<bdi lang="en" dir="ltr">OpenAI</bdi> وجوجل (<bdi lang="en" dir="ltr">Gemini</bdi>)
+                        و<bdi lang="en" dir="ltr">OpenRouter</bdi> و<bdi lang="en" dir="ltr">Groq</bdi>
+                        وميتا (<bdi lang="en" dir="ltr">Muse</bdi>)، و<bdi lang="en" dir="ltr">Baseten</bdi> لريلزك أنت وحدها،
+                        أو خدمة بعنوان يحدّده المُشغّل. وتبيّن <a href="/privacy#ai-providers-ar">سياسة الخصوصية</a> ما يتلقّاه
+                        كلٌّ منهم.
+                    </li>
+                    <li>
+                        <strong>قراءة الوسائط ومشاهدة ريلزك، إن شغّلتَ ذلك فقط:</strong> إن شغّلتَ نماذج ميتا للذكاء الاصطناعي
+                        لحسابك، فقد تُقرأ الصور ومقاطع الفيديو والرسائل الصوتية والمنشورات والقصص المُشارَكة التي يرسلها الناس إليك،
+                        وتُشاهَد ريلزك المنشورة، ليكون الردّ عمّا أرسلوه فعلاً ولإيجاد الفيديو المناسب لسؤالهم. وقد تشاهد الريلزَ
+                        نماذجُ ميتا أو نموذج ميتا المفتوح الذي يشغّله لنا <bdi lang="en" dir="ltr">Baseten</bdi>. وكل ذلك متوقف إلى
+                        أن تشغّله.
                     </li>
                 </ul>
                 <p>
@@ -1273,7 +1291,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Terms of Service</h1>
-                <p class="stamp">Last updated: <time datetime="2026-10-25">2026-10-25</time></p>
+                <p class="stamp">Last updated: <time datetime="2026-10-30">2026-10-30</time></p>
                 <p class="applies">These Terms of Service govern your use of <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, including connecting it to your Instagram, Facebook, TikTok and YouTube accounts.</p>
 
@@ -1350,9 +1368,20 @@
                         a comment matches a keyword you set, a private message to the person who
                         wrote it (and a public reply under the comment, if you turn that on), plus
                         a like on that comment; and replies to direct messages sent to your
-                        account. Direct-message replies are written by an AI model (Google
-                        Gemini by default, or another AI provider the operator chooses, as the
-                        <a href="/privacy">privacy policy</a> describes), not a person.
+                        account. Direct-message replies are written by an AI model, not a person:
+                        Google Gemini by default, or another AI provider the operator chooses. The
+                        providers are Anthropic (Claude), OpenAI, Google (Gemini), OpenRouter, Groq and
+                        Meta (Muse), and Baseten for your own reels only, or a service at an address
+                        the operator enters, and the <a href="/privacy#ai-providers-en">privacy policy</a>
+                        says what each one receives.
+                    </li>
+                    <li>
+                        <strong>Reads media and watches your reels, only if you switch it on:</strong> with
+                        Meta's AI models switched on for your account, the photos, videos, voice notes and
+                        shared posts and stories that people send you can be read, and your own published
+                        reels watched, so that the replies are about what people actually sent and to find
+                        the right video for a question. Meta's models, or Meta's open model run for us by
+                        Baseten, may watch the reels. All of this is off until you switch it on.
                     </li>
                 </ul>
                 <p>
