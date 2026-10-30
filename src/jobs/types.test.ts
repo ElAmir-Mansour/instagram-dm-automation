@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { JOB_KINDS, isJobKind, isWhatsAppDmPayload } from './types.js';
+import { BACKGROUND_JOB_KINDS, JOB_KINDS, isJobKind, isWhatsAppDmPayload } from './types.js';
 
 describe('isJobKind', () => {
     it('accepts every kind in the registry', () => {
@@ -52,5 +52,19 @@ describe('the WhatsApp job kinds', () => {
         ]) {
             assert.equal(isWhatsAppDmPayload(payload), false, JSON.stringify(payload));
         }
+    });
+});
+
+describe('the video memory\'s job kind', () => {
+    it('muse.reel_index is a kind, so a job of that kind in the table is run and not refused as unknown', () => {
+        assert.equal(isJobKind('muse.reel_index'), true);
+        assert.ok((JOB_KINDS as readonly string[]).includes('muse.reel_index'));
+        assert.equal(isJobKind('muse.reel_index.'), false);
+        assert.equal(isJobKind('muse.offer_card'), false, 'the cut phases have no kind');
+    });
+
+    it('is the one background kind: slow work that no person is waiting on, which a drain runs after what a person is waiting for', () => {
+        assert.deepEqual([...BACKGROUND_JOB_KINDS], ['muse.reel_index']);
+        for (const kind of BACKGROUND_JOB_KINDS) assert.ok((JOB_KINDS as readonly string[]).includes(kind), kind);
     });
 });
