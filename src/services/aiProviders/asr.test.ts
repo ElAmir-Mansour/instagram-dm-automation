@@ -80,7 +80,7 @@ function recorder(...answers: Array<Response | Error | (() => Response)>): { fet
     return { fetchImpl, seen };
 }
 
-const heard = (over: Record<string, unknown> = {}): Response => jsonResponse(200, { sessionId: 'sess-42', transcript: 'بكام الكورس ده', audioDurationMs: 3000, turns: [], ...over });
+const heard = (over: Record<string, unknown> = {}): Response => jsonResponse(200, { sessionId: 'sess-42', transcript: 'بكام الاشتراك ده', audioDurationMs: 3000, turns: [], ...over });
 
 const call = (fetchImpl: FetchLike | undefined, over: Partial<TranscribeWithMetaArgs> = {}) =>
     transcribeWithMeta({ creatorId: TENANT, wav: THREE_SECONDS, now: NOW, ...(fetchImpl ? { fetchImpl } : {}), ...over });
@@ -121,7 +121,7 @@ describe('a voice note that is heard', () => {
 
     it('returns the transcript, how long Meta says the audio was, what it cost, the model, the session and the row', async () => {
         const out = await call(recorder(heard()).fetchImpl);
-        assert.equal(out.transcript, 'بكام الكورس ده');
+        assert.equal(out.transcript, 'بكام الاشتراك ده');
         assert.equal(out.durationMs, 3000);
         assert.equal(out.usd, 0.00015);
         assert.equal(out.model, 'muse-voice-transcribe-1.0');
@@ -155,12 +155,12 @@ describe('a voice note that is heard', () => {
 
     it('sends the keywords and the WAV to Meta\'s speech endpoint, with the key as a Bearer header only', async () => {
         const { fetchImpl, seen } = recorder(heard());
-        await call(fetchImpl, { keywords: ['Agentic AI', 'AutoReply'] });
+        await call(fetchImpl, { keywords: ['Data Academy', 'AutoReply'] });
         const sent = seen[0]!;
         assert.equal(sent.url, 'https://api.meta.ai/v1/asr/transcribe');
         assert.equal(sent.headers.authorization, `Bearer ${KEY}`);
         const [request, audio] = parseMultipart(sent.body, sent.headers['content-type']!);
-        assert.deepEqual(JSON.parse(request!.data.toString('utf8')).keywords, ['Agentic AI', 'AutoReply']);
+        assert.deepEqual(JSON.parse(request!.data.toString('utf8')).keywords, ['Data Academy', 'AutoReply']);
         assert.ok(audio!.data.equals(THREE_SECONDS));
         assert.ok(!sent.body.includes(KEY));
     });
@@ -187,7 +187,7 @@ describe('a voice note that is heard', () => {
     it('settling that fails does not fail a call that was paid for: the transcript is returned, the failure logged, and the reservation stays counted', async () => {
         db.failOn(/^UPDATE ai_usage SET provider/);
         const out = await call(recorder(heard()).fetchImpl);
-        assert.equal(out.transcript, 'بكام الكورس ده');
+        assert.equal(out.transcript, 'بكام الاشتراك ده');
         assert.equal(logged('ai.usage_settle_failed').length, 1);
         assert.equal(db.usage[0]!.outcome, 'reserved', 'at its ceiling: over-counting is the safe side of a budget');
     });
@@ -196,7 +196,7 @@ describe('a voice note that is heard', () => {
         const { fetchImpl, seen } = recorder(heard());
         setProviderFetch(fetchImpl);
         const out = await call(undefined);
-        assert.equal(out.transcript, 'بكام الكورس ده');
+        assert.equal(out.transcript, 'بكام الاشتراك ده');
         assert.equal(seen.length, 1);
     });
 });
@@ -340,7 +340,7 @@ describe('the budgets', () => {
 
     it('leave a call alone when no budget is set (the default): voice notes are limited by the Muse daily cap in the gate', async () => {
         const out = await call(recorder(heard()).fetchImpl);
-        assert.equal(out.transcript, 'بكام الكورس ده');
+        assert.equal(out.transcript, 'بكام الاشتراك ده');
     });
 });
 

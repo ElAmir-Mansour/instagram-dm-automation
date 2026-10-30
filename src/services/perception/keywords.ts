@@ -1,20 +1,21 @@
 /**
  * The terms that bias a voice note's transcription (docs/specs/005-muse-sees T049, contracts/perception.md §2). The speech model is told, with the audio, the
- * names a customer is likely to say, so that «الكورس بتاع Agentic AI» is heard as that and not as something that sounds like it; Meta says only that keywords
- * "bias recognition but do not guarantee an exact spelling" (dev.meta.ai/docs/speech-to-text, read 2026-10-31), and gives no count or length limit.
+ * names a customer is likely to say, so that a question about «اشتراك Data Academy» is heard as that and not as something that sounds like it; Meta says only that
+ * keywords "bias recognition but do not guarantee an exact spelling" (dev.meta.ai/docs/speech-to-text, read 2026-10-31), and gives no count or length limit.
  *
- *   voiceKeywords(profile)    at most 20 names: every offer's name (the course or product), the brand name, and the creator's display names, longest first.
+ *   voiceKeywords(profile)    at most 20 names: every offer's name (a product, a program, a class), the brand name, and the creator's display names, longest first.
  *
  * Pure: the profile's DM context (`ProfileContext<'dm'>`, which the DM turn already holds) goes in and a list comes out; nothing is read from a database.
  *
- * **What counts as a name.** The OFFER names (a course is an offer of kind `course`, so "offer and course names" are one list), the brand name, and both display names.
+ * **What counts as a name.** The OFFER names (whatever the creator sells, a class or a program or a product, is an offer with a name, so there is one list), the brand name,
+ * and both display names.
  * The display names are in because a tenant may have no brand name at all (a shop is its display name, «متجر نور», and `brand_name` is empty) and because a customer
  * says the creator's name to them. The comment keywords (the word a post asks people to comment) are NOT names, and are often an everyday word: they would bias
  * recognition toward a word that needs no help. A handle is not a spoken word either.
  *
  * **Which twenty.** A profile holds at most ten offers, so the cap is rarely met; when it is, the LONGEST names win: they are the most specific, the least likely to
  * be common words and the likeliest to be misheard when nothing says what they are. The list is in that order, ties in the order the profile gives them (the primary
- * offer first). A name that repeats one already kept, ignoring case, is dropped; one over `KEYWORD_MAX_CHARS` characters (a course TITLE is up to 200) is cut at a
+ * offer first). A name that repeats one already kept, ignoring case, is dropped; one over `KEYWORD_MAX_CHARS` characters (an offer's name may be up to 200) is cut at a
  * word, because the start of a title is the part a person says and the whole of it is not.
  */
 import { graphemes } from '../dmSales/text.js';

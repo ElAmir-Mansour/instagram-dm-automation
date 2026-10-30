@@ -5,7 +5,9 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { describe, it } from 'node:test';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { after, before, describe, it } from 'node:test';
 import { AiError } from './errors.js';
 import {
     ASR_LANGUAGE_BIAS, ASR_MAX_KEYWORDS, ASR_MODEL, ASR_PROVIDER, ASR_TIMEOUT_MS, ASR_USD_PER_HOUR, asrUrl, asrUsd, buildAsrRequest, buildMultipart, callMetaAsr, type AsrArgs,
@@ -39,7 +41,7 @@ function recorder(...answers: Array<Response | Error>): { fetchImpl: FetchLike; 
     return { fetchImpl, seen };
 }
 
-const ok = (over: Record<string, unknown> = {}): Response => jsonResponse(200, { sessionId: 'sess-1', transcript: 'بكام الكورس', audioDurationMs: 1022, turns: [], ...over });
+const ok = (over: Record<string, unknown> = {}): Response => jsonResponse(200, { sessionId: 'sess-1', transcript: 'بكام الاشتراك', audioDurationMs: 1022, turns: [], ...over });
 
 const call = (fetchImpl: FetchLike, over: Partial<AsrArgs> = {}) => callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl, ...over });
 
@@ -78,8 +80,8 @@ describe('what an hour of audio costs', () => {
 describe('the request part', () => {
     it('is exactly the contract\'s, in its key order: model, audioEncoding WAV, languageBias Arabic and English, then the keywords', () => {
         assert.equal(
-            JSON.stringify(buildAsrRequest(['Agentic AI', 'كورس بايثون'])),
-            '{"model":"muse-voice-transcribe-1.0","audioEncoding":"WAV","languageBias":["Arabic","English"],"keywords":["Agentic AI","كورس بايثون"]}',
+            JSON.stringify(buildAsrRequest(['Data Academy', 'اشتراك بايثون'])),
+            '{"model":"muse-voice-transcribe-1.0","audioEncoding":"WAV","languageBias":["Arabic","English"],"keywords":["Data Academy","اشتراك بايثون"]}',
         );
         assert.deepEqual([...ASR_LANGUAGE_BIAS], ['Arabic', 'English']);
     });
@@ -159,7 +161,7 @@ describe('the multipart body: the shape that was tried live (scripts/meta-probe.
 describe('the call', () => {
     it('POSTs multipart to Meta\'s /v1/asr/transcribe: the key as a Bearer header only, the request part as JSON with no filename, the audio as the WAV', async () => {
         const { fetchImpl, seen } = recorder(ok());
-        const out = await call(fetchImpl, { keywords: ['Agentic AI', 'AutoReply'], boundary: 'fixedboundary' });
+        const out = await call(fetchImpl, { keywords: ['Data Academy', 'AutoReply'], boundary: 'fixedboundary' });
 
         assert.equal(seen.length, 1);
         const sent = seen[0]!;
@@ -178,14 +180,14 @@ describe('the call', () => {
         assert.equal(request.type, 'application/json');
         assert.equal(request.filename, undefined, 'the JSON part is a field, not a file');
         assert.deepEqual(JSON.parse(request.data.toString('utf8')), {
-            model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Arabic', 'English'], keywords: ['Agentic AI', 'AutoReply'],
+            model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Arabic', 'English'], keywords: ['Data Academy', 'AutoReply'],
         });
         assert.equal(audio.type, 'audio/wav');
         assert.equal(audio.filename, 'voice.wav');
         assert.ok(audio.data.equals(WAV), 'the audio is exactly the WAV that was handed in');
 
         assert.ok(!sent.url.includes(KEY) && !sent.body.includes(KEY), 'the key is in the header and nowhere else');
-        assert.deepEqual(out, { transcript: 'بكام الكورس', durationMs: 1022, model: 'muse-voice-transcribe-1.0', sessionId: 'sess-1' });
+        assert.deepEqual(out, { transcript: 'بكام الاشتراك', durationMs: 1022, model: 'muse-voice-transcribe-1.0', sessionId: 'sess-1' });
     });
 
     it('sends no keywords key when there are none, and at most twenty when there are more', async () => {
@@ -250,8 +252,8 @@ describe('the call', () => {
 
 describe('the answer', () => {
     it('is the transcript (trimmed), what Meta says it processed, and the session id for a support ticket', async () => {
-        const out = await call(recorder(ok({ transcript: '  عايز أعرف بكام الكورس؟ \n', audioDurationMs: 4321, sessionId: 'abc-123_X.y:z' })).fetchImpl);
-        assert.deepEqual(out, { transcript: 'عايز أعرف بكام الكورس؟', durationMs: 4321, model: 'muse-voice-transcribe-1.0', sessionId: 'abc-123_X.y:z' });
+        const out = await call(recorder(ok({ transcript: '  عايز أعرف بكام الاشتراك؟ \n', audioDurationMs: 4321, sessionId: 'abc-123_X.y:z' })).fetchImpl);
+        assert.deepEqual(out, { transcript: 'عايز أعرف بكام الاشتراك؟', durationMs: 4321, model: 'muse-voice-transcribe-1.0', sessionId: 'abc-123_X.y:z' });
     });
 
     it('rounds a duration that is not whole, and falls back to the WAV\'s own length when the answer does not say (or says nonsense)', async () => {
@@ -332,6 +334,95 @@ describe('every way it can fail is an AiError of the providers layer\'s kinds', 
         assert.ok(!String(err.stack).includes(KEY));
         const echoed = await answer(jsonResponse(400, { error: { message: `bad audio ${Buffer.from(WAV).toString('base64').slice(0, 60)}` } }));
         assert.ok(echoed.message.length <= 240, 'an error message is cut, whatever it quotes');
+    });
+});
+
+describe('over a real socket (a local server standing in for Meta): what the real fetch does with the body, the headers, a redirect and a deadline', () => {
+    let server: Server;
+    let origin: string;
+    let received: { headers: IncomingMessage['headers']; method: string | undefined; url: string | undefined; body: Buffer }[];
+    let behave: (req: IncomingMessage, res: import('node:http').ServerResponse) => void;
+
+    before(async () => {
+        server = createServer((req, res) => {
+            const chunks: Buffer[] = [];
+            req.on('data', (c: Buffer) => chunks.push(c));
+            req.on('end', () => {
+                received.push({ headers: req.headers, method: req.method, url: req.url, body: Buffer.concat(chunks) });
+                behave(req, res);
+            });
+        });
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+    after(async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    /** The real `fetch`, with Meta's address swapped for the local server's. Nothing else about the request is touched. */
+    const local: FetchLike = (url, init) => fetch(url.replace('https://api.meta.ai', origin), init);
+
+    it('sends a body the server can read: the multipart with its boundary intact, the right length, the key as a Bearer header, and the WAV byte for byte', async () => {
+        received = [];
+        behave = (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ sessionId: 's-1', transcript: 'بكام الاشتراك', audioDurationMs: 1022, turns: [] })); };
+        const out = await callMetaAsr({ apiKey: KEY, wav: WAV, keywords: ['Data Academy'], fetchImpl: local });
+
+        assert.deepEqual(out, { transcript: 'بكام الاشتراك', durationMs: 1022, model: ASR_MODEL, sessionId: 's-1' });
+        assert.equal(received.length, 1);
+        const got = received[0]!;
+        assert.equal(got.method, 'POST');
+        assert.equal(got.url, '/v1/asr/transcribe');
+        assert.equal(got.headers.authorization, `Bearer ${KEY}`);
+        assert.equal(got.headers.accept, 'application/json');
+        assert.match(String(got.headers['content-type']), /^multipart\/form-data; boundary=autoreply[0-9a-f]{24}$/);
+        assert.equal(Number(got.headers['content-length']), got.body.length, 'the length the server was told is the length it got');
+        const [request, audio] = parseMultipart(got.body, String(got.headers['content-type']));
+        assert.deepEqual(JSON.parse(request!.data.toString('utf8')), {
+            model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Arabic', 'English'], keywords: ['Data Academy'],
+        });
+        assert.equal(request!.filename, undefined);
+        assert.equal(audio!.filename, 'voice.wav');
+        assert.equal(audio!.type, 'audio/wav');
+        assert.ok(audio!.data.equals(WAV));
+    });
+
+    it('refuses a redirect for real: the 307 is a bad_request that names it, and the address it points to is never asked (the key stays with Meta)', async () => {
+        received = [];
+        behave = (_req, res) => { res.writeHead(307, { location: `${origin}/elsewhere` }); res.end(); };
+        const err = await failureOf(callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl: local }));
+        assert.equal(err.kind, 'bad_request');
+        assert.match(err.message, /redirect/i);
+        assert.deepEqual(received.map((r) => r.url), ['/v1/asr/transcribe']);
+    });
+
+    it('a server that never answers ends as a timeout at the deadline, and the abort is the real one', async () => {
+        received = [];
+        behave = () => undefined;
+        const started = Date.now();
+        const err = await failureOf(callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl: local, timeoutMs: 200 }));
+        assert.equal(err.kind, 'timeout');
+        assert.match(err.message, /did not transcribe in time/);
+        assert.ok(Date.now() - started < 5_000);
+    });
+
+    it('reads a real error answer: a 401 body that echoes the key is an auth error with the key scrubbed, and a 429 carries its Retry-After', async () => {
+        received = [];
+        behave = (_req, res) => { res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: `Incorrect API key provided: ${KEY}`, type: 'authentication_error' } })); };
+        const auth = await failureOf(callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl: local }));
+        assert.equal(auth.kind, 'auth');
+        assert.ok(!auth.message.includes(KEY));
+
+        behave = (_req, res) => { res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '9' }); res.end(JSON.stringify({ error: { message: 'Concurrency limit reached' } })); };
+        const rate = await failureOf(callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl: local }));
+        assert.deepEqual([rate.kind, rate.retryAfterMs], ['rate', 9000]);
+    });
+
+    it('a connection that dies mid-answer is a timeout (the connection dropped), not a crash', async () => {
+        received = [];
+        behave = (req) => { req.socket.destroy(); };
+        const err = await failureOf(callMetaAsr({ apiKey: KEY, wav: WAV, fetchImpl: local }));
+        assert.equal(err.kind, 'timeout');
     });
 });
 

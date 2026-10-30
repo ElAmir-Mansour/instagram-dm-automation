@@ -30,7 +30,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-11-01T09:30:00.000Z');
 const LINK = 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=1&signature=SECRETSIG123';
 const KEY = FAKE_KEYS.meta;
-const TRANSCRIPT = 'عايز أعرف بكام الكورس وفيه شهادة';
+const TRANSCRIPT = 'عايز أعرف بكام الاشتراك وفيه شهادة';
 
 let logs: { level: string; line: string; fields: Record<string, unknown> }[];
 let restoreSink: (() => void) | undefined;
@@ -87,9 +87,9 @@ function only<S extends VoiceResult['status']>(result: VoiceResult, status: S): 
 
 describe('wordCount', () => {
     it('counts the pieces of a transcript that have a letter or a digit in them, in any script', () => {
-        assert.equal(wordCount('بكام الكورس'), 2);
-        assert.equal(wordCount('how much is the course'), 5);
-        assert.equal(wordCount('الكورس course 300'), 3);
+        assert.equal(wordCount('بكام الاشتراك'), 2);
+        assert.equal(wordCount('how much is the plan'), 5);
+        assert.equal(wordCount('الاشتراك plan 300'), 3);
         assert.equal(wordCount('٣٠٠ جنيه'), 2);
         assert.equal(wordCount('  spaced \n\t out  '), 2);
     });
@@ -119,13 +119,13 @@ describe('transcribeVoice: a note that is heard', () => {
         const { calls } = await hear({
             download: () => downloaded({ bytes: Buffer.from('MP4-BYTES') }),
             decode: () => decoded({ wav, durationMs: 2000 }),
-        }, { keywords: ['Agentic AI', 'AutoReply'] });
+        }, { keywords: ['Data Academy', 'AutoReply'] });
         assert.deepEqual(calls.download, [LINK]);
         assert.equal(Buffer.from(calls.decode[0]!).toString(), 'MP4-BYTES');
         assert.equal(calls.transcribe.length, 1);
         assert.equal(calls.transcribe[0]!.creatorId, CREATOR);
         assert.ok(Buffer.from(calls.transcribe[0]!.wav).equals(wav));
-        assert.deepEqual(calls.transcribe[0]!.keywords, ['Agentic AI', 'AutoReply']);
+        assert.deepEqual(calls.transcribe[0]!.keywords, ['Data Academy', 'AutoReply']);
     });
 
     it('sends no keywords key when the caller has none', async () => {
@@ -134,8 +134,8 @@ describe('transcribeVoice: a note that is heard', () => {
     });
 
     it('cleans the transcript the way the stored line is cleaned: one line, no control or direction-changing character; and cuts it to what a 3-minute note holds', async () => {
-        const messy = await hear({ transcribe: () => heard({ transcript: 'بكام‮ الكورس\n\n ده\t؟\u0007' }) });
-        assert.equal(only(messy.result, 'ok').transcript, 'بكام الكورس ده ؟');
+        const messy = await hear({ transcribe: () => heard({ transcript: 'بكام\u202e الاشتراك\n\n ده\t؟\u0007' }) });
+        assert.equal(only(messy.result, 'ok').transcript, 'بكام الاشتراك ده ؟');
 
         const long = await hear({ transcribe: () => heard({ transcript: 'كلمة '.repeat(2000) }) });
         const ok = only(long.result, 'ok');
@@ -338,7 +338,7 @@ describe('transcribeVoice: whether it is words', () => {
     });
 
     it('two words is enough', async () => {
-        for (const transcript of ['بكام الكورس', 'price please', 'عايز ٣٠٠']) {
+        for (const transcript of ['بكام الاشتراك', 'price please', 'عايز ٣٠٠']) {
             const { result } = await hear({ transcribe: () => heard({ transcript }) });
             assert.equal(result.status, 'ok', transcript);
             assert.equal(only(result, 'ok').words, 2);
@@ -365,7 +365,7 @@ describe('transcribeVoice: it never throws', () => {
 
 describe('transcribeVoice: what it logs', () => {
     it('is one line per call: the stage timings, sizes, the audio\'s length, the words, the dollars and the model; never the words, the link or a key', async () => {
-        await hear({}, { keywords: ['Agentic AI'] });
+        await hear({}, { keywords: ['Data Academy'] });
         const lines = voiceLines();
         assert.equal(lines.length, 1);
         const line = lines[0]!;
@@ -383,9 +383,9 @@ describe('transcribeVoice: what it logs', () => {
         for (const field of ['ms', 'download_ms', 'decode_ms', 'asr_ms']) assert.ok(typeof line.fields[field] === 'number', field);
 
         const all = logs.map((l) => l.line).join('\n');
-        assert.ok(!all.includes('الكورس'), 'the transcript is not logged');
+        assert.ok(!all.includes('الاشتراك'), 'the transcript is not logged');
         assert.ok(!all.includes(LINK) && !all.includes('SECRETSIG123') && !all.includes('asset_id'), 'the link is a signed URL and is never logged');
-        assert.ok(!all.includes('Agentic AI'), 'the keywords are names of the creator\'s, not for a log');
+        assert.ok(!all.includes('Data Academy'), 'the keywords are names of the creator\'s, not for a log');
         assert.ok(!all.includes('[redacted]'), 'no field is named so the logger blanks it');
     });
 
@@ -504,7 +504,7 @@ describe('the whole chain: the real download, the real decoder, the real bookkee
         skip: missing === false ? false : String(missing),
     }, async () => {
         const { deps, seen } = wire(await aacNote(), asrAnswer());
-        const result = await transcribeVoice({ creatorId: CREATOR, link: LINK, keywords: ['Agentic AI', 'AutoReply'] }, deps);
+        const result = await transcribeVoice({ creatorId: CREATOR, link: LINK, keywords: ['Data Academy', 'AutoReply'] }, deps);
 
         const ok = only(result, 'ok');
         assert.equal(ok.transcript, TRANSCRIPT);
@@ -525,7 +525,7 @@ describe('the whole chain: the real download, the real decoder, the real bookkee
         assert.equal(sent.headers.authorization, `Bearer ${KEY}`);
         const [request, audio] = parseMultipart(sent.body, sent.headers['content-type']!);
         assert.deepEqual(JSON.parse(request!.data.toString('utf8')), {
-            model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Arabic', 'English'], keywords: ['Agentic AI', 'AutoReply'],
+            model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Arabic', 'English'], keywords: ['Data Academy', 'AutoReply'],
         });
         const wav = parseWav(audio!.data);
         assert.ok(wav.ok && isAsrWav(wav.info));
@@ -542,7 +542,7 @@ describe('the whole chain: the real download, the real decoder, the real bookkee
         assert.equal(voiceLines().length, 1);
         const all = logs.map((l) => l.line).join('\n');
         assertNoKey(all, 'the log');
-        assert.ok(!all.includes('الكورس') && !all.includes('SECRETSIG123'));
+        assert.ok(!all.includes('الاشتراك') && !all.includes('SECRETSIG123'));
     });
 
     it('a 503 from Meta twice ends as provider_error: two attempts, each a row settled at nothing', async () => {

@@ -34,7 +34,7 @@ export interface TranscribeWithMetaArgs {
     creatorId: string;
     /** RIFF/WAVE, mono, 16-bit PCM, 16 or 24 kHz. */
     wav: Uint8Array;
-    /** Offer, course and brand names to bias recognition toward (`perception/keywords.ts`). */
+    /** Offer and brand names to bias recognition toward (`perception/keywords.ts`). */
     keywords?: readonly string[];
     /** One deadline for the call; `ASR_TIMEOUT_MS` when absent. */
     timeoutMs?: number;

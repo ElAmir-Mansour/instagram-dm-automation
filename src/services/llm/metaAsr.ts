@@ -107,7 +107,7 @@ export interface AsrArgs {
     apiKey: string;
     /** RIFF/WAVE, mono, 16-bit PCM, 16 or 24 kHz (`perception/transcode.ts` makes it). */
     wav: Uint8Array;
-    /** Offer, course and brand names, to bias recognition toward (`perception/keywords.ts`). */
+    /** Offer and brand names, to bias recognition toward (`perception/keywords.ts`). */
     keywords?: readonly string[];
     /** For a test: the deadline, and a boundary that does not change. */
     timeoutMs?: number;

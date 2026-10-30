@@ -1,5 +1,5 @@
 /**
- * The terms that bias a voice note's transcription (`keywords.ts`): at most twenty offer, course and brand names from the profile's DM context, longest first.
+ * The terms that bias a voice note's transcription (`keywords.ts`): at most twenty offer and brand names from the profile's DM context, longest first.
  * Pure: the contexts are the real ones the DM turn holds, cut from the fixtures profiles (`profile/fixtures.ts`), and nothing reaches a database or a model.
  */
 import assert from 'node:assert/strict';
@@ -39,8 +39,8 @@ describe('voiceKeywords on the profiles the DM turn really holds', () => {
 
 describe('voiceKeywords: which names, and in what order', () => {
     it('lists the longest first (by what a reader sees: an Arabic letter and its marks count once)', () => {
-        const out = voiceKeywords(source({ offers: named('Go', 'Agentic AI for beginners', 'Python', 'كورس الذكاء الاصطناعي') }));
-        assert.deepEqual(out, ['Agentic AI for beginners', 'كورس الذكاء الاصطناعي', 'Python', 'Go']);
+        const out = voiceKeywords(source({ offers: named('Go', 'Data Academy for beginners', 'Python', 'أكاديمية البيانات') }));
+        assert.deepEqual(out, ['Data Academy for beginners', 'أكاديمية البيانات', 'Python', 'Go']);
         // A diacritic does not make a name longer: «مُحَمَّد» is four letters.
         assert.deepEqual(voiceKeywords(source({ offers: named('مُحَمَّد', 'abcde') })), ['abcde', 'مُحَمَّد']);
     });
@@ -55,19 +55,19 @@ describe('voiceKeywords: which names, and in what order', () => {
 
     it('drops a name that repeats one already kept, ignoring case, width and spacing, and keeps the first spelling', () => {
         const out = voiceKeywords(source({
-            offers: named('AutoReply Pro', 'autoreply pro', 'Agentic   AI', 'Agentic AI'),
+            offers: named('AutoReply Pro', 'autoreply pro', 'Data   Academy', 'Data Academy'),
             // Full-width letters are the same name once normalised.
-            brand: 'AUTOREPLY PRO', en: '\uFF21gentic \uFF21\uFF29',
+            brand: 'AUTOREPLY PRO', en: '\uFF24ata \uFF21cademy',
         }));
-        assert.deepEqual(out, ['AutoReply Pro', 'Agentic AI']);
+        assert.deepEqual(out, ['AutoReply Pro', 'Data Academy']);
     });
 
     it('drops what is blank or not text, and cleans what is left to one line with no control or direction-changing character', () => {
         const out = voiceKeywords(source({
-            offers: [{ name: '   ' }, { name: '' }, { name: 7 as unknown as string }, { name: null as unknown as string }, { name: 'Agentic‮ AI\n course\t' }],
-            brand: '​', ar: undefined, en: ' ',
+            offers: [{ name: '   ' }, { name: '' }, { name: 7 as unknown as string }, { name: null as unknown as string }, { name: 'Data\u202e Academy\n plan\t' }],
+            brand: '\u200b', ar: undefined, en: ' ',
         }));
-        assert.deepEqual(out, ['Agentic AI course']);
+        assert.deepEqual(out, ['Data Academy plan']);
     });
 
     it('is empty for a profile with nothing named, and never throws', () => {
@@ -86,10 +86,10 @@ describe('voiceKeywords: how many, and how long', () => {
     });
 
     it('cuts a name over 80 characters at a word (the start of a title is the part a person says), with no ellipsis and no trailing space', () => {
-        const title = 'Agentic AI: build real AI agents from scratch, with Claude, tools and memory, step by step';
+        const title = 'Data Academy: build real dashboards from scratch, with SQL, charts and stories, step by step';
         assert.ok(title.length > KEYWORD_MAX_CHARS);
         const [out] = voiceKeywords(source({ offers: named(title) }));
-        assert.equal(out, 'Agentic AI: build real AI agents from scratch, with Claude, tools and memory');
+        assert.equal(out, 'Data Academy: build real dashboards from scratch, with SQL, charts and stories');
         assert.ok(length(out!) <= KEYWORD_MAX_CHARS);
         assert.doesNotMatch(out!, /[\s,;:…-]$/, 'no trailing space, separator or ellipsis');
     });
@@ -124,9 +124,9 @@ describe('voiceKeywords: it changes nothing it is given', () => {
 
     it('works on a frozen profile', () => {
         const frozen = Object.freeze({
-            names: Object.freeze({ display_name: Object.freeze({ ar: 'أمير', en: 'Amir' }), brand_name: 'ElAmir' }),
-            offers: Object.freeze([Object.freeze(offer({ id: 'a', name: 'Agentic AI', primary: true })), Object.freeze(offer({ id: 'b', name: 'C#' }))]),
+            names: Object.freeze({ display_name: Object.freeze({ ar: 'أمير', en: 'Amir' }), brand_name: 'AcmeBrand' }),
+            offers: Object.freeze([Object.freeze(offer({ id: 'a', name: 'Data Academy', primary: true })), Object.freeze(offer({ id: 'b', name: 'C#' }))]),
         });
-        assert.deepEqual(voiceKeywords(frozen), ['Agentic AI', 'ElAmir', 'أمير', 'Amir', 'C#']);
+        assert.deepEqual(voiceKeywords(frozen), ['Data Academy', 'AcmeBrand', 'أمير', 'Amir', 'C#']);
     });
 });

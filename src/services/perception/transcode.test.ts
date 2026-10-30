@@ -261,12 +261,12 @@ describe('what a failure is called', () => {
     });
 
     it('keeps the detail to one short clean line, however much the decoder said', async () => {
-        const noisy = `${'x'.repeat(500)}\u0007‮ control and direction characters`;
+        const noisy = `${'x'.repeat(500)}\u0007\u202e control and direction characters`;
         const result = await decode(NOTE, { run: standIn(failsWith({ code: 1, stderr: `first\n${noisy}\n` })).run });
         assert.equal(result.ok, false);
         const detail = result.ok ? '' : result.detail ?? '';
         assert.ok(detail.length <= 180, detail.length.toString());
-        assert.doesNotMatch(detail, /[\u0000-\u001f‮]/);
+        assert.doesNotMatch(detail, /[\u0000-\u001f\u202e]/);
     });
 });
 
