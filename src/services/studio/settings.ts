@@ -47,7 +47,7 @@ export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac', 
 export const MONTEUR_STYLES: readonly MonteurStyle[] = ['classic', 'paper'];
 export const INFOGRAPHIC_SOCIALS: readonly InfographicSocial[] = ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'];
 export const INFOGRAPHIC_THEMES: readonly InfographicTheme[] = ['dark', 'light'];
-export const INFOGRAPHIC_PLATFORMS: readonly InfographicPlatform[] = ['instagram', 'facebook', 'youtube'];
+export const INFOGRAPHIC_PLATFORMS: readonly InfographicPlatform[] = ['instagram', 'facebook', 'youtube', 'tiktok'];
 /** Gemini's prebuilt voices the narrator of an explainer may be (research.md R3). A voice outside the list would fail at the voice step, a day later. */
 const GEMINI_VOICES = ['Charon', 'Sadaltager', 'Schedar', 'Gacrux', 'Sulafat', 'Achernar', 'Vindemiatrix', 'Rasalgethi'] as const;
 /** The narrators of each language. Arabic also has the native Modern Standard Arabic voice the 2026-10-19 promos used. */
@@ -258,6 +258,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         list(infographic.platforms, 'infographic.platforms', INFOGRAPHIC_PLATFORMS.length, (v, p) => oneOf(v, p, INFOGRAPHIC_PLATFORMS));
         if (Array.isArray(infographic.platforms)) {
             if (infographic.platforms.length === 0) problems.push('infographic.platforms needs at least one platform');
+            else if (!infographic.platforms.some((p) => p !== 'tiktok')) problems.push('infographic.platforms needs Instagram, Facebook or YouTube: infographics are not posted to TikTok');
             if (new Set(infographic.platforms).size !== infographic.platforms.length) problems.push('infographic.platforms lists a platform twice');
         }
     }

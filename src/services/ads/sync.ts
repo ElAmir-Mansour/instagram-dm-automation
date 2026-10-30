@@ -23,12 +23,13 @@ import { queryRows } from '../../db/query.js';
 import { getSetting, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from '../appSettings.js';
 import { adsGet, adsPost, AdsGraphError, type AdsCallOptions, type GraphParams } from './graph.js';
 import {
-    boostIdFromName, breakdownsUnavailable, markMissing, upsertBreakdowns, upsertInsights, upsertObjects, type BreakdownKind, type BreakdownRow,
-    type InsightLevel, type InsightRow, type ObjectLevel, type ParsedObject,
+    boostIdFromName, breakdownsUnavailable, markMissing, upsertBreakdowns, upsertInsights, upsertObjects, type AdSighting, type BreakdownKind,
+    type BreakdownRow, type InsightLevel, type InsightRow, type ObjectLevel, type ParsedObject,
 } from './mirror.js';
 import { canSpend, POINTS, retryAtFor, status as pacerStatus, type PacerStatus } from './pacer.js';
 import { readAdsSettings } from './settings.js';
 import { adoptCreatedMetaIds, applyAudienceReads, AUDIENCE_READ_FIELDS, hasLiveAudiences } from './audiences.js';
+import { raiseAdStatusAlerts } from './adStatusAlerts.js';
 
 // ─── Numbers and days ───────────────────────────────────────────────────────────────────────
 
@@ -535,6 +536,9 @@ export interface SyncOptions {
  * deletion marking runs only when every page was read AND no nested edge was cut off (`structureIsComplete`: an ad set list that was
  * paged would otherwise count the unread ones as missing). A sync stopped by the budget, the clock or a throttle stores what it read,
  * marks nothing deleted and does not record itself as done, so the next drain continues.
+ *
+ * Once the rows are stored, an ad that was already in the stored copy and has just become DISAPPROVED or WITH_ISSUES is announced (the
+ * `ad_rejected` and `ad_issues` alerts, `adStatusAlerts.ts`); an ad met for the first time is not. The count is logged as `status_alerts`.
  */
 export async function syncStructure(creatorId: string, opts: SyncOptions = {}, deps: SyncDeps = defaultDeps): Promise<SyncResult> {
     const prepared = await prepare(creatorId, opts.deadline ?? Number.POSITIVE_INFINITY, deps);
@@ -546,7 +550,17 @@ export async function syncStructure(creatorId: string, opts: SyncOptions = {}, d
 
     const syncedAt = ctx.deps.now();
     const parsed = parseStructure(read.pages);
-    await upsertObjects(creatorId, ctx.adAccountId, ctx.currency, parsed, syncedAt);
+    const sightings: AdSighting[] = [];
+    let statusAlerts = 0;
+    try {
+        await upsertObjects(creatorId, ctx.adAccountId, ctx.currency, parsed, syncedAt, sightings);
+    } finally {
+        // The ads whose state changed are announced now: every transaction has ended (`upsertObjects` commits chunk by chunk and reports
+        // only the chunks that committed), so no network call waits inside one. This is a `finally` because a chunk that committed holds its
+        // new state for good: were a later chunk to fail the sync, the next one would find nothing changed and the alert would be lost.
+        // `raiseAdStatusAlerts` never throws; an error from `upsertObjects` still propagates.
+        statusAlerts = await raiseAdStatusAlerts(creatorId, sightings, ctx.deps.now());
+    }
 
     const everyPage = !read.more && !read.stopped;
     let deleted = 0;
@@ -557,7 +571,7 @@ export async function syncStructure(creatorId: string, opts: SyncOptions = {}, d
     }
     if (everyPage) await patchSyncState(creatorId, { structureAt: syncedAt.toISOString() });
     if (!read.stopped) await syncAudiences(ctx);
-    log('info', 'ads.sync_structure', { creator_id: creatorId, objects: parsed.length, pages: read.pages.length, complete: everyPage, deleted });
+    log('info', 'ads.sync_structure', { creator_id: creatorId, objects: parsed.length, pages: read.pages.length, complete: everyPage, deleted, status_alerts: statusAlerts });
     return { ran: true, complete: everyPage, ...(read.stopped ? { skipped: read.stopped } : {}), ...(read.retryAt ? { retryAt: read.retryAt } : {}), stored: parsed.length, deleted };
 }
 

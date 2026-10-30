@@ -371,15 +371,15 @@ The comment on `HISTORY_WINDOW` in `ai.ts` already identifies this. **Still not 
 does the equivalent on Anthropic: `cacheSystem: true` puts the persona, knowledge base and rules in one cached system block
 (`generateDmViaLayer`, `src/services/dmEngine.ts`), which pays off within a live back-and-forth (a 5-minute cache).
 
-### 4.3 Measure first — not yet possible from the logs
+### 4.3 Measure first — possible from the logs since 2026-10-25
 
-`ai.ts` logs `ai.usage` on every success with `prompt_tokens`, `output_tokens`, `total_tokens`, `cached_tokens` and
-`history_turns`. **Every one of the four token fields prints `[redacted]`:** the logger blanks any field whose NAME matches
-`REDACT_KEY` (`/(token|secret|password|…)/i`, `src/utils/log.ts`), and `prompt_tokens` contains "token". Only `history_turns`
-and the model survive. The same trap hid `webhook.signature_rejected`'s two diagnostic fields until PR #261 renamed them. Until
-these fields are renamed (or the redaction learns that `*_tokens` counts are not secrets), the week of measurement this section
-asks for cannot be taken from the logs. The providers layer's `ai_usage` table does record tokens and cost, but only for calls
-that go through the layer.
+`ai.ts` logs `ai.usage` on every success with `usage_in` (the prompt), `usage_out`, `usage_total`, `usage_cache_read` and
+`history_turns`: the same `usage_*` names the providers layer's `ai.call` uses. Until 2026-10-25 the four counts were named
+`prompt_tokens`, `output_tokens`, `total_tokens` and `cached_tokens`, and **every one printed `[redacted]`**: the logger blanks
+any field whose NAME matches `REDACT_KEY` (`src/utils/log.ts`), and each of them contains "token" (§5.2). So the week of
+measurement this section asks for starts from that date. A search for `ai.usage` in the logs now shows the prompt size per DM,
+which is the number that says whether context caching (§4.2) is worth turning on. The providers layer's `ai_usage` table records
+tokens and cost too, but only for calls that go through the layer.
 
 ### 4.4 Cheaper adjacent wins
 
@@ -432,9 +432,12 @@ dependency — `JSON.stringify` and `AsyncLocalStorage`, both stdlib. Key proper
   signature|cookie` (`REDACT_KEY`), applied recursively. This matters: an axios error's `config.headers`
   carries the Gemini API key, and `describeError` is called on axios errors throughout. **It matches the field's
   NAME, not its value, and that is a trap:** a count named `total_tokens`, a status named `token_status`, a boolean
-  named `has_cookie` all print `[redacted]`. It hid the signature-rejection diagnostics until PR #261 renamed them
-  (`app_keys_tried`, `instagram_app_configured`), and it still hides `ai.usage`'s token counts (§4.3) and
-  `token.rechecked`'s `token_status`. Name a field for what it holds, not after the secret it is about.
+  named `has_cookie` all printed `[redacted]`. It hid the signature-rejection diagnostics until PR #261 renamed them
+  (`app_keys_tried`, `instagram_app_configured`), and `ai.usage`'s token counts, `token.rechecked`'s status and type and the
+  three `*.oauth_state_mismatch` lines until 2026-10-25 (now `usage_*`, `status`/`type` and `browser_state`). **A test now
+  holds the rule:** `src/utils/logFieldNames.test.ts` reads every `log()` call in `src/` and fails on a field it writes whose
+  name `REDACT_KEY` matches. Name a field for what it holds, not after the secret it is about; and never hand a secret to
+  `log()` at all, since the redaction is the net under spread and error objects, not a way to log one.
 - **It cannot throw.** It runs inside `catch` blocks. Circular references (an axios error
   holds request→response→config→request), `BigInt`, and `Error`'s non-enumerable fields are
   all handled; a failing sink is swallowed.
@@ -465,7 +468,7 @@ Structured events make this expressible. In rough priority:
 | `webhook.enqueue_failed_falling_back` | any occurrence | Durability is off; the app is back to pre-queue behaviour. |
 | `comment.no_campaign_match` | rate change | Not an error, but a sudden spike means a campaign was deactivated or a keyword broke. |
 | `job.drain_complete` | `budgetExhausted: true` sustained | The drain cannot keep up; the external scheduler is missing or too infrequent. |
-| `ai.usage` | `total_tokens` trend | Cost regression, e.g. someone pasted a 50KB knowledge base. **Prints `[redacted]` today (§4.3).** |
+| `ai.usage` | `usage_in` / `usage_total` trend | Cost regression, e.g. someone pasted a 50KB knowledge base. (Readable since 2026-10-25, §4.3.) |
 | `runtime.wait_until_unavailable` | any occurrence | The inline drain is running without `waitUntil`: DM latency goes back to minutes (ADR-9). |
 | `ads.cap_paused_all`, `ads.cap_check_failed` | any occurrence | Money: the cap paused every campaign, or a check of the cap failed (2 h of failures raises the `guard_blind` alert). |
 
@@ -597,8 +600,8 @@ shipped, two in a different form than proposed.
 What would change the system's character next, in the order this document would take them (proposals, not plans anyone has
 approved):
 
-1. **Make the logs measurable:** rename the fields `REDACT_KEY` blanks by accident (`ai.usage`'s token counts, `token.rechecked`'s
-   `token_status`), or teach the redaction that a number is not a secret (§4.3, §5.2). Small, and it unblocks §4's measurement.
+1. ~~**Make the logs measurable.**~~ Done 2026-10-25: the five fields `REDACT_KEY` blanked by accident were renamed, and a test
+   fails on the next one (§4.3, §5.2). §4's measurement can start.
 2. **A scheduled liveness check** that alerts on silence relative to each tenant's own rhythm (§5.4). `scripts/diagnose.mjs`
    already has the hard half; nothing runs it on a timer.
 3. **Gemini context caching** for the owner's DM bot (§4.2), once 1 has made the before-and-after measurable.

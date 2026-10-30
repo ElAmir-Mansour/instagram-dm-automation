@@ -9,6 +9,7 @@ import { validateEnv } from './config/env.js';
 import { logSignatureRejection, verifyMetaSignature } from './utils/signature.js';
 import { enqueueWebhookBody, isAcceptedWebhookObject, processWebhookBody } from './webhook/router.js';
 import { acknowledgeThenRun } from './webhook/ack.js';
+import { verifyTokenCandidates } from './services/webhookVerifyToken.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import { profileCacheScope } from './services/profile/cache.js';
@@ -331,19 +332,10 @@ app.get('/webhook', async (req, res) => {
     // The verify token may come from the environment or from the creator row.
     // The database copy exists so it can be changed from the dashboard without a
     // redeploy — Meta re-checks this on every subscription change, so a stale or
-    // empty env var otherwise blocks all webhook reconfiguration.
-    const candidates: string[] = [];
-    if (process.env.META_VERIFY_TOKEN) candidates.push(process.env.META_VERIFY_TOKEN);
-    try {
-        const { rows } = await pool.query(
-            'SELECT webhook_verify_token FROM creators WHERE is_active = true AND webhook_verify_token IS NOT NULL LIMIT 1'
-        );
-        const dbToken = rows[0]?.webhook_verify_token;
-        if (dbToken) candidates.push(dbToken);
-    } catch (err: any) {
-        // A database outage must not make a correct env token stop working.
-        log('error', 'webhook.verify_token_read_failed', describeError(err));
-    }
+    // empty env var otherwise blocks all webhook reconfiguration. The list is the
+    // one the repair button sends from (src/services/webhookVerifyToken.ts): a
+    // database outage must not make a correct env token stop working.
+    const candidates = await verifyTokenCandidates();
 
     if (candidates.some((c) => c === token)) {
         log('info', 'webhook.verified', { candidates: candidates.length });

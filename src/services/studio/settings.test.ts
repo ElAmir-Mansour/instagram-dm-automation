@@ -295,6 +295,15 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         });
     }
 
+    it('takes TikTok in the infographic platforms beside another platform: explainers send it an inbox draft', () => {
+        assert.deepEqual(problemsFor({ infographic: { platforms: ['instagram', 'facebook', 'tiktok'] } }), []);
+    });
+
+    it('refuses TikTok alone in the infographic platforms: an infographic is never posted to TikTok', () => {
+        const problems = problemsFor({ infographic: { platforms: ['tiktok'] } });
+        assert.ok(problems.some((p) => /infographic\.platforms needs Instagram, Facebook or YouTube/.test(p)), problems.join('\n'));
+    });
+
     it('accepts a folder on any of the worker’s systems, and clearing it again', () => {
         for (const folder of ['/Users/me/Movies/Monteur', 'C:\\Users\\me\\Videos', 'D:/Videos', '\\\\nas\\videos']) {
             assert.deepEqual(problemsFor({ monteur: { folder } }), [], folder);

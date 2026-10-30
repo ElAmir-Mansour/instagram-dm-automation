@@ -37,6 +37,7 @@ import {
     color, decryptSecret, describeDbTarget, fingerprint, fmtAge, fmtBytes, fmtTime,
     connectReadOnly, isEncrypted, loadEnv, parseArgs, probeHeaders, safeQuery,
 } from './lib/live.mjs';
+import { graphBase } from './lib/graph.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -63,7 +64,8 @@ const envFile = loadEnv(typeof args.env === 'string' ? args.env : null);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const BASE_URL = (typeof args.url === 'string' ? args.url : 'https://msg-response-auto.vercel.app').replace(/\/$/, '');
-const GRAPH = 'https://graph.facebook.com/v21.0';
+// The app's own Graph version (or META_API_VERSION), read after the .env above is loaded.
+const GRAPH = graphBase();
 const JSON_OUT = Boolean(args.json);
 
 // ─── Thresholds ─────────────────────────────────────────────────────────────────────────

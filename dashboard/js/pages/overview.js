@@ -236,6 +236,9 @@ const OverviewPage = {
         const tokenP = this._settle(API.getTokenStatus());
         // The stored Facebook connection (columns only, no call to Meta): "reconnect due" comes from the daily recheck (P29).
         const metaP = this._settle(API.getMetaConnection());
+        // Where Meta sends the events, as the hourly check last stored it (no call to Meta): another project that uses the same Meta app can take Instagram away
+        // while every connection above still reads "Connected" (src/services/metaWebhooks.ts).
+        const healthP = this._settle(API.getTenantHealth());
         const postsP = this._settle(API.getScheduledPosts());
         // 100, the route's cap: the default of 20 undercounted who is waiting.
         const threadsP = this._settle(API.getConversations({ limit: 100 }));
@@ -304,12 +307,12 @@ const OverviewPage = {
         // dailyP joins the wait here too: buildAlerts() reads it for the
         // trailing 7-day rate, and it was already being fetched in the same
         // tick for the chart, so this adds no extra round trip.
-        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP]).then(
-            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes]) => {
+        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP, healthP]).then(
+            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes]) => {
                 if (!live()) return;
                 const host = this.region('briefing');
                 if (!host || statsRes.status !== 'fulfilled') return;
-                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes));
+                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes));
                 // Refresh lives inside the region it rewrites; keep focus on it.
                 const focus = UI.captureFocus(host);
                 host.innerHTML = esc(this.renderBriefing(alerts, new Date()));
@@ -630,7 +633,7 @@ const OverviewPage = {
      * Pushed in the order the checks run; `sortAlerts()` then puts what is
      * broken before what is late before what is merely worth knowing.
      */
-    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes) {
+    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes) {
         const alerts = [];
         const startOfToday = this.localMidnight();
 
@@ -697,6 +700,22 @@ const OverviewPage = {
                 title: t(invalid ? 'overview.alert.metaInvalid' : 'overview.alert.metaExpiring'),
                 body: t(invalid ? 'overview.alert.metaInvalidBody' : 'overview.alert.metaExpiringBody'),
                 action: t('overview.openSettings'), target: 'settings',
+            });
+        }
+
+        // 1c. Meta is not sending this account's events to AutoReply (src/services/metaWebhooks.ts): an event type points at another website, is switched off, or lacks
+        //     a field. Nothing else on this screen can show it: the token is valid, every connection reads "Connected", and a Facebook event keeps "last webhook" fresh
+        //     while Instagram's go elsewhere. Read from the hourly check's stored answer (`health.webhooks`), and only a definite `ok: false` is an alert: a check that
+        //     could not run, or a server that does not send it, says nothing. The platform admin is sent to the card that fixes it; everyone else is told whom to ask.
+        const webhooks = healthRes && healthRes.status === 'fulfilled' && healthRes.value ? healthRes.value.webhooks : null;
+        const webhookNotice = typeof HealthStrip !== 'undefined' ? HealthStrip.webhookNotice(webhooks) : null;
+        if (webhookNotice) {
+            const admin = typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin();
+            alerts.push({
+                level: 'danger', icon: 'plug-zap',
+                title: webhookNotice.title,
+                body: [...webhookNotice.lines, admin ? '' : t('webhooks.banner.askOwner')].filter(Boolean).join(' '),
+                action: admin ? t('webhooks.banner.fix') : '', target: admin ? 'settings' : '', query: admin ? 's=platform&card=meta-events' : '',
             });
         }
 
@@ -885,15 +904,16 @@ const OverviewPage = {
                                 <div>
                                     <h3>${a.title}</h3>
                                     <p>${a.body}</p>
-                                    <button type="button" class="alert-link" data-action="app:navigate" data-target="${a.target}"${a.query ? html` data-query="${a.query}"` : ''}>
+                                    ${a.target ? html`<button type="button" class="alert-link" data-action="app:navigate" data-target="${a.target}"${a.query ? html` data-query="${a.query}"` : ''}>
                                         ${a.action}
                                         <i data-lucide="arrow-right" aria-hidden="true"></i>
-                                    </button>
+                                    </button>` : ''}
                                 </div>
                             </div>
                         `)}
                     </div>
                 `}
+                <p class="form-hint mbs-3 briefing-help">${UI.helpLink('getting-started', t('help.link.gettingStarted'))}</p>
             </section>
         `;
     },

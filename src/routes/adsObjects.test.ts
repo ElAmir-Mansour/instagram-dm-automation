@@ -6,7 +6,7 @@
  * The database, Meta and `waitUntil` are faked by src/services/ads/objectsTestDb.ts.
  */
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import {
     ACC, ADSET_ID, ADSET_META, CAMPAIGN_ID, CAMPAIGN_META, OTHER_ACC, OTHER_TENANT, TENANT, adsetRow, installObjectsKit, objectRow, type ObjectsKit, type StoredOp,
 } from '../services/ads/testing/objects/testDb.js';
@@ -50,7 +50,16 @@ const storedOp = (over: Partial<StoredOp> = {}): StoredOp => ({
     created_at: new Date(), started_at: null, finished_at: null, ...over,
 });
 
+/**
+ * The money rule counts what every active budget can still spend before the month ends, so the same resume fits a $100 cap late in a
+ * month and not early in the next: "a resume that fits" passed when written (2026-10-22) and would fail from 2026-11-01 to about the
+ * 10th of every month. The clock is pinned to the day the file was written.
+ */
+const WRITTEN_ON = Date.parse('2026-10-22T12:00:00.000Z');
+
 describe('/api/ads objects, ops and sync', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['Date'], now: WRITTEN_ON }); });
+    afterEach(() => { mock.timers.reset(); });
     let kit: ObjectsKit;
     beforeEach(() => { kit = installObjectsKit(); });
     afterEach(() => kit.restore());

@@ -315,7 +315,7 @@ const IceBreakersCard = {
         return html`
             <h2 class="section-title">${t('iceb.title')}</h2>
             <div class="settings-card surface">
-                <p class="form-hint mbe-2">${t('iceb.intro', { max: l.ice })}</p>
+                <p class="form-hint mbe-2">${t('iceb.intro', { max: l.ice })} ${UI.helpLink('dm-assistant#ice-breakers', t('help.link.iceBreakers'), { newTab: true })}</p>
                 <p class="form-hint mbe-4">${t('iceb.desktopNote')}</p>
                 ${this.connected() ? '' : html`<div class="mbe-4">${UI.errorStrip(t('iceb.notConnected'), '', 'iceb-connect-note')}</div>`}
                 <div class="token-status mbe-4" id="iceb-status" aria-live="polite">${this.statusMarkup()}</div>

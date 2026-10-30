@@ -19,7 +19,7 @@ jobs:
         with:
           # 22, not 20: the test runner only expands glob patterns in --test from Node 22.
           # On 20 it treats "src/**/*.test.ts" as a literal path and finds nothing.
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci
@@ -104,3 +104,10 @@ jobs:
       # The name is allowed, a limit stated ("not guaranteed") is allowed, and every other exception is a reasoned entry that fails when stale.
       - name: Check voice
         run: npm run check:voice
+
+      # The docs cite code as `path` and `path:line`, and link each other. Nothing else notices a cited file that was renamed or
+      # deleted, a line number past the end of its file, or a public doc linking a file that is not in this repo (local notes,
+      # specs): those are dead on GitHub. Line numbers that merely drifted are not failures; `npm run docs:reanchor` moves them
+      # by git history (the docs audit of 2026-10-25 found 65% of FLOWS.md's anchors had moved).
+      - name: Check doc references
+        run: npm run check:docs

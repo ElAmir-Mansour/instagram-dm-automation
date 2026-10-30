@@ -27,7 +27,7 @@ import { profileContextOrLegacy, type ProfileContext } from './profile/context.j
 import { getMediaStore, uploadIdFromUrl } from './storage.js';
 import {
     MAX_THUMBNAIL_BYTES, queryUpload, SCOPE_UPLOAD, sendBytes, setThumbnail, shortDescription, shortTitle, startResumableUpload,
-    tagsFrom, THUMBNAIL_MIME_TYPES, youtubeCategoryId, youtubeHttp, PEOPLE_BLOGS_CATEGORY_ID, type UploadState, type VideoMetadata, type YouTubePrivacy,
+    tagsFrom, THUMBNAIL_MIME_TYPES, youtubeCategoryId, youtubeHttp, PEOPLE_BLOGS_CATEGORY_ID, type UploadState, type VideoMetadata, type YouTubePrivacy, YouTubeApiError,
 } from './youtube.js';
 import { getAccessToken, noteYouTubeFailure } from './youtubeConnections.js';
 
@@ -140,7 +140,7 @@ async function applyThumbnail(accessToken: string, videoId: string, coverUrl: st
         return null;
     } catch (err) {
         log('warn', 'youtube.thumbnail_failed', { video_id: videoId, ...describeError(err) });
-        return `Thumbnail not set: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
+        return thumbnailNote(err);
     }
 }
 
@@ -221,4 +221,16 @@ export async function publishYouTubePost(post: YouTubePublishTarget): Promise<Sc
         );
         throw err;
     }
+}
+
+/**
+ * The note for a cover YouTube would not take. The quota and rate-limit sentences tell the owner of a FAILED post to press Publish now,
+ * and here that would be wrong: the Short is up, and Publish now takes only a PENDING or FAILED row. So for those two the note says what
+ * happened and where the thumbnail is set instead; any other refusal keeps YouTube's own words.
+ */
+function thumbnailNote(err: unknown): string {
+    if (err instanceof YouTubeApiError && (err.reason === 'quotaExceeded' || err.reason === 'rateLimitExceeded')) {
+        return 'Thumbnail not set: YouTube’s quota or a rate limit was hit just then. The Short is up — set the thumbnail in YouTube Studio.';
+    }
+    return `Thumbnail not set: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
 }

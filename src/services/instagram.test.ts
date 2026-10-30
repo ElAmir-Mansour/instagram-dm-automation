@@ -210,6 +210,32 @@ describe('sendPublicReply', () => {
 
         assert.equal(calls[0]!.url, `${BASE}/comment-9/comments`);
     });
+
+    it('never repeats a public reply that timed out: Meta may already have posted it', async () => {
+        // The same trap as the reel posted twice (2026-09-26): a timeout is not proof that nothing was
+        // posted, and a retry would put the reply under the comment twice, in front of everyone.
+        onPost = async () => { throw Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }); };
+        await assert.rejects(() => sendPublicReply('comment-9', 'تم', TOKEN));
+        assert.equal(calls.length, 1, 'one attempt, no retry');
+    });
+
+    it('never repeats a public reply Meta answered with a 5xx', async () => {
+        onPost = async () => { throw Object.assign(new Error('bad gateway'), { response: { status: 502, data: {} } }); };
+        await assert.rejects(() => sendPublicReply('comment-9', 'تم', TOKEN, true));
+        assert.equal(calls.length, 1);
+    });
+
+    it('still retries a public reply Meta refused with a rate limit, since nothing was posted', async () => {
+        let n = 0;
+        onPost = async () => {
+            n++;
+            if (n === 1) throw Object.assign(new Error('rate'), { response: { status: 400, data: { error: { code: 4, message: 'Application request limit reached' } } } });
+            return { data: { id: 'r-9' } };
+        };
+        const res = await sendPublicReply('comment-9', 'تم', TOKEN);
+        assert.equal(res.id, 'r-9');
+        assert.equal(calls.length, 2);
+    });
 });
 
 describe('sendDirectMessage', () => {

@@ -11,6 +11,9 @@
  *   - **The Page picker** (a modal), for a person who manages several Pages: pick one, confirm a replacement, or ask Facebook again.
  *   - **Connect, Reconnect, Disconnect**, each with the confirmation that its consequence deserves.
  *   - **The operator's two fields** (the switch and the configuration id), for a platform admin, inside the card.
+ *   - **Where Meta sends each kind of event** (`eventsBlock`), a platform admin's card: Meta delivers each event type to ONE address for the whole Meta app, and
+ *     another project that uses the app can take Instagram away while every connection reads "Connected". It shows where each kind goes now and sends everything back
+ *     with one button, after a question that lists what will change. The server judges (`problems`, `plan`); this only says it.
  *
  * ─── What the card never does ───────────────────────────────────────────────
  * Nothing here ever sees a token: `GET /api/meta/connection` has none to give, the picker lists names and ids, and the one address the
@@ -50,6 +53,7 @@ const MetaConnect = {
     /** The tenant changed (`App.resetTenantState`): the previous one's open pick, and the screen waiting on a change, are not this one's. */
     resetTenantState() {
         this._pick = null;
+        this._eventsResult = null;
         this.afterChange = null;
     },
 
@@ -326,11 +330,247 @@ const MetaConnect = {
             <section class="section" id="settings-meta">
                 <h2 class="section-title">${t('meta.title')}</h2>
                 <div class="settings-card surface">
+                    <p class="form-hint mbe-3">${UI.helpLink('connect-meta', t('help.link.connectMeta'))}</p>
                     ${body}
                     ${ctx.isAdmin ? this.appBlock(ctx.app, ctx.appError) : ''}
                 </div>
             </section>
         `;
+    },
+
+    // ─── Where Meta sends each kind of event (platform admin) ────────────────
+
+    /** The Meta objects people know by a name, and the sentence that names each in the card. Any other object is shown as Meta spells it. */
+    EVENT_OBJECTS: Object.freeze({ instagram: 'meta.events.object.instagram', page: 'meta.events.object.page', whatsapp_business_account: 'meta.events.object.whatsapp' }),
+    /** The key of `lastEvents` (when an event of that kind last reached THIS workspace) each of them reads. */
+    EVENT_LAST: Object.freeze({ instagram: 'instagram', page: 'facebook', whatsapp_business_account: 'whatsapp' }),
+    /** What the server refuses a read or a repair with, each with its own sentence (`meta.events.error.<code>`). Anything else says what the server said. */
+    EVENT_ERRORS: Object.freeze(['not_configured', 'no_base_url', 'no_verify_token', 'graph_failed']),
+    /** The kinds of step a repair has (`RepairStep.kind`), each with its own line in the question (`meta.events.step.<kind>`). */
+    EVENT_STEPS: Object.freeze(['elsewhere', 'inactive', 'missing_object', 'missing_field']),
+    /** What the last repair did, kept for the card until it is checked again: `{ steps, pages, confirmed }`, or null. */
+    _eventsResult: null,
+
+    /** Latin text (a host, a field, Meta's own words) inside a sentence, isolated so the sentence's punctuation cannot jump to the wrong end of it. A string. */
+    ltrText(value) {
+        return `\u2066${String(value === null || value === undefined ? '' : value)}\u2069`;
+    },
+
+    /** Is this a Meta object the card has a name for? Own keys only: an object called `constructor` is not one. */
+    knownEventObject(object) {
+        return Object.prototype.hasOwnProperty.call(this.EVENT_OBJECTS, object);
+    },
+
+    /** Instagram, Facebook Page, WhatsApp, or the object as Meta spells it. A string, for a row's name and for the lines of the question. */
+    eventObjectName(object) {
+        return this.knownEventObject(object) ? t(this.EVENT_OBJECTS[object]) : this.ltrText(object);
+    },
+
+    /** The words for a failed read or repair: the code's sentence when it is one we know (with Meta's own words after a refusal), else what the server said. */
+    eventsErrorText(err) {
+        const code = String((err && err.body && err.body.code) || '').toLowerCase();
+        if (this.EVENT_ERRORS.includes(code)) {
+            const detail = code === 'graph_failed' && err.message ? ` ${this.ltrText(err.message)}` : '';
+            return `${t(`meta.events.error.${code}`)}${detail}`;
+        }
+        return (err && err.message) || t('error.unexpected');
+    },
+
+    /** A status pill: a glyph and a word, never colour alone. The tone is one of the badge tones `check:contrast` already measures. */
+    eventPill(tone, glyph, label) {
+        return html`<span class="status-pill ${html.raw(UI.STATUS_TONE_CLASS[tone] || UI.STATUS_TONE_CLASS.neutral)}" data-tone="${tone}"><span class="status-pill-glyph" aria-hidden="true">${glyph}</span>${label}</span>`;
+    },
+
+    /**
+     * One row per Meta object, from `GET /api/meta/webhooks`: `{ object, name, tone, glyph, label, lines }`. The state comes from the server's judgement
+     * (`problems`): a problem is red, and what is only a warning (an object that carries no events pointing elsewhere, a subscription that is off but empty) is amber.
+     * An object AutoReply cannot work without that Meta has no subscription for at all is a row too, so its absence is seen and not just missing from a list.
+     */
+    eventRows(data) {
+        const d = data || {};
+        const objects = Array.isArray(d.objects) ? d.objects : [];
+        const problems = Array.isArray(d.problems) ? d.problems : [];
+        const last = d.lastEvents && typeof d.lastEvents === 'object' ? d.lastEvents : {};
+        const rows = objects.filter((o) => o && typeof o === 'object').map((o) => {
+            const problem = problems.find((p) => p && p.object === o.object) || null;
+            const kind = problem ? problem.kind : '';
+            let state = { tone: 'success', glyph: '✓', label: t('meta.events.state.ours') };
+            if (kind === 'elsewhere' || (!problem && o.ours === false)) {
+                state = { tone: problem ? 'danger' : 'warning', glyph: problem ? '✕' : '▲', label: t('meta.events.state.elsewhere', { host: this.ltrText(o.host || '?') }) };
+            } else if (kind === 'inactive' || (!problem && o.active === false)) {
+                state = { tone: problem ? 'danger' : 'warning', glyph: problem ? '✕' : '▲', label: t('meta.events.state.off') };
+            } else if (kind === 'missing_field') {
+                state = { tone: 'danger', glyph: '✕', label: t('meta.events.state.missing') };
+            }
+            const fields = Array.isArray(o.fields) ? o.fields : [];
+            const lines = [{ warn: false, text: fields.length > 0 ? t('meta.events.fields', { fields: this.ltrText(fields.join(', ')) }) : t('meta.events.noFields') }];
+            const critical = kind === 'missing_field' && Array.isArray(problem.fields) ? problem.fields : [];
+            if (critical.length > 0) lines.push({ warn: true, text: t('meta.events.missingCritical', { fields: this.ltrText(critical.join(', ')) }) });
+            const optional = (Array.isArray(o.missingRequired) ? o.missingRequired : []).filter((f) => !critical.includes(f));
+            if (optional.length > 0) lines.push({ warn: true, text: t('meta.events.missingFields', { fields: this.ltrText(optional.join(', ')) }) });
+            if (Object.prototype.hasOwnProperty.call(this.EVENT_LAST, o.object)) {
+                const at = last[this.EVENT_LAST[o.object]];
+                lines.push({ warn: false, text: at ? t('meta.events.lastEvent', { age: UI.relativeAge(at).text }) : t('meta.events.lastEventNone') });
+            }
+            return Object.assign({ object: o.object, name: this.eventObjectName(o.object), lines }, state);
+        });
+        problems.filter((p) => p && p.kind === 'missing_object').forEach((p) => {
+            rows.push({
+                object: p.object, name: this.eventObjectName(p.object), tone: 'danger', glyph: '✕', label: t('meta.events.state.notSubscribed'),
+                lines: [{ warn: true, text: t('meta.events.notSubscribedHint') }],
+            });
+        });
+        return rows;
+    },
+
+    eventRowMarkup(row) {
+        return html`
+            <li class="settings-row" data-row="${row.object}" data-state="${row.tone}">
+                <div class="settings-row-head">
+                    <strong class="settings-row-name" dir="auto">${row.name}</strong>
+                    ${this.eventPill(row.tone, row.glyph, row.label)}
+                </div>
+                <div class="settings-row-detail" dir="auto">
+                    ${row.lines.map((line) => html`<p class="events-line${line.warn ? html.raw(' text-warning') : ''}" dir="auto">${line.text}</p>`)}
+                </div>
+            </li>
+        `;
+    },
+
+    /** What the last repair did, when it left something to say: Meta's refusals, one per object, with its own words; whether it could be read back; the Pages. */
+    eventsResultMarkup(result) {
+        if (!result) return '';
+        const failed = (Array.isArray(result.steps) ? result.steps : []).filter((s) => s && s.ok === false);
+        const pages = result.pages && typeof result.pages === 'object' ? result.pages : {};
+        const problems = [
+            ...failed.map((s) => t('meta.events.stepFailed', { object: this.eventObjectName(s.object), message: this.ltrText(s.error || '') })),
+            result.confirmed === false ? t('meta.events.unconfirmed') : '',
+            Number(pages.failed) > 0 ? t('meta.events.pagesFailed', { count: UI.formatNumber(Number(pages.failed)) }) : '',
+        ].filter(Boolean);
+        const again = Number(pages.resubscribed) > 0 ? t('meta.events.pagesResubscribed', { count: UI.formatNumber(Number(pages.resubscribed)) }) : '';
+        if (problems.length === 0 && !again) return '';
+        const warn = problems.length > 0;
+        return html`
+            <p class="meta-notice ${warn ? html.raw('is-warning') : html.raw('is-success')}" role="status">
+                <i data-lucide="${warn ? 'alert-triangle' : 'check-circle'}" aria-hidden="true"></i>
+                <span>
+                    <strong>${warn ? t('meta.events.donePartial') : t('meta.events.done')}</strong>
+                    ${[...problems, again].filter(Boolean).map((line) => html`<span class="meta-notice-more" dir="auto">${line}</span>`)}
+                </span>
+            </p>
+        `;
+    },
+
+    /**
+     * The body of the card, for a read that came back (`data`) or failed (`error`). The button is the plan's: it says what it will do, and with nothing to do it is
+     * disabled and says so. "Check again" repaints the page, which reads Meta again.
+     */
+    eventsBlock(data, error) {
+        if (error) {
+            return html`
+                <div class="inline-error" role="alert">
+                    <i data-lucide="alert-circle" aria-hidden="true"></i>
+                    <div><strong dir="auto">${t('meta.events.loadFailed', { message: this.eventsErrorText(error) })}</strong></div>
+                </div>
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'metaconnect:recheck', id: 'meta-events-recheck' })}
+            `;
+        }
+        if (!data) return '';
+        const rows = this.eventRows(data);
+        const plan = Array.isArray(data.plan) ? data.plan : [];
+        const url = data.expected && data.expected.url;
+        return html`
+            <p class="form-hint mbe-3">${t('meta.events.intro')} ${UI.helpLink('connect-meta#events-destination', t('help.link.metaEvents'), { newTab: true })}</p>
+            ${url ? html`
+                <div class="settings-copy-row mbe-4">
+                    <span class="form-label">${t('meta.events.expected')}</span>
+                    <code dir="ltr">${UI.ltr(url)}</code>
+                    ${UI.button({ variant: 'ghost', size: 'sm', icon: 'copy', ariaLabel: t('setup.copyUrl'), title: t('setup.copyUrl'), action: 'app:copyValue', data: { copy: url } })}
+                </div>
+            ` : ''}
+            ${data.ok === false ? html`<p class="meta-notice is-danger" role="status"><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('webhooks.banner.title')}</span></p>` : ''}
+            ${this.eventsResultMarkup(this._eventsResult)}
+            <ul class="settings-rows" id="meta-events-rows">${rows.map((row) => this.eventRowMarkup(row))}</ul>
+            <div class="row row--wrap gap-3 mbs-4">
+                ${UI.button({
+                    variant: 'primary', icon: 'plug-zap', label: plan.length > 0 ? t('meta.events.fix') : t('meta.events.allGood'),
+                    action: 'metaconnect:askRepair', id: 'meta-events-fix', disabled: plan.length === 0,
+                })}
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('meta.events.recheck'), action: 'metaconnect:recheck', id: 'meta-events-recheck' })}
+                ${data.checkedAt ? html`<span class="text-meta">${t('meta.events.checked', { when: UI.relativeAge(data.checkedAt).text })}</span>` : ''}
+            </div>
+        `;
+    },
+
+    /** One line of the question, a string: what this step does to one Meta object. */
+    stepLine(step) {
+        const kind = this.EVENT_STEPS.includes(step.kind) ? step.kind : 'missing_field';
+        const added = Array.isArray(step.addedFields) && step.addedFields.length > 0 ? step.addedFields : (Array.isArray(step.fields) ? step.fields : []);
+        return t(`meta.events.step.${kind}`, { object: this.eventObjectName(step.object), host: this.ltrText(step.fromHost || '?'), fields: this.ltrText(added.join(', ')) });
+    },
+
+    /** The question's body: the sentence, then one line per step (`<br>` inside the one paragraph the dialog draws). */
+    repairBody(plan) {
+        return html`${t('meta.events.confirmBody')}${plan.map((step) => html`<br><span class="events-step" dir="auto">• ${this.stepLine(step)}</span>`)}`;
+    },
+
+    /**
+     * "Send everything to AutoReply": read Meta once more (so the question lists what is wrong NOW, not what the page showed a minute ago) and ask, naming every
+     * object that will change. Nothing is sent before the answer is yes. With nothing left to do it says so and repaints.
+     */
+    async askRepair(btn) {
+        if (!btn || btn.disabled) return;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        let data;
+        try {
+            data = await API.getMetaWebhooks();
+        } catch (err) {
+            restore();
+            UI.toast(this.eventsErrorText(err), 'error');
+            return;
+        }
+        restore();
+        const plan = Array.isArray(data && data.plan) ? data.plan : [];
+        if (plan.length === 0) {
+            UI.toast(t('meta.events.allGood'), 'success');
+            await this.changed();
+            return;
+        }
+        UI.confirm({
+            title: t('meta.events.confirmTitle'),
+            body: this.repairBody(plan),
+            hint: t('meta.events.confirmHint'),
+            confirmLabel: t('meta.events.fix'),
+            confirmIcon: 'plug-zap',
+            tone: 'primary',
+            onConfirm: () => this.repairConfirmed(),
+        });
+    },
+
+    /**
+     * The question was answered yes. A refusal that comes before anything is sent (not configured, no public address, no verify token, Meta not answering) is thrown,
+     * so the dialog stays open and says why. After that every step is a result: the card is repainted from what Meta says now, with what it refused beside each object.
+     */
+    async repairConfirmed() {
+        let out;
+        try {
+            out = await API.repairMetaWebhooks();
+        } catch (err) {
+            throw new Error(this.eventsErrorText(err));
+        }
+        const steps = Array.isArray(out && out.steps) ? out.steps : [];
+        const complete = steps.every((s) => s && s.ok === true) && out.confirmed !== false && out.ok === true;
+        this._eventsResult = { steps, pages: out && out.pages ? out.pages : null, confirmed: !(out && out.confirmed === false) };
+        UI.toast(complete ? t('meta.events.done') : t('meta.events.donePartial'), complete ? 'success' : 'error');
+        await this.changed();
+    },
+
+    /** "Check again": forget the last repair's result and repaint, which reads Meta again. */
+    async recheck(btn) {
+        if (!btn || btn.disabled) return;
+        this._eventsResult = null;
+        await this.changed();
     },
 
     // ─── Pure: the Page picker ───────────────────────────────────────────────
@@ -688,4 +928,6 @@ UI.registerActions('metaconnect', {
     pickMissing: (el) => MetaConnect.pickMissing(el),
     pickAgain: (el) => MetaConnect.pickAgain(el),
     saveApp: (el, e) => MetaConnect.saveApp(el, e),
+    askRepair: (el) => MetaConnect.askRepair(el),
+    recheck: (el) => MetaConnect.recheck(el),
 });

@@ -144,7 +144,7 @@ These are identifiers, not secrets. The secrets (`META_APP_SECRET`, tokens) live
 ## Exchange script
 
 `scripts/exchange-token.mjs`. Usage, from the repository root: `node --env-file=.env scripts/exchange-token.mjs <SHORT_LIVED_USER_TOKEN>`.
-It calls Graph API `v21.0` (hard-coded in the script); the app itself is on `v26.0` (`src/services/instagram.ts`).
+It calls the same Graph API version as the app: `v26.0`, or `META_API_VERSION` when it is set (`scripts/lib/graph.mjs`, kept equal to `src/services/instagram.ts` by a test).
 
 
 ---

@@ -194,7 +194,7 @@ indexing and rendering need the worker, so they wait in the queue until it is ba
 | "Online" | An authenticated worker call within the last 90 s | `WORKER_ONLINE_WINDOW_MS`, `src/services/studio/worker.ts:21` |
 | Dashboard refreshes the status | Every 15 s | `STATUS_REFRESH_MS`, `dashboard/js/pages/studio.js` |
 | Editor re-reads a writing or rendering draft | Every 4 s | `RENDER_POLL_MS`, `dashboard/js/pages/studio.js` |
-| A claim is presumed dead | No heartbeat for 15 min | `STALE_CLAIM_MINUTES`, `src/services/studio/jobs.ts:29` |
+| A claim is presumed dead | No heartbeat for 15 min | `STALE_CLAIM_MINUTES`, `src/services/studio/jobs.ts:42` |
 
 ---
 
@@ -504,7 +504,7 @@ file names in `library.test.mjs`:
   a `/` typed in Finder, shows as `/`.
 - Lessons sort naturally: 1.2 before 1.10, and numbers before the lettered sections.
 - On the app's side a scan result is upserted by the video's path and never deletes
-  (`applyScan`, `src/services/studio/jobs.ts:342`). An entry that doesn't validate is skipped and
+  (`applyScan`, `src/services/studio/jobs.ts:549`). An entry that doesn't validate is skipped and
   listed in the job's `result.skipped` instead of failing the whole scan. The scan payload's folder
   is the Settings value `library.root`; the worker refuses one outside its `courseRoot`.
 
@@ -571,7 +571,7 @@ A lesson goes **Not indexed yet** (غير مفهرس بعد) → **Indexing…**
 8. **Thumbnails.** For each moment, ffmpeg cuts a 480 px JPEG from the *original* video, and the
    worker uploads it to the app.
 9. **Complete.** The app replaces the lesson's moments wholesale, stores the notes and marks it
-   indexed (`applyIndex`, `src/services/studio/jobs.ts:468`).
+   indexed (`applyIndex`, `src/services/studio/jobs.ts:675`).
 
 ### Moments, and the clean flag
 
@@ -653,7 +653,7 @@ A **draft** is one carousel on its way from an idea to a scheduled post. Drafts 
 - Writing runs synchronously inside `POST /api/studio/drafts`, with a 120 s budget. If the serverless
   invocation is cut off, the row stays `generating`; once it is ten minutes old the API presents
   it as failed with *"Writing this draft never finished: the request was cut off. Try again."*
-  (`STALE_GENERATION_MS`, `src/services/studio/drafts.ts:61`). The row itself is not rewritten.
+  (`STALE_GENERATION_MS`, `src/services/studio/drafts.ts:72`). The row itself is not rewritten.
 - `POST /drafts` answers 201 even when the draft came back `failed`: the failure is its content.
 - Edits are refused once scheduled (409, *"This draft is scheduled, so it can no longer be changed.
   Its posts are in Posts."*) and while a draft is still being written.
@@ -715,7 +715,7 @@ is dropped. The writer is told to use only what the sources state: no features, 
 model names, button labels or results beyond them, and nothing inside the sources, such as an
 on-screen prompt, counts as an instruction to it.
 
-**The rules every carousel must pass** (`validateCarousel`, `src/services/studio/rules.ts:276`), a
+**The rules every carousel must pass** (`validateCarousel`, `src/services/studio/rules.ts:289`), a
 port of the design's own checker: every limit above; the item counts; 6 to 10 slides, the first a
 cover and the last a call to action; the highlight is part of the title; no Latin digit beside
 Arabic text, when your digits are Arabic-Indic; a TikTok title of at most 90 UTF-16 units; the
@@ -781,7 +781,7 @@ it.
 - **A reused keyword is swapped for its campaign's main word,** the first in the campaign's trigger
   list. A campaign triggering on «منديل, رسمة, stitch» may be picked through any of the three, but
   the carousel asks for «منديل», the word the campaign's DM was written around, and the caption's
-  keyword line is rewritten to match (`preferPrimaryKeyword`, `src/services/studio/drafts.ts:446`).
+  keyword line is rewritten to match (`preferPrimaryKeyword`, `src/services/studio/drafts.ts:497`).
 - **A new keyword brings up to three variants,** other spellings a follower might type (a common
   misspelling, the word in another script), each at least three letters and none overlapping a
   live keyword. They are shown as **Also matches:** (تطابق أيضاً) and join the new campaign's
@@ -943,7 +943,7 @@ it: Instagram and Facebook published at that time; what happens on TikTok; and w
 comments the keyword gets the DM.
 
 *Operator:* in one transaction, with the draft locked and re-checked so a double click schedules
-once (`scheduleDraft`, `src/services/studio/schedule.ts:123`):
+once (`scheduleDraft`, `src/services/studio/schedule.ts:146`):
 
 1. A `scheduled_posts` row: `platform = 'both'`, `post_type = 'carousel'`, the Instagram images as
    `media_urls` (Instagram takes 2 to 10), the Instagram caption, `PENDING`, and a new `group_id`.
@@ -993,7 +993,7 @@ The routine:
 5. Back in the Studio, tick **Made public on TikTok** on each of those drafts.
 
 *Operator:* `POST /api/studio/tiktok/batch` (`runTikTokBatch`,
-`src/services/studio/schedule.ts:226`) turns every scheduled draft with `schedule.tiktok = 'queue'`
+`src/services/studio/schedule.ts:349`) turns every scheduled draft with `schedule.tiktok = 'queue'`
 and no TikTok row yet into a `tiktok` row due now, 40 s apart, in scheduled order (TikTok allows a
 photo-post start 6 times a minute per token), grouped with its Instagram sibling. The options are
 Direct Post, `SELF_ONLY` until audited and public after, the TikTok title, music added, comments
@@ -1032,7 +1032,7 @@ trigger, the draft's DM, no public reply, every post (`post_id` NULL), active, a
 `substring` match mode. "Already answers" is decided by `matchCampaign` itself, with each
 campaign's own match mode, over the campaigns that apply to every post: a substring campaign on a
 shorter word inside the keyword counts, because it would answer those comments anyway
-(`planCampaign`, `src/services/studio/schedule.ts:100`).
+(`planCampaign`, `src/services/studio/schedule.ts:116`).
 
 ---
 
@@ -1057,7 +1057,7 @@ Nothing about any one creator is written into the code or the prompts (STUDIO.md
   changes.
 - **Defaults:** a new account starts neutral: English, generic wording, the dark-grid theme, the
   default palette, no product, no library folder (`defaultStudioSettings()`,
-  `src/services/studio/settingsTypes.ts:92`). The creator's own account was seeded once, after
+  `src/services/studio/settingsTypes.ts:320`). The creator's own account was seeded once, after
   deploy, by `scripts/seed-studio-settings.mjs`. Those are the *Example* values below.
 
 ### Brand kit

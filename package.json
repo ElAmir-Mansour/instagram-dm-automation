@@ -18,6 +18,8 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:voice": "node scripts/check-voice.mjs",
+    "check:docs": "node scripts/check-doc-refs.mjs",
+    "docs:reanchor": "node scripts/check-doc-refs.mjs --reanchor",
     "build:hero3d": "node scripts/build-hero3d.mjs",
     "check:hero3d": "node scripts/build-hero3d.mjs --check",
     "build:font": "node scripts/build-font.mjs",
@@ -45,7 +47,7 @@
     "url": "https://github.com/ElAmir-Mansour/instagram-dm-automation.git"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "24.x"
   },
   "dependencies": {
     "@vercel/functions": "3.9.9",

@@ -1,10 +1,13 @@
 # Verifying AutoReply Pro against a real Meta event
 
 The pipeline was split into modules, given a durable job queue, moved the 200 to before the
-work, wired rate limiting and added an AI disclosure prefix. 548 unit tests cover the pieces.
-None of that proves the deployed system handles a real Instagram comment, and as of
-2026-09-21 the live database shows **zero jobs, zero interactions and zero messages since the
-last migration** — so the refactor is currently unverified in production.
+work, wired rate limiting and added an AI disclosure prefix. Thousands of unit tests (`npm test`)
+cover the pieces. None of that proves the deployed system handles a real Instagram comment. When
+this was written (2026-09-21) the live database showed **zero jobs, zero interactions and zero
+messages since the last migration**, so the refactor was unverified in production. That is a dated
+fact: `node scripts/diagnose.mjs` prints today's (its `flow` lines say when the last comment and
+the last DM arrived). The procedure below is still how you prove a deployment, or a change to the
+pipeline, with one real comment.
 
 Only the account owner can post a comment. This is the procedure, with what to run at each
 step and what a healthy result looks like.
@@ -21,8 +24,8 @@ step 5 sends a real DM to whoever comments.
 
 | Safe to run any time | Never run to "test" |
 |---|---|
-| `node scripts/diagnose.mjs` — read-only | `GET /api/cron/publish` with the bearer token — **publishes all 6 pending posts to the live accounts** |
-| `node scripts/watch.mjs` — read-only | `GET /api/jobs/drain` with the bearer token — runs real handlers and sends real DMs |
+| `node scripts/diagnose.mjs` — read-only | `GET /api/cron/publish` with the bearer token — **publishes every pending post that is due to the live accounts**, and runs the daily sweeps |
+| `node scripts/watch.mjs` — read-only | `GET /api/jobs/drain` with the bearer token — runs real handlers, sends real DMs, publishes due posts, and runs the ads spending guard (RUNBOOK, top) |
 | The dashboard | Any `INSERT`/`UPDATE` against production |
 
 Both scripts run every query in its own `BEGIN READ ONLY … ROLLBACK`, checked inside the
@@ -50,8 +53,11 @@ the rest of this procedure meaningless:
 
 Exit codes: `0` healthy, `1` warnings, `2` critical, `3` the diagnostics could not run.
 
-**Expected warnings before you start** — these are the ones this procedure exists to clear, so
-seeing them is the point, not a problem:
+**Warnings you may see before you start.** On 2026-09-21 these three were the ones this
+procedure existed to clear, so seeing them was the point, not a problem. They are what a
+deployment that has handled no traffic prints. Today they may be gone, and then you are
+re-proving a pipeline that already works. (The first also appears after a quiet week, because
+`done` jobs are deleted after 7 days: RUNBOOK §1.)
 
 ```
 ! queue    the jobs table is EMPTY — no webhook delivery has ever been enqueued
@@ -89,8 +95,10 @@ Note three things:
   inside unrelated words — `عيد` matches inside `سعيد`, `جو` inside `موجود`. A short keyword
   makes step 5 ambiguous, because you cannot tell a real match from an accidental one. It also
   means a campaign you did not intend may claim the comment first: the winner is the most
-  specific campaign, ranked post-specific before generic, then by keyword length
-  (`src/services/matching.ts:45-51`).
+  specific campaign, ranked post-specific before generic, then by the length of the whole keyword
+  list (the `trigger_keyword` text with its commas, not the one keyword that matched), then the
+  newest (`specificityTiers` in `src/services/matching.ts`; the live query's `ORDER BY` is in
+  `src/services/liveCampaigns.ts`).
 
 ## Step 3 — Start the watcher
 
@@ -140,7 +148,7 @@ so you should not have to wait for a cron.
 | `③ rate limit checked` showing `≥ 180` | The hourly quota is exhausted; sends are being dropped and marked FAILED. | Wait for the next hour boundary; counters prune after 48h. |
 | `⑤ DM sent` then `⚠ public reply failed` | The DM went out; the public comment reply did not. | Usually `Activity already replied to` or a >1000-character reply template. |
 | `↻ job retrying` | A transient failure; backoff is ~30s, ~2m, ~8m with jitter. | Wait. If it reaches `✖ job FAILED` the error is permanent — read the printed message. |
-| Everything but `⑥ job drained` | The work happened but the queue bookkeeping did not finish — the invocation was frozen after the send. | Harmless (the sends are idempotent), but it means the inline drain is being cut short: consider lowering `JOB_INLINE_BUDGET_MS`, or point an external scheduler at `/api/jobs/drain`. |
+| Everything but `⑥ job drained` | The work happened but the queue bookkeeping did not finish — the invocation was frozen after the send. | Harmless (the sends are idempotent), but the inline drain was cut short. It runs under `waitUntil`, which keeps the invocation alive until the work ends (`src/webhook/ack.ts`), so look in the Vercel logs for `runtime.wait_until_unavailable`: the platform gave this request no `waitUntil`. The job stays `running` until the first drain after 300 s reaps it and runs it again (RUNBOOK §5.3). The Heroku worker drains every minute (RUNBOOK §5.1). |
 
 ## Step 6 — Check the two things the database does not record
 
@@ -152,8 +160,9 @@ so you should not have to wait for a cron.
 
 ## Step 7 — Verify the DM path separately
 
-The DM path has had **no traffic since May 2026**, so it is the least proven part of the
-system. From the second account, reply in the DM thread (any question).
+On 2026-09-21 the DM path had had **no traffic since May 2026**, which made it the least proven
+part of the system. The `flow` lines of `node scripts/diagnose.mjs` say how long ago the last
+inbound DM was today. From the second account, reply in the DM thread (any question).
 
 Healthy result:
 
@@ -169,6 +178,8 @@ If `② DM claimed` appears but `⑤ AI reply sent` never does: check `conversat
 for that thread (the watcher says when the bot is paused), that the `ai_agents` row is active
 (diagnostics report it), and the Gemini key: **Operations → Gemini API key** says which key is
 answering, and a missing one shows in the Vercel logs as `dm.pipeline_failed` with *No Gemini API key*.
+A reply that fails on its last attempt is not silence any more: the customer is sent one hand-off
+line and the owner is alerted (`dm.failure_handoff`; RUNBOOK §16 walks it).
 
 ## Step 8 — Post-flight
 
@@ -184,14 +195,15 @@ Healthy result — two warnings from step 1 have flipped:
 ```
 
 If `queue` now reports jobs `pending` with an age over 15 minutes, the inline drain is not
-keeping up and the scheduled drain has not caught them either. Two things call
-`GET /api/jobs/drain`: `.github/workflows/drain.yml` on a `*/5` schedule (check it with
+keeping up and the scheduled drain has not caught them either. Three things call
+`GET /api/jobs/drain` (RUNBOOK §5.1). The Heroku worker polls it every 60 s and is **running**
+(`worker=1`; check with `heroku ps -a autoreply-pro-worker`, details in
+[`heroku-worker/README.md`](heroku-worker/README.md)). `.github/workflows/drain.yml` asks for
+`*/5` and is delivered every 2 to 5 hours: check it with
 `gh run list --workflow=drain.yml --limit 5` — a run that fails in under 10 seconds means
-`CRON_SECRET` is missing or wrong), and the Vercel cron **once daily** as the backstop
-(Hobby-plan limit). GitHub throttles scheduled workflows heavily, so a gap of hours between
-runs is normal rather than broken. If the interval genuinely matters, scale the Heroku worker
-up (`heroku ps:scale worker=1 -a autoreply-pro-worker`, 60s polling) or point any 1-minute cron
-service at the same URL with the same bearer.
+`CRON_SECRET` is missing or wrong, and a gap of hours between runs is GitHub throttling, not a
+fault. The Vercel cron runs **once daily** as the backstop (Hobby-plan limit). If jobs still pile
+up while the worker is running, that is a real finding and not a scheduling gap.
 
 ## Step 9 — Idempotency, if you want it proven
 
@@ -354,7 +366,7 @@ Vercel logs around the test's time:
    real run easier to check.
 2. Put the account back the way it is normally kept, unless a real Only me run follows.
 3. If you like, delete the test rows in Posts Scheduler — that removes this app's record only, never
-   the TikTok post (`src/routes/api.ts:2492-2516`).
+   the TikTok post (`src/routes/api.ts:3236-3260`).
 4. Re-run the T1 connection query: still `active`, `last_error` NULL.
 
 ### What the TikTok procedure does not prove
@@ -376,25 +388,34 @@ Vercel logs around the test's time:
 
 ## What this procedure deliberately does not verify
 
-- **Publishing.** There is no dry run: `/api/cron/publish` publishes to the live accounts, and
-  six posts are currently `PENDING`. Verify it only when you actually want the next scheduled
-  post to go out; the diagnostics already report stranded claims, overdue rows and failures.
+- **Publishing.** There is no dry run: `/api/cron/publish` and `/api/jobs/drain` publish every
+  `PENDING` post that is due to the live accounts. Verify it only when you actually want the
+  next scheduled post to go out; the diagnostics already report stranded claims, overdue rows
+  and failures.
 - **The Instagram app's signing secret.** `diagnose.mjs --probe-signature` proves
   `META_APP_SECRET` matches production (it POSTs a correctly signed body whose `object` is
   unrecognised, which returns 200 before the enqueue and writes nothing). `INSTAGRAM_APP_SECRET`
   belongs to the separate Instagram-Login app and is not in the local `.env`, so the only proof
-  for it is a real Instagram-signed delivery — which is step 5.
-- **Multi-tenant isolation.** One creator row exists and it is the active one, so the tenant
-  scoping cannot be exercised at all. Fair queueing by `tenant_key` is likewise untestable
+  for it is a real Instagram-signed delivery — which is step 5. On 2026-09-21 Meta's
+  subscriptions showed both the `instagram` and the `page` object under one app, so every event
+  was signed with `META_APP_SECRET` and `INSTAGRAM_APP_SECRET` was vestigial (RUNBOOK §2.3);
+  step 5 matters for it only if the two apps are ever split again.
+- **Multi-tenant isolation.** This procedure acts as one tenant, so it cannot show that one
+  tenant never sees another's rows. The unit tests carry those checks (for example
+  `src/services/ads/isolation.test.ts`). Fair queueing by `tenant_key` is likewise untestable
   here: with one page id every job lands in one partition, which is exactly the degenerate case
-  the round-robin was written to avoid (`src/jobs/queue.ts:100-123`).
-- **Token re-checking.** Nothing asks Meta about the token on a schedule. A token that dies
-  while the account is quiet will not be noticed by anything in this procedure — the passive
-  detector only fires on a real send failure (`src/services/tokenHealth.ts:47`). Data access
-  on the current token lapses **2026-12-19** while `/debug_token` still reports it valid; see
-  `RUNBOOK.md` §3.
+  the round-robin was written to avoid (`src/jobs/queue.ts:100-123`). (On 2026-09-21 one creator
+  row existed.)
+- **Token re-checking.** This procedure does not test it. The daily cron asks Meta about every
+  connected tenant's Page token and flags an invalid one, or data access within 14 days of
+  lapsing, as **Reconnect due** (`recheckAllMetaTokens`, `src/services/metaTokenRecheck.ts`;
+  RUNBOOK §3.1), and a real send failure with code 190 flips it at once (`noteMetaFailure`,
+  `src/services/tokenHealth.ts`). So a token that dies while the account is quiet is noticed
+  within a day, but nothing here proves that. Data access on the token lapses on a date that
+  `node scripts/diagnose.mjs` prints (2026-12-19 on 2026-09-21) while `/debug_token` still
+  reports it valid; see `RUNBOOK.md` §3.
 - **Data-subject erasure.** *Superseded 2026-09-21: there is now a two-step preview-then-execute
-  tool at Dashboard → Erasure, backed by `src/services/erasure.ts`. See RUNBOOK §7.* The
+  tool at Dashboard → Data erasure, backed by `src/services/erasure.ts`. See RUNBOOK §7.* The
   original note follows, for the retention half which still applies. The retention sweep that the
   published `/data-deletion` page depends on is a no-op until `RAW_PAYLOAD_RETENTION_DAYS` is
   set. See `RUNBOOK.md` §7.

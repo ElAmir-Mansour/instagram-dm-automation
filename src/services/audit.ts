@@ -121,6 +121,12 @@ export const AUDIT_ACTIONS = {
     metaDeauthorize: 'meta.deauthorize',
     /** The Meta login settings (the switch, the configuration id) were changed by a platform admin. */
     settingsMetaLoginWrite: 'settings.meta_login_write',
+    /**
+     * A platform admin pressed "Send everything to AutoReply": the Meta app's webhook subscriptions (`POST /{app}/subscriptions`) that pointed elsewhere, were
+     * off or lacked a field were set back to this deployment, and each connected Page was re-subscribed if it needed it. `detail` holds, per object, the host
+     * and the fields before and after, and the outcome of each step: never a token.
+     */
+    metaWebhooksRepair: 'meta.webhooks_repair',
     /** The platform's Gemini key was saved (after Google accepted it) or removed, from Operations. */
     settingsGeminiKeyWrite: 'settings.gemini_key_write',
     /** The Supabase Storage config media goes to was saved (after Supabase accepted it) or removed. */

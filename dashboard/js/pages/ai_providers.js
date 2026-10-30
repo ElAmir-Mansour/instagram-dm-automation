@@ -444,7 +444,7 @@ const AiProviders = {
             <section class="section" id="aip-section">
                 <h2 class="section-title">${t('ops.ai.title')}</h2>
                 <div class="surface pad-5 stack gap-5">
-                    <p class="form-hint aip-lede">${t('ops.ai.intro')}</p>
+                    <p class="form-hint aip-lede">${t('ops.ai.intro')} ${UI.helpLink('ai-usage', t('help.link.aiUsage'))}</p>
                     <div id="aip-body" class="stack gap-5">${this.body()}</div>
                 </div>
             </section>

@@ -59,7 +59,7 @@ The maintainers also keep local notes and specs outside this public repository.
 
 ### 1. Prerequisites
 
-- Node.js 22 or newer. CI runs Node 22, and `npm test` gives glob patterns to `node --test`, which Node 20 reads as file names.
+- Node.js 24. Production (Vercel) and CI both run 24.x, and `package.json` pins it (`engines`), so a move to the next major is a deliberate change. A newer Node works locally with an engine warning from npm; Node 20 does not, because `npm test` gives glob patterns to `node --test`, which Node 20 reads as file names.
 - A Postgres database. This project runs on Supabase. On Vercel, use its pooler address (port 6543).
 - A Meta developer app, and a Vercel account.
 - Serving accounts you do not own needs Meta Advanced Access (Business Verification and App Review). See [`RUNBOOK.md`](RUNBOOK.md) §8.3.
@@ -158,6 +158,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and every push to `ma
 | `check:contrast` | Token colours keep WCAG AA contrast |
 | `check:i18n` | Every English string has an Arabic one |
 | `check:voice` | The words the product never says do not appear in dashboard or public text |
+| `check:docs` | Every repo path, `path:line` and relative link in a tracked doc exists (`scripts/check-doc-refs.mjs`). When code moves, `npm run docs:reanchor` moves the line anchors that point at it and lists the ones whose code is gone |
 
 **Deploys:** every merge to `main` deploys production through Vercel's Git integration. There is no manual deploy step. Each pull request gets a preview deployment. `vercel rollback` goes back ([`RUNBOOK.md`](RUNBOOK.md) §9).
 
@@ -179,7 +180,7 @@ Mounts are in `src/index.ts` and `src/routes/api.ts`. [`FLOWS.md`](FLOWS.md) wal
 | `/api/auth/me`, `/api/auth/switch-tenant`, `/api/auth/password` | `src/routes/api.ts` | Any session | Who am I, change workspace, change password |
 | `/api/{stats,campaigns,interactions,posts,upload,conversations,dm/funnel,settings,health/tenant,attention,creators}` | `src/routes/api.ts` | Any member reads, `operator` writes, `owner` changes the Meta token and webhook token. Some settings are platform admin only | The core dashboard API |
 | `/api/tiktok`, `/api/youtube` | `tiktok.ts`, `youtube.ts` | Members read, `owner` connects, platform admin saves the app keys | Connections and publishing options |
-| `/api/meta` | `src/routes/meta.ts` | `owner` connects, `operator` runs the comment check, platform admin saves app settings | Connect with Facebook |
+| `/api/meta` | `src/routes/meta.ts` | `owner` connects, `operator` runs the comment check, platform admin saves app settings and reads or repairs where Meta sends each event type (`/webhooks`) | Connect with Facebook |
 | `/api/whatsapp` | `src/routes/whatsapp.ts` | Members read, `owner` writes | Number, agent mode, billing, entry links |
 | `/api/studio` | `src/routes/studio.ts` | `operator`. `owner` manages workers. Explainers also need a switch that only the platform owner's workspace can have | Carousels, Monteur, infographics, explainers |
 | `/api/growth` | `src/routes/growth.ts` | `operator` | Insights, coach, keywords, competitors |

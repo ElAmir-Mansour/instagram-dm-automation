@@ -88,7 +88,7 @@ const InviteCard = {
                 ${isReset ? '' : Admin.field(t('invites.joinsAs'), Admin.roleChip(invite.role))}
                 ${Admin.field(t('invites.expires'), UI.formatDay(invite.expires_at))}
             </dl>
-            <p class="form-hint">${t('invites.shownOnce')}</p>
+            <p class="form-hint">${t('invites.shownOnce')} ${UI.helpLink('onboarding#invite', t('help.link.onboardingInvite'), { newTab: true })}</p>
             <div class="modal-actions invite-card-footer">
                 ${UI.button({ variant: 'danger', icon: 'ban', label: t('invites.revoke'), action: 'inviteCard:revoke', data: { id: invite.id } })}
                 ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('invites.regenerate'), action: 'inviteCard:regenerate', data: { id: invite.id } })}

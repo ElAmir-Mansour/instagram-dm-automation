@@ -52,7 +52,7 @@ the same lifecycle with no upload step: TikTok pulls every image from this app's
 **only from a URL prefix verified in the portal** (§2.5). JPEG or WebP, uploaded here — never a
 link to another site (`src/services/postMedia.ts:20-24`, `:77-97`). They carry a title (at most
 90 UTF-16 units) and a description (at most 4000), and TikTok allows their init 6 calls a
-minute per token (`src/services/tiktok.ts:537-540`, `:584`).
+minute per token (`src/services/tiktok.ts:607-610`, `:584`).
 
 **What TikTok does not allow at all, for this app:**
 
@@ -63,10 +63,10 @@ minute per token (`src/services/tiktok.ts:537-540`, `:584`).
   RUNBOOK §4.1 and §5.1.
 - **Public posts before the audit**, and branded content before the audit.
 - **A chosen cover.** TikTok picks a video's; a photo post's cover is its first image
-  (`photo_cover_index: 0`, `src/services/tiktok.ts:606`). TikTok rows never get a `cover_url`
-  (`src/routes/api.ts:2280-2281`).
+  (`photo_cover_index: 0`, `src/services/tiktok.ts:676`). TikTok rows never get a `cover_url`
+  (`src/routes/api.ts:3000-3001`).
 - **Editing after it has gone.** Once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` the app
-  refuses edits (`src/routes/api.ts:2395-2398`); change the post in TikTok.
+  refuses edits (`src/routes/api.ts:3117-3120`); change the post in TikTok.
 
 ---
 
@@ -116,17 +116,17 @@ switches in §5 (`tiktokScopes`, `src/services/tiktok.ts`), plus a third switch 
 ### 2.4 The URLs to register
 
 Settings → **Platform** → **TikTok app** (platform admin) → "Register these in the TikTok developer
-portal" lists every one with a copy button (`src/routes/tiktok.ts:340-346`). They are built from
+portal" lists every one with a copy button (`src/routes/tiktok.ts:351-357`). They are built from
 the **Public site address** field, so save that first (§3). Copy them; do not type them.
 
 | Portal field | Value | Served by |
 |---|---|---|
-| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:98` |
-| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:109` |
-| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:103` |
-| Redirect URI (Login Kit) | `https://msg-response-auto.vercel.app/api/tiktok/callback` | `src/routes/tiktok.ts:92` |
-| Webhook callback URL | `https://msg-response-auto.vercel.app/api/tiktok/webhook` | `src/routes/tiktok.ts:153` |
-| Scopes to request | what Connect will ask for, today `user.info.basic,video.upload,video.publish` | `src/services/tiktok.ts:53` |
+| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:213` |
+| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:224` |
+| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:218` |
+| Redirect URI (Login Kit) | `https://msg-response-auto.vercel.app/api/tiktok/callback` | `src/routes/tiktok.ts:83` |
+| Webhook callback URL | `https://msg-response-auto.vercel.app/api/tiktok/webhook` | `src/routes/tiktok.ts:149` |
+| Scopes to request | what Connect will ask for, today `user.info.basic,video.upload,video.publish` | `src/services/tiktok.ts:64` |
 
 > **TikTok compares the redirect URI byte for byte.** A trailing slash, `http://`, or a preview
 > deployment's host is a different URI, and Connect fails. That is why it is built from the saved
@@ -144,7 +144,7 @@ curl -s -o /dev/null -w 'webhook  %{http_code}\n' -X POST -H 'Content-Type: appl
 
 Healthy: `200` for the three pages; `302` for the callback (no code, so it bounces back to
 Settings); `401` for the webhook (unsigned, so refused before anything is written —
-`src/routes/tiktok.ts:157-165`). The last one writes a harmless `tiktok.webhook_signature_rejected`
+`src/routes/tiktok.ts:153-161`). The last one writes a harmless `tiktok.webhook_signature_rejected`
 log line.
 
 ### 2.5 URL properties: verifying the prefix through the dashboard
@@ -164,7 +164,7 @@ photo can only be *pulled* (`PULL_FROM_URL`), and TikTok pulls only from a verif
    - **Save TikTok app**.
 
    Both are required together; the name must match `tiktok[A-Za-z0-9_-]{4,100}.txt` and the
-   contents fit in 500 characters (`src/routes/tiktok.ts:358`, `:395-404`).
+   contents fit in 500 characters (`src/routes/tiktok.ts:370`, `:395-404`).
 4. Confirm the app serves it, before asking TikTok to look:
 
    ```bash
@@ -177,7 +177,7 @@ photo can only be *pulled* (`PULL_FROM_URL`), and TikTok pulls only from a verif
 **TikTok handed out three different files over time** — one for the Terms/Privacy URLs, one for
 the prefix, then one more for domains when Direct Post was switched on. **The app keeps serving
 all of them.** Saving a new file moves the previous one into a history (the last ten), and the
-root route answers any of them (`src/services/appSettings.ts:249-259`, `src/index.ts:117-131`).
+root route answers any of them (`src/services/appSettings.ts:749-759`, `src/index.ts:232-246`).
 The Settings form shows only the newest. To see every file being served:
 
 ```sql
@@ -202,7 +202,7 @@ the portal ever shows as unverified again, save its file again.
 ## 3. Paste the key and secret into Settings
 
 One set of credentials for the whole deployment, so this is **platform admin only**: the block is
-not drawn for anyone else, and its API answers them 404 (`src/routes/tiktok.ts:188-194`). The
+not drawn for anyone else, and its API answers them 404 (`src/routes/tiktok.ts:184-190`). The
 shared `DASHBOARD_PASSWORD` login is a platform admin.
 
 1. Portal → the app (the sandbox today; production once approved) → **Credentials**. Copy the
@@ -213,9 +213,9 @@ shared `DASHBOARD_PASSWORD` login is a platform admin.
 
    | Field | What to paste | Notes |
    |---|---|---|
-   | **Client key** | the client key | Shown whole once saved — it is not a secret; TikTok puts it in every authorise URL, and seeing it is how a typo gets found (`src/routes/tiktok.ts:324-326`). Must match `[A-Za-z0-9_-]{6,100}` (`:369`) |
-   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:60-63`, `:92-99`) |
-   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:183-193`). Every TikTok URL is built from it (§2.4, §2.5) |
+   | **Client key** | the client key | Shown whole once saved — it is not a secret; TikTok puts it in every authorise URL, and seeing it is how a typo gets found (`src/routes/tiktok.ts:335-337`). Must match `[A-Za-z0-9_-]{6,100}` (`:369`) |
+   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:343-346`, `:92-99`) |
+   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:648-658`). Every TikTok URL is built from it (§2.4, §2.5) |
 
 4. **Save TikTok app**. Healthy: the toast "TikTok app settings saved.", and the section now offers
    **Connect TikTok** to the workspace owner.
@@ -224,13 +224,13 @@ Saving the secret, and later connecting, both encrypt, so both need `TOKEN_ENCRY
 environment — the same requirement as saving a Meta token (RUNBOOK §3.2).
 
 **The database wins over the environment.** `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and
-`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:163-176`,
+`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:484-497`,
 `:200-207`). A value from the environment is labelled "Set in the environment — saving here
 overrides it". With either half of the credentials missing, TikTok is simply "not set up": the
 section says "TikTok isn't set up yet…" and Connect answers 409.
 
 **The client secret is also the webhook key.** TikTok signs every webhook with the client secret
-of the app that sends it (`src/services/tiktok.ts:766-789`). Save a secret from the wrong app —
+of the app that sends it (`src/services/tiktok.ts:836-859`). Save a secret from the wrong app —
 sandbox versus production — and Connect fails *and* every webhook is refused (RUNBOOK §10.6).
 
 To read what is saved without opening the dashboard (read-only):
@@ -249,14 +249,14 @@ SELECT key, is_secret,
 ## 4. Connect and Reconnect
 
 Connecting is per workspace, and only the workspace **owner** can do it ("Only the account owner
-can connect or disconnect TikTok.", `src/routes/tiktok.ts:186`). One TikTok account per
+can connect or disconnect TikTok.", `src/routes/tiktok.ts:182`). One TikTok account per
 workspace, and one workspace per TikTok account.
 
 ### 4.1 Connect
 
 1. Settings → **Connections** → the TikTok card → **Connect TikTok**. The dashboard asks the server for TikTok's
    authorise URL, which also sets a single-use cookie valid for 10 minutes, then goes there
-   (`src/routes/tiktok.ts:261-285`). **Start and finish in the same browser** — the cookie is how
+   (`src/routes/tiktok.ts:257-281`). **Start and finish in the same browser** — the cookie is how
    the callback knows the round trip is yours.
 2. Log in to the TikTok account this workspace should post to (with the sandbox key: a target
    user). TikTok's consent screen names **AutoReply Pro** and the scopes. Allow.
@@ -275,8 +275,8 @@ workspace, and one workspace per TikTok account.
 | Direct post (private until TikTok approves the app) | switch on, not audited, connection holds `video.publish` only |
 | Direct post | switch on and audited |
 
-(`tiktokModeLabel`, `dashboard/js/pages/settings.js:431-435`; the server decides the mode with
-`postModeFor`, `src/routes/tiktok.ts:225-227`.)
+(`tiktokModeLabel`, `dashboard/js/pages/settings.js:1899-1903`; the server decides the mode with
+`postModeFor`, `src/routes/tiktok.ts:221-223`.)
 
 Two warnings the card can add: "Reconnect TikTok to allow direct posting." (the switch is on but
 this connection predates it) and "Video upload permission wasn't granted — reconnect and allow
@@ -285,14 +285,14 @@ video upload." (neither posting scope was granted).
 ### 4.2 When Connect comes back with an error
 
 The callback redirects to Settings with a reason, and the page turns it into a toast
-(`src/routes/tiktok.ts:92-151`):
+(`src/routes/tiktok.ts:83-142`):
 
 | Toast | Cause | Fix |
 |---|---|---|
 | "TikTok connection was cancelled." | Cancel was pressed on TikTok's consent screen | Connect again and allow |
 | "The connection link expired or was started in another browser. Try again from this browser." | the cookie did not come back: another browser or profile, cookies blocked, or the login finished somewhere else | start and finish in one browser |
 | "The connection link expired. Try again." | more than 10 minutes, or the link was used twice | Connect again |
-| "That TikTok account is connected to another workspace. Disconnect it there first." | the same TikTok account is on another workspace (`src/services/tiktokConnections.ts:199-201`) | disconnect it there |
+| "That TikTok account is connected to another workspace. Disconnect it there first." | the same TikTok account is on another workspace (`src/services/tiktokConnections.ts:231-233`) | disconnect it there |
 | "TikTok didn't accept the connection. Check the client key and secret, then try again." | the code exchange failed: a wrong secret, a sandbox key with a production secret, a redirect URI that differs from the portal's, or no `TOKEN_ENCRYPTION_KEY` | §3; the Vercel log line `tiktok.oauth_callback_failed` carries TikTok's own reason |
 | "Set the public site address in the TikTok app settings first." | no Public site address anywhere | §3 |
 | "Couldn't connect TikTok. Try again." | TikTok answered with an error other than a cancel — most often a scope the portal has not granted (§2.3) | read the log line `tiktok.oauth_denied`; untick the Direct Post switch or fix the portal |
@@ -303,7 +303,7 @@ TikTok may also show its own error page and never come back, for the same scope 
 
 **Reconnect** runs the same flow and replaces the workspace's connection in place: new tokens, new
 scopes, status back to active, the last error cleared (`completeConnection`,
-`src/services/tiktokConnections.ts:142-204`). Scheduled posts are untouched. Reconnect when:
+`src/services/tiktokConnections.ts:163-225`). Scheduled posts are untouched. Reconnect when:
 
 - the pill says **Needs reconnecting** (the card shows "Last problem: …" — §8.2);
 - you have just ticked the Direct Post switch (§5);
@@ -317,7 +317,7 @@ Afterwards, check **Permissions** again and that "reconnect before" moved.
 
 **Disconnect TikTok** → confirm. The app revokes its token with TikTok (best-effort) and deletes the
 stored connection — account id, name, avatar and both tokens (`disconnect`,
-`src/services/tiktokConnections.ts:376-393`). Removing the app from the TikTok side ("Manage app
+`src/services/tiktokConnections.ts:434-451`). Removing the app from the TikTok side ("Manage app
 permissions" in TikTok) does the same through the `authorization.removed` webhook
 (`src/services/tiktokPublish.ts:656-660`).
 
@@ -343,7 +343,7 @@ facts about TikTok's portal that the app cannot check for itself — you tell it
 | "TikTok has approved this app for Direct Post (audit passed)" | `tiktok.audited` | TikTok has told you the audit passed |
 
 Both default to off and are saved with **Save TikTok app**, which always sends both — an unticked
-box is a real "no" (`dashboard/js/pages/settings.js:609-612`, `src/routes/tiktok.ts:406-413`).
+box is a real "no" (`dashboard/js/pages/settings.js:3939-3942`, `src/routes/tiktok.ts:418-425`).
 
 | Direct Post | Audited | Connect asks for | A new TikTok post goes out as | Privacy allowed |
 |---|---|---|---|---|
@@ -351,7 +351,7 @@ box is a real "no" (`dashboard/js/pages/settings.js:609-612`, `src/routes/tiktok
 | **on** | **off** — today | all three | the composer asks, per post: "Post directly to my profile" or "Send to my TikTok drafts (inbox)" | **Only me** |
 | on | on | `user.info.basic`, `video.publish` | direct, always | any level TikTok offers the account |
 
-(`tiktokScopes`, `src/services/tiktok.ts:53-56`; the per-post choice, `src/routes/api.ts:2245-2251`.)
+(`tiktokScopes`, `src/services/tiktok.ts:64-70`; the per-post choice, `src/routes/api.ts:2965-2971`.)
 Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 
 ### 5.1 Switching Direct Post on
@@ -362,8 +362,8 @@ Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
    `video.publish`.
 3. **Every connected workspace must Reconnect once.** Until it does, its card says "Reconnect
    TikTok to allow direct posting." and its posts keep going out as inbox drafts — the mode needs
-   the scope on the connection, not just the switch (`src/routes/tiktok.ts:225-227`).
-4. The mode is fixed on each post when it is scheduled (`src/routes/api.ts:2240-2251`), so posts
+   the scope on the connection, not just the switch (`src/routes/tiktok.ts:221-223`).
+4. The mode is fixed on each post when it is scheduled (`src/routes/api.ts:2960-2971`), so posts
    scheduled before the switch stay inbox drafts. Edit them and choose "Post directly to my
    profile", or reschedule them.
 
@@ -385,7 +385,7 @@ Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 >   scheduled (`scheduled_posts.platform_options`), and the publish-time check only narrows it,
 >   never widens it (`src/services/tiktokPublish.ts:287-297`). Edit each one and choose Everyone.
 > - Studio carousels scheduled *after* the tick do go out public automatically
->   (`studioTikTokOptions`, `src/services/studio/schedule.ts:39-50`).
+>   (`studioTikTokOptions`, `src/services/studio/schedule.ts:45-58`).
 
 No reconnect is needed after the audit: the existing connection already holds `video.publish`. A
 later reconnect asks only for `user.info.basic` and `video.publish`, which ends inbox drafts — as
@@ -413,7 +413,7 @@ me) — edit the post." (`src/services/tiktokPublish.ts:290-292`).
    and the TikTok publisher reads the bytes from there rather than over HTTP (`:207-213`).
 3. **Caption** — §10.
 4. **TikTok post settings.** Built live from TikTok's `creator_info` for the connected account, as
-   TikTok's guidelines require (`src/routes/tiktok.ts:234-259`):
+   TikTok's guidelines require (`src/routes/tiktok.ts:230-255`):
 
    | Control (exact label) | Behaviour |
    |---|---|
@@ -455,7 +455,7 @@ the draft.
 - Needs the verified URL prefix and the Public site address (§2.5), or it fails with
   `url_ownership_unverified`.
 - **Six photo inits a minute per token.** Space photo posts out — the Studio uses 40 seconds
-  (`src/services/studio/schedule.ts:29`). A drain that finds many photo posts already due
+  (`src/services/studio/schedule.ts:34`). A drain that finds many photo posts already due
   publishes them back to back, so a backlog can still run into the limit; the ones refused fail
   with `rate_limit_exceeded` and are retried with **Publish now** (§11).
 - An inbox photo draft needs TikTok app 31.8 or newer on the phone (`app_version_check_failed`).
@@ -533,10 +533,10 @@ The Studio makes Instagram carousels and a 9:16 TikTok version of each (STUDIO.m
    while unaudited (Everyone once audited), the draft's TikTok title, Auto-add music on, comments
    allowed, and the **Your brand** disclosure on — every Studio carousel is labelled "Promotional
    content". The click is the consent (`studioTikTokOptions` and `runTikTokBatch`,
-   `src/services/studio/schedule.ts:39-50`, `:220-273`).
+   `src/services/studio/schedule.ts:45-58`, `:343-396`).
 4. It refuses with "Direct Post is not available: switch it on in Settings → TikTok app, then
    reconnect TikTok." unless the connection holds `video.publish` and the Direct Post switch is on
-   (`src/services/studio/schedule.ts:56-64`).
+   (`src/services/studio/schedule.ts:64-72`).
 5. The rows go out on the next drains. Keep the account private until the SQL in §6.3 step 3 comes
    back empty, then do steps 4–6.
 
@@ -679,14 +679,14 @@ After approval: swap in the production key and secret and reconnect (§8.3), the
 
 | Token | Lives | Stored | Renewed |
 |---|---|---|---|
-| Access token | **24 hours** | `platform_connections.access_token`, `enc:v1` | on use, when less than 10 minutes are left (`getAccessToken`, `src/services/tiktokConnections.ts:302-323`), and every day by the cron for every active connection (`refreshAllConnections`, `:330-354`, called at `src/routes/api.ts:890`) |
-| Refresh token | **365 days from the first authorisation** — refreshing does not extend it | `refresh_token`, `enc:v1` | replaced on every refresh, because TikTok may rotate it; only one refresh runs at a time, and a claim older than 2 minutes is taken over (`src/services/tiktokConnections.ts:247-292`) |
+| Access token | **24 hours** | `platform_connections.access_token`, `enc:v1` | on use, when less than 10 minutes are left (`getAccessToken`, `src/services/tiktokConnections.ts:360-381`), and every day by the cron for every active connection (`refreshAllConnections`, `:330-354`, called at `src/routes/api.ts:1087`) |
+| Refresh token | **365 days from the first authorisation** — refreshing does not extend it | `refresh_token`, `enc:v1` | replaced on every refresh, because TikTok may rotate it; only one refresh runs at a time, and a claim older than 2 minutes is taken over (`src/services/tiktokConnections.ts:305-350`) |
 | OAuth state | 10 minutes, single use | `oauth_states` | per Connect (`:33`, `:49-75`) |
 
 **Reconnect once a year.** The card's "A TikTok connection lasts one year — reconnect before
 *date*" is the refresh token's expiry, and it adds a days-left warning inside 30 days. Diarise the
 date, as with Meta's data-access date (RUNBOOK §3). After reconnecting, read the new date: it comes
-from TikTok's own answer (`refresh_expires_in`, `src/services/tiktok.ts:201-213`), so it is the truth.
+from TikTok's own answer (`refresh_expires_in`, `src/services/tiktok.ts:215-227`), so it is the truth.
 
 The daily cron's refresh is a **health check** the Meta side never had: a revoked account is
 found at 00:00 UTC, not by the next scheduled post.
@@ -694,17 +694,17 @@ found at 00:00 UTC, not by the next scheduled post.
 ### 8.2 What makes a connection "Needs reconnecting"
 
 - **A refresh refused** with `access_token_invalid`, `invalid_grant`, `scope_not_authorized` or
-  `scope_permission_missed` (`src/services/tiktok.ts:95-100`) → the row becomes `invalid` with
+  `scope_permission_missed` (`src/services/tiktok.ts:109-114`) → the row becomes `invalid` with
   TikTok's reason in `last_error` — unless another invocation had just rotated the token, in which
-  case nothing is dead (`src/services/tiktokConnections.ts:273-286`).
+  case nothing is dead (`src/services/tiktokConnections.ts:331-344`).
 - **Any publish call** failing with one of those codes does the same (`noteTikTokFailure`,
   `:360-367`, called at `src/services/tiktokPublish.ts:565`).
 - **Transient failures never do** — a 5xx, a timeout or a rate limit releases the claim for the
-  next caller (`src/services/tiktokConnections.ts:288-290`).
+  next caller (`src/services/tiktokConnections.ts:346-348`).
 
 While it is invalid: the card shows **Needs reconnecting** and "Last problem: …"; every TikTok post
 that comes due **fails** with that reason (`:307-309`); and scheduling a new TikTok post is refused
-with "TikTok is not connected — connect it in Settings first." (`src/routes/api.ts:2236-2239`).
+with "TikTok is not connected — connect it in Settings first." (`src/routes/api.ts:2956-2959`).
 
 **The only fix is Reconnect** (§4.3); a dead refresh token cannot be revived. Then retry what failed
 in the meantime with **Publish now**.
@@ -749,17 +749,17 @@ Healthy: `status = active`; `last_refreshed_at` within the last day (the daily c
 | Limit | Value | Whose | What happens when you hit it |
 |---|---|---|---|
 | Unposted inbox drafts | **5 per 24 hours** | TikTok. Counted here conservatively: this workspace's inbox rows `PUBLISHING`, `PROCESSING` or `IN_INBOX` claimed in the last 24 h (`src/services/tiktokPublish.ts:173`, `:190-201`) | the post is **held**, not failed: back to `PENDING` with "Waiting for TikTok: *n* drafts…", and it goes out on a later sweep; **Publish now** answers 409. Direct posts do not count |
-| Photo post init | **6 calls a minute** per token | TikTok (`src/services/tiktok.ts:582-585`) | `rate_limit_exceeded` → the post **fails**; the init is never retried automatically (§11) |
-| Status checks | 30 a minute per token | TikTok | the sweep asks about at most 10 rows per drain and 25 per daily cron (`src/services/tiktokPublish.ts:577-582`, `src/routes/api.ts:894`) |
+| Photo post init | **6 calls a minute** per token | TikTok (`src/services/tiktok.ts:652-655`) | `rate_limit_exceeded` → the post **fails**; the init is never retried automatically (§11) |
+| Status checks | 30 a minute per token | TikTok | the sweep asks about at most 10 rows per drain and 25 per daily cron (`src/services/tiktokPublish.ts:577-582`, `src/routes/api.ts:1091`) |
 | Posts per day per account | TikTok's own cap | TikTok | `spam_risk_too_many_posts` → retry tomorrow |
 | Active users of the app | TikTok's daily cap for this app | TikTok | `reached_active_user_cap` → retry later |
 | Before the audit | Only me, on a private account | TikTok | §6.3 |
-| Video file | MP4, MOV or WebM here; TikTok asks for MP4 (H.264). TikTok takes up to 4 GB, sent whole up to 64 MB and in 32 MB chunks above — but the function holds the whole file in memory, it is read from `media_uploads` (Postgres, on a 500 MB tier), and a video at an outside URL is capped at 256 MB | both (`src/services/tiktokPublish.ts:42`, `:50`; `src/services/tiktok.ts:304-349`) | refused before upload with "TikTok accepts MP4, MOV or WebM video — …" |
+| Video file | MP4, MOV or WebM here; TikTok asks for MP4 (H.264). TikTok takes up to 4 GB, sent whole up to 64 MB and in 32 MB chunks above — but the function holds the whole file in memory, it is read from `media_uploads` (Postgres, on a 500 MB tier), and a video at an outside URL is capped at 256 MB | both (`src/services/tiktokPublish.ts:42`, `:50`; `src/services/tiktok.ts:374-419`) | refused before upload with "TikTok accepts MP4, MOV or WebM video — …" |
 | Video length | the account's own maximum (`max_video_post_duration_sec`) | TikTok; checked here before upload for Direct Post (`src/services/tiktokPublish.ts:314-317`) | "This video is *n*s; your TikTok account allows up to *m*s." |
-| Frame rate, resolution | 23–60 fps; 360–4096 px on each side | TikTok, after processing (`src/services/tiktok.ts:708-722`) | FAILED with TikTok's reason (§11.2) |
+| Frame rate, resolution | 23–60 fps; 360–4096 px on each side | TikTok, after processing (`src/services/tiktok.ts:778-792`) | FAILED with TikTok's reason (§11.2) |
 | Photos per post | 1 (`image`) or 2–35 (`carousel`) | both (`src/services/postMedia.ts:20-21`) | refused at scheduling |
 | Photo format | JPEG or WebP, uploaded here | TikTok (`src/services/postMedia.ts:24`, `:77-97`) | refused at scheduling, and again at publish |
-| Photo title | **90** UTF-16 units | TikTok (`src/services/tiktok.ts:537`) | refused at scheduling if typed; cut to fit if taken from the caption |
+| Photo title | **90** UTF-16 units | TikTok (`src/services/tiktok.ts:607`) | refused at scheduling if typed; cut to fit if taken from the caption |
 | Photo description | **4000** UTF-16 units | TikTok (`:538`) | cut to fit |
 | Video caption | **2200** UTF-16 units | TikTok (`:357`) | cut to fit |
 | Dashboard upload | about 3.3 MB of file | Vercel's 4.5 MB request cap | write bigger files straight into `media_uploads` over the database connection |
@@ -774,7 +774,7 @@ a video caption is cut with a plain `slice`, which can split one that sits exact
 
 **The 40-second stagger only works if the drain runs often.** Rows are due 40 s apart, but they
 go out when a drain runs, and one drain publishes everything already due back to back
-(`publishDuePosts`, `src/routes/api.ts:785-831`). With the Heroku worker on (it polls every 60 s)
+(`publishDuePosts`, `src/routes/api.ts:965-1011`). With the Heroku worker on (it polls every 60 s)
 that is one or two posts a minute; after an hours-long gap in the GitHub schedule it can be the
 whole batch at once, and a seventh photo post inside one minute fails with `rate_limit_exceeded`.
 Press **Publish now** on those a minute later. Which drainers are running: RUNBOOK §5.1.
@@ -787,9 +787,9 @@ Press **Publish now** on those a minute later. Which drainers are running: RUNBO
 
 | Post | The caption goes as | Cut at | Notes |
 |---|---|---|---|
-| Video, Direct Post | `post_info.title` (documented) | 2200 UTF-16 units | `src/services/tiktokPublish.ts:319-320`, `src/services/tiktok.ts:514` |
+| Video, Direct Post | `post_info.title` (documented) | 2200 UTF-16 units | `src/services/tiktokPublish.ts:319-320`, `src/services/tiktok.ts:584` |
 | Video, inbox draft | `post_info.title` — **undocumented** for inbox uploads | 2200 | if TikTok answers `invalid_params`/`invalid_param`, the init is repeated once **without** it, and the draft arrives with no caption (`src/services/tiktok.ts:362-412`). The log line `tiktok.upload_started` says `caption_sent: true` or `false`; the card's **Copy caption** button is the fallback |
-| Photo, either mode | **title**: the TikTok title field, or else the caption's first line with text on it; **description**: the whole caption | 90 / 4000 | `photoTitle`, `src/services/tiktok.ts:557-562`; `src/services/tiktokPublish.ts:444-447` |
+| Photo, either mode | **title**: the TikTok title field, or else the caption's first line with text on it; **description**: the whole caption | 90 / 4000 | `photoTitle`, `src/services/tiktok.ts:627-632`; `src/services/tiktokPublish.ts:444-447` |
 
 Count in UTF-16 units: one per letter, two per emoji (§9).
 
@@ -803,19 +803,19 @@ Count in UTF-16 units: one per letter, two per emoji (§9).
   in the Studio settings; the owner's says «رابطه في البايو»; `src/services/studio/rules.ts`), and every one
   carries the Studio's **TikTok caption line** setting — "Every TikTok caption carries this line.
   TikTok can't send DMs, so point people to your bio." The seeded line is in
-  `scripts/seed-studio-settings.mjs:67`.
+  `scripts/seed-studio-settings.mjs:72`.
 - **The bio link is clickable only on a Business account or with 1,000+ followers.** Before that,
   the call to action works only as text people read and search for.
 
 ### 10.3 "Also send to TikTok" copies the Meta caption word for word
 
 The TikTok sibling gets the same caption as the Instagram/Facebook row
-(`src/routes/api.ts:2163-2166`, `:2279`). An Instagram caption built around a comment keyword goes
+(`src/routes/api.ts:2867-2870`, `:2279`). An Instagram caption built around a comment keyword goes
 to TikTok with that keyword in it. So either:
 
 - schedule the TikTok post on its own (Platform: TikTok) with a link-in-bio caption; or
 - edit the TikTok row's caption before it goes out — allowed while it is `PENDING` or `FAILED`,
-  refused once it is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`src/routes/api.ts:2395-2398`).
+  refused once it is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`src/routes/api.ts:3117-3120`).
 
 The Studio does not have this problem: it writes separate Instagram and TikTok captions.
 
@@ -837,11 +837,11 @@ with the step that failed, then the plain-language sentence:
 | `TikTok status:` | asking TikTok how a post is doing |
 
 A code not in these tables comes through as TikTok's own message, or the bare code
-(`toTikTokError`, `src/services/tiktok.ts:140-164`).
+(`toTikTokError`, `src/services/tiktok.ts:154-178`).
 
 ### 11.1 API refusals — every code the app translates
 
-`CODE_MESSAGES`, `src/services/tiktok.ts:107-131`. The four marked **re-auth** also mark the
+`CODE_MESSAGES`, `src/services/tiktok.ts:121-145`. The four marked **re-auth** also mark the
 connection `invalid` (`:95-100`, §8.2).
 
 | Code | What `error_log` says | Meaning | Fix |
@@ -860,7 +860,7 @@ connection `invalid` (`:95-100`, §8.2).
 | `file_format_check_failed` | TikTok rejected the file format — upload an MP4 (H.264). | not a format TikTok takes | re-encode (below), upload, reschedule |
 | `invalid_file_upload` | TikTok rejected the uploaded file. | the bytes did not match what the init declared, or the file is damaged | upload the file again and reschedule |
 | `url_ownership_unverified` | TikTok can only fetch photos from a verified URL prefix. In the TikTok developer portal, open "URL properties", verify https://msg-response-auto.vercel.app/, then retry. | the prefix is not verified, or the Public site address differs from it | §2.5, then **Publish now** |
-| `invalid_param` | TikTok refused the post's settings as invalid. (TikTok: *TikTok's own message*) | TikTok's message names the field — the one thing needed to fix it, so it is kept (`src/services/tiktok.ts:137`, `:150`) | read the field TikTok named, edit, retry. An inbox video has already been retried once without its caption |
+| `invalid_param` | TikTok refused the post's settings as invalid. (TikTok: *TikTok's own message*) | TikTok's message names the field — the one thing needed to fix it, so it is kept (`src/services/tiktok.ts:151`, `:150`) | read the field TikTok named, edit, retry. An inbox video has already been retried once without its caption |
 | `invalid_params` | *(same)* | as above | as above |
 | `app_version_check_failed` | Sending photos to TikTok drafts needs TikTok app version 31.8 or newer. Update the TikTok app, then retry. | an inbox photo draft, an old TikTok app | update the TikTok app on the phone, then **Publish now** |
 
@@ -875,7 +875,7 @@ ffmpeg -i in.mov -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -ar 48000 -movflag
 
 When TikTok accepts the upload and then refuses the post, its status says `FAILED` with a
 `fail_reason`, and `error_log` holds the sentence below, with no prefix (`FAIL_REASONS`,
-`src/services/tiktok.ts:708-727`). It can arrive through any of the three writers — the inline poll,
+`src/services/tiktok.ts:778-797`). It can arrive through any of the three writers — the inline poll,
 the webhook or the sweep.
 
 | `fail_reason` | What `error_log` says | Fix |
@@ -908,9 +908,9 @@ readable.
 |---|---|---|
 | Waiting for TikTok: *n* drafts from the last 24 hours are still in your TikTok inbox (TikTok allows 5). Post them in the TikTok app and this goes out on the next run. — **status stays `PENDING`** | `src/services/tiktokPublish.ts:176-181`, `:555-563` | held, not failed: it retries by itself. Post the drafts, or edit the post to post directly |
 | TikTok is not connected for this account — connect it in Settings. | `src/services/tiktokConnections.ts:36-41` | **Connect TikTok**, then **Publish now** |
-| *the connection's last problem* (when it is `invalid`) | `src/services/tiktokConnections.ts:307-309` | **Reconnect** |
-| The TikTok token is being refreshed by another request — retry in a moment. | `src/services/tiktokConnections.ts:322` | **Publish now** again |
-| TikTok app credentials are not configured. | `src/services/tiktokConnections.ts:258-262` | §3 |
+| *the connection's last problem* (when it is `invalid`) | `src/services/tiktokConnections.ts:365-367` | **Reconnect** |
+| The TikTok token is being refreshed by another request — retry in a moment. | `src/services/tiktokConnections.ts:380` | **Publish now** again |
+| TikTok app credentials are not configured. | `src/services/tiktokConnections.ts:316-320` | §3 |
 | This post is set to post directly, but TikTok has not granted direct posting — reconnect TikTok in Settings. | `src/services/tiktokPublish.ts:497-499` | §5.1, then **Reconnect** |
 | This post is set to go to your TikTok drafts, but TikTok has not granted uploading — reconnect TikTok in Settings, or edit the post to post directly. | `src/services/tiktokPublish.ts:500-502` | as it says |
 | This TikTok post has no privacy choice — edit it and choose who can see it. | `src/services/tiktokPublish.ts:289` | edit the post |
@@ -923,7 +923,7 @@ readable.
 | TikTok fetches photos from this app's public address, and none is set — add it in Settings → TikTok app. | `src/services/tiktokPublish.ts:396-399` | §3 |
 | TikTok did not confirm this upload within 24 hours. Check your TikTok inbox; if it is not there, retry. | `src/services/tiktokPublish.ts:617-620` | RUNBOOK §10.7 |
 | TikTok upload has no publish id — schedule it again. | `src/services/tiktokPublish.ts:612-615` | reschedule |
-| Abandoned after 5 publish attempts — each claim went stale without completing. … | `src/routes/api.ts:858-865` | RUNBOOK §4.2 |
+| Abandoned after 5 publish attempts — each claim went stale without completing. … | `src/routes/api.ts:1043-1050` | RUNBOOK §4.2 |
 
 ---
 
@@ -986,20 +986,20 @@ its scheduled time — minutes with the Heroku worker on, up to hours on the Git
 **Is it safe to press Publish now twice?**
 
 Yes. The click claims the row atomically, so a second click while it is sending gets "Cannot
-publish now — this post is already PUBLISHING." (`src/routes/api.ts:2551-2579`). And a retry of a
+publish now — this post is already PUBLISHING." (`src/routes/api.ts:3352-3380`). And a retry of a
 row that already reached TikTok asks TikTok about it first, instead of posting it again
 (`src/services/tiktokPublish.ts:430-441`, `:515-528`).
 
 **If I delete a TikTok post from Posts Scheduler, is it deleted on TikTok?**
 
-No. Deleting the row deletes this app's record only (`src/routes/api.ts:2492-2516`). Delete the
+No. Deleting the row deletes this app's record only (`src/routes/api.ts:3236-3260`). Delete the
 post in TikTok.
 
 **Can two workspaces use the same TikTok account?**
 
 No. One TikTok account belongs to one workspace — webhooks name the account, not the workspace —
 so the second Connect says "That TikTok account is connected to another workspace. Disconnect it
-there first." (`src/services/tiktokConnections.ts:199-201`).
+there first." (`src/services/tiktokConnections.ts:231-233`).
 
 **Does the app read my TikTok comments, followers or analytics?**
 

@@ -79,6 +79,7 @@ import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
 import { recheckAllMetaTokens } from '../services/metaTokenRecheck.js';
+import { checkMetaWebhooks, readWebhookSummary } from '../services/metaWebhooks.js';
 import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
 import { refreshAllWhatsAppConnections } from '../services/whatsappHealth.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
@@ -454,6 +455,15 @@ router.get('/jobs/drain', async (req, res) => {
     // 6-hourly catch-up of leads a missed notification would lose, for tenants with a lead_ads sign-off only. Never throws.
     const leads = await sweepLeads(new Date(), sweepDeadline(startedAt));
     if (leads.purged > 0 || (leads.catchUp && (leads.catchUp.stored > 0 || leads.catchUp.failed > 0))) log('info', 'ads.leads_sweep', { purged: leads.purged, ...leads.catchUp });
+
+    // Where Meta sends each kind of event (src/services/metaWebhooks.ts): the Meta app's subscriptions are read at most once an hour (a held-back run is one settings
+    // read), the answer is stored for the dashboard's banners, and the owner is told once a day per problem when events that matter go to another website. A Meta app
+    // delivers each event type to ONE address, so another project that uses it can take Instagram away while every connection still reads "Connected". Never throws.
+    try {
+        await checkMetaWebhooks();
+    } catch (err) {
+        log('error', 'meta.webhooks_sweep_failed', describeError(err));
+    }
 
     // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
     // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
@@ -1118,6 +1128,14 @@ router.get('/cron/publish', async (req, res) => {
             log('error', 'cron.meta_token_recheck_failed', describeError(recheckErr));
         }
 
+        // Where Meta sends each event type (src/services/metaWebhooks.ts): the daily backstop of the drain's hourly check, for a day the drain never ran. Held back to one
+        // read an hour like the drain's, and fail-soft, like the sweeps around it.
+        try {
+            await checkMetaWebhooks();
+        } catch (hooksErr) {
+            log('error', 'cron.meta_webhooks_failed', describeError(hooksErr));
+        }
+
         // Boost spend and status (v52): one insights read per paused/active boost, once a day. Fail-soft, like the sweeps around it.
         try {
             const boosts = await syncAllBoosts();
@@ -1771,12 +1789,20 @@ const canAdminister = requireTenantRole('owner');
 
 router.get('/health/tenant', async (req, res) => {
     try {
-        const health = await getTenantHealth(getTenantId(req));
+        const [health, webhooks] = await Promise.all([
+            getTenantHealth(getTenantId(req)),
+            // Where Meta sends each event type, as the last check stored it (app settings only: no call to Meta on a page load). The same for every tenant, because the
+            // Meta app is. A setting that cannot be read leaves it null, which the dashboard reads as "not known": never as "all well", and never as "broken".
+            readWebhookSummary().catch((err) => {
+                log('warn', 'api.tenant_health_webhooks_unread', describeError(err));
+                return null;
+            }),
+        ]);
         if (!health) {
             res.status(404).json({ error: 'Not found.' });
             return;
         }
-        res.json(health);
+        res.json({ ...health, webhooks });
     } catch (err) {
         log('error', 'api.tenant_health_failed', describeError(err));
         if (isMissingSchema(err)) {

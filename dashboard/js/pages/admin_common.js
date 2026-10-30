@@ -570,6 +570,37 @@ const HealthStrip = {
             UI.toast((err && err.message) || t('health.recheckFailed'), 'error');
         }
     },
+
+    // ─── Where Meta sends the events: the notice Overview and the Inbox show ─────────
+
+    /** The kinds of problem the server names (`ProblemKind`, src/services/metaWebhooks.ts), each with its own sentence (`webhooks.banner.<kind>`). */
+    WEBHOOK_PROBLEMS: ['elsewhere', 'inactive', 'missing_object', 'missing_field'],
+
+    /** The Meta objects people know by a name (`webhooks.platform.<object>`); any other is shown as Meta spells it. */
+    WEBHOOK_PLATFORMS: ['instagram', 'page', 'whatsapp_business_account'],
+
+    /**
+     * What `GET /api/health/tenant` says about where Meta sends the events (`health.webhooks`, the hourly check's stored answer), as a notice:
+     * `{ title, lines }`, plain sentences with every Latin part isolated, or null. Only a definite `ok: false` with something to name is a notice:
+     * `ok: null` is a check that never got an answer, a missing field is a server that does not send it yet or a setting that could not be read, and
+     * none of those is a verdict. One sentence per problem: which event type goes where, and what AutoReply therefore cannot answer.
+     */
+    webhookNotice(webhooks) {
+        if (!webhooks || webhooks.ok !== false || !Array.isArray(webhooks.problems) || webhooks.problems.length === 0) return null;
+        const isolate = (text) => `\u2066${String(text === null || text === undefined ? '' : text)}\u2069`;
+        const lines = webhooks.problems.filter((p) => p && typeof p === 'object').map((p) => {
+            const known = HealthStrip.WEBHOOK_PLATFORMS.indexOf(p.object) !== -1;
+            const kind = HealthStrip.WEBHOOK_PROBLEMS.indexOf(p.kind) !== -1 ? p.kind : 'elsewhere';
+            // An object nobody has a name for (`permissions`) is named as Meta spells it, in the sentence made for that.
+            const variant = !known && (kind === 'elsewhere' || kind === 'inactive') ? 'Other' : '';
+            return t(`webhooks.banner.${kind}${variant}`, {
+                platform: known ? t(`webhooks.platform.${p.object}`) : isolate(p.object),
+                host: isolate(p.host || '?'),
+                fields: isolate((Array.isArray(p.fields) ? p.fields : []).join(', ')),
+            });
+        });
+        return lines.length > 0 ? { title: t('webhooks.banner.title'), lines } : null;
+    },
 };
 
 UI.registerActions('health', {
