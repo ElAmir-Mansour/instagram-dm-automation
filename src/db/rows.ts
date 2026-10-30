@@ -24,6 +24,7 @@
 import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel, ExampleCarousel } from '../services/studio/carouselTypes.js';
 import type { DraftFinding } from '../services/explainers/spec.js';
+import type { Perception } from '../services/perception/types.js';
 import type {
     ExplainerConfig, ExplainerLanguage, ExplainerLengthTier, ExplainerSoundMode, ExplainerWriter, InfographicConfig, InfographicSocial, InfographicTheme,
     MonteurConfig, MonteurStyle,
@@ -301,6 +302,11 @@ export interface MessageRow {
     no_reply_reason?: string | null;
     /** v50. The inbound media saved to our store. PRIVATE: never served by the public upload route. SET NULL when the upload is deleted. */
     media_upload_id?: string | null;
+    /**
+     * v60. Inbound with no words only: what Meta Muse understood from the media (a description or a transcript, never the media), written once. NULL means
+     * perception never ran for the row, which is every row until a tenant switches it on. Absent on a row read before v60 is applied, so nothing may depend on it.
+     */
+    perception?: Perception | null;
     created_at: Timestamptz;
 }
 

@@ -96,6 +96,19 @@ export interface SalesFacts {
      * Absent (the default, and every conversation that did not begin from an ad), the facts block is byte for byte what it was (`prompt.test.ts`).
      */
     ad?: { name: string; offerTitle: string | null; primaryText: string | null; tapped: string | null };
+    /**
+     * Meta Muse perception (`services/perception/`): what the customer sent that had no words, as `perceivedFact` words it ("What the customer sent: a shared
+     * reel. What it shows: …"), already one line. Given only for a message Meta's model read, and said last in the facts block, next to the customer's message.
+     * Absent (every tenant whose switches are off, and every message that has words), the facts block is byte for byte what it was (`prompt.test.ts`).
+     * It is NOT among the guard's facts: a number seen in media is not one the reply may state.
+     */
+    sent?: string;
+    /**
+     * The video recall found for this message ("Relevant video: <link> (watch from 0:13): …", or "No video on this topic yet"), already one line, said after
+     * `sent`. Absent unless the owner's video memory is on and the message asked for a video. The turn puts the same line into the guard's facts, so the
+     * second it names passes the number check.
+     */
+    video?: string;
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */
