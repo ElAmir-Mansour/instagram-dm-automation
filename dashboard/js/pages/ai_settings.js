@@ -1070,7 +1070,7 @@ const AiSettingsPage = {
                 <div id="muse-error"></div>
                 <div class="muse-status" id="muse-status" role="status" aria-live="polite"></div>
 
-                <div class="muse-body" id="muse-form" role="group" aria-labelledby="muse-title" data-input="muse:changed" data-change="muse:changed">
+                <div class="muse-body" id="muse-form" data-input="muse:changed" data-change="muse:changed">
                     ${this.MUSE_SWITCHES.map((name) => row(name))}
 
                     <hr class="divider">

@@ -20,7 +20,8 @@ import { installAiDb, type AiDb } from '../services/aiProviders/testDb.js';
 import { assertNoKey, FAKE_KEYS } from '../services/aiProviders/testKeys.js';
 import { AUDIT_ACTIONS } from '../services/audit.js';
 import { allowMode, museAuditDetail, MUSE_ALLOW_SENDERS_MAX, parseMuseInput } from '../services/perception/museSettings.js';
-import { MUSE_BUDGET_PURPOSES } from '../services/perception/gate.js';
+import { gatePerception, MUSE_BUDGET_PURPOSES, type GateArgs } from '../services/perception/gate.js';
+import { capabilityOn, readMuseSettings, senderAllowed } from '../services/perception/switches.js';
 import { setLogSink } from '../utils/log.js';
 import apiRouter from './api.js';
 
@@ -511,5 +512,56 @@ describe('parseMuseInput, museAuditDetail and allowMode', () => {
         assert.ok(!JSON.stringify(detail).includes(SARA));
         assert.equal(JSON.stringify(detail).includes('[redacted]'), false);
         assert.deepEqual(museAuditDetail({ ...after, allowSenders: ['*'] }, []), { changed: [], switches: after.switches, allow: 'everyone', allow_count: 0, daily_usd: 3 });
+    });
+});
+
+// ─── The whole path: what the card saves is what the reply path decides on ──────────────────────────────────────────────────
+
+describe('POST /settings/ai/muse — what it saves is what the reply path reads and the gate decides on', () => {
+    // The gate with nothing but its settings real: the settings are read through `readMuseSettings` from the rows the route wrote.
+    const gate = (senderId: string, kind: string, capability: GateArgs['capability'], spent = 0) => gatePerception(
+        { creatorId: TENANT, senderId, kind, capability },
+        { routeReady: async () => true, spentToday: async () => spent, tellOwner: async () => {}, now: () => new Date('2026-11-01T09:00:00Z') },
+    );
+
+    it('is read back by the reply path\'s own reader, and only the people on the list, with the switch on, get through the gate', async () => {
+        const res = await run('post', '/settings/ai/muse', { body: { switches: { dm_media: true }, allow_senders: [SARA, OMAR], daily_usd: 4.5 } });
+        assert.equal(res.statusCode, 200);
+        const settings = await readMuseSettings(TENANT);
+        assert.deepEqual(settings, { switches: { dm_media: true, voice: false, memory: false }, allowSenders: [SARA, OMAR], dailyUsd: 4.5 });
+        assert.equal(capabilityOn(settings, 'dm_media'), true);
+        assert.equal(capabilityOn(settings, 'voice'), false);
+        assert.deepEqual([SARA, OMAR, STRANGER].map((id) => senderAllowed(settings.allowSenders, id)), [true, true, false]);
+        // The gate, on a reel and on a voice note, from the people the card saved and from a stranger.
+        assert.deepEqual(await gate(SARA, 'reel', 'dm_media'), { ok: true });
+        assert.deepEqual(await gate(OMAR, 'story_mention', 'dm_media'), { ok: true });
+        assert.deepEqual(await gate(STRANGER, 'reel', 'dm_media'), { ok: false, reason: 'not_allowed_sender' });
+        assert.deepEqual(await gate(SARA, 'audio', 'voice'), { ok: false, reason: 'switch_off' }, 'voice is stored and off');
+    });
+
+    it('opens to everyone with ["*"], and the cap the card saved is the cap the gate holds: 4.5 refuses at 4.5, and 0 refuses always', async () => {
+        await run('post', '/settings/ai/muse', { body: { switches: { dm_media: true }, allow_senders: ['*'], daily_usd: 4.5 } });
+        assert.deepEqual(await gate(STRANGER, 'image', 'dm_media', 4.49), { ok: true });
+        assert.deepEqual(await gate(STRANGER, 'image', 'dm_media', 4.5), { ok: false, reason: 'budget' });
+        await run('post', '/settings/ai/muse', { body: { daily_usd: 0 } });
+        assert.deepEqual(await gate(STRANGER, 'image', 'dm_media', 0), { ok: false, reason: 'budget' }, 'a cap of 0 keeps it off by money');
+    });
+
+    it('is switched off again by the card, and the gate says so: the switch is the first thing it asks', async () => {
+        await run('post', '/settings/ai/muse', { body: { switches: { dm_media: true }, allow_senders: ['*'] } });
+        assert.deepEqual(await gate(SARA, 'reel', 'dm_media'), { ok: true });
+        await run('post', '/settings/ai/muse', { body: { switches: { dm_media: false } } });
+        assert.deepEqual(await gate(SARA, 'reel', 'dm_media'), { ok: false, reason: 'switch_off' });
+        await run('post', '/settings/ai/muse', { body: { switches: { dm_media: true }, allow_senders: [] } });
+        assert.deepEqual(await gate(SARA, 'reel', 'dm_media'), { ok: false, reason: 'not_allowed_sender' }, 'and an empty list is nobody, switch on or not');
+    });
+
+    it('leaves another tenant\'s gate exactly as it was: the rows are the session\'s tenant\'s', async () => {
+        await run('post', '/settings/ai/muse', { body: { switches: { dm_media: true }, allow_senders: ['*'] } });
+        const other = await gatePerception(
+            { creatorId: OTHER, senderId: SARA, kind: 'reel', capability: 'dm_media' },
+            { routeReady: async () => true, spentToday: async () => 0, tellOwner: async () => {} },
+        );
+        assert.deepEqual(other, { ok: false, reason: 'switch_off' });
     });
 });

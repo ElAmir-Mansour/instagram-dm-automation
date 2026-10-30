@@ -20,6 +20,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { buildMuseView, parseMuseInput } from '../services/perception/museSettings.js';
 import { MUSE_DAILY_USD_MAX } from '../services/perception/switches.js';
 import { loadDashboard, settle, type Dashboard, type Json } from './_harness.js';
 
@@ -699,6 +700,82 @@ describe('Meta vision card: loaded with the rest of the AI settings', () => {
         o.page.resetTenantState();
         assert.equal(o.page._muse, undefined);
         assert.equal(o.page._musePicker, null);
+    });
+});
+
+// ─── The same shapes as the server's own code ───────────────────────────────────────────────────────────────────────────────
+
+describe('Meta vision card: the contract with the server\'s own code', () => {
+    const TENANT = '11111111-1111-4111-8111-111111111111';
+    const build = (stored: Json, over: Json = {}) => buildMuseView(TENANT, stored, {
+        spentToday: async () => 0.4321, routeReady: async () => true, routeOf: async () => ({ provider: 'meta', model: 'muse-spark-1.3' }),
+        people: async (_creator, ids) => ids.map((id) => ({ id, username: id === SARA ? 'sara_dev' : null, name: id === SARA ? 'Sara Dev' : 'عمر' })),
+        ...over,
+    });
+
+    it('reads what the server\'s own view builder answers, field for field, after the JSON in between', async () => {
+        const stored = { switches: { dm_media: true, voice: false, memory: true }, allowSenders: [SARA, OMAR], dailyUsd: 2.5 };
+        const built = await build(stored);
+        const o = open({ view: JSON.parse(JSON.stringify(built)) });
+        const m = o.page._muse;
+        assert.equal(m.status, 'ready');
+        assert.deepEqual(plain(m.saved), { switches: stored.switches, who: 'list', ids: [SARA, OMAR], capText: '2.5' });
+        assert.equal(m.spentToday, 0.4321);
+        assert.equal(m.keyReady, true);
+        assert.equal(m.model, 'muse-spark-1.3');
+        assert.equal(m.max, built.limits.dailyUsdMax);
+        assert.equal(m.maxPeople, built.limits.allowSendersMax);
+        assert.deepEqual([...m.people.entries()].map(([id, who]: [string, Json]) => [id, plain(who)]), [[SARA, { username: 'sara_dev', name: 'Sara Dev' }], [OMAR, { username: '', name: 'عمر' }]]);
+        assert.equal(o.el('muse-daily-usd').value, '2.5');
+        assert.ok(String(o.el('muse-people-list').innerHTML).includes('@sara_dev'));
+    });
+
+    it('reads the server\'s degraded answers as what they are: no key, a check that could not be made, a spend that could not be read, everyone, nobody', async () => {
+        const base = { switches: { dm_media: false, voice: false, memory: false }, allowSenders: [] as string[], dailyUsd: 3 };
+        const noKey = open({ view: JSON.parse(JSON.stringify(await build(base, { routeReady: async () => false }))) }).page._muse;
+        assert.deepEqual([noKey.keyReady, noKey.model], [false, '']);
+        const unknown = open({ view: JSON.parse(JSON.stringify(await build(base, { routeReady: async () => { throw new Error('x'); } }))) }).page._muse;
+        assert.deepEqual([unknown.keyReady, unknown.model], [null, '']);
+        const blind = open({ view: JSON.parse(JSON.stringify(await build(base, { spentToday: async () => { throw new Error('x'); } }))) }).page._muse;
+        assert.equal(blind.spentToday, null);
+        const everyone = open({ view: JSON.parse(JSON.stringify(await build({ ...base, allowSenders: ['*'] }))) }).page._muse;
+        assert.deepEqual([everyone.saved.who, plain(everyone.saved.ids), everyone.people.size], ['everyone', [], 0]);
+        const nobody = open({ view: JSON.parse(JSON.stringify(await build(base))) }).page._muse;
+        assert.deepEqual([nobody.saved.who, plain(nobody.saved.ids)], ['list', []]);
+    });
+
+    it('sends only bodies the server\'s own parser takes, from every state the card can be in, and what it keeps is what is on screen', async () => {
+        const states: Array<[string, Json]> = [
+            ['a list', view()],
+            ['nobody', view({ allowSenders: [], people: [] })],
+            ['everyone', view({ allowSenders: ['*'], people: [] })],
+            ['every switch on', view({ switches: { dm_media: true, voice: true, memory: true } })],
+            ['a cap of 0', view({ dailyUsd: 0 })],
+            ['the cap\'s maximum', view({ dailyUsd: 50 })],
+            ['a cap in cents', view({ dailyUsd: 12.34 })],
+        ];
+        for (const [name, v] of states) {
+            const o = open({ view: v });
+            const body = plain(o.page.musePayload());
+            const parsed = parseMuseInput(body);
+            assert.equal(parsed.ok, true, `${name}: ${JSON.stringify(body)}`);
+            if (!parsed.ok) continue;
+            assert.deepEqual(plain(parsed.input.switches), v.switches, name);
+            assert.deepEqual(plain(parsed.input.allowSenders), v.allowSenders, name);
+            assert.equal(parsed.input.dailyUsd, v.dailyUsd, name);
+        }
+        // A person picked from the inbox, and the cap edited: what the page sends is still what the server takes.
+        const o = open({ view: view({ allowSenders: [], people: [] }) });
+        o.page.museTogglePicker();
+        await settle();
+        o.page.museAddPerson(OMAR);
+        o.page.museAddPerson(SARA);
+        o.el('muse-daily-usd').value = '7.5';
+        o.el('muse-voice').checked = true;
+        o.page.museChanged();
+        const parsed = parseMuseInput(plain(o.page.musePayload()));
+        assert.ok(parsed.ok);
+        if (parsed.ok) assert.deepEqual(plain(parsed.input), { switches: { dm_media: true, voice: true, memory: false }, allowSenders: [OMAR, SARA], dailyUsd: 7.5 });
     });
 });
 

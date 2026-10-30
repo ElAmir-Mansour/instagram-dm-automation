@@ -243,7 +243,7 @@ describe('GET /conversations/:id/messages — the perception and the decision tr
         model: 'muse-spark-1.3', stored_at: '2026-10-30T10:00:05.000Z', ms: 8200, usd: 0.021,
     };
     const unreadable = { v: 1, kind: 'image', status: 'unreadable', reason: 'low_confidence', model: 'muse-spark-1.3', stored_at: '2026-10-30T11:00:05.000Z', ms: 3000, usd: 0.004 };
-    const meta = { engine: 'providers', intent: 'info', stage: 'recommend', next_action: 'recommend', perceived: true, recalled: false, reason: 'The reel is about decorators, which the Python course covers.' };
+    const meta = { engine: 'providers', intent: 'info', stage: 'recommend', next_action: 'recommend', perceived: true, recalled: false, reason: 'The reel is about decorators, which the Python guide covers.' };
     // Newest first, as the query orders them; the route reverses.
     const stored = () => [
         { id: 'a1', direction: 'outbound', sender: 'ai', text: 'ده بيشرح الـ decorators', message_type: 'text', meta_message_id: null, ai_meta: meta, perception: null, created_at: '2026-10-30T10:00:12Z' },

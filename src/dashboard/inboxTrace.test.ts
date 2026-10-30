@@ -18,7 +18,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { NEXT_ACTIONS } from '../services/dmSales/types.js';
-import { ABOUT_OWNER, FAIL_REASONS, PERCEPTION_STATUSES, SKIP_REASONS, UNREADABLE_REASONS } from '../services/perception/types.js';
+import { perceivedText } from '../services/perception/text.js';
+import { WORDLESS_PLACEHOLDERS } from '../webhook/attachments.js';
+import { ABOUT_OWNER, FAIL_REASONS, PERCEPTION_STATUSES, SKIP_REASONS, UNREADABLE_REASONS, type Perception } from '../services/perception/types.js';
 import { loadDashboard, type Dashboard, type Json } from './_harness.js';
 
 type Lang = 'ar' | 'en';
@@ -46,23 +48,27 @@ function load(lang: Lang = 'en'): Rig {
     return { h, Inbox: h.run('InboxPage'), t: h.t };
 }
 
-/** What the server stores for a perceived reel: the readable text, and what was understood. */
+/**
+ * What the pipeline stores for a perceived reel: a `Perception` as the server types it (so a field it renames or drops stops this compiling), and the readable text
+ * `perceivedText` builds from it (so the format the page has to recognise is the server's own, not a copy of it).
+ */
+const BASE: Perception = {
+    v: 1, kind: 'reel', status: 'ok', seen: 'A 37-second reel showing a Python decorator that times a function.', transcript: '', about_owner: 'own_content', confidence: 0.92,
+    model: 'muse-spark-1.3', stored_at: '2026-10-30T10:00:05.000Z', ms: 8200, usd: 0.021,
+};
 const reel = (over: Json = {}, perception: Json | null = {}): Json => ({
     id: 'm1', direction: 'inbound', sender: 'customer', message_type: 'reel', created_at: '2026-10-30T10:00:00.000Z',
-    text: '[shared reel] A 37-second reel showing a Python decorator that times a function.',
+    text: perceivedText('reel', BASE),
     raw_payload: { message: { attachments: [{ type: 'ig_reel', payload: { url: 'https://cdn.example.test/reel.mp4' } }] } },
-    perception: perception === null ? null : {
-        v: 1, kind: 'reel', status: 'ok', seen: 'A 37-second reel showing a Python decorator that times a function.', transcript: '', about_owner: 'own_content', confidence: 0.92,
-        model: 'muse-spark-1.3', stored_at: '2026-10-30T10:00:05.000Z', ms: 8200, usd: 0.021, ...perception,
-    },
+    perception: perception === null ? null : { ...BASE, ...perception },
     ...over,
 });
 
 const reply = (meta: Json | null, over: Json = {}): Json => ({
-    id: 'a1', direction: 'outbound', sender: 'ai', message_type: 'text', text: 'ده بيشرح الـ decorators، تحب أرسلك الكورس؟', created_at: '2026-10-30T10:00:12.000Z', ai_meta: meta, ...over,
+    id: 'a1', direction: 'outbound', sender: 'ai', message_type: 'text', text: 'ده بيشرح الـ decorators، تحب أرسلك الدليل؟', created_at: '2026-10-30T10:00:12.000Z', ai_meta: meta, ...over,
 });
 
-const META = { engine: 'providers', intent: 'info', stage: 'recommend', next_action: 'recommend', offer_id: 'python', perceived: true, reason: 'The reel is about decorators, which the Python course covers.' };
+const META = { engine: 'providers', intent: 'info', stage: 'recommend', next_action: 'recommend', offer_id: 'python', perceived: true, reason: 'The reel is about decorators, which the Python guide covers.' };
 
 // ─── Under the customer's message: what was seen ─────────────────────────────────────────────────────────────────────────
 
@@ -96,14 +102,17 @@ describe('Inbox: what Meta Muse saw, under a message with no words', () => {
 
     it('reads every kind the pipeline can perceive, a story mention among them, and a voice note as what was HEARD, once', () => {
         const { Inbox, t } = load();
-        for (const kind of ['reel', 'share', 'story_reply', 'story_share', 'image', 'video']) {
-            const bubble = String(Inbox.messageBubble(reel({ message_type: kind, text: `[${kind}] Something it saw.` }, { kind, seen: 'Something it saw.' })));
+        for (const kind of ['reel', 'share', 'story_reply', 'story_share', 'image', 'video'] as const) {
+            // The text the server stores for each kind is its own placeholder with the description after it.
+            const stored = perceivedText(kind, { seen: 'Something it saw.' });
+            assert.ok(stored.startsWith(WORDLESS_PLACEHOLDERS[kind]), stored);
+            const bubble = String(Inbox.messageBubble(reel({ message_type: kind, text: stored }, { kind, seen: 'Something it saw.' })));
             assert.ok(bubble.includes('data-perception="ok"') && text(bubble).includes('Something it saw.'), kind);
-            assert.ok(!bubble.includes('[' + kind + ']'), `${kind}: the placeholder is not printed`);
+            assert.ok(!bubble.includes(WORDLESS_PLACEHOLDERS[kind]), `${kind}: the placeholder is not printed`);
         }
-        const voice = String(Inbox.messageBubble(reel({ message_type: 'audio', text: 'كام سعر الكورس وفيه شهادة؟', raw_payload: null }, { kind: 'audio', seen: undefined, transcript: 'كام سعر الكورس وفيه شهادة؟', model: 'muse-voice-transcribe-1.0' })));
+        const voice = String(Inbox.messageBubble(reel({ message_type: 'audio', text: 'كام سعر الباقة وفيه شهادة؟', raw_payload: null }, { kind: 'audio', seen: undefined, transcript: 'كام سعر الباقة وفيه شهادة؟', model: 'muse-voice-transcribe-1.0' })));
         assert.ok(voice.includes(t('inbox.perception.heard')) && voice.includes('data-lucide="music"'), 'heard, not seen');
-        assert.equal((voice.match(/كام سعر الكورس/g) ?? []).length, 1, 'the transcript is there once: the old transcript block does not repeat it');
+        assert.equal((voice.match(/كام سعر الباقة/g) ?? []).length, 1, 'the transcript is there once: the old transcript block does not repeat it');
         assert.ok(!voice.includes(t('inbox.voiceTranscript')), 'and it is the perception\'s block, not the WhatsApp one');
         assert.ok(!/lang="en"/.test(voice), 'a transcript is the customer\'s own language');
         assert.ok(!voice.includes('msg-seen-owner'), 'and a voice note has no owner to name, whatever the row says');
@@ -114,7 +123,7 @@ describe('Inbox: what Meta Muse saw, under a message with no words', () => {
 
     it('keeps a story mention as "mentioned you in a story", in the bubble and in the thread list, while the description sits under it', () => {
         const { Inbox, t } = load();
-        const mention = reel({ message_type: 'story_mention', text: '[Story Mention] A story showing a laptop with code on the screen.', raw_payload: { message: { attachments: [{ type: 'story_mention', payload: { url: 'https://cdn.example.test/s.jpg' } }] } } }, { kind: 'story_mention', seen: 'A story showing a laptop with code on the screen.' });
+        const mention = reel({ message_type: 'story_mention', text: perceivedText('story_mention', { seen: 'A story showing a laptop with code on the screen.' }), raw_payload: { message: { attachments: [{ type: 'story_mention', payload: { url: 'https://cdn.example.test/s.jpg' } }] } } }, { kind: 'story_mention', seen: 'A story showing a laptop with code on the screen.' });
         const bubble = String(Inbox.messageBubble(mention));
         assert.ok(text(bubble).includes(t('inbox.storyMention')), 'the mention is named');
         assert.ok(!bubble.includes('[Story Mention]'), 'the placeholder with its description is not words they wrote');
