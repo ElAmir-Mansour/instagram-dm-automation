@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
-import { estimateUsd, generate, setAiCaller, setProviderFetch, type AiGenerateArgs } from './generate.js';
+import { estimateUsd, generate, IMAGE_TOKENS, setAiCaller, setProviderFetch, VIDEO_TOKENS_PER_SECOND, VIDEO_TOKENS_UNKNOWN_LENGTH, type AiGenerateArgs } from './generate.js';
 import { AiError, isAiError } from '../llm/errors.js';
 import type { GeminiSchema } from '../llm/geminiSchema.js';
 import { setLlmCaller, type GenerateJsonArgs, type GenerateJsonResult } from '../llm/generate.js';
@@ -20,7 +20,7 @@ const OWNER = '11111111-1111-4111-8111-111111111111';
 const TENANT = '44444444-4444-4444-8444-444444444444';
 const SCHEMA: GeminiSchema = { type: 'OBJECT', properties: { reply: { type: 'STRING' } }, required: ['reply'] };
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: { level: string; line: string }[];
@@ -407,6 +407,55 @@ describe('estimateUsd', () => {
     });
 });
 
+describe('estimateUsd with pictures and video', () => {
+    const base = { system: 'x'.repeat(1000), schema: SCHEMA };
+    const text = 'y'.repeat(400);
+    const words = estimateUsd({ ...base, user: [{ role: 'user', text }] }, 4000, 'muse-spark-1.3', {});
+    const withMedia = (media: Array<{ kind: 'image' | 'video'; seconds?: number }>) => estimateUsd(
+        { ...base, user: [{ role: 'user', text, media: media.map((m) => ({ ...m, mime: m.kind === 'image' ? 'image/jpeg' : 'video/mp4', base64: 'QUJD'.repeat(50_000) })) }] }, 4000, 'muse-spark-1.3', {},
+    );
+    /** The extra input, in tokens, an estimate carries over the same call with words alone, at Muse Spark's $1.25 a million. */
+    const extraTokens = (usd: number) => Math.round(((usd - words.usd) * 1e6) / 1.25);
+
+    it('counts a picture as about 800 tokens of input and a video as about 280 a second, and a video of unknown length as 12 000', () => {
+        assert.equal(IMAGE_TOKENS, 800);
+        assert.equal(VIDEO_TOKENS_PER_SECOND, 280);
+        assert.equal(VIDEO_TOKENS_UNKNOWN_LENGTH, 12_000);
+        assert.equal(extraTokens(withMedia([{ kind: 'image' }]).usd), 800);
+        assert.equal(extraTokens(withMedia([{ kind: 'image' }, { kind: 'image' }]).usd), 1600);
+        assert.equal(extraTokens(withMedia([{ kind: 'video', seconds: 37 }]).usd), 10_360);
+        assert.equal(extraTokens(withMedia([{ kind: 'video' }]).usd), 12_000);
+        assert.equal(extraTokens(withMedia([{ kind: 'image' }, { kind: 'video', seconds: 10 }]).usd), 800 + 2800);
+    });
+
+    it('takes a length that is not a positive number as no length: the unknown-video figure, never a free video', () => {
+        for (const seconds of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+            assert.equal(extraTokens(withMedia([{ kind: 'video', seconds }]).usd), 12_000, String(seconds));
+        }
+    });
+
+    it('counts tokens and not the base64: a 750 kB picture does not cost what its characters would', () => {
+        const huge = withMedia([{ kind: 'image' }]);
+        assert.ok(huge.usd < words.usd + 0.01, 'about 800 tokens, not 375 000');
+    });
+
+    it('is exactly the old estimate when there is no media, an empty list, or a plain string', () => {
+        const plain = estimateUsd({ ...base, user: 'y'.repeat(400) }, 4000, 'muse-spark-1.3', {});
+        assert.equal(plain.usd, words.usd);
+        assert.equal(estimateUsd({ ...base, user: [{ role: 'user', text, media: [] }] }, 4000, 'muse-spark-1.3', {}).usd, words.usd);
+        // And the figure itself: half a token a character on the system prompt, the words and the schema, plus the output cap, at Muse Spark's rates.
+        const input = Math.ceil((1000 + 400 + JSON.stringify(SCHEMA).length) / 2);
+        assert.equal(words.usd, (input * 1.25 + 4000 * 4.25) / 1e6);
+        assert.equal(words.priced, true);
+    });
+
+    it('adds the media to the input of a call that caches its system prompt too', () => {
+        const cachedWords = estimateUsd({ ...base, user: [{ role: 'user', text }], cacheSystem: true }, 4000, 'claude-opus-5-5', {});
+        const cachedMedia = estimateUsd({ ...base, user: [{ role: 'user', text, media: [{ kind: 'image', mime: 'image/jpeg', base64: 'QUJD' }] }], cacheSystem: true }, 4000, 'claude-opus-5-5', {});
+        assert.equal(Math.round(((cachedMedia.usd - cachedWords.usd) * 1e6) / 4), 800, 'at Opus 5.5\'s $4 a million input');
+    });
+});
+
 describe('what is logged', () => {
     it('is the purpose, provider, model, outcome, tokens, dollars and latency, and never a key, a prompt or an answer', async () => {
         await call();
@@ -576,6 +625,160 @@ describe('the whole path, through the real Groq adapter', () => {
         assert.equal(refused.kind, 'auth');
         assertNoKey(JSON.stringify(refused) + refused.message + (refused.stack ?? ''), 'the error');
         assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
+    });
+});
+
+describe('the whole path, through the real Meta adapter', () => {
+    const IMAGE = { kind: 'image' as const, mime: 'image/jpeg', base64: 'SU1BR0VCWVRFUw==' };
+    const metaAnswer = (usage: Record<string, unknown> = { prompt_tokens: 15, completion_tokens: 190, total_tokens: 205, completion_tokens_details: { reasoning_tokens: 180 }, prompt_tokens_details: { cached_tokens: 0 } }) => jsonResponse(200, {
+        id: 'chatcmpl-1', object: 'chat.completion', model: 'muse-spark-1.3',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"reply":"a price screenshot"}' } }],
+        usage,
+    });
+    const viaMeta = (fetchImpl: ReturnType<typeof stubFetch>['fetchImpl'], routing: Record<string, unknown> = { perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' } }) => {
+        restoreCaller?.();
+        restoreCaller = undefined;
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        db.setSetting('ai.routing', JSON.stringify(routing));
+        setProviderFetch(fetchImpl);
+    };
+
+    it('sends the request Meta takes, raises a small limit to the 4 000 floor, sends reasoning_effort, and puts the key only in the header', async () => {
+        const { fetchImpl, calls } = stubFetch(metaAnswer());
+        viaMeta(fetchImpl);
+        const out = await call({ purpose: 'perception_dm', maxTokens: 200 });
+        assert.deepEqual(out.json, { reply: 'a price screenshot' });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.url, 'https://api.meta.ai/v1/chat/completions');
+        assert.equal(calls[0]!.headers['authorization'], `Bearer ${FAKE_KEYS.meta}`);
+        assert.ok(!calls[0]!.url.includes(FAKE_KEYS.meta) && !calls[0]!.raw.includes(FAKE_KEYS.meta), 'never in the URL or the body');
+        assert.equal(calls[0]!.body.model, 'muse-spark-1.3');
+        assert.equal(calls[0]!.body.max_tokens, 4000, 'a Test asks for 200 and Muse Spark reasons before it answers');
+        assert.equal(calls[0]!.body.reasoning_effort, 'low');
+        assert.equal(calls[0]!.body.response_format.json_schema.strict, true);
+        assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
+    });
+
+    it('keeps a limit above the floor as it was given, and does not raise it twice', async () => {
+        const { fetchImpl, calls } = stubFetch(metaAnswer());
+        viaMeta(fetchImpl);
+        await call({ purpose: 'perception_dm', maxTokens: 8000 });
+        assert.equal(calls[0]!.body.max_tokens, 8000);
+    });
+
+    it('records a priced row: provider meta, the model, the tokens as returned (thinking inside the output), and dollars from the table', async () => {
+        const { fetchImpl } = stubFetch(metaAnswer());
+        viaMeta(fetchImpl);
+        const out = await call({ purpose: 'perception_dm', maxTokens: 4000 });
+        assert.deepEqual([out.priced, out.costSource, out.usd], [true, 'table', 0.00082625]);
+        const row = db.usage[0]!;
+        assert.deepEqual(
+            [row.purpose, row.provider, row.model, row.outcome, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.priced, row.usd, row.creator_id],
+            ['perception_dm', 'meta', 'muse-spark-1.3', 'ok', 15, 190, 0, true, 0.00082625, TENANT],
+        );
+    });
+
+    it('records the cached part of the prompt apart from the rest, and prices it at $0.15 a million', async () => {
+        const { fetchImpl } = stubFetch(metaAnswer({ prompt_tokens: 10_000, completion_tokens: 600, total_tokens: 10_600, prompt_tokens_details: { cached_tokens: 8000 } }));
+        viaMeta(fetchImpl);
+        const out = await call({ purpose: 'perception_dm', maxTokens: 4000 });
+        assert.deepEqual(out.usage, { in: 2000, out: 600, cacheRead: 8000 });
+        assert.equal(out.usd, 0.00625);
+        const row = db.usage[0]!;
+        assert.deepEqual([row.input_tokens, row.output_tokens, row.cache_read_tokens, row.usd], [2000, 600, 8000, 0.00625]);
+        const line = JSON.parse(logs.filter((l) => l.line.includes('"event":"ai.call"'))[0]!.line);
+        assert.equal(line.usage_cache_read, 8000);
+    });
+
+    it('carries a picture to Meta as a base64 data URL and charges the reservation for it, then settles at what the call cost', async () => {
+        const { fetchImpl, calls } = stubFetch(metaAnswer({ prompt_tokens: 1075, completion_tokens: 564 }));
+        viaMeta(fetchImpl);
+        let reserved: number | undefined;
+        const realFetch = fetchImpl;
+        setProviderFetch(async (url, init) => { reserved = db.usage.find((u) => u.outcome === 'reserved')?.usd; return realFetch(url, init); });
+        const user = [{ role: 'user' as const, text: 'The customer shared the attached image and wrote nothing with it.', media: [IMAGE] }];
+        const out = await call({ purpose: 'perception_dm', maxTokens: 3000, user });
+        assert.deepEqual(out.json, { reply: 'a price screenshot' });
+        const content = calls[0]!.body.messages[1].content;
+        assert.deepEqual(content.map((p: { type: string }) => p.type), ['text', 'image_url']);
+        assert.equal(content[1].image_url.url, 'data:image/jpeg;base64,SU1BR0VCWVRFUw==');
+        assert.equal(reserved, estimateUsd({ system: 'SYSTEM-SENTINEL you write a profile.', user, schema: SCHEMA }, 4000, 'muse-spark-1.3', {}).usd, 'the reservation counted the picture, at the raised limit');
+        assert.deepEqual([db.usage[0]!.outcome, db.usage[0]!.input_tokens, db.usage[0]!.output_tokens], ['ok', 1075, 564]);
+        // The file is nowhere in a row or a log line.
+        assert.ok(!(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n')).includes(IMAGE.base64));
+    });
+
+    it('refuses a picture for a provider that is not sent them: nothing is called, the row says bad_request, and the file is in no error', async () => {
+        // `dm` takes any provider (here Anthropic, the only key), so it is the adapter that refuses: before a request exists.
+        const { fetchImpl, calls } = stubFetch(metaAnswer());
+        restoreCaller?.();
+        restoreCaller = undefined;
+        setProviderFetch(fetchImpl);
+        const err = await failure(call({ purpose: 'dm', user: [{ role: 'user', text: 'see this', media: [IMAGE] }] }));
+        assert.equal(err.kind, 'bad_request');
+        assert.equal(calls.length, 0);
+        assert.match(err.message, /Anthropic is not sent pictures or video/);
+        assert.equal(db.usage[0]!.outcome, 'bad_request');
+        assert.ok(!(JSON.stringify(err) + JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n')).includes(IMAGE.base64));
+    });
+
+    it('answers a Muse purpose with Meta alone: with only Anthropic\'s key it is `no_provider`, a refusal row, and no call', async () => {
+        const err = await failure(call({ purpose: 'perception_dm' }));
+        assert.equal(err.kind, 'no_provider');
+        assert.equal(providerCalls.length, 0);
+        assert.deepEqual(db.usage.map((u) => [u.purpose, u.provider, u.outcome]), [['perception_dm', 'none', 'no_provider']]);
+    });
+
+    it('runs with the default pick as well, once Meta has a key and no route is saved: Meta, Muse Spark 1.3, effort low', async () => {
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        const out = await call({ purpose: 'recall' });
+        const sent = providerCalls[0]!;
+        assert.deepEqual([sent.provider, sent.model, sent.effort, sent.apiKey], ['meta', 'muse-spark-1.3', 'low', FAKE_KEYS.meta]);
+        assert.equal(sent.maxTokens, 20_000, 'a caller\'s limit above the floor is its own');
+        assert.deepEqual([out.route, out.effort], ['default', 'low']);
+    });
+});
+
+describe('a Contributor-mode model, through generate: Meta may train on what it is sent', () => {
+    const CONTRIBUTOR = 'muse-spark-1.3-contributor';
+    beforeEach(() => db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true));
+
+    it('is refused for a tenant\'s call on a saved route: `no_provider`, a refusal row, and the provider is never asked', async () => {
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'meta', model: CONTRIBUTOR, effort: 'low' } }));
+        const err = await failure(call({ purpose: 'dm', creatorId: TENANT }));
+        assert.equal(err.kind, 'no_provider');
+        assert.match(err.message, /uses muse-spark-1\.3-contributor, a Contributor-mode model/);
+        assert.equal(providerCalls.length, 0);
+        assert.deepEqual(db.usage.map((u) => [u.purpose, u.provider, u.outcome, u.usd]), [['dm', 'none', 'no_provider', 0]]);
+    });
+
+    it('is refused when a call names it, whatever the label, unless the label is `eval` and the call belongs to no tenant', async () => {
+        for (const over of [
+            { purpose: 'dm' as const, creatorId: null, route: { provider: 'meta' as const, model: CONTRIBUTOR } },
+            { purpose: 'dm' as const, creatorId: null, usageAs: 'key_test' as const, route: { provider: 'meta' as const, model: CONTRIBUTOR } },
+        ]) {
+            const err = await failure(call(over));
+            assert.equal(err.kind, 'no_provider', JSON.stringify(over));
+            assert.match(err.message, /a Contributor-mode model/);
+        }
+        assert.equal(providerCalls.length, 0);
+    });
+
+    it('is allowed for an evaluation of made-up cases: label `eval`, no tenant, a named route; it is recorded as `eval`, and its price is the ceiling, flagged', async () => {
+        answer = (a) => okAnswer({ model: a.model, provider: 'meta', billed: [{ model: a.model, in: 1000, out: 500 }] });
+        const out = await call({ purpose: 'dm', creatorId: null, usageAs: 'eval', route: { provider: 'meta', model: CONTRIBUTOR } });
+        assert.equal(providerCalls[0]!.model, CONTRIBUTOR);
+        assert.equal(out.priced, false, 'nobody seeded a price for a model nothing may route to');
+        const row = db.usage.at(-1)!;
+        assert.deepEqual([row.purpose, row.creator_id, row.model, row.outcome, row.priced], ['eval', null, CONTRIBUTOR, 'ok', false]);
+    });
+
+    it('is still refused for the Agent sandbox, which is recorded as `eval` but belongs to a tenant: a saved route cannot name one for it either', async () => {
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'meta', model: CONTRIBUTOR, effort: 'low' } }));
+        const err = await failure(call({ purpose: 'dm', creatorId: TENANT, usageAs: 'eval' }));
+        assert.equal(err.kind, 'no_provider');
+        assert.match(err.message, /a Contributor-mode model/);
+        assert.equal(providerCalls.length, 0);
     });
 });
 

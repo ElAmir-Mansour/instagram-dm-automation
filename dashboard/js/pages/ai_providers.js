@@ -53,13 +53,16 @@ const AiProvidersView = {
     /** The environment variable each provider's key falls back to (settings.ts PROVIDER_KEY_ENV). */
     KEY_ENV: Object.assign(Object.create(null), {
         anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
+        meta: 'META_MODEL_API_KEY',
     }),
 
     /**
-     * The purposes the interface has words for; any other (a newer server's) is shown as its own name. The last two are not routes:
-     * `key_test` (Check and Test) and `eval` (a run of the DM evaluation harness) only label spend, so they have a name and no hint.
+     * The purposes the interface has words for; any other (a newer server's) is shown as its own name. The last three are not routes:
+     * `key_test` (Check and Test), `eval` (a run of the DM evaluation harness) and `perception_voice` (a voice note heard by Meta's speech model)
+     * only label spend, so they have a name and no hint.
      */
-    KNOWN_PURPOSES: ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review', 'key_test', 'eval'],
+    KNOWN_PURPOSES: ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+        'perception_dm', 'recall', 'reel_index', 'comment_intent', 'key_test', 'eval', 'perception_voice'],
 
     // ─── Numbers ──────────────────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@ import { PROVIDER_IDS } from '../llm/registry.js';
 import { installAiDb, type AiDb } from './testDb.js';
 import { assertNoKey, FAKE_KEYS } from './testKeys.js';
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
 
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
@@ -58,11 +58,14 @@ const EMPTY: AiConfig = { providers: {}, routing: {}, prices: {}, budgets: { dai
 describe('the setting keys', () => {
     it('are the ones 06 names, one secret row per provider, and Gemini keeps the existing one', () => {
         assert.deepEqual(Object.values(PROVIDER_KEY_SETTING).sort(), [
-            'ai.providers.anthropic.api_key', 'ai.providers.custom.api_key', 'ai.providers.groq.api_key', 'ai.providers.openai.api_key', 'ai.providers.openrouter.api_key', 'gemini.api_key',
+            'ai.providers.anthropic.api_key', 'ai.providers.custom.api_key', 'ai.providers.groq.api_key', 'ai.providers.meta.api_key', 'ai.providers.openai.api_key',
+            'ai.providers.openrouter.api_key', 'gemini.api_key',
         ]);
         assert.equal(PROVIDER_KEY_SETTING.gemini, APP_SETTING_KEYS.geminiApiKey);
         assert.equal(PROVIDER_KEY_SETTING.groq, APP_SETTING_KEYS.aiProviderKeyGroq);
         assert.equal(APP_SETTING_KEYS.aiProviderKeyGroq, 'ai.providers.groq.api_key');
+        assert.equal(PROVIDER_KEY_SETTING.meta, APP_SETTING_KEYS.aiProviderKeyMeta);
+        assert.equal(APP_SETTING_KEYS.aiProviderKeyMeta, 'ai.providers.meta.api_key');
         assert.equal(APP_SETTING_KEYS.aiProviders, 'ai.providers');
         assert.equal(APP_SETTING_KEYS.aiRouting, 'ai.routing');
         assert.equal(APP_SETTING_KEYS.aiPrices, 'ai.prices');
@@ -77,8 +80,19 @@ describe('the setting keys', () => {
         }
     });
 
-    it('have environment fallbacks for four providers and Gemini, none for Custom', () => {
-        assert.deepEqual(PROVIDER_KEY_ENV, { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', custom: null });
+    it('have environment fallbacks for five providers and Gemini, none for Custom', () => {
+        assert.deepEqual(PROVIDER_KEY_ENV, {
+            anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', meta: 'META_MODEL_API_KEY', custom: null,
+        });
+    });
+
+    it('keep Meta\'s key in an encrypted row of its own: a secret setting, so setSetting stores it as ciphertext and never as the pasted text', () => {
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.aiProviderKeyMeta), true);
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        const stored = db.settings.get('ai.providers.meta.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored Meta key');
     });
 });
 
@@ -143,6 +157,27 @@ describe('loadAiSettings: the keys', () => {
         const { keys } = await loadAiSettings();
         assert.equal(keys.has('groq'), false);
         assert.deepEqual(keys.status('groq'), { set: false, source: null, last4: null, envFallback: false });
+    });
+
+    it('reads Meta\'s key from its own setting, saved first, then META_MODEL_API_KEY, trimmed, and never previews the environment\'s', async () => {
+        process.env.META_MODEL_API_KEY = `  ${FAKE_KEYS.openai}\n`;
+        let { keys } = await loadAiSettings();
+        assert.equal(keys.get('meta'), FAKE_KEYS.openai);
+        assert.deepEqual(keys.status('meta'), { set: true, source: 'env', last4: null, envFallback: true });
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        ({ keys } = await loadAiSettings());
+        assert.equal(keys.get('meta'), FAKE_KEYS.meta);
+        assert.deepEqual(keys.status('meta'), { set: true, source: 'database', last4: 'met7', envFallback: true });
+        // The key is Meta's alone: no other provider answers with it.
+        assert.equal(keys.has('groq'), false);
+        assert.equal(keys.has('custom'), false);
+    });
+
+    it('is not set for Meta with no key anywhere; a blank META_MODEL_API_KEY is not a key', async () => {
+        process.env.META_MODEL_API_KEY = '   ';
+        const { keys } = await loadAiSettings();
+        assert.equal(keys.has('meta'), false);
+        assert.deepEqual(keys.status('meta'), { set: false, source: null, last4: null, envFallback: false });
     });
 
     it("reads Gemini's key from the platform's existing setting, saved first, then GEMINI_API_KEY", async () => {
@@ -210,6 +245,13 @@ describe('what a screen is told (describeAi)', () => {
         assert.equal(byId.groq!.baseUrl, null, 'only Custom has one');
         assert.equal(byId.groq!.defaultModel, 'openai/gpt-oss-120b');
         assert.deepEqual(byId.groq!.suggestedModels, ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+        assert.equal(byId.meta!.problem, 'has no API key saved');
+        assert.equal(byId.meta!.label, 'Meta (Muse)');
+        assert.equal(byId.meta!.keyRequired, true);
+        assert.equal(byId.meta!.sharesDmQuota, false);
+        assert.equal(byId.meta!.baseUrl, null, 'only Custom has one');
+        assert.equal(byId.meta!.defaultModel, 'muse-spark-1.3');
+        assert.deepEqual(byId.meta!.suggestedModels, ['muse-spark-1.3', 'muse-spark-1.2']);
         assert.equal(byId.custom!.problem, 'has no base URL saved');
         assert.equal(byId.gemini!.sharesDmQuota, true);
         assert.equal(byId.anthropic!.sharesDmQuota, false);
@@ -427,6 +469,66 @@ describe('planAiPatch: what a change may be', () => {
         }
         // Every other purpose, including `dm`, still takes any provider: Instagram's route is not narrowed.
         assert.ok(plan({ routing: { dm: { provider: 'gemini', model: 'gemini-3.8-flash' } } }).ok);
+    });
+
+    it('takes Meta\'s default model and a route to it for a Muse purpose, and gives it no base URL or JSON mode', () => {
+        const r = plan({ providers: { meta: { defaultModel: ' muse-spark-1.2 ' } }, routing: { perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' }, recall: { provider: 'meta' } } });
+        assert.ok(r.ok);
+        assert.deepEqual(r.plan.providers, { meta: { defaultModel: 'muse-spark-1.2' } });
+        assert.deepEqual(r.plan.routing, {
+            perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' },
+            recall: { provider: 'meta', model: '', effort: 'low' },
+        });
+        assert.deepEqual(r.plan.changes.routes, { perception_dm: 'meta/muse-spark-1.3/low', recall: 'meta/default/low' });
+        assert.match(problems({ providers: { meta: { baseUrl: 'https://llm.example.com/v1' } } })[0]!, /providers\.meta\.baseUrl: only Custom has a base URL/);
+    });
+
+    it('refuses to SAVE a Muse purpose on any provider but Meta, and says why in its own words, not WhatsApp\'s', () => {
+        for (const purpose of ['perception_dm', 'recall', 'reel_index', 'comment_intent']) {
+            for (const provider of ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']) {
+                const found = problems({ routing: { [purpose]: { provider } } });
+                assert.equal(found.length, 1, `${purpose} ${provider}`);
+                assert.match(found[0]!, new RegExp(`routing\\.${purpose}\\.provider must be one of meta: only Meta \\(Muse\\) is set up to answer this purpose\\.`), `${purpose} ${provider}`);
+                assert.doesNotMatch(found[0]!, /forbid training/, 'that is WhatsApp\'s reason');
+            }
+            assert.ok(plan({ routing: { [purpose]: { provider: 'meta', model: 'muse-spark-1.3' } } }).ok, purpose);
+        }
+        // WhatsApp keeps its own sentence, word for word.
+        assert.equal(
+            problems({ routing: { dm_whatsapp: { provider: 'gemini' } } })[0],
+            'routing.dm_whatsapp.provider must be one of groq, anthropic, openai: only providers whose terms forbid training on what they are sent may answer this purpose.',
+        );
+        // Meta may still answer the purposes it was never restricted from: `dm` takes any provider.
+        assert.ok(plan({ routing: { dm: { provider: 'meta', model: 'muse-spark-1.3' } } }).ok);
+        // And NOT WhatsApp: Meta is not on that list.
+        assert.match(problems({ routing: { dm_whatsapp: { provider: 'meta' } } })[0]!, /routing\.dm_whatsapp\.provider must be one of groq, anthropic, openai/);
+    });
+
+    it('refuses to SAVE a Contributor-mode model on any route, for any purpose, whichever provider the route names, and in either case', () => {
+        for (const [purpose, provider] of [['dm', 'meta'], ['perception_dm', 'meta'], ['reel_index', 'meta'], ['onboarding_draft', 'openrouter'], ['tenant_studio', 'custom']] as const) {
+            for (const model of ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor', 'MUSE-SPARK-1.3-CONTRIBUTOR']) {
+                const found = problems({ routing: { [purpose]: { provider, model } } });
+                assert.equal(found.length, 1, `${purpose} ${model}`);
+                assert.match(found[0]!, new RegExp(`^routing\\.${purpose}\\.model is a Contributor-mode model: its provider may train on what it is sent, so no purpose may use one\\. Use the Standard model\\.$`), `${purpose} ${model}`);
+            }
+        }
+        // Its Standard twin is fine, and so is a name that merely contains the word.
+        assert.ok(plan({ routing: { dm: { provider: 'meta', model: 'muse-spark-1.3' } } }).ok);
+        assert.ok(plan({ routing: { dm: { provider: 'custom', model: 'contributor-guide-v2' } } }).ok);
+    });
+
+    it('refuses to SAVE a Contributor-mode model as a provider\'s default, but only when the patch sets it: one that was already there does not block another change', () => {
+        for (const model of ['muse-spark-1.3-contributor', ' muse-spark-1.2-contributor ']) {
+            const found = problems({ providers: { meta: { defaultModel: model } } });
+            assert.deepEqual(found, ['providers.meta.defaultModel is a Contributor-mode model: its provider may train on what it is sent, so no purpose may use one. Use the Standard model.']);
+        }
+        // A hand-edited setting is not repaired here, and does not stop the operator switching the provider off.
+        const current: AiConfig = { ...EMPTY, providers: { meta: { defaultModel: 'muse-spark-1.3-contributor' } } };
+        const r = plan({ providers: { meta: { enabled: false } } }, current);
+        assert.ok(r.ok);
+        assert.deepEqual(r.plan.providers!.meta, { enabled: false, defaultModel: 'muse-spark-1.3-contributor' });
+        // Clearing it is how it is repaired.
+        assert.ok(plan({ providers: { meta: { defaultModel: null } } }, current).ok);
     });
 
     it('saves prices per model, lower-cased, and refuses a figure that is not dollars per million tokens', () => {

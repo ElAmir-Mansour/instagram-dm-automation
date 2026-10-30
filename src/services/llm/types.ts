@@ -16,8 +16,20 @@ export const DEFAULT_EFFORT: Effort = 'medium';
 /** Why the model stopped, in the one vocabulary every family is mapped onto. */
 export type StopReason = 'end_turn' | 'max_tokens' | 'refusal';
 
-/** One turn of a conversation. A repair round is the first prompt, the answer it got, and what to fix. */
-export type LlmTurn = { role: 'user' | 'model'; text: string };
+/**
+ * A picture or a video that goes with a turn's words, held as the bytes the provider will be sent: `base64` is the file itself, with no
+ * `data:` prefix, and `mime` its type (`image/jpeg`, `video/mp4`). Inline on purpose: Meta's servers cannot fetch a remote URL that blocks
+ * bots (`media_url_origin_error`), and nothing about a customer's file should be kept at an address. `seconds` is how long a video runs,
+ * when the caller knows: only the spend estimate reads it (`estimateUsd`).
+ */
+export type LlmMedia = { kind: 'image' | 'video'; mime: string; base64: string; seconds?: number };
+
+/**
+ * One turn of a conversation. A repair round is the first prompt, the answer it got, and what to fix. `media` rides with a USER turn's
+ * words and only Meta (Muse) takes it: every other adapter refuses a turn that carries any, with a `bad_request`, before a request is
+ * made. Absent or empty, a turn is what it always was.
+ */
+export type LlmTurn = { role: 'user' | 'model'; text: string; media?: LlmMedia[] };
 
 /**
  * Tokens, as `{in, out}` (the spec's names). Not `input_tokens`/`output_tokens`: the logger

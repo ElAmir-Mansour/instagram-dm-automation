@@ -312,6 +312,7 @@ describe('AI providers card — the pure helpers', () => {
         assert.equal(View.keyEnv('gemini'), 'GEMINI_API_KEY');
         assert.equal(View.keyEnv('openrouter'), 'OPENROUTER_API_KEY');
         assert.equal(View.keyEnv('groq'), 'GROQ_API_KEY');
+        assert.equal(View.keyEnv('meta'), 'META_MODEL_API_KEY');
         assert.equal(View.keyEnv('custom'), null);
         // The card keeps its own copy of the server's table (it cannot import it), so a provider added there and not here would say "the server's key" with no name.
         for (const id of PROVIDER_IDS) assert.equal(View.keyEnv(id), PROVIDER_KEY_ENV[id], id);
@@ -330,7 +331,10 @@ describe('AI providers card — the pure helpers', () => {
     it('builds the routing table from the server\'s purposes, starting an unrouted purpose on Automatic at its own effort', () => {
         const ai = aiView({ config: { routing: { onboarding_proof: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const rows = View.routeRows(ai) as Json[];
-        assert.deepEqual(rows.map((r) => r.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
+        assert.deepEqual(rows.map((r) => r.purpose), [
+            'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+            'perception_dm', 'recall', 'reel_index', 'comment_intent',
+        ]);
         const draft = rows[0]!;
         assert.deepEqual({ ...draft.selected }, { provider: '', model: '', effort: 'high' });
         assert.equal(draft.saved, null);
@@ -453,7 +457,7 @@ describe('AI providers card — what it draws', () => {
             env: ['openai'],
         });
         const markup = String(Card.renderLoaded());
-        for (const label of ['Anthropic (Claude)', 'OpenAI', 'Google Gemini', 'OpenRouter', 'Groq', 'Custom (OpenAI-compatible)']) assert.ok(markup.includes(label), label);
+        for (const label of ['Anthropic (Claude)', 'OpenAI', 'Google Gemini', 'OpenRouter', 'Groq', 'Meta (Muse)', 'Custom (OpenAI-compatible)']) assert.ok(markup.includes(label), label);
         assert.ok(markup.includes(`${t('ops.ai.badge.saved')} <bdi class="ltr-text" dir="ltr">••••ant1</bdi>`), 'the saved key: status and its last four, isolated');
         assert.ok(markup.includes(t('ops.ai.badge.env')));
         assert.ok(!markup.includes('oai2'), 'an environment key is reported present and never previewed');
@@ -465,7 +469,7 @@ describe('AI providers card — what it draws', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
         const inputs = [...markup.matchAll(/<input[^>]*type="password"[^>]*>/g)].map((m) => m[0]);
-        assert.equal(inputs.length, 6, 'one per provider');
+        assert.equal(inputs.length, 7, 'one per provider');
         for (const input of inputs) {
             assert.match(input, /autocomplete="new-password"/);
             assert.match(input, /name="apiKey"/);
@@ -494,10 +498,10 @@ describe('AI providers card — what it draws', () => {
         assert.match(String(Card.providerInner(Card.provider('custom'))).match(/<button[^>]*data-action="aip:loadModels"[^>]*>/)![0], /disabled/, 'Custom needs its base URL first');
     });
 
-    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all six, the endpoint on Custom only', () => {
+    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all seven, the endpoint on Custom only', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
-        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 6);
+        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 7);
         assert.equal([...markup.matchAll(/name="baseUrl"/g)].length, 1);
         assert.equal([...markup.matchAll(/name="jsonMode"/g)].length, 1);
         const custom = String(Card.providerInner(Card.provider('custom')));
@@ -512,7 +516,10 @@ describe('AI providers card — what it draws', () => {
     it('draws the routing table: a row per purpose, Automatic for an unrouted one with its model and effort off', () => {
         const { Card, View, t } = loaded({ config: { routing: { tenant_studio: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const markup = String(Card.renderLoaded());
-        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']) {
+        for (const purpose of [
+            'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+            'perception_dm', 'recall', 'reel_index', 'comment_intent',
+        ]) {
             assert.ok(markup.includes(`id="aip-r-${purpose}"`), purpose);
             assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}`)), purpose);
             assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}.hint`)), `${purpose}: its hint`);
@@ -560,7 +567,7 @@ describe('AI providers card — what it draws', () => {
         const markup = String(Card.pricesInner());
         assert.ok(markup.includes('claude-opus-5-5') && markup.includes('gpt-6-astra'));
         assert.ok(markup.includes(t('ops.ai.priceCustom')) && markup.includes(t('ops.ai.priceDefault')));
-        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 11, 'ten built in and one of the operator\'s');
+        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 15, 'fourteen built in (the Muse models are four of them) and one of the operator\'s');
         assert.equal([...markup.matchAll(/data-action="aip:removePrice"/g)].length, 1, 'only an override can be removed');
         assert.match(markup, /data-model="gpt-6-astra"[^>]*data-in="2.5"[^>]*data-out="10"/);
     });
@@ -591,6 +598,29 @@ describe('AI providers card — what it draws', () => {
         const rows = View.spendRows(usage) as Json;
         assert.ok(Math.abs(rows.total - 0.56) < 1e-9, 'the total is the sum of every row, evaluation runs included');
         assert.deepEqual((rows.purposes as Json[]).map((r) => [r.purpose, r.share]), [['eval', 89], ['dm', 11]]);
+    });
+
+    it('names what Meta\'s models spend in words too: the four routed purposes and the voice-note label, with a name for the voice label and no hint', () => {
+        const usage = usageView({
+            byPurpose: [
+                { purpose: 'perception_dm', provider: 'meta', calls: 4, failed: 0, usd: 0.02, tokensIn: 9000, tokensOut: 2400 },
+                { purpose: 'reel_index', provider: 'meta', calls: 1, failed: 0, usd: 0.03, tokensIn: 5800, tokensOut: 3300 },
+                { purpose: 'perception_voice', provider: 'meta', calls: 2, failed: 0, usd: 0.0001, tokensIn: 0, tokensOut: 0 },
+            ],
+        });
+        const { Card, View, t } = loaded({}, { usage });
+        const markup = String(Card.spendInner());
+        for (const purpose of ['perception_dm', 'reel_index', 'perception_voice']) {
+            assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}`)), purpose);
+            assert.ok(View.knownPurpose(purpose), purpose);
+        }
+        assert.doesNotMatch(markup, />(perception_dm|reel_index|perception_voice)</, 'never shown as an id');
+        // Only the voice label is not a route, so it is the one thing in the list that has a name and no hint.
+        const strings = (load().I18N.strings as Record<'ar' | 'en', Record<string, string>>);
+        for (const lang of ['ar', 'en'] as const) {
+            assert.equal(strings[lang]['ops.ai.purpose.perception_voice.hint'], undefined, lang);
+            for (const purpose of ['perception_dm', 'recall', 'reel_index', 'comment_intent']) assert.ok(strings[lang][`ops.ai.purpose.${purpose}.hint`], `${lang} ${purpose}`);
+        }
     });
 
     it('draws the spend: today and this month, by purpose (named) and by tenant (the platform when there is none)', () => {
@@ -1439,8 +1469,8 @@ describe('AI providers card — interface copy in Arabic and English', () => {
         for (const effort of s.View.EFFORTS as string[]) keys.add(`ops.ai.effort.${effort}`);
         for (const purpose of s.View.KNOWN_PURPOSES as string[]) {
             keys.add(`ops.ai.purpose.${purpose}`);
-            // `key_test` and `eval` only label spend: they are not routes, so they have a name and no hint.
-            if (purpose !== 'key_test' && purpose !== 'eval') keys.add(`ops.ai.purpose.${purpose}.hint`);
+            // `key_test`, `eval` and `perception_voice` only label spend: they are not routes, so they have a name and no hint.
+            if (purpose !== 'key_test' && purpose !== 'eval' && purpose !== 'perception_voice') keys.add(`ops.ai.purpose.${purpose}.hint`);
         }
         for (const name of s.View.BUDGETS as string[]) keys.add(`ops.ai.budget.${name}`);
         for (const code of ['no_credit', 'no_model_list']) keys.add(`ops.ai.warning.${code}`);

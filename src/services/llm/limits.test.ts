@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { META_MIN_OUTPUT } from './adapters/chatCompletions.js';
 import { OPENAI_REASONING_MIN_OUTPUT } from './adapters/openai.js';
 import { minOutputTokens } from './limits.js';
 import { PROVIDER_IDS } from './registry.js';
@@ -41,6 +42,22 @@ describe('minOutputTokens', () => {
 
     it('gives a gpt-oss model no floor behind OpenRouter, OpenAI or a Custom endpoint: it is Groq that sends it reasoning', () => {
         for (const provider of ['openrouter', 'custom', 'openai']) assert.equal(minOutputTokens(provider, 'openai/gpt-oss-120b', 'high'), 0, provider);
+    });
+
+    it('is 4 000 for every Muse model at every effort: Muse Spark always reasons, and under about 1 000 to 2 000 a call came back empty after being billed', () => {
+        assert.equal(META_MIN_OUTPUT, 4_000);
+        for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-wonder-1.0', 'muse-spark-open-1026', '']) {
+            for (const effort of EFFORTS) assert.equal(minOutputTokens('meta', model, effort), 4_000, `${model} ${effort}`);
+        }
+    });
+
+    it('gives the admin\'s Test button, which asks for 200 tokens, a floor far above it: it is raised to what Muse needs, never lowered', () => {
+        assert.ok(minOutputTokens('meta', 'muse-spark-1.3', 'low') > 200);
+    });
+
+    it('asks nothing of another provider for a Muse model name, and nothing of Meta for another provider\'s: the floor belongs to the provider', () => {
+        for (const provider of ['custom', 'openrouter', 'groq']) assert.equal(minOutputTokens(provider, 'muse-spark-1.3', 'high'), 0, provider);
+        assert.equal(minOutputTokens('meta', 'claude-opus-5-5', 'low'), 4_000);
     });
 
     it('is a heuristic that grows with effort for a Claude model that takes effort, and nothing for one that does not', () => {

@@ -46,6 +46,7 @@ import { AiError } from '../errors.js';
 import { totalUsage } from '../cost.js';
 import { jsonSchemaFor, schemaComplexity } from '../schema.js';
 import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, LlmTurn, ProviderQuery, StopReason } from '../types.js';
+import { refuseMedia } from './media.js';
 import { modelIdsFrom, prepareQuery } from './endpoint.js';
 import { getJson, postJson } from './post.js';
 
@@ -110,6 +111,8 @@ function messagesFor(user: string | LlmTurn[]): Array<{ role: 'user' | 'assistan
 }
 
 export function buildAnthropicRequest(a: AdapterArgs): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+    // Only Meta is sent pictures and video here: a turn that carries any is refused before a request exists.
+    refuseMedia(a);
     const fallback = supportsServerFallback(a.model);
     const effort = effortFor(a.model, a.effort);
 

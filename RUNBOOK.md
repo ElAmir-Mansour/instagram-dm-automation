@@ -353,7 +353,7 @@ materialised when the connection string was committed to a public repo
 - the TikTok, YouTube and WhatsApp connection tokens (`platform_connections`);
 - every secret app setting (`app_settings` rows with `is_secret`, written by `setSetting`,
   `src/services/appSettings.ts`): the Gemini key, the AI-provider keys (Anthropic, OpenAI,
-  OpenRouter, Groq, custom), the TikTok and YouTube client secrets, the YouTube API key, the
+  OpenRouter, Groq, Meta, custom), the TikTok and YouTube client secrets, the YouTube API key, the
   media-storage key, the Telegram bot token, the email (Resend) key, and each tenant's ads token
   (`ads.token.<tenant>`);
 - the Cloudflare token that draws explainer pictures

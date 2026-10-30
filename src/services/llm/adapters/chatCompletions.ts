@@ -61,6 +61,31 @@
  *   - Reasoning tokens count in `usage.completion_tokens`, so `limits.ts` asks for the same room
  *     as for an OpenAI reasoning model.
  *
+ * Meta (api.meta.ai/v1, the Muse models) speaks the same format too, read from dev.meta.ai/docs on
+ * 2026-10-28 and tried live on 2026-10-28 to 10-30, with these differences:
+ *
+ *   - Structured output: the same nested strict `json_schema`, modeled on OpenAI's, so `strictSchemaFor`
+ *     already makes what it wants (every property required, `additionalProperties: false`). Its root must be
+ *     a plain object (no array, `anyOf` or `enum` at the top), which is refused here before the call, as it
+ *     is for OpenAI; the other providers on this format are left to answer for themselves.
+ *   - Reasoning: Muse Spark always reasons. `reasoning_effort` takes `minimal` to `max` and refuses
+ *     `none` with a 400, so the call's five efforts go as they are, except that `max` exists only on
+ *     `muse-spark-1.3` and `muse-wonder-1.0` and is sent as `xhigh` for any other. The thinking is
+ *     counted inside `completion_tokens` and billed as output (one word of answer used 180 tokens of it),
+ *     and a limit under about 1,000 to 2,000 tokens comes back as `content: null` and `finish_reason:
+ *     'length'` after being billed: `META_MIN_OUTPUT` is what `limits.ts` asks for. The reasoning text
+ *     is redacted before it reaches an API caller, so there is nothing to leave out of the response.
+ *   - Media: a user turn's pictures and video are content parts after its text, as base64 `data:` URLs
+ *     (`image_url` and `video_url`). A remote URL is fetched by Meta's own servers and fails with
+ *     `media_url_origin_error` for a host that blocks bots, so none is ever sent. Only Meta is sent them
+ *     (`MEDIA_PROVIDERS`); a turn with none builds the plain string content it always did.
+ *   - Usage: `prompt_tokens_details.cached_tokens` is a SUBSET of `prompt_tokens`, so it is moved out of
+ *     `in` into `cacheRead`, which `cost.ts` prices at the model's cached-input rate. There is no cost in
+ *     the response: the price table prices a call, and a Contributor-mode model is the one it does not
+ *     know (nothing may route to one: purposes.ts).
+ *   - `GET /models` is the key check and the list: the usual `{data: [{id}]}`, mixed with Muse Image,
+ *     Muse Voice Transcribe, SAM and the `-contributor` ids, none of which can answer here (`metaModels`).
+ *
  * Custom's JSON mode (`jsonMode`, the operator's setting): `schema` as above, or `object` for an
  * endpoint that only does JSON mode: `{type: 'json_object'}` plus the schema described in the
  * system prompt (JSON mode errors unless the word "JSON" is in the conversation, and promises
@@ -74,8 +99,9 @@ import { totalUsage } from '../cost.js';
 import { AiError, errorFromHttp } from '../errors.js';
 import { providerName } from '../registry.js';
 import { jsonSchemaFor, rootKind } from '../schema.js';
-import type { Adapter, AdapterArgs, AdapterResult, Billed, FamilyAdapter, LlmTurn, ProviderQuery, StopReason } from '../types.js';
+import type { Adapter, AdapterArgs, AdapterResult, Billed, FamilyAdapter, LlmMedia, LlmTurn, ProviderQuery, StopReason, Usage } from '../types.js';
 import { endpointFor, modelIdsFrom, prepareQuery } from './endpoint.js';
+import { checkMedia, mediaRefusal, refuseMedia } from './media.js';
 import { reasoningEffortFor } from './openai.js';
 import { getJson, postJson } from './post.js';
 import { dropStrictNulls, SCHEMA_NAME, strictSchemaFor } from './strict.js';
@@ -105,13 +131,62 @@ export function groqReasoningEffort(model: string, effort: AdapterArgs['effort']
     return effort === 'low' || effort === 'medium' ? effort : 'high';
 }
 
+/**
+ * The smallest `maxTokens` worth asking a Muse model for (limits.ts). Muse Spark always reasons, and the reasoning is spent from the same limit
+ * as the answer: with less than about 1,000 to 2,000 tokens a call came back empty, `finish_reason: 'length'`, after being billed. 4,000 is what a
+ * one-line answer at `low` effort needs with room to spare (measured 2026-10-28 to 10-30), and it is a cap, not a charge.
+ */
+export const META_MIN_OUTPUT = 4_000;
+
+/** The providers on this wire format that are sent pictures and video. A provider is added here only once its privacy terms name it for them. */
+export const MEDIA_PROVIDERS: ReadonlySet<string> = new Set(['meta']);
+
+/** The two models Meta documents `reasoning_effort: "max"` for (dev.meta.ai/docs/reasoning): Muse Spark 1.3 and Muse Wonder. */
+const META_MAX_EFFORT_MODEL = /^muse-(?:spark-1\.3|wonder-1\.0)$/i;
+
+/**
+ * The `reasoning_effort` a Muse model is sent. Meta takes our five names as they are (and refuses `none`, which is not one of them); `max` is
+ * documented only for `muse-spark-1.3` and `muse-wonder-1.0`, so on any other model it is sent as `xhigh` and not left to a 400.
+ */
+export function metaReasoningEffort(model: string, effort: AdapterArgs['effort']): AdapterArgs['effort'] {
+    return effort === 'max' && !META_MAX_EFFORT_MODEL.test(model.trim()) ? 'xhigh' : effort;
+}
+
 /** The schema as a paragraph for the system prompt, for an endpoint that can only be asked for "a JSON object". */
 function describedSchema(a: AdapterArgs): string {
     return `Answer with a single JSON object and nothing else, one that matches this JSON Schema:\n${JSON.stringify(jsonSchemaFor(a.schema))}`;
 }
 
-function messagesFor(system: string, user: string | LlmTurn[]): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-    const turns = typeof user === 'string' ? [{ role: 'user' as const, content: user }] : user.map((t) => ({ role: t.role === 'model' ? ('assistant' as const) : ('user' as const), content: t.text }));
+/** One content part of a message that carries media: the turn's words, or a picture or a video as a base64 `data:` URL. */
+type ContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'video_url'; video_url: { url: string } };
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string | ContentPart[] };
+
+const dataUrl = (m: LlmMedia): string => `data:${m.mime.trim()};base64,${m.base64}`;
+
+/**
+ * A user turn that carries media, as the parts Meta reads: its words first (left out when there are none, since an empty text part is
+ * not a thing to send), then each picture or video in the order given.
+ */
+function partsFor(a: AdapterArgs, turn: LlmTurn, index: number): ContentPart[] {
+    if (turn.role !== 'user') throw mediaRefusal(a, `Turn ${index + 1} is the model's own and carries media: only a user turn can.`);
+    const media = turn.media ?? [];
+    media.forEach((m, piece) => checkMedia(a, m, index, piece));
+    return [
+        ...(turn.text ? [{ type: 'text' as const, text: turn.text }] : []),
+        ...media.map((m): ContentPart => (m.kind === 'video' ? { type: 'video_url', video_url: { url: dataUrl(m) } } : { type: 'image_url', image_url: { url: dataUrl(m) } })),
+    ];
+}
+
+function messagesFor(a: AdapterArgs, system: string): ChatMessage[] {
+    const user = a.user;
+    const turns: ChatMessage[] = typeof user === 'string'
+        ? [{ role: 'user', content: user }]
+        // A turn with no media (or an empty list) is the string it always was, so a request with none is byte for byte what it was.
+        : user.map((t, i) => ({ role: t.role === 'model' ? ('assistant' as const) : ('user' as const), content: t.media?.length ? partsFor(a, t, i) : t.text }));
     // An empty system prompt is not one; leave it out rather than send it.
     return system.trim() ? [{ role: 'system', content: system }, ...turns] : turns;
 }
@@ -134,24 +209,30 @@ export function buildChatRequest(a: AdapterArgs): { url: string; headers: Record
         system = `${a.system.trim()}\n\n${describedSchema(a)}`.trim();
         responseFormat = { type: 'json_object' };
     } else {
-        responseFormat = { type: 'json_schema', json_schema: { name: SCHEMA_NAME, strict: true, schema: strictSchemaFor(a, { objectRoot: false }) } };
+        responseFormat = { type: 'json_schema', json_schema: { name: SCHEMA_NAME, strict: true, schema: strictSchemaFor(a, { objectRoot: a.provider === 'meta' }) } };
     }
+
+    // Before anything is built: a provider that is not sent media refuses a turn that has some, so none of it is ever put in a body.
+    if (!MEDIA_PROVIDERS.has(a.provider)) refuseMedia(a);
 
     const reasoning = openrouter ? openRouterReasoning(a.model, a.effort) : undefined;
     const groqEffort = a.provider === 'groq' ? groqReasoningEffort(a.model, a.effort) : undefined;
+    // Every Muse model reasons, so it is always told how hard: left out, it would pick a level of its own.
+    const metaEffort = a.provider === 'meta' ? metaReasoningEffort(a.model, a.effort) : undefined;
     return {
         url: `${base}/chat/completions`,
         // The key is here and nowhere else: not in the URL, not in the body. A keyless endpoint sends none.
         headers: a.apiKey ? { authorization: `Bearer ${a.apiKey}` } : {},
         body: {
             model: a.model,
-            messages: messagesFor(system, a.user),
+            messages: messagesFor(a, system),
             max_tokens: a.maxTokens,
             response_format: responseFormat,
             ...(openrouter ? { provider: { require_parameters: true } } : {}),
             ...(reasoning ? { reasoning } : {}),
             // The reasoning text is returned by default and nothing here reads it: leave it out of the response, not just out of the answer.
             ...(groqEffort ? { reasoning_effort: groqEffort, include_reasoning: false } : {}),
+            ...(metaEffort ? { reasoning_effort: metaEffort } : {}),
         },
     };
 }
@@ -175,6 +256,20 @@ function providerCost(provider: string, usage: any): { usd: number; source: 'pro
         return upstream !== undefined && upstream > 0 ? { usd: Math.round(((charged ?? 0) + upstream) * 1e9) / 1e9, source: 'provider' } : {};
     }
     return charged !== undefined ? { usd: charged, source: 'provider' } : {};
+}
+
+/**
+ * The tokens of a call, from `usage`. Everywhere but Meta that is the prompt and the completion, as it always was. Meta also says how much of the
+ * prompt was served from its cache (`prompt_tokens_details.cached_tokens`), and that is a SUBSET of `prompt_tokens`, not an addition to it: it is
+ * taken out of `in` and kept as `cacheRead`, which is priced at the cached rate, so the input is neither charged twice nor all at the full rate.
+ * The key is absent when nothing was cached, like every other provider's.
+ */
+function usageOf(provider: string, usage: any): Pick<Usage, 'in' | 'out' | 'cacheRead'> {
+    const prompt = count(usage?.prompt_tokens);
+    const out = count(usage?.completion_tokens);
+    if (provider !== 'meta') return { in: prompt, out };
+    const cached = Math.min(count(usage?.prompt_tokens_details?.cached_tokens), prompt);
+    return { in: prompt - cached, out, ...(cached ? { cacheRead: cached } : {}) };
 }
 
 type Call = Pick<AdapterArgs, 'provider' | 'model' | 'apiKey'>;
@@ -211,7 +306,7 @@ const textOf = (content: unknown): string =>
 export function parseChatResponse(data: any, a: Call): AdapterResult {
     const usage = data?.usage;
     // Keyed by the model that was asked for: that is what an operator's price table is written in.
-    const billed: Billed[] = [{ model: a.model, in: count(usage?.prompt_tokens), out: count(usage?.completion_tokens), ...providerCost(a.provider, usage) }];
+    const billed: Billed[] = [{ model: a.model, ...usageOf(a.provider, usage), ...providerCost(a.provider, usage) }];
 
     if (data?.error) throw embeddedError(data.error, a, billed);
     const choice = data?.choices?.[0];
@@ -276,6 +371,18 @@ function groqModels(body: unknown): string[] {
     return modelIdsFrom(body).filter((id) => !GROQ_NOT_CHAT.test(id));
 }
 
+/**
+ * Meta's list holds more than the chat models: Muse Image (`/images`), Muse Voice Transcribe (`/asr`) and SAM (`/responses`) answer on endpoints
+ * of their own, and every chat model has a `-contributor` twin that is the same model at a discount that lets Meta train on what it is sent. None
+ * of those can serve a route here, so only the Standard Muse Spark and Muse Wonder ids are offered, by what they are called and not by what is
+ * left over, so a twin Meta adds later stays out. Any other id can still be typed in; a Contributor one is refused when a route is saved.
+ */
+const META_CHAT_MODEL = /^muse-(?:spark|wonder)-\d+(?:\.\d+)*$/i;
+
+function metaModels(body: unknown): string[] {
+    return modelIdsFrom(body).filter((id) => META_CHAT_MODEL.test(id));
+}
+
 /** A list, or a check, of an OpenAI-compatible endpoint's models; `404` is "this server has no list", for the caller to read. */
 async function getModels(q: ProviderQuery) {
     // OpenRouter's list is public, and a Custom endpoint may need no key: neither is required here. Groq's list needs one, and is what proves it.
@@ -298,7 +405,7 @@ export const chatCompletionsFamily: FamilyAdapter = {
     listModels: async (q) => {
         try {
             const body = await getModels(q);
-            return q.provider === 'openrouter' ? openRouterModels(body) : q.provider === 'groq' ? groqModels(body) : modelIdsFrom(body);
+            return q.provider === 'openrouter' ? openRouterModels(body) : q.provider === 'groq' ? groqModels(body) : q.provider === 'meta' ? metaModels(body) : modelIdsFrom(body);
         } catch (err) {
             if (q.provider === 'custom' && isNoList(err)) {
                 throw prepareQuery(q, { needsKey: false }).fail('bad_request', `${providerName(q.provider)} has no model list: GET /models answered 404. Type the model id instead.`, 404);

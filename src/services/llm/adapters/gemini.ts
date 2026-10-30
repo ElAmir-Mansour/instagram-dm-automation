@@ -34,6 +34,7 @@ import { withoutArrayBounds } from '../geminiSchema.js';
 import { isRawJsonSchema } from '../schema.js';
 import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, ProviderQuery, StopReason } from '../types.js';
 import { prepareQuery } from './endpoint.js';
+import { refuseMedia } from './media.js';
 import { getJson, postJson } from './post.js';
 
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
@@ -72,6 +73,8 @@ export function thinkingConfigFor(model: string, effort: Effort, maxTokens: numb
 }
 
 export function buildGeminiRequest(a: AdapterArgs): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+    // Only Meta is sent pictures and video here: a turn that carries any is refused before a request exists.
+    refuseMedia(a);
     const turns = typeof a.user === 'string' ? [{ role: 'user' as const, text: a.user }] : a.user;
     const thinking = thinkingConfigFor(a.model, a.effort, a.maxTokens);
     const model = a.model.replace(/^models\//, '');

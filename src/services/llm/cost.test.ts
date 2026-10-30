@@ -10,7 +10,7 @@ import {
 import { PROVIDERS } from './registry.js';
 
 describe('DEFAULT_PRICES', () => {
-    it('seeds the Claude, Gemini and Groq models the registry offers, at the rates on the providers\' pricing pages', () => {
+    it('seeds the Claude, Gemini, Groq and Muse models the registry offers, at the rates on the providers\' pricing pages', () => {
         assert.deepEqual(DEFAULT_PRICES, {
             'claude-opus-5-5': { in: 4, out: 20 },
             'claude-opus-5': { in: 5, out: 25 },
@@ -22,11 +22,15 @@ describe('DEFAULT_PRICES', () => {
             'gemini-3.1-pro-preview': { in: 2, out: 12 },
             'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
             'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
+            'muse-spark-1.3': { in: 1.25, out: 4.25 },
+            'muse-spark-1.2': { in: 1.25, out: 4.25 },
+            'muse-spark-1.1': { in: 1.25, out: 4.25 },
+            'muse-wonder-1.0': { in: 4, out: 20 },
         });
     });
 
-    it('prices every Anthropic, Gemini and Groq model the registry suggests or defaults to', () => {
-        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini' || p.id === 'groq')) {
+    it('prices every Anthropic, Gemini, Groq and Meta model the registry suggests or defaults to', () => {
+        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini' || p.id === 'groq' || p.id === 'meta')) {
             for (const model of [p.defaultModel, ...p.suggestedModels]) {
                 assert.equal(priceFor(model, {}).priced, true, `${p.id}: ${model}`);
             }
@@ -370,5 +374,61 @@ describe('cache tokens in totalUsage, billedFromUsage and costOf', () => {
         const entries = [{ model: 'claude-opus-5-5', in: 10, out: 10, cacheRead: 10, cacheWrite: 10 }];
         costOf(entries, DEFAULT_PRICES);
         assert.deepEqual(entries, [{ model: 'claude-opus-5-5', in: 10, out: 10, cacheRead: 10, cacheWrite: 10 }]);
+    });
+});
+
+// ─── Meta's Muse models (dev.meta.ai/docs/pricing-rate-limits, Standard mode, checked 2026-10-30) ────────────────────────────────
+//
+// Muse Spark 1.3, 1.2 and 1.1: $1.25 in, $4.25 out, cached input $0.15. Muse Wonder: $4 in, $20 out, cached input $0.20. Reasoning tokens are counted
+// inside `completion_tokens` and billed as output, so a call is priced from its two token counts and nothing else.
+
+describe('Muse prices', () => {
+    const M = 1_000_000;
+
+    it('prices Muse Spark at $1.25 in and $4.25 out per million, whichever of its three versions answered, and Wonder at $4 and $20', () => {
+        for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1']) {
+            assert.deepEqual(priceFor(model, {}), { in: 1.25, out: 4.25, priced: true }, model);
+            assert.deepEqual(usdFor({ in: M, out: M }, model, DEFAULT_PRICES), { usd: 5.5, priced: true }, model);
+        }
+        assert.deepEqual(priceFor('muse-wonder-1.0', {}), { in: 4, out: 20, priced: true });
+        assert.deepEqual(usdFor({ in: M, out: M }, 'muse-wonder-1.0', DEFAULT_PRICES), { usd: 24, priced: true });
+    });
+
+    it('prices the live usage of 2026-10-28 as it was billed: a one-word answer, 15 tokens in and 190 out, thinking included', () => {
+        // {"completion_tokens":190,"prompt_tokens":15,...,"completion_tokens_details":{"reasoning_tokens":180}}: all 190 are output.
+        // 15 * 1.25 + 190 * 4.25 = 18.75 + 807.5 = 826.25, per million.
+        assert.equal(usdFor({ in: 15, out: 190 }, 'muse-spark-1.3', DEFAULT_PRICES).usd, 0.00082625);
+    });
+
+    it('reads cached input at $0.15 a million on Muse Spark (0.12x of $1.25) and $0.20 on Muse Wonder (0.05x of $4)', () => {
+        assert.equal(cacheReadMultiplier('muse-spark-1.3'), 0.12);
+        assert.equal(cacheReadMultiplier('muse-spark-1.2'), 0.12);
+        assert.equal(cacheReadMultiplier('muse-spark-1.1'), 0.12);
+        assert.equal(cacheReadMultiplier('muse-wonder-1.0'), 0.05);
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'muse-spark-1.3', DEFAULT_PRICES), { usd: 0.15, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'muse-wonder-1.0', DEFAULT_PRICES), { usd: 0.2, priced: true });
+    });
+
+    it('prices a call whose prefix was cached: 8,000 of 10,000 prompt tokens read from the cache, 600 out', () => {
+        // 2,000 * 1.25 + 8,000 * 0.15 + 600 * 4.25 = 2,500 + 1,200 + 2,550 = 6,250, per million.
+        assert.equal(usdFor({ in: 2000, out: 600, cacheRead: 8000 }, 'muse-spark-1.3', DEFAULT_PRICES).usd, 0.00625);
+        // The same call with no cache at all is dearer: 10,000 * 1.25 + 2,550 = 15,050.
+        assert.equal(usdFor({ in: 10_000, out: 600 }, 'muse-spark-1.3', DEFAULT_PRICES).usd, 0.01505);
+    });
+
+    it('gives a dated snapshot its alias\'s price and cache rate, as it does for every model', () => {
+        assert.deepEqual(priceFor('muse-spark-1.3-20261101', {}), { in: 1.25, out: 4.25, priced: true });
+        assert.equal(cacheReadMultiplier('muse-spark-1.3-20261101'), 0.12);
+    });
+
+    it('does not price a Contributor-mode twin as its Standard model: it is charged at the ceiling and flagged, and nothing may route to it', () => {
+        for (const model of ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor']) {
+            assert.equal(priceFor(model, {}).priced, false, model);
+            assert.equal(cacheReadMultiplier(model), DEFAULT_CACHE_READ_MULTIPLIER, model);
+        }
+    });
+
+    it('leaves the ceiling an unknown model is charged at where it was: no Muse rate is the highest in the table', () => {
+        assert.deepEqual(priceFor('some-new-model', DEFAULT_PRICES), { in: 5, out: 25, priced: false });
     });
 });

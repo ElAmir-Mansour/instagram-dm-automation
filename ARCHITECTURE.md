@@ -31,7 +31,7 @@ a function or constant, with a line only where the line itself is the point.
         ▼                             ▼                              ▼
   Supabase Postgres             Supabase Storage              Gemini (the owner's DM bot) · the AI providers
   jobs, studio_jobs,            `media` (public),             layer (Anthropic, OpenAI, Gemini, OpenRouter,
-  tenants, everything           `media-private`               Groq, Custom) · Cloudflare Workers AI (pictures)
+  tenants, everything           `media-private`               Groq, Meta, Custom) · Cloudflare Workers AI (pictures)
                                                               · Telegram, Resend (alerts) · Groq/OpenAI (voice)
 
   Callers of /api/jobs/drain: the Heroku worker (every ~60 s) · GitHub Actions (every few hours) · Vercel cron (daily)
@@ -892,7 +892,7 @@ only an explainer's script has a fallback (Gemini, when the owner picks it, the 
 
 ### ADR-11 — An AI providers layer, routed by purpose, for everything that is not the owner's Mac or his Gemini bot
 
-**Chosen:** two layers. `src/services/llm/` is a stateless library (adapters for Anthropic, OpenAI, Gemini, OpenRouter, Groq and
+**Chosen:** two layers. `src/services/llm/` is a stateless library (adapters for Anthropic, OpenAI, Gemini, OpenRouter, Groq, Meta (Muse) and
 a custom endpoint, wire formats, errors, schemas, prices), held clear of the database by a test. `src/services/aiProviders/` is
 built on it: the operator's keys, routes, prices and budgets, `resolveRoute`, one `ai_usage` row per call, and `generate`, which
 does all of that around one call. Each caller names a purpose (`AI_PURPOSES`): onboarding drafts and proof samples, the DM engine
@@ -903,12 +903,17 @@ Studio writer and ad proposals. Voice transcription uses the same keys under a r
 project and model (on 2026-09-24 the Studio's indexer spent the bot's whole day), and a free Gemini key may train on what it is
 sent. A layer lets each purpose name its provider, lets a tenant bring its own key, and makes cost visible per call.
 
-**Two rules carry the weight:**
+**Three rules carry the weight:**
 - **A saved route never falls through.** If its provider cannot answer (no key, switched off), the call is `no_provider`, naming
   the cause; moving quietly to another provider would bill someone the operator did not choose and hide a broken key.
 - **Customers' words go only where the terms forbid training.** `dm_whatsapp` may use only `NO_TRAINING_PROVIDERS` (Anthropic,
   OpenAI, Groq), and voice notes only Groq, then OpenAI if paid AI is allowed (`TRANSCRIBE_PROVIDERS`), because Meta's
   WhatsApp terms bar letting its data train a model.
+- **What reads a photo or a video goes only to Meta (Muse), and never to a model that trains on it.** The four Muse purposes
+  (`perception_dm`, `recall`, `reel_index`, `comment_intent`) answer from `['meta']` alone, and Meta sits late in the default order, so no
+  purpose is moved to it while an earlier provider can answer; only Meta is sent a turn's media (`LlmTurn.media`, inline base64: every other
+  adapter refuses it with a `bad_request` before a request exists); and a `-contributor` model id (the same model at a discount that lets Meta
+  train on what it is sent) is refused on every route, saved or not, except an evaluation of made-up cases (`isContributorModel`, `pickRoute`).
 
 **Kept as it was, on purpose:** the owner's DM bot on Gemini. The `gemini` engine is the default and is byte-identical to the
 pre-layer request (pinned by `ai.test.ts`); `providers` is opt-in per tenant, with a once-only Gemini fallback.

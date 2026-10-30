@@ -6,13 +6,19 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { EFFORTS } from '../llm/types.js';
-import { AI_PURPOSES, EVAL, isAiPurpose, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, TRANSCRIBE, type UsagePurpose } from './purposes.js';
+import {
+    AI_PURPOSES, EVAL, isAiPurpose, isContributorModel, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, NO_TRAINING_PROVIDERS, PERCEPTION_VOICE, PURPOSE_ALLOWLIST_REASON,
+    PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, TRANSCRIBE, type UsagePurpose,
+} from './purposes.js';
 import { ProviderKeys } from './settings.js';
 import { describeAi } from './view.js';
 
 describe('AI_PURPOSES', () => {
-    it('is the five existing purposes in their order, then `dm`, `dm_whatsapp` and the two ads purposes', () => {
-        assert.deepEqual([...AI_PURPOSES], ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
+    it('is the five existing purposes in their order, then `dm`, `dm_whatsapp`, the two ads purposes and the four Muse purposes', () => {
+        assert.deepEqual([...AI_PURPOSES], [
+            'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+            'perception_dm', 'recall', 'reel_index', 'comment_intent',
+        ]);
     });
 
     it('has a default effort for every purpose, a real level each, and no other keys', () => {
@@ -32,6 +38,67 @@ describe('the ads purposes (A7)', () => {
     it('are NOT Mac-brain purposes: that set means "refuse on the layer", and the owner\'s drafts are Studio ads_think jobs instead', () => {
         assert.equal(MAC_BRAIN_PURPOSES.has('ads_draft'), false);
         assert.equal(MAC_BRAIN_PURPOSES.has('ads_review'), false);
+    });
+});
+
+describe('the Muse purposes (perception_dm, recall, reel_index, comment_intent)', () => {
+    const MUSE = ['perception_dm', 'recall', 'reel_index', 'comment_intent'] as const;
+
+    it('are purposes a route can be saved for, each at effort low: a person waits for the answer, and Muse Spark reasons before it gives one', () => {
+        for (const purpose of MUSE) {
+            assert.equal(isAiPurpose(purpose), true, purpose);
+            assert.equal(PURPOSE_DEFAULT_EFFORT[purpose], 'low', purpose);
+        }
+    });
+
+    it('may be answered by Meta alone: the allow-list is exactly [meta], and not WhatsApp\'s list of providers that forbid training', () => {
+        for (const purpose of MUSE) assert.deepEqual([...PURPOSE_PROVIDER_ALLOWLIST[purpose]!], ['meta'], purpose);
+        // Adding Meta to NO_TRAINING_PROVIDERS would open WhatsApp to it and protect nothing on Instagram: it is untouched.
+        assert.deepEqual([...NO_TRAINING_PROVIDERS], ['groq', 'anthropic', 'openai']);
+        assert.deepEqual([...PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp!], ['groq', 'anthropic', 'openai']);
+        assert.equal(PURPOSE_PROVIDER_ALLOWLIST.dm, undefined, '`dm` still takes any provider');
+        // The Baseten widening of reel_index is the memory PR\'s: this one adds no provider but Meta.
+        assert.equal(Object.keys(PURPOSE_PROVIDER_ALLOWLIST).length, 5);
+    });
+
+    it('have no default route to Meta or anyone: with none saved a purpose is answered by the first provider that has a key, and a borrowed route is WhatsApp\'s alone', () => {
+        assert.deepEqual({ ...PURPOSE_ROUTE_FALLBACK }, { dm_whatsapp: 'dm' });
+        for (const purpose of MUSE) assert.equal(PURPOSE_ROUTE_FALLBACK[purpose], undefined, purpose);
+    });
+
+    it('are not Mac-brain purposes: Muse work runs on the platform\'s key, never on the owner\'s Mac', () => {
+        for (const purpose of MUSE) assert.equal(MAC_BRAIN_PURPOSES.has(purpose), false, purpose);
+    });
+
+    it('say why only Meta may answer them, in words that are not WhatsApp\'s, and WhatsApp has none of its own (it keeps the sentence it always had)', () => {
+        for (const purpose of MUSE) assert.equal(PURPOSE_ALLOWLIST_REASON[purpose], 'only Meta (Muse) is set up to answer this purpose.', purpose);
+        assert.equal(PURPOSE_ALLOWLIST_REASON.dm_whatsapp, undefined);
+    });
+
+    it('are described to the card with their default effort, unguarded, and nothing saved', () => {
+        const budgets = { dailyUsd: null, monthlyUsd: null, tenantDailyUsd: null, tenantMonthlyUsd: null };
+        const view = describeAi({ providers: {}, routing: {}, prices: {}, budgets }, new ProviderKeys(new Map(), new Set()));
+        for (const purpose of MUSE) {
+            const row = view.purposes.find((p) => p.purpose === purpose);
+            assert.ok(row, `the card is given a ${purpose} row`);
+            assert.equal(row.defaultEffort, 'low');
+            assert.equal(row.macBrainGuarded, false);
+            assert.equal(row.saved, null);
+        }
+    });
+});
+
+describe('isContributorModel', () => {
+    it('is true for an id that ends -contributor, in any case and with space around it: that twin lets Meta train on what it is sent', () => {
+        for (const model of ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor', 'MUSE-SPARK-1.3-CONTRIBUTOR', '  muse-spark-1.3-contributor\n', 'x-contributor']) {
+            assert.equal(isContributorModel(model), true, JSON.stringify(model));
+        }
+    });
+
+    it('is false for the Standard models, every other provider\'s models, an empty id, and a name that only mentions the word', () => {
+        for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-wonder-1.0', 'claude-opus-5-5', 'gemini-3.8-flash', 'openai/gpt-oss-120b', '', 'contributor', 'contributor-guide-v2', 'muse-spark-1.3-contributors']) {
+            assert.equal(isContributorModel(model), false, JSON.stringify(model));
+        }
     });
 });
 
@@ -93,6 +160,15 @@ describe('the usage labels', () => {
     it('a UsagePurpose is a purpose or one of the two labels, so a harness can ask for the `dm` route and be recorded as `eval`', () => {
         const labels: UsagePurpose[] = [...AI_PURPOSES, KEY_TEST, EVAL];
         assert.equal(new Set(labels).size, AI_PURPOSES.length + 2);
+    });
+
+    it('`perception_voice` labels the spend on a voice note Meta transcribes and is NOT a routable purpose: speech is not a chat model, so there is no row and no route (like `transcribe`)', () => {
+        assert.equal(PERCEPTION_VOICE, 'perception_voice');
+        assert.equal(isAiPurpose(PERCEPTION_VOICE), false);
+        assert.equal((AI_PURPOSES as readonly string[]).includes(PERCEPTION_VOICE), false);
+        assert.equal(Object.keys(PURPOSE_DEFAULT_EFFORT).includes(PERCEPTION_VOICE), false);
+        const label: UsagePurpose = PERCEPTION_VOICE;
+        assert.equal(label, 'perception_voice');
     });
 
     it('`transcribe` labels speech-to-text spend and is NOT a routable purpose: no routing row, so no chat model can be saved for it (T034)', () => {
