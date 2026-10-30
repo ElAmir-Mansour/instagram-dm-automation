@@ -1177,6 +1177,54 @@ claim, and do nothing. Releasing is what makes the retry actually reach the work
 A Gemini rate limit, a Meta 500 and a socket reset all used to end here logged and swallowed,
 with the job marked done and the inbound row permanently unanswerable.
 
+### 2.12 — A voice note is heard: download → decode → Meta's speech model (P3)
+
+An Instagram voice note is a message with no words (§2.2): kind `audio`, a link on `lookaside.fbsbx.com` that serves `video/mp4` (AAC inside an MP4).
+With the tenant's `voice` switch on, the sender on its allow-list and the day's Muse cap not reached (`gatePerception`, capability `voice`,
+**`src/services/perception/gate.ts`**), the word-less branch does not send the fixed line: it asks for the words in the note, stores them as the row's
+`text`, and lets the sales turn answer them like typed ones. **`transcribeVoice`** (**`src/services/perception/voice.ts`**) is the media half of that: the
+link goes in, `{ transcript, durationMs, usd, model }` or the reason there is none comes out. It never throws, writes nothing of the conversation, sends
+nothing to the customer and checks no switch: the gate, "typing…", `messages.perception` and `messages.text`, and the answer are the caller's.
+
+1. **Download.** `fetchMedia(link, { kind: 'audio' })` (**`src/services/perception/media.ts`**): Meta's media hosts only, HTTPS, no token, at most 10 MB,
+   15 s to connect and 30 s in all, and the bytes are never written anywhere. The response's `Content-Type` decides what they are, and a voice note's
+   `video/mp4` stays audio. No link (`skipped / no_url`), a refused one (403, 404 and 410 are `expired_url`), something that is not audio, or too many
+   bytes ends here.
+2. **Decode.** `transcodeToWav` (**`src/services/perception/transcode.ts`**) runs the `ffmpeg-static` binary **inside the function**, with `execFile` and an
+   argument list (never a shell): `-hide_banner -loglevel error -i <in> -ac 1 -ar 24000 -c:a pcm_s16le -map_metadata -1 -y <out.wav>`, on a file in a fresh
+   `mkdtemp` directory under `os.tmpdir()` (an MP4 may keep its index at the end of the file, so it is not read from a pipe). **10 s, then SIGKILL.**
+   `-map_metadata -1` leaves the input's tags (a title, a device, a location) out of the WAV. The length is read from the WAV's own size, 48,000 bytes a
+   second, with no `ffprobe`: more than 3 minutes (and a second of an encoder's padding) is refused, a file over that size from its `stat`, before it is
+   read. The directory is removed in `finally`, on every path.
+3. **Hear.** `transcribeWithMeta` (**`src/services/aiProviders/asr.ts`**) finds Meta's key the way every chat call does (Settings → AI providers first,
+   `META_MODEL_API_KEY` after), reserves the call in `ai_usage` against the platform's and the tenant's budgets (`reserveCall`), and asks `callMetaAsr`
+   (**`src/services/llm/metaAsr.ts`**): `POST https://api.meta.ai/v1/asr/transcribe`, multipart, a JSON `request` part (`muse-voice-transcribe-1.0`, `WAV`,
+   language bias `["Arabic","English"]`, and as keywords up to 20 offer, brand and display names from **`src/services/perception/keywords.ts`**, longest
+   first) and the WAV as `audio`; 30 s, the key in the `Authorization` header only, redirects refused, no retry inside the call. The reservation then
+   becomes the row: provider `meta`, purpose `perception_voice`, `usd` = `audioDurationMs` / 3,600,000 × $0.18, no tokens.
+4. **Words.** The transcript is cleaned the way the stored line is (one line, no control or direction-changing character, at most 4,000 characters).
+   **Fewer than two words is `unreadable / empty_transcript`**: silence, noise or a single word, and the caller asks the customer to type or resend, as
+   for media it could not read. Meta was paid either way, and the result still carries the cost.
+5. **One result, one log line:** `perception.voice_heard`, `_unreadable`, `_skipped` or `_failed`, with the stage timings (`download_ms`, `decode_ms`,
+   `asr_ms`), the sizes, the audio's length, the words counted, the dollars, the model and Meta's `session_id` (its handle for a support ticket).
+   **Never the transcript, the link (a signed URL) or a key.**
+
+**One retry**, for a 5xx or a timeout of step 3 only, and only while the whole step (held to 90 s) has room for another 30 s attempt: a second `ai_usage`
+row, the first settled at $0. A 429, a refused key, a bad request, a budget and a missing key are never retried inside the turn.
+
+`transcribeVoice` answers in the words perception already stores (`src/services/perception/types.ts`): `skipped` (`no_url`, `no_key`, `budget`), `failed`
+(`too_large`: over 10 MB or 3 minutes; `fetch_failed`: a link or a file that is no good, and a decoder that cannot run, which the log's `detail` says;
+`expired_url`; `timeout`; `provider_error`: Meta's refusal, which `detail` says as the kind and the HTTP status) and `unreadable` (`empty_transcript`).
+
+> **Why this way — the decoder is in the function, and the voice goes to Meta or to nobody.**
+> The decoder was proven before it was built (T046, a Vercel preview, 2026-10-30): `ffmpeg-static@5.3.0` ran from
+> `/var/task/node_modules/ffmpeg-static/ffmpeg` and turned a 1-second AAC into WAV in 11 to 19 ms. That needs
+> `"includeFiles": ["node_modules/ffmpeg-static/ffmpeg"]` on the `src/index.ts` build in `vercel.json`: without it the package's JavaScript is traced into
+> the function and its binary is not, so the path resolves and the file is not there, and every voice note fails as `decoder_unavailable` (an `error`
+> line). The package is imported when a note arrives, never at load, so a deployment without it loses voice notes and not the app.
+> The privacy page promises Meta's speech model, so there is no fallback to another provider (the WhatsApp agent's Groq path, §10.13, is another
+> product's and is not reachable from here): no Meta key, Meta switched off or a budget reached is `skipped`, never "send it elsewhere".
+
 ---
 
 ## 3. Scheduled post → publish
@@ -4150,6 +4198,12 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
+| 2 | **a voice note's decoder is not in the function** (the `ffmpeg-static` binary missing: `includeFiles` dropped from `vercel.json`, or no build for the platform) — `transcodeToWav`, **`src/services/perception/transcode.ts`** | `perception.voice_failed` (**`error`**, `detail: decoder_unavailable: ENOENT` / `no_binary`) | no `ai_usage` row (Meta is never asked): **every voice note gets the fixed line** until it is fixed |
+| 2 | a voice note that will not decode (not audio, no sound in it, killed after 10 s) or is over 10 MB or 3 minutes — `transcodeToWav` | `perception.voice_failed` (`warn`; `reason`: `fetch_failed` / `timeout` / `too_large`; `detail`: `decode_failed: …` / `decode` / `too_long`) | no `ai_usage` row; the fixed line |
+| 2 | a voice note's link that is missing, not Meta's, expired (403, 404, 410), not audio, or over 10 MB — `fetchMedia` through `transcribeVoice`, **`src/services/perception/voice.ts`** | `perception.voice_skipped` (`no_url`) / `perception.voice_failed` (`fetch_failed`, `expired_url`, `too_large`, `timeout`) | no row; the fixed line |
+| 2 | Meta's speech model refuses or fails (a key it does not take, a 429, a 5xx, the 30 s deadline, an answer with no transcript) — `transcribeWithMeta`, **`src/services/aiProviders/asr.ts`** | `ai.call_failed` (`warn`, `purpose: perception_voice`, `outcome`) and `perception.voice_failed` (`provider_error` / `timeout`; `detail`: the kind and the HTTP status) | yes: an `ai_usage` row, outcome = the kind, **$0** (an answer that came back unusable is charged its estimate); a 5xx or a timeout is tried **once** more if the 90 s step has room; the fixed line |
+| 2 | no Meta key (Settings or `META_MODEL_API_KEY`), Meta switched off, or a platform or tenant AI budget reached — `transcribeWithMeta` | `ai.call_refused` (`no_provider` / `budget`) and `perception.voice_skipped` (`no_key` / `budget`) | yes: a refusal row in `ai_usage`. **Never another provider**: the note is sent nowhere else; the fixed line |
+| 2 | **a voice note of fewer than two words** (silence, noise, one word) — `transcribeVoice` | `perception.voice_unreadable` (`reason: empty_transcript`, `words`) | yes: the `ai_usage` row for what Meta billed; the customer is asked to type or resend; the transcript is never logged |
 | 7.8 | a `leadgen` change for a tenant with no lead_ads sign-off — `fetchAndStoreLead` | `ads.lead_locked` (`warn`) | **no** (nothing fetched) |
 | 7.8 | the app-level Page webhook has no `leadgen` field, or the Page is not subscribed (no sign-off yet) | *(none: Meta sends nothing)* | no; `scripts/diagnose.mjs` notes the missing field |
 | 7.8 | `GET /{leadgen_id}` refused (no `leads_retrieval`, Leads Access Manager) — `fetchAndStoreLead` | `ads.lead_read_refused` | no; the job ends `failed` and the catch-up will be refused too |
