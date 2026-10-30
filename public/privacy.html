@@ -265,7 +265,14 @@
     · the reels: the account owner's own published reels are analysed by Meta's
       hosted models or by Muse Spark Open at Baseten (route reel_index, allowed
       for meta and baseten). Only the reel goes to Baseten, never a message, a
-      comment or a follower's datum. Baseten's policy,
+      comment or a follower's datum. THAT IS ENFORCED BY NOTHING YET:
+      PURPOSE_PROVIDER_ALLOWLIST (src/services/aiProviders/purposes.ts) restricts
+      only dm_whatsapp, so any registered provider can be routed to any purpose
+      in Settings. PR p4 must refuse Baseten for every purpose but reel_index
+      (a deny, not only reel_index's allow-list), or "no message, comment or
+      follower data goes to Baseten" is a promise the operator's own Settings
+      could break; /data-deletion therefore names Baseten only beside the reels.
+      Baseten's policy,
       https://www.baseten.co/privacy-policy/ (opened 2026-10-30, updated
       2026-09-23), treats API content as Customer Content under its customer
       agreement and says nothing either way about training, so this page says
@@ -2705,7 +2712,7 @@
                 <p>
                     The operator of the tool (section 9) can switch on Meta's AI models, called Muse, as one of the
                     providers in section 5, and the account owner can then switch on, for the account, the features below.
-                    <strong>Each of them is off unless it has been switched on.</strong> Where they are,
+                    <strong>Each of them is off unless it has been switched on.</strong> Where they are switched on,
                     <strong>the text of direct messages and of comments, and the media people send, may be processed by
                     Meta's AI models (Muse)</strong>:
                 </p>

@@ -214,15 +214,21 @@ describe('/data-deletion — the same providers are named among what deletion ca
         }
     });
 
-    it('names the providers (Meta (Muse) and Baseten among them) and the operator\'s own address, scopes it to account owners, and says the copy is theirs', () => {
+    it('names the providers (Meta (Muse) among them) and the operator\'s own address, scopes it to account owners, and says the copy is theirs', () => {
         const en = words(section5.en);
-        for (const name of ['Anthropic', 'OpenAI', 'Google (Gemini)', 'OpenRouter', 'Groq', 'Meta (Muse)', 'Baseten', 'a service at an address the operator added']) assert.ok(en.includes(name), name);
+        for (const name of ['Anthropic', 'OpenAI', 'Google (Gemini)', 'OpenRouter', 'Groq', 'Meta (Muse)', 'a service at an address the operator added']) assert.ok(en.includes(name), name);
+        // Baseten never writes a reply and never sees a message, so it is NOT in the list of providers "the operator has write replies": it is named
+        // once, in the Meta bullet, beside the reels (a reader of the list would otherwise be told their conversation may have reached it).
+        const aiBullet = (doc: string, marker: string) => doc.slice(doc.indexOf(marker), doc.indexOf('</li>', doc.indexOf(marker)));
+        assert.ok(!aiBullet(section5.en, '<strong>AI providers:</strong>').includes('Baseten'));
+        assert.ok(!aiBullet(section5.ar, '<strong>مزوّدو الذكاء الاصطناعي:</strong>').includes('Baseten'));
+        assert.ok(en.includes('Baseten') && words(section5.ar).includes('Baseten'));
         assert.ok(en.includes('if you are an account owner and the operator of the tool has switched on a provider'));
         assert.ok(en.includes('we cannot delete it on your behalf'));
         assert.ok(en.includes('the text of your conversation reached that provider instead of Google (section 3 of the privacy policy)'));
         assert.ok(en.includes('Nothing else about people who comment or message on Instagram or Facebook is sent to them'));
         const ar = words(section5.ar);
-        for (const name of ['Anthropic', 'OpenAI', 'Gemini', 'OpenRouter', 'Groq', 'ميتا (Muse)', 'Baseten']) assert.ok(ar.includes(name), name);
+        for (const name of ['Anthropic', 'OpenAI', 'Gemini', 'OpenRouter', 'Groq', 'ميتا (Muse)']) assert.ok(ar.includes(name), name);
         assert.ok(ar.includes('إن كنتَ صاحب حساب وفعّل مُشغّل الأداة مزوّداً'));
         assert.ok(ar.includes('ولا نستطيع حذفها نيابةً عنك'));
         assert.ok(ar.includes('فقد وصل نصّ محادثتك إلى ذلك المزوّد بدلاً من جوجل (القسم 3 من سياسة الخصوصية)'));
