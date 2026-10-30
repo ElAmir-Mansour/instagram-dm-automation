@@ -19,8 +19,10 @@
  *   - `sales`           the DM sales prompt (docs/DM_SALES_PLAN.md §3, S5): what it tells the model (shared by the four Arabic registers, as
  *                       `dm` is) and the four lines a customer is sent without a model (`lines`), which are dialect and so differ.
  *                       The lines are drafts for the three non-Gulf registers until a native speaker has read them: `kits.test.ts` lists them.
- *   - `attachments`     the two lines a customer is sent for a message with no words (a photo, a voice note, a mention of the account in a
- *                       story), without a model, in every `sales_mode` (src/webhook/attachmentAck.ts). Drafts as well, in the same table.
+ *   - `attachments`     the lines a customer is sent for a message with no words (a photo, a voice note, a mention of the account in a
+ *                       story), without a model, in every `sales_mode` (src/webhook/attachmentAck.ts): the two it has always been sent (`media`, `mention`)
+ *                       and, only when Meta Muse tried to read the message (src/services/perception/plan.ts), the thanks that names the story (`mentionNamed`)
+ *                       and the request to send it again (`resend`). Drafts as well, in the same table.
  *
  * **Extending it (P9-P12).** Add the field to `LanguageKit` and fill it in for all five records: the `Record<KitKey, ...>`
  * will not compile until every register has it, so a register cannot be left speaking another's text by omission. Put the
@@ -120,6 +122,17 @@ export interface AttachmentLines {
     media: string;
     /** They mentioned the account in their story: thanks, and an offer to help. */
     mention: string;
+    /**
+     * Meta Muse perception (src/services/perception): the same thanks for a story mention, naming what was shared. `what` is the model's own summary of the
+     * story (at most 8 words, in the conversation's language), already cleaned by `mentionLine` (src/services/perception/text.ts), which also refuses a summary
+     * that holds a number, a link or a handle. Used only when perception read the story; otherwise `mention` is sent, exactly as it always was.
+     */
+    mentionNamed: (what: string) => string;
+    /**
+     * Meta Muse perception: a photo, a video, a shared reel or a story the model could not read with confidence. It asks for it to be sent again, or for the
+     * question to be typed: never a guess at what it showed. Sent through the same claim as `media` (once per burst, never twice in a day).
+     */
+    resend: string;
 }
 
 /** Words of one offer's block in the sales prompt, and of the conversation's last block. */
@@ -389,6 +402,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         {
             media: 'وصلني مرفقك 🙏 بس ما أقدر أفتح الصور والصوتيات والمقاطع هنا. يا ليت يكون سؤالك مكتوب، وأساعدك على طول.',
             mention: 'شكراً على الإشارة في قصتك 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+            mentionNamed: (what) => `شكراً على الإشارة في قصتك وعلى مشاركة ${what} 🙏 ولو عندك أي سؤال يسعدني أساعدك.`,
+            resend: 'ما قدرت أشوفه بوضوح 🙏 يا ليت يوصلني مرة ثانية، أو يكون سؤالك مكتوب وأساعدك على طول.',
         }),
 
     msa: arabic('msa',
@@ -420,6 +435,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         {
             media: 'وصلني مرفقك 🙏 لكنني لا أستطيع فتح الصور والرسائل الصوتية والمقاطع هنا. يسعدني أن أساعدك إذا وصلني سؤالك مكتوباً.',
             mention: 'شكراً على الإشارة في قصتك 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.',
+            mentionNamed: (what) => `شكراً على الإشارة في قصتك وعلى مشاركة ${what} 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.`,
+            resend: 'لم أتمكن من رؤيته بوضوح 🙏 أرجو إعادة إرساله، أو كتابة سؤالك وسيسعدني أن أساعدك.',
         }),
 
     egyptian: arabic('egyptian',
@@ -450,6 +467,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         {
             media: 'وصلني المرفق 🙏 بس مش هقدر أفتح الصور والفويسات والفيديوهات هنا. يا ريت السؤال يكون مكتوب وأنا أساعدك على طول.',
             mention: 'شكراً على المنشن في الستوري 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+            mentionNamed: (what) => `شكراً على المنشن في الستوري وعلى مشاركة ${what} 🙏 ولو عندك أي سؤال يسعدني أساعدك.`,
+            resend: 'معرفتش أشوفه كويس 🙏 يا ريت يتبعت تاني، أو السؤال يكون مكتوب وأنا أساعدك على طول.',
         }),
 
     levantine: arabic('levantine',
@@ -480,6 +499,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         {
             media: 'وصلني المرفق 🙏 بس ما بقدر افتح الصور والفويسات والفيديوهات هون. يا ريت يكون سؤالك مكتوب، وبساعدك فوراً.',
             mention: 'شكراً على المنشن بالستوري 🙏 ولو عندك أي سؤال بيسعدني ساعدك.',
+            mentionNamed: (what) => `شكراً على المنشن بالستوري وعلى مشاركة ${what} 🙏 ولو عندك أي سؤال بيسعدني ساعدك.`,
+            resend: 'ما قدرت شوفه منيح 🙏 يا ريت يوصلني مرة تانية، أو يكون سؤالك مكتوب وبساعدك فوراً.',
         }),
 
     // English has no register, and none of its lines is a translation of the owner's: they say the same thing in plain English.
@@ -502,6 +523,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         attachments: {
             media: 'Got your attachment 🙏 I can\'t open photos, voice notes or videos here. If you type your question, I\'ll help right away.',
             mention: 'Thanks for the mention in your story 🙏 If you have a question, I\'m glad to help.',
+            mentionNamed: (what) => `Thanks for the mention in your story, and for sharing ${what} 🙏 If you have a question, I'm glad to help.`,
+            resend: 'I couldn\'t see that clearly 🙏 Could you send it again, or type your question? I\'ll help right away.',
         },
         sales: {
             ownerFallback: 'the account owner',

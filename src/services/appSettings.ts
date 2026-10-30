@@ -326,6 +326,8 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *   museDailyUsd    the most the perception features may spend in a UTC day, in USD: a number from 0 to 50. Absent is 3. Not a secret.
  *   museBudgetNotice the UTC day (`YYYY-MM-DD`) the owner was last told the daily cap was reached, so the notice goes out once a day
  *                   (`src/services/perception/gate.ts`). Written by the code, never by a person. Not a secret.
+ *   museProviderNotice the UTC day the owner was last told Meta refused the key, or the account has no credit left (`src/services/perception/alert.ts`):
+ *                   once a day, written by the code, never by a person. Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -349,6 +351,7 @@ export const TENANT_SETTING_PREFIXES = {
     museAllowSenders: 'muse.allow_senders.',
     museDailyUsd: 'muse.daily_usd.',
     museBudgetNotice: 'muse.budget_notice.',
+    museProviderNotice: 'muse.provider_notice.',
 } as const;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */

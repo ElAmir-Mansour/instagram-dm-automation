@@ -142,13 +142,13 @@ export async function claimBudgetNotice(creatorId: string, now: Date): Promise<b
     return row !== null;
 }
 
-type ChannelOutcome = 'sent' | 'failed' | 'off';
+export type ChannelOutcome = 'sent' | 'failed' | 'off';
 
 /**
  * The owner's own channels (`notify.*`: the deployment's Telegram bot and Resend key), each one's outcome. Both are asked at once, so the first refusal of
  * the day waits for the slower of two 5 s timeouts at most, not their sum. `sendTelegramMessage` and `sendEmail` never throw.
  */
-async function sendNotice(notice: { subject: string; text: string }): Promise<{ telegram: ChannelOutcome; email: ChannelOutcome }> {
+export async function sendNotice(notice: { subject: string; text: string }): Promise<{ telegram: ChannelOutcome; email: ChannelOutcome }> {
     const channels = await readNotifyChannels();
     const tg = channels.telegram;
     const to = effectiveTo(channels.email);

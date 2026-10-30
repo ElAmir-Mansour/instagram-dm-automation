@@ -76,28 +76,46 @@ export async function loadSalesState(conversationId: string): Promise<SalesState
 }
 
 /**
- * Is `messageId` no longer the message to answer? Two ways, both checked against the row's own `created_at`:
+ * The moment a message became ready to be answered, as SQL for the table aliased `a`: its `created_at`, except for a word-less message Meta Muse has read
+ * (`messages.perception` with status `ok`), which could not be answered until the read was stored, so it is `perception.stored_at`. `$3` is `WORDLESS_MESSAGE_TYPES`.
+ * A text keeps its `created_at`, so for every message there ever was before perception this is exactly what the statement below compared.
+ */
+const READY_AT = (a: string): string => `CASE WHEN COALESCE(${a}.message_type, 'text') = ANY($3::text[]) AND ${a}.perception->>'status' = 'ok'
+                           THEN COALESCE((${a}.perception->>'stored_at')::timestamptz, ${a}.created_at) ELSE ${a}.created_at END`;
+
+/**
+ * Is `messageId` no longer the message to answer? Two ways, both checked against the moment the message was ready to be answered (`READY_AT`: its own `created_at`,
+ * or for a word-less message that was read, the moment its perception was stored):
  *
  *   - `newerUnhandled`: a LATER inbound message in the same conversation has not been answered yet. A burst of messages makes one job
  *     each; the newest answers all of them (the model reads the whole burst in its history), and this one stands down.
  *   - `answered`: somebody (this bot on an earlier attempt, a person from the inbox) has already replied after it. Answering again is a
  *     second reply to one message; it is what a job resumed after a crash between the send and the bookkeeping would do.
  *
- * **Neither counts what has no words.** A photo (or any other word-less message, `webhook/attachments.ts`) is never answered by this turn:
- * the ack that follows it is a fixed line from the kit (`webhook/attachmentAck.ts`). So a photo sent right after a question must not make
- * the question's turn stand down as "a later message is waiting" (nobody would answer the words), and an ack sent after a question (for a
- * photo that came in meanwhile) must not make a retry of that question look "already answered": the ack was not an answer to it. Both are
- * read off `message_type`, the contract that `WORDLESS_MESSAGE_TYPES` and `ATTACHMENT_ACK_TYPE` name.
+ * **What has no words counts only once it has been read.** A photo (or any other word-less message, `webhook/attachments.ts`) used to be answered by a fixed
+ * line from the kit (`webhook/attachmentAck.ts`), never by this turn. So a photo sent right after a question must not make the question's turn stand down as "a
+ * later message is waiting" (nobody would answer the words), and an ack sent after a question (for a photo that came in meanwhile) must not make a retry of
+ * that question look "already answered": the ack was not an answer to it. Both are read off `message_type`, the contract that `WORDLESS_MESSAGE_TYPES` and
+ * `ATTACHMENT_ACK_TYPE` name. That is still so for a word-less message nobody read (every one with Meta Muse's switches off).
+ *
+ * With them on (src/services/perception), a word-less message whose perception was stored `ok` IS answered by a turn, so:
+ *   - as a LATER message it counts as waiting, like a text, from the moment it was read, and not before: a photo still being read is not an answer to wait for.
+ *     (A story mention is read too, but it is thanked and not answered, so it never makes a question stand down.)
+ *   - as THIS message it stands down only for a reply sent after its perception was stored. A text sent while a reel was being read was answered while the reel was
+ *     not yet readable, and that reply is not the reel's answer: the reel is answered unless a reply came after it was read.
+ * Texts are compared on their `created_at` exactly as before, so the same statement answers the same for every conversation that holds no perception.
  */
 export async function supersession(conversationId: string, messageId: string): Promise<{ newerUnhandled: boolean; answered: boolean }> {
     const row = await queryOne<{ newer_unhandled: boolean; answered: boolean }>(
-        `SELECT EXISTS (SELECT 1 FROM messages n
+        `WITH me AS (SELECT ${READY_AT('m')} AS ready_at FROM messages m WHERE m.id = $2)
+         SELECT EXISTS (SELECT 1 FROM messages n
                          WHERE n.conversation_id = $1 AND n.direction = 'inbound' AND n.id <> $2 AND n.handled_at IS NULL
-                           AND n.created_at > (SELECT created_at FROM messages WHERE id = $2)
-                           AND COALESCE(n.message_type, 'text') <> ALL($3::text[])) AS newer_unhandled,
+                           AND ${READY_AT('n')} > (SELECT ready_at FROM me)
+                           AND (COALESCE(n.message_type, 'text') <> ALL($3::text[])
+                                OR (n.perception->>'status' = 'ok' AND n.message_type <> 'story_mention'))) AS newer_unhandled,
                 EXISTS (SELECT 1 FROM messages o
                          WHERE o.conversation_id = $1 AND o.direction = 'outbound'
-                           AND o.created_at > (SELECT created_at FROM messages WHERE id = $2)
+                           AND o.created_at > (SELECT ready_at FROM me)
                            AND COALESCE(o.message_type, '') <> $4) AS answered`,
         [conversationId, messageId, WORDLESS_MESSAGE_TYPES, ATTACHMENT_ACK_TYPE]
     );

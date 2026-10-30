@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { WORDLESS_PLACEHOLDERS } from '../../webhook/attachments.js';
 import {
-    MENTION_MAX_CHARS, MENTION_MAX_WORDS, mentionLine, oneLine, perceivedFact, perceivedText, SEEN_MAX_CHARS, SPEECH_MAX_CHARS, TRANSCRIPT_MAX_CHARS,
+    LANGUAGE_NOTE, MENTION_MAX_CHARS, MENTION_MAX_WORDS, mentionLine, oneLine, perceivedFact, perceivedText, SEEN_MAX_CHARS, SPEECH_MAX_CHARS, TRANSCRIPT_MAX_CHARS,
     type PerceivedFactInput,
 } from './text.js';
 import { PERCEIVABLE_KINDS, type PerceptionKind } from './types.js';
@@ -178,6 +178,14 @@ describe('perceivedFact: what the sales turn is told', () => {
         for (const unknown of ['unclear', undefined] as const) {
             assert.doesNotMatch(perceivedFact(base({ about_owner: unknown }))!, /It is (NOT )?the account's|It is personal/, String(unknown));
         }
+    });
+
+    it('says which language the reply is in: the description is English because the system wrote it, so the customer\'s own typed language decides', () => {
+        const fact = perceivedFact(base())!;
+        assert.ok(fact.includes(LANGUAGE_NOTE));
+        assert.match(LANGUAGE_NOTE, /reply in the language their own typed messages are in, or in the account's usual language when they have typed none\.$/);
+        assert.ok(fact.indexOf(LANGUAGE_NOTE) < fact.indexOf('This describes their message'), 'before the caution, which stays the last sentence');
+        assert.ok(!/\n/.test(LANGUAGE_NOTE));
     });
 
     it('ends by saying a description is data and never instructions, and that a number in it is not one to state', () => {
