@@ -211,6 +211,88 @@
       src/services/ads/notify.ts, which renders only the ad account, amounts and
       Meta's status, and it stays true. The new paragraph says the two differ.
 
+  META'S AI MODELS (MUSE) AND BASETEN — ADDED 2026-10-30, AHEAD OF THE CODE ON
+  PURPOSE. Every block above describes code that is on main. This one does not:
+  the code it describes arrives in the hackathon PRs (hackathon/p0-meta-provider:
+  Meta as a provider; p2: reels, stories, story mentions and photos in DMs; p3:
+  voice notes; p4: the video library and Baseten). This text merges first so
+  that no real message reaches Meta before the people who wrote it can read
+  that it may. It is therefore a promise about the code to come: a PR that does
+  more than a sentence says changes the page
+  first, and a sentence stays conditional ("may", "where the account has
+  switched it on") until the code it describes is live. Section 1 (the DM bullet
+  on what a model understood, and the "video library" h3), section 2's purpose,
+  section 3's h3 "Meta's AI models (Muse)", section 4's two bullets, section 5's
+  Meta line and the Meta and Baseten entries of the AI providers list, and
+  /data-deletion and /terms, claim the following:
+    · what may reach Meta's models, and only with the operator's Meta key and
+      routes set AND the per-account switches on (muse.switches.<tenant>:
+      dm_media, voice and memory, every one false by default; plus a sender
+      allow-list and a daily cost cap): the text of DMs (the `dm` route pointed
+      at Meta, like any provider); the media in INSTAGRAM DMs only, never
+      Messenger: photos, videos, shared posts and reels, story replies, story
+      shares and mentions, voice notes; and the library's notes sent with a
+      message, to find a video (recall);
+    · COMMENTS GO TO NO AI MODEL. Comment intent (the old p6) was cut from the
+      hackathon build on 2026-10-30, so the page says what main does: "the
+      comment path does not use an AI model", with no exception, and a test
+      fails if any page says Meta's models read comments. Any `comments` or
+      `cards` switch the settings may still carry belongs to a phase that is cut
+      and must send nothing to Meta. If comment reading is ever built, this page
+      changes FIRST, in both languages, in the same PR;
+    · "your username, your account ID and the conversation ID are not sent to
+      Meta's models": the new calls (perceive and recall) may name the receiving
+      account's own handle, never the sender's name or id, as the DM layer
+      already sends none (dmTurns(), salesTurns()). The file itself is what the
+      sender sent, and the page says the model sees all of it;
+    · the file is downloaded inside the job, passed on as base64 and never
+      written to media_uploads or anywhere else. What is kept is
+      messages.perception (a short description the model wrote, a transcript, a
+      confidence, the model, the cost) and the same text in messages.text, so it
+      lives and dies with the message: no automatic expiry, deleted with the
+      conversation (section 4 here; sections 1 and 2 of /data-deletion). The
+      page says "short description", and "a transcript of what was said" for a
+      voice note, which is not short;
+    · Standard model ids only: PR p0 makes the providers layer refuse a
+      `-contributor` id for every purpose but the benchmark's made-up cases, so
+      the page says "never" for anything people send and for the owner's reels.
+      The training sentence is Meta's, said as "according to Meta": its
+      documentation (read 2026-10-30: dev.meta.ai/docs/pricing-rate-limits.md
+      and models.md) says content sent to a Standard model is not used to train
+      Meta's models, and that a Contributor model's may be. That documentation
+      says NOTHING about how long Meta keeps what it receives, so the page does
+      not claim it keeps nothing: like every provider above, "governed by its own
+      policy, and we cannot delete it on your behalf". Meta's Files API keeps an
+      uploaded file until it is deleted or its expires_after passes
+      (dev.meta.ai/docs/file-handling.md), and a reel over 35 MB goes through it:
+      PR p4 must delete or expire that upload, or "the app discards the file"
+      would be true of us and not of Meta;
+    · the reels: the account owner's own published reels are analysed by Meta's
+      hosted models or by Muse Spark Open at Baseten (route reel_index, allowed
+      for meta and baseten). Only the reel goes to Baseten, never a message, a
+      comment or a follower's datum. THAT IS ENFORCED BY NOTHING YET:
+      PURPOSE_PROVIDER_ALLOWLIST (src/services/aiProviders/purposes.ts) restricts
+      only dm_whatsapp, so any registered provider can be routed to any purpose
+      in Settings. PR p4 must refuse Baseten for every purpose but reel_index
+      (a deny, not only reel_index's allow-list), or "no message, comment or
+      follower data goes to Baseten" is a promise the operator's own Settings
+      could break; /data-deletion therefore names Baseten only beside the reels.
+      Baseten's policy,
+      https://www.baseten.co/privacy-policy/ (opened 2026-10-30, updated
+      2026-09-23), treats API content as Customer Content under its customer
+      agreement and says nothing either way about training, so this page says
+      nothing about training for Baseten. The library has no automatic expiry in
+      the design: "no automatic expiry" is the design's, and p4 must show that
+      its rows go with the creator before that sentence is relied on;
+    · VOICE: the page names Meta's speech model. If p3 ends on its plan C (Groq
+      Whisper through transcribe.ts, because ffmpeg cannot run on Vercel and the
+      worker route is not taken), a voice note would go to Groq, and this page
+      must say so before that ships;
+    · the Meta policy link, https://www.facebook.com/privacy/policy/, is the one
+      Meta's own developer site (dev.meta.ai) gives as its Privacy Policy, and the
+      one section 5's Meta line already used; the docs name no separate privacy
+      page for the Model API.
+
   META ADS (BOOST) — ADDED 2026-10-22 WITH PR #225 (migration v52). Section 1
   "When the account owner boosts a post" and the ads lines in sections 2, 4,
   5, 6 and 7 claim the following, and the code does it:
@@ -1231,7 +1313,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 25 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 30 أكتوبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1333,7 +1415,16 @@
                     <li>
                         <strong>إن كانت رسالتك صورة أو مقطع فيديو أو رسالة صوتية أو ملفاً أو منشوراً
                         أو ريلاً أو قصة مُشارَكة</strong>، نخزّن نوعها والرابط الذي ترسله ميتا معها،
-                        داخل الحدث الأصلي أعلاه. ولا ننسخ الملف نفسه.
+                        داخل الحدث الأصلي أعلاه. ولا نحتفظ بنسخة من الملف نفسه.
+                    </li>
+                    <li>
+                        <strong>ما فهمه نموذج ذكاء اصطناعي ممّا أرسلتَه، وذلك فقط إن شغّل الحسابُ هذه الميزة.</strong>
+                        وهي للرسائل الخاصة على إنستجرام فقط (لا ماسنجر)، ومتوقفة ما لم تُشغَّل (القسم 3): إن أرسلتَ صورة
+                        أو مقطع فيديو أو رسالة صوتية، أو شاركتَ منشوراً أو ريلاً أو قصة، أو رددتَ على إحدى قصص الحساب أو ذكرتَه
+                        في قصتك، فقد ينظر نموذجٌ في ما أرسلتَه أو يستمع إليه. يُنزَّل الملف ويُمرَّر إلى النموذج ثم يُتخلَّص منه:
+                        <strong>لا يُحفَظ</strong>. ويُخزَّن مع رسالتك وصفٌ قصير كتبه النموذج لما ظهر فيه، أو نصُّ ما قيل إن كانت
+                        رسالة صوتية، ليراه صاحب الحساب في صندوق رسائله وتأخذه الردود في الحسبان. ويبقى ما دام نصّ الرسالة
+                        باقياً (القسم 4)، ويُحذف مع محادثتك إن طلبتَ حذفها.
                     </li>
                     <li>
                         <strong>معرّف حسابك عند ميتا</strong> ووقت آخر رسالة ومتى أُبلغتَ آخر مرة
@@ -1661,10 +1752,37 @@
                     </li>
                 </ul>
 
+                <h3 id="reels-ar">عندما يشغّل صاحب الحساب مكتبة الفيديوهات</h3>
+                <p>
+                    هذا الجزء يخصّ الريلز التي نشرها صاحب الحساب نفسه، لا أي شخص يراسل الحساب.
+                    <strong>ولا يدخل فيه إلا فيديوهات صاحب الحساب العلنية: لا بيانات تعليقات ولا رسائل ولا متابعين.</strong>
+                    وهو متوقف ما لم يشغّله صاحب الحساب.
+                </p>
+                <ul>
+                    <li>
+                        <strong>المشاهدة:</strong> تقرأ الأداة من إنستجرام الريلز المنشورة على الحساب، وتنزّل كلَّ ريل وتجعل نموذج
+                        ذكاء اصطناعي يشاهده ليكتب ما يُعرض فيه وما يُقال: السرد الصوتي، والنص الظاهر على الشاشة، واللحظات
+                        الرئيسة، والموضوعات. وتتم المشاهدة على نماذج ميتا التي تشغّلها بنفسها
+                        (<bdi lang="en" dir="ltr">Muse</bdi>)، أو على نموذج ميتا المفتوح
+                        (<bdi lang="en" dir="ltr">Muse Spark Open</bdi>) الذي يشغّله لنا شريكنا
+                        <bdi lang="en" dir="ltr">Baseten</bdi>. ولا يُرسَل إلا الريل نفسه مع تعليماتنا له.
+                        <strong>ولا تصل إلى <bdi lang="en" dir="ltr">Baseten</bdi> أي بيانات عن رسالة أو تعليق أو متابع.</strong>
+                    </li>
+                    <li>
+                        <strong>ما يُخزَّن:</strong> ملاحظات كل ريل مع رابطه وتاريخه، وهي مكتبة فيديوهات للحساب يقرؤها صاحبه في لوحة
+                        التحكم. أمّا ملف الفيديو فلا يُحفَظ، وتبقى المكتبة كما يبيّن القسم 4.
+                    </li>
+                    <li>
+                        <strong>الاستخدام:</strong> حين تطلب رسالةٌ فيديو في موضوعٍ ما، تُرسَل ملاحظات المكتبة (لا الفيديوهات) إلى نماذج
+                        ميتا مع نصّ تلك الرسالة، لتجد الفيديو المناسب (القسم 3).
+                    </li>
+                </ul>
+
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
+                    <li>فهم الصور ومقاطع الفيديو والرسائل الصوتية والمنشورات المُشارَكة التي ترسلها، ليكون الردّ عمّا أرسلتَه فعلاً، وإيجاد فيديو صاحب الحساب الذي يجيب عن سؤالك إن شغّل مكتبة الفيديوهات (القسم 3).</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
                     <li>تنبيه مُشغّل الأداة حين تحتاج محادثةٌ مع حسابه هو إلى شخص (القسم 3).</li>
@@ -1685,7 +1803,7 @@
                 <p>
                     ما يُرسَل إلى جوجل هو النصوص واتجاه كل رسالة فقط. <strong>لا يُرسَل اسمك ولا
                     معرّف حسابك ولا معرّف المحادثة</strong> إلى جوجل. ونصوص التعليقات لا تُرسَل
-                    إلى جوجل إطلاقاً — مسار التعليقات لا يستخدم الذكاء الاصطناعي.
+                    إلى جوجل إطلاقاً، ومسار التعليقات لا يستخدم نموذج ذكاء اصطناعي.
                 </p>
                 <p>
                     ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
@@ -1714,6 +1832,46 @@
                     غير تنبيهات الإعلانات الموصوفة في القسم 1، التي لا تحتوي شيئاً عنك.
                 </p>
 
+                <h3 id="meta-ai-ar">نماذج الذكاء الاصطناعي من ميتا (<bdi lang="en" dir="ltr">Muse</bdi>)</h3>
+                <p>
+                    يستطيع مُشغّل الأداة (القسم 9) أن يفعّل نماذج الذكاء الاصطناعي من ميتا، واسمها
+                    <bdi lang="en" dir="ltr">Muse</bdi>، مزوّداً من المزوّدين المذكورين في القسم 5، ثم يستطيع صاحب الحساب
+                    أن يفعّل للحساب الميزات التالية. <strong>وكل ميزة منها متوقفة ما لم تُشغَّل.</strong> وحيث تكون مشغّلة،
+                    <strong>قد تُعالَج نصوص الرسائل الخاصة والوسائط التي يرسلها الناس بنماذج الذكاء الاصطناعي من
+                    ميتا (<bdi lang="en" dir="ltr">Muse</bdi>)</strong>:
+                </p>
+                <ul>
+                    <li>
+                        <strong>الرسائل الخاصة:</strong> يُرسَل نصّ رسالتك وما سبقها من رسائل المحادثة إلى نماذج ميتا لتكتب الردّ
+                        بدلاً من جوجل، على النحو الموضّح أعلاه لأي مزوّد.
+                    </li>
+                    <li>
+                        <strong>الصور ومقاطع الفيديو والمنشورات والريلز والقصص المُشارَكة، والردود على قصص الحساب، والقصص التي
+                        يُذكر فيها الحساب</strong> (للرسائل الخاصة على إنستجرام فقط، لا ماسنجر): ينظر نموذجٌ في الملف ويصفه،
+                        ليكون الردّ عمّا أرسلتَه بدلاً من أن يطلب منك كتابته من جديد.
+                    </li>
+                    <li>
+                        <strong>الرسائل الصوتية:</strong> تُحوَّل الرسالة الصوتية إلى نص بنموذج ميتا للكلام، ثم يُجاب عنه كما
+                        يُجاب عن رسالة مكتوبة.
+                    </li>
+                    <li>
+                        <strong>ريلز صاحب الحساب نفسه:</strong> يشاهد نموذجٌ كلاً منها لبناء مكتبة الفيديوهات
+                        الموصوفة في القسم 1.
+                    </li>
+                </ul>
+                <p>
+                    <strong>لا يُحفَظ ملف الوسائط.</strong> تنزّله الأداة وترسله إلى النموذج ثم تتخلّص منه. وما تحتفظ به مع رسالتك
+                    وصفٌ قصير لما ظهر فيه، أو نصٌّ لما قيل إن كان رسالة صوتية (القسم 1)، ويُحذف مع محادثتك إن طلبتَ حذفها
+                    (<a href="/data-deletion">صفحة حذف البيانات</a>). ويرى النموذج كل ما تُظهره الصورة أو الفيديو.
+                </p>
+                <p>
+                    <strong>النماذج القياسية فقط.</strong> لا تستخدم الأداة إلا نماذج ميتا القياسية
+                    (<bdi lang="en" dir="ltr">Standard</bdi>)، والمحتوى الذي تتلقّاه لا يُستخدم، بحسب ميتا، في تدريب نماذجها. ولا
+                    تستخدم أبداً نماذج <bdi lang="en" dir="ltr">Contributor</bdi> من ميتا، وهي التي قد تُدرَّب على ما تتلقّاه، لا مع
+                    شيء يرسله الناس ولا مع فيديوهات صاحب الحساب. <strong>ولا يُرسَل إلى نماذج ميتا كذلك اسمك ولا معرّف حسابك ولا
+                    معرّف المحادثة.</strong> وما تحتفظ به ميتا نفسها ممّا يصلها تحكمه سياستها هي، ولا نستطيع حذفه نيابةً عنك.
+                </p>
+
                 <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
                 <ul>
                     <li>
@@ -1734,6 +1892,10 @@
                         انتهاء تلقائية، حتى يحذفها صاحب الحساب. السبب أنها هي ما يقرأه صاحب
                         الحساب في صندوق رسائله. <strong>هذا يشمل نصّ رسائلك الخاصة.</strong> إن
                         أردتَ حذفها، فالطريق هو <a href="/data-deletion">صفحة حذف البيانات</a>.
+                    </li>
+                    <li>
+                        <strong>ما فهمه نموذج ذكاء اصطناعي ممّا أرسلتَه من وسائط</strong> — الوصف القصير، أو نصّ الرسالة
+                        الصوتية: يُخزَّن مع رسالتك، فيبقى ما دام نصّ الرسالة أعلاه باقياً. أمّا الملف نفسه فلا يُحفَظ.
                     </li>
                     <li>
                         <strong>اتصال تيك توك</strong> — معرّف <span class="code" lang="en" dir="ltr">open_id</span>
@@ -1780,6 +1942,10 @@
                         الإعدادات تستخدمها. ويبقى التسجيل الصوتي والفيديوهات النهائية حتى 30 يوماً بعد آخر منشور مجدول لذلك الفيديو، وما
                         دام لم يُجدول بعد. وحذف فيديو الشرح يحذف ملفاته.
                     </li>
+                    <li>
+                        <strong>مكتبة الفيديوهات</strong> — ملاحظات عن الريلز التي نشرها صاحب الحساب نفسه: تبقى مع الحساب بلا مدة
+                        انتهاء تلقائية. ولا تُحفَظ ملفات الفيديو.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
@@ -1789,7 +1955,8 @@
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
                         وعبرها تُرسَل الردود. وإن روّج صاحب الحساب منشوراً، تتلقّى ميتا ما يلزم لإنشاء الإعلان
                         في حسابه الإعلاني (المنشور والميزانية والمدة والبلد والرابط) وتعيد المنصرف والنتائج
-                        المجمّعة (القسم 1).
+                        المجمّعة (القسم 1). وإن شغّل المُشغّل نماذج ميتا للذكاء الاصطناعي، تتلقّى ميتا كذلك، عبر خدمة
+                        منفصلة وبمفتاح المُشغّل، النصوص والوسائط الموصوفة في القسم 3.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
                     </li>
                     <li>
@@ -1846,7 +2013,9 @@
                 <h3 id="ai-providers-ar">مزوّدو الذكاء الاصطناعي (جهات معالجة فرعية)</h3>
                 <p>
                     يستطيع مُشغّل الأداة (القسم 9) أن يفعّل مزوّداً أو أكثر من المزوّدين التاليين ليكتب مسودّات بالذكاء
-                    الاصطناعي لحساب صاحب الحساب، والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3). <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
+                    الاصطناعي لحساب صاحب الحساب، والردودَ على رسائله الخاصة حيث يختار المُشغّل ذلك (القسم 3). ومن بينهم نماذج
+                    ميتا، وهي تقرأ كذلك الوسائط التي يرسلها الناس وريلز صاحب الحساب نفسه، ويشغّل <bdi lang="en" dir="ltr">Baseten</bdi>
+                    نموذج ميتا المفتوح على تلك الريلز وحدها (القسمان 1 و3). <strong>لا يُستخدم أيٌّ منهم إلا إن أضاف المُشغّل مفتاحه وأبقاه مفعّلاً</strong>،
                     وما لم يفعل ذلك لا يصله شيء.
                 </p>
                 <ul>
@@ -1873,6 +2042,20 @@
                         <a href="https://console.groq.com/docs/your-data" target="_blank" rel="noopener noreferrer">كيف تتعامل <bdi lang="en" dir="ltr">Groq</bdi> مع بيانات الواجهة البرمجية</a>.
                     </li>
                     <li>
+                        <strong>ميتا</strong> (<bdi lang="en" dir="ltr">Muse</bdi>) — نماذج الذكاء الاصطناعي من ميتا. وهي ميتا نفسها
+                        المذكورة في القائمة أعلاه، لكنها خدمة منفصلة تعمل بمفتاح المُشغّل. وحيث تكون مشغّلة تتلقّى ما يصفه القسمان
+                        3 و1: نصوص الرسائل الخاصة، والوسائط التي يرسلها الناس، وريلز صاحب الحساب نفسه. ولا تُستخدم إلا
+                        نماذجها القياسية (<bdi lang="en" dir="ltr">Standard</bdi>)، والمحتوى الذي تتلقّاه لا يُستخدم، بحسب ميتا، في
+                        تدريب نماذجها.
+                        <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
+                    </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Baseten</bdi></strong> — شريكنا في تشغيل النماذج. تشغّل نموذج ميتا المفتوح
+                        (<bdi lang="en" dir="ltr">Muse Spark Open</bdi>) ليشاهد ريلز صاحب الحساب نفسه المنشورة، حيث يختار المُشغّل
+                        ذلك بدلاً من نماذج ميتا التي تشغّلها بنفسها. <strong>ولا تصل إليها أي بيانات عن رسالة أو تعليق أو متابع.</strong>
+                        <a href="https://www.baseten.co/privacy-policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Baseten</bdi></a>.
+                    </li>
+                    <li>
                         <strong>خدمة بعنوان يحدّده المُشغّل</strong> — إن أضاف المُشغّل عنوان خدمة متوافقة مع
                         <bdi lang="en" dir="ltr">OpenAI</bdi> بنفسه، فمُزوّد ذلك العنوان جهة معالجة فرعية أيضاً.
                     </li>
@@ -1881,7 +2064,9 @@
                     <strong>ما يُرسَل إليهم:</strong> ملف صاحب الحساب ومحتواه — ما يكتبه عن نفسه وعن نشاطه، ونصوص موقعه
                     وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ
                     على رسائله الخاصة، <strong>يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً</strong>، على النحو الموضّح في القسم 3 تماماً؛
-                    <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
+                    <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>، إلا ما يقول القسم 3
+                    إن نماذج ميتا قد تتلقّاه أيضاً (الوسائط التي يرسلها الناس)، ولا يصل إلى
+                    <bdi lang="en" dir="ltr">Baseten</bdi> إلا ريلز صاحب الحساب نفسه. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
                     وما يصل إلى كل منهم يخضع لسياسته هو، ولا نستطيع حذفه نيابةً عنك.
                 </p>
 
@@ -1967,7 +2152,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 25 October 2026</p>
+                <p class="stamp">Last updated: 30 October 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
 
@@ -2067,7 +2252,18 @@
                     <li>
                         <strong>If your message is a photo, video, voice note, file, or a shared post,
                         reel or story</strong>, we store what kind it was and the link Meta sends with it,
-                        inside the event above. We do not copy the file itself.
+                        inside the event above. We do not keep a copy of the file itself.
+                    </li>
+                    <li>
+                        <strong>What an AI model understood of what you sent, only where the account has switched
+                        that on.</strong> It is for Instagram direct messages only (not Messenger), and off unless it is
+                        switched on (section 3). If you send a photo, a video or a voice note, share a post, reel or story,
+                        reply to one of the account's stories or mention the account in yours, a model may look at it or
+                        listen to it. The file is downloaded, passed to the model and discarded:
+                        <strong>it is not kept</strong>. What is kept, with your message, is a short description the model
+                        wrote of what it showed or, for a voice note, a transcript of what was said, so that the account
+                        owner sees it in their inbox and the replies can take it into account. It is kept for as long as the
+                        message text is (section 4), and deleted with your conversation if you ask for it to be erased.
                     </li>
                     <li>
                         <strong>Your Meta-scoped account ID</strong>, the time of the last
@@ -2425,10 +2621,38 @@
                     </li>
                 </ul>
 
+                <h3 id="reels-en">When the account owner switches on the video library</h3>
+                <p>
+                    This part is about the account owner's own published reels, not about anyone who writes to the
+                    account. <strong>It uses only the owner's own public videos: no comment, message, contact or follower
+                    data goes into it.</strong> It is off unless the account owner switches it on.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Watching:</strong> the app reads the account's published reels from Instagram, downloads
+                        each one and has an AI model watch it, to write down what it shows and says: the narration, the text
+                        on screen, the key moments and the topics. The watching is done by the AI models Meta runs itself
+                        (Muse), or by Meta's open model (Muse Spark Open), which our inference partner Baseten runs for us.
+                        Only the reel is sent, with our instructions for it. <strong>No message, comment or follower data
+                        goes to Baseten.</strong>
+                    </li>
+                    <li>
+                        <strong>Stored:</strong> each reel's notes, with its link and date: a video library for the account,
+                        which its owner reads in the dashboard. The video file is not kept, and the library is kept as
+                        section 4 says.
+                    </li>
+                    <li>
+                        <strong>Used for:</strong> when a message asks for a video on some topic, the library's notes (not the
+                        videos) are sent to Meta's AI models together with the text of that message, to find the right one
+                        (section 3).
+                    </li>
+                </ul>
+
                 <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
+                    <li>To understand the photos, videos, voice notes and shared posts you send, so that the reply is about what you actually sent, and, where the account owner has switched on the video library, to find the account owner's video that answers your question (section 3).</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
                     <li>To alert the operator of the tool when a conversation with his own account needs a person (section 3).</li>
@@ -2450,7 +2674,7 @@
                     What is sent to Google is message text and the direction of each message,
                     nothing more. <strong>Your username, your account ID, and the conversation
                     ID are not sent to Google.</strong> Comment text is never sent to Google at
-                    all — the comment path does not use AI.
+                    all, and the comment path does not use an AI model.
                 </p>
                 <p>
                     The operator of the tool (section 9) can instead have an account's replies written by one
@@ -2483,6 +2707,49 @@
                     section 1, which contain nothing about you.
                 </p>
 
+                <h3 id="meta-ai-en">Meta's AI models (Muse)</h3>
+                <p>
+                    The operator of the tool (section 9) can switch on Meta's AI models, called Muse, as one of the
+                    providers in section 5, and the account owner can then switch on, for the account, the features below.
+                    <strong>Each of them is off unless it has been switched on.</strong> Where they are switched on,
+                    <strong>the text of direct messages and the media people send may be processed by
+                    Meta's AI models (Muse)</strong>:
+                </p>
+                <ul>
+                    <li>
+                        <strong>Direct messages:</strong> the text of your message and the earlier messages of the thread are
+                        sent to Meta's models to write the reply, in place of Google, as described above for any provider.
+                    </li>
+                    <li>
+                        <strong>Photos, videos, shared posts, reels and stories, replies to the account's stories, and
+                        stories that mention the account</strong> (Instagram direct messages only, not Messenger): a model looks
+                        at the file and describes it, so that the reply is about what you sent instead of asking you to type it
+                        again.
+                    </li>
+                    <li>
+                        <strong>Voice notes:</strong> Meta's speech model turns the recording into text, which is then answered
+                        like a written message.
+                    </li>
+                    <li>
+                        <strong>The account owner's own reels:</strong> a model watches each one, to build the video
+                        library described in section 1.
+                    </li>
+                </ul>
+                <p>
+                    <strong>The media file is not kept.</strong> The app downloads it, sends it to the model and discards it.
+                    What it keeps, with your message, is a short description of what it showed or, for a voice note, a
+                    transcript (section 1), which is deleted with your conversation if you ask for it to be erased (see the
+                    <a href="/data-deletion">data deletion page</a>). The model sees everything a photo or a video shows.
+                </p>
+                <p>
+                    <strong>Standard models only.</strong> The app uses only Meta's Standard models: according to Meta, the
+                    content they receive is not used to train Meta's models. It never uses Meta's "Contributor" models, which
+                    may be trained on what they receive, with anything people send or with the account owner's videos.
+                    <strong>Your username, your account ID and the conversation ID are not sent to Meta's models either.</strong>
+                    What Meta itself keeps of what it receives is governed by its own policy, and we cannot delete it on your
+                    behalf.
+                </p>
+
                 <h2 id="retention-en">4. How long it is kept</h2>
                 <ul>
                     <li>
@@ -2506,6 +2773,11 @@
                         <strong>This includes the text of your private messages.</strong> If you
                         want yours removed, the route is the
                         <a href="/data-deletion">data deletion page</a>.
+                    </li>
+                    <li>
+                        <strong>What an AI model understood of the media you sent</strong> — the short description, or the
+                        transcript of a voice note: kept with your message, so for as long as the message text above. The
+                        file itself is not kept.
                     </li>
                     <li>
                         <strong>The TikTok connection</strong> — the <span class="code">open_id</span>,
@@ -2557,6 +2829,10 @@
                         an explainer or the settings use them. The narration and the finished videos are kept until 30 days after the
                         explainer's last scheduled post, and while it has none. Deleting an explainer deletes its files.
                     </li>
+                    <li>
+                        <strong>The video library</strong> — the notes about the account owner's own published reels: kept with
+                        the account, with no automatic expiry. The video files are not kept.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
@@ -2567,7 +2843,8 @@
                         arrive from Meta, and replies are sent back through it. If the account owner
                         boosts a post, Meta receives what it needs to create the ad in the owner's ad
                         account (the post, budget, days, country and link) and returns the spend and the
-                        totals (section 1).
+                        totals (section 1). If the operator switches on Meta's AI models, Meta also receives, through a
+                        separate service used with the operator's own key, the text and media described in section 3.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
                     </li>
                     <li>
@@ -2628,7 +2905,9 @@
                 <p>
                     The operator of the tool (section 9) can switch on one or more of the providers below to write
                     AI drafts for an account owner and, where the operator chooses, the replies to its direct messages
-                    (section 3). <strong>None of them is used unless the operator has added its key and left it
+                    (section 3). One of them, Meta's AI models, can also read the media people send and the account
+                    owner's own reels, and Baseten runs Meta's open model on those reels alone (sections 1 and 3).
+                    <strong>None of them is used unless the operator has added its key and left it
                     switched on</strong>; until then nothing reaches it.
                 </p>
                 <ul>
@@ -2654,6 +2933,20 @@
                         <a href="https://console.groq.com/docs/your-data" target="_blank" rel="noopener noreferrer">How Groq handles API data</a>.
                     </li>
                     <li>
+                        <strong>Meta</strong> (Muse) — Meta's AI models. The same company as the Meta in the list above, but a
+                        separate service, used with the operator's key. Where it is switched on it receives what sections 3 and 1
+                        describe: the text of direct messages, the media people send, and the account owner's own
+                        reels. Only its Standard models are used, and according to Meta the content they receive is not used to
+                        train its models.
+                        <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Baseten</strong> — our inference partner. It runs Meta's open model (Muse Spark Open) to watch
+                        the account owner's own published reels, where the operator has chosen that over the models Meta runs
+                        itself. <strong>No message, comment or follower data goes to it.</strong>
+                        <a href="https://www.baseten.co/privacy-policy/" target="_blank" rel="noopener noreferrer">Baseten's privacy policy</a>.
+                    </li>
+                    <li>
                         <strong>A service at an address the operator enters</strong> — if the operator adds the address of an
                         OpenAI-compatible service, whoever runs that address is a sub-processor too.
                     </li>
@@ -2664,7 +2957,8 @@
                     for them and their captions — so that a draft can be written for them. When the operator has a provider write
                     an account's direct-message replies, <strong>the text of the conversation is sent to that provider
                     too</strong>, exactly as section 3 describes; <strong>nothing else about people who comment or message
-                    on Instagram or Facebook is sent through this route</strong>. Each provider is used with the operator's key, not the
+                    on Instagram or Facebook is sent through this route</strong>, except what section 3 says Meta's AI models may also
+                    receive (the media people send); Baseten receives only the account owner's own reels. Each provider is used with the operator's key, not the
                     account owner's. What reaches each of them is governed by its own
                     policy, and we cannot delete it on your behalf.
                 </p>
