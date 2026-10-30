@@ -5776,6 +5776,38 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'meta-vision',
+                    title: { ar: 'رؤية ميتا (تجريبية)', en: 'Meta vision (beta)' },
+                    body: {
+                        ar: [
+                            '**رؤية ميتا** تخلّي مساعد المبيعات يقرأ اللي يرسله لك الناس على إنستغرام، بدل السطر الثابت الواحد اللي ياخذونه اليوم: صورة أو لقطة شاشة، أو ريل أو منشور مُشارَك، أو ردّ على قصتك، أو قصة يشيرون فيها لك. نموذج Muse من ميتا يشوفه ويوصفه، والمساعد يرد من عروضك، و**الرسائل** تعرض تحت الرسالة وش شاف، وتحت الرد وش قرّر وليش. هي تجريبية ومتوقفة لين تشغّلها، من **مساعد الرسائل** ← **رؤية ميتا**.',
+                            { dl: [
+                                ['المفاتيح', 'كل مفتاح مستقل. **الردّ على الصور والريلز والإشارات في القصص** هو اللي يشتغل اليوم. أما **الرسائل الصوتية** و**ذاكرة الفيديو** فقريباً: تقدر تشغّلهم الحين، لكن هذا يحفظ اختيارك بس، ويبدأون لما يصدرون.'],
+                                ['من يُجاب عنهم', 'اختر **هؤلاء الأشخاص فقط** واضغط **أضف شخصاً**: تختار من محادثات إنستغرام الأخيرة بالاسم أو اسم المستخدم اللي تعرضه **الرسائل**، ويبقى أي أحد ثاني على الردود المعتادة. واختر **الجميع** لما تطمئن، وبعدها كل من يراسل حسابك على إنستغرام ممكن يُقرأ اللي يرسله.'],
+                                ['الحد اليومي', '**الحد اليومي (بالدولار)** هو أقصى ما تصرفه في اليوم، من 0 إلى 50 (من منتصف الليل لمنتصفه بتوقيت UTC). والبطاقة تعرض كم انصرف اليوم. إذا وصل الحد توقفت لين اليوم التالي، وتاخذ هالرسائل السطر الثابت المعتاد، ويوصلك تنبيه مرة وحدة. والصفر يخليها متوقفة.'],
+                                ['وش يُحفظ', 'الصورة أو الفيديو أو الصوت يُرسل لنموذج Muse من ميتا عشان يقرأه، وما نحفظ الملف. اللي يبقى مع الرسالة وصف قصير، أو كلام الرسالة الصوتية، عشان تقراه في **الرسائل** ويتذكره المساعد في المحادثة.'],
+                                ['إنستغرام بس', 'يقرأ رسائل إنستغرام. ماسنجر وواتساب ما تُقرأ، والرسالة اللي ما يرسل إنستغرام رابط محتواها (صورة تُشاهد مرة وحدة) ياخذ صاحبها السطر المعتاد.'],
+                                ['النماذج القياسية بس', 'تُستخدم نماذج ميتا القياسية بس، وميتا ما تدرّب نماذجها على اللي يُرسل لها. وأي نموذج ممكن يُدرَّب على المُرسل يُرفض، وين ما اختير.'],
+                            ] },
+                            { tip: 'ابدأ باختيار **هؤلاء الأشخاص فقط** وحساباتك التجريبية: ارسل من واحد منها ريل ولقطة شاشة، واقرأ **الرسائل**، وبعدها اختر **الجميع**. واضغط **احفظ رؤية ميتا** بعد أي تغيير: لها زرها الخاص، غير زر المساعد اللي فوقها.' },
+                            'وإذا ما قدر يقرأ شي بثقة ما يخمّن: الشخص ياخذ السطر المعتاد، أو يُطلب منه يرسله مرة ثانية، و**الرسائل** تقول وش صار بصراحة: غير مقروء، أو انتهى رابطه، أو كبير جداً، أو تُرك، وليش.',
+                        ],
+                        en: [
+                            '**Meta vision** lets the sales assistant read what people send you on Instagram, instead of giving them the one fixed line they get today: a photo or screenshot, a shared reel or post, a reply to your story, or a story that mentions you. Meta’s Muse model looks at it and describes it, the assistant answers from your offers, and the **Inbox** shows under the message what it saw, and under the reply what it decided and why. It is in beta and off until you switch it on, in **DM assistant** → **Meta vision**.',
+                            { dl: [
+                                ['The switches', 'Each one is separate. **Answer photos, reels and story mentions** is the one that works today. **Voice notes** and **Video memory** are coming soon: you can switch them on now, but that only saves your choice, and they start working when they ship.'],
+                                ['Who it answers', 'Choose **Only these people** and press **Add a person**: you pick from your recent Instagram conversations, by the name or username the **Inbox** shows, and anyone else keeps getting today’s replies. Choose **Everyone** when you are happy with it, and every person who messages your Instagram account can have what they send read.'],
+                                ['The daily cap', '**Daily cap (USD)** is the most it may spend in a day, from 0 to 50 (UTC midnight to midnight). The card shows what was spent today. When the cap is reached it stops until the next day, those messages get the usual fixed line, and you are told once. 0 keeps it off.'],
+                                ['What is kept', 'The photo, video or audio is sent to Meta’s Muse model to be read, and we do not store the file. What stays with the message is a short description, or the words of a voice note, so you can read it in the **Inbox** and the assistant remembers it in the conversation.'],
+                                ['Instagram only', 'It reads Instagram messages. Messenger and WhatsApp are not read, and a message Instagram sends with no link to its media (a view-once photo) gets today’s line.'],
+                                ['Standard models only', 'Only Meta’s Standard models are used, and Meta does not train its models on what is sent to them. A model that may be trained on what it is sent is refused, wherever it is chosen.'],
+                            ] },
+                            { tip: 'Start with **Only these people** and your own test accounts: send a reel and a screenshot from one, read the **Inbox**, and only then choose **Everyone**. Press **Save Meta vision** after any change: it has its own button, apart from the assistant’s above it.' },
+                            'When it cannot read something with confidence it does not guess: the person gets the usual line, or is asked to send it again, and the **Inbox** says what happened, honestly: unreadable, expired, too large or skipped, and why.',
+                        ],
+                    },
+                },
+                {
                     id: 'save',
                     title: { ar: 'نصائح توفّر عليك', en: 'Ways to spend less' },
                     body: {
