@@ -407,7 +407,8 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
             'Photos, videos, shared posts, reels and stories, replies to the account\'s stories, and stories that mention the account (Instagram direct messages only, not Messenger): a model looks at the file and describes it, so that the reply is about what you sent instead of asking you to type it again.',
             'Voice notes: Meta\'s speech model turns the recording into text, which is then answered like a written message.',
             'Comments: a comment on the account\'s own post that matches no keyword may be read by a model, to tell whether it is a question or a wish to buy, which the account may then answer as a keyword campaign would.',
-            'The account owner\'s own reels: a model watches each one once, to build the video library described in section 1.',
+            // No "once": the design retries a reel whose analysis failed the next day (the job's dedupe key carries the date).
+            'The account owner\'s own reels: a model watches each one, to build the video library described in section 1.',
         );
         has(words(meta.ar),
             'يستطيع مُشغّل الأداة (القسم 9) أن يفعّل نماذج الذكاء الاصطناعي من ميتا، واسمها Muse، مزوّداً من المزوّدين المذكورين في القسم 5، ثم يستطيع صاحب الحساب أن يفعّل للحساب الميزات التالية.',
@@ -417,7 +418,7 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
             'الصور ومقاطع الفيديو والمنشورات والريلز والقصص المُشارَكة، والردود على قصص الحساب، والقصص التي يُذكر فيها الحساب (للرسائل الخاصة على إنستجرام فقط، لا ماسنجر): ينظر نموذجٌ في الملف ويصفه، ليكون الردّ عمّا أرسلتَه بدلاً من أن يطلب منك كتابته من جديد.',
             'الرسائل الصوتية: تُحوَّل الرسالة الصوتية إلى نص بنموذج ميتا للكلام، ثم يُجاب عنه كما يُجاب عن رسالة مكتوبة.',
             'التعليقات: قد يقرأ نموذجٌ تعليقاً على منشور الحساب نفسه لا يطابق أي كلمة مفتاحية، ليميّز هل هو سؤال أو رغبة في الشراء، فقد يُجيب عنه الحساب حينئذٍ كما تُجيب حملةٌ بكلمة مفتاحية.',
-            'ريلز صاحب الحساب نفسه: يشاهد نموذجٌ كلاً منها مرة واحدة لبناء مكتبة الفيديوهات الموصوفة في القسم 1.',
+            'ريلز صاحب الحساب نفسه: يشاهد نموذجٌ كلاً منها لبناء مكتبة الفيديوهات الموصوفة في القسم 1.',
         );
         // Every Latin name in the Arabic block sits in its own <bdi>, as its neighbours do, or the punctuation around it reorders.
         for (const latin of ['Muse', 'Standard', 'Contributor']) assert.ok(meta.ar.includes(`<bdi lang="en" dir="ltr">${latin}</bdi>`), latin);
