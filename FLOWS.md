@@ -3089,6 +3089,60 @@ The format is Meta's signed-request format as the Data Deletion callback guide d
 Callback (<https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow>, "Detecting When People Uninstall Apps") points to it and
 does not repeat the payload. **Not yet seen against a live delivery**: the callback's Test button in the App Dashboard is the check.
 
+### 8.10 — Where Meta sends each event type: the app-level subscriptions (2026-10-30)
+
+A Meta app delivers each webhook **object type** (`instagram`, `page`, `whatsapp_business_account`, …) to **one callback URL for the whole app**. The Page-level
+subscription of §8.3 (`subscribePage`) only chooses which fields a Page sends. On 2026-10-30 another project that uses this Meta app pointed `instagram` (and a
+field-less `user`) at its own site: 45 hours without an Instagram DM or comment, while the Page token was valid, every connection read "Connected", `lastWebhookAt`
+stayed fresh from Facebook's events, and Settings → "Test the handshake" only asks THIS deployment about its own handshake. A signature failure at least writes
+`webhook.signature_rejected` (§1.2); this writes nothing, because the delivery never arrives. **`src/services/metaWebhooks.ts`** is what can see it.
+
+1. **Read.** `readAppSubscriptions`: `GET {GRAPH_BASE}/{app-id}/subscriptions` with the app token `{app-id}|{app-secret}` in an `Authorization: Bearer` header, never a
+   URL. `parseSubscriptions` refuses anything that is not `{ data: [...] }` (`graph_failed`): not an answer is never "no subscriptions". `describeSubscriptions` reads each
+   object against the host of `expectedCallback`, which is the `app.public_base_url` setting (or `PUBLIC_BASE_URL`) plus `/webhook` and never the Host header of whoever is
+   asking: `{ object, host, ours, active, fields, version, carriesEvents, missingRequired }`.
+2. **Judge** (pure). `findProblems` / `isBroken`: **broken** is an object that carries events being elsewhere or switched off, `instagram` or `page` having no subscription,
+   `instagram` lacking `comments`/`messages`, `page` lacking `feed`/`messages`. A field-less object pointing elsewhere (`user`) and a Page without `messaging_referrals`
+   are **warnings**, shown on the card and never alarming. One problem per object, the worst: `elsewhere`, `inactive`, `missing_field`, or `missing_object`.
+3. **Check, at most once an hour.** `checkMetaWebhooks`, called by `GET /api/jobs/drain` (after the lead sweep, before the Monteur's) and by `GET /api/cron/publish`,
+   held back by the stored `attemptedAt` (a held-back run is one settings read), and **never throws**. The answer is the app setting `meta.webhooks.status`
+   (`{ checkedAt, attemptedAt, ok, expectedUrl, expectedHost, objects, error }`): `checkedAt` is when Meta last ANSWERED, `attemptedAt` when a check last RAN. A check that
+   got no answer (no `META_APP_ID`/secret, no public address, Meta down) keeps the last answer's `ok` and `objects` and says why in `error`: not knowing neither starts nor
+   stops a warning. A deployment with nothing to check yet logs `meta.webhooks_unanswered` at `info`.
+4. **Tell the owner.** `alertIfNew`: an email (Resend) and a Telegram message, through the same `notify.*` channels the DM alerts use, **Arabic first and then English**,
+   naming which event type goes to which host and the link to the card (`settingsLinkFor`). One alert a day per problem (`meta.webhooks.alerted`, `{ day (UTC), keys }`, a key
+   being object + kind + host), listing every problem that stands. A day on which nothing could be sent (no channel on, every send refused) is **not** marked told: the next
+   hourly check tries again.
+5. **Show it.** `GET /api/health/tenant` adds `webhooks: { ok, checkedAt, problems }` from the stored answer: app settings only, **no Graph call on a page load**, the same for
+   every tenant. Only a definite `ok: false` is a notice: `HealthStrip.webhookNotice` (**`dashboard/js/pages/admin_common.js`**) feeds Today's alert
+   (`OverviewPage.buildAlerts`) and the Inbox's strip (`InboxPage.paintWebhookStrip`); the platform admin gets a link to the card, everyone else is told whom to ask.
+   `GET /api/meta/webhooks` (platform admin; 404 for anyone else) is the live read behind Settings → Platform → "Where Meta sends your events"
+   (`MetaConnect.eventsBlock`): it forces a check, stores it, and adds the plan the button would apply and `lastEvents`, the newest `jobs` row per platform for THIS workspace
+   (`readLastEvents`: `tenant_key` is the Instagram account's id, the Page's, or the WhatsApp number's).
+6. **Repair.** `POST /api/meta/webhooks/repair` (platform admin, `{ "confirm": true }` or 400): `repairSubscriptions`.
+   - **Plan** (`planRepair`, pure): one step per object that is elsewhere, off or short of a required field, in the order Meta listed them, then one per required object Meta
+     has none for. An object that is ours, active and complete has none, so an empty plan means there is nothing to send. A step carries the **union** of the object's current
+     and required fields (a POST replaces the list, so nothing Meta subscribed to is dropped) at the **version its fields already have** (the app's version when they differ
+     or there are none).
+   - **Before anything is sent**: `not_configured`, `no_base_url`, `no_verify_token` (409 each) and the first read failing (`graph_failed`, 502). The verify token is the first of
+     `verifyTokenCandidates` (**`src/services/webhookVerifyToken.ts`**): the environment's `META_VERIFY_TOKEN`, then the first active creator's `webhook_verify_token`, which is
+     the list `GET /webhook` accepts (`src/index.ts`), so the handshake Meta makes during the POST accepts it by construction.
+   - **Each step**: `POST https://graph.facebook.com/{version}/{app-id}/subscriptions`, form-encoded: `object`, `callback_url`, `fields` (left out for a field-less object),
+     `verify_token`, `include_values=true`, `access_token`. The tokens are in the **body**, never the URL. **Not retried** (re-pointing is idempotent, and a timeout is
+     answered by reading back), 30 s because Meta calls this deployment while it applies. A Meta refusal is that step's `{ ok: false, error }` (scrubbed of every secret) in a 200,
+     never a 401, which the dashboard reads as signed out.
+   - **Then** it reads again (what it stores and returns is what Meta says now, not what the POSTs claimed) and goes over each active connected tenant's Page
+     (`repairPages`): `GET /{page}/subscribed_apps`, and only a Page that does not list this app, or lacks a field it needs (`WEBHOOK_FIELDS`, plus `leadgen` while the tenant's
+     lead-ads sign-off stands), is subscribed again with `subscribePage`. A complete Page is not touched (that would only risk losing a field). One tenant's failure is counted
+     and stops nothing.
+   - **Audit**: one `meta.webhooks_repair` row, per object the host and fields before and after and the outcome of each step, no token.
+
+> **Why the host and not the whole URL.** It is what `scripts/diagnose.mjs` has always compared (`checkMetaConfig`), and what separates "another site" from "us". A wrong
+> path on our own host is not detected.
+
+> **What a repair does to another project.** A Meta app has one address per event type, so a project that uses this app stops receiving the types put back. The question
+> before the button says so, and lists every object that will change.
+
 ## 9. A tenant's profile draft: read, ask, check, wait
 
 `profile_drafts` (migration v34) reads what a tenant gave (an Instagram handle, a website, a YouTube channel, some pasted text), asks a
@@ -4134,6 +4188,10 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 8 | a connection that needs renewing or that Meta rejects — the recheck | `token.reconnect_due` (`warn` / `error`) | yes: the health columns; "reconnect due" on the card and on Overview |
 | 8 | a deauthorize request with no valid signature, a stale one, or one for a person no tenant was connected by — **`routes/meta.ts`** `/deauthorize` | `meta.deauthorize_rejected` (`warn`) / `meta.deauthorize_handled` (`matched: 0`) | no (the rejection precedes the database; an unmatched id changes nothing and answers 200) |
 | 8 | a TikTok or YouTube flow the wizard began, whose return address could not be saved (no v35 column) | `tiktok.return_to_unsaved` / `youtube.return_to_unsaved` (`warn`) | the state without `return_to`: it returns to Settings, and still connects |
+| 8 | **Meta sends an event type to another website** (the Meta app's `instagram` or `page` subscription points elsewhere, is switched off or lacks `comments`/`messages`) — `describeSubscriptions` / `findProblems`, §8.10 | `meta.webhooks_checked` (`warn`, `problems`) and `meta.webhooks_alert` (`warn`, one outcome per channel); `webhook.signature_rejected` does **not** fire | **no `jobs` row**: the delivery never arrives. The stored `meta.webhooks.status` says `ok: false`, Today and the Inbox show the notice, the owner is told once a day |
+| 8 | the hourly webhook check cannot run (no `META_APP_ID` / secret, no public address, Meta not answering) — `checkMetaWebhooks` | `meta.webhooks_unanswered` (`info` for a deployment with nothing to check, `warn` for a Meta that did not answer) | `meta.webhooks.status` keeps the last answer and sets `error`; **no notice** comes from a check that never answered |
+| 8 | the webhook alert could not be sent (no channel switched on, every send refused) — `alertIfNew` | `meta.webhooks_alert` (`warn`), `meta.webhooks_alert_email_failed` / `_telegram_failed` | no `meta.webhooks.alerted` entry: the day is not spent, the next hourly check tries again |
+| 8 | a repair step that Meta refused or that timed out — `applyStep` | `meta.webhooks_repaired` (`steps_failed`, `still_broken`) | the audit row `meta.webhooks_repair` (outcome per object); `ok: false` inside `steps` of a 200, and the card keeps Meta's own words beside the object |
 | 9 | **no AI provider has a key** — `draftStep` / `generate` (`no_provider`) | `ai.call_refused`, `onboarding.draft_failed` (`error_kind: no_provider`) | yes: `failed`, `needsAiKey`, the prefill kept; **no draft, no retry** |
 | 9 | one source unreadable (private Instagram, a site that refuses, no YouTube key) — `fetchDraftSources` | `onboarding.ig_source_failed`, `onboarding.yt_source_skipped`, `onboarding.draft_fetched` | yes: the draft is made from the rest, the failure is a line of `sources_status` |
 | 9 | TikTok connected but its profile fields were never stored (the profile scope is off, or not reconnected since) — `readTikTok` | `onboarding.draft_fetched` (`tiktok: skipped`) | yes: `sources_status.tiktok` `skipped`, no TikTok source |

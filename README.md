@@ -180,7 +180,7 @@ Mounts are in `src/index.ts` and `src/routes/api.ts`. [`FLOWS.md`](FLOWS.md) wal
 | `/api/auth/me`, `/api/auth/switch-tenant`, `/api/auth/password` | `src/routes/api.ts` | Any session | Who am I, change workspace, change password |
 | `/api/{stats,campaigns,interactions,posts,upload,conversations,dm/funnel,settings,health/tenant,attention,creators}` | `src/routes/api.ts` | Any member reads, `operator` writes, `owner` changes the Meta token and webhook token. Some settings are platform admin only | The core dashboard API |
 | `/api/tiktok`, `/api/youtube` | `tiktok.ts`, `youtube.ts` | Members read, `owner` connects, platform admin saves the app keys | Connections and publishing options |
-| `/api/meta` | `src/routes/meta.ts` | `owner` connects, `operator` runs the comment check, platform admin saves app settings | Connect with Facebook |
+| `/api/meta` | `src/routes/meta.ts` | `owner` connects, `operator` runs the comment check, platform admin saves app settings and reads or repairs where Meta sends each event type (`/webhooks`) | Connect with Facebook |
 | `/api/whatsapp` | `src/routes/whatsapp.ts` | Members read, `owner` writes | Number, agent mode, billing, entry links |
 | `/api/studio` | `src/routes/studio.ts` | `operator`. `owner` manages workers. Explainers also need a switch that only the platform owner's workspace can have | Carousels, Monteur, infographics, explainers |
 | `/api/growth` | `src/routes/growth.ts` | `operator` | Insights, coach, keywords, competitors |

@@ -191,6 +191,12 @@ a warning. The app subscribes a connected Page to the same list itself (`WEBHOOK
 `leadgenFieldsFor`, `src/services/metaLogin.ts`); the App Dashboard's Page webhook needs the
 fields too.
 
+**The dashboard checks this for you (2026-10-30).** On 2026-10-30 another project that uses this Meta app pointed `instagram` at its own site: 45 hours without an Instagram
+DM or comment while every connection read "Connected". Settings → Platform → "Where Meta sends your events" now reads the same `GET /{app}/subscriptions` and says, per object, whether
+it goes to AutoReply, to another website (named), or is switched off, with when an event of that kind last reached the workspace; "Send everything to AutoReply" sets it back after a
+question that lists what will change. The drain reads it at most once an hour: a problem raises a red alert on Today, a strip on the Inbox, and an email and Telegram message once a day
+per problem (`meta.webhooks_checked` and `meta.webhooks_alert` in the log). `diagnose.mjs` stays the check you run from a terminal. How it works: `FLOWS.md` §8.10.
+
 ### 2.3 Was the signature rejected?
 
 **A webhook signature failure is invisible from the database.** The 403 happens before
