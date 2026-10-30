@@ -542,6 +542,10 @@ const API = {
     // The owner's A/B wording experiment for the sales assistant (DM plan S14): the tenant's own, readable by every role, written by an operator.
     getSalesVariants: () => API.request('/settings/sales-variants'),
     saveSalesVariants: (data) => API.request('/settings/sales-variants', { method: 'POST', body: JSON.stringify(data) }),
+    // Meta vision (beta), the card under the AI settings form (docs/specs/005-muse-sees T038): the OWNER's write (`canAdminister`). The read is the `muse` block of `getAiSettings`.
+    saveMuseSettings: (data) => API.request('/settings/ai/muse', { method: 'POST', body: JSON.stringify(data) }),
+    // The people that card offers: the inbox's own list of threads (`GET /conversations`) at its page size, the newest 100. The card keeps the Instagram ones.
+    getRecentConversations: () => API.request('/conversations?limit=100'),
 
     // ─── Carousel Studio (STUDIO.md §4) ─────────────────────────────────────
     // The worker on the Mac does the slow parts (indexing, rendering); these

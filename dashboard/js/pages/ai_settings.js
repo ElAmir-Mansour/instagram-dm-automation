@@ -5,6 +5,12 @@
  * the loose Arabic leading and `unicode-bidi: plaintext` (via `.user-content`)
  * rather than the tight UI line-height: a system prompt with a Latin URL in
  * the middle of an Arabic sentence has to keep that URL where it was typed.
+ *
+ * Under both sits the "Meta vision (beta)" card (docs/specs/005-muse-sees T038): the owner's switches for the assistant reading what people send
+ * (photos, reels, story mentions), who it answers (people he picks from his recent Instagram conversations, or everyone) and its daily cap. It is the
+ * OWNER's (`POST /api/settings/ai/muse` is `canAdminister`), it has its own Save and its own unsaved note, and its state is the `muse` block of the
+ * same `GET /api/settings/ai` the form loads from: `undefined` (a server that predates it) hides the card, `null` (the server could not read it) shows why
+ * and offers nothing to save, so a card that failed to load is never saved over his real choice.
  */
 const AiSettingsPage = {
     /**
@@ -64,7 +70,7 @@ const AiSettingsPage = {
      * the two texts, the switch, the model, the temperature, the engine, the sales choice, the follow-up delay and the A/B wordings.
      */
     canLeave() {
-        return !this.hasUnsavedChanges();
+        return !this.hasUnsavedChanges() && !this.museDirty();
     },
 
     /** Called after the person agreed to lose the edits (`App.discardCurrent`): the parked draft would bring them back. */
@@ -91,6 +97,8 @@ const AiSettingsPage = {
         this._saved = null;
         this._routeView = undefined;
         this._variants = undefined;
+        this._muse = undefined;
+        this._musePicker = null;
     },
 
     /** What the server last gave us, to compare the fields against. */
@@ -400,6 +408,8 @@ const AiSettingsPage = {
                         </div>
                     </div>
                 </section>
+
+                ${this.museShell()}
             </div>
         `;
     },
@@ -456,6 +466,8 @@ const AiSettingsPage = {
             this._variants = undefined;
             this.syncEngine();
             this.syncSales();
+            // The Meta vision card's own block of the same answer (`muse`): absent hides the card, null says it could not be read.
+            this.adoptMuse(settings.muse);
 
             this._saved = {
                 system_prompt: prompt.value,
@@ -980,6 +992,609 @@ const AiSettingsPage = {
         this.refreshDirty();
     },
 
+    // ─── Meta vision (beta): the owner's card (docs/specs/005-muse-sees T038) ────────────────────────────────
+
+    /** The switches, in the order the card draws them. */
+    MUSE_SWITCHES: Object.freeze(['dm_media', 'voice', 'memory']),
+    /** The control each switch is. */
+    MUSE_CONTROLS: Object.freeze({ dm_media: 'muse-dm-media', voice: 'muse-voice', memory: 'muse-memory' }),
+    /** The switches whose feature is not live yet (voice ships in P3, video memory in P4): the server stores them and nothing reads them, and the card says so. */
+    MUSE_SOON: Object.freeze({ dm_media: false, voice: true, memory: true }),
+    /** A sender id as the server takes it (`SENDER_ID` in src/services/dmSales/mode.ts): the picker offers only threads whose id is one, so nothing else is ever sent. */
+    MUSE_SENDER: /^\d{5,32}$/,
+    /** The picker's list is the inbox's own, at the inbox's page size: the newest threads, filtered to Instagram's here. */
+    MUSE_PICKER_LIMIT: 100,
+    /** Longest handle or name the card draws; the stylesheet wraps the rest. */
+    MUSE_TEXT_MAX: 100,
+
+    /**
+     * The card's state. `undefined`: nothing adopted yet. `{ status: 'unavailable' }`: the server did not send the block (hide the card). `{ status: 'failed' }`:
+     * it sent `null` (it could not read the settings: say so, draw nothing live, save nothing). `{ status: 'ready', ... }`: `saved` and `draft` are
+     * `{ switches, who: 'list' | 'everyone', ids, capText }` (`draft` is what is on screen, `saved` what the server holds), `people` maps a sender id to
+     * `{ username, name }` for the names the card knows, and the rest is what the server said about the key and the spend.
+     */
+    _muse: undefined,
+
+    /** The picker: whether it is open, how the list of recent conversations stands (`idle`, `loading`, `ready`, `failed`), its rows and what is typed in its search. */
+    _musePicker: null,
+
+    musePickerState() {
+        if (!this._musePicker) this._musePicker = { open: false, status: 'idle', rows: [], term: '' };
+        return this._musePicker;
+    },
+
+    /**
+     * May this session change Meta vision? `POST /settings/ai/muse` is the OWNER's (`canAdminister`): switching it on decides whether a customer's media goes to
+     * Meta's models, and the cap is his money. An operator may run the agent and still reads the card; a viewer reads everything. Optimistic like `canEdit`:
+     * where the shell cannot answer (a test harness, a page before the session has loaded) the session is an owner's.
+     */
+    canEditMuse() {
+        const owner = typeof App === 'undefined' || typeof App.canAdminister !== 'function' || App.canAdminister();
+        return this.canEdit() && owner;
+    },
+
+    /** A string, trimmed, at most `MUSE_TEXT_MAX` characters; '' for anything that is not text. */
+    museText(value) {
+        return typeof value === 'string' ? Array.from(value.trim()).slice(0, this.MUSE_TEXT_MAX).join('') : '';
+    },
+
+    /** The card, as the shell draws it: controls where an owner changes things, locked for everyone else, and every value filled in by `paintMuse` once the answer is in. */
+    museShell() {
+        const mayEdit = this.canEditMuse();
+        const off = mayEdit ? '' : html.raw(' disabled');
+        const lock = mayEdit ? '' : html.raw(' readonly');
+        // An operator can change the agent and not this: the viewer's note (`ai.readOnly`) is not theirs to read.
+        const ownerOnly = this.canEdit() && !mayEdit;
+        const row = (name) => html`
+            <div class="toggle-block">
+                <div>
+                    <h4 aria-level="3">${t(`muse.${this.museKey(name)}`)}${this.MUSE_SOON[name] ? html` <span class="badge badge-neutral muse-soon">${t('muse.soon')}</span>` : ''}</h4>
+                    <p id="${this.MUSE_CONTROLS[name]}-desc">${t(`muse.${this.museKey(name)}Desc`)}${this.MUSE_SOON[name] ? html` ${t('muse.soonNote')}` : ''}</p>
+                </div>
+                <label class="switch" for="${this.MUSE_CONTROLS[name]}">
+                    <span class="sr-only">${t(`muse.${this.museKey(name)}`)}</span>
+                    <input type="checkbox" id="${this.MUSE_CONTROLS[name]}" aria-describedby="${this.MUSE_CONTROLS[name]}-desc"${off}>
+                    <span class="switch-track"></span>
+                </label>
+            </div>
+        `;
+        return html`
+            <section class="surface ai-panel muse-card" id="muse-card" aria-labelledby="muse-title">
+                <div class="panel-head">
+                    <i data-lucide="eye" aria-hidden="true"></i>
+                    <h3 id="muse-title" aria-level="2">${t('muse.title')}</h3>
+                    <span class="badge badge-info">${t('muse.beta')}</span>
+                </div>
+                <p class="form-hint mbe-3">${t('muse.intro')} ${UI.helpLink('ai-usage#meta-vision', t('help.link.metaVision'), { newTab: true })}</p>
+                ${ownerOnly ? html`<p class="form-hint mbe-3" id="muse-owner-note" role="note"><i data-lucide="eye" aria-hidden="true"></i> ${t('muse.ownerOnly')}</p>` : ''}
+                <div id="muse-error"></div>
+                <div class="muse-status" id="muse-status" role="status" aria-live="polite"></div>
+
+                <div class="muse-body" id="muse-form" data-input="muse:changed" data-change="muse:changed">
+                    ${this.MUSE_SWITCHES.map((name) => row(name))}
+
+                    <hr class="divider">
+
+                    <div class="form-group">
+                        <label class="form-label" for="muse-who">${t('muse.who')}</label>
+                        <select class="select" id="muse-who" data-change="muse:whoChanged" aria-describedby="muse-who-desc muse-who-hint"${off}>
+                            <option value="list">${t('muse.whoList')}</option>
+                            <option value="everyone">${t('muse.whoEveryone')}</option>
+                        </select>
+                        <span class="field-desc" id="muse-who-desc">${t('muse.whoDesc')}</span>
+                        <p class="form-hint hidden" id="muse-everyone-note">${t('muse.whoEveryoneNote')}</p>
+                        <p class="form-hint hidden" id="muse-who-hint" role="status" aria-live="polite"></p>
+                    </div>
+
+                    <div class="muse-people-block hidden" id="muse-people-block">
+                        <p class="form-label" id="muse-people-label">${t('muse.people')}</p>
+                        <ul class="growth-chips muse-people" id="muse-people-list" aria-labelledby="muse-people-label"></ul>
+                        <div>
+                            ${UI.button({ variant: 'secondary', size: 'sm', icon: 'user-plus', label: t('muse.add'), action: 'muse:togglePicker', id: 'muse-picker-open', disabled: !mayEdit })}
+                        </div>
+                        <div class="muse-picker hidden" id="muse-picker" role="group" aria-labelledby="muse-picker-title" data-keydown="muse:pickerKey">
+                            <h4 class="muse-picker-title" id="muse-picker-title" aria-level="3">${t('muse.pickerTitle')}</h4>
+                            <label class="sr-only" for="muse-picker-search">${t('muse.pickerSearch')}</label>
+                            <input class="field" id="muse-picker-search" type="search" dir="auto" autocomplete="off" spellcheck="false" data-input="muse:pickerSearch"
+                                   placeholder="${t('muse.pickerSearch')}" aria-controls="muse-picker-list"${off}>
+                            <p class="form-hint" id="muse-picker-note" role="status" aria-live="polite"></p>
+                            <ul class="muse-choices" id="muse-picker-list"></ul>
+                        </div>
+                    </div>
+
+                    <hr class="divider">
+
+                    <div class="form-group">
+                        <label class="form-label" for="muse-daily-usd">${t('muse.cap')}</label>
+                        <span class="field-desc" id="muse-cap-desc">${t('muse.capDesc')}</span>
+                        <input class="field muse-cap" id="muse-daily-usd" type="number" inputmode="decimal" dir="ltr" lang="en" min="0" max="50" step="0.01"
+                               autocomplete="off" aria-describedby="muse-cap-desc muse-spent muse-cap-hint"${lock}>
+                        <p class="form-hint" id="muse-spent"></p>
+                        <p class="form-hint hidden" id="muse-cap-hint" role="status" aria-live="polite"></p>
+                    </div>
+
+                    <div class="form-actions">
+                        ${UI.button({ variant: 'primary', icon: 'check', label: t('muse.save'), action: 'muse:save', id: 'muse-save-btn', disabled: !mayEdit })}
+                        <span class="unsaved-note hidden" id="muse-unsaved-note" role="status">${t('ai.unsaved')}</span>
+                    </div>
+                </div>
+            </section>
+        `;
+    },
+
+    /** The dictionary's word for a switch: `dm_media` is "dmMedia". */
+    museKey(name) {
+        return name === 'dm_media' ? 'dmMedia' : name;
+    },
+
+    // ─── What the server said, and what is on screen ───
+
+    /** The card's state from the server's `muse` block (see `_muse`). */
+    museStateFrom(view) {
+        const sw = view.switches && typeof view.switches === 'object' ? view.switches : {};
+        const allow = Array.isArray(view.allowSenders) ? view.allowSenders.filter((id) => typeof id === 'string') : [];
+        const everyone = allow.includes('*');
+        const ids = everyone ? [] : allow.filter((id) => this.MUSE_SENDER.test(id));
+        const cap = typeof view.dailyUsd === 'number' && Number.isFinite(view.dailyUsd) ? view.dailyUsd : null;
+        const limits = view.limits && typeof view.limits === 'object' ? view.limits : {};
+        const saved = {
+            switches: { dm_media: sw.dm_media === true, voice: sw.voice === true, memory: sw.memory === true },
+            who: everyone ? 'everyone' : 'list',
+            ids,
+            capText: cap === null ? '' : String(cap),
+        };
+        const people = new Map();
+        (Array.isArray(view.people) ? view.people : []).forEach((person) => {
+            if (!person || typeof person.id !== 'string' || !this.MUSE_SENDER.test(person.id)) return;
+            people.set(person.id, { username: this.museText(person.username).replace(/^@/, ''), name: this.museText(person.name) });
+        });
+        return {
+            status: 'ready',
+            saved,
+            draft: { switches: { ...saved.switches }, who: saved.who, ids: [...saved.ids], capText: saved.capText },
+            people,
+            spentToday: typeof view.spentToday === 'number' && Number.isFinite(view.spentToday) ? view.spentToday : null,
+            keyReady: view.keyReady === true ? true : view.keyReady === false ? false : null,
+            model: view.route && typeof view.route.model === 'string' ? this.museText(view.route.model) : '',
+            max: Number.isInteger(limits.dailyUsdMax) ? limits.dailyUsdMax : 50,
+            maxPeople: Number.isInteger(limits.allowSendersMax) ? limits.allowSendersMax : 50,
+        };
+    },
+
+    /** Takes the server's answer as the card's state and draws it: the load, and a save's answer. The picker stays as it is when `keepPicker`. */
+    adoptMuse(view, keepPicker) {
+        if (view === undefined) this._muse = { status: 'unavailable' };
+        else if (!view || typeof view !== 'object' || Array.isArray(view)) this._muse = { status: 'failed' };
+        else this._muse = this.museStateFrom(view);
+        if (!keepPicker) this._musePicker = null;
+        this.paintMuse();
+    },
+
+    /** Copies what is on screen into the draft. A control that is not on the page keeps what the draft has. */
+    syncMuseDraft() {
+        const m = this._muse;
+        if (!m || m.status !== 'ready') return;
+        this.MUSE_SWITCHES.forEach((name) => {
+            const el = document.getElementById(this.MUSE_CONTROLS[name]);
+            if (el) m.draft.switches[name] = !!el.checked;
+        });
+        const who = document.getElementById('muse-who');
+        if (who) m.draft.who = who.value === 'everyone' ? 'everyone' : 'list';
+        const cap = document.getElementById('muse-daily-usd');
+        if (cap && typeof cap.value === 'string') m.draft.capText = cap.value;
+    },
+
+    /** The cap as a number of dollars: a whole number or one with one or two decimals, from 0 to the server's maximum. `null` for anything else (empty, a letter, three decimals, out of range). */
+    museCap(text) {
+        const raw = String(text === undefined || text === null ? '' : text).trim();
+        if (!/^\d{1,2}(\.\d{1,2})?$/.test(raw)) return null;
+        const n = Number(raw);
+        const max = this._muse && this._muse.max ? this._muse.max : 50;
+        return n >= 0 && n <= max ? n : null;
+    },
+
+    /** One string for a state, so "unsaved" is a comparison. The list counts only while it is the one that answers, and a cap that is not a number is kept as typed so it differs. */
+    museCanon(d) {
+        const cap = this.museCap(d.capText);
+        return JSON.stringify([d.switches.dm_media, d.switches.voice, d.switches.memory, d.who, d.who === 'list' ? d.ids : [], cap === null ? `?${String(d.capText).trim()}` : cap]);
+    },
+
+    /** The card on screen differs from what the server holds. False when there is no card to differ (not loaded, failed, hidden). */
+    museDirty() {
+        const m = this._muse;
+        if (!m || m.status !== 'ready') return false;
+        this.syncMuseDraft();
+        return this.museCanon(m.draft) !== this.museCanon(m.saved);
+    },
+
+    /** What the server takes for the card as it stands. Every field, every time: what is on screen is what is saved. */
+    musePayload() {
+        const d = this._muse.draft;
+        return {
+            switches: { dm_media: d.switches.dm_media, voice: d.switches.voice, memory: d.switches.memory },
+            allow_senders: d.who === 'everyone' ? ['*'] : [...d.ids],
+            daily_usd: this.museCap(d.capText),
+        };
+    },
+
+    // ─── Drawing it ───
+
+    /** "$0.42", isolated so the sign stays on the number in an Arabic sentence; a sum under a cent says so. */
+    museMoney(n) {
+        if (n > 0 && n < 0.01) return t('muse.lessThanCent');
+        return `⁦$${n.toFixed(2)}⁩`;
+    },
+
+    /** Every part of the card from the state: the controls' values and whether they are live, the key line, the people, the hints and the spend. */
+    paintMuse() {
+        const m = this._muse;
+        const card = document.getElementById('muse-card');
+        if (card) card.classList.toggle('hidden', !m || m.status === 'unavailable');
+        if (!m || m.status === 'unavailable') return;
+        const ready = m.status === 'ready';
+        // A card that could not load shows nothing as chosen and lets nothing be saved: what it would send is not what he saved.
+        const live = ready && this.canEditMuse();
+        const put = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
+        this.MUSE_SWITCHES.forEach((name) => put(this.MUSE_CONTROLS[name], (el) => { el.checked = ready && m.draft.switches[name]; el.disabled = !live; }));
+        put('muse-who', (el) => { el.value = ready ? m.draft.who : 'list'; el.disabled = !live; });
+        put('muse-daily-usd', (el) => { el.value = ready ? m.draft.capText : ''; el.readOnly = !live; });
+        put('muse-save-btn', (el) => { el.disabled = !live; });
+        put('muse-picker-open', (el) => { el.disabled = !live; });
+        put('muse-picker-search', (el) => { el.disabled = !live; });
+        put('muse-error', (el) => {
+            el.innerHTML = ready ? '' : esc(html`
+                ${UI.errorStrip(t('muse.loadErrorTitle'), t('muse.loadErrorHint'), 'muse-error-strip')}
+                <p>${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'muse:reload', id: 'muse-reload' })}</p>
+            `);
+            UI.icons(el);
+        });
+        this.paintMuseStatus();
+        this.paintMusePeople();
+        this.paintMuseHints();
+        this.paintMuseSpent();
+        this.paintMusePicker();
+        this.refreshMuseDirty();
+    },
+
+    /** The key line: whether a Meta key can answer (the gate's own question) and which model it would read with; what to do when none can. */
+    paintMuseStatus() {
+        const el = document.getElementById('muse-status');
+        if (!el) return;
+        const m = this._muse;
+        if (!m || m.status !== 'ready') {
+            el.innerHTML = '';
+            return;
+        }
+        let line;
+        if (m.keyReady === true) {
+            line = html`<span class="badge badge-success"><i data-lucide="check-circle" aria-hidden="true"></i>${t('muse.key.ready')}</span>${m.model ? html` <span class="muse-status-note">${t('muse.key.model', { model: this.isolate(m.model) })}</span>` : ''}`;
+        } else if (m.keyReady === false) {
+            line = html`<span class="badge badge-warning"><i data-lucide="alert-triangle" aria-hidden="true"></i>${t('muse.key.notReady')}</span> <span class="muse-status-note">${t('muse.key.notReadyHint')}</span>`;
+        } else {
+            line = html`<span class="badge badge-neutral"><i data-lucide="info" aria-hidden="true"></i>${t('muse.key.unknown')}</span>`;
+        }
+        el.innerHTML = esc(line);
+        UI.icons(el);
+    },
+
+    /** A person as the inbox names a sender nobody has looked up: "User 3051", from the last four of the id. */
+    musePersonLabel(id) {
+        const known = this._muse && this._muse.people ? this._muse.people.get(id) : null;
+        if (known && known.username) return `@${known.username}`;
+        if (known && known.name) return known.name;
+        return t('inbox.anonUser', { id: id.slice(-4) });
+    },
+
+    /** One person on the list: the handle the inbox shows (else the name, else "User 3051"), the name beside a handle, and a remove button only where it can be used. */
+    musePersonChip(id, editable) {
+        const known = this._muse.people.get(id);
+        const label = this.musePersonLabel(id);
+        const sub = known && known.username && known.name ? known.name : '';
+        const remove = t('muse.remove', { name: this.isolate(label) });
+        return html`
+            <li class="chip growth-chip" data-person="${id}">
+                <span class="user-content" dir="auto">${label}</span>
+                ${sub ? html`<span class="muse-person-sub user-content" dir="auto">${sub}</span>` : ''}
+                ${editable ? html`
+                    <button type="button" class="growth-chip-x" data-action="muse:removePerson" data-id="${id}" data-focus-key="muse-person-${id}"
+                            aria-label="${remove}" title="${remove}"><i data-lucide="x" aria-hidden="true"></i></button>
+                ` : ''}
+            </li>
+        `;
+    },
+
+    /** The people block (the list, and the picker's button) while the answer is "only these people", the everyone note while it is everyone. */
+    paintMusePeople() {
+        const m = this._muse;
+        const ready = !!m && m.status === 'ready';
+        const everyone = ready && m.draft.who === 'everyone';
+        const block = document.getElementById('muse-people-block');
+        if (block) block.classList.toggle('hidden', !ready || everyone);
+        const note = document.getElementById('muse-everyone-note');
+        if (note) note.classList.toggle('hidden', !everyone);
+        const list = document.getElementById('muse-people-list');
+        if (!list) return;
+        if (!ready || everyone) {
+            list.innerHTML = '';
+            return;
+        }
+        const editable = this.canEditMuse();
+        list.innerHTML = esc(m.draft.ids.map((id) => this.musePersonChip(id, editable)));
+        UI.icons(list);
+    },
+
+    /** The lines under "who" and under the cap. Written as text, so nothing in them is ever markup. */
+    paintMuseHints() {
+        const m = this._muse;
+        const ready = !!m && m.status === 'ready';
+        const who = document.getElementById('muse-who-hint');
+        if (who) {
+            let text = '';
+            if (ready && m.draft.who === 'list') {
+                if (m.draft.ids.length === 0) text = t('muse.whoNobody');
+                else if (m.draft.ids.length >= m.maxPeople) text = t('muse.limit', { max: m.maxPeople });
+            }
+            who.textContent = text;
+            who.classList.toggle('hidden', !text);
+            who.classList.toggle('text-warning', !!text);
+        }
+        const cap = document.getElementById('muse-cap-hint');
+        if (cap) {
+            const bad = ready && this.museCap(m.draft.capText) === null;
+            cap.textContent = bad ? t('muse.capInvalid', { max: m.max }) : '';
+            cap.classList.toggle('hidden', !bad);
+            cap.classList.toggle('text-warning', bad);
+        }
+    },
+
+    /** "Spent today: $0.42 of $3.00": the sum the gate's cap counts, against the cap the server holds (the draft is not what is enforced). */
+    paintMuseSpent() {
+        const el = document.getElementById('muse-spent');
+        if (!el) return;
+        const m = this._muse;
+        if (!m || m.status !== 'ready') {
+            el.textContent = '';
+            return;
+        }
+        const cap = this.museCap(m.saved.capText);
+        el.textContent = m.spentToday === null
+            ? t('muse.spentUnknown')
+            : t('muse.spent', { spent: this.museMoney(m.spentToday), cap: cap === null ? '—' : this.museMoney(cap) });
+    },
+
+    /** The note beside the card's Save: unsaved edits. */
+    refreshMuseDirty() {
+        const note = document.getElementById('muse-unsaved-note');
+        if (note) note.classList.toggle('hidden', !this.museDirty());
+    },
+
+    // ─── Changing it ───
+
+    /** Typing, a switch: the draft follows the screen, and the lines that depend on it. Nothing is redrawn (it would take the caret). */
+    museChanged() {
+        this.syncMuseDraft();
+        this.paintMuseStatus();
+        this.paintMuseHints();
+        this.refreshMuseDirty();
+    },
+
+    /** "Only these people" or "Everyone": the list and the picker are for the first only. */
+    museWhoChanged() {
+        this.syncMuseDraft();
+        this.paintMusePeople();
+        this.paintMuseHints();
+        this.paintMusePicker();
+        this.refreshMuseDirty();
+    },
+
+    // ─── The picker: people from his recent Instagram conversations ───
+
+    /** The rows of the inbox's own list that the card can offer: Instagram threads with an id the server takes, newest first (the server's order), each once. */
+    musePickerRowsFrom(result) {
+        const list = result && Array.isArray(result.data) ? result.data : [];
+        const rows = [];
+        list.forEach((row) => {
+            if (!row || typeof row !== 'object' || row.platform !== 'instagram') return;
+            const id = typeof row.instagram_user_id === 'string' ? row.instagram_user_id.trim() : '';
+            if (!this.MUSE_SENDER.test(id) || rows.some((r) => r.id === id)) return;
+            rows.push({ id, username: this.museText(row.username).replace(/^@/, ''), name: this.museText(row.profile_name), at: row.last_message_at || '' });
+        });
+        return rows;
+    },
+
+    /** What the picker offers now: the loaded threads that are not on the list yet and match what is typed (name, handle), in the order loaded. */
+    museChoices() {
+        const m = this._muse;
+        const p = this.musePickerState();
+        const term = p.term.trim().toLocaleLowerCase();
+        return p.rows.filter((row) => !m.draft.ids.includes(row.id)
+            && (!term || `${row.username} ${row.name}`.toLocaleLowerCase().includes(term)));
+    },
+
+    /** Asks for the recent threads once per open (again after a failure, or when `again`). A late answer, or one for a page that was left, is dropped. */
+    async loadMusePicker(again) {
+        const p = this.musePickerState();
+        if (p.status === 'loading' || (p.status === 'ready' && !again)) return;
+        p.status = 'loading';
+        this.paintMusePicker();
+        const page = this._seq;
+        let result = null;
+        let failed = false;
+        try {
+            result = await API.getRecentConversations();
+        } catch (err) {
+            console.error('Meta vision picker load error:', err);
+            failed = true;
+        }
+        if (page !== this._seq || p !== this._musePicker) return;
+        p.rows = failed ? [] : this.musePickerRowsFrom(result);
+        p.status = failed ? 'failed' : 'ready';
+        this.paintMusePicker();
+    },
+
+    /** The panel and its list for the picker's state. Choices are buttons; everything typed or named by a person goes through `html` as text. */
+    paintMusePicker() {
+        const m = this._muse;
+        const p = this.musePickerState();
+        const open = !!m && m.status === 'ready' && m.draft.who === 'list' && p.open;
+        const panel = document.getElementById('muse-picker');
+        if (panel) panel.classList.toggle('hidden', !open);
+        const toggle = document.getElementById('muse-picker-open');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            toggle.setAttribute('aria-controls', 'muse-picker');
+        }
+        const list = document.getElementById('muse-picker-list');
+        const note = document.getElementById('muse-picker-note');
+        if (!open || !list) return;
+        const full = m.draft.ids.length >= m.maxPeople;
+        let message = '';
+        let retry = false;
+        let choices = [];
+        if (p.status === 'loading') message = t('muse.pickerLoading');
+        else if (p.status === 'failed') { message = t('muse.pickerFailed'); retry = true; }
+        else if (full) message = t('muse.limit', { max: m.maxPeople });
+        else {
+            choices = this.museChoices();
+            if (p.rows.length === 0) message = t('muse.pickerNone');
+            else if (choices.length === 0) message = p.term.trim() ? t('muse.pickerNoMatch', { term: this.isolate(p.term.trim().slice(0, 40)) }) : t('muse.pickerNone');
+            else message = t('muse.pickerNote', { count: this.MUSE_PICKER_LIMIT });
+        }
+        if (note) {
+            note.textContent = message;
+            note.classList.toggle('text-warning', p.status === 'failed');
+        }
+        list.innerHTML = esc([
+            retry ? html`<li>${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'muse:retryPicker', id: 'muse-picker-retry' })}</li>` : '',
+            choices.map((row) => this.musePickerChoice(row)),
+        ]);
+        UI.icons(list);
+    },
+
+    /** One thread in the picker: the handle the inbox shows (else the name, else "User 3051"), with the name and how long ago they wrote beneath it. */
+    musePickerChoice(row) {
+        const label = row.username ? `@${row.username}` : (row.name || t('inbox.anonUser', { id: row.id.slice(-4) }));
+        const age = row.at ? UI.relativeAge(row.at, { neverText: '' }).text : '';
+        const sub = [row.username ? row.name : '', age].filter(Boolean).join(' · ');
+        return html`
+            <li>
+                <button type="button" class="muse-choice" data-action="muse:addPerson" data-id="${row.id}" aria-label="${t('muse.pickerAdd', { name: this.isolate(label) })}">
+                    <span class="user-content" dir="auto">${label}</span>
+                    ${sub ? html`<span class="muse-choice-sub user-content" dir="auto">${sub}</span>` : ''}
+                </button>
+            </li>
+        `;
+    },
+
+    /** Opens or closes the picker; opening asks for the threads. */
+    museTogglePicker() {
+        const m = this._muse;
+        if (!m || m.status !== 'ready' || !this.canEditMuse()) return;
+        const p = this.musePickerState();
+        p.open = !p.open;
+        this.paintMusePicker();
+        if (!p.open) return;
+        const search = document.getElementById('muse-picker-search');
+        if (search && typeof search.focus === 'function') search.focus();
+        this.loadMusePicker(false);
+    },
+
+    /** Escape closes the picker and gives the focus back to the button that opened it. */
+    musePickerKey(event) {
+        if (!event || event.key !== 'Escape') return;
+        const p = this.musePickerState();
+        if (!p.open) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        p.open = false;
+        this.paintMusePicker();
+        const toggle = document.getElementById('muse-picker-open');
+        if (toggle && typeof toggle.focus === 'function') toggle.focus();
+    },
+
+    musePickerSearch(el) {
+        const p = this.musePickerState();
+        p.term = el && typeof el.value === 'string' ? el.value : '';
+        this.paintMusePicker();
+    },
+
+    /** Puts a person from the picker on the list: the sender id of that thread, and the names the picker knew for it. Only ids of this shape, at most the server's limit, each once. */
+    museAddPerson(id) {
+        const m = this._muse;
+        if (!m || m.status !== 'ready' || !this.canEditMuse()) return;
+        if (!this.MUSE_SENDER.test(String(id)) || m.draft.ids.includes(id) || m.draft.ids.length >= m.maxPeople) return;
+        const row = this.musePickerState().rows.find((r) => r.id === id);
+        if (row && !m.people.has(id)) m.people.set(id, { username: row.username, name: row.name });
+        m.draft.ids.push(id);
+        this.paintMusePeople();
+        this.paintMuseHints();
+        this.paintMusePicker();
+        this.refreshMuseDirty();
+        const search = document.getElementById('muse-picker-search');
+        if (search && typeof search.focus === 'function') search.focus();
+    },
+
+    /** Takes a person off the list. The focus goes to the button that adds one, which is always there. */
+    museRemovePerson(id) {
+        const m = this._muse;
+        if (!m || m.status !== 'ready' || !this.canEditMuse()) return;
+        const at = m.draft.ids.indexOf(id);
+        if (at < 0) return;
+        m.draft.ids.splice(at, 1);
+        this.paintMusePeople();
+        this.paintMuseHints();
+        this.paintMusePicker();
+        this.refreshMuseDirty();
+        const add = document.getElementById('muse-picker-open');
+        if (add && typeof add.focus === 'function') add.focus();
+    },
+
+    // ─── Saving it ───
+
+    /**
+     * Save, with the card's own button. Nothing is sent for a session that is not the owner's (the server refuses it as well), for a card that did not load, or for a cap
+     * the server would refuse: that one is stopped here with its hint on screen. What the server answers is what is on screen and what is saved.
+     */
+    async museSave(button) {
+        if (!this.canEditMuse()) return;
+        const m = this._muse;
+        if (!m || m.status !== 'ready') return;
+        this.syncMuseDraft();
+        if (this.museCap(m.draft.capText) === null) {
+            this.paintMuseHints();
+            UI.toast(t('muse.capInvalid', { max: m.max }), 'error');
+            return;
+        }
+        const restore = UI.actionBusy(button, t('common.saving'));
+        if (!restore) return; // already in flight
+        const page = this._seq;
+        try {
+            const got = await API.saveMuseSettings(this.musePayload());
+            if (page !== this._seq) return;
+            this.adoptMuse(got, true);
+            UI.toast(t('muse.saved'), 'success');
+        } catch (err) {
+            console.error('Save Meta vision error:', err);
+            UI.toast((err && err.message) || t('muse.saveFailed'), 'error');
+            if (page === this._seq) this.refreshMuseDirty();
+        } finally {
+            restore();
+        }
+    },
+
+    /** Asks again for the card's block only, so a failed card can recover without touching the agent's form above it. */
+    async museReload() {
+        const page = this._seq;
+        let view = null;
+        try {
+            const got = await API.getAiSettings();
+            view = got ? got.muse : undefined;
+        } catch (err) {
+            console.error('Meta vision reload error:', err);
+        }
+        if (page !== this._seq) return;
+        this.adoptMuse(view);
+    },
+
     async saveSettings(form, event) {
         event.preventDefault();
         // The server refuses a viewer's save (`canOperate`); nothing is sent, and no toast quotes its 403.
@@ -1267,4 +1882,18 @@ UI.registerActions('ai', {
     variantsChanged: () => AiSettingsPage.variantsChanged(),
     addVariant: () => AiSettingsPage.addVariant(),
     removeVariant: (el) => AiSettingsPage.removeVariant(el && el.dataset ? el.dataset.slot : ''),
+});
+
+// Meta vision (beta): the owner's card under the form.
+UI.registerActions('muse', {
+    changed: () => AiSettingsPage.museChanged(),
+    whoChanged: () => AiSettingsPage.museWhoChanged(),
+    togglePicker: () => AiSettingsPage.museTogglePicker(),
+    pickerKey: (el, e) => AiSettingsPage.musePickerKey(e),
+    pickerSearch: (el) => AiSettingsPage.musePickerSearch(el),
+    retryPicker: () => AiSettingsPage.loadMusePicker(true),
+    addPerson: (el) => AiSettingsPage.museAddPerson(el && el.dataset ? el.dataset.id : ''),
+    removePerson: (el) => AiSettingsPage.museRemovePerson(el && el.dataset ? el.dataset.id : ''),
+    save: (el) => AiSettingsPage.museSave(el),
+    reload: () => AiSettingsPage.museReload(),
 });

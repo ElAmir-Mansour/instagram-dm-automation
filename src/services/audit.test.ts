@@ -186,6 +186,11 @@ describe('isAuditAction', () => {
         for (const name of names) assert.equal(isAuditAction(name), true, name);
     });
 
+    it('knows the action of Meta vision\'s settings, under the name the audit trail will show', () => {
+        assert.equal(AUDIT_ACTIONS.museSettingsChanged, 'muse.settings_changed');
+        assert.equal(isAuditAction('muse.settings_changed'), true);
+    });
+
     it('rejects an unknown filter rather than returning an empty list', () => {
         // An operator filtering on a typo should be told, not shown "no results" — which
         // reads as "nothing has happened", the opposite of the truth.
