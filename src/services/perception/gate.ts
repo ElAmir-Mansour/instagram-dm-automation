@@ -55,10 +55,10 @@ export interface GateArgs {
 export const MUSE_BUDGET_PURPOSES: readonly string[] = Object.freeze(['perception_dm', 'perception_voice', 'recall', 'reel_index']);
 
 /**
- * The routed purpose a perception call asks the providers layer on, and so the one the key check resolves. It names a purpose the Meta provider's change
- * (P0) registers in `AI_PURPOSES` with `meta` as the only provider that may answer it; typed as a string until that change is on this branch.
+ * The routed purpose a perception call asks the providers layer on, and so the one the key check resolves: `AI_PURPOSES` registers it with `meta` as
+ * the only provider that may answer it (P0).
  */
-const PERCEPTION_PURPOSE: string = 'perception_dm';
+const PERCEPTION_PURPOSE: AiPurpose = 'perception_dm';
 
 // ─── What the gate reads (each one replaceable, so a test never reaches a database or a provider) ───────────────────────────
 
@@ -96,7 +96,7 @@ export async function spentTodayUsd(creatorId: string, now: Date): Promise<numbe
 /** Whether the providers layer has a route that can answer perception. Only "no provider" is a no: any other failure is thrown, and the gate refuses on it. */
 export async function perceptionRouteReady(creatorId: string): Promise<boolean> {
     try {
-        await resolveRoute(PERCEPTION_PURPOSE as AiPurpose, creatorId);
+        await resolveRoute(PERCEPTION_PURPOSE, creatorId);
         return true;
     } catch (err) {
         if (err instanceof AiError && err.kind === 'no_provider') return false;

@@ -413,15 +413,13 @@ describe('spentTodayUsd', () => {
 // ─── The key check ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('perceptionRouteReady', () => {
-    const P0_LANDED = (AI_PURPOSES as readonly string[]).includes('perception_dm');
-
     it('reads a failure that is not "no provider" as a failure to tell, never as "no key"', async () => {
         // No settings at all: the providers layer finds no key and answers `no_provider`; a database that fails is another error, which the gate treats as no route.
         (pool as any).query = async () => { throw new Error('connection terminated'); };
         await assert.rejects(() => perceptionRouteReady(TENANT), (err) => !(err instanceof AiError && err.kind === 'no_provider'));
     });
 
-    it('asks the providers layer on a purpose that layer routes to Meta only (skipped until the Meta provider\'s change is on this branch)', { skip: P0_LANDED ? false : 'P0 (the Meta provider and its routed purposes) has not landed on this branch' }, () => {
+    it('asks the providers layer on a purpose that layer routes to Meta only', () => {
         for (const purpose of ['perception_dm', 'recall', 'reel_index']) assert.ok((AI_PURPOSES as readonly string[]).includes(purpose), purpose);
         assert.deepEqual((PURPOSE_PROVIDER_ALLOWLIST as Record<string, readonly string[] | undefined>)['perception_dm'], ['meta']);
     });
