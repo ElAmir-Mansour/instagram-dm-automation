@@ -172,6 +172,11 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     if (facts.variant?.opening) lines.push(c.variantOpening(facts.variant.opening));
     if (facts.variant?.cta) lines.push(c.variantCta(facts.variant.cta));
     if (facts.ad) lines.push(...c.ad(facts.ad));
+    // Meta Muse (perception, recall): lines the perception module words, said last. Blank is absent, so an empty string can never add an empty line.
+    const sent = facts.sent?.trim();
+    if (sent) lines.push(sent);
+    const video = facts.video?.trim();
+    if (video) lines.push(video);
     return lines.join('\n');
 }
 
