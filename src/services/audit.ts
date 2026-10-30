@@ -266,6 +266,11 @@ export const AUDIT_ACTIONS = {
     explainersProviderUpdated: 'explainers.provider_updated',
     /** A platform admin switched illustrated explainers on or off for a tenant (`explainers.enabled.<tenant>`). */
     explainersEnabledChanged: 'explainers.enabled_changed',
+    /**
+     * The owner changed Meta vision from the AI settings card (`muse.switches.<tenant>`, `muse.allow_senders.<tenant>`, `muse.daily_usd.<tenant>`). `detail` holds what
+     * changed, the three switches' states, who it answers (nobody, a list, everyone) with the COUNT of people on the list, and the daily cap: never a sender id.
+     */
+    museSettingsChanged: 'muse.settings_changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
