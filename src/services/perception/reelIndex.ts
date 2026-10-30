@@ -315,9 +315,6 @@ async function readNode(graph: Pick<GraphSession, 'get'>, igMediaId: string): Pr
 
 // ─── The model's two tries ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A model error kind that is a failure of the PROVIDER (and so earns the one fallback), as opposed to ours: the platform's budget, or no route at all. */
-const NOT_A_PROVIDER_FAILURE: ReadonlySet<string> = new Set(['budget', 'no_provider']);
-
 type Analysed =
     | { ok: true; analysis: ReelAnalysis; out: AiGenerateResult; fellBack: boolean; spentUsd: number }
     /** Not the reel's fault and not a failure of the provider: the platform's own AI budget is spent, or no route can answer. The reel is left as it was. */
@@ -360,8 +357,9 @@ async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, ba
             notes.push(note(err));
             failedOn = { provider: err.provider, kind: err.kind, retryable: err.retryable, reason: err.kind === 'timeout' ? 'timeout' : err.kind === 'bad_output' ? 'bad_output' : 'provider_error' };
         }
-        // The one fallback: only from Baseten, only once, only for a failure of the provider.
-        if (attempt === 0 && failedOn.provider === 'baseten' && !NOT_A_PROVIDER_FAILURE.has(failedOn.kind)) {
+        // The one fallback: only from Baseten, only once. What is not a failure of the provider (the platform's budget, no route at all) returned above, so every
+        // kind that gets here is Baseten's own: a refused key, no credit, a throttle, a timeout, a cut-off answer or an answer that was no use.
+        if (attempt === 0 && failedOn.provider === 'baseten') {
             fellBack = true;
             log('warn', 'muse.reel_index_fallback', { creator_id: args.creatorId, ig_media_id: args.igMediaId, from: 'baseten', kind: failedOn.kind });
             continue;
