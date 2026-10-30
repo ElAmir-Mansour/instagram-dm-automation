@@ -60,6 +60,17 @@
  *     the bot's reply time, over 7, 30 or 90 days. It sits above the list, closed, and asks the server only
  *     when opened or when the period changes: it is not part of the poll.
  *
+ * ─── What Meta Muse saw, and why the reply was what it was (docs/specs/005-muse-sees T039, the "saw → decided → why" trace) ───
+ * With Meta vision on, a message with no words (a reel, a photo, a story mention, a voice note) is read by Meta's Muse model, and what it understood is stored
+ * with the message (`messages.perception`; `GET /conversations/:id/messages` is `SELECT *`, so it arrives with the row). Under the customer's bubble:
+ *   - what was SEEN (`perception.seen`), or HEARD for a voice note (`perception.transcript`), in the transcript's own style with a small "seen by Meta Muse"
+ *     mark, the model, how sure it was and whose content it is;
+ *   - when it could not be read, that, honestly: unreadable, could not be opened (too large, expired, no answer) or not read at all (switched off, not on the
+ *     list, the cap): the status and reason come from closed lists (`PERCEPTION_REASONS`, the server's own), and anything else is escaped text.
+ * Under the reply, `aiMetaDetail` draws one wrapping line: Saw (`ai_meta.perceived`) or Recalled (`ai_meta.recalled`) → Decided (the action) → Why (`ai_meta.reason`).
+ * Everything in `perception` and `ai_meta` came from a model reading a stranger's media: every value goes through the `html` tag as text, and a model's sentence is
+ * cut to a length and never a key.
+ *
  * ─── Handled, and who is really answering (UX overhaul US1: audit IN-01, IN-02) ──────────
  *   - "Mark handled" ends a thread's turn in the owner's To do (`handled_at`, v45): a thread answered from the Instagram app is
  *     recorded nowhere else, so it stayed "Needs you" and in every count for ever. It is set from the chat header, from a button on
@@ -116,6 +127,20 @@ const InboxPage = {
     })),
     /** Longest an offer id or an unknown value is shown, so a long string cannot stretch the line it is in. */
     AI_META_TEXT_MAX: 48,
+    /** Longest the reason line of a decision (`ai_meta.reason`) is shown: it is a model's sentence, so it is cut. */
+    TRACE_REASON_MAX: 200,
+
+    // ─── What Meta Muse saw (src/services/perception/types.ts: a test fails when these differ) ──
+    /** `perception.status`: the only one whose description is the message's meaning. The rest are said as what they are. */
+    PERCEPTION_STATUSES: Object.freeze(['ok', 'unreadable', 'skipped', 'failed']),
+    /** `perception.reason`, from all three lists the server keeps (skipped, failed, unreadable): each has a sentence of its own, and one outside them is shown as escaped text. */
+    PERCEPTION_REASONS: Object.freeze([
+        'switch_off', 'not_allowed_sender', 'sales_off', 'budget', 'unsupported_kind', 'no_key', 'no_url',
+        'too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout',
+        'low_confidence', 'empty_transcript',
+    ]),
+    /** `perception.about_owner`: whose content the media is. "unclear" says nothing, so it is not drawn. */
+    PERCEPTION_OWNERS: Object.freeze(['own_content', 'other_content', 'personal']),
 
     // ─── The funnel card ─────────────────────────────────────────────────────
     FUNNEL_WINDOWS: Object.freeze([7, 30, 90]),
@@ -527,7 +552,8 @@ const InboxPage = {
         if (text === this.STRUCTURED_PLACEHOLDER) {
             return thread.last_message_type === 'carousel' ? t('inbox.preview.carousel') : t('inbox.preview.structured');
         }
-        if (text === this.STORY_MENTION_PLACEHOLDER || (thread.last_message_type === 'story_mention' && !text)) return t('inbox.storyMention');
+        // A story mention Meta Muse has read is stored as "[Story Mention] <what it showed>" (`perceivedText`): still a mention here, and the description is under the message.
+        if (text === this.STORY_MENTION_PLACEHOLDER || (thread.last_message_type === 'story_mention' && (!text || text.startsWith(this.STORY_MENTION_PLACEHOLDER)))) return t('inbox.storyMention');
         const wordless = this.wordlessKind(thread.last_message_type);
         if (wordless && thread.last_message_type !== 'story_mention') return t(this.attachmentStyle(wordless).label);
         return text || t('inbox.noMessages');
@@ -1908,7 +1934,9 @@ const InboxPage = {
         const text = typeof msg.text === 'string' ? msg.text : '';
         const structure = this.structuredContent(msg);
         const attachments = isOut ? '' : this.attachmentsMarkup(msg);
-        const transcript = isOut ? '' : this.voiceTranscript(msg);
+        // What Meta Muse understood of a message with no words, and for a voice note it is the transcript: then it is drawn once, with the mark, and not twice.
+        const perception = isOut ? '' : this.perceptionMarkup(msg);
+        const transcript = isOut || this.perceptionOf(msg) ? '' : this.voiceTranscript(msg);
 
         // A placeholder is not words. "[Structured Template]" is what a carousel is stored as; its cards are the message, and
         // when they cannot be drawn (the stored body is pruned after a while) the bubble says what it was instead.
@@ -1917,7 +1945,8 @@ const InboxPage = {
         if (text === this.STRUCTURED_PLACEHOLDER) {
             shown = '';
             if (!structure) note = t(msg.message_type === 'carousel' ? 'inbox.carouselGone' : 'inbox.structuredGone');
-        } else if (text === this.STORY_MENTION_PLACEHOLDER) {
+        } else if (text === this.STORY_MENTION_PLACEHOLDER || (!isOut && msg.message_type === 'story_mention' && this.perceptionOf(msg) && text.startsWith(this.STORY_MENTION_PLACEHOLDER))) {
+            // The mention, and when Meta Muse has read it, the placeholder carries its description after it: that is drawn under the message, not as words they wrote.
             shown = t('inbox.storyMention');
         } else if (!isOut && msg.message_type !== 'story_mention' && this.wordlessKind(msg.message_type)) {
             // A message with no words: `[photo]` is what the pipeline stored, not what the customer said. The chips are the message.
@@ -1938,6 +1967,7 @@ const InboxPage = {
                     ${note ? html`<p class="msg-note" dir="auto">${note}</p>` : ''}
                     ${structure}
                     ${attachments}
+                    ${perception}
                     ${transcript ? html`<div class="msg-transcript"><span class="msg-transcript-label">${t('inbox.voiceTranscript')}</span><p class="msg-transcript-text" dir="auto">${transcript}</p></div>` : ''}
                     <span class="message-time">${UI.formatTime(msg.created_at)}</span>
                 </div>
@@ -2174,6 +2204,65 @@ const InboxPage = {
         `;
     },
 
+    // ─── What Meta Muse understood of a message with no words (`messages.perception`) ─────────────────────
+    /**
+     * `messages.perception` of a customer's message as an object: JSONB arrives parsed, a string is parsed. null when perception never ran (the column is NULL
+     * for every row until a tenant switches Meta vision on), for an outbound row, and for anything that is not an object.
+     */
+    perceptionOf(msg) {
+        if (!msg || msg.direction !== 'inbound') return null;
+        return this.parsePayload(msg.perception);
+    },
+
+    /** A confidence of 0 to 1 as "92%", or '' for anything that is not such a number. */
+    confidenceText(value) {
+        return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? UI.formatPercent(Math.round(value * 100)) : '';
+    },
+
+    /**
+     * What Meta Muse made of the message, under the customer's bubble. An `ok` perception is what it SAW (what it HEARD, for a voice note), in the transcript's
+     * style, with the mark, the model, how sure it was and whose content it is. Anything else is said as it is: it could not read it, could not open it, or did
+     * not read it, and why. '' when perception never ran. The description is a model's sentence about a stranger's media, so it is escaped text and nothing else.
+     */
+    perceptionMarkup(msg) {
+        const p = this.perceptionOf(msg);
+        if (!p) return '';
+        const status = this.plainText(p.status);
+        if (status !== 'ok') return this.perceptionNote(p, status);
+        const audio = p.kind === 'audio' || msg.message_type === 'audio';
+        const words = audio ? (this.plainText(p.transcript) || this.voiceTranscript(msg)) : this.plainText(p.seen);
+        if (!words) return '';
+        const model = this.plainText(p.model);
+        const sure = this.confidenceText(p.confidence);
+        // Whose content it is belongs to a picture, a reel or a story; a voice note is the customer's own voice and has no owner to name.
+        const owner = !audio && this.PERCEPTION_OWNERS.includes(p.about_owner) ? t(`inbox.perception.owner.${p.about_owner}`) : '';
+        return html`
+            <div class="msg-transcript msg-seen" data-perception="ok">
+                <span class="msg-transcript-label"><i data-lucide="${audio ? 'music' : 'eye'}" aria-hidden="true"></i>${t(audio ? 'inbox.perception.heard' : 'inbox.perception.seen')}${model ? html` · <bdi class="ltr-text" dir="ltr">${model}</bdi>` : ''}${sure ? html` · ${t('inbox.perception.sure', { percent: sure })}` : ''}</span>
+                <p class="msg-transcript-text" dir="auto"${audio ? '' : html.raw(' lang="en"')}>${words}</p>
+                ${owner ? html`<span class="badge badge-neutral msg-seen-owner">${owner}</span>` : ''}
+            </div>
+        `;
+    },
+
+    /** A perception that did not end `ok`, said honestly: what happened to it and why. The reason is a sentence from the closed list, or escaped text for one outside it. */
+    perceptionNote(p, status) {
+        const known = status === 'unreadable' || status === 'failed' || status === 'skipped';
+        const reason = this.plainText(p.reason);
+        // A reason outside the list (a newer server, a hand-edited row) is shown as the escaped, cut, bidi-isolated text it is, and never turned into a key.
+        const other = reason && !this.PERCEPTION_REASONS.includes(reason) ? this.vocabText('inbox.perception.reason', [], reason) : '';
+        const sentence = this.PERCEPTION_REASONS.includes(reason)
+            ? t(`inbox.perception.reason.${reason}`)
+            : (other ? t('inbox.perception.reasonOther', { code: `\u2068${other}\u2069` }) : '');
+        const icon = status === 'skipped' || !known ? 'info' : 'alert-triangle';
+        return html`
+            <div class="msg-transcript msg-seen msg-seen--note" data-perception="${known ? status : 'unknown'}">
+                <span class="msg-transcript-label"><i data-lucide="${icon}" aria-hidden="true"></i>${t(known ? `inbox.perception.${status}` : 'inbox.perception.skipped')}</span>
+                ${sentence ? html`<p class="msg-transcript-text" dir="auto">${sentence}</p>` : ''}
+            </div>
+        `;
+    },
+
     // ─── Under the bubble ────────────────────────────────────────────────────
     /** The tap the message came from, and the state of the reply to it when that reply is failing: chips, or '' when there is neither. */
     inboundDetail(msg) {
@@ -2322,6 +2411,7 @@ const InboxPage = {
     aiMetaDetail(msg) {
         const meta = this.aiMetaOf(msg);
         if (!meta) return '';
+        const trace = this.aiTrace(meta);
         const items = [];
         const intent = this.vocabText('inbox.intent', this.AI_INTENTS, meta.intent);
         if (intent) items.push(this.aiMetaItem('inbox.aiMeta.intent', html`<bdi dir="auto">${intent}</bdi>`));
@@ -2332,7 +2422,8 @@ const InboxPage = {
                 : html`<bdi class="ltr-text" dir="ltr">${this.vocabText('inbox.stage', this.STAGES, stage)}</bdi>`));
         }
         const action = this.vocabText('inbox.nextAction', this.NEXT_ACTIONS, meta.next_action);
-        if (action) items.push(this.aiMetaItem('inbox.aiMeta.next', html`<bdi dir="auto">${action}</bdi>`));
+        // The trace says the action in its own "Decided" step: the line under it does not say it twice.
+        if (action && !(trace && trace.decided)) items.push(this.aiMetaItem('inbox.aiMeta.next', html`<bdi dir="auto">${action}</bdi>`));
         const offer = this.plainText(meta.offer_id);
         if (offer && offer !== 'none') {
             const shown = offer.length > this.AI_META_TEXT_MAX ? `${offer.slice(0, this.AI_META_TEXT_MAX - 1)}…` : offer;
@@ -2342,7 +2433,43 @@ const InboxPage = {
         if (engine) items.push(this.aiMetaItem('inbox.aiMeta.engine', html`<bdi dir="auto">${engine}</bdi>`));
         const reason = this.vocabText('inbox.handoffReason', this.HANDOFF_REASONS, meta.handoff_reason);
         if (reason) items.push(this.aiMetaItem('inbox.aiMeta.handoff', html`<span class="badge badge-warning"><bdi dir="auto">${reason}</bdi></span>`));
-        return items.length ? html`<div class="msg-detail msg-detail--meta" data-ai-meta>${items}</div>` : '';
+        const line = items.length ? html`<div class="msg-detail msg-detail--meta" data-ai-meta>${items}</div>` : '';
+        return trace ? html`${trace.markup}${line}` : line;
+    },
+
+    /** A model's sentence as one line, cut to `TRACE_REASON_MAX` characters: whitespace of any kind is one space. '' for anything that is not text. */
+    traceText(value) {
+        const flat = this.plainText(value).replace(/\s+/g, ' ');
+        const chars = Array.from(flat);
+        return chars.length > this.TRACE_REASON_MAX ? `${chars.slice(0, this.TRACE_REASON_MAX - 1).join('').trimEnd()}…` : flat;
+    },
+
+    /**
+     * The decision as one line under the reply: Saw → Decided → Why. What it SAW is the flag `ai_meta.perceived` (the turn answered media it had read) and what it
+     * RECALLED is `ai_meta.recalled` (a video of the owner's, from his library); what it DECIDED is the action (`next_action`, one of the flow's own words); WHY is the
+     * one-line reason the turn recorded, a model's sentence that is cut and escaped. A step the row does not have is left out, and a row with none of the three has
+     * no trace at all: `{ markup, decided }`, or null. The long description of what was seen is under the customer's message, not repeated here.
+     */
+    aiTrace(meta) {
+        const saw = meta.perceived === true;
+        const recalled = meta.recalled === true;
+        const reason = this.traceText(meta.reason);
+        const action = this.vocabText('inbox.nextAction', this.NEXT_ACTIONS, meta.next_action);
+        if (!saw && !recalled && !reason) return null;
+        const key = (labelKey) => html`<span class="msg-detail-key">${t(labelKey)}:</span>`;
+        const steps = [];
+        if (saw || recalled) {
+            steps.push(html`
+                <span class="msg-trace-step" data-step="saw">
+                    <i data-lucide="${saw ? 'eye' : 'film'}" aria-hidden="true"></i>
+                    ${saw ? html`${key('inbox.trace.saw')} ${t('inbox.trace.sawMedia')}` : ''}${saw && recalled ? ' · ' : ''}${recalled ? html`${key('inbox.trace.recalled')} ${t('inbox.trace.recalledVideo')}` : ''}
+                </span>
+            `);
+        }
+        if (action) steps.push(html`<span class="msg-trace-step" data-step="decided"><i data-lucide="sparkles" aria-hidden="true"></i>${key('inbox.trace.decided')} <bdi dir="auto">${action}</bdi></span>`);
+        if (reason) steps.push(html`<span class="msg-trace-step" data-step="why"><i data-lucide="lightbulb" aria-hidden="true"></i>${key('inbox.trace.why')} <bdi dir="auto">${reason}</bdi></span>`);
+        const joined = steps.map((step, i) => (i === 0 ? step : html`<i data-lucide="arrow-right" class="msg-trace-arrow" aria-hidden="true"></i>${step}`));
+        return { decided: !!action, markup: html`<div class="msg-detail msg-trace" data-ai-trace role="group" aria-label="${t('inbox.trace.label')}">${joined}</div>` };
     },
 
     // ─── The funnel card (DM plan S12) ───────────────────────────────────────

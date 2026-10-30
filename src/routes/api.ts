@@ -25,6 +25,7 @@ import { DEFAULT_SALES_MODE, isSalesMode, parseTestSenders, SALES_MODES, type Sa
 import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, followupMinutesInput } from '../services/dmSales/followup.js';
 import { getFollowupMinutes } from '../services/dmSales/followupJob.js';
 import { readVariantState, saveVariantConfig } from '../services/dmSales/variantStore.js';
+import { loadMuseView, buildMuseView, museAuditDetail, parseMuseInput, saveMuseSettings } from '../services/perception/museSettings.js';
 import {
     activeVariants, MAX_VARIANTS, MIN_VARIANTS, parseVariantConfig, VARIANT_IDS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX,
 } from '../services/dmSales/variants.js';
@@ -4135,6 +4136,10 @@ router.get('/settings/ai', async (req, res) => {
         const creatorId = getTenantId(req);
 
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
+        // Meta vision's settings, for the card under the agent's form (`services/perception/museSettings.ts`): the three switches, who it answers, the daily
+        // cap and what is spent, and whether a Meta key can answer. Its own lookups, so a failure is `null` here and the card says so: it never fails the
+        // agent's settings, and what it could not read is never shown as "everything off".
+        const muse = await loadMuseView(creatorId);
         if (agentRes.rows.length === 0) {
             // In the language this tenant's DMs speak (its profile's `dm` surface), not the owner's by default.
             const { language } = await profileContextOrLegacy(creatorId, 'dm');
@@ -4148,6 +4153,7 @@ router.get('/settings/ai', async (req, res) => {
                 gemini_fallback: DEFAULT_GEMINI_FALLBACK,
                 sales_mode: DEFAULT_SALES_MODE,
                 sales_test_senders: [],
+                muse,
             });
             return;
         }
@@ -4156,7 +4162,7 @@ router.get('/settings/ai', async (req, res) => {
         // list no longer has falls back at reply time, and the dashboard's picker holds only
         // that list's options, so the raw value would render as an empty selection.
         const agent = agentRes.rows[0];
-        res.json({ ...agent, model: resolveModel(agent.model) });
+        res.json({ ...agent, model: resolveModel(agent.model), muse });
     } catch (err) {
         log('error', 'api.ai_settings_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch AI settings.' });
@@ -4294,6 +4300,38 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         }
         log('error', 'api.ai_settings_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update AI settings.' });
+    }
+});
+
+/**
+ * Meta vision's settings (docs/specs/005-muse-sees T037): the three switches, who it answers and the daily cap. **Owner only** (`canAdminister`, not
+ * `canOperate`): the switches decide whether a customer's photos, reels and voice notes are sent to Meta's models, which is the owner's call, and the
+ * cap is his money. Validated whole before anything is written (`parseMuseInput`: a typo is a 400 naming it); the answer is the new `muse` block, so
+ * the card shows what the server holds. A save that changes nothing writes nothing, and one that changes something is a `muse.settings_changed` ledger
+ * row whose detail has counts and switch states and never a sender id. Only the SESSION's tenant is ever written.
+ */
+router.post('/settings/ai/muse', canAdminister, async (req, res) => {
+    const parsed = parseMuseInput(req.body);
+    if (!parsed.ok) {
+        res.status(400).json({ error: parsed.problem.error, code: 'MUSE_INVALID', field: parsed.problem.field });
+        return;
+    }
+    try {
+        const creatorId = getTenantId(req);
+        const saved = await saveMuseSettings(creatorId, parsed.input, req.session?.userId ?? null);
+        if (saved.changed.length > 0) {
+            await writeAudit(await actorFromSession(req.session), {
+                action: AUDIT_ACTIONS.museSettingsChanged, targetType: 'tenant', targetId: creatorId, detail: museAuditDetail(saved.after, saved.changed),
+            });
+            log('info', 'muse.settings_set', {
+                creator_id: creatorId, changed: saved.changed, dm_media: saved.after.switches.dm_media, voice: saved.after.switches.voice,
+                memory: saved.after.switches.memory, allow_count: saved.after.allowSenders.length, daily_usd: saved.after.dailyUsd,
+            });
+        }
+        res.json(await buildMuseView(creatorId, saved.after));
+    } catch (err) {
+        log('error', 'api.muse_settings_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the Meta vision settings.' });
     }
 });
 
