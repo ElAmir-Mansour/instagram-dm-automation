@@ -79,6 +79,15 @@ const goodProvider = (hit: Hit): Response => {
             data: [{ id: 'openai/gpt-oss-120b' }, { id: 'whisper-large-v3' }, { id: 'openai/gpt-oss-20b' }, { id: 'canopylabs/orpheus-v1-english' }, { id: 'llama-3.3-70b-versatile' }],
         });
     }
+    if (u.host === 'api.meta.ai' && u.pathname === '/v1/models') {
+        if (hit.headers.authorization !== `Bearer ${FAKE_KEYS.meta}`) return echoes401(hit);
+        // As GET /v1/models answered on 2026-10-28: every chat model's Contributor twin, and the models of other endpoints, are in it.
+        return jsonResponse(200, {
+            object: 'list',
+            data: ['muse-wonder-1.0', 'sam-3.1', 'muse-spark-1.3-contributor', 'muse-voice-transcribe-1.0', 'muse-spark-1.3', 'muse-image-1.0', 'muse-spark-1.2-contributor', 'muse-spark-1.2', 'muse-spark-1.1']
+                .map((id) => ({ id, object: 'model', created: 0, owned_by: 'meta' })),
+        });
+    }
     if (u.host === 'llm.example.com' && u.pathname === '/v1/models') {
         return jsonResponse(200, { data: [{ id: 'my-model' }, { id: 'other-model' }] });
     }
@@ -96,7 +105,7 @@ const fakeFetch: FetchLike = async (url, init) => {
 
 // ─── The stand-in for the rest ───────────────────────────────────────────────────────────────
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: string[];
@@ -188,8 +197,11 @@ describe('GET /ai', () => {
     it('answers with providers, purposes, prices, budgets, warnings and today\'s spend, and nothing is saved yet', async () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
-        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']);
-        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review']);
+        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom']);
+        assert.deepEqual(body.purposes.map((p: any) => p.purpose), [
+            'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
+            'perception_dm', 'recall', 'reel_index', 'comment_intent',
+        ]);
         assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
         assert.equal(body.budgets.unlimited, true);
         assert.deepEqual(body.warnings.map((w: any) => w.code), ['no_budget']);
@@ -204,6 +216,7 @@ describe('GET /ai', () => {
         process.env.OPENAI_API_KEY = FAKE_KEYS.openai;
         db.setSetting('ai.providers.custom.api_key', FAKE_KEYS.custom, true);
         db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
+        db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
         const { body } = await call('GET', '/ai');
         const keys = Object.fromEntries(body.providers.map((p: any) => [p.id, p.key]));
         assert.deepEqual(keys.anthropic, { set: true, source: 'database', last4: 'ant1', envFallback: false });
@@ -212,6 +225,7 @@ describe('GET /ai', () => {
         assert.deepEqual(keys.openrouter, { set: false, source: null, last4: null, envFallback: false });
         assert.deepEqual(keys.custom, { set: true, source: 'database', last4: 'cus5', envFallback: false });
         assert.deepEqual(keys.groq, { set: true, source: 'database', last4: 'grq6', envFallback: false });
+        assert.deepEqual(keys.meta, { set: true, source: 'database', last4: 'met7', envFallback: false });
         assertNoKey(JSON.stringify(body), 'GET /ai');
     });
 
@@ -229,7 +243,7 @@ describe('GET /ai', () => {
     it('lists the DM purpose, then WhatsApp\'s: low effort by default, not the Mac\'s, and resolved to the first provider with a key', async () => {
         saveKey('anthropic');
         const { body } = await call('GET', '/ai');
-        const [dm, whatsapp] = body.purposes.slice(-4, -2);
+        const [dm, whatsapp] = ['dm', 'dm_whatsapp'].map((purpose) => body.purposes.find((p: any) => p.purpose === purpose));
         assert.deepEqual(dm, {
             purpose: 'dm', defaultEffort: 'low', macBrainGuarded: false, saved: null,
             resolved: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' },
@@ -243,9 +257,43 @@ describe('GET /ai', () => {
     it('shows WhatsApp\'s purpose resolved to an error, not to Gemini, when Gemini is the only key', async () => {
         db.setSetting('gemini.api_key', FAKE_KEYS.gemini, true);
         const { body } = await call('GET', '/ai');
-        const [dm, whatsapp] = body.purposes.slice(-4, -2);
+        const [dm, whatsapp] = ['dm', 'dm_whatsapp'].map((purpose) => body.purposes.find((p: any) => p.purpose === purpose));
         assert.equal(dm.resolved.provider, 'gemini', 'Instagram\'s DM route may use it');
         assert.equal(whatsapp.resolved.error.kind, 'no_provider', 'WhatsApp\'s may not');
+    });
+
+    it('lists the four Muse purposes last, low effort, not the Mac\'s, and resolved to an error until Meta has a key, then to Meta whatever other keys there are', async () => {
+        saveKey('anthropic');
+        saveKey('gemini');
+        const before = await call('GET', '/ai');
+        const muse = ['perception_dm', 'recall', 'reel_index', 'comment_intent'];
+        assert.deepEqual(before.body.purposes.slice(-4).map((p: any) => p.purpose), muse);
+        for (const row of before.body.purposes.slice(-4)) {
+            assert.equal(row.defaultEffort, 'low', row.purpose);
+            assert.equal(row.macBrainGuarded, false, row.purpose);
+            assert.equal(row.saved, null, row.purpose);
+            assert.equal(row.resolved.error.kind, 'no_provider', `${row.purpose}: only Meta may answer it, and Meta has no key`);
+        }
+        saveKey('meta');
+        const after = await call('GET', '/ai');
+        for (const row of after.body.purposes.slice(-4)) {
+            assert.deepEqual(row.resolved, { provider: 'meta', model: 'muse-spark-1.3', effort: 'low', source: 'default' }, row.purpose);
+        }
+        // Nothing existing moved to Meta: Gemini and Anthropic keep every purpose they had.
+        for (const purpose of ['dm', 'tenant_studio', 'onboarding_draft']) {
+            assert.equal(after.body.purposes.find((p: any) => p.purpose === purpose).resolved.provider, 'anthropic', purpose);
+        }
+        assertNoKey(JSON.stringify(after.body), 'GET /ai with a Meta key');
+    });
+
+    it('shows Meta (Muse) as a provider with its address left out, its key status, its default and suggested models, and the environment variable it falls back to unnamed', async () => {
+        const { body } = await call('GET', '/ai');
+        const meta = body.providers.find((p: any) => p.id === 'meta');
+        assert.deepEqual(
+            { label: meta.label, family: meta.family, keyRequired: meta.keyRequired, enabled: meta.enabled, defaultModel: meta.defaultModel, suggestedModels: meta.suggestedModels, baseUrl: meta.baseUrl, usable: meta.usable, problem: meta.problem },
+            { label: 'Meta (Muse)', family: 'chat_completions', keyRequired: true, enabled: true, defaultModel: 'muse-spark-1.3', suggestedModels: ['muse-spark-1.3', 'muse-spark-1.2'], baseUrl: null, usable: false, problem: 'has no API key saved' },
+        );
+        assert.ok(!JSON.stringify(body).includes('api.meta.ai'), 'a fixed address is not sent to the card');
     });
 
     it('fails with the migration hint when v34 has not been applied', async () => {
@@ -320,6 +368,36 @@ describe('PUT /ai', () => {
             assert.match(refused.body.error, /routing\.dm_whatsapp\.provider must be one of groq, anthropic, openai/, provider);
         }
         assert.deepEqual(JSON.parse(db.settings.get('ai.routing')!.value), { dm_whatsapp: { provider: 'groq', model: 'openai/gpt-oss-120b', effort: 'low' } }, 'the refused ones saved nothing');
+    });
+
+    it('saves a route for a Muse purpose on Meta and refuses one on any other provider, naming Meta and why, and saving nothing', async () => {
+        const ok = await call('PUT', '/ai', { body: { routing: { perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' }, recall: { provider: 'meta' } } } });
+        assert.equal(ok.status, 200);
+        assert.deepEqual(ok.body.purposes.find((p: any) => p.purpose === 'perception_dm').saved, { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' });
+        assert.deepEqual(ok.body.purposes.find((p: any) => p.purpose === 'recall').saved, { provider: 'meta', model: '', effort: 'low' });
+        assert.deepEqual(db.audits.at(-1)!.detail.routes, { perception_dm: 'meta/muse-spark-1.3/low', recall: 'meta/default/low' });
+        for (const provider of ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']) {
+            const refused = await call('PUT', '/ai', { body: { routing: { reel_index: { provider, model: 'x-model', effort: 'low' } } } });
+            assert.equal(refused.status, 400, provider);
+            assert.equal(refused.body.error, 'routing.reel_index.provider must be one of meta: only Meta (Muse) is set up to answer this purpose.', provider);
+        }
+        assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)).sort(), ['perception_dm', 'recall'], 'the refused ones saved nothing');
+    });
+
+    it('refuses a Contributor-mode model as a route or as Meta\'s default model, for any purpose: Meta may train on what it is sent', async () => {
+        for (const body of [
+            { routing: { dm: { provider: 'meta', model: 'muse-spark-1.3-contributor', effort: 'low' } } },
+            { routing: { perception_dm: { provider: 'meta', model: 'muse-spark-1.2-contributor', effort: 'low' } } },
+            { providers: { meta: { defaultModel: 'muse-spark-1.3-contributor' } } },
+        ]) {
+            const refused = await call('PUT', '/ai', { body });
+            assert.equal(refused.status, 400, JSON.stringify(body));
+            assert.match(refused.body.error, /is a Contributor-mode model: its provider may train on what it is sent, so no purpose may use one\. Use the Standard model\./);
+        }
+        assert.equal(db.settings.size, 0, 'nothing was saved');
+        assert.equal(db.audits.length, 0, 'nothing was audited');
+        // The Standard model is fine on the same routes.
+        assert.equal((await call('PUT', '/ai', { body: { routing: { dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' } }, providers: { meta: { defaultModel: 'muse-spark-1.2' } } } })).status, 200);
     });
 
     it('refuses a route for a usage label: `eval` and `key_test` label spend and are not purposes', async () => {
@@ -453,6 +531,46 @@ describe('PUT /ai/keys/:provider: checked with the provider first, saved only if
         assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
     });
 
+    it('checks Meta\'s key against its model list with a bearer header, then saves it encrypted under its own setting, and a Test of it records no tokens', async () => {
+        const { status, body } = await call('PUT', '/ai/keys/meta', { body: { apiKey: `  ${FAKE_KEYS.meta}\n` } });
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'meta', key: { set: true, source: 'database', last4: 'met7', envFallback: false } });
+        assert.equal(hits.length, 1);
+        assert.equal(hits[0]!.method, 'GET');
+        assert.equal(hits[0]!.url, 'https://api.meta.ai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.meta}`);
+        assert.equal(hits[0]!.raw, '', 'the check is a GET with no body: it spends nothing');
+        const stored = db.settings.get('ai.providers.meta.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored value');
+        assert.deepEqual(db.audits.map((a) => [a.action, a.detail]), [['settings.ai_key_write', { provider: 'meta', change: 'saved', warning: null }]]);
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.outcome, u.input_tokens, u.output_tokens]), [['meta', 'ok', 0, 0]]);
+        assertNoKey(JSON.stringify(db.audits) + JSON.stringify(db.usage), 'the audit and usage rows');
+    });
+
+    it('refuses a Meta key Meta refuses with 401, saves nothing, and does not repeat the key its error echoed', async () => {
+        const bad = FAKE_KEYS.meta.replace('met7', 'xxxx');
+        const { status, body } = await call('PUT', '/ai/keys/meta', { body: { apiKey: bad } });
+        assert.equal(status, 400);
+        assert.equal(body.kind, 'auth');
+        assert.match(body.error, /^Meta refused this key: /);
+        assertNoKey(JSON.stringify(body), 'the refusal', [bad]);
+        assert.ok(!JSON.stringify(body).includes(bad.slice(8, -4)));
+        assert.equal(db.settings.size, 0);
+        assert.equal(db.audits.length, 0);
+        assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
+    });
+
+    it('forgets Meta\'s saved key on DELETE, and with META_MODEL_API_KEY set the environment answers again', async () => {
+        saveKey('meta');
+        process.env.META_MODEL_API_KEY = FAKE_KEYS.openai;
+        const { status, body } = await call('DELETE', '/ai/keys/meta');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'meta', key: { set: true, source: 'env', last4: null, envFallback: true } });
+        assert.equal(db.settings.has('ai.providers.meta.api_key'), false);
+    });
+
     it('needs Custom\'s base URL to be saved first, then checks the key against that endpoint', async () => {
         const first = await call('PUT', '/ai/keys/custom', { body: { apiKey: FAKE_KEYS.custom } });
         assert.equal(first.status, 400);
@@ -553,9 +671,18 @@ describe('POST /ai/test', () => {
         assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.groq}`);
     });
 
+    it('with META_MODEL_API_KEY tests Meta\'s model list with it', async () => {
+        process.env.META_MODEL_API_KEY = FAKE_KEYS.meta;
+        const { body } = await call('POST', '/ai/test', { body: { provider: 'meta' } });
+        assert.equal(body.ok, true);
+        assert.equal(hits[0]!.url, 'https://api.meta.ai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.meta}`);
+    });
+
     it('refuses a provider with no key, Custom with no base URL, an unknown provider, and a body that is neither or both', async () => {
         assert.match((await call('POST', '/ai/test', { body: { provider: 'openai' } })).body.error, /No API key is saved for OpenAI/);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'groq' } })).body.error, /No API key is saved for Groq/);
+        assert.match((await call('POST', '/ai/test', { body: { provider: 'meta' } })).body.error, /No API key is saved for Meta\./);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'custom' } })).body.error, /has no base URL saved/);
         for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'eval' }, { purpose: 'nope' }]) {
             assert.equal((await call('POST', '/ai/test', { body })).status, 400, JSON.stringify(body));
@@ -580,6 +707,35 @@ describe('POST /ai/test', () => {
         assert.equal(rows.length, 1);
         assert.deepEqual([rows[0]!.creator_id, rows[0]!.outcome, rows[0]!.input_tokens, rows[0]!.output_tokens], [null, 'ok', 40, 6]);
         assert.equal(usageOf('onboarding_draft').length, 0, 'it is a test, not onboarding spend');
+    });
+
+    it('{purpose: perception_dm} tests a Muse route as `key_test` on Meta, at effort low with the Muse floor of 4 000 tokens under the admin\'s 200, priced from the table', async () => {
+        saveKey('meta');
+        generateAnswer = () => ({
+            json: { ok: true }, usage: { in: 15, out: 190 }, billed: [{ model: 'muse-spark-1.3', in: 15, out: 190 }],
+            model: 'muse-spark-1.3', provider: 'meta', stopReason: 'end_turn', elapsed_ms: 3100,
+        });
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'perception_dm' } });
+        assert.equal(status, 200);
+        assert.deepEqual(
+            { ok: body.ok, purpose: body.purpose, provider: body.provider, model: body.model, usage: body.usage, usd: body.usd, priced: body.priced },
+            { ok: true, purpose: 'perception_dm', provider: 'meta', model: 'muse-spark-1.3', usage: { in: 15, out: 190 }, usd: 0.00082625, priced: true },
+        );
+        assert.equal(generated.length, 1);
+        assert.equal(generated[0]!.provider, 'meta');
+        assert.equal(generated[0]!.apiKey, FAKE_KEYS.meta);
+        assert.equal(generated[0]!.effort, 'low');
+        assert.equal(generated[0]!.maxTokens, 4000, 'the Test asks for 200; Muse Spark reasons first, so the layer raises it');
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.model, u.outcome, u.priced]), [['meta', 'muse-spark-1.3', 'ok', true]]);
+        assert.equal(usageOf('perception_dm').length, 0, 'it is a test, not perception spend');
+    });
+
+    it('{purpose: perception_dm} with Meta\'s key missing says `no_provider` and never moves to another provider', async () => {
+        saveKey('anthropic');
+        const { body } = await call('POST', '/ai/test', { body: { purpose: 'perception_dm' } });
+        assert.equal(body.ok, false);
+        assert.equal(body.error.kind, 'no_provider');
+        assert.equal(generated.length, 0);
     });
 
     it('goes through the router: a saved route\'s provider answers, and the Mac guard does not apply (no tenant)', async () => {
@@ -652,6 +808,16 @@ describe('GET /ai/models/:provider', () => {
         assert.equal(hits[0]!.url, 'https://api.groq.com/openai/v1/models');
         assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.groq}`);
         assert.equal((await call('GET', '/ai/models/openrouter')).status, 400, 'a provider with no key is still refused');
+    });
+
+    it('lists Meta\'s Standard chat models with the saved key: not the Contributor twins that train on what is sent, not its image, speech or segmentation models', async () => {
+        saveKey('meta');
+        const { status, body } = await call('GET', '/ai/models/meta');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'meta', models: ['muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1'], truncated: false });
+        assert.equal(hits[0]!.url, 'https://api.meta.ai/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.meta}`);
+        assert.ok(!JSON.stringify(body).includes('contributor'));
     });
 
     it('lists Custom\'s models from its saved base URL', async () => {

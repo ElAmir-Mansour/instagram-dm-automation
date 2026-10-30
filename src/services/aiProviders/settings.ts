@@ -18,7 +18,7 @@ import { inspect } from 'node:util';
 import { log } from '../../utils/log.js';
 import { APP_SETTING_KEYS, getSettings, last4, setSetting, type AppSettingKey } from '../appSettings.js';
 import { type PriceTable } from '../llm/cost.js';
-import { AI_PURPOSES, isAiPurpose, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, type AiPurpose } from './purposes.js';
+import { AI_PURPOSES, isAiPurpose, isContributorModel, PURPOSE_ALLOWLIST_REASON, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, type AiPurpose } from './purposes.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, providerById, type ProviderId } from '../llm/registry.js';
 import { EFFORTS, isJsonMode, type Effort, type JsonMode } from '../llm/types.js';
 
@@ -31,6 +31,7 @@ export const PROVIDER_KEY_SETTING: Readonly<Record<ProviderId, AppSettingKey>> =
     gemini: APP_SETTING_KEYS.geminiApiKey,
     openrouter: APP_SETTING_KEYS.aiProviderKeyOpenrouter,
     groq: APP_SETTING_KEYS.aiProviderKeyGroq,
+    meta: APP_SETTING_KEYS.aiProviderKeyMeta,
     custom: APP_SETTING_KEYS.aiProviderKeyCustom,
 };
 
@@ -41,6 +42,7 @@ export const PROVIDER_KEY_ENV: Readonly<Record<ProviderId, string | null>> = {
     gemini: 'GEMINI_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
     groq: 'GROQ_API_KEY',
+    meta: 'META_MODEL_API_KEY',
     custom: null,
 };
 
@@ -367,6 +369,12 @@ export type PlanResult = { ok: true; plan: AiPlan } | { ok: false; problems: str
 
 const SECTIONS = ['providers', 'routing', 'prices', 'budgets'] as const;
 
+/** Said to a purpose with an allow-list that has no reason of its own (`PURPOSE_ALLOWLIST_REASON`): WhatsApp's. */
+const DEFAULT_ALLOWLIST_REASON = 'only providers whose terms forbid training on what they are sent may answer this purpose.';
+
+/** Why a Contributor-mode model id (`isContributorModel`) is refused when it is saved, for a route's model and for a provider's default. */
+const CONTRIBUTOR_REFUSAL = 'is a Contributor-mode model: its provider may train on what it is sent, so no purpose may use one. Use the Standard model.';
+
 /**
  * `PUT /api/admin/ai`'s body, validated whole against what is saved. Each section merges entry by entry: `null` removes an entry, an
  * object replaces it (a provider's fields merge into what is saved; a route and a price replace). Nothing is written here, so a body with
@@ -394,6 +402,8 @@ export function planAiPatch(body: unknown, current: AiConfig): PlanResult {
             // A provider's fields merge into what is saved: a card saving the default model must not forget the base URL. `null` clears one.
             const merged = providerEntry(id, { ...current.providers[id], ...value });
             if (!merged.ok) { problems.push(merged.problem); continue; }
+            // Only what is being saved: a patch that touches something else must not be held up by a model that was already there.
+            if (typeof value.defaultModel === 'string' && isContributorModel(value.defaultModel)) { problems.push(`providers.${id}.defaultModel ${CONTRIBUTOR_REFUSAL}`); continue; }
             if (Object.keys(merged.entry).length) next[id] = merged.entry;
             else delete next[id];
             plan.changes.providers.push(id);
@@ -416,9 +426,11 @@ export function planAiPatch(body: unknown, current: AiConfig): PlanResult {
             // in the refusal and the card can show it, instead of the route vanishing and another provider answering without anyone having chosen it.
             const allowed = PURPOSE_PROVIDER_ALLOWLIST[purpose];
             if (allowed && !allowed.includes(route.route.provider)) {
-                problems.push(`routing.${purpose}.provider must be one of ${allowed.join(', ')}: only providers whose terms forbid training on what they are sent may answer this purpose.`);
+                problems.push(`routing.${purpose}.provider must be one of ${allowed.join(', ')}: ${PURPOSE_ALLOWLIST_REASON[purpose] ?? DEFAULT_ALLOWLIST_REASON}`);
                 continue;
             }
+            // Refused when SAVED, like the allow-list; `pickRoute` refuses one that got in some other way, and names it.
+            if (isContributorModel(route.route.model)) { problems.push(`routing.${purpose}.model ${CONTRIBUTOR_REFUSAL}`); continue; }
             next[purpose] = route.route;
             plan.changes.routes[purpose] = `${route.route.provider}/${route.route.model || 'default'}/${route.route.effort}`;
         }

@@ -47,6 +47,7 @@ import { AiError, type AiErrorKind } from '../errors.js';
 import { providerName } from '../registry.js';
 import { EFFORTS, type Adapter, type AdapterArgs, type AdapterResult, type Billed, type Effort, type FamilyAdapter, type LlmTurn, type ProviderQuery, type StopReason } from '../types.js';
 import { prepareQuery } from './endpoint.js';
+import { refuseMedia } from './media.js';
 import { getJson, postJson } from './post.js';
 import { dropStrictNulls, SCHEMA_NAME, strictSchemaFor } from './strict.js';
 
@@ -109,6 +110,8 @@ function inputFor(user: string | LlmTurn[]): Array<{ role: 'user' | 'assistant';
 }
 
 export function buildOpenAiRequest(a: AdapterArgs): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+    // Only Meta is sent pictures and video here: a turn that carries any is refused before a request exists.
+    refuseMedia(a);
     // A schema OpenAI would refuse is refused here, saying what to change and before a billed call.
     const schema = strictSchemaFor(a, { objectRoot: true });
     const effort = reasoningEffortFor(a.model, a.effort);

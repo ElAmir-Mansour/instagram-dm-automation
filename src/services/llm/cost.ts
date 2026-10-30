@@ -42,6 +42,12 @@ export type PriceTable = Readonly<Record<string, Price>>;
  *     and $0.075/$0.30, Groq's paid rates. On Groq's free tier the same call costs nothing, so these
  *     over-count it, which is the safe side for a budget; they are only Groq's (OpenRouter reports
  *     its own cost, which overrides the table).
+ *   - dev.meta.ai/docs/pricing-rate-limits (pay-as-you-go, Standard mode), checked 2026-10-30: Muse
+ *     Spark 1.3, 1.2 and 1.1 $1.25/$4.25 with cached input at $0.15; Muse Wonder $4/$20 with cached
+ *     input at $0.20. Reasoning tokens are counted inside `completion_tokens` and billed as output,
+ *     so the table needs nothing more. Contributor mode (`-contributor`, $0.10/$0.20) is left out on
+ *     purpose: no route may use it (purposes.ts), so a call on one is charged at the ceiling and
+ *     flagged, which is the loud side.
  * Not seeded: Fable ($10/$50), whose calls are therefore charged at this table's ceiling and
  * flagged, which under-counts them; and every OpenAI, OpenRouter and Custom model, and the other
  * Groq models.
@@ -57,6 +63,10 @@ export const DEFAULT_PRICES: PriceTable = {
     'gemini-3.1-pro-preview': { in: 2, out: 12 },
     'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
     'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
+    'muse-spark-1.3': { in: 1.25, out: 4.25 },
+    'muse-spark-1.2': { in: 1.25, out: 4.25 },
+    'muse-spark-1.1': { in: 1.25, out: 4.25 },
+    'muse-wonder-1.0': { in: 4, out: 20 },
 };
 
 /**
@@ -69,18 +79,26 @@ export const CACHE_WRITE_MULTIPLIER = 1.25;
 export const DEFAULT_CACHE_READ_MULTIPLIER = 0.1;
 
 /**
- * The models whose cache reads are cheaper than a tenth of the input price. Checked against
+ * The models whose cache reads are not a tenth of the input price (the Claude ones below are cheaper, Muse Spark is dearer). Checked against
  * platform.claude.com/docs/en/about-claude/pricing on 2026-10-14: "Cache hits and refreshes on Claude
  * Opus 5.5 and Claude Sonnet 5.5 are priced at 0.05x the base input price" ($0.20 and $0.10 per
  * million), and Fable 5.1 and Mythos 5.1 at 0.025x. Every other Claude model, Haiku 5.5 included,
  * is a tenth. (The `claude-api` skill's cached copy says $0.20 for Sonnet 5.5, which is the tenth;
  * the pricing page is the newer of the two and says 0.05x.)
+ *
+ * Meta's, from dev.meta.ai/docs/pricing-rate-limits on 2026-10-30: Muse Spark reads cached input at $0.15 of $1.25 (0.12x) and Muse Wonder
+ * at $0.20 of $4 (0.05x). Its pricing page lists no cache-write rate (a prefix is cached automatically, and the request that first sends it
+ * pays full input), so the Meta adapter reports reads only.
  */
 const CACHE_READ_MULTIPLIERS: Readonly<Record<string, number>> = {
     'claude-opus-5-5': 0.05,
     'claude-sonnet-5-5': 0.05,
     'claude-fable-5-1': 0.025,
     'claude-mythos-5-1': 0.025,
+    'muse-spark-1.3': 0.12,
+    'muse-spark-1.2': 0.12,
+    'muse-spark-1.1': 0.12,
+    'muse-wonder-1.0': 0.05,
 };
 
 const valid = (p: unknown): p is Price =>

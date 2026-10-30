@@ -21,10 +21,14 @@
  *     counts the `max_tokens` a request asks for against the account's tokens per minute, and on
  *     the free tier that is 8 000 for gpt-oss-120b: a 25 000 floor would make every free-tier
  *     request "too large" (a 413) before it was read. The caller's limit stands.
+ *   - Meta (Muse): 4 000, whatever the model and the effort. Muse Spark always reasons and counts it in
+ *     `completion_tokens`; measured live on 2026-10-28 to 10-30, a one-word answer spent 180 tokens thinking,
+ *     and a limit under about 1 000 to 2 000 came back with no text and `finish_reason: 'length'` after being
+ *     billed. The admin's Test button asks for 200, and would otherwise fail every time. A floor, not a charge.
  *   - Everything else (a model that does not reason, a Custom endpoint, an unknown name): 0, no
  *     minimum, which is the answer for a limit that was sized for the JSON alone.
  */
-import { openRouterReasoning } from './adapters/chatCompletions.js';
+import { META_MIN_OUTPUT, openRouterReasoning } from './adapters/chatCompletions.js';
 import { thinkingConfigFor, THINKING_BUDGETS } from './adapters/gemini.js';
 import { supportsEffort } from './adapters/anthropic.js';
 import { OPENAI_REASONING_MIN_OUTPUT, supportsReasoning } from './adapters/openai.js';
@@ -44,6 +48,8 @@ export function minOutputTokens(provider: string, model: string, effort: Effort)
             return supportsEffort(model) ? ANTHROPIC_MIN_OUTPUT[effort] : 0;
         case 'gemini':
             return thinkingConfigFor(model, effort, Number.MAX_SAFE_INTEGER) ? Math.max(GEMINI_FLOOR, THINKING_BUDGETS[effort] * 2) : 0;
+        case 'meta':
+            return META_MIN_OUTPUT;
         default:
             return 0;
     }

@@ -258,6 +258,24 @@ const groq: Fixture = {
     waitMs: { withHeader: 30_000, withoutHeader: undefined },
 };
 
+// Meta (Muse): the Chat Completions shape at api.meta.ai/v1, `{error: {message, type, code}}`. Its answers carry no cost, and the thinking is counted inside
+// `completion_tokens`. Its strict mode wants an object at the top level, like OpenAI's.
+const meta: Fixture = {
+    provider: 'meta',
+    model: 'muse-spark-1.3',
+    key: 'meta-key-Hb7vQm3xTz9RnYd2KfP5aLc8JgSe4UoWiNtXrBwEs6Vq',
+    keyHeader: 'authorization',
+    keyHeaderValue: (key) => `Bearer ${key}`,
+    arrayRoot: false,
+    origin: 'https://api.meta.ai/',
+    text: chatText('muse-spark-1.3'),
+    refusal: chatRefusal('muse-spark-1.3'),
+    cutOff: chatCutOff('muse-spark-1.3'),
+    error: (status, message) => jsonResponse(status, { error: { message, type: 'invalid_request_error', code: null } }),
+    rateLimited: (retryAfter) => jsonResponse(429, { error: { message: 'Rate limit exceeded for muse-spark-1.3. Please retry later.', type: 'rate_limit_error', code: 'rate_limit_exceeded' } }, retryAfter ? { 'retry-after': retryAfter } : {}),
+    waitMs: { withHeader: 30_000, withoutHeader: undefined },
+};
+
 const custom: Fixture = {
     provider: 'custom',
     model: 'llama-4-maverick',
@@ -300,7 +318,7 @@ const printed = (err: AiError): string =>
 /** What Node's fetch throws for `redirect: 'error'`. */
 const redirectRefusal = () => Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
 
-for (const fx of [anthropic, openai, gemini, openrouter, groq, custom]) {
+for (const fx of [anthropic, openai, gemini, openrouter, groq, meta, custom]) {
     describe(`generateJson (${fx.provider})`, () => {
         describe('a structured answer', () => {
             it('returns the parsed JSON with usage, billing, model, provider, stop reason and timing', async () => {
@@ -1076,7 +1094,7 @@ describe('generateJson (groq specifics)', () => {
     });
 
     it('is the only provider for which 498 is a server error', async () => {
-        for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
+        for (const fx of [anthropic, openai, gemini, openrouter, meta, custom]) {
             const err = await rejection(call(fx, stubFetch(fx.error(498, 'odd')).fetchImpl));
             assert.equal(err.kind, 'bad_request', fx.provider);
             assert.equal(err.retryable, false, fx.provider);
@@ -1187,7 +1205,7 @@ describe('generateJson (custom specifics)', () => {
 });
 
 describe('an answer that leaves out a required field', () => {
-    for (const fx of [anthropic, openai, gemini, openrouter, groq, custom]) {
+    for (const fx of [anthropic, openai, gemini, openrouter, groq, meta, custom]) {
         describe(fx.provider, () => {
             it('is bad_output, retryable once, naming the field and billed, because some endpoints take strict for a hint', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.text('{"score":3}', { input: 77, output: 9 }));
@@ -1358,7 +1376,7 @@ describe('generateJson before any request is made', () => {
         });
 
         it('is ignored, however bad, for a provider that has its own address', async () => {
-            for (const fx of [anthropic, openai, gemini, openrouter, groq]) {
+            for (const fx of [anthropic, openai, gemini, openrouter, groq, meta]) {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
                 const out = await call(fx, fetchImpl, { baseUrl: 'http://10.0.0.5/not-a-url-we-would-allow' });
                 assert.deepEqual(out.json, ANSWER);
