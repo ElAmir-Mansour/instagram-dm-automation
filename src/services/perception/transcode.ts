@@ -4,7 +4,7 @@
  * (WAV only), so something has to decode it, and that something is `ffmpeg-static`'s binary running INSIDE the Vercel function.
  *
  * **Proven first** (T046, a Vercel preview, 2026-10-30): `ffmpeg-static@5.3.0`, with `"includeFiles": ["node_modules/ffmpeg-static/ffmpeg"]` on the `src/index.ts`
- * build in `vercel.json` (the legacy `builds` config: no `functions` block), ran from `/var/task/node_modules/ffmpeg-static/ffmpeg` (ffmpeg 7.0.2, Linux x64) and turned a
+ * build in `vercel.json` (the legacy `builds` config: no `functions` block), ran from `/var/task/node_modules/ffmpeg-static/ffmpeg` (ffmpeg 7.0.2, Linux) and turned a
  * 1-second AAC into 49,118 bytes of WAV in 11 to 19 ms; the whole probe took 56 ms warm and 296 ms cold. So: no Heroku worker, no Groq. Without `includeFiles` the
  * package's JavaScript is traced into the function and its binary is not, so the path resolves and the file is not there: `decoder_unavailable`, and `transcode.test.ts`
  * pins the entry in `vercel.json` for that reason.
@@ -51,7 +51,7 @@ export const AUDIO_GRACE_MS = 1000;
 export const WAV_SAMPLE_RATE = 24_000;
 const WAV_BYTES_PER_SECOND = WAV_SAMPLE_RATE * 2;
 
-/** A WAV this long or longer is more than `MAX_AUDIO_MS` plus the grace whatever its header says (the header has room for tags): refused without being read. */
+/** A WAV bigger than this holds more than `MAX_AUDIO_MS` plus the grace of samples, whatever its header says (4 KB is room for tags): it is refused from its size, without being read. */
 export const MAX_WAV_BYTES = Math.ceil(((MAX_AUDIO_MS + AUDIO_GRACE_MS) / 1000) * WAV_BYTES_PER_SECOND) + 4096;
 
 /** ffmpeg at `-loglevel error` says one line about a file it cannot read; a decoder that floods past this is killed and read as failed. */
