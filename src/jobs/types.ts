@@ -16,12 +16,19 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead', 'muse.reel_index'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
     return typeof value === 'string' && (JOB_KINDS as readonly string[]).includes(value);
 }
+
+/**
+ * The kinds that are slow background work, not an answer to a person: a reel takes about a minute to watch (`muse.reel_index`). A drain claims a whole batch at once and
+ * runs it one job after another, so one of these claimed beside a DM or a comment would make that person wait for it. `drainJobs` runs these LAST in a batch, so what
+ * a person is waiting for goes first, and the drain's budget (which ends the batch and hands the rest back unrun) falls on the slow job and not on the quick one.
+ */
+export const BACKGROUND_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['muse.reel_index']);
 
 /** A `dm.process` job from `entry.messaging` (Instagram, Messenger). */
 export interface MessagingDmPayload {
@@ -85,7 +92,20 @@ export interface LeadJobPayload {
     createdTime: number | null;
 }
 
+/**
+ * A `muse.reel_index` job (docs/specs/005-muse-sees T054): watch ONE of the account owner's own published reels and write what it shows and says into the video memory
+ * (`reel_analyses`, `src/services/perception/reelIndex.ts`). Ids only: the reel's address is read again from Meta when the job runs, because the Graph API's `media_url`
+ * is a short-lived link and is never stored. Dedupe key `reel:<igMediaId>:<yyyy-mm-dd>`: the key is permanent, so the day lets a failed reel be tried again tomorrow.
+ */
+export interface ReelIndexPayload {
+    creatorId: string;
+    /** Instagram's id of the reel: `reel_analyses.ig_media_id`. */
+    igMediaId: string;
+}
+
 export interface JobPayloads {
+    /** One of the owner's own reels for the video memory. See `ReelIndexPayload`. */
+    'muse.reel_index': ReelIndexPayload;
     'comment.process': {
         /** One element of `entry.changes`, exactly as Meta sent it. */
         change: unknown;

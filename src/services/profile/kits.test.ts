@@ -35,7 +35,7 @@ describe('the kits', () => {
                 kit.disclosure, kit.starterPersona, ...Object.values(kit.offerNouns),
                 kit.commentFallback.lead, kit.commentFallback.bio, kit.commentFallback.link('https://x.test'), kit.commentFallback.none,
                 kit.studio.forwardExample, kit.studio.fallbackQuestion, kit.studio.coursePitch, ...kit.studio.timeWords.head, ...kit.studio.timeWords.all,
-                kit.importFallback.dm, kit.importFallback.replies, kit.attachments.media, kit.attachments.mention,
+                kit.importFallback.dm, kit.importFallback.replies, kit.attachments.media, kit.attachments.mention, kit.attachments.mentionNamed('X'), kit.attachments.resend,
             ];
             assert.equal(kit.studio.timeWords.head.length, 5, `${key}: the prompt names five time words`);
             for (const line of lines) assert.ok(line.trim().length > 0, `${key} has a blank line`);
@@ -369,41 +369,62 @@ describe('the DM sales kit: what a customer is sent without a model, as drafted 
 });
 
 /**
- * The two lines a customer is sent for a message with NO WORDS (a photo, a voice note, a mention in a story: `src/webhook/attachments.ts`),
+ * The lines a customer is sent for a message with NO WORDS (a photo, a voice note, a mention in a story: `src/webhook/attachments.ts`),
  * in every register, as drafted. Sent without a model, in every `sales_mode`. None addresses the reader by gender, and none holds a link, a
  * number or a name. The Gulf column is the owner's wording; the other three are drafts for a native speaker to read (05 §2).
+ *
+ * `media` and `mention` are what has always been sent. `mentionNamed` (Meta Muse perception: the thanks that names what the story showed) is a template, so the
+ * table shows it filled with `WHAT`, and `resend` (the photo or reel the model could not read with confidence) is a line like the others.
  */
-const REVIEW_ATTACHMENTS: Record<KitKey, { media: string; mention: string }> = {
+const WHAT: Record<'ar' | 'en', string> = { ar: 'رحلة إلى الإسكندرية', en: 'a trip to Alexandria' };
+type ReviewAttachments = { media: string; mention: string; mentionNamed: string; resend: string };
+const REVIEW_ATTACHMENTS: Record<KitKey, ReviewAttachments> = {
     gulf: {
         media: 'وصلني مرفقك 🙏 بس ما أقدر أفتح الصور والصوتيات والمقاطع هنا. يا ليت يكون سؤالك مكتوب، وأساعدك على طول.',
         mention: 'شكراً على الإشارة في قصتك 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+        mentionNamed: 'شكراً على الإشارة في قصتك وعلى مشاركة رحلة إلى الإسكندرية 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+        resend: 'ما قدرت أشوفه بوضوح 🙏 يا ليت يوصلني مرة ثانية، أو يكون سؤالك مكتوب وأساعدك على طول.',
     },
     msa: {
         media: 'وصلني مرفقك 🙏 لكنني لا أستطيع فتح الصور والرسائل الصوتية والمقاطع هنا. يسعدني أن أساعدك إذا وصلني سؤالك مكتوباً.',
         mention: 'شكراً على الإشارة في قصتك 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.',
+        mentionNamed: 'شكراً على الإشارة في قصتك وعلى مشاركة رحلة إلى الإسكندرية 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.',
+        resend: 'لم أتمكن من رؤيته بوضوح 🙏 أرجو إعادة إرساله، أو كتابة سؤالك وسيسعدني أن أساعدك.',
     },
     egyptian: {
         media: 'وصلني المرفق 🙏 بس مش هقدر أفتح الصور والفويسات والفيديوهات هنا. يا ريت السؤال يكون مكتوب وأنا أساعدك على طول.',
         mention: 'شكراً على المنشن في الستوري 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+        mentionNamed: 'شكراً على المنشن في الستوري وعلى مشاركة رحلة إلى الإسكندرية 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+        resend: 'معرفتش أشوفه كويس 🙏 يا ريت يتبعت تاني، أو السؤال يكون مكتوب وأنا أساعدك على طول.',
     },
     levantine: {
         media: 'وصلني المرفق 🙏 بس ما بقدر افتح الصور والفويسات والفيديوهات هون. يا ريت يكون سؤالك مكتوب، وبساعدك فوراً.',
         mention: 'شكراً على المنشن بالستوري 🙏 ولو عندك أي سؤال بيسعدني ساعدك.',
+        mentionNamed: 'شكراً على المنشن بالستوري وعلى مشاركة رحلة إلى الإسكندرية 🙏 ولو عندك أي سؤال بيسعدني ساعدك.',
+        resend: 'ما قدرت شوفه منيح 🙏 يا ريت يوصلني مرة تانية، أو يكون سؤالك مكتوب وبساعدك فوراً.',
     },
     en: {
         media: 'Got your attachment 🙏 I can\'t open photos, voice notes or videos here. If you type your question, I\'ll help right away.',
         mention: 'Thanks for the mention in your story 🙏 If you have a question, I\'m glad to help.',
+        mentionNamed: 'Thanks for the mention in your story, and for sharing a trip to Alexandria 🙏 If you have a question, I\'m glad to help.',
+        resend: 'I couldn\'t see that clearly 🙏 Could you send it again, or type your question? I\'ll help right away.',
     },
 };
 
+/** A kit's attachment lines as plain text: the template filled in with an example of what a story showed, in the kit's own language. */
+function attachmentTexts(key: KitKey): ReviewAttachments {
+    const a = KITS[key].attachments;
+    return { media: a.media, mention: a.mention, mentionNamed: a.mentionNamed(WHAT[KITS[key].lang]), resend: a.resend };
+}
+
 describe('the attachment lines: what a customer is sent for a message with no words, as drafted (for a native speaker to read)', () => {
     for (const key of KIT_KEYS) {
-        it(`${key}: the "I can't open it" line and the story-mention thanks`, () => {
-            assert.deepEqual({ ...KITS[key].attachments }, REVIEW_ATTACHMENTS[key]);
+        it(`${key}: the "I can't open it" line, the story-mention thanks, the thanks that names the story and the "send it again" line`, () => {
+            assert.deepEqual(attachmentTexts(key), REVIEW_ATTACHMENTS[key]);
         });
 
         it(`${key}: holds no link, no number and no name: the guard has nothing to refuse in it`, () => {
-            for (const text of Object.values(KITS[key].attachments)) {
+            for (const text of Object.values(attachmentTexts(key))) {
                 const g = guardReply(text, { texts: [], prices: [] });
                 assert.deepEqual(g.violations, [], text);
                 assert.deepEqual(g.linksRemoved, [], text);
@@ -414,13 +435,13 @@ describe('the attachment lines: what a customer is sent for a message with no wo
 
     it('an Egyptian or MSA customer is told none of the Gulf words', () => {
         for (const key of ['egyptian', 'msa'] as const) {
-            for (const [name, text] of Object.entries(KITS[key].attachments)) assertNoGulfInEgyptianOrMsa(text, `${key} attachment line ${name}`);
+            for (const [name, text] of Object.entries(attachmentTexts(key))) assertNoGulfInEgyptianOrMsa(text, `${key} attachment line ${name}`);
         }
     });
 
     it('every register has its own words: no register is left speaking another\'s', () => {
         for (const key of ['msa', 'egyptian', 'levantine', 'en'] as const) {
-            for (const line of ['media', 'mention'] as const) assert.notEqual(KITS[key].attachments[line], KITS.gulf.attachments[line], `${key} ${line}`);
+            for (const line of ['media', 'mention', 'mentionNamed', 'resend'] as const) assert.notEqual(attachmentTexts(key)[line], attachmentTexts('gulf')[line], `${key} ${line}`);
         }
     });
 });

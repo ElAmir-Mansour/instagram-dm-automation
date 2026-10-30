@@ -297,11 +297,11 @@ describe('a request with no media is what it was before this provider existed', 
     });
 });
 
-describe('only Meta (Muse) is sent pictures and video', () => {
+describe('only Meta (Muse) is sent pictures and video: hosted by Meta, or by Baseten for the reel indexer', () => {
     const withMedia = (over: Partial<AdapterArgs>): AdapterArgs => ({ ...meta(), user: [{ role: 'user', text: 'see this', media: [IMAGE, VIDEO] }], ...over });
 
-    it('lists Meta alone on the Chat Completions format', () => {
-        assert.deepEqual([...MEDIA_PROVIDERS], ['meta']);
+    it('lists Meta and Baseten (Meta\'s open model, the owner\'s reels alone: purposes.ts) on the Chat Completions format, and no one else', () => {
+        assert.deepEqual([...MEDIA_PROVIDERS], ['meta', 'baseten']);
     });
 
     it('is refused by OpenRouter, Groq and Custom with a final bad_request before a request exists, naming the provider and none of the bytes', () => {

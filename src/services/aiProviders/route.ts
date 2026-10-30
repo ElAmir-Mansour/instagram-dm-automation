@@ -8,6 +8,9 @@
  *      the Operations card says so beside any route that lands there.
  *   3. With no provider at all, `no_provider`. That error is final; the wizard falls back to its deterministic prefill.
  *
+ * A provider that may answer only some purposes (Baseten: the reel indexer alone, `PROVIDER_PURPOSE_ALLOWLIST`) is passed over in step 2 for every other
+ * purpose, and a saved route that names it for one is refused in step 1, whatever its key says.
+ *
  * Before any of that, the Mac guard: `tenant_monteur_think` and `tenant_infographic` are refused for a tenant the operator's Mac works for
  * (the owner, and `studio.mac_brain_tenants`). His videos stay on the Mac; his work is never routed through the operator's API key.
  *
@@ -17,7 +20,9 @@
 import { isMacBrainAllowed } from '../macBrain.js';
 import { defaultModelOf, loadAiSettings, providerProblem, type AiConfig, type ProviderKeys } from './settings.js';
 import { AiError } from '../llm/errors.js';
-import { isContributorModel, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, type AiPurpose } from './purposes.js';
+import {
+    isContributorModel, MAC_BRAIN_PURPOSES, providerMayAnswer, providerPurposeReason, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, type AiPurpose,
+} from './purposes.js';
 import { PROVIDER_IDS, providerById, providerName, type ProviderId } from '../llm/registry.js';
 import type { Effort, JsonMode } from '../llm/types.js';
 
@@ -56,6 +61,20 @@ export interface PickOptions {
      * no tenant and is recorded as `eval` (`generate` decides that): everywhere else such a model is refused, saved or not (purposes.ts).
      */
     allowContributor?: boolean;
+    /**
+     * Providers to pass over: the caller already tried them and wants the next one. A saved route that names one is skipped, not refused, and the first provider
+     * that is allowed for the purpose and has a key answers at its default model. It only NARROWS: a caller can never name the provider that answers, so a tenant's
+     * call still follows the operator's routing. The reel indexer's one retry after Baseten fails moves to Meta's hosted model this way.
+     */
+    skip?: readonly ProviderId[];
+}
+
+/**
+ * `no_provider`, final, when a provider that may answer only some purposes (`PROVIDER_PURPOSE_ALLOWLIST`) is asked for another. Nothing is sent: this is said before a key
+ * is read. `pickRoute` applies it to a saved route and `generate` once more to the route it is about to call, so the deny holds even if one of the two changes.
+ */
+export function assertProviderMayAnswer(provider: ProviderId, purpose: AiPurpose): void {
+    if (!providerMayAnswer(provider, purpose)) throw noProvider(`${providerPurposeReason(providerName(provider), provider)} It cannot be used for ${purpose}.`);
 }
 
 /** The choice, from settings already read. Throws `no_provider` with the reason; never touches the database. */
@@ -74,9 +93,14 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
     const allowed = PURPOSE_PROVIDER_ALLOWLIST[purpose];
     const fallback = PURPOSE_ROUTE_FALLBACK[purpose];
     const own = config.routing[purpose];
+    const skipped = (id: ProviderId): boolean => opts.skip?.includes(id) === true;
     const saved = own ?? (fallback ? config.routing[fallback] : undefined);
-    if (saved) {
+    if (saved && !skipped(saved.provider)) {
         const named = own ? purpose : `${purpose} (taken from the ${fallback} route)`;
+        // Before the provider's key is looked at, like the allow-list below: a route that may not be used is refused whatever its key says.
+        if (!providerMayAnswer(saved.provider, purpose)) {
+            throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}. ${providerPurposeReason(providerName(saved.provider), saved.provider)} Choose another provider.`);
+        }
         if (allowed && !allowed.includes(saved.provider)) {
             throw noProvider(`The route for ${named} uses ${providerName(saved.provider)}, which is not on the list of providers that may answer this purpose (${allowed.map(providerName).join(', ')}). Choose one of them.`);
         }
@@ -92,7 +116,10 @@ export function pickRoute(purpose: AiPurpose, config: AiConfig, keys: ProviderKe
     }
 
     for (const id of PROVIDER_IDS) {
+        if (skipped(id)) continue;
         if (allowed && !allowed.includes(id)) continue;
+        // The default order never reaches a provider that may not answer this purpose, even when it is the only one with a key: it would be chosen by nobody.
+        if (!providerMayAnswer(id, purpose)) continue;
         if (providerProblem(id, config, keys)) continue;
         const model = defaultModelOf(id, config);
         // A provider whose default model trains on what it is sent cannot answer on its own say-so, the same as one with no key.

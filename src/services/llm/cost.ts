@@ -48,6 +48,11 @@ export type PriceTable = Readonly<Record<string, Price>>;
  *     so the table needs nothing more. Contributor mode (`-contributor`, $0.10/$0.20) is left out on
  *     purpose: no route may use it (purposes.ts), so a call on one is charged at the ceiling and
  *     flagged, which is the loud side.
+ *   - baseten.co/pricing (the Model APIs table) and baseten.co/library/muse-spark-open, read 2026-10-30: Muse Spark Open $1.25 input and $4.25 output per million
+ *     tokens, cached input $0.15, the same as Meta's own Muse Spark. The page names the model `meta-models/muse-spark-open`; the id the owner's key works with
+ *     is `meta-models/muse-spark-open-1026`, which a dated-snapshot match does not reach (the suffix is four digits, not six to eight), so both are listed. The
+ *     adapter reports no cached input for Baseten (it takes `prompt_tokens` whole), which can only over-count a call, the safe side of a budget. Reasoning tokens
+ *     are counted in `completion_tokens` and billed as output. Baseten bills for image and video input as input tokens too; the page says nothing different.
  * Not seeded: Fable ($10/$50), whose calls are therefore charged at this table's ceiling and
  * flagged, which under-counts them; and every OpenAI, OpenRouter and Custom model, and the other
  * Groq models.
@@ -67,6 +72,8 @@ export const DEFAULT_PRICES: PriceTable = {
     'muse-spark-1.2': { in: 1.25, out: 4.25 },
     'muse-spark-1.1': { in: 1.25, out: 4.25 },
     'muse-wonder-1.0': { in: 4, out: 20 },
+    'meta-models/muse-spark-open-1026': { in: 1.25, out: 4.25 },
+    'meta-models/muse-spark-open': { in: 1.25, out: 4.25 },
 };
 
 /**

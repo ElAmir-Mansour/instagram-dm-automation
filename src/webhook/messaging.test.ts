@@ -1811,7 +1811,10 @@ describe('handleMessagingEvent — a message with no words', () => {
         assert.deepEqual(JSON.parse(String(inbound.params[5])), photoEvent(), 'and not reshaped');
         assert.equal(geminiCalls, 0);
         assert.equal(layerCalls.length, 0);
-        assert.ok(!executed.some((e) => /FROM ai_agents[^]*sales_mode|sales_mode/.test(e.sql)), 'the sales mode is not even read');
+        // Meta Muse asks one question before it reads anything: does the sales mode answer this sender? That is ONE read of the mode and nothing of the sales turn
+        // (no `last_inbound_at` stamp, no history, no state). Every other call is what it was: the whole list is pinned below, against the pipeline before Muse existed.
+        assert.equal(executed.filter((e) => /sales_mode/.test(e.sql)).length, 1, 'the sales mode is read once');
+        assert.ok(!executed.some((e) => /last_inbound_at|stage = \$3/.test(e.sql)), 'and no sales turn ran');
     });
 
     it('answers it once, with the owner\'s line behind the disclosure: claimed first, sent, then the disclosure stamped and the message handled', async () => {
@@ -1865,7 +1868,7 @@ describe('handleMessagingEvent — a message with no words', () => {
         assert.equal(error, null);
         assert.equal(layerCalls.length, 0, 'the layer stub was never called');
         assert.equal(geminiCalls, 0);
-        assert.ok(!timeline.some((c) => /sales_mode|last_inbound_at/.test(c)), 'no sales statement ran');
+        assert.ok(!timeline.some((c) => /last_inbound_at/.test(c)), 'no sales turn ran (the one read of the mode is Meta Muse asking whether a read could be answered)');
         assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message'], 'no mark_seen and no typing_on either');
         assert.ok(String(sends[0]!.body.message.text).endsWith(LINE));
     });
@@ -2251,5 +2254,182 @@ describe('adContextFor — the bot is told about the ad only when the owner swit
     it('on, an ad made in Meta\'s Ads Manager not synced yet: the title Meta sent, no offer', async () => {
         const { out } = await withDb({ switchOn: true, ad: null }, () => adContextFor('creator-1', entry, offers, null));
         assert.deepEqual(out, { name: 'عرض الخريف', offerTitle: null, primaryText: null, tapped: null });
+    });
+});
+
+
+// ─── Meta Muse off: a message with no words is today's, call for call ───────────────────────
+
+/**
+ * With Meta Muse's switches off (the default), or the sender not on its allow-list, or the sales mode not answering this sender, or the DM not on Instagram, a message
+ * with no words is exactly what it was before perception existed: the same ack, the same sends, no write the old pipeline did not make, no typing indicator and no model.
+ *
+ * "Exactly" is written out. `WORDLESS_TODAYS_CALLS` is the old pipeline's list, captured by running the same scenario on `5fdf169` (the base of this change) and this one,
+ * the only differences being the READS named in `READS` and the text of the sales turn's burst check. A statement, a send or a model call added, dropped or moved fails
+ * here, naming both lists. The reads are why the list is filtered and not compared raw, and each is counted, so none can be added quietly.
+ */
+describe('handleMessagingEvent — Meta Muse off: a message with no words is today\'s, call for call', () => {
+    const WORDLESS_TODAYS_CALLS = [
+        'SQL SELECT id, instagram_page_id, facebook_',
+        'SQL INSERT INTO conversations (creator_id,',
+        'SQL INSERT INTO messages (conversation_id,',
+        'SQL UPDATE conversations SET profile_checked',
+        'SQL SELECT profile, version, activated_at F',
+        'SQL SELECT id FROM creators ORDER BY create',
+        'SQL SELECT is_active, system_prompt, knowled',
+        'SQL INSERT INTO messages (conversation_id,',
+        'SQL INSERT INTO rate_limit_counters (creato',
+        'SQL INSERT INTO app_rate_limit_counters (bu',
+        'META message',
+        'SQL UPDATE conversations SET ai_disclosed_a',
+        'SQL UPDATE messages SET handled_at = NOW(),',
+    ];
+    /** The reads Meta Muse's questions need. Nothing else is allowed to be added. */
+    const SALES_READ = 'SQL SELECT sales_mode, sales_test_senders F';
+    const SETTING_READ = 'SQL SELECT value, is_secret FROM app_settin';
+    const withoutReads = (timeline: string[]): string[] => timeline.filter((c) => !c.startsWith(SALES_READ) && !c.startsWith(SETTING_READ));
+    const count = (timeline: string[], prefix: string): number => timeline.filter((c) => c.startsWith(prefix)).length;
+
+    const sameCalls = (actual: string[], expected: string[], what: string): void => {
+        const matches = actual.length === expected.length && actual.every((call, i) => call.startsWith(expected[i]!));
+        assert.ok(matches, `${what} differ from today's.\nexpected:\n  ${expected.join('\n  ')}\nactual:\n  ${actual.join('\n  ')}`);
+    };
+    const agentIn = (mode: 'off' | 'test' | 'on', senders: string[] = []) => ({
+        is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7, engine: 'gemini', gemini_fallback: true, sales_mode: mode, sales_test_senders: senders,
+    });
+    const msg = (message: Record<string, unknown>, over: Record<string, unknown> = {}) => textEvent({ message, ...over });
+    const PHOTO = { mid: 'mid-p', attachments: [{ type: 'image', payload: { url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=1' } }] };
+    const REEL = { mid: 'mid-r', attachments: [{ type: 'ig_reel', payload: { url: 'https://www.instagram.com/reel/C1/', title: 'cap', reel_video_id: '17900000000000001' } }] };
+    const MENTION = { mid: 'mid-m', attachments: [{ type: 'story_mention', payload: { url: 'https://lookaside.fbsbx.com/m' } }] };
+    const STORY_REPLY = { mid: 'mid-s', reply_to: { story: { url: 'https://lookaside.fbsbx.com/s', id: '18000000000000001' } } };
+
+    let layerCalls: AiGenerateArgs[];
+    let undo: () => void;
+    beforeEach(() => {
+        layerCalls = [];
+        const previousCaller = setAiCaller(async (args) => { layerCalls.push(args); throw new Error('with Meta Muse off, no model is ever asked about a message with no words'); });
+        undo = () => { setAiCaller(previousCaller); };
+    });
+    afterEach(() => undo());
+
+    it('a photo, sales mode off: the old calls plus ONE read, the mode', async () => {
+        const { timeline, sends, error, geminiCalls } = await runDm(msg(PHOTO), { agent: agentIn('off') });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.equal(count(timeline, SALES_READ), 1);
+        assert.equal(count(timeline, SETTING_READ), 0, 'a sales mode that answers nobody never gets as far as the switches');
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+        assert.equal(geminiCalls, 0);
+        assert.equal(layerCalls.length, 0);
+    });
+
+    it('a photo, sales mode ON, every switch off: the old calls plus the mode and the three settings of the gate (switches, allow-list, cap), and today\'s line', async () => {
+        const { timeline, sends, executed, error, geminiCalls } = await runDm(msg(PHOTO), { agent: agentIn('on') });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.equal(count(timeline, SALES_READ), 1);
+        assert.equal(count(timeline, SETTING_READ), 3);
+        assert.deepEqual(executed.filter((e) => /FROM app_settings WHERE key = \$1/.test(e.sql)).map((e) => e.params[0]).sort(), ['muse.allow_senders.creator-1', 'muse.daily_usd.creator-1', 'muse.switches.creator-1']);
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message'], 'no typing indicator');
+        assert.equal(sends[0]!.body.message.text, `${KITS.gulf.disclosure}\n${KITS.gulf.attachments.media}`);
+        assert.equal(geminiCalls, 0);
+        assert.equal(layerCalls.length, 0);
+        assert.ok(!executed.some((e) => /UPDATE messages SET perception|FROM reel_analyses/.test(e.sql)), 'nothing is written or read for a perception');
+    });
+
+    it('a shared reel and a story mention are the same: the line they always got, with no download and no Graph call', async () => {
+        for (const [what, message, line] of [['a shared reel', REEL, KITS.gulf.attachments.media], ['a story mention', MENTION, KITS.gulf.attachments.mention]] as const) {
+            const { timeline, sends, error, lookups } = await runDm(msg(message), { agent: agentIn('on') });
+            assert.equal(error, null, what);
+            sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, what);
+            assert.equal(sends[0]!.body.message.text, `${KITS.gulf.disclosure}\n${line}`, what);
+            assert.equal(lookups.length, 0, `${what}: Meta is not asked anything`);
+        }
+    });
+
+    it('the switch on but the sender NOT on the allow-list: the same, and nothing is written', async () => {
+        const settings = [[/FROM app_settings WHERE key = \$1/, { rows: [{ value: JSON.stringify({ dm_media: true, voice: false, memory: false }), is_secret: false }] }]] as Array<[RegExp, { rows: any[] }]>;
+        const { timeline, sends, executed, error } = await runDm(msg(PHOTO), { agent: agentIn('on'), extraRoutes: settings });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+        assert.ok(!executed.some((e) => /UPDATE messages SET perception/.test(e.sql)));
+    });
+
+    it('a Messenger photo is the old calls with NO read at all: perception is Instagram\'s, and the platform is the first thing asked', async () => {
+        const { timeline, sends, error } = await runDm(
+            textEvent({ recipient: { id: 'fb-page-1' }, message: PHOTO }), { agent: agentIn('on') }, { lastAttempt: false, object: 'page' }, 'fb-page-1'
+        );
+        assert.equal(error, null);
+        sameCalls(timeline.filter((c) => !c.startsWith('SQL UPDATE conversations SET profile_checked')), WORDLESS_TODAYS_CALLS.filter((c) => !c.startsWith('SQL UPDATE conversations SET profile_checked')), 'the calls');
+        assert.equal(count(timeline, SALES_READ) + count(timeline, SETTING_READ), 0);
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+    });
+
+    it('a sticker, a file and a voice note are the old calls with no read at all: not a kind Muse reads (voice is another phase)', async () => {
+        const messages: Array<Record<string, unknown>> = [
+            { mid: 'a', attachments: [{ type: 'audio', payload: { url: 'https://lookaside.fbsbx.com/a.mp4' } }] },
+            { mid: 'b', attachments: [{ type: 'file', payload: { url: 'https://lookaside.fbsbx.com/f.pdf' } }] },
+            { mid: 'c', is_unsupported: true },
+        ];
+        for (const message of messages) {
+            const { timeline, error } = await runDm(msg(message), { agent: agentIn('on') });
+            assert.equal(error, null);
+            sameCalls(timeline, WORDLESS_TODAYS_CALLS, JSON.stringify(Object.keys(message)));
+            assert.equal(count(timeline, SALES_READ) + count(timeline, SETTING_READ), 0);
+        }
+    });
+
+    it('a reply to a story with NO words is a word-less message: the same, and the story is not fetched', async () => {
+        const { timeline, error, lookups } = await runDm(msg(STORY_REPLY), { agent: agentIn('on') });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.equal(lookups.length, 0);
+    });
+
+    it('a reply to a story WITH words, every switch off: the same calls as the same words with no story, plus exactly the gate\'s three reads; the model is asked as ever', async () => {
+        const salesRoutes: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+            [/UPDATE conversations\s+SET last_inbound_at/, { rows: [{ stage: 'new', qualifier_turns: 0, abuse_strikes: 0, offer_id: null, offers_linked: [], last_link_at: null, opted_out_at: null, ai_replies_last_hour: 0 }] }],
+            [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
+            [/UPDATE conversations SET stage/, { rowCount: 1 }],
+            [/LEFT JOIN LATERAL/, { rows: [{ current_source: null, interaction_id: null, recent_campaign: null, recipient_id: null, replied_at: null, recent_keywords: null, recent_template: null, current_keywords: null, current_template: null }] }],
+        ];
+        const answer = async (args: AiGenerateArgs) => {
+            layerCalls.push(args);
+            return {
+                json: { intent: 'info', stage: 'new', next_action: 'reply', offer_id: 'none', handoff_reason: 'none', text: 'رد المبيعات', quick_replies: [] },
+                usage: { in: 900, out: 60 }, billed: [], model: 'claude-test', provider: 'anthropic', stopReason: 'end_turn', elapsed_ms: 800, usd: 0.003, priced: true, costSource: 'table', effort: 'low', route: 'saved', usageId: '1',
+            } as AiGenerateResult;
+        };
+        setAiCaller(answer);
+        const plain = await runDm(msg({ mid: 'mid-t', text: 'كم السعر؟' }), { agent: agentIn('on'), extraRoutes: salesRoutes });
+        const story = await runDm(msg({ mid: 'mid-t', text: 'كم السعر؟', reply_to: { story: { url: 'https://lookaside.fbsbx.com/s', id: '18000000000000001' } } }), { agent: agentIn('on'), extraRoutes: salesRoutes });
+
+        assert.equal(plain.error, null);
+        assert.equal(story.error, null);
+        assert.equal(count(plain.timeline, SETTING_READ), 1, 'the Gemini-key read the sales turn already made, or none: whatever the plain DM makes');
+        assert.deepEqual(withoutReads(story.timeline), withoutReads(plain.timeline), 'every call that is not a read is the same');
+        assert.equal(count(story.timeline, SETTING_READ) - count(plain.timeline, SETTING_READ), 3, 'plus exactly the gate\'s three');
+        assert.deepEqual(story.sends.map((s) => s.body.sender_action ?? 'message'), plain.sends.map((s) => s.body.sender_action ?? 'message'), 'and the sends are the same: no extra typing indicator');
+        assert.ok(!story.executed.some((e) => /UPDATE messages SET perception/.test(e.sql)));
+        assert.equal(layerCalls.length, 2, 'the sales model answered each (and only for the question)');
+        assert.ok(!JSON.stringify(layerCalls[1]!.user).includes('The story they replied to'), 'and was told nothing of a story');
+    });
+
+    it('a text with no story costs not one read more than it did', async () => {
+        const salesRoutes: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+            [/UPDATE conversations\s+SET last_inbound_at/, { rows: [{ stage: 'new', qualifier_turns: 0, abuse_strikes: 0, offer_id: null, offers_linked: [], last_link_at: null, opted_out_at: null, ai_replies_last_hour: 0 }] }],
+            [/SELECT EXISTS \(SELECT 1 FROM messages n/, { rows: [{ newer_unhandled: false, answered: false }] }],
+            [/UPDATE conversations SET stage/, { rowCount: 1 }],
+            [/LEFT JOIN LATERAL/, { rows: [{ current_source: null, interaction_id: null, recent_campaign: null, recipient_id: null, replied_at: null, recent_keywords: null, recent_template: null, current_keywords: null, current_template: null }] }],
+        ];
+        setAiCaller(async (args) => {
+            layerCalls.push(args);
+            return { json: { intent: 'info', stage: 'new', next_action: 'reply', offer_id: 'none', handoff_reason: 'none', text: 'x', quick_replies: [] }, usage: { in: 1, out: 1 }, billed: [], model: 'm', provider: 'anthropic', stopReason: 'end_turn', elapsed_ms: 1, usd: 0, priced: true, costSource: 'table', effort: 'low', route: 'saved', usageId: '1' } as AiGenerateResult;
+        });
+        const { timeline, error } = await runDm(textEvent(), { agent: agentIn('on'), extraRoutes: salesRoutes });
+        assert.equal(error, null);
+        assert.equal(count(timeline, SETTING_READ), 1, 'the one read of the DM key that was always there, and nothing of Meta Muse');
+        assert.ok(!timeline.some((c) => /muse|perception/i.test(c)));
     });
 });

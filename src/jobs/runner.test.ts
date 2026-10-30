@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { cachedForRequest, withProfileCache } from '../services/profile/cache.js';
 import { setLogSink } from '../utils/log.js';
-import { backoffSeconds, drainJobs } from './runner.js';
+import { backoffSeconds, drainJobs, orderForRunning } from './runner.js';
 import { memoryQueue } from './testSupport.js';
 import type { EnqueueInput, Job, JobHandlerRegistry, JobKind, JobQueue } from './types.js';
 
@@ -123,6 +123,7 @@ function handlersThat(behaviour: (job: Job) => void | Promise<void>): {
         registry: {
             'comment.process': run,
             'dm.process': run,
+            'muse.reel_index': run,
         } as unknown as JobHandlerRegistry,
     };
 }
@@ -657,5 +658,48 @@ describe('the profile cache is per job, not per drain', () => {
         const result = await drainJobs({ queue, handlers: registry, budgetMs: 60_000, random: () => 0.5 });
         assert.deepEqual([result.succeeded, result.failed], [1, 1]);
         assert.equal(state.calls, 2);
+    });
+});
+
+describe('a background job in a batch (BACKGROUND_JOB_KINDS): what a person is waiting for runs first', () => {
+    const reel = (id: string, attempts = 1): Job => job({ id, kind: 'muse.reel_index' as JobKind, attempts, payload: { creatorId: 'c', igMediaId: '1' } as Job['payload'] });
+    const dm = (id: string, attempts = 1): Job => job({ id, kind: 'dm.process' as JobKind, attempts });
+
+    it('orders a batch with the slow reel jobs last and every other job in the order the claim gave, and leaves a batch with none exactly as it was', () => {
+        const batch = [reel('r1'), dm('d1'), job({ id: 'c1' }), reel('r2'), dm('d2')];
+        assert.deepEqual(orderForRunning(batch).map((j) => j.id), ['d1', 'c1', 'd2', 'r1', 'r2']);
+        const plain = [dm('d1'), job({ id: 'c1' }), dm('d2')];
+        assert.deepEqual(orderForRunning(plain).map((j) => j.id), ['d1', 'c1', 'd2']);
+        assert.deepEqual(orderForRunning([]), []);
+        assert.deepEqual(batch.map((j) => j.id), ['r1', 'd1', 'c1', 'r2', 'd2'], 'the claimed batch itself is not reordered in place');
+    });
+
+    it('runs a DM claimed beside a reel BEFORE it, so the person does not wait for a minute of video', async () => {
+        const queue = fakeQueue([[reel('r1'), dm('d1')]]);
+        const { registry, seen } = handlersThat(() => {});
+        await drainJobs({ queue, handlers: registry, budgetMs: 10_000, batchSize: 3 });
+        assert.deepEqual(seen.map((j) => j.id), ['d1', 'r1']);
+        assert.deepEqual(queue.completed, ['d1', 'r1']);
+    });
+
+    it('is the reel that is handed back when the budget ends: it is the slow job that does not run, never the quick one that was behind it', async () => {
+        let clock = 0;
+        const queue = fakeQueue([[reel('r1', 2), dm('d1', 1), reel('r2', 3)]]);
+        const { registry, seen } = handlersThat((j) => { if (j.id === 'd1') clock += 9_000; });
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 8_000, batchSize: 3, now: () => clock });
+        assert.deepEqual(seen.map((j) => j.id), ['d1'], 'the DM ran');
+        assert.deepEqual(queue.released, [claims(['r1', 2], ['r2', 3])], 'both reels went back to the queue, each with the attempt its own claim counted');
+        assert.equal(result.budgetExhausted, true);
+        assert.equal(queue.failed.length, 0);
+    });
+
+    it('runs the reels one after another once the people\'s jobs are done, and the budget stops them like any other job', async () => {
+        let clock = 0;
+        const queue = fakeQueue([[reel('r1'), reel('r2'), reel('r3')]]);
+        const { registry, seen } = handlersThat(() => { clock += 45_000; });
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 45_000, batchSize: 5, now: () => clock });
+        assert.deepEqual(seen.map((j) => j.id), ['r1'], 'a reel takes about the whole budget of a worker drain, so one is run and the rest are handed back');
+        assert.deepEqual(queue.released, [claims(['r2', 1], ['r3', 1])]);
+        assert.equal(result.claimed, 1);
     });
 });

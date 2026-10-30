@@ -9,7 +9,8 @@
  *   - a viewer's shell has NO live control: every input, select, textarea and button is disabled or read-only (a scan of the whole markup, so a
  *     control added to the shell later without a decision fails here), with the note in both languages;
  *   - Save and the sandbox send nothing for a viewer, a load does not hand Save back, and the wording experiment's cards are read-only too;
- *   - the write paths this page calls are exactly the four audited here, each behind the server guard the page's question (`canOperate`) mirrors.
+ *   - the write paths this page calls are exactly the five audited here, each behind the server guard the page's question mirrors (`canOperate`, and for
+ *     Meta vision's card `canAdminister`: the owner's, so an operator reads that card and changes only the agent).
  *
  * The REAL `ai_settings.js` in a `node:vm` context, as `aiVariants.test.ts` loads it.
  */
@@ -113,12 +114,14 @@ const isDisabled = (tag: string) => /\sdisabled(?=[\s>=])/.test(tag);
 const isReadOnly = (tag: string) => /\sreadonly(?=[\s>=])/.test(tag);
 
 /** The text boxes: read-only for a viewer, so the prompt can still be read, selected and copied. Everything else is disabled. */
-const TEXT_BOXES = ['system-prompt-text', 'knowledge-base-text', 'sales-test-senders', 'sales-followup-minutes'];
+const TEXT_BOXES = ['system-prompt-text', 'knowledge-base-text', 'sales-test-senders', 'sales-followup-minutes', 'muse-daily-usd'];
 /** What a viewer must not be able to touch, by id: the audit of this screen's controls. */
 const GATED = [
     'ai-active-toggle', 'system-prompt-text', 'knowledge-base-text', 'engine-selector', 'gemini-fallback-toggle', 'sales-mode-selector',
     'sales-test-senders', 'sales-followup-minutes', 'sales-variants-enabled', 'sales-variant-add', 'model-selector', 'temp-slider',
     'save-settings-btn', 'sandbox-user-input', 'sandbox-btn',
+    // Meta vision (beta), the owner's card: the three switches, who it answers, the picker's button and search, the cap, and its own Save.
+    'muse-dm-media', 'muse-voice', 'muse-memory', 'muse-who', 'muse-picker-open', 'muse-picker-search', 'muse-daily-usd', 'muse-save-btn',
 ];
 
 describe('AI settings — an operator keeps every control', () => {
@@ -274,9 +277,12 @@ describe('AI settings — the write paths, audited against the server\'s guards'
         saveSalesVariants: { path: '/settings/sales-variants', guard: 'canOperate' },
         // A platform admin's route (`requirePlatformAdmin`), and a platform admin always acts as owner: the field is drawn for them alone.
         saveSalesFollowup: { path: '/settings/sales-followup', guard: 'canAdminister' },
+        // Meta vision's card (T038): the OWNER's, because it decides whether a customer's media is sent to Meta's models and sets his daily spend. The card draws
+        // itself read-only for an operator as well as a viewer (`canEditMuse`), which the card's own tests pin.
+        saveMuseSettings: { path: '/settings/ai/muse', guard: 'canAdminister' },
     };
 
-    it('calls exactly the four writes audited here: a fifth means deciding who may make it, and drawing it read-only for the rest', () => {
+    it('calls exactly the five writes audited here: a sixth means deciding who may make it, and drawing it read-only for the rest', () => {
         const calls = callsOfThePage();
         assert.deepEqual(calls.filter((c) => c.method !== 'GET').map((c) => c.name).sort(), Object.keys(AUDITED).sort());
         for (const [name, want] of Object.entries(AUDITED)) {

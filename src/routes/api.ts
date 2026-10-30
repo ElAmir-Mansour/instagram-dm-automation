@@ -25,6 +25,7 @@ import { DEFAULT_SALES_MODE, isSalesMode, parseTestSenders, SALES_MODES, type Sa
 import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, followupMinutesInput } from '../services/dmSales/followup.js';
 import { getFollowupMinutes } from '../services/dmSales/followupJob.js';
 import { readVariantState, saveVariantConfig } from '../services/dmSales/variantStore.js';
+import { loadMuseView, buildMuseView, museAuditDetail, parseMuseInput, saveMuseSettings } from '../services/perception/museSettings.js';
 import {
     activeVariants, MAX_VARIANTS, MIN_VARIANTS, parseVariantConfig, VARIANT_IDS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX,
 } from '../services/dmSales/variants.js';
@@ -100,6 +101,8 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { museLibraryRouter } from './museLibrary.js';
+import { queueNewReelsForMemoryTenants } from '../services/perception/reelLibrary.js';
 import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
@@ -1183,6 +1186,16 @@ router.get('/cron/publish', async (req, res) => {
             if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
         }
 
+        // The video memory (src/services/perception/reelLibrary.ts, docs/specs/005-muse-sees T054): for every tenant that switched `memory` on, queue the reels published
+        // since the last run, and any that failed or were never reached: one `muse.reel_index` job each, which the drain runs (one reel a call). A tenant with the switch off
+        // costs one settings read. Fail-soft, like the sweeps around it: this must never break the publish sweep above it.
+        try {
+            const reels = await queueNewReelsForMemoryTenants();
+            if (reels.memoryOn > 0 || reels.failed > 0) log('info', 'cron.muse_reels', { ...reels });
+        } catch (reelsErr) {
+            log('error', 'cron.muse_reels_failed', describeError(reelsErr));
+        }
+
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
         // or a missing permission must not turn a publish sweep that already ran into a 500.
@@ -1741,6 +1754,8 @@ router.use('/profile', profileRouter);
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
 router.use('/dm/ice-breakers', iceBreakersRouter);
+// The video memory's library (docs/specs/005-muse-sees T054): the owner's own reels, watched once. Owner only on every route, reads included (the router carries the guard).
+router.use('/settings/ai/muse/library', museLibraryRouter);
 // Boost a published post with Meta ads (docs/META_ADS_RESEARCH.md option 2). Owner only, every route; activation is the one that spends.
 router.use('/ads', adsRouter);
 
@@ -4135,6 +4150,10 @@ router.get('/settings/ai', async (req, res) => {
         const creatorId = getTenantId(req);
 
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
+        // Meta vision's settings, for the card under the agent's form (`services/perception/museSettings.ts`): the three switches, who it answers, the daily
+        // cap and what is spent, and whether a Meta key can answer. Its own lookups, so a failure is `null` here and the card says so: it never fails the
+        // agent's settings, and what it could not read is never shown as "everything off".
+        const muse = await loadMuseView(creatorId);
         if (agentRes.rows.length === 0) {
             // In the language this tenant's DMs speak (its profile's `dm` surface), not the owner's by default.
             const { language } = await profileContextOrLegacy(creatorId, 'dm');
@@ -4148,6 +4167,7 @@ router.get('/settings/ai', async (req, res) => {
                 gemini_fallback: DEFAULT_GEMINI_FALLBACK,
                 sales_mode: DEFAULT_SALES_MODE,
                 sales_test_senders: [],
+                muse,
             });
             return;
         }
@@ -4156,7 +4176,7 @@ router.get('/settings/ai', async (req, res) => {
         // list no longer has falls back at reply time, and the dashboard's picker holds only
         // that list's options, so the raw value would render as an empty selection.
         const agent = agentRes.rows[0];
-        res.json({ ...agent, model: resolveModel(agent.model) });
+        res.json({ ...agent, model: resolveModel(agent.model), muse });
     } catch (err) {
         log('error', 'api.ai_settings_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch AI settings.' });
@@ -4294,6 +4314,38 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         }
         log('error', 'api.ai_settings_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update AI settings.' });
+    }
+});
+
+/**
+ * Meta vision's settings (docs/specs/005-muse-sees T037): the three switches, who it answers and the daily cap. **Owner only** (`canAdminister`, not
+ * `canOperate`): the switches decide whether a customer's photos, reels and voice notes are sent to Meta's models, which is the owner's call, and the
+ * cap is his money. Validated whole before anything is written (`parseMuseInput`: a typo is a 400 naming it); the answer is the new `muse` block, so
+ * the card shows what the server holds. A save that changes nothing writes nothing, and one that changes something is a `muse.settings_changed` ledger
+ * row whose detail has counts and switch states and never a sender id. Only the SESSION's tenant is ever written.
+ */
+router.post('/settings/ai/muse', canAdminister, async (req, res) => {
+    const parsed = parseMuseInput(req.body);
+    if (!parsed.ok) {
+        res.status(400).json({ error: parsed.problem.error, code: 'MUSE_INVALID', field: parsed.problem.field });
+        return;
+    }
+    try {
+        const creatorId = getTenantId(req);
+        const saved = await saveMuseSettings(creatorId, parsed.input, req.session?.userId ?? null);
+        if (saved.changed.length > 0) {
+            await writeAudit(await actorFromSession(req.session), {
+                action: AUDIT_ACTIONS.museSettingsChanged, targetType: 'tenant', targetId: creatorId, detail: museAuditDetail(saved.after, saved.changed),
+            });
+            log('info', 'muse.settings_set', {
+                creator_id: creatorId, changed: saved.changed, dm_media: saved.after.switches.dm_media, voice: saved.after.switches.voice,
+                memory: saved.after.switches.memory, allow_count: saved.after.allowSenders.length, daily_usd: saved.after.dailyUsd,
+            });
+        }
+        res.json(await buildMuseView(creatorId, saved.after));
+    } catch (err) {
+        log('error', 'api.muse_settings_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the Meta vision settings.' });
     }
 });
 

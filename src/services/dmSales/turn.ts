@@ -38,6 +38,14 @@
  * the transport's `readable` (a WhatsApp entry link's ` #ref` is not for the model; the stored row is untouched). Given none, it is Instagram and
  * Messenger exactly as before: every line that differs is under `transport`, and `turn.test.ts` pins the request bodies of the other path and the history it reads.
  *
+ * **Meta Muse perception** (`perceived`, docs/specs/005-muse-sees): a message with no words (a shared reel, a photo) can be READ by a model first
+ * (`src/services/perception/`), and this turn then answers the description, which is the row's `text`. Four things change for such a turn and for no
+ * other: the refund/complaint prefilter does not read the description (a model's "a screenshot of a refund policy" is not a customer asking for a refund,
+ * R9: only words a person typed are read for it); the description is told to the model as a fact, the facts block's "What the customer sent"; a personal
+ * document goes to a person without a model ever being asked; and the legacy Gemini path is never the fallback (its key may be a free-tier one, which
+ * trains on what it is sent), so a model that fails is a hand-off. The reply's `ai_meta` also says it was perceived and why it did what it did
+ * (`traceReason`, built by the code, not written by the model). Absent (every turn there was before), none of this exists, not even a key in `ai_meta`.
+ *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
  * follow-up itself (S9's job does, `followupJob.ts`).
@@ -51,6 +59,8 @@ import { generate } from '../aiProviders/generate.js';
 import { DM_MAX_TOKENS, DM_TIMEOUT_MS, failureOf, readDmEngine, type DmFailure } from '../dmEngine.js';
 import { sendDirectMessage, sendSenderAction, type SenderAction } from '../instagram.js';
 import type { LlmTurn } from '../llm/types.js';
+import { traceReason } from '../perception/trace.js';
+import type { PerceptionKind } from '../perception/types.js';
 import type { ProfileContext } from '../profile/context.js';
 import { kitFor, type SalesKit } from '../profile/kits.js';
 import { bridgeFacts, commentSource, openingStage } from './bridge.js';
@@ -146,6 +156,26 @@ export interface SalesTurnInput {
      * `ads.bot_context` on and the conversation is an ad one; absent, the prompt is byte for byte what it was.
      */
     ad?: SalesFacts['ad'];
+    /** Meta Muse perception: this turn answers something a model READ for the customer. See the top of the file. Absent: a turn exactly as it always was. */
+    perceived?: PerceivedTurn;
+}
+
+/** What a perceived turn is told, by the pipeline (`src/webhook/messaging.ts`), from the perception it stored (`src/services/perception/`). */
+export interface PerceivedTurn {
+    /** What was read: the trace says it, and a kind is all it needs. */
+    kind: PerceptionKind;
+    /**
+     * `inbound.text` is the model's DESCRIPTION of what they sent (`[shared reel] A reel about …`), not words they typed, so the refund/complaint prefilter does not read it
+     * (R9), and the reply is answered from the description alone. False when they typed the words (a reply to a story that has some: the story is only context),
+     * and the prefilter then reads them as ever.
+     */
+    describedText: boolean;
+    /** The facts block's "What the customer sent: …" line (`perceivedFact`), already one line. Null: nothing to add. */
+    sent: string | null;
+    /** How the trace begins, naming how it was looked at (`readPhrase`: "Watched a shared reel"). Absent: "Read <what>". */
+    read?: string;
+    /** The media is a personal document: the chat is handed to a person and the model is never asked, whatever the person's words say. */
+    personal?: boolean;
 }
 
 export type SalesTurnOutcome =
@@ -205,6 +235,19 @@ interface Ending {
 
 /** What is sent for the model's own text: a reply, or a close that is not an opt-out. */
 const sendsModelText = (d: TurnDecision): boolean => d.effect === 'reply' || (d.effect === 'close' && !d.optOut);
+
+/**
+ * The one line of why for a perceived turn's reply: the ending's own (a personal document), else built from what was read and what the code decided. A model that
+ * failed is recognised by the `model_failed` the ending records, never by a guess.
+ */
+function perceivedReason(perceived: PerceivedTurn, decision: TurnDecision, o: Ending): string {
+    if (typeof o.meta.reason === 'string') return o.meta.reason;
+    return traceReason({
+        kind: perceived.kind, effect: decision.effect, action: decision.action, handoffReason: decision.handoffReason, intent: o.intent,
+        modelFailed: typeof o.meta.model_failed === 'string',
+        ...(perceived.read ? { read: perceived.read } : {}),
+    });
+}
 
 export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
     const startedAt = Date.now();
@@ -308,6 +351,9 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 handoff_reason: decision.handoffReason, latency_ms: Date.now() - startedAt,
                 ...(variantId ? { variant: variantId } : {}),
                 ...(transport ? { channel: transport.channel } : {}),
+                // The decision trace (US5): that this reply answered something that was read, and the one line of why. Only for such a turn, so every other reply's
+                // `ai_meta` has not one key more than it had.
+                ...(input.perceived ? { perceived: true, reason: perceivedReason(input.perceived, decision, o) } : {}),
             },
         };
         const recorded = await recordTurn(record);
@@ -348,8 +394,20 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         return conclude(loopDecision(state), { intent: null, offerId: null, text: null, link: null, quick: [], meta: { engine: 'rule' } });
     }
 
-    // 4. Before any model: the messages that need a person, or a stop, or a calm word.
-    const pre = prefilter(inbound.text);
+    // A personal document (an ID, a card, a receipt with personal data): a person looks, and no model is asked what it shows or what to say. The customer is told
+    // exactly what a refund is told: a person has been told. Nothing about what was in it is said to anyone, here or in the owner's alert.
+    if (input.perceived?.personal) {
+        const decision = handoffDecision('unsure', state);
+        log('info', 'dm.sales_personal_media', logBase);
+        return conclude(decision, {
+            intent: null, offerId: null, text: lineFor(decision, null, ctx, kit, owner, 'handoff'), link: null, quick: [],
+            meta: { engine: 'rule', reason: traceReason({ kind: input.perceived.kind, effect: decision.effect, action: decision.action, handoffReason: decision.handoffReason, intent: null, personal: true }) },
+        });
+    }
+
+    // 4. Before any model: the messages that need a person, or a stop, or a calm word. A DESCRIPTION is not read for them (R9): what a model said it saw is not what
+    // the person said, and a screenshot of a refund policy is not a refund request.
+    const pre: PrefilterDecision = input.perceived?.describedText ? { action: 'pass' } : prefilter(inbound.text);
     if (pre.action !== 'pass') {
         const signal = pre.action === 'opt_out' ? 'opt_out' : pre.reason;
         const decision = decisionForPrefilter(pre, state);
@@ -398,6 +456,9 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         ...(guidance ? { variant: guidance } : {}),
         ...(transport ? { channel: transport.channel } : {}),
         ...(input.ad ? { ad: input.ad } : {}),
+        // What a model said it saw, said last, next to the customer's message. It is NOT among the guard's facts below: a number or a price in a picture is not one the
+        // reply may state unless the information above gives it.
+        ...(input.perceived?.sent ? { sent: input.perceived.sent } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
@@ -406,11 +467,13 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     /** Never silence: the legacy Gemini path once, when the owner wants it; else a hand-off. */
     const modelFailed = async (failure: DmFailure): Promise<SalesTurnResult> => {
-        if (transport) {
+        if (transport || input.perceived) {
             // Never the legacy Gemini path for another channel (review C1): its key may be a free-tier one, which trains on what it is sent, and a
             // customer's WhatsApp words do not go there. Not the engine setting, not `gemini_fallback`: a person has the chat. `dm.engine_failed` says why.
+            // The same for a turn that answers what a model READ (FR-006b): what the customer sent is not told to a provider that may train on it.
             log('error', 'dm.engine_failed', {
-                ...logBase, source: 'dm', engine: 'providers', reason: failure.reason, message: failure.message, fallback: 'never', channel: transport.channel, sales: true,
+                ...logBase, source: 'dm', engine: 'providers', reason: failure.reason, message: failure.message, fallback: 'never',
+                ...(transport ? { channel: transport.channel } : {}), sales: true, ...(input.perceived ? { perceived: true } : {}),
             });
             const decision = handoffDecision('unsure', state);
             return conclude(decision, {
@@ -539,6 +602,18 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     if (!chosen || !answer) return modelFailed({ reason: 'no_answer', message: 'The model gave no answer to act on.' });
 
     const { decision } = chosen;
+
+    // A message with no words is answered after a read that takes seconds, and its siblings arrive in them: three photos in a burst are ONE answer, the newest's. The check
+    // made at the top of the turn could not see a sibling whose own read had not finished, so it is made again now that the answer is written and before it is sent. Only
+    // for such a turn, and only for a plain reply: a hand-off, an opt-out and a calm word are decisions that must not be lost to a message that has not been read yet.
+    if (input.perceived?.describedText && decision.effect === 'reply') {
+        const late = await supersession(conversation.id, inbound.id);
+        if (late.newerUnhandled || late.answered) {
+            log('info', 'dm.sales_superseded', { ...logBase, newer_unhandled: late.newerUnhandled, answered: late.answered, late: true });
+            return { kind: 'done', outcome: 'superseded' };
+        }
+    }
+
     return conclude(decision, {
         intent: chosen.reply.intent,
         offerId: chosen.reply.offer_id,

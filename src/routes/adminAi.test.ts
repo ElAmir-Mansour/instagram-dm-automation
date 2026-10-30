@@ -88,6 +88,11 @@ const goodProvider = (hit: Hit): Response => {
                 .map((id) => ({ id, object: 'model', created: 0, owned_by: 'meta' })),
         });
     }
+    if (u.host === 'inference.baseten.co' && u.pathname === '/v1/models') {
+        if (hit.headers.authorization !== `Bearer ${FAKE_KEYS.baseten}`) return echoes401(hit);
+        // Baseten lists every open model its Model APIs serve (documented 2026-10-30); only Meta's are offered.
+        return jsonResponse(200, { object: 'list', data: ['zai-org/GLM-5.3', 'meta-models/muse-spark-open-1026', 'moonshotai/Kimi-K3'].map((id) => ({ id, object: 'model' })) });
+    }
     if (u.host === 'llm.example.com' && u.pathname === '/v1/models') {
         return jsonResponse(200, { data: [{ id: 'my-model' }, { id: 'other-model' }] });
     }
@@ -105,7 +110,7 @@ const fakeFetch: FetchLike = async (url, init) => {
 
 // ─── The stand-in for the rest ───────────────────────────────────────────────────────────────
 
-const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'GEMINI_API_KEY'] as const;
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'META_MODEL_API_KEY', 'BASETEN_API_KEY', 'GEMINI_API_KEY'] as const;
 let db: AiDb;
 let savedEnv: Record<string, string | undefined>;
 let logs: string[];
@@ -197,7 +202,7 @@ describe('GET /ai', () => {
     it('answers with providers, purposes, prices, budgets, warnings and today\'s spend, and nothing is saved yet', async () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
-        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom']);
+        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'baseten', 'custom']);
         assert.deepEqual(body.purposes.map((p: any) => p.purpose), [
             'onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'dm_whatsapp', 'ads_draft', 'ads_review',
             'perception_dm', 'recall', 'reel_index', 'comment_intent',
@@ -217,6 +222,7 @@ describe('GET /ai', () => {
         db.setSetting('ai.providers.custom.api_key', FAKE_KEYS.custom, true);
         db.setSetting('ai.providers.groq.api_key', FAKE_KEYS.groq, true);
         db.setSetting('ai.providers.meta.api_key', FAKE_KEYS.meta, true);
+        db.setSetting('ai.providers.baseten.api_key', FAKE_KEYS.baseten, true);
         const { body } = await call('GET', '/ai');
         const keys = Object.fromEntries(body.providers.map((p: any) => [p.id, p.key]));
         assert.deepEqual(keys.anthropic, { set: true, source: 'database', last4: 'ant1', envFallback: false });
@@ -226,6 +232,7 @@ describe('GET /ai', () => {
         assert.deepEqual(keys.custom, { set: true, source: 'database', last4: 'cus5', envFallback: false });
         assert.deepEqual(keys.groq, { set: true, source: 'database', last4: 'grq6', envFallback: false });
         assert.deepEqual(keys.meta, { set: true, source: 'database', last4: 'met7', envFallback: false });
+        assert.deepEqual(keys.baseten, { set: true, source: 'database', last4: 'bas9', envFallback: false });
         assertNoKey(JSON.stringify(body), 'GET /ai');
     });
 
@@ -379,9 +386,25 @@ describe('PUT /ai', () => {
         for (const provider of ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']) {
             const refused = await call('PUT', '/ai', { body: { routing: { reel_index: { provider, model: 'x-model', effort: 'low' } } } });
             assert.equal(refused.status, 400, provider);
-            assert.equal(refused.body.error, 'routing.reel_index.provider must be one of meta: only Meta (Muse) is set up to answer this purpose.', provider);
+            assert.equal(refused.body.error, 'routing.reel_index.provider must be one of meta, baseten: only Meta (Muse), hosted by Meta or by Baseten, is set up to answer this purpose.', provider);
         }
         assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)).sort(), ['perception_dm', 'recall'], 'the refused ones saved nothing');
+    });
+
+    it('saves a route for the reel indexer on Baseten, and refuses one on Baseten for every other purpose, naming the one it may answer and why, saving nothing', async () => {
+        const ok = await call('PUT', '/ai', { body: { routing: { reel_index: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } } } });
+        assert.equal(ok.status, 200);
+        assert.deepEqual(ok.body.purposes.find((p: any) => p.purpose === 'reel_index').saved, { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' });
+        assert.deepEqual(db.audits.at(-1)!.detail.routes, { reel_index: 'baseten/meta-models/muse-spark-open-1026/low' });
+        const others = ok.body.purposes.map((p: any) => p.purpose).filter((purpose: string) => purpose !== 'reel_index');
+        assert.equal(others.length, 12);
+        for (const purpose of others) {
+            const refused = await call('PUT', '/ai', { body: { routing: { [purpose]: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } } } });
+            assert.equal(refused.status, 400, purpose);
+            assert.equal(refused.body.error, `routing.${purpose}.provider Baseten may answer only reel_index: it watches the owner's own published reels, and no message, comment or follower data goes to it.`, purpose);
+        }
+        assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)), ['reel_index'], 'the refused ones saved nothing');
+        assert.equal(db.audits.length, 1, 'and audited nothing');
     });
 
     it('refuses a Contributor-mode model as a route or as Meta\'s default model, for any purpose: Meta may train on what it is sent', async () => {
@@ -562,6 +585,46 @@ describe('PUT /ai/keys/:provider: checked with the provider first, saved only if
         assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
     });
 
+    it('checks Baseten\'s key against its model list with a bearer header, then saves it encrypted under its own setting, and a check of it records no tokens', async () => {
+        const { status, body } = await call('PUT', '/ai/keys/baseten', { body: { apiKey: `  ${FAKE_KEYS.baseten}\n` } });
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'baseten', key: { set: true, source: 'database', last4: 'bas9', envFallback: false } });
+        assert.equal(hits.length, 1);
+        assert.equal(hits[0]!.method, 'GET');
+        assert.equal(hits[0]!.url, 'https://inference.baseten.co/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.baseten}`);
+        assert.equal(hits[0]!.raw, '', 'the check is a GET with no body: it spends nothing');
+        const stored = db.settings.get('ai.providers.baseten.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored value');
+        assert.deepEqual(db.audits.map((a) => [a.action, a.detail]), [['settings.ai_key_write', { provider: 'baseten', change: 'saved', warning: null }]]);
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.outcome, u.input_tokens, u.output_tokens]), [['baseten', 'ok', 0, 0]]);
+        assertNoKey(JSON.stringify(db.audits) + JSON.stringify(db.usage), 'the audit and usage rows');
+    });
+
+    it('refuses a Baseten key Baseten refuses with 401, saves nothing, and does not repeat the key its error echoed (whole, or by its shape)', async () => {
+        const bad = FAKE_KEYS.baseten.replace('bas9', 'xxxx');
+        const { status, body } = await call('PUT', '/ai/keys/baseten', { body: { apiKey: bad } });
+        assert.equal(status, 400);
+        assert.equal(body.kind, 'auth');
+        assert.match(body.error, /^Baseten refused this key: /);
+        assertNoKey(JSON.stringify(body), 'the refusal', [bad]);
+        assert.ok(!JSON.stringify(body).includes(bad.slice(8, -4)));
+        assert.equal(db.settings.size, 0);
+        assert.equal(db.audits.length, 0);
+        assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
+    });
+
+    it('forgets Baseten\'s saved key on DELETE, and with BASETEN_API_KEY set the environment answers again', async () => {
+        saveKey('baseten');
+        process.env.BASETEN_API_KEY = FAKE_KEYS.openai;
+        const { status, body } = await call('DELETE', '/ai/keys/baseten');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'baseten', key: { set: true, source: 'env', last4: null, envFallback: true } });
+        assert.equal(db.settings.has('ai.providers.baseten.api_key'), false);
+    });
+
     it('forgets Meta\'s saved key on DELETE, and with META_MODEL_API_KEY set the environment answers again', async () => {
         saveKey('meta');
         process.env.META_MODEL_API_KEY = FAKE_KEYS.openai;
@@ -679,10 +742,64 @@ describe('POST /ai/test', () => {
         assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.meta}`);
     });
 
+    it('with BASETEN_API_KEY tests Baseten\'s model list with it', async () => {
+        process.env.BASETEN_API_KEY = FAKE_KEYS.baseten;
+        const { body } = await call('POST', '/ai/test', { body: { provider: 'baseten' } });
+        assert.equal(body.ok, true);
+        assert.equal(hits[0]!.url, 'https://inference.baseten.co/v1/models');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.baseten}`);
+    });
+
+    it('lists only Meta\'s open models from Baseten\'s model list, for "Load models"', async () => {
+        saveKey('baseten');
+        const { status, body } = await call('GET', '/ai/models/baseten');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'baseten', models: ['meta-models/muse-spark-open-1026'], truncated: false });
+    });
+
+    it('{purpose: dm} on a Baseten route that got in by hand is refused by name, with no call and no spend, and GET /ai shows the route as refused and still saved', async () => {
+        saveKey('baseten');
+        saveKey('anthropic');
+        // Not through PUT /ai (which refuses it): a stored setting edited by hand, which `pickRoute` must still refuse.
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } }));
+        const tested = await call('POST', '/ai/test', { body: { purpose: 'dm' } });
+        assert.equal(tested.status, 200);
+        assert.equal(tested.body.ok, false);
+        assert.equal(tested.body.error.kind, 'no_provider');
+        assert.match(tested.body.error.message, /The route for dm uses Baseten\. Baseten may answer only reel_index/);
+        assert.equal(generated.length, 0, 'nothing reached a provider');
+        assert.equal(hits.length, 0);
+        const view = await call('GET', '/ai');
+        const dm = view.body.purposes.find((p: any) => p.purpose === 'dm');
+        assert.deepEqual(dm.saved, { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' });
+        assert.equal(dm.resolved.error.kind, 'no_provider');
+        assert.match(dm.resolved.error.message, /Baseten may answer only reel_index/);
+    });
+
+    it('{purpose: reel_index} tests the reel indexer\'s route on Baseten as `key_test`, priced from the table, with the 4 000 floor under the admin\'s 200', async () => {
+        saveKey('baseten');
+        db.setSetting('ai.routing', JSON.stringify({ reel_index: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } }));
+        generateAnswer = () => ({
+            json: { ok: true }, usage: { in: 15, out: 190 }, billed: [{ model: 'meta-models/muse-spark-open-1026', in: 15, out: 190 }],
+            model: 'meta-models/muse-spark-open-1026', provider: 'baseten', stopReason: 'end_turn', elapsed_ms: 2700,
+        });
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'reel_index' } });
+        assert.equal(status, 200);
+        assert.deepEqual(
+            { ok: body.ok, purpose: body.purpose, provider: body.provider, model: body.model, usage: body.usage, priced: body.priced },
+            { ok: true, purpose: 'reel_index', provider: 'baseten', model: 'meta-models/muse-spark-open-1026', usage: { in: 15, out: 190 }, priced: true },
+        );
+        assert.equal(generated[0]!.provider, 'baseten');
+        assert.equal(generated[0]!.apiKey, FAKE_KEYS.baseten);
+        assert.equal(generated[0]!.maxTokens, 4000);
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.outcome, u.priced]), [['baseten', 'ok', true]]);
+    });
+
     it('refuses a provider with no key, Custom with no base URL, an unknown provider, and a body that is neither or both', async () => {
         assert.match((await call('POST', '/ai/test', { body: { provider: 'openai' } })).body.error, /No API key is saved for OpenAI/);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'groq' } })).body.error, /No API key is saved for Groq/);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'meta' } })).body.error, /No API key is saved for Meta\./);
+        assert.match((await call('POST', '/ai/test', { body: { provider: 'baseten' } })).body.error, /No API key is saved for Baseten\./);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'custom' } })).body.error, /has no base URL saved/);
         for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'eval' }, { purpose: 'nope' }]) {
             assert.equal((await call('POST', '/ai/test', { body })).status, 400, JSON.stringify(body));
