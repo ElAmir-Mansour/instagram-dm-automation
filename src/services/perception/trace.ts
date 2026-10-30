@@ -73,7 +73,7 @@ export interface TraceInput {
     modelFailed?: boolean;
 }
 
-/** The longest the line gets: it sits under a bubble. */
+/** The longest the line may get: it sits under a bubble. Every combination of the closed lists is inside it (`trace.test.ts` walks them all), so nothing is ever cut. */
 export const REASON_MAX_CHARS = 200;
 
 export function traceReason(t: TraceInput): string {
@@ -89,6 +89,5 @@ export function traceReason(t: TraceInput): string {
         const because = t.intent ? BECAUSE[t.intent] : undefined;
         line = `Read ${read}; ${DID[t.action]}${because ? `, because ${because}` : ''}`;
     }
-    const full = `${line}.`;
-    return full.length > REASON_MAX_CHARS ? `${full.slice(0, REASON_MAX_CHARS - 1)}…` : full;
+    return `${line}.`;
 }
