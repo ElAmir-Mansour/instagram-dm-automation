@@ -7,9 +7,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { EFFORTS } from '../llm/types.js';
 import {
-    AI_PURPOSES, EVAL, isAiPurpose, isContributorModel, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, NO_TRAINING_PROVIDERS, PERCEPTION_VOICE, PURPOSE_ALLOWLIST_REASON,
-    PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, TRANSCRIBE, type UsagePurpose,
+    AI_PURPOSES, EVAL, isAiPurpose, isContributorModel, KEY_TEST, KEY_TEST_EFFORT, MAC_BRAIN_PURPOSES, NO_TRAINING_PROVIDERS, PERCEPTION_VOICE, PROVIDER_PURPOSE_ALLOWLIST,
+    providerMayAnswer, providerPurposeReason, PURPOSE_ALLOWLIST_REASON, PURPOSE_DEFAULT_EFFORT, PURPOSE_PROVIDER_ALLOWLIST, PURPOSE_ROUTE_FALLBACK, TRANSCRIBE, type UsagePurpose,
 } from './purposes.js';
+import { PROVIDER_IDS } from '../llm/registry.js';
 import { ProviderKeys } from './settings.js';
 import { describeAi } from './view.js';
 
@@ -51,13 +52,12 @@ describe('the Muse purposes (perception_dm, recall, reel_index, comment_intent)'
         }
     });
 
-    it('may be answered by Meta alone: the allow-list is exactly [meta], and not WhatsApp\'s list of providers that forbid training', () => {
-        for (const purpose of MUSE) assert.deepEqual([...PURPOSE_PROVIDER_ALLOWLIST[purpose]!], ['meta'], purpose);
-        // Adding Meta to NO_TRAINING_PROVIDERS would open WhatsApp to it and protect nothing on Instagram: it is untouched.
+    it('may be answered by Meta alone, except the reel indexer, which Meta\'s open model at Baseten may answer too: and not WhatsApp\'s list of providers that forbid training', () => {
+        for (const purpose of MUSE) assert.deepEqual([...PURPOSE_PROVIDER_ALLOWLIST[purpose]!], purpose === 'reel_index' ? ['meta', 'baseten'] : ['meta'], purpose);
+        // Adding Meta to NO_TRAINING_PROVIDERS would open WhatsApp to it and protect nothing on Instagram: it is untouched, and Baseten is not in it either.
         assert.deepEqual([...NO_TRAINING_PROVIDERS], ['groq', 'anthropic', 'openai']);
         assert.deepEqual([...PURPOSE_PROVIDER_ALLOWLIST.dm_whatsapp!], ['groq', 'anthropic', 'openai']);
-        assert.equal(PURPOSE_PROVIDER_ALLOWLIST.dm, undefined, '`dm` still takes any provider');
-        // The Baseten widening of reel_index is the memory PR\'s: this one adds no provider but Meta.
+        assert.equal(PURPOSE_PROVIDER_ALLOWLIST.dm, undefined, '`dm` still takes any provider that may answer it');
         assert.equal(Object.keys(PURPOSE_PROVIDER_ALLOWLIST).length, 5);
     });
 
@@ -70,8 +70,12 @@ describe('the Muse purposes (perception_dm, recall, reel_index, comment_intent)'
         for (const purpose of MUSE) assert.equal(MAC_BRAIN_PURPOSES.has(purpose), false, purpose);
     });
 
-    it('say why only Meta may answer them, in words that are not WhatsApp\'s, and WhatsApp has none of its own (it keeps the sentence it always had)', () => {
-        for (const purpose of MUSE) assert.equal(PURPOSE_ALLOWLIST_REASON[purpose], 'only Meta (Muse) is set up to answer this purpose.', purpose);
+    it('say why only Meta may answer them, in words that are not WhatsApp\'s (the reel indexer\'s also names Baseten), and WhatsApp has none of its own (it keeps the sentence it always had)', () => {
+        for (const purpose of MUSE) {
+            assert.equal(PURPOSE_ALLOWLIST_REASON[purpose], purpose === 'reel_index'
+                ? 'only Meta (Muse), hosted by Meta or by Baseten, is set up to answer this purpose.'
+                : 'only Meta (Muse) is set up to answer this purpose.', purpose);
+        }
         assert.equal(PURPOSE_ALLOWLIST_REASON.dm_whatsapp, undefined);
     });
 
@@ -84,6 +88,33 @@ describe('the Muse purposes (perception_dm, recall, reel_index, comment_intent)'
             assert.equal(row.defaultEffort, 'low');
             assert.equal(row.macBrainGuarded, false);
             assert.equal(row.saved, null);
+        }
+    });
+});
+
+describe('Baseten may answer one purpose: reel_index (PROVIDER_PURPOSE_ALLOWLIST)', () => {
+    it('is exactly { baseten: [reel_index] }: the one provider that may answer only some purposes', () => {
+        assert.deepEqual(Object.keys(PROVIDER_PURPOSE_ALLOWLIST), ['baseten']);
+        assert.deepEqual([...PROVIDER_PURPOSE_ALLOWLIST.baseten!], ['reel_index']);
+    });
+
+    it('lets Baseten answer reel_index and no other purpose, for every purpose there is, and says nothing about a provider that has no list', () => {
+        for (const purpose of AI_PURPOSES) assert.equal(providerMayAnswer('baseten', purpose), purpose === 'reel_index', purpose);
+        for (const provider of PROVIDER_IDS) {
+            if (provider === 'baseten') continue;
+            for (const purpose of AI_PURPOSES) assert.equal(providerMayAnswer(provider, purpose), true, `${provider} ${purpose}`);
+        }
+    });
+
+    it('gives the refusal words that name Baseten, the one purpose and what never reaches it, and the same shape for any provider that gets a list', () => {
+        const reason = providerPurposeReason('Baseten', 'baseten');
+        assert.equal(reason, 'Baseten may answer only reel_index: it runs Meta\'s open model on the account owner\'s own published reels, and what people send, comment or follow with never goes to it.');
+    });
+
+    it('keeps the two directions apart: reel_index lists Baseten as a provider that may answer it, and no other purpose lists it', () => {
+        assert.ok(PURPOSE_PROVIDER_ALLOWLIST.reel_index!.includes('baseten'));
+        for (const purpose of AI_PURPOSES) {
+            if (purpose !== 'reel_index') assert.ok(!(PURPOSE_PROVIDER_ALLOWLIST[purpose] ?? []).includes('baseten'), purpose);
         }
     });
 });

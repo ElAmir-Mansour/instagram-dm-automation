@@ -11,8 +11,8 @@ import { isAiError } from './errors.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
 
 describe('PROVIDERS', () => {
-    it('lists the seven providers in the order resolveRoute falls back through them, Meta late and Custom last', () => {
-        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom']);
+    it('lists the eight providers in the order resolveRoute falls back through them, Meta late, Baseten right after it and Custom last', () => {
+        assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'baseten', 'custom']);
         assert.deepEqual([...PROVIDER_IDS], PROVIDERS.map((p) => p.id));
     });
 
@@ -25,8 +25,22 @@ describe('PROVIDERS', () => {
             openrouter: 'chat_completions',
             groq: 'chat_completions',
             meta: 'chat_completions',
+            baseten: 'chat_completions',
             custom: 'chat_completions',
         });
+    });
+
+    it('has Baseten at its own fixed address, key required, defaulting to Meta\'s open Muse Spark and suggesting that one model alone', () => {
+        const baseten = providerById('baseten')!;
+        assert.equal(baseten.label, 'Baseten (Muse Spark Open)');
+        assert.equal(baseten.family, 'chat_completions');
+        assert.equal(baseten.baseUrl, 'https://inference.baseten.co/v1');
+        assert.equal(baseten.editableBaseUrl, false);
+        assert.equal(baseten.keyRequired, true);
+        assert.equal(baseten.defaultModel, 'meta-models/muse-spark-open-1026');
+        assert.deepEqual([...baseten.suggestedModels], ['meta-models/muse-spark-open-1026']);
+        assert.equal(isProviderId('baseten'), true);
+        assert.equal(providerName('baseten'), 'Baseten', 'an error names it "Baseten", not the label');
     });
 
     it('has Meta (Muse) at its own fixed address, key required, defaulting to Muse Spark 1.3 and suggesting only the Standard models', () => {

@@ -1,8 +1,8 @@
 /**
  * Pictures and video in a conversation (`LlmTurn.media`): what every adapter asks first, and the one family member that answers it.
  *
- * Only Meta (Muse) takes media here. Its servers read a base64 `data:` URL; a remote one fails with `media_url_origin_error` when the host blocks
- * bots, which Instagram's CDN does. Every other adapter refuses a turn that carries any, with a `bad_request` and before a request is made, so a
+ * Only Meta (Muse) takes media here, hosted by Meta or, for the reel indexer alone, by Baseten (`MEDIA_PROVIDERS`, chatCompletions.ts). Its servers read a
+ * base64 `data:` URL; a remote one fails with `media_url_origin_error` when the host blocks bots, which Instagram's CDN does. Every other adapter refuses a turn that carries any, with a `bad_request` and before a request is made, so a
  * customer's photo or video cannot reach a provider that was set up to be sent words alone, whatever route a caller chose.
  * A turn with no `media`, or an empty list, is a plain turn: no adapter looks any further, and the request it builds is the one it always built.
  */

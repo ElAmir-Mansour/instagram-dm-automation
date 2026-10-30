@@ -13,6 +13,7 @@ import {
     applyAiPlan, BUDGET_NAMES, defaultModelOf, keyProblem, loadAiSettings, MAX_PRICE_OVERRIDES, parseBudget, parsePrices, parseProviders, parseRouting,
     planAiPatch, PROVIDER_KEY_ENV, PROVIDER_KEY_SETTING, providerProblem, type AiConfig,
 } from './settings.js';
+import { AI_PURPOSES } from './purposes.js';
 import { describeAi } from './view.js';
 import { PROVIDER_IDS } from '../llm/registry.js';
 import { installAiDb, type AiDb } from './testDb.js';
@@ -58,14 +59,16 @@ const EMPTY: AiConfig = { providers: {}, routing: {}, prices: {}, budgets: { dai
 describe('the setting keys', () => {
     it('are the ones 06 names, one secret row per provider, and Gemini keeps the existing one', () => {
         assert.deepEqual(Object.values(PROVIDER_KEY_SETTING).sort(), [
-            'ai.providers.anthropic.api_key', 'ai.providers.custom.api_key', 'ai.providers.groq.api_key', 'ai.providers.meta.api_key', 'ai.providers.openai.api_key',
-            'ai.providers.openrouter.api_key', 'gemini.api_key',
+            'ai.providers.anthropic.api_key', 'ai.providers.baseten.api_key', 'ai.providers.custom.api_key', 'ai.providers.groq.api_key', 'ai.providers.meta.api_key',
+            'ai.providers.openai.api_key', 'ai.providers.openrouter.api_key', 'gemini.api_key',
         ]);
         assert.equal(PROVIDER_KEY_SETTING.gemini, APP_SETTING_KEYS.geminiApiKey);
         assert.equal(PROVIDER_KEY_SETTING.groq, APP_SETTING_KEYS.aiProviderKeyGroq);
         assert.equal(APP_SETTING_KEYS.aiProviderKeyGroq, 'ai.providers.groq.api_key');
         assert.equal(PROVIDER_KEY_SETTING.meta, APP_SETTING_KEYS.aiProviderKeyMeta);
         assert.equal(APP_SETTING_KEYS.aiProviderKeyMeta, 'ai.providers.meta.api_key');
+        assert.equal(PROVIDER_KEY_SETTING.baseten, APP_SETTING_KEYS.aiProviderKeyBaseten);
+        assert.equal(APP_SETTING_KEYS.aiProviderKeyBaseten, 'ai.providers.baseten.api_key');
         assert.equal(APP_SETTING_KEYS.aiProviders, 'ai.providers');
         assert.equal(APP_SETTING_KEYS.aiRouting, 'ai.routing');
         assert.equal(APP_SETTING_KEYS.aiPrices, 'ai.prices');
@@ -80,10 +83,20 @@ describe('the setting keys', () => {
         }
     });
 
-    it('have environment fallbacks for five providers and Gemini, none for Custom', () => {
+    it('have environment fallbacks for six providers and Gemini, none for Custom', () => {
         assert.deepEqual(PROVIDER_KEY_ENV, {
-            anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', meta: 'META_MODEL_API_KEY', custom: null,
+            anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', meta: 'META_MODEL_API_KEY',
+            baseten: 'BASETEN_API_KEY', custom: null,
         });
+    });
+
+    it('keep Baseten\'s key in an encrypted row of its own, as a secret setting: stored as ciphertext and never as the pasted text', () => {
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.aiProviderKeyBaseten), true);
+        db.setSetting('ai.providers.baseten.api_key', FAKE_KEYS.baseten, true);
+        const stored = db.settings.get('ai.providers.baseten.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored Baseten key');
     });
 
     it('keep Meta\'s key in an encrypted row of its own: a secret setting, so setSetting stores it as ciphertext and never as the pasted text', () => {
@@ -483,12 +496,13 @@ describe('planAiPatch: what a change may be', () => {
         assert.match(problems({ providers: { meta: { baseUrl: 'https://llm.example.com/v1' } } })[0]!, /providers\.meta\.baseUrl: only Custom has a base URL/);
     });
 
-    it('refuses to SAVE a Muse purpose on any provider but Meta, and says why in its own words, not WhatsApp\'s', () => {
+    it('refuses to SAVE a Muse purpose on any provider but Meta (the reel indexer also on Baseten), and says why in its own words, not WhatsApp\'s', () => {
         for (const purpose of ['perception_dm', 'recall', 'reel_index', 'comment_intent']) {
+            const list = purpose === 'reel_index' ? 'meta, baseten: only Meta \\(Muse\\), hosted by Meta or by Baseten, is set up' : 'meta: only Meta \\(Muse\\) is set up';
             for (const provider of ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'custom']) {
                 const found = problems({ routing: { [purpose]: { provider } } });
                 assert.equal(found.length, 1, `${purpose} ${provider}`);
-                assert.match(found[0]!, new RegExp(`routing\\.${purpose}\\.provider must be one of meta: only Meta \\(Muse\\) is set up to answer this purpose\\.`), `${purpose} ${provider}`);
+                assert.match(found[0]!, new RegExp(`routing\\.${purpose}\\.provider must be one of ${list} to answer this purpose\\.`), `${purpose} ${provider}`);
                 assert.doesNotMatch(found[0]!, /forbid training/, 'that is WhatsApp\'s reason');
             }
             assert.ok(plan({ routing: { [purpose]: { provider: 'meta', model: 'muse-spark-1.3' } } }).ok, purpose);
@@ -515,6 +529,42 @@ describe('planAiPatch: what a change may be', () => {
         // Its Standard twin is fine, and so is a name that merely contains the word.
         assert.ok(plan({ routing: { dm: { provider: 'meta', model: 'muse-spark-1.3' } } }).ok);
         assert.ok(plan({ routing: { dm: { provider: 'custom', model: 'contributor-guide-v2' } } }).ok);
+    });
+
+    it('saves a route to Baseten for the reel indexer, at its model and effort, and a default model for Baseten, with no base URL or JSON mode', () => {
+        const r = plan({ providers: { baseten: { defaultModel: ' meta-models/muse-spark-open-1026 ' } }, routing: { reel_index: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } } });
+        assert.ok(r.ok);
+        assert.deepEqual(r.plan.providers, { baseten: { defaultModel: 'meta-models/muse-spark-open-1026' } });
+        assert.deepEqual(r.plan.routing, { reel_index: { provider: 'baseten', model: 'meta-models/muse-spark-open-1026', effort: 'low' } });
+        assert.deepEqual(r.plan.changes.routes, { reel_index: 'baseten/meta-models/muse-spark-open-1026/low' });
+        // "Automatic" model, and the purpose's own effort, are saved as they are for any route.
+        const auto = plan({ routing: { reel_index: { provider: 'baseten' } } });
+        assert.ok(auto.ok);
+        assert.deepEqual(auto.plan.routing, { reel_index: { provider: 'baseten', model: '', effort: 'low' } });
+        assert.match(problems({ providers: { baseten: { baseUrl: 'https://llm.example.com/v1' } } })[0]!, /providers\.baseten\.baseUrl: only Custom has a base URL/);
+    });
+
+    it('refuses to SAVE a route to Baseten for every purpose but reel_index, with the reason that nothing people send, comment or follow with goes to it, and saves nothing', () => {
+        const reason = 'Baseten may answer only reel_index: it runs Meta\'s open model on the account owner\'s own published reels, and what people send, comment or follow with never goes to it.';
+        const others = AI_PURPOSES.filter((purpose) => purpose !== 'reel_index');
+        assert.equal(others.length, 12);
+        for (const purpose of others) {
+            for (const model of ['', 'meta-models/muse-spark-open-1026', 'some/other-model']) {
+                const found = problems({ routing: { [purpose]: { provider: 'baseten', model } } });
+                // One problem, and it is the provider's own rule, FIRST: for a Muse purpose it is not "must be one of meta".
+                assert.deepEqual(found, [`routing.${purpose}.provider ${reason}`], `${purpose} ${model}`);
+            }
+            assert.equal(plan({ routing: { [purpose]: { provider: 'baseten' } } }).ok, false, purpose);
+        }
+        // A body with one good entry and one refused entry is refused whole: the good one is not saved either.
+        const mixed = plan({ routing: { reel_index: { provider: 'baseten' }, dm: { provider: 'baseten' } } });
+        assert.equal(mixed.ok, false);
+        // Removing a route is not saving one: `null` clears a purpose whatever it was set to by hand.
+        assert.ok(plan({ routing: { dm: null } }, { ...EMPTY, routing: { dm: { provider: 'baseten', model: '', effort: 'low' } } }).ok);
+    });
+
+    it('does not let Baseten\'s rule touch any other provider: the same body on Meta, Anthropic or Groq saves for `dm`', () => {
+        for (const provider of ['meta', 'anthropic', 'groq']) assert.ok(plan({ routing: { dm: { provider, model: 'a-model' } } }).ok, provider);
     });
 
     it('refuses to SAVE a Contributor-mode model as a provider\'s default, but only when the patch sets it: one that was already there does not block another change', () => {

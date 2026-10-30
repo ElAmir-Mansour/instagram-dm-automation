@@ -25,6 +25,8 @@
  *     `completion_tokens`; measured live on 2026-10-28 to 10-30, a one-word answer spent 180 tokens thinking,
  *     and a limit under about 1 000 to 2 000 came back with no text and `finish_reason: 'length'` after being
  *     billed. The admin's Test button asks for 200, and would otherwise fail every time. A floor, not a charge.
+ *   - Baseten (Meta's open Muse Spark): the same 4 000. It always reasons too (Baseten's reasoning page: "Muse Spark Open always reasons"), the reasoning is
+ *     counted in `completion_tokens`, and the live reel analysis of 2026-10-29 spent 3 371 output tokens on a 37 s reel.
  *   - Everything else (a model that does not reason, a Custom endpoint, an unknown name): 0, no
  *     minimum, which is the answer for a limit that was sized for the JSON alone.
  */
@@ -49,6 +51,7 @@ export function minOutputTokens(provider: string, model: string, effort: Effort)
         case 'gemini':
             return thinkingConfigFor(model, effort, Number.MAX_SAFE_INTEGER) ? Math.max(GEMINI_FLOOR, THINKING_BUDGETS[effort] * 2) : 0;
         case 'meta':
+        case 'baseten':
             return META_MIN_OUTPUT;
         default:
             return 0;

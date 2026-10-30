@@ -74,9 +74,11 @@ export const KEY_TEST_EFFORT: Effort = 'low';
  */
 export const MAC_BRAIN_PURPOSES: ReadonlySet<AiPurpose> = new Set<AiPurpose>(['tenant_monteur_think', 'tenant_infographic']);
 
-/** The providers that may answer the Muse purposes: Meta alone (see `PURPOSE_PROVIDER_ALLOWLIST`). */
+/** The providers that may answer the Muse purposes: Meta alone (see `PURPOSE_PROVIDER_ALLOWLIST`), and for the reel indexer also Baseten, which hosts Meta's open model. */
 const META_ONLY: readonly ProviderId[] = Object.freeze(['meta'] as const);
 const META_ONLY_REASON = 'only Meta (Muse) is set up to answer this purpose.';
+const REEL_INDEX_PROVIDERS: readonly ProviderId[] = Object.freeze(['meta', 'baseten'] as const);
+const REEL_INDEX_REASON = 'only Meta (Muse), hosted by Meta or by Baseten, is set up to answer this purpose.';
 
 /**
  * The providers whose terms forbid training on what is sent through their API: Anthropic, OpenAI and Groq (research R4). A WhatsApp customer's words
@@ -96,7 +98,9 @@ export const PURPOSE_PROVIDER_ALLOWLIST: Readonly<Partial<Record<AiPurpose, read
     // that `recall` reads is built by Muse too. NOT `NO_TRAINING_PROVIDERS`, which gates WhatsApp: adding Meta there would open WhatsApp to it.
     perception_dm: META_ONLY,
     recall: META_ONLY,
-    reel_index: META_ONLY,
+    // The one Muse purpose that may also run on Meta's open-weights model, served by Baseten: the reel indexer reads the owner's OWN published reels and nothing
+    // a follower sent. That Baseten answers nothing else is the other direction of the same rule (`PROVIDER_PURPOSE_ALLOWLIST`), which is what keeps it true.
+    reel_index: REEL_INDEX_PROVIDERS,
     comment_intent: META_ONLY,
 });
 
@@ -107,9 +111,35 @@ export const PURPOSE_PROVIDER_ALLOWLIST: Readonly<Partial<Record<AiPurpose, read
 export const PURPOSE_ALLOWLIST_REASON: Readonly<Partial<Record<AiPurpose, string>>> = Object.freeze({
     perception_dm: META_ONLY_REASON,
     recall: META_ONLY_REASON,
-    reel_index: META_ONLY_REASON,
+    reel_index: REEL_INDEX_REASON,
     comment_intent: META_ONLY_REASON,
 });
+
+/**
+ * The other direction of the allow-list: the purposes a PROVIDER may answer, for a provider that is not general-purpose. A provider with no entry may answer
+ * any purpose its own list (`PURPOSE_PROVIDER_ALLOWLIST`) lets it.
+ *
+ * Baseten runs Meta's open-weights model (Muse Spark Open) for ONE job: the reel indexer, which watches the account owner's own published reels. The public
+ * privacy page promises that no message, comment or follower data goes to Baseten, and an allow-list on `reel_index` alone cannot keep that promise: it says
+ * which providers may answer a purpose, not which purposes a provider may answer, so a route saved for `dm` on Baseten, or `dm` left on "Automatic" with Baseten
+ * the only provider that has a key, would send a customer's words there. So this is a deny: it is enforced where a route is saved (`planAiPatch`), where one is
+ * chosen (`pickRoute`, for a saved route and for the default order alike) and where a call is made (`generate`), and a refusal in any of them names Baseten.
+ */
+export const PROVIDER_PURPOSE_ALLOWLIST: Readonly<Partial<Record<ProviderId, readonly AiPurpose[]>>> = Object.freeze({
+    baseten: Object.freeze(['reel_index'] as const),
+});
+
+/** Whether `provider` may answer `purpose`: true for every provider that has no list of its own (`PROVIDER_PURPOSE_ALLOWLIST`). */
+export function providerMayAnswer(provider: ProviderId, purpose: AiPurpose): boolean {
+    const only = PROVIDER_PURPOSE_ALLOWLIST[provider];
+    return !only || only.includes(purpose);
+}
+
+/** The words a refusal uses, for a provider that may answer only some purposes. `providerLabel` is the name the operator knows it by ("Baseten"). */
+export function providerPurposeReason(providerLabel: string, provider: ProviderId): string {
+    const only = PROVIDER_PURPOSE_ALLOWLIST[provider] ?? [];
+    return `${providerLabel} may answer only ${only.join(', ')}: it runs Meta's open model on the account owner's own published reels, and what people send, comment or follow with never goes to it.`;
+}
 
 /**
  * A purpose with no route saved of its own answers on another purpose's saved route (`pickRoute`): WhatsApp replies on the `dm` route until the operator

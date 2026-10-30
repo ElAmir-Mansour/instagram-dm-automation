@@ -21,6 +21,8 @@ const KEYS = {
     // Built, not written whole: a `gsk_` and fifty-two characters is what a secret scanner blocks a push for.
     groq: 'gsk_' + 'Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq' + 'AbCdEfGh',
     meta: 'meta-key-Hb7vQm3xTz9RnYd2KfP5aLc8JgSe4UoWiNtXrBwEs6Vq',
+    // Baseten's shape (`b10_`, eight characters, a dot, thirty-two), built and not written whole.
+    baseten: 'b10_' + 'Hb7vQm3x' + '.' + 'Tz9RnYd2KfP5aLc8JgSe4UoWiNtXrBwE',
     custom: 'llm-key-Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq',
 } satisfies Record<ProviderId, string>;
 const CUSTOM_BASE = 'https://llm.example.com/v1';
@@ -123,6 +125,14 @@ const metaList = () => jsonResponse(200, {
         .map((id) => ({ id, object: 'model', created: 0, owned_by: 'meta' })),
 });
 
+// Baseten's list is every open model its Model APIs serve (GET https://inference.baseten.co/v1/models, documented on 2026-10-30), not only Meta's: this provider
+// offers the ids under `meta-models/` and drops the rest. The list below is made up to the documented shape, since no live call is made from a test.
+const basetenList = () => jsonResponse(200, {
+    object: 'list',
+    data: ['zai-org/GLM-5.3', 'meta-models/muse-spark-open-1026', 'deepseek-ai/DeepSeek-V4-Pro', 'meta-models/muse-spark-open', 'moonshotai/Kimi-K3']
+        .map((id) => ({ id, object: 'model', created: 0, owned_by: id.split('/')[0] })),
+});
+
 const customList = () => jsonResponse(200, { object: 'list', data: [{ id: 'llama-4-maverick', object: 'model' }, { id: 'qwen-4-72b', object: 'model' }] });
 
 const openRouterKey = () => jsonResponse(200, { data: { label: 'sk-or-v1-abc...f3a', limit: null, limit_remaining: null, usage: 1.25, is_free_tier: false } });
@@ -151,6 +161,10 @@ const rows: Array<{
     {
         provider: 'meta', list: metaList, models: ['muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1'],
         listUrl: 'https://api.meta.ai/v1/models', checkUrl: 'https://api.meta.ai/v1/models', header: 'authorization', value: (k) => `Bearer ${k}`,
+    },
+    {
+        provider: 'baseten', list: basetenList, models: ['meta-models/muse-spark-open-1026', 'meta-models/muse-spark-open'],
+        listUrl: 'https://inference.baseten.co/v1/models', checkUrl: 'https://inference.baseten.co/v1/models', header: 'authorization', value: (k) => `Bearer ${k}`,
     },
     {
         provider: 'custom', list: customList, models: ['llama-4-maverick', 'qwen-4-72b'],
@@ -605,7 +619,7 @@ describe('the front door', () => {
     });
 
     it('is no_provider for a provider that needs a key and has none, before any request', async () => {
-        for (const provider of ['anthropic', 'openai', 'gemini', 'groq', 'meta'] as const) {
+        for (const provider of ['anthropic', 'openai', 'gemini', 'groq', 'meta', 'baseten'] as const) {
             for (const run of [listProviderModels, checkProviderKey]) {
                 const { fetchImpl, calls } = stubFetch(anthropicList());
                 const err = await rejection(run(query(provider, fetchImpl, { apiKey: '   ' })));

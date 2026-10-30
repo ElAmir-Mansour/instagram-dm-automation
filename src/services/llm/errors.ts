@@ -48,6 +48,9 @@ export const MAX_MESSAGE_CHARS = 240;
  * (xAI and the next provider's prefix). Providers that mask a key print stars in the middle
  * ("sk-proj-****abcd"), so stars count as part of one. Groq's has its own line, like `sk-`'s, because
  * the run-of-characters rule needs forty and a masked or shortened key echoed back has fewer.
+ * Baseten's is a run of eight characters, a dot and thirty-two, with `b10_` in front since 2026-10-01
+ * (docs.baseten.co/organization/api-keys): the dot splits it into two runs under forty, so the
+ * general rule never sees it and it has a line of its own, with or without the prefix.
  */
 const KEY_SHAPES: ReadonlyArray<readonly [RegExp, string]> = [
     [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]'],
@@ -55,6 +58,7 @@ const KEY_SHAPES: ReadonlyArray<readonly [RegExp, string]> = [
     [/\b(x-api-key|x-goog-api-key|authorization)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1$2[redacted]'],
     [/\bsk-[A-Za-z0-9_*.-]{6,}/g, '[redacted]'],
     [/\bgsk_[A-Za-z0-9_*.-]{6,}/g, '[redacted]'],
+    [/\b(?:b10_)?[A-Za-z0-9]{8}\.[A-Za-z0-9]{32}\b/g, '[redacted]'],
     [/\bAIza[0-9A-Za-z_*-]{16,}/g, '[redacted]'],
     [/\b[A-Za-z0-9_-]{40,}\b/g, '[redacted]'],
 ];
