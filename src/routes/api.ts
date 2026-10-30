@@ -100,6 +100,8 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { museLibraryRouter } from './museLibrary.js';
+import { queueNewReelsForMemoryTenants } from '../services/perception/reelLibrary.js';
 import { adsRouter } from './ads.js';
 import { syncAllBoosts } from '../services/adBoosts.js';
 import { runGuard } from '../services/ads/guard.js';
@@ -1183,6 +1185,16 @@ router.get('/cron/publish', async (req, res) => {
             if (!isMissingTable(writingErr, 'explainers')) log('error', 'cron.explainers_writing_failed', describeError(writingErr));
         }
 
+        // The video memory (src/services/perception/reelLibrary.ts, docs/specs/005-muse-sees T054): for every tenant that switched `memory` on, queue the reels published
+        // since the last run, and any that failed or were never reached: one `muse.reel_index` job each, which the drain runs (one reel a call). A tenant with the switch off
+        // costs one settings read. Fail-soft, like the sweeps around it: this must never break the publish sweep above it.
+        try {
+            const reels = await queueNewReelsForMemoryTenants();
+            if (reels.memoryOn > 0 || reels.failed > 0) log('info', 'cron.muse_reels', { ...reels });
+        } catch (reelsErr) {
+            log('error', 'cron.muse_reels_failed', describeError(reelsErr));
+        }
+
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
         // or a missing permission must not turn a publish sweep that already ran into a 500.
@@ -1741,6 +1753,8 @@ router.use('/profile', profileRouter);
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
 router.use('/dm/ice-breakers', iceBreakersRouter);
+// The video memory's library (docs/specs/005-muse-sees T054): the owner's own reels, watched once. Owner only on every route, reads included (the router carries the guard).
+router.use('/settings/ai/muse/library', museLibraryRouter);
 // Boost a published post with Meta ads (docs/META_ADS_RESEARCH.md option 2). Owner only, every route; activation is the one that spends.
 router.use('/ads', adsRouter);
 
