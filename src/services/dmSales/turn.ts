@@ -46,6 +46,14 @@
  * trains on what it is sent), so a model that fails is a hand-off. The reply's `ai_meta` also says it was perceived and why it did what it did
  * (`traceReason`, built by the code, not written by the model). Absent (every turn there was before), none of this exists, not even a key in `ai_meta`.
  *
+ * **Meta Muse recall** (`src/services/perception/recall.ts`, docs/specs/005-muse-sees T056): a message the customer TYPED (or said: a voice note's transcript is a typed
+ * turn here) that asks for a video is looked up in the owner's video library, when the tenant's `memory` switch is on and the sender is allowed. What is added, for such a turn
+ * and for no other: the facts block's "Relevant video: <link> (watch from m:ss): <summary>" (or "No video on this topic yet"), the line among the guard's facts (so the second it
+ * names is no invented number) and the video's link on the guard's allow-list for THIS reply alone (the guard still strips any other link, a library permalink that was not
+ * recalled included), the link added after the model's words when the model left it out, and `ai_meta.recalled: true` with the trace's reason. Instagram only (never a Messenger
+ * or a WhatsApp turn), never for a button the customer tapped, and never for a DESCRIPTION: what a model wrote about a photo is not words the customer wrote, and it says
+ * "reel" or "video" whatever they wanted. Absent (the switch off, no cue in the message, nothing found), none of this exists: the turn is byte for byte what it was.
+ *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
  * follow-up itself (S9's job does, `followupJob.ts`).
@@ -59,7 +67,8 @@ import { generate } from '../aiProviders/generate.js';
 import { DM_MAX_TOKENS, DM_TIMEOUT_MS, failureOf, readDmEngine, type DmFailure } from '../dmEngine.js';
 import { sendDirectMessage, sendSenderAction, type SenderAction } from '../instagram.js';
 import type { LlmTurn } from '../llm/types.js';
-import { traceReason } from '../perception/trace.js';
+import { hasContentCue, mentionsLink, recallForTurn, type TurnRecall } from '../perception/recall.js';
+import { traceReason, type TraceInput } from '../perception/trace.js';
 import type { PerceptionKind } from '../perception/types.js';
 import type { ProfileContext } from '../profile/context.js';
 import { kitFor, type SalesKit } from '../profile/kits.js';
@@ -215,6 +224,8 @@ interface Evaluated {
     link: string | null;
     /** The model's text, cleaned and checked: null when what is sent is not the model's text. */
     guarded: GuardedReply | null;
+    /** The matched video's link, for a reply that is the model's own words: put after them when the model left it out. Null when no reel matched. */
+    recallLink: string | null;
     /** The model's words are what is sent, and there are none. */
     empty: boolean;
 }
@@ -237,15 +248,17 @@ interface Ending {
 const sendsModelText = (d: TurnDecision): boolean => d.effect === 'reply' || (d.effect === 'close' && !d.optOut);
 
 /**
- * The one line of why for a perceived turn's reply: the ending's own (a personal document), else built from what was read and what the code decided. A model that
- * failed is recognised by the `model_failed` the ending records, never by a guess.
+ * The one line of why for a reply that answered something that was read, or that was given a video from the library: the ending's own (a personal document), else built from
+ * what was read, what was recalled and what the code decided. A model that failed is recognised by the `model_failed` the ending records, never by a guess.
  */
-function perceivedReason(perceived: PerceivedTurn, decision: TurnDecision, o: Ending): string {
+function decisionReason(perceived: PerceivedTurn | undefined, recall: TraceInput['recall'], decision: TurnDecision, o: Ending): string {
     if (typeof o.meta.reason === 'string') return o.meta.reason;
     return traceReason({
-        kind: perceived.kind, effect: decision.effect, action: decision.action, handoffReason: decision.handoffReason, intent: o.intent,
+        ...(perceived ? { kind: perceived.kind } : {}),
+        ...(recall ? { recall } : {}),
+        effect: decision.effect, action: decision.action, handoffReason: decision.handoffReason, intent: o.intent,
         modelFailed: typeof o.meta.model_failed === 'string',
-        ...(perceived.read ? { read: perceived.read } : {}),
+        ...(perceived?.read ? { read: perceived.read } : {}),
     });
 }
 
@@ -261,6 +274,25 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     /** The A/B arm this conversation is in, once the turn knows it (S14): what `ai_meta.variant` records, and what the record assigns when it is new. */
     let variantId: string | null = null;
     let variantAssign: string | null = null;
+
+    /** What the video library gave this turn (recall), once it has been asked: null for every turn it was not asked for, or that it added nothing to. */
+    let recalled: TurnRecall | null = null;
+
+    /**
+     * `mark_seen` and `typing_on`, started the first time they are asked for and never twice: a turn that looks in the video library starts them BEFORE it (the person sees
+     * the reply being written while the library is read), and every other turn starts them where it always did, just before the model is asked.
+     */
+    let seenAndTypingStarted: Promise<void> | null = null;
+    const startSeenAndTyping = (): Promise<void> => {
+        seenAndTypingStarted ??= transport ? transport.seen() : startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
+        return seenAndTypingStarted;
+    };
+
+    /** What the library gave this reply, for the trace: nothing unless the model's own words were what was sent, because only then did the reply use it. */
+    const recallTrace = (decision: TurnDecision, o: Ending): TraceInput['recall'] => {
+        if (!recalled || o.meta.engine !== 'providers' || !sendsModelText(decision)) return undefined;
+        return recalled.match ? { found: true, second: recalled.match.second } : { found: false };
+    };
 
     /** What every ending shares: the quota, the disclosure, the send, and the one statement that records the reply with the new state. */
     const conclude = async (decision: TurnDecision, o: Ending): Promise<SalesTurnResult> => {
@@ -301,6 +333,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
         const payload = o.payload ?? salesPayload(o.text ?? '', o.quick);
         const messageType = o.messageType ?? (payload.quick_replies ? 'quick_reply' : 'text');
+        const recall = recallTrace(decision, o);
 
         // One quota check per reply, as the old path does it: a disclosure that travels as its own message is still one reply. The quota is Instagram's
         // (a pool shared by every tenant's Instagram and Messenger sends): WhatsApp's own limits are Meta's, and the sender answers for them.
@@ -351,9 +384,13 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 handoff_reason: decision.handoffReason, latency_ms: Date.now() - startedAt,
                 ...(variantId ? { variant: variantId } : {}),
                 ...(transport ? { channel: transport.channel } : {}),
-                // The decision trace (US5): that this reply answered something that was read, and the one line of why. Only for such a turn, so every other reply's
-                // `ai_meta` has not one key more than it had.
-                ...(input.perceived ? { perceived: true, reason: perceivedReason(input.perceived, decision, o) } : {}),
+                // The decision trace (US5): that this reply answered something that was read and/or was given a video from the owner's library, and the one line of why.
+                // Only for such a turn, so every other reply's `ai_meta` has not one key more than it had.
+                ...(input.perceived || recall ? {
+                    ...(input.perceived ? { perceived: true } : {}),
+                    ...(recall?.found ? { recalled: true } : {}),
+                    reason: decisionReason(input.perceived, recall, decision, o),
+                } : {}),
             },
         };
         const recorded = await recordTurn(record);
@@ -418,6 +455,15 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         });
     }
 
+    // 4b. The owner's video library (recall, T056). A message the customer wrote or said that has a word that may be asking for a video: when the tenant's `memory` switch is on and
+    // the sender is allowed, the library is looked into and what it holds is told to the model below. Only for an Instagram DM (the privacy page says Messenger and WhatsApp are not
+    // read), never for a button they tapped, and never for a DESCRIPTION of a photo (a model's words, which say "reel" and "video" whatever the person wanted). A turn without a cue in
+    // its words reaches no setting here, and a recall that finds nothing, or fails, leaves the turn exactly what it would have been: `recallForTurn` never throws.
+    if (!transport && !input.pageId && !inbound.payload && !input.perceived?.describedText && hasContentCue(inbound.text)) {
+        void startSeenAndTyping();
+        recalled = await recallForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text });
+    }
+
     // 5. The model. The prompt's static part is the same on every turn of this tenant (cacheable); the facts of this conversation ride with the message.
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
     // Where the conversation began (S10), read beside the history: one statement that never throws (`commentSource`). A source is a conversation that
@@ -459,6 +505,8 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         // What a model said it saw, said last, next to the customer's message. It is NOT among the guard's facts below: a number or a price in a picture is not one the
         // reply may state unless the information above gives it.
         ...(input.perceived?.sent ? { sent: input.perceived.sent } : {}),
+        // What the video library holds for what they asked, said after it. A matched reel's line IS among the guard's facts (below), so the second it names is no invented number.
+        ...(recalled ? { video: recalled.line } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
@@ -534,7 +582,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         if (decision.action === 'send_link' && offer) {
             link = await linkFor(offer, { id: conversation.id, creatorId: creator.id });
             // The link takes room out of the 900 bytes: the text is cut again to fit beside it.
-            ({ reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: stage, reserveBytes: utf8Bytes(`\n${link}`) }));
+            ({ reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: stage, reserveBytes: utf8Bytes(`\n${link}`) + (recalled?.link ? utf8Bytes(`\n${recalled.link}`) : 0) }));
         }
 
         let guarded: GuardedReply | null = null;
@@ -542,19 +590,21 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         if (sendsModelText(decision)) {
             // The link the server is inserting is on the allowlist, so a model that repeats it (it is never shown it) is not stripped of it.
             // The keyword they commented was shown to the model in the facts, so it is data like the rest (a keyword with a digit in it is no invented number).
+            // A matched video's line is a fact the reply may repeat (the second it names, a number in its summary) and its link is on the list for this reply alone; a reel that
+            // was not matched has no line and no link here, so the guard takes its permalink out like any other link the data does not give.
             const claims = {
                 ...prompt.claims,
-                texts: bridged?.comment.keyword ? [...prompt.claims.texts, bridged.comment.keyword] : prompt.claims.texts,
-                allowedLinks: [...(prompt.claims.allowedLinks ?? []), ...(link ? [link] : [])],
+                texts: [...prompt.claims.texts, ...(bridged?.comment.keyword ? [bridged.comment.keyword] : []), ...(recalled?.match ? [recalled.line] : [])],
+                allowedLinks: [...(prompt.claims.allowedLinks ?? []), ...(link ? [link] : []), ...(recalled?.link ? [recalled.link] : [])],
             };
             guarded = guardReply(reply.text, claims);
             empty = guarded.text.trim().length === 0;
         }
-        return { reply, repaired, decision, link, guarded, empty };
+        return { reply, repaired, decision, link, guarded, empty, recallLink: guarded && recalled?.link ? recalled.link : null };
     };
 
     // `mark_seen` and `typing_on` go out while the model thinks, and are done before anything is sent.
-    const seenAndTyping = transport ? transport.seen() : startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
+    const seenAndTyping = startSeenAndTyping();
 
     // The first try, and ONE more with a correction when the answer broke a rule only a rewrite can mend.
     let chosen: Evaluated | null = null;
@@ -663,11 +713,19 @@ function lineFor(
     }
 }
 
-/** The model's own words after the guard, with the server's link after them (unless the model's text already holds exactly that link). */
+/**
+ * The model's own words after the guard, with the server's links after them: the matched video's (the model was told to write it, and the guard kept it only if it wrote it
+ * exactly; a reply that left it out, or mangled it into one the guard took out, gets it here, so the answer to "do you have a video?" always has the video) and then the
+ * offer's, each unless the text already holds exactly that link.
+ */
 function modelText(chosen: Evaluated | null): string | null {
     if (!chosen?.guarded) return null;
-    const { link, guarded } = chosen;
-    return composeText(guarded.text, link && !guarded.text.includes(link) ? link : null);
+    const { link, recallLink, guarded } = chosen;
+    const tail = [
+        recallLink && !mentionsLink(guarded.text, recallLink) ? recallLink : null,
+        link && !guarded.text.includes(link) ? link : null,
+    ].filter((l): l is string => l !== null).join('\n');
+    return composeText(guarded.text, tail || null);
 }
 
 /** What `messages.ai_meta` says about a model's answer: the proposal, what the code made of it, and what it cost to get. */
