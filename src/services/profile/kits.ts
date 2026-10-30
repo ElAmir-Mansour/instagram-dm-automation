@@ -19,8 +19,10 @@
  *   - `sales`           the DM sales prompt (docs/DM_SALES_PLAN.md §3, S5): what it tells the model (shared by the four Arabic registers, as
  *                       `dm` is) and the four lines a customer is sent without a model (`lines`), which are dialect and so differ.
  *                       The lines are drafts for the three non-Gulf registers until a native speaker has read them: `kits.test.ts` lists them.
- *   - `attachments`     the two lines a customer is sent for a message with no words (a photo, a voice note, a mention of the account in a
- *                       story), without a model, in every `sales_mode` (src/webhook/attachmentAck.ts). Drafts as well, in the same table.
+ *   - `attachments`     the lines a customer is sent for a message with no words (a photo, a voice note, a mention of the account in a
+ *                       story), without a model, in every `sales_mode` (src/webhook/attachmentAck.ts): the two it has always been sent (`media`, `mention`)
+ *                       and, only when Meta Muse tried to read the message (src/services/perception/plan.ts), the thanks that names the story (`mentionNamed`)
+ *                       and the request to send it again (`resend`). Drafts as well, in the same table.
  *
  * **Extending it (P9-P12).** Add the field to `LanguageKit` and fill it in for all five records: the `Record<KitKey, ...>`
  * will not compile until every register has it, so a register cannot be left speaking another's text by omission. Put the
