@@ -19,12 +19,14 @@
  *     not the ads alerts, which carry nothing about a customer. The numbers are checked against notify.ts itself, so the page and the
  *     alert cannot drift apart;
  *   - Meta's AI models (Muse) and Baseten (the hackathon's P1, written AHEAD of the code, which arrives in P0, P2, P3 and P4): that the text of
- *     DMs and comments and the media people send MAY be processed by Meta's models, only where the features are switched on (each is off
- *     by default); that the media FILE is never kept, only a short description or a transcript, deleted with the conversation; that only
- *     Meta's Standard models are used ("according to Meta", Meta's own words, never our promise on its behalf) and never its Contributor
- *     models; that the account owner's own published reels are watched by Meta's hosted models or by Meta's open model at Baseten, and that
- *     NO message, comment or follower data goes to Baseten; and that /terms lists the same providers. Nothing here pins a claim that the
- *     code does it today: every sentence is conditional, which is the point of writing it first.
+ *     DMs and the media people send MAY be processed by Meta's models, only where the features are switched on (each is off by default);
+ *     that the media FILE is never kept, only a short description or a transcript, deleted with the conversation; that only Meta's Standard
+ *     models are used ("according to Meta", Meta's own words, never our promise on its behalf) and never its Contributor models; that the
+ *     account owner's own published reels are watched by Meta's hosted models or by Meta's open model at Baseten, and that NO message,
+ *     comment or follower data goes to Baseten; and that /terms lists the same providers. COMMENTS GO TO NO AI MODEL (comment intent, P6,
+ *     was cut from the build on 2026-10-30): the pages say the comment path does not use an AI model, with no exception, and a guard fails
+ *     if any page ties Meta's models to comments. Nothing here pins a claim that the code does it today: every sentence is conditional,
+ *     which is the point of writing it first.
  *
  * The pages' bodies are otherwise untouched by this change, so the existing checks on them (publicPagesFiles, publicPagesChrome,
  * landingTruth's owner rules) are what say the rest is still true.
@@ -356,8 +358,8 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
 
 /**
  * Meta's AI models (Muse) and Baseten: the hackathon's P1, written BEFORE the code (P0 the provider, P2 reels/stories/photos, P3 voice,
- * P4 the video library and Baseten, P6 comments if it ships), so that no real message reaches Meta before the people who wrote it can read
- * that it may. These pin the shape of an honest disclosure, and nothing here says the code does it today.
+ * P4 the video library and Baseten; comment reading, P6, is cut), so that no real message reaches Meta before the people who wrote it can
+ * read that it may. These pin the shape of an honest disclosure, and nothing here says the code does it today.
  */
 describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and Baseten, written ahead of the code (hackathon P1)', () => {
     /** Every sentence is there, once the markup is out of the way. */
@@ -402,22 +404,20 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
         has(words(meta.en),
             'The operator of the tool (section 9) can switch on Meta\'s AI models, called Muse, as one of the providers in section 5, and the account owner can then switch on, for the account, the features below.',
             'Each of them is off unless it has been switched on.',
-            'the text of direct messages and of comments, and the media people send, may be processed by Meta\'s AI models (Muse)',
+            'the text of direct messages and the media people send may be processed by Meta\'s AI models (Muse)',
             'Direct messages: the text of your message and the earlier messages of the thread are sent to Meta\'s models to write the reply, in place of Google, as described above for any provider.',
             'Photos, videos, shared posts, reels and stories, replies to the account\'s stories, and stories that mention the account (Instagram direct messages only, not Messenger): a model looks at the file and describes it, so that the reply is about what you sent instead of asking you to type it again.',
             'Voice notes: Meta\'s speech model turns the recording into text, which is then answered like a written message.',
-            'Comments: a comment on the account\'s own post that matches no keyword may be read by a model, to tell whether it is a question or a wish to buy, which the account may then answer as a keyword campaign would.',
             // No "once": the design retries a reel whose analysis failed the next day (the job's dedupe key carries the date).
             'The account owner\'s own reels: a model watches each one, to build the video library described in section 1.',
         );
         has(words(meta.ar),
             'يستطيع مُشغّل الأداة (القسم 9) أن يفعّل نماذج الذكاء الاصطناعي من ميتا، واسمها Muse، مزوّداً من المزوّدين المذكورين في القسم 5، ثم يستطيع صاحب الحساب أن يفعّل للحساب الميزات التالية.',
             'وكل ميزة منها متوقفة ما لم تُشغَّل.',
-            'قد تُعالَج نصوص الرسائل الخاصة والتعليقات، والوسائط التي يرسلها الناس، بنماذج الذكاء الاصطناعي من ميتا (Muse)',
+            'قد تُعالَج نصوص الرسائل الخاصة والوسائط التي يرسلها الناس بنماذج الذكاء الاصطناعي من ميتا (Muse)',
             'الرسائل الخاصة: يُرسَل نصّ رسالتك وما سبقها من رسائل المحادثة إلى نماذج ميتا لتكتب الردّ بدلاً من جوجل، على النحو الموضّح أعلاه لأي مزوّد.',
             'الصور ومقاطع الفيديو والمنشورات والريلز والقصص المُشارَكة، والردود على قصص الحساب، والقصص التي يُذكر فيها الحساب (للرسائل الخاصة على إنستجرام فقط، لا ماسنجر): ينظر نموذجٌ في الملف ويصفه، ليكون الردّ عمّا أرسلتَه بدلاً من أن يطلب منك كتابته من جديد.',
             'الرسائل الصوتية: تُحوَّل الرسالة الصوتية إلى نص بنموذج ميتا للكلام، ثم يُجاب عنه كما يُجاب عن رسالة مكتوبة.',
-            'التعليقات: قد يقرأ نموذجٌ تعليقاً على منشور الحساب نفسه لا يطابق أي كلمة مفتاحية، ليميّز هل هو سؤال أو رغبة في الشراء، فقد يُجيب عنه الحساب حينئذٍ كما تُجيب حملةٌ بكلمة مفتاحية.',
             'ريلز صاحب الحساب نفسه: يشاهد نموذجٌ كلاً منها لبناء مكتبة الفيديوهات الموصوفة في القسم 1.',
         );
         // Every Latin name in the Arabic block sits in its own <bdi>, as its neighbours do, or the punctuation around it reorders.
@@ -477,13 +477,67 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
         }
     });
 
-    it('section 3\'s Google paragraph no longer says the comment path never uses AI: it says where it may (Meta\'s reading of comments, if switched on)', () => {
+    it('section 3 says the comment path does not use an AI model, with no exception: comment reading is not built (P6 is cut)', () => {
         const en = words(between(privacy.en, '<h2 id="gemini-en">', '<h2 id="retention-en">'));
-        has(en, 'Comment text is never sent to Google at all, and the comment path does not use an AI model, except where the account has switched on Meta\'s reading of comments (see Meta\'s AI models, below).');
-        assert.ok(!en.includes('the comment path does not use AI.'), 'the old, absolute sentence is gone');
+        // The full stop right after "model" is the pin: any "except where …" clause would stand between them.
+        has(en, 'Comment text is never sent to Google at all, and the comment path does not use an AI model.');
         const ar = words(between(privacy.ar, '<h2 id="gemini-ar">', '<h2 id="retention-ar">'));
-        has(ar, 'ونصوص التعليقات لا تُرسَل إلى جوجل إطلاقاً، ومسار التعليقات لا يستخدم نموذج ذكاء اصطناعي إلا حيث يشغّل الحساب قراءة ميتا للتعليقات (انظر «نماذج الذكاء الاصطناعي من ميتا» أدناه).');
-        assert.ok(!ar.includes('مسار التعليقات لا يستخدم الذكاء الاصطناعي.'), 'the old, absolute sentence is gone');
+        has(ar, 'ونصوص التعليقات لا تُرسَل إلى جوجل إطلاقاً، ومسار التعليقات لا يستخدم نموذج ذكاء اصطناعي.');
+    });
+
+    it('NO page says Meta\'s models read comments: the Meta blocks do not mention comments at all, and no sentence on any page ties Meta\'s models to them', () => {
+        // 1. The blocks that are about Meta's models say nothing about comments, in either language.
+        const metaBlocks = {
+            en: [meta.en, item(block.en, '<strong>Meta</strong> (Muse)'), item(block.en, '<strong>Baseten</strong>'), reels.en],
+            ar: [meta.ar, item(block.ar, '<strong>ميتا</strong>'), item(block.ar, '<strong><bdi lang="en" dir="ltr">Baseten</bdi></strong>'), reels.ar],
+        };
+        // The one thing they may say is that NO comment data goes into the library, and none goes to Baseten.
+        const negations = {
+            en: [/no comment, message, contact or follower data/gi, /no message, comment or follower data/gi],
+            ar: [/لا بيانات تعليقات ولا رسائل ولا متابعين/g, /أي بيانات عن رسالة أو تعليق أو متابع/g],
+        };
+        for (const lang of ['ar', 'en'] as const) {
+            for (const html of metaBlocks[lang]) {
+                let text = words(html);
+                for (const re of negations[lang]) text = text.replace(re, '');
+                assert.ok(!(lang === 'en' ? /comment/i : /تعليق/).test(text), `${lang}: …${text.slice(0, 80)}…`);
+            }
+        }
+        // 2. On all three pages, a sentence that names Meta's AI models and a comment is allowed only as a negation ("people who comment or
+        //    message" is the pre-existing "nothing else about people who comment or message is sent" and is stripped first).
+        const NAMES_META_MODELS = { en: /Muse|Meta's (?:AI )?models|Meta's open model/, ar: /Muse|نماذج ميتا|نموذج ميتا|نماذج الذكاء الاصطناعي من ميتا/ };
+        const NAMES_COMMENT = { en: /\bcomment(?:s|ed)?\b/i, ar: /تعليق/ };
+        const allowed = { en: [...negations.en, /people who comment or message/gi], ar: negations.ar };
+        const sentences = (html: string) => html.split(/<\/(?:li|p|h[1-6])>/).flatMap((chunk) => words(chunk).split(/(?<=[.!?؟])\s+/));
+        let checked = 0;
+        for (const lang of ['ar', 'en'] as const) {
+            for (const [name, doc] of [['privacy', privacy[lang]], ['data-deletion', deletion[lang]], ['terms', terms[lang]]] as const) {
+                for (const sentence of sentences(doc)) {
+                    if (!NAMES_META_MODELS[lang].test(sentence)) continue;
+                    checked++;
+                    let rest = sentence;
+                    for (const re of allowed[lang]) rest = rest.replace(re, '');
+                    assert.ok(!NAMES_COMMENT[lang].test(rest), `${name} ${lang}: a sentence ties Meta's models to comments: ${sentence}`);
+                }
+            }
+        }
+        assert.ok(checked > 40, `the scan is not blind: it looked at ${checked} sentences that name Meta's models`);
+        // 3. The phrases that only a comment switch would produce, in either language, are nowhere. (Not "read comments" / «قراءة التعليقات»
+        //    or "the text of the comment": the TikTok paragraph says no scope lets the app read comments, and section 1 lists the comment
+        //    text Meta sends us.)
+        const FORBIDDEN = {
+            en: /reading of comments|comment reading|comment intent|text of comments|comments? (?:may|can) be read|comment you left|comments? on the account's own post/i,
+            ar: /قراءة ميتا للتعليقات|تعليق تركتَه|يقرأ نموذجٌ تعليقاً/,
+        };
+        for (const lang of ['ar', 'en'] as const) {
+            for (const [name, doc] of [['privacy', privacy[lang]], ['data-deletion', deletion[lang]], ['terms', terms[lang]]] as const) {
+                const hit = FORBIDDEN[lang].exec(words(doc));
+                assert.equal(hit, null, `${name} ${lang}: ${hit?.[0]}`);
+            }
+        }
+        // 4. The scan catches what it is meant to catch.
+        assert.ok(FORBIDDEN.en.test('the account has switched on Meta\'s reading of comments') && FORBIDDEN.ar.test('قراءة ميتا للتعليقات'));
+        assert.ok(NAMES_META_MODELS.en.test('Meta\'s AI models read the comment') && NAMES_COMMENT.en.test('read the comment') && NAMES_COMMENT.ar.test('نصُّ تعليق'));
     });
 
     it('section 1 says what is kept of the media a person sent, that the file is not, and that it is off unless switched on', () => {
@@ -558,7 +612,7 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
     it('the sub-processor list: Meta (Muse) and Baseten each say what they receive, Meta says Standard only (as Meta states it), Baseten says reels only and nothing about training', () => {
         has(words(item(block.en, '<strong>Meta</strong> (Muse)')),
             'Meta (Muse) — Meta\'s AI models. The same company as the Meta in the list above, but a separate service, used with the operator\'s key.',
-            'Where it is switched on it receives what sections 3 and 1 describe: the text of direct messages and of comments, the media people send, and the account owner\'s own reels.',
+            'Where it is switched on it receives what sections 3 and 1 describe: the text of direct messages, the media people send, and the account owner\'s own reels.',
             'Only its Standard models are used, and according to Meta the content they receive is not used to train its models.',
             'Meta\'s privacy policy');
         has(words(item(block.en, '<strong>Baseten</strong>')),
@@ -568,7 +622,7 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
         assert.ok(!/train/i.test(words(item(block.en, '<strong>Baseten</strong>'))), 'Baseten\'s own policy says nothing either way about training, so neither does this page, for Baseten');
         has(words(item(block.ar, '<strong>ميتا</strong>')),
             'ميتا (Muse) — نماذج الذكاء الاصطناعي من ميتا. وهي ميتا نفسها المذكورة في القائمة أعلاه، لكنها خدمة منفصلة تعمل بمفتاح المُشغّل.',
-            'وحيث تكون مشغّلة تتلقّى ما يصفه القسمان 3 و1: نصوص الرسائل الخاصة والتعليقات، والوسائط التي يرسلها الناس، وريلز صاحب الحساب نفسه.',
+            'وحيث تكون مشغّلة تتلقّى ما يصفه القسمان 3 و1: نصوص الرسائل الخاصة، والوسائط التي يرسلها الناس، وريلز صاحب الحساب نفسه.',
             'ولا تُستخدم إلا نماذجها القياسية (Standard)، والمحتوى الذي تتلقّاه لا يُستخدم، بحسب ميتا، في تدريب نماذجها.',
             'سياسة خصوصية ميتا');
         has(words(item(block.ar, '<strong><bdi lang="en" dir="ltr">Baseten</bdi></strong>')),
@@ -581,10 +635,10 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
     it('the sub-processor intro and "what is sent" say what Meta may also receive and that Baseten gets only the reels', () => {
         has(words(block.en),
             'One of them, Meta\'s AI models, can also read the media people send and the account owner\'s own reels, and Baseten runs Meta\'s open model on those reels alone (sections 1 and 3).',
-            'except what section 3 says Meta\'s AI models may also receive (the media people send and, where it is switched on, the text of comments); Baseten receives only the account owner\'s own reels.');
+            'except what section 3 says Meta\'s AI models may also receive (the media people send); Baseten receives only the account owner\'s own reels.');
         has(words(block.ar),
             'ومن بينهم نماذج ميتا، وهي تقرأ كذلك الوسائط التي يرسلها الناس وريلز صاحب الحساب نفسه، ويشغّل Baseten نموذج ميتا المفتوح على تلك الريلز وحدها (القسمان 1 و3).',
-            'إلا ما يقول القسم 3 إن نماذج ميتا قد تتلقّاه أيضاً (الوسائط التي يرسلها الناس، ونصوص التعليقات حيث يُشغَّل ذلك)، ولا يصل إلى Baseten إلا ريلز صاحب الحساب نفسه.');
+            'إلا ما يقول القسم 3 إن نماذج ميتا قد تتلقّاه أيضاً (الوسائط التي يرسلها الناس)، ولا يصل إلى Baseten إلا ريلز صاحب الحساب نفسه.');
         // The operator's own address stays the last entry, and the rule that none is used without a key is untouched.
         assert.ok(words(block.en).includes('None of them is used unless the operator has added its key and left it switched on; until then nothing reaches it.'));
     });
@@ -625,13 +679,13 @@ describe('/privacy, /data-deletion and /terms — Meta\'s AI models (Muse) and B
                 assert.ok(ai > 0 && ai < metaAt && metaAt < alerts, lang);
             }
             has(words(item(section5.en, '<strong>Meta\'s AI models (Muse):</strong>')),
-                'if the operator has switched on Meta\'s AI models for the account you messaged, the text of your messages, the text of a comment you left on one of its posts, and any photo, video, voice note, or shared post, reel or story you sent may have been processed by them (section 3 of the privacy policy).',
+                'if the operator has switched on Meta\'s AI models for the account you messaged, the text of your messages, and any photo, video, voice note, or shared post, reel or story you sent may have been processed by them (section 3 of the privacy policy).',
                 'We do not keep the file, only a short description or a transcript, which we delete with your conversation.',
                 'Meta\'s own copy, if there is one, is governed by Meta\'s policy, and we cannot delete it on your behalf.',
                 'According to Meta, what its Standard models receive is not used to train its models, and those are the only ones used.',
                 'If you are an account owner, your own published reels may have been watched by Meta\'s models, or by Meta\'s open model at our inference partner Baseten, which receives nothing else; Baseten\'s copy is governed by its own policy too.');
             has(words(item(section5.ar, '<strong>نماذج الذكاء الاصطناعي من ميتا')),
-                'إن شغّل المُشغّل هذه النماذج للحساب الذي راسلتَه، فقد تكون نصوص رسائلك، ونصُّ تعليق تركتَه على أحد منشوراته، وأي صورة أو مقطع فيديو أو رسالة صوتية أرسلتَها، أو منشور أو ريل أو قصة شاركتَها، قد عولجت بها (القسم 3 من سياسة الخصوصية).',
+                'إن شغّل المُشغّل هذه النماذج للحساب الذي راسلتَه، فقد تكون نصوص رسائلك، وأي صورة أو مقطع فيديو أو رسالة صوتية أرسلتَها، أو منشور أو ريل أو قصة شاركتَها، قد عولجت بها (القسم 3 من سياسة الخصوصية).',
                 'ولا نحتفظ بالملف، بل بوصف قصير أو نص مكتوب فقط، نحذفه مع محادثتك.',
                 'ونسخة ميتا نفسها، إن وُجدت، تخضع لسياسة ميتا، ولا نستطيع حذفها نيابةً عنك.',
                 'وبحسب ميتا لا يُستخدم ما تتلقّاه نماذجها القياسية (Standard) في تدريب نماذجها، وهذه وحدها المستخدمة.',

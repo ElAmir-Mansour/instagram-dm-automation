@@ -215,10 +215,10 @@
   PURPOSE. Every block above describes code that is on main. This one does not:
   the code it describes arrives in the hackathon PRs (hackathon/p0-meta-provider:
   Meta as a provider; p2: reels, stories, story mentions and photos in DMs; p3:
-  voice notes; p4: the video library and Baseten; p6, only if it ships: comment
-  reading). This text merges first so that no real message reaches Meta before
-  the people who wrote it can read that it may. It is therefore a promise about
-  the code to come: a PR that does more than a sentence says changes the page
+  voice notes; p4: the video library and Baseten). This text merges first so
+  that no real message reaches Meta before the people who wrote it can read
+  that it may. It is therefore a promise about the code to come: a PR that does
+  more than a sentence says changes the page
   first, and a sentence stays conditional ("may", "where the account has
   switched it on") until the code it describes is live. Section 1 (the DM bullet
   on what a model understood, and the "video library" h3), section 2's purpose,
@@ -227,19 +227,24 @@
   /data-deletion and /terms, claim the following:
     · what may reach Meta's models, and only with the operator's Meta key and
       routes set AND the per-account switches on (muse.switches.<tenant>:
-      dm_media, voice, memory, comments, cards, every one false by default; plus
-      a sender allow-list and a daily cost cap): the text of DMs (the `dm` route
-      pointed at Meta, like any provider); the media in INSTAGRAM DMs only, never
+      dm_media, voice and memory, every one false by default; plus a sender
+      allow-list and a daily cost cap): the text of DMs (the `dm` route pointed
+      at Meta, like any provider); the media in INSTAGRAM DMs only, never
       Messenger: photos, videos, shared posts and reels, story replies, story
-      shares and mentions, voice notes; the text of an unmatched comment on the
-      account's own post (comment intent: ONLY IF p6 ships; until then the
-      sentence is true because no such switch exists); and the library's notes
-      sent with a message, to find a video (recall);
+      shares and mentions, voice notes; and the library's notes sent with a
+      message, to find a video (recall);
+    · COMMENTS GO TO NO AI MODEL. Comment intent (the old p6) was cut from the
+      hackathon build on 2026-10-30, so the page says what main does: "the
+      comment path does not use an AI model", with no exception, and a test
+      fails if any page says Meta's models read comments. Any `comments` or
+      `cards` switch the settings may still carry belongs to a phase that is cut
+      and must send nothing to Meta. If comment reading is ever built, this page
+      changes FIRST, in both languages, in the same PR;
     · "your username, your account ID and the conversation ID are not sent to
-      Meta's models": the new calls (perceive, recall, comment intent) may name
-      the receiving account's own handle, never the sender's name or id, as the
-      DM layer already sends none (dmTurns(), salesTurns()). The file itself is
-      what the sender sent, and the page says the model sees all of it;
+      Meta's models": the new calls (perceive and recall) may name the receiving
+      account's own handle, never the sender's name or id, as the DM layer
+      already sends none (dmTurns(), salesTurns()). The file itself is what the
+      sender sent, and the page says the model sees all of it;
     · the file is downloaded inside the job, passed on as base64 and never
       written to media_uploads or anywhere else. What is kept is
       messages.perception (a short description the model wrote, a transcript, a
@@ -1798,8 +1803,7 @@
                 <p>
                     ما يُرسَل إلى جوجل هو النصوص واتجاه كل رسالة فقط. <strong>لا يُرسَل اسمك ولا
                     معرّف حسابك ولا معرّف المحادثة</strong> إلى جوجل. ونصوص التعليقات لا تُرسَل
-                    إلى جوجل إطلاقاً، ومسار التعليقات لا يستخدم نموذج ذكاء اصطناعي إلا حيث يشغّل الحساب
-                    قراءة ميتا للتعليقات (انظر «نماذج الذكاء الاصطناعي من ميتا» أدناه).
+                    إلى جوجل إطلاقاً، ومسار التعليقات لا يستخدم نموذج ذكاء اصطناعي.
                 </p>
                 <p>
                     ويستطيع مُشغّل الأداة (القسم 9) بدلاً من ذلك أن يجعل ردود حسابٍ ما يكتبها أحد مزوّدي الذكاء
@@ -1833,7 +1837,7 @@
                     يستطيع مُشغّل الأداة (القسم 9) أن يفعّل نماذج الذكاء الاصطناعي من ميتا، واسمها
                     <bdi lang="en" dir="ltr">Muse</bdi>، مزوّداً من المزوّدين المذكورين في القسم 5، ثم يستطيع صاحب الحساب
                     أن يفعّل للحساب الميزات التالية. <strong>وكل ميزة منها متوقفة ما لم تُشغَّل.</strong> وحيث تكون مشغّلة،
-                    <strong>قد تُعالَج نصوص الرسائل الخاصة والتعليقات، والوسائط التي يرسلها الناس، بنماذج الذكاء الاصطناعي من
+                    <strong>قد تُعالَج نصوص الرسائل الخاصة والوسائط التي يرسلها الناس بنماذج الذكاء الاصطناعي من
                     ميتا (<bdi lang="en" dir="ltr">Muse</bdi>)</strong>:
                 </p>
                 <ul>
@@ -1849,10 +1853,6 @@
                     <li>
                         <strong>الرسائل الصوتية:</strong> تُحوَّل الرسالة الصوتية إلى نص بنموذج ميتا للكلام، ثم يُجاب عنه كما
                         يُجاب عن رسالة مكتوبة.
-                    </li>
-                    <li>
-                        <strong>التعليقات:</strong> قد يقرأ نموذجٌ تعليقاً على منشور الحساب نفسه لا يطابق أي كلمة مفتاحية، ليميّز
-                        هل هو سؤال أو رغبة في الشراء، فقد يُجيب عنه الحساب حينئذٍ كما تُجيب حملةٌ بكلمة مفتاحية.
                     </li>
                     <li>
                         <strong>ريلز صاحب الحساب نفسه:</strong> يشاهد نموذجٌ كلاً منها لبناء مكتبة الفيديوهات
@@ -2044,7 +2044,7 @@
                     <li>
                         <strong>ميتا</strong> (<bdi lang="en" dir="ltr">Muse</bdi>) — نماذج الذكاء الاصطناعي من ميتا. وهي ميتا نفسها
                         المذكورة في القائمة أعلاه، لكنها خدمة منفصلة تعمل بمفتاح المُشغّل. وحيث تكون مشغّلة تتلقّى ما يصفه القسمان
-                        3 و1: نصوص الرسائل الخاصة والتعليقات، والوسائط التي يرسلها الناس، وريلز صاحب الحساب نفسه. ولا تُستخدم إلا
+                        3 و1: نصوص الرسائل الخاصة، والوسائط التي يرسلها الناس، وريلز صاحب الحساب نفسه. ولا تُستخدم إلا
                         نماذجها القياسية (<bdi lang="en" dir="ltr">Standard</bdi>)، والمحتوى الذي تتلقّاه لا يُستخدم، بحسب ميتا، في
                         تدريب نماذجها.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
@@ -2065,7 +2065,7 @@
                     وروابطه التي يقدّمها، والمنشورات التي تُكتب له وأوصافها — لتُكتب له مسودّة. وحين يجعل المُشغّل أحد المزوّدين يكتب ردود حسابٍ
                     على رسائله الخاصة، <strong>يُرسَل نصّ المحادثة إلى ذلك المزوّد أيضاً</strong>، على النحو الموضّح في القسم 3 تماماً؛
                     <strong>ولا يُرسَل عبر هذا المسار شيء غير ذلك عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك</strong>، إلا ما يقول القسم 3
-                    إن نماذج ميتا قد تتلقّاه أيضاً (الوسائط التي يرسلها الناس، ونصوص التعليقات حيث يُشغَّل ذلك)، ولا يصل إلى
+                    إن نماذج ميتا قد تتلقّاه أيضاً (الوسائط التي يرسلها الناس)، ولا يصل إلى
                     <bdi lang="en" dir="ltr">Baseten</bdi> إلا ريلز صاحب الحساب نفسه. ويعمل كل مزوّد بمفتاح المُشغّل، لا بمفتاح صاحب الحساب.
                     وما يصل إلى كل منهم يخضع لسياسته هو، ولا نستطيع حذفه نيابةً عنك.
                 </p>
@@ -2674,8 +2674,7 @@
                     What is sent to Google is message text and the direction of each message,
                     nothing more. <strong>Your username, your account ID, and the conversation
                     ID are not sent to Google.</strong> Comment text is never sent to Google at
-                    all, and the comment path does not use an AI model, except where the account has
-                    switched on Meta's reading of comments (see Meta's AI models, below).
+                    all, and the comment path does not use an AI model.
                 </p>
                 <p>
                     The operator of the tool (section 9) can instead have an account's replies written by one
@@ -2713,7 +2712,7 @@
                     The operator of the tool (section 9) can switch on Meta's AI models, called Muse, as one of the
                     providers in section 5, and the account owner can then switch on, for the account, the features below.
                     <strong>Each of them is off unless it has been switched on.</strong> Where they are switched on,
-                    <strong>the text of direct messages and of comments, and the media people send, may be processed by
+                    <strong>the text of direct messages and the media people send may be processed by
                     Meta's AI models (Muse)</strong>:
                 </p>
                 <ul>
@@ -2730,11 +2729,6 @@
                     <li>
                         <strong>Voice notes:</strong> Meta's speech model turns the recording into text, which is then answered
                         like a written message.
-                    </li>
-                    <li>
-                        <strong>Comments:</strong> a comment on the account's own post that matches no keyword may be read by a
-                        model, to tell whether it is a question or a wish to buy, which the account may then answer as a keyword
-                        campaign would.
                     </li>
                     <li>
                         <strong>The account owner's own reels:</strong> a model watches each one, to build the video
@@ -2941,7 +2935,7 @@
                     <li>
                         <strong>Meta</strong> (Muse) — Meta's AI models. The same company as the Meta in the list above, but a
                         separate service, used with the operator's key. Where it is switched on it receives what sections 3 and 1
-                        describe: the text of direct messages and of comments, the media people send, and the account owner's own
+                        describe: the text of direct messages, the media people send, and the account owner's own
                         reels. Only its Standard models are used, and according to Meta the content they receive is not used to
                         train its models.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
@@ -2964,8 +2958,7 @@
                     an account's direct-message replies, <strong>the text of the conversation is sent to that provider
                     too</strong>, exactly as section 3 describes; <strong>nothing else about people who comment or message
                     on Instagram or Facebook is sent through this route</strong>, except what section 3 says Meta's AI models may also
-                    receive (the media people send and, where it is switched on, the text of comments); Baseten receives only the
-                    account owner's own reels. Each provider is used with the operator's key, not the
+                    receive (the media people send); Baseten receives only the account owner's own reels. Each provider is used with the operator's key, not the
                     account owner's. What reaches each of them is governed by its own
                     policy, and we cannot delete it on your behalf.
                 </p>
