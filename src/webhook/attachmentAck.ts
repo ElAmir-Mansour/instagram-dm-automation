@@ -21,6 +21,11 @@
  * What the caller (`answerDm`, messaging.ts) keeps: the paused-bot check before this, the inbound row's `markHandled` after it, and the
  * catch that decides what a thrown send error means (retry on a transient one, final on a permanent Meta error). The ack is never retried
  * for its own sake: a refused quota is `'quota'` and the message is handled.
+ *
+ * **Meta Muse perception** (`perception`, src/services/perception): when the tenant's switch is on and a model tried to READ the message, the line may be another
+ * of the kit's (the thanks that names the story a person mentioned the account in, or the request to send it again) and the outbound row says why in
+ * `ai_meta.reason`. Everything else is the same: the same claim, the same quota, the same disclosure, the same once-a-burst and once-a-day rules. Absent, the row's
+ * `ai_meta` is `{ engine, reply, kind }` and the line is the kit's, byte for byte as it always was.
  */
 import { queryCount, queryOne } from '../db/query.js';
 import { decideAgent } from '../services/ai.js';
@@ -41,6 +46,12 @@ export interface WordlessAckInput {
     /** The word-less message being acknowledged: its row, and who sent it. */
     inbound: { id: string; senderId: string };
     wordless: Wordless;
+    /**
+     * Meta Muse perception tried to read this message, and what that changes (see the top of the file): `line` is the exact words to send instead of the kit's
+     * (`attachments.resend`, or `mentionLine`'s thanks), when there is one; `reason` is the one line of why, for the inbox; `perceived` says the media WAS understood
+     * (the thanks names what it showed). Absent: the kit's line, and no trace.
+     */
+    perception?: { line?: string; reason: string; perceived: boolean };
     /** The profile's DM context: the language and register the line is written in. */
     ctx: ProfileContext<'dm'>;
     /** Whether the automated-service disclosure goes in front of the line, and its words (the pipeline's `needsDisclosure`): passed in, as for the sales turn. */
@@ -91,7 +102,7 @@ export async function acknowledgeWordless(input: WordlessAckInput): Promise<Word
 
     // 1. The line. A sticker has none, and the row is still stored and handled by the caller.
     const lines = kitFor(ctx.language).attachments;
-    const line = wordless.ack === 'mention' ? lines.mention : wordless.ack === 'media' ? lines.media : null;
+    const line = wordless.ack === null ? null : input.perception?.line ?? (wordless.ack === 'mention' ? lines.mention : lines.media);
     if (line === null) {
         log('info', 'dm.wordless_silent', { ...logBase, wordless_kind: wordless.kind });
         return 'no_line';
@@ -111,7 +122,10 @@ export async function acknowledgeWordless(input: WordlessAckInput): Promise<Word
         ATTACHMENT_ACK_TYPE,
         line,
         JSON.stringify({ text: line }),
-        JSON.stringify({ engine: 'rule', reply: ATTACHMENT_ACK_TYPE, kind: wordless.kind }),
+        JSON.stringify({
+            engine: 'rule', reply: ATTACHMENT_ACK_TYPE, kind: wordless.kind,
+            ...(input.perception ? { reason: input.perception.reason, ...(input.perception.perceived ? { perceived: true } : {}) } : {}),
+        }),
         inbound.id,
         WORDLESS_MESSAGE_TYPES,
     ]);

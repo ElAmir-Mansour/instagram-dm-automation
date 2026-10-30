@@ -609,8 +609,8 @@ does not go through `isActionableMessagingEvent`) hands the event to `handleEcho
 | **no words** | no text and no payload, but `message.attachments[]`, `message.reply_to.story` or `message.is_unsupported` (`src/webhook/attachments.ts`, `describeWordless`) | `message_type` = its kind (`image`, `video`, `audio`, `file`, `sticker`, `share`, `reel`, `story_share`, `story_mention`, `story_reply`, `attachment`), `text` = a placeholder (`[photo]`) |
 
 A **message with no words** is stored whole (`raw_payload` is the Meta event, which already holds each attachment's `type` and
-link), drawn in the inbox as a chip, and **never reaches a model**, in any `sales_mode`: `answerDm` hands it to `acknowledgeWordless`
-(`src/webhook/attachmentAck.ts`) before it reads the mode. That sends one fixed kit line (`kit.attachments.mention` for a story
+link) and drawn in the inbox as a chip. **Unless Meta Muse reads it (§2.6h, off by default), it never reaches a model**, in any `sales_mode`:
+`answerDm` hands it to `acknowledgeWordless` (`src/webhook/attachmentAck.ts`). That sends one fixed kit line (`kit.attachments.mention` for a story
 mention, `.media` for the rest, nothing for a sticker), claimed as an outbound row in one statement so a burst is acknowledged once and
 never in place of a real answer. Skipped, with the message still marked handled, when the bot is paused, the agent is off, the claim
 refuses or the send quota refuses (no retry for an acknowledgement); a transient send failure takes the claim back and retries.
@@ -940,6 +940,56 @@ turn's `linkFor` (**`src/services/dmSales/link.ts:28`**; one per conversation an
 
 Only `is_prefetch = FALSE` rows are clicks to anything that reads them: the follow-up nudge, which skips a person who clicked
 (§2.6c), the sales funnel (§2.6e) and an ad's `trackedClicks` (§12.4).
+
+### 2.6h — Meta Muse reads what has no words (hackathon, P2a)
+
+Behind the tenant's switches (`muse.switches.<t>`, `muse.allow_senders.<t>`, `muse.daily_usd.<t>`; `src/services/perception/switches.ts`), all **off by default**. With
+every one of the conditions below unmet, a message with no words is **today's, call for call**: the same ack, the same sends, no write, no typing, no model.
+`messaging.test.ts` ("Meta Muse off") pins the old pipeline's calls, captured by running the same scenarios before and after, so the only additions are the
+reads the questions need. The questions, in this order, each only if the one before passed (**`planWordless`**, `src/webhook/messaging.ts`):
+
+1. **Instagram, and a thing Muse reads.** The DM's platform (the body's `object`) is Instagram, and `primaryRef` (`src/services/perception/dm.ts`) finds one
+   thing in the event to read: a photo, a video, a shared reel or post, a shared or mentioned story, or the story a reply answers (what they SENT comes before
+   the story). A sticker, a file, a view-once, an unsupported message and **a voice note** (another phase) are not: they stop here, with no read at all. Messenger
+   stops here too.
+2. **The sales mode answers this sender** (`readSalesSettings` / `answersWithSales`, §2.6b): a read is only for a message the sales turn will answer. Else
+   `perception.skipped:sales_off` and today's line.
+3. **`perceiveDm`** (`src/services/perception/dm.ts`):
+   1. A **retry reuses** `messages.perception` if an earlier attempt stored one: no gate, no typing, no download, no model call.
+   2. **`gatePerception`** (`gate.ts`): the switch for the kind (`dm_media`), the allow-list, a Meta route with a key, the day's cap. It logs
+      `perception.skipped:<reason>` itself. A switch off or a sender not allowed leaves nothing behind; the day's cap and a missing key write
+      `{status: 'skipped', reason}` on the row (the owner switched it on, so the inbox can say why), and the owner is told once a day of the cap.
+   3. **`typing_on`**, best effort, right after the gate passes and before the slow part.
+   4. **`resolveSource`** (`source.ts`) decides what Muse is shown, from what Instagram actually sends (research R18): a shared **reel** carries
+      `reel_video_id` and a `url` that is a web PAGE (never downloaded); a shared **post** carries `ig_post_media_id` and a `url` that serves its JPEG cover. The
+      creator's **own** media is the library's notes if `reel_analyses` has a row (no model), else `GET /{id}?fields=media_type,media_url,owner,permalink,caption`
+      with the Page token (`GraphSession`), and when the owner is this account and the media is a VIDEO, its fresh `*.fbcdn.net` mp4 (at most 35 MB) is
+      downloaded and Muse **watches** it. **Anyone else's** post is its cover and caption, and anyone else's reel its caption alone (no model: a caption is text).
+      Whose it is comes from the Graph owner, never from the model. A photo, a story, a story mention and the story a reply answers are the link Meta sent
+      (`fetchMedia`: HTTPS, Meta's CDN hosts only, no credentials, capped while it streams, 15 s to connect and 30 s in all; a story mention's link dies in a
+      day, so a 403, 404 or 410 later is `expired_url`).
+   5. **`perceive`** (`perceive.ts`): one structured call through the providers layer, purpose `perception_dm` (Meta only), `effort: 'low'`, `maxTokens: 3000`,
+      schema `perception_v1`, the media inline as base64, the whole step within 90 s. The prompt says "shared the attached", never "no text". It holds the media,
+      a caption and the account's own handle, **never the follower's name, username, id or words**. Readable and 0.6 confident is `ok`; less is `unreadable`; a
+      personal document is `ok` with its description replaced by "a personal document" and nothing it said kept. A 5xx, a timeout and a malformed answer are
+      tried once more; a refused key or no credit tells the owner once a day (`alert.ts`); a 429 is not retried.
+   6. **`storePerception`** (`store.ts`): `UPDATE messages SET perception = …, text = … WHERE perception IS NULL`, once, with the **database's** clock for
+      `stored_at` and the readable text in the same statement. The media is never written anywhere.
+4. **What becomes of it** (`planOf`, `plan.ts`):
+   - **`ok`** → the **sales turn answers** the stored description (`runSalesTurn` with `perceived`, §2.6b): the refund/complaint prefilter does **not** read
+     the description (only typed words), the description is the facts block's "What the customer sent …" and is **not** among the guard's facts (a price in
+     a picture is not one the reply may state), the legacy Gemini path is never the fallback, a personal document is handed to a person with no model, and
+     the reply's `ai_meta` says `perceived: true` and a one-line `reason` the code builds (`traceReason`). A story mention is **not** answered: it is thanked
+     by name (`mentionLine` over `kit.attachments.mentionNamed`) through the same `CLAIM_ACK` claim.
+   - **`unreadable`** → the kit's `resend` line for what the person sent (never for the story they replied to or mentioned the account in), else today's line.
+   - **`failed` / `skipped`** → today's line, with the reason in `ai_meta.reason` and on the row. Never silence.
+5. **A burst is one answer.** `supersession` (`src/services/dmSales/store.ts`) compares a read word-less message from the moment its perception was stored,
+   not its `created_at`: a text sent while a reel is being read does not lose the reel's answer unless a reply came after the read, and a read photo counts as
+   a message waiting (a story mention does not: it is thanked). The sales turn asks again **after** the model has written and before it sends, so the
+   photos of a burst that are not the newest stand down. **A reply to a story that has words** is answered from the words; the story is read too and told as
+   context ("The story they replied to shows …"), and the row's text stays what they typed.
+6. **The last attempt.** A failure after the read hands the conversation over like words (`handOver`, §2.11); a message that was only acknowledged asked
+   nothing and is not. A read that throws (the database could not take the record) is retried, and on the last attempt is today's line.
 
 ### 2.7 — Gemini
 
@@ -4148,6 +4198,10 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |
 | 2 | **Meta Business AI owns the Instagram thread** (error 100 / 2534037, A3) — `noteBusinessAiBlock` | `ads.alert_business_ai` (`error`), once per conversation | `conversations.no_reply_reason = 'business_ai_owns_thread'`; **not retried**, no outbound row; cleared by the next send that goes out |
 | 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
+| 2 | **Meta Muse did not read a message with no words** (§2.6h): the switch is off, the sender is not on the allow-list, the sales mode does not answer them, or it is not Instagram — `planWordless`, `gatePerception` | `perception.skipped:<reason>` (`switch_off`, `not_allowed_sender`, `sales_off`; nothing at all for Messenger, a sticker, a file or a voice note) | **no**: the line it always got, and not one write more |
+| 2 | Muse is on but the day's cap is reached, or no Meta key is set up — `perceiveDm` | `perception.skipped:budget` / `perception.skipped:no_key` | `messages.perception` = `{status: 'skipped', reason}`; the usual line, with the reason in the ack's `ai_meta.reason`; the owner is told of the cap once a day |
+| 2 | a read that came to nothing (the link expired, too large, the model refused or timed out, or could not read it with confidence) — `perceiveDm`, `perceive` | `perception.stored` (`status`, `reason`), `perception.call_failed` | `messages.perception` = `{status: 'failed' \| 'unreadable', reason}`; the usual line, or the kit's "send it again" for what a person sent; a retry reuses it and asks Meta nothing |
+| 2 | Meta refused the key or the account has no credit — `tellOwnerProviderTrouble` | `perception.provider_notice` | the owner is told once a day (`app_settings` `muse.provider_notice.<tenant>`); every word-less message gets the usual line until it is fixed |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 7.8 | a `leadgen` change for a tenant with no lead_ads sign-off — `fetchAndStoreLead` | `ads.lead_locked` (`warn`) | **no** (nothing fetched) |
