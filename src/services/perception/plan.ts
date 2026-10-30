@@ -13,6 +13,7 @@
  */
 import type { PerceivedTurn } from '../dmSales/turn.js';
 import type { AttachmentLines } from '../profile/kits.js';
+import { readPhrase } from './how.js';
 import { mentionLine, perceivedFact, perceivedText } from './text.js';
 import type { Perception, PerceptionKind } from './types.js';
 
@@ -61,7 +62,7 @@ export function planOf(p: Perception, lines: Pick<AttachmentLines, 'mentionNamed
         return {
             kind: 'answer',
             text: perceivedText(p.kind, p),
-            perceived: { kind: p.kind, describedText: true, sent: perceivedFact(p), personal: p.about_owner === 'personal' },
+            perceived: { kind: p.kind, describedText: true, sent: perceivedFact(p), read: readPhrase(p.kind, p.seen), personal: p.about_owner === 'personal' },
         };
     }
     if (p.status === 'unreadable') {

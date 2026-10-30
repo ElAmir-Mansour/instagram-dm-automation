@@ -27,7 +27,7 @@ describe('planOf: a perception that was read', () => {
         assert.ok(plan.kind === 'answer');
         assert.equal(plan.text, perceivedText('reel', p));
         assert.equal(plan.text, '[shared reel] A 37-second reel about a backend.');
-        assert.deepEqual(plan.perceived, { kind: 'reel', describedText: true, sent: perceivedFact(p), personal: false });
+        assert.deepEqual(plan.perceived, { kind: 'reel', describedText: true, sent: perceivedFact(p), read: 'Read a shared reel', personal: false });
         assert.match(plan.perceived.sent!, /^What the customer sent: a shared reel\. What it shows: A 37-second reel about a backend\./);
     });
 
@@ -39,6 +39,16 @@ describe('planOf: a perception that was read', () => {
             assert.equal(plan.perceived.describedText, true);
             assert.ok(plan.text.startsWith('['), kind);
         }
+    });
+
+    it('says how it was looked at, from the sentence the description starts with: a reel that was watched, one read by its caption, a cover', () => {
+        const read = (seen: string, kind: 'reel' | 'share' = 'reel'): string | undefined => { const plan = planOf(base({ kind, seen }), en); return plan.kind === 'answer' ? plan.perceived.read : undefined; };
+        assert.equal(read('Watched the reel. A reel about a backend.'), 'Watched a shared reel');
+        assert.equal(read('Watched the reel earlier (the library\'s notes on it). A reel.'), 'Used the library\'s notes on a shared reel');
+        assert.equal(read('Read the caption. It says: «Backend in 37 seconds»'), 'Read the caption of a shared reel');
+        assert.equal(read('Saw the cover and caption. A cover.', 'share'), 'Saw the cover of a shared post and its caption');
+        assert.equal(read('Saw the cover. A cover.', 'share'), 'Saw the cover of a shared post');
+        assert.equal(read('A 37-second reel.'), 'Read a shared reel');
     });
 
     it('a personal document is an answer the turn hands to a person: the flag is set, and what is described is only "a personal document"', () => {

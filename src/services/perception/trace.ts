@@ -8,19 +8,8 @@
  */
 import type { TurnEffect } from '../dmSales/flow.js';
 import type { HandoffReason, Intent, NextAction } from '../dmSales/types.js';
+import { readNoun } from './how.js';
 import type { PerceptionKind } from './types.js';
-
-/** What was read, as a noun phrase. */
-const READ: Readonly<Record<PerceptionKind, string>> = Object.freeze({
-    reel: 'a shared reel',
-    share: 'a shared post',
-    story_reply: 'a reply to the account\'s story',
-    story_share: 'a shared story',
-    story_mention: 'a story mention',
-    image: 'a photo',
-    video: 'a video',
-    audio: 'a voice note',
-});
 
 /** What the turn did, as a verb phrase, by the action the code settled on. */
 const DID: Readonly<Record<NextAction, string>> = Object.freeze({
@@ -62,6 +51,11 @@ const HANDED: Readonly<Partial<Record<HandoffReason, string>>> = Object.freeze({
 export interface TraceInput {
     /** What was read. */
     kind: PerceptionKind;
+    /**
+     * How the line begins when it says more than "Read a photo": what was read AND how it was looked at (`readPhrase`: "Watched a shared reel", "Read the caption of a
+     * shared reel"), so that the trace never claims more than the agent did. Absent: "Read <what>".
+     */
+    read?: string;
     /** What the turn did, and the action it settled on (`TurnDecision`). */
     effect: TurnEffect;
     action: NextAction;
@@ -77,17 +71,17 @@ export interface TraceInput {
 export const REASON_MAX_CHARS = 200;
 
 export function traceReason(t: TraceInput): string {
-    const read = READ[t.kind];
-    if (t.personal) return `Read ${read}: it is a personal document, so the chat went to a person without describing it.`;
-    if (t.modelFailed) return `Read ${read}, but the model could not answer: a person was told.`;
+    const read = t.read ?? `Read ${readNoun(t.kind)}`;
+    if (t.personal) return `Read ${readNoun(t.kind)}: it is a personal document, so the chat went to a person without describing it.`;
+    if (t.modelFailed) return `${read}, but the model could not answer: a person was told.`;
 
     let line: string;
-    if (t.effect === 'calm') line = `Read ${read}; sent one calm line`;
-    else if (t.effect === 'pause') line = `Read ${read}; stopped replying`;
-    else if (t.effect === 'handoff') line = `Read ${read}; ${DID.handoff}${HANDED[t.handoffReason] ? `, because ${HANDED[t.handoffReason]}` : ''}`;
+    if (t.effect === 'calm') line = `${read}; sent one calm line`;
+    else if (t.effect === 'pause') line = `${read}; stopped replying`;
+    else if (t.effect === 'handoff') line = `${read}; ${DID.handoff}${HANDED[t.handoffReason] ? `, because ${HANDED[t.handoffReason]}` : ''}`;
     else {
         const because = t.intent ? BECAUSE[t.intent] : undefined;
-        line = `Read ${read}; ${DID[t.action]}${because ? `, because ${because}` : ''}`;
+        line = `${read}; ${DID[t.action]}${because ? `, because ${because}` : ''}`;
     }
     return `${line}.`;
 }

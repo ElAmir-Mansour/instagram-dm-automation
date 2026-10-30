@@ -419,7 +419,7 @@ describe('Meta Muse on: a shared reel (R18)', () => {
         assert.equal(record.about_owner, 'own_content', 'whose it is comes from the Graph API\'s owner, not from the model');
         assert.equal(storeOf(r)!.params[3], '[shared reel] Watched the reel. A 37-second reel about building a backend.');
         assert.ok(lastUser(r.salesCalls[0]!).includes('It is the account\'s own content.'));
-        assert.equal(recordedReply(r)!.aiMeta.reason, 'Read a shared reel; answered from the account\'s own information, because they want to know more.');
+        assert.equal(recordedReply(r)!.aiMeta.reason, 'Watched a shared reel; answered from the account\'s own information, because they want to know more.', 'the trace says it was watched');
     });
 
     it('the creator\'s own, already in the library: its notes are the perception, and there is no Graph call, no download and no model for it', async () => {
@@ -433,6 +433,7 @@ describe('Meta Muse on: a shared reel (R18)', () => {
         assert.equal(storedRecord(r).usd, 0);
         assert.equal(r.salesCalls.length, 1, 'and the sales turn answers it');
         assert.deepEqual(r.executed.filter((e) => /FROM reel_analyses/.test(e.sql)).map((e) => e.params), [['creator-1', REEL_ID]]);
+        assert.equal(recordedReply(r)!.aiMeta.reason, 'Used the library\'s notes on a shared reel; answered from the account\'s own information, because they want to know more.');
         assert.ok(actions(r).includes('typing_on'), 'typing is still shown: the gate passed');
     });
 
@@ -447,6 +448,7 @@ describe('Meta Muse on: a shared reel (R18)', () => {
         assert.equal(storedRecord(r).model, 'caption');
         assert.ok(lastUser(r.salesCalls[0]!).includes('It is NOT the account\'s own content: never say that it is.'));
         assert.ok(!/Watched/.test(lastUser(r.salesCalls[0]!)));
+        assert.equal(recordedReply(r)!.aiMeta.reason, 'Read the caption of a shared reel; answered from the account\'s own information, because they want to know more.', 'and the trace says only that the caption was read');
     });
 
     it('an own reel whose mp4 has gone is today\'s line, with the reason on the row', async () => {
@@ -475,6 +477,7 @@ describe('Meta Muse on: a shared post (R18)', () => {
         assert.equal(storedRecord(r).seen, 'Saw the cover and caption. A cover reading "10 tips".');
         assert.equal(storedRecord(r).about_owner, 'other_content');
         assert.equal(storedRecord(r).kind, 'share');
+        assert.equal(recordedReply(r)!.aiMeta.reason, 'Saw the cover of a shared post and its caption; answered from the account\'s own information, because they want to know more.');
     });
 });
 

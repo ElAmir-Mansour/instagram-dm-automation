@@ -31,15 +31,15 @@ import type { FetchLike } from '../llm/types.js';
 import {
     CONNECT_TIMEOUT_MS, fetchMedia, TOTAL_TIMEOUT_MS, type DownloadedMedia, type MediaRef, type MediaResult,
 } from './media.js';
+import { HOW_PREFIX, withHow, type HowSeen } from './how.js';
 import { readReelAnalysis, type ReelAnalysis } from './store.js';
 import { oneLine, SEEN_MAX_CHARS, SPEECH_MAX_CHARS } from './text.js';
 import type { AboutOwner, FailReason, Perception } from './types.js';
 
+export { HOW_PREFIX, withHow, type HowSeen };
+
 /** Whose the media is, as far as the code can tell: the Graph API's owner, never the model's guess. */
 export type Owner = 'own' | 'other' | 'unknown';
-
-/** How it was looked at. Written into the description and the trace, so the owner can see what the agent actually did. */
-export type HowSeen = 'watched' | 'library' | 'cover' | 'caption' | 'media';
 
 export type Draft = Omit<Perception, 'stored_at'>;
 
@@ -144,22 +144,7 @@ export function captionPerception(kind: Draft['kind'], caption: string, owner: O
     };
 }
 
-// ─── What each way of looking is called ──────────────────────────────────────────────────────────────────────────────────
-
-/** The sentence a description starts with, by how the media was looked at. A photo, a story or a video the customer sent needs none: it was shown whole. */
-export const HOW_PREFIX: Readonly<Record<HowSeen, string>> = Object.freeze({
-    watched: 'Watched the reel.',
-    library: 'Watched the reel earlier (the library\'s notes on it).',
-    cover: 'Saw the cover and caption.',
-    caption: 'Read the caption.',
-    media: '',
-});
-
-/** `seen` with how it was looked at in front of it. With no caption a cover is only a cover. Pure. */
-export function withHow(how: HowSeen, seen: string, hasCaption: boolean): string {
-    const prefix = how === 'cover' && !hasCaption ? 'Saw the cover.' : HOW_PREFIX[how];
-    return oneLine(prefix ? `${prefix} ${seen}` : seen, SEEN_MAX_CHARS);
-}
+// ─── Whose it is ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** What the code knows of whose it is, as the field the sales turn reads; null for "cannot tell", which leaves the model's own say. */
 export function ownerAbout(owner: Owner): AboutOwner | null {

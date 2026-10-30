@@ -17,6 +17,15 @@ describe('traceReason', () => {
         assert.equal(traceReason(input({ kind: 'share', action: 'recommend', intent: 'ready_to_buy' })), 'Read a shared post; recommended the offer that fits, because they are ready to buy.');
     });
 
+    it('begins with how it was looked at when the pipeline says so, and every other part of the line is the same', () => {
+        assert.equal(traceReason(input({ read: 'Watched a shared reel' })), 'Watched a shared reel; answered from the account\'s own information, because they want to know more.');
+        assert.equal(traceReason(input({ read: 'Read the caption of a shared reel', action: 'send_link', intent: 'price' })), 'Read the caption of a shared reel; sent the offer\'s link, because they asked about the price.');
+        assert.equal(traceReason(input({ read: 'Watched a shared reel', modelFailed: true })), 'Watched a shared reel, but the model could not answer: a person was told.');
+        assert.equal(traceReason(input({ read: 'Watched a shared reel', effect: 'handoff', action: 'handoff', handoffReason: 'wants_human' })), 'Watched a shared reel; handed the chat to a person, because they asked for a person.');
+        // A personal document says only what it is, whatever else it was given: nothing of how it was looked at.
+        assert.equal(traceReason(input({ kind: 'image', read: 'Saw the cover of a shared post', personal: true })), 'Read a photo: it is a personal document, so the chat went to a person without describing it.');
+    });
+
     it('leaves the "because" out when the intent says nothing, and for no intent at all', () => {
         assert.equal(traceReason(input({ intent: 'other' })), 'Read a shared reel; answered from the account\'s own information.');
         assert.equal(traceReason(input({ intent: null })), 'Read a shared reel; answered from the account\'s own information.');

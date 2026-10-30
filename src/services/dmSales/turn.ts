@@ -172,6 +172,8 @@ export interface PerceivedTurn {
     describedText: boolean;
     /** The facts block's "What the customer sent: …" line (`perceivedFact`), already one line. Null: nothing to add. */
     sent: string | null;
+    /** How the trace begins, naming how it was looked at (`readPhrase`: "Watched a shared reel"). Absent: "Read <what>". */
+    read?: string;
     /** The media is a personal document: the chat is handed to a person and the model is never asked, whatever the person's words say. */
     personal?: boolean;
 }
@@ -243,6 +245,7 @@ function perceivedReason(perceived: PerceivedTurn, decision: TurnDecision, o: En
     return traceReason({
         kind: perceived.kind, effect: decision.effect, action: decision.action, handoffReason: decision.handoffReason, intent: o.intent,
         modelFailed: typeof o.meta.model_failed === 'string',
+        ...(perceived.read ? { read: perceived.read } : {}),
     });
 }
 
