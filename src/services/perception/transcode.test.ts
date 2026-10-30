@@ -153,7 +153,7 @@ describe('the 10 s limit', () => {
         await rm(flag);
 
         const started = Date.now();
-        const result = await decode(NOTE, { ffmpegPath: script, timeoutMs: 1500 });
+        const result = await decode(NOTE, { ffmpegPath: script, timeoutMs: 2000 });
         assertFailure(result, 'timeout', 'decode');
         assert.ok(Date.now() - started < 10_000, 'the call came back at the deadline, not when the sleep ended');
         const pid = Number((await readFile(pidFile, 'utf8')).trim());

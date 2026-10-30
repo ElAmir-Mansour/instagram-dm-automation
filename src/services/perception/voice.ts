@@ -11,8 +11,8 @@
  *   1. **Download** (`media.ts` `fetchMedia`, kind `audio`): Meta's hosts only, HTTPS, no token, at most 10 MB, 15 s to connect and 30 s in all, never written anywhere. A voice note
  *      arrives as `video/mp4` (AAC inside an MP4) and stays audio.   No link: `skipped / no_url`.   The rest as `fetchMedia` names them: `too_large`, `fetch_failed`, `expired_url`, `timeout`.
  *   2. **Decode** (`transcode.ts`): `ffmpeg-static` inside the function, to mono 16-bit 24 kHz WAV with the tags removed, 10 s. More than 3 minutes is `failed / too_large` (detail
- *      `too_long`); a file that will not decode is `failed / fetch_failed` (detail `decode_failed: …`), an unusable file being what a download that was not media is; the binary
- *      missing is `failed / fetch_failed` (detail `decoder_unavailable: …`) and logged as an ERROR, because it means the deployment is wrong and every voice note will say it.
+ *      `too_long`); a file that will not decode is `failed / fetch_failed` (detail `decode_failed: …`: bytes that are no use, like a download that was not media); the binary missing
+ *      is `failed / fetch_failed` too (detail `decoder_unavailable: …`) and is logged as an ERROR, because it means the deployment is wrong and every voice note will say so.
  *   3. **Hear** (`aiProviders/asr.ts`): Meta's `muse-voice-transcribe-1.0`, with Arabic and English as the language bias and the creator's names as keywords, 30 s, one row in
  *      `ai_usage` (purpose `perception_voice`, $0.18 an hour). **Never another provider.** No Meta key, or Meta switched off: `skipped / no_key`; a platform or tenant budget reached:
  *      `skipped / budget`; the deadline: `failed / timeout`; any other refusal or answer that is no good: `failed / provider_error` (detail: the kind and the HTTP status).
