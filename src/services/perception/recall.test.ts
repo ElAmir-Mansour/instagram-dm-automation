@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { FAKE_KEYS } from '../aiProviders/testKeys.js';
 import { jsonResponse } from '../llm/testFetch.js';
 import { guardReply } from '../dmSales/guard.js';
-import { MUSE_BUDGET_PURPOSES } from './gate.js';
+import { MUSE_BUDGET_PURPOSES, perceptionRouteReady } from './gate.js';
 import type { LibraryRow } from './reelLibrary.js';
 import {
     buildLibrary, hasContentCue, LINE_LIMITS, MAX_REELS, mentionsLink, MESSAGE_MAX_CHARS, MIN_CALL_MS, NO_VIDEO_FACT, parseRecallAnswer, RECALL_EFFORT, RECALL_INSTRUCTIONS,
@@ -597,12 +597,20 @@ describe('recallForTurn: when nothing is asked', () => {
         assert.ok(await ask('any video on docker?'));
     });
 
-    it('asks whether a route can answer RECALL, not perception: a route for perception alone is no route', async () => {
+    it('asks whether a route can answer RECALL, not perception: a saved route for recall that cannot answer is no route, while perception still has one', async () => {
         open({ keys: ['meta'] });
-        world.ai.setSetting('ai.routing', JSON.stringify({ perception_dm: { provider: 'meta', model: 'muse-spark-1.3', effort: 'low' } }));
-        assert.equal(await recallRouteReady(TENANT), true, 'with a Meta key, the default order reaches Meta for recall too');
+        stock(DOCKER());
+        assert.equal(await recallRouteReady(TENANT), true, 'with a Meta key, the default order reaches Meta for recall');
+        // The operator saved a provider for recall that may not answer it (only Meta's models may): the purpose has no route, and perception's own has not changed.
+        world.ai.setSetting('ai.routing', JSON.stringify({ recall: { provider: 'openai', model: 'gpt-4.1', effort: 'low' } }));
+        assert.equal(await recallRouteReady(TENANT), false);
+        assert.equal(await perceptionRouteReady(TENANT), true);
+        assert.equal(await ask('any video on docker?'), null);
+        assert.equal(meta().length, 0);
+        assert.deepEqual(world.logs.filter((l) => String(l.event).startsWith('perception.skipped:')).map((l) => l.event), ['perception.skipped:no_key']);
+        world.ai.settings.delete('ai.routing');
         world.ai.settings.delete('ai.providers.meta.api_key');
-        assert.equal(await recallRouteReady(TENANT), false, 'no key: no route');
+        assert.equal(await recallRouteReady(TENANT), false, 'and with no key at all, no route');
     });
 
     it('an empty library is no call: nothing was watched yet, and a reel that failed or is queued is not in it', async () => {

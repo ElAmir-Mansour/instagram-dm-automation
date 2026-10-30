@@ -311,7 +311,7 @@ describe('a perceived turn: the reply says it was perceived, and why', () => {
         const meta = record(r).aiMeta;
         assert.equal(meta.perceived, true);
         assert.equal(meta.reason, 'Read a shared reel; answered from the account\'s own information, because they asked about the price.');
-        assert.ok(!('recalled' in meta), 'recall is another phase: nothing here sets it');
+        assert.ok(!('recalled' in meta), 'a described turn never recalls: what a model wrote about a reel is not words the customer wrote (turn.recall.test.ts)');
         assert.equal(meta.engine, 'providers');
         assert.equal(meta.next_action, 'reply');
     });
