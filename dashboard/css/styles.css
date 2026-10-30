@@ -5042,6 +5042,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 #threads-stale { padding: var(--space-2) var(--space-2) 0; }
 #threads-stale .inline-error { margin-block-end: 0; flex-wrap: wrap; }
 #threads-stale .inline-error > .btn { margin-inline-start: auto; }
+/* The webhook strip: Meta is sending this account's events to another website (inbox.js `paintWebhookStrip`). Like the stale strip, it wraps on a phone. */
+#webhook-strip { padding: var(--space-2) var(--space-2) 0; }
+#webhook-strip .inline-error { margin-block-end: 0; flex-wrap: wrap; }
+#webhook-strip .inline-error > .btn { margin-inline-start: auto; }
 /* I4: a day divider in the message log. */
 .chat-day { display: flex; align-items: center; gap: var(--space-3); margin-block: var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
 .chat-day::before, .chat-day::after { content: ''; flex: 1; border-block-start: 1px solid var(--border-subtle); }

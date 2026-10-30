@@ -251,6 +251,9 @@ const InboxPage = {
                     <!-- When nobody is being answered automatically, or sales is only in test: said once, here, instead of
                          being left for a row's badge to imply. Hidden until the first answer says there is something to say. -->
                     <div id="assistant-strip" class="assistant-strip hidden" role="status" aria-label="${t('inbox.strip.label')}"></div>
+                    <!-- Meta is sending this account's events to another website (the stored answer of the hourly check): an inbox that stays empty for that
+                         reason looks exactly like a quiet one. Hidden unless the answer is a definite "no". -->
+                    <div id="webhook-strip" class="hidden"></div>
                     <div class="inbox-search">
                         <label class="sr-only" for="inbox-search">${t('inbox.searchLabel')}</label>
                         <div class="input-affix">
@@ -308,6 +311,7 @@ const InboxPage = {
         this.bindImageGuard();
 
         this.loadThreads();
+        this.loadWebhookStrip();
         this.startPolling();
 
         // Pause polling while the tab is in the background — an inbox left open
@@ -763,6 +767,52 @@ const InboxPage = {
 
     markStale(show, err) {
         this.setStrip(show ? 'stale' : null, err);
+    },
+
+    /**
+     * The strip for "Meta is not sending this account's events to AutoReply" (src/services/metaWebhooks.ts): the hourly check's stored answer, read once when the
+     * screen opens (`GET /api/health/tenant`: no call to Meta, and no polling). A list that stays empty because Instagram's events go to another website looks exactly
+     * like a quiet inbox, which is why it is said here. It is an extra: a request that fails, or an answer that is not a definite "no", leaves the strip hidden.
+     */
+    async loadWebhookStrip() {
+        const epoch = this._epoch;
+        let health = null;
+        try {
+            health = await API.getTenantHealth();
+        } catch (err) {
+            return;
+        }
+        if (epoch !== this._epoch) return; // a previous visit, or the previous tenant
+        this.paintWebhookStrip(health && health.webhooks);
+    },
+
+    paintWebhookStrip(webhooks) {
+        const host = document.getElementById('webhook-strip');
+        if (!host) return;
+        const notice = typeof HealthStrip !== 'undefined' ? HealthStrip.webhookNotice(webhooks) : null;
+        if (!notice) {
+            host.classList.add('hidden');
+            host.innerHTML = '';
+            return;
+        }
+        // The platform admin fixes it in Settings; everyone else is told whom to ask, because the button would lead nowhere for them.
+        const admin = typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin();
+        host.innerHTML = esc(html`
+            <div class="inline-error" role="alert" id="webhook-strip-notice">
+                <i data-lucide="plug-zap" aria-hidden="true"></i>
+                <div>
+                    <strong dir="auto">${notice.title}</strong>
+                    <span class="inline-error-hint" dir="auto">${notice.lines.join(' ')}</span>
+                    ${admin ? '' : html`<span class="inline-error-hint" dir="auto">${t('webhooks.banner.askOwner')}</span>`}
+                </div>
+                ${admin ? UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'settings', label: t('webhooks.banner.fix'),
+                    action: 'app:navigate', data: { target: 'settings', query: 's=platform&card=meta-events' }, id: 'webhook-strip-fix',
+                }) : ''}
+            </div>
+        `);
+        host.classList.remove('hidden');
+        UI.icons(host);
     },
 
     retryThreads() {

@@ -89,6 +89,17 @@ export const APP_SETTING_KEYS = {
      */
     metaAdsScopesEnabled: 'meta.ads_scopes_enabled',
     /**
+     * Where Meta sends each kind of event, as the last check read it (`src/services/metaWebhooks.ts`): JSON `{ checkedAt, attemptedAt, ok, expectedUrl,
+     * expectedHost, objects, error }`, written by the hourly check (the drain and the daily cron) and by the Settings card's repair. Not a secret: hosts and
+     * field names only. `GET /api/health/tenant` serves a summary of it, so a screen never asks Meta on a page load.
+     */
+    metaWebhooksStatus: 'meta.webhooks.status',
+    /**
+     * The webhook problems the owner was last told about, so one problem is one alert a day: JSON `{ day: 'YYYY-MM-DD' (UTC), keys: ['<object>:<kind>:<host>', …] }`.
+     * A new day starts the list again. Not a secret.
+     */
+    metaWebhooksAlerted: 'meta.webhooks.alerted',
+    /**
      * The Marketing API version the ads module calls (src/services/ads/graph.ts), pinned on its own instead of following `META_API_VERSION`:
      * that env var is the publisher's rollback lever, and ads must never silently drop below v25.0 (v24 ends 2026-11-10, and Advantage+
      * behaviour differs by version). Unset means `v26.0`; a value below `v25.0` is refused when saved and ignored when read. Not a secret.

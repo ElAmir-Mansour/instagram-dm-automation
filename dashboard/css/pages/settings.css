@@ -145,6 +145,9 @@ details[open] > summary .settings-health-more [data-lucide] { transform: rotate(
     overflow-wrap: anywhere;
 }
 .settings-row-action { grid-area: action; }
+/* "Where Meta sends your events": a row's detail is several short lines (the events, what is missing, when one last arrived), not one. */
+.settings-row-detail > .events-line { margin: 0; }
+.settings-row-detail > .events-line + .events-line { margin-block-start: var(--space-1); }
 @media (max-width: 640px) {
     .settings-row {
         grid-template-columns: minmax(0, 1fr) auto;
