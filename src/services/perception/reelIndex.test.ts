@@ -484,6 +484,38 @@ describe('the fallback: one retry on Meta\'s hosted model, and only after a fail
         assert.equal(row('9001'), undefined, 'the reel is left exactly as it was: no row at all');
     });
 
+    it('is a failure of Baseten, not a skip, when the second try cannot be made: Meta\'s hosted model has no key, so the reel is stored as failed and the runner retries it', async () => {
+        world.ai.settings.delete('ai.providers.meta.api_key');
+        addReel(world, '9001');
+        answerOn(world, 'inference.baseten.co', jsonResponse(503, { error: { message: 'overloaded' } }));
+        const retry = await index('9001', { lastAttempt: false });
+        assert.deepEqual(retry, { status: 'failed', reason: 'provider_error', retryable: true, stored: false }, 'not "skipped": nothing would ever try it again');
+        assert.deepEqual([baseten().length, meta().length], [1, 0], 'Baseten was asked, and Meta had no key to be asked with');
+    });
+
+    it('stores that failure with both halves of it in the detail, on the last attempt', async () => {
+        world.ai.settings.delete('ai.providers.meta.api_key');
+        addReel(world, '9001');
+        answerOn(world, 'inference.baseten.co', jsonResponse(503, { error: { message: 'overloaded' } }));
+        const out = await index('9001', { lastAttempt: true });
+        assert.deepEqual(out, { status: 'failed', reason: 'provider_error', retryable: true, stored: true });
+        assert.deepEqual(row('9001')!.result, { error: 'provider_error', detail: 'baseten:server:503 | meta:no_provider' });
+    });
+
+    it('is the same when the platform\'s own budget refuses the second try: the reel failed on Baseten, and it is not a skip', async () => {
+        addReel(world, '9001');
+        // The day's spend reaches the platform's budget while Baseten is being asked, so the second call finds it spent.
+        world.providers.scripts['inference.baseten.co'] = [() => {
+            world.ai.setSetting('ai.budget.daily_usd', '0.01');
+            world.ai.seedUsage({ usd: 0.5, purpose: 'dm', creator_id: TENANT });
+            return jsonResponse(503, { error: { message: 'overloaded' } });
+        }];
+        const out = await index('9001', { lastAttempt: true });
+        assert.deepEqual(out, { status: 'failed', reason: 'provider_error', retryable: true, stored: true });
+        assert.equal((row('9001')!.result as any).detail, 'baseten:server:503 | meta:budget');
+        assert.equal(meta().length, 0);
+    });
+
     it('does not start the second try when the job has no time left for it: the failure is a timeout, and the detail says why', async () => {
         addReel(world, '9001');
         let clock = 1_000_000;

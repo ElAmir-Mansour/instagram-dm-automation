@@ -336,15 +336,18 @@ async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, ba
         ...(avoid.length ? { avoid } : {}),
     });
 
+    type Failed = { provider: string; kind: string; retryable: boolean; reason: ReelFailReason };
     const notes: string[] = [];
     let spentUsd = 0;
     let fellBack = false;
+    /** What the first try failed on, which is what the reel failed on if the second try cannot be made or fails to be. */
+    let first: Failed | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
         const left = JOB_BUDGET_MS - (deps.now() - started);
         if (attempt === 1 && left < MIN_FALLBACK_MS) {
             return { ok: false, reason: 'timeout', retryable: true, detail: [...notes, 'no_time_left'].join(' | '), spentUsd };
         }
-        let failedOn: { provider: string; kind: string; retryable: boolean; reason: ReelFailReason } | null = null;
+        let failedOn: Failed;
         try {
             const out = await ask(attempt === 0 ? [] : ['baseten']);
             const analysis = parseReelAnalysis(out.json);
@@ -355,14 +358,21 @@ async function analyse(deps: ReelIndexDeps, args: IndexArgs, started: number, ba
             failedOn = { provider: out.provider, kind: 'bad_output', retryable: true, reason: 'bad_output' };
         } catch (err) {
             if (!isAiError(err)) throw err;
-            if (err.kind === 'budget') return { ok: false, skip: 'budget' };
-            if (err.kind === 'no_provider') return { ok: false, skip: 'no_key' };
+            if (err.kind === 'budget' || err.kind === 'no_provider') {
+                // Not the reel's fault and not a failure of the provider: with nothing tried yet the reel is left alone (a skip). After Baseten failed it is NOT a skip: the
+                // second try could not be made (no key for Meta's hosted model, or the platform's budget is spent), and the reel failed on Baseten, which is what is stored
+                // and what the runner retries. A skip here would hide Baseten's failure and never be tried again.
+                if (first === null) return { ok: false, skip: err.kind === 'budget' ? 'budget' : 'no_key' };
+                notes.push(`meta:${err.kind}`);
+                return { ok: false, reason: first.reason, retryable: first.retryable, detail: notes.join(' | '), spentUsd };
+            }
             notes.push(note(err));
             failedOn = { provider: err.provider, kind: err.kind, retryable: err.retryable, reason: err.kind === 'timeout' ? 'timeout' : err.kind === 'bad_output' ? 'bad_output' : 'provider_error' };
         }
-        // The one fallback: only from Baseten, only once. What is not a failure of the provider (the platform's budget, no route at all) returned above, so every
-        // kind that gets here is Baseten's own: a refused key, no credit, a throttle, a timeout, a cut-off answer or an answer that was no use.
+        // The one fallback: only from Baseten, only once. Every kind that gets here is the provider's own: a refused key, no credit, a throttle, a timeout, a cut-off
+        // answer or an answer that was no use (the platform's budget and a missing route returned above).
         if (attempt === 0 && failedOn.provider === 'baseten') {
+            first = failedOn;
             fellBack = true;
             log('warn', 'muse.reel_index_fallback', { creator_id: args.creatorId, ig_media_id: args.igMediaId, from: 'baseten', kind: failedOn.kind });
             continue;
