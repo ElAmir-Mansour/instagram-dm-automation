@@ -346,34 +346,37 @@ export interface MediaIo {
     readFile(file: string): Promise<Buffer>;
 }
 
-/**
- * The media of a case: its file from `dir`, its synthetic card, or nothing for a caption alone. The size caps are the product's own (`MEDIA_LIMITS`): a file the
- * product would refuse is not benchmarked as though it were read.
- */
+/** A file of `dir` read as media, or why it could not be. The size caps are the product's own (`MEDIA_LIMITS`): a file the product would refuse is not benchmarked as though it were read. */
+export async function loadFile(file: string, dir: string, io: MediaIo): Promise<MediaLoad> {
+    const ext = EXTENSIONS[path.extname(file).toLowerCase()];
+    if (!ext || !FILE_NAME.test(file)) return { ok: false, why: `${file} is not a plain picture, video or audio file name` };
+    let bytes: Buffer;
+    try {
+        bytes = await io.readFile(path.join(dir, file));
+    } catch {
+        return { ok: false, why: `${file} is not in the media folder (${displayPath(dir)})` };
+    }
+    if (bytes.length === 0) return { ok: false, why: `${file} is empty` };
+    if (bytes.length > MEDIA_LIMITS[ext.media]) {
+        return { ok: false, why: `${file} is ${(bytes.length / 1024 / 1024).toFixed(1)} MB, over the ${(MEDIA_LIMITS[ext.media] / 1024 / 1024).toFixed(0)} MB the product reads` };
+    }
+    return { ok: true, media: { bytes, mime: ext.mime, mediaKind: ext.media } };
+}
+
+/** The media of a case: its file from `dir`, its synthetic card, or nothing for a caption alone. */
 export async function loadMedia(c: MuseCase, dir: string, io: MediaIo): Promise<MediaLoad | null> {
     if (c.source.kind === 'caption') return null;
     if (c.source.kind === 'synthetic') {
         const m = syntheticMedia(c.source.card);
         return { ok: true, media: { bytes: m.bytes, mime: m.mime, mediaKind: 'image' } };
     }
-    const ext = EXTENSIONS[path.extname(c.source.file).toLowerCase()]!;
-    let bytes: Buffer;
-    try {
-        bytes = await io.readFile(path.join(dir, c.source.file));
-    } catch {
-        return { ok: false, why: `${c.source.file} is not in the media folder (${displayPath(dir)})` };
-    }
-    if (bytes.length === 0) return { ok: false, why: `${c.source.file} is empty` };
-    if (bytes.length > MEDIA_LIMITS[ext.media]) {
-        return { ok: false, why: `${c.source.file} is ${(bytes.length / 1024 / 1024).toFixed(1)} MB, over the ${(MEDIA_LIMITS[ext.media] / 1024 / 1024).toFixed(0)} MB the product reads` };
-    }
-    return { ok: true, media: { bytes, mime: ext.mime, mediaKind: ext.media } };
+    return loadFile(c.source.file, dir, io);
 }
 
-/** A folder as it may be printed in a public report: the home directory is `~`, so no user name is in it. */
+/** A path as it may be printed in a public report: the home directory is `~` wherever it appears, so no user name is in it. */
 export function displayPath(p: string, home?: string): string {
     const h = home ?? process.env.HOME ?? '';
-    return h && p.startsWith(h) ? `~${p.slice(h.length)}` : p;
+    return h.length > 1 ? p.split(h).join('~') : p;
 }
 
 /** The extension table, for the code that reads a memory or open-weights file the same way. */

@@ -71,6 +71,11 @@ export class Ledger {
         };
     }
 
+    /** What the calls of one role cost in all, for whatever is not a case (the memory arm's questions). */
+    usdOf(role: string): number {
+        return round(this.calls.filter((c) => c.role === role).reduce((n, c) => n + c.usd, 0));
+    }
+
     /** What the judge cost in all. */
     judgeUsd(): number {
         return round(this.calls.filter((c) => c.role === 'judge').reduce((n, c) => n + c.usd, 0));
@@ -83,11 +88,16 @@ export class Ledger {
 
 const round = (usd: number): number => Math.round(usd * 1e9) / 1e9;
 
-/** `text` with the key taken out, for anything printed that a provider's words could have reached. */
-export function scrubKey(text: string, ...keys: readonly (string | null | undefined)[]): string {
+/** `text` with every key taken out, and nothing else changed: for what is printed, which may be a table. */
+export function redactKeys(text: string, ...keys: readonly (string | null | undefined)[]): string {
     let out = String(text);
     for (const key of keys) if (key && key.length >= 8) out = out.split(key).join('[key]');
-    return scrub(out);
+    return out;
+}
+
+/** `text` with the key taken out and the rest cleaned the way an error message is (one line, at most 240 characters): for a short reason that a provider's words may have reached. */
+export function scrubKey(text: string, ...keys: readonly (string | null | undefined)[]): string {
+    return scrub(redactKeys(text, ...keys));
 }
 
 // ─── One call ────────────────────────────────────────────────────────────────────────────────────────────────────────────

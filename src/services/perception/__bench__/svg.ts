@@ -8,7 +8,7 @@
  *
  * What a bar says: 100% is every case the arm ran. An arm that did not run is not a bar of zero: it is a line that says it did not run.
  */
-import { dollars, percent, secs } from './metrics.js';
+import { BAR, dollars, percent, secs } from './metrics.js';
 import type { MemorySummary } from './memory.js';
 import type { ArmId, ArmSummary, Rate, SkippedArm } from './types.js';
 
@@ -45,6 +45,8 @@ interface Bar {
     label: string;
     rate: Rate;
     cls: string;
+    /** A goal to mark on the track, as a percentage. */
+    goal?: number;
 }
 
 /** A horizontal bar on a track, with its value after it. `n/m` is in the value, because a percentage of eight cases is a number a reader should be able to check. */
@@ -53,13 +55,17 @@ function bar(x: number, y: number, b: Bar): string {
     const trackW = BAR_W - 112;
     const fillW = pct === null || pct <= 0 ? 0 : Math.max(2, Math.round((trackW * pct) / 100));
     const value = pct === null ? '-' : `${percent(b.rate)} (${b.rate.n}/${b.rate.of})`;
+    const tick = b.goal === undefined ? '' : `<rect class="goal" x="${x + 112 + Math.round((trackW * b.goal) / 100) - 1}" y="${y - 3}" width="2" height="${BAR_H + 6}"/>`;
     return [
         `<text class="small muted" x="${x}" y="${y + 12}">${esc(b.label)}</text>`,
         `<rect class="track" x="${x + 112}" y="${y}" width="${trackW}" height="${BAR_H}" rx="3"/>`,
         fillW === 0 ? '' : `<rect class="${b.cls}" x="${x + 112}" y="${y}" width="${fillW}" height="${BAR_H}" rx="3"/>`,
+        tick,
         `<text class="small" x="${x + BAR_W + 8}" y="${y + 12}">${esc(value)}</text>`,
     ].filter(Boolean).join('\n');
 }
+
+const upper = (text: string): string => (text ? text[0]!.toUpperCase() + text.slice(1) : text);
 
 /** The chart as an SVG document. Deterministic: the same data is the same bytes. */
 export function renderChart(d: ChartData): string {
@@ -73,7 +79,7 @@ export function renderChart(d: ChartData): string {
     const out: string[] = [];
 
     if (media.length > 0) {
-        out.push(`<text class="head" x="${PAD}" y="${y}">Messages with no words, and what the agent does with them</text>`);
+        out.push(`<text class="head" x="${PAD}" y="${y}">Messages with no words, and what the agent does with them (the tick is the ${BAR.expectedActionPct}% goal)</text>`);
         y += 14;
         for (const a of media) {
             const cls = ARM_CLASS[a.arm];
@@ -81,11 +87,11 @@ export function renderChart(d: ChartData): string {
                 `<text class="label" x="${PAD}" y="${y + 26}">${esc(a.label)}</text>`,
                 `<text class="small muted" x="${PAD}" y="${y + 44}">${esc(`${a.cases} cases`)}</text>`,
                 bar(BAR_X, y + 10, { label: 'Understood', rate: a.understood, cls }),
-                bar(BAR_X, y + 34, { label: 'Expected action', rate: a.expectedAction, cls }),
+                bar(BAR_X, y + 34, { label: 'Expected action', rate: a.expectedAction, cls, ...(a.arm === 'meta' || a.arm === 'voice' ? { goal: BAR.expectedActionPct } : {}) }),
             );
             y += ROW_H;
         }
-        y += 14;
+        y += 26;
     }
 
     if (memory.length > 0) {
@@ -102,26 +108,26 @@ export function renderChart(d: ChartData): string {
             );
             y += ROW_H;
         }
-        y += 14;
+        y += 26;
     }
 
     if (numbers) {
         out.push(`<text class="head" x="${PAD}" y="${y}">The shipped path, against the bar</text>`);
         y += 22;
-        const stats: [string, string][] = [
-            ['Invented facts sent', String(numbers.inventedSent)],
-            ['p90 latency', secs(numbers.p90Ms)],
-            ['Cost per reply', dollars(numbers.usdPerReply)],
+        const stats: [string, string, string][] = [
+            ['Invented facts sent', String(numbers.inventedSent), `${numbers.inventedDraft} in the first draft, before the guard`],
+            ['p90 latency', secs(numbers.p90Ms), `goal: at most ${BAR.p90Ms / 1000} s`],
+            ['Cost per reply', dollars(numbers.usdPerReply), `goal: at most ${dollars(BAR.usdPerReply)}`],
         ];
-        stats.forEach(([label, value], i) => {
-            const x = PAD + i * 270;
-            out.push(`<text class="big" x="${x}" y="${y + 24}">${esc(value)}</text>`, `<text class="small muted" x="${x}" y="${y + 44}">${esc(label)}</text>`);
+        stats.forEach(([label, value, note], i) => {
+            const x = PAD + i * 290;
+            out.push(`<text class="big" x="${x}" y="${y + 24}">${esc(value)}</text>`, `<text class="small" x="${x}" y="${y + 44}">${esc(label)}</text>`, `<text class="small muted" x="${x}" y="${y + 60}">${esc(note)}</text>`);
         });
-        y += 62;
+        y += 80;
     }
 
     for (const s of skipped) {
-        out.push(`<text class="small muted" x="${PAD}" y="${y + 14}">${esc(`${s.label}: not run. ${s.why}`.slice(0, 120))}</text>`);
+        out.push(`<text class="small muted" x="${PAD}" y="${y + 14}">${esc(`${s.label}: not run. ${upper(s.why)}`.slice(0, 130))}</text>`);
         y += 20;
     }
 
@@ -145,6 +151,7 @@ export function renderChart(d: ChartData): string {
         '.muted { fill: var(--muted); }',
         '.band { fill: var(--warn); }',
         '.track { fill: var(--track); }',
+        '.goal { fill: var(--text); opacity: 0.55; }',
         '.meta { fill: var(--meta); }',
         '.today { fill: var(--today); }',
         '.voice { fill: var(--voice); }',

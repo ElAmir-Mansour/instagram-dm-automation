@@ -138,7 +138,7 @@ export function renderMarkdown(run: BenchmarkRun): string {
         out.push(
             '## Against the bar', '',
             `The success criteria the shipped path was built to (the first three are about replies, the fourth about cost). ${barMet(run.summaries) ? 'All are met on this run.' : 'Not all are met on this run.'}`, '',
-            table(['Criterion', 'This run', 'Goal', ''], targets.map((t) => [t.label, t.value, t.goal, t.met ? 'met' : 'missed'])), '',
+            table(['Criterion', 'This run', 'Goal', 'Verdict'], targets.map((t) => [t.label, t.value, t.goal, t.met ? 'met' : 'missed'])), '',
         );
     }
 
@@ -155,7 +155,7 @@ export function renderMarkdown(run: BenchmarkRun): string {
     for (const arm of ['today', 'today_voice'] as const) {
         if (!by(arm)) continue;
         const list = failuresOf(arm);
-        out.push(`<details><summary>${html(ARM_LABELS[arm])}: ${list.length} (one or two a case: it never opens an attachment, and the line it sends is not what was asked for)</summary>`, '', ...list.map(failureLine), '', '</details>', '');
+        out.push(`<details><summary>${html(ARM_LABELS[arm])}: ${list.length} ${list.length === 1 ? 'case where' : 'cases where'} what it did was not what the case asks for</summary>`, '', 'It never opens an attachment, so it understands none of them; this lists where the line it sends is the wrong action.', '', ...list.map(failureLine), '', '</details>', '');
     }
     if (run.memory) {
         for (const m of run.memory.summaries.filter((x) => x.questions > 0 && x.failures.length > 0)) {

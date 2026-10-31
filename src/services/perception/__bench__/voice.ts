@@ -16,7 +16,7 @@ import { resolveFixture } from '../../dmSales/__evals__/fixtures.js';
 import { kitFor } from '../../profile/kits.js';
 import { isAiError } from '../../llm/errors.js';
 import {
-    accepts, ACTION_WORDS, draftTurn, emptyInvented, finishDrafted, judgeUnderstood, oneLine, spent, type ArmDeps,
+    accepts, ACTION_WORDS, draftTurn, emptyInvented, expectedWords, finishDrafted, judgeUnderstood, oneLine, spent, type ArmDeps,
 } from './arms.js';
 import type { Perception } from '../types.js';
 import { scrubKey } from './caller.js';
@@ -93,7 +93,7 @@ export async function runVoiceCase(c: MuseCase, media: LoadedMedia, transcribe: 
 
         if (heard.status !== 'ok' || spoken.length < MIN_TRANSCRIPT_WORDS) {
             const actionOk = accepts(c, 'resend');
-            const why = `${ACTION_WORDS.resend}, because it could not be heard; expected ${c.expect.action.map((a) => ACTION_WORDS[a]).join(' or ')}`;
+            const why = `${ACTION_WORDS.resend}, because it could not be heard; ${expectedWords(c)}`;
             if (!actionOk) failures.push({ caseId: c.id, arm: 'voice', what: 'action', reason: oneLine(why) });
             return {
                 ...base, action: 'resend', actionOk, actionWhy: actionOk ? null : why, reply: kit.attachments.resend, trace, invented: emptyInvented(), failures, ms: readMs,

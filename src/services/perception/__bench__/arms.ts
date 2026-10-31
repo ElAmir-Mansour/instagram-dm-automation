@@ -172,6 +172,15 @@ export const ACTION_WORDS: Readonly<Record<ActionClass, string>> = Object.freeze
     thank: 'sent a generic thanks', generic_line: 'sent the fixed "can\'t open that here" line', silent: 'sent nothing', error: 'made no answer (a model call failed)',
 });
 
+/** What a case wanted, as a noun phrase: "expected a recommendation or an answer". */
+export const WANTED_WORDS: Readonly<Record<ActionClass, string>> = Object.freeze({
+    answer: 'an answer', recommend: 'a recommendation', resend: 'a request to send it again', handoff: 'a hand-off to a person', thank_named: 'a thanks that names what was shared',
+    thank: 'a generic thanks', generic_line: 'the fixed line', silent: 'nothing', error: 'an error',
+});
+
+/** "expected a recommendation or an answer". */
+export const expectedWords = (c: MuseCase): string => `expected ${c.expect.action.map((a) => WANTED_WORDS[a]).join(' or ')}`;
+
 /** What the customer got, as a kind of action. The sales turn's `next_action` decides which kind of answer it was. */
 export function actionOfTurn(t: Pick<TurnOutcome, 'sent' | 'model' | 'error'>): ActionClass {
     if (t.error) return 'error';
@@ -214,7 +223,7 @@ export function scoreTurn(c: MuseCase, arm: ArmId, t: TurnOutcome, fx: EvalFixtu
         actionWhy = t.error
             ? `the model did not answer (${t.error.kind})`
             : !classOk
-                ? `${ACTION_WORDS[action]}; expected ${c.expect.action.map((a) => ACTION_WORDS[a]).join(' or ')}`
+                ? `${ACTION_WORDS[action]}; ${expectedWords(c)}`
                 : decisionFails.map(failureLine).join('; ');
         fail('action', actionWhy);
     }
@@ -311,7 +320,7 @@ export async function runMetaCase(c: MuseCase, media: LoadedMedia | null, deps: 
                 const action: ActionClass = plan.perception?.line === kit.attachments.resend ? 'resend'
                     : c.kind === 'story_mention' ? (named ? 'thank_named' : 'thank') : 'generic_line';
                 const actionOk = accepts(c, action);
-                const actionWhy = actionOk ? null : `${ACTION_WORDS[action]}${plan.perception?.reason ? ` (${oneLine(plan.perception.reason, 110)})` : ''}; expected ${c.expect.action.map((a) => ACTION_WORDS[a]).join(' or ')}`;
+                const actionWhy = actionOk ? null : `${ACTION_WORDS[action]}${plan.perception?.reason ? ` (${oneLine(plan.perception.reason, 110)})` : ''}; ${expectedWords(c)}`;
                 if (!actionOk) failures.push({ caseId: c.id, arm: 'meta', what: 'action', reason: oneLine(actionWhy ?? '') });
                 const totals = spent(deps, c.id);
                 return { ...common, action, actionOk, actionWhy, reply: line, trace: plan.perception?.reason ?? null, invented: emptyInvented(), failures, ms: reading.ms, ...totals };
@@ -319,7 +328,7 @@ export async function runMetaCase(c: MuseCase, media: LoadedMedia | null, deps: 
             if (plan.perceived.personal) {
                 // No model is asked: a person looks, and nothing about what was in it is said to anyone.
                 const actionOk = c.expect.action.includes('handoff');
-                if (!actionOk) failures.push({ caseId: c.id, arm: 'meta', what: 'action', reason: `handed the chat to a person; expected ${c.expect.action.map((a) => ACTION_WORDS[a]).join(' or ')}` });
+                if (!actionOk) failures.push({ caseId: c.id, arm: 'meta', what: 'action', reason: `handed the chat to a person; ${expectedWords(c)}` });
                 const trace = traceReason({ kind: p.kind, effect: 'handoff', action: 'handoff', handoffReason: 'unsure', intent: null, personal: true });
                 return {
                     ...common, action: 'handoff', actionOk, actionWhy: actionOk ? null : failures[failures.length - 1]!.reason, reply: handoffLine(fx), trace, invented: emptyInvented(), failures, ms: reading.ms,
@@ -378,7 +387,7 @@ export async function runTodayCase(c: MuseCase, deps: ArmDeps, arm: 'today' | 't
             const outcome = await draftTurn(c, c.typed, undefined, deps);
             const t = outcome.turns[0]!;
             const score = scoreTurn(c, arm, t, fx);
-            const failures: Failure[] = [{ caseId: c.id, arm, what: 'understood', reason: 'it never opens an attachment' }, ...score.failures];
+            const failures: Failure[] = [...score.failures];
             return { ...base, action: score.action, actionOk: score.actionOk, actionWhy: score.actionWhy, reply: score.reply, invented: score.invented, failures, ms: t.latencyMs ?? 0, judge: score.judge, ...spent(deps, c.id) };
         } finally {
             deps.ledger.current = null;
@@ -390,8 +399,8 @@ export async function runTodayCase(c: MuseCase, deps: ArmDeps, arm: 'today' | 't
     const action: ActionClass = c.priorAck ? 'silent' : mention ? 'thank' : 'generic_line';
     const reply = c.priorAck ? '' : mention ? kit.attachments.mention : kit.attachments.media;
     const actionOk = accepts(c, action);
-    const actionWhy = actionOk ? null : `${ACTION_WORDS[action]}; expected ${c.expect.action.map((a) => ACTION_WORDS[a]).join(' or ')}`;
-    const failures: Failure[] = [{ caseId: c.id, arm, what: 'understood', reason: 'it never opens an attachment' }];
+    const actionWhy = actionOk ? null : `${ACTION_WORDS[action]}; ${expectedWords(c)}`;
+    const failures: Failure[] = [];
     if (!actionOk) failures.push({ caseId: c.id, arm, what: 'action', reason: oneLine(actionWhy ?? '') });
     return { ...base, action, actionOk, actionWhy, reply, invented: emptyInvented(), failures, ms: 0, usd: 0, tokensIn: 0, tokensOut: 0, calls: 0 };
 }

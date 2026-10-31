@@ -2135,6 +2135,33 @@ npx tsx scripts/eval-dm-sales.mts --stub                                        
 - **Adding a case:** one JSON file in `src/services/dmSales/__evals__/conversations/`. The loader rejects a misspelt expectation instead of
   letting it check nothing. `npm test` runs the harness's tests and a two-case dry run with a stub model.
 
+## Muse benchmark
+
+A hand-run check of the sales agent on what followers send without a word (photos, a video, shared reels, a story mention and, once its module is in, voice notes), the shipped
+path beside what the agent did before Muse, with every failure listed. It is for the hackathon entry and for anyone who wants to see the numbers made again: it calls the **live**
+Meta API with your key (about twenty cents a run), so it is never run by `npm test` or CI.
+
+```bash
+npm run eval:muse -- --env ../.env                        # the key is META_MODEL_API_KEY in that file
+npm run eval:muse -- --settings --env ../.env             # or the key saved in Settings (a read-only connection, closed before anything runs)
+npm run eval:muse -- --env ../.env --voice --memory --library library.json --open-weights --judge
+npm run eval:muse -- --stub --out scratch/bench           # a dry run: canned answers, no key, no network, writes only where --out says
+npm run eval:muse -- --list                               # the cases
+```
+
+- **Cases** are one file, `scripts/eval-muse/cases.json`: each says what was sent, what was typed with it, which actions are right, and which facts must not be invented (a price the
+  picture showed). The loader rejects a misspelt expectation instead of letting it check nothing. The media is read from `--media-dir` (default `~/Desktop/Meta hackathon tests/media`);
+  no media file is in the repository, and a case whose file is missing is skipped by name, never passed. Two pictures (a made-up identity card and a story) are drawn at run time.
+- **Arms.** Meta: `perceive()` and the sales turn's own prompt, schema, coercion and guard, drafted through the DM sales evaluation's runner (`src/services/dmSales/__evals__/`), so
+  nothing is sent. Today: the fixed line the agent sent before Muse (once a day), and for a message with words the same sales turn with the media unopened. `--voice` and `--memory`
+  run the product's own transcription and recall, and are skipped with a note until their modules are in this checkout. `--open-weights` analyses one reel on Muse Spark Open (Baseten,
+  `BASETEN_API_KEY`) and on hosted Muse Spark with the reel indexer's own request.
+- **What it touches.** Keys from the file you name (no `.env` is read unless you name one) or from Settings read-only. It writes no database (the application's pool is closed before
+  the run), sends no message and reads no tenant; a Contributor-mode model id is refused unless every selected case is a drawn one.
+- **Outputs.** `benchmark.md` and `benchmark.svg` in the `docs/hackathon` folder (light and dark): the table per arm, the bar the shipped path is held to, every failure with its case
+  id and a line of why, what did not run, the date, the models and the command. Exit 0 = the bar was met, 1 = it ran and was not met, 2 = usage or nothing could run, 3 = refused
+  (no key). The code is `src/services/perception/__bench__/`; its tests make no live call.
+
 ## Media storage
 
 Uploads live in the public Supabase Storage bucket `media` (`<creator_id>/<id><ext>`);
