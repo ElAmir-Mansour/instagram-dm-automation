@@ -38,8 +38,8 @@ describe('sensesCues: the words that ask whether a voice note or a photo would b
         assert.deepEqual(sensesCues('a photo or a voice note, which is easier?'), ['voice', 'dm_media']);
     });
 
-    it('is not fooled by a word that only contains the letters: photography, voting, imagine, a record of a course', () => {
-        for (const text of ['عندكم كورس تصوير؟', 'التصويت امتى؟', 'imagine that', 'are the lectures recorded?', 'a pictorial', 'photography course?']) {
+    it('is not fooled by a word that only contains the letters: photography, voting, imagine, lectures that were recorded', () => {
+        for (const text of ['عندكم دورة تصوير؟', 'التصويت امتى؟', 'imagine that', 'are the lectures recorded?', 'a pictorial', 'photography classes?']) {
             assert.deepEqual(sensesCues(text), [], text);
         }
     });

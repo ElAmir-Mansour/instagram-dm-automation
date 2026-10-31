@@ -33,7 +33,7 @@ const fold = (cues: readonly string[]): string[] => cues.map((cue) => normalizeA
 /** «صوت» is inside صوتي، صوتية، الصوت، بصوت، صوتيات (not تصويت: a ي stands between); «فويس» inside فويسات. ڤ is not folded, so «ڤويس» is its own cue. */
 const AR_VOICE: readonly string[] = fold(['صوت', 'فويس', 'ڤويس', 'ريكورد', 'أوديو']);
 /**
- * «صورة» and «صورت» (صورتي، صورتك) and «الصور», never the bare «صور»: it is inside «تصوير», photography, a subject people ask a course about, not a photo they want
+ * «صورة» and «صورت» (صورتي، صورتك) and «الصور», never the bare «صور»: it is inside «تصوير», photography, a subject people ask about, not a photo they want
  * to send. «سكرين» is inside سكرينشوت and اسكرين.
  */
 const AR_PICTURE: readonly string[] = fold(['صورة', 'صورت', 'الصور', 'سكرين', 'لقطة شاشة']);
