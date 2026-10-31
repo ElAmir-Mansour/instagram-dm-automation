@@ -489,7 +489,7 @@ node scripts/diagnose.mjs        # read the `queue` section
 |---|---|---|
 | `queue is drained` | — | Healthy: nothing pending, stuck or dead-lettered. |
 | `N job(s) pending, oldest due Xm ago` | warn >15m, **crit >90m** | Nothing is draining. See §5.1. (`scripts/diagnose.mjs:85-86`, `:613-619`) |
-| `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:77`, `src/jobs/runner.ts:31`) |
+| `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:77`, `src/jobs/runner.ts:32`) |
 | `job … exhausted its retries` | `attempts >= max_attempts` | Permanent. Read the printed error; retrying will not help. |
 
 ### 5.1 What drains the queue, and how to check it is still doing so
@@ -611,16 +611,16 @@ A median back near 70 s means the instance is being frozen again. Look for
 
 ### 5.3 Stuck and failed jobs
 
-A claim is reapable after **300 seconds** (`src/jobs/runner.ts:31`) — generous on purpose,
+A claim is reapable after **300 seconds** (`src/jobs/runner.ts:32`) — generous on purpose,
 because reaping a job that is still running is how a DM gets sent twice. Both drain paths reap
-before claiming (`src/jobs/drain.ts:53-58`, `:87`), so **draining is also how you unstick a
+before claiming (`src/jobs/drain.ts:57-62`, `:93`), so **draining is also how you unstick a
 stale claim**. A job with attempts left goes back to `pending`; one without becomes `failed`
 with `[abandoned: the claim went stale and no attempts remain]` appended
-(`src/jobs/queue.ts:212-231`).
+(`src/jobs/queue.ts:214-233`).
 
 A drain that only ran out of its time budget does not leave claims for this: it hands the jobs it
 claimed but did not reach back to `pending` itself, with the attempt given back (`job.released`
-in the logs; `src/jobs/runner.ts:167`, `src/jobs/queue.ts:260`). `job.released` carries
+in the logs; `src/jobs/runner.ts:175`, `src/jobs/queue.ts:262`). `job.released` carries
 `released`, `unrun` and `job_ids`; `released` lower than `unrun` means some row had already moved
 on (it finished, or another drain took it), and that row is left alone. So a row that stays
 `running` means its drain was frozen or killed, or that handing it back failed
@@ -628,7 +628,7 @@ on (it finished, or another drain took it), and that row is left alone. So a row
 above; one that stays `running` for much longer means no drain has run (§5.1).
 
 Retries are exponential with jitter: roughly **30s, 2m, 8m**, `max_attempts` 3 by default
-(`src/jobs/runner.ts:41-45`, `src/config/migration_v13_jobs.sql:43`). Jittered because the
+(`src/jobs/runner.ts:42-46`, `src/config/migration_v13_jobs.sql:43`). Jittered because the
 triggering failure is usually shared — a Meta outage, a dead token — so unjittered retries turn
 one outage into a thundering herd.
 
@@ -642,7 +642,7 @@ SELECT id, kind, status, attempts, max_attempts, run_after, claimed_at,
 ```
 
 `failed` rows are **never** pruned — those are the ones you need. `done` rows are deleted after
-7 days by the retention sweep (`src/services/retention.ts:51`, `src/jobs/queue.ts:289-300`).
+7 days by the retention sweep (`src/services/retention.ts:51`, `src/jobs/queue.ts:291-302`).
 
 **Replaying a dead job.** Once the cause is fixed, use the admin **Job queue** screen (`#/jobs`,
 platform admin only). It lists jobs by status (`pending`, `running`, `done`, `failed`,
