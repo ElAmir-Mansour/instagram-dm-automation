@@ -885,7 +885,7 @@ describe('the sales turn: the thread as the model reads it', () => {
     it('asks for the stored payload of the bot\'s own rows only, and never for an inbound row\'s, which is the whole Meta event', async () => {
         const r = await run();
         const history = r.executed.find((e) => /SELECT direction, text, sender/.test(e.sql))!;
-        assert.match(history.sql.replace(/\s+/g, ' '), /SELECT direction, text, sender, payload, CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload FROM messages/);
+        assert.match(history.sql.replace(/\s+/g, ' '), /SELECT direction, text, sender, payload, CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload, CASE WHEN direction = 'inbound' THEN perception END AS perception FROM messages/);
     });
 
     it('tells the model about the tap even when the thread read does not hold the message yet (the event carried it)', async () => {
