@@ -1612,3 +1612,60 @@ describe('the sales turn without a transport: the exact requests Instagram and M
         assert.ok(!('channel' in record(ok).aiMeta));
     });
 });
+
+// ─── Where the seconds go ───────────────────────────────────────────────────────────────────
+
+describe('the sales turn: one dm.timing line (src/utils/timing.ts)', () => {
+    const tapped = (over: Row = {}) => ({
+        sender: { id: 'user-1' }, recipient: { id: 'ig-page-1' }, timestamp: Date.now() - 1_500, message: { mid: 'mid-1', text: 'How much is the plan?' }, ...over,
+    });
+
+    it('is ONE line for the DM: the pipeline\'s steps and the turn\'s, in the order they ran, adding up to the total, with what the model itself took', async () => {
+        const r = await run({ event: tapped(), layer: saying(reply({ stage: 'qualify', next_action: 'ask_qualifier', text: 'Happy to help! What is your goal?' })) });
+
+        assert.equal(r.error, null);
+        const timing = logs(r, 'dm.timing');
+        assert.equal(timing.length, 1, 'the turn joins the pipeline\'s line: not a second one');
+        const line = timing[0] as Record<string, any>;
+        assert.deepEqual(Object.keys(line.steps_ms).filter((k) => k !== 'rest'), [
+            'creator', 'conversation', 'claim', 'settings', 'profile',
+            'state', 'burst', 'agent', 'prefilter', 'context', 'model', 'guard', 'sender_wait', 'quota', 'send', 'disclosed', 'record',
+            'settle', 'finish', 'profile_wait',
+        ]);
+        assert.equal(line.total_ms, Object.values(line.steps_ms as Record<string, number>).reduce((a, b) => a + b, 0));
+        assert.equal(line.path, 'sales');
+        assert.equal(line.outcome, 'sent');
+        assert.equal(line.engine, 'providers');
+        assert.equal(line.provider, 'anthropic');
+        assert.equal(line.model, 'claude-test');
+        assert.equal(line.attempts, 1);
+        assert.equal(line.model_api_ms, 900, 'the provider\'s own time, beside the step\'s wall time');
+        assert.equal(typeof line.sender_actions_ms, 'number', 'mark_seen and typing_on, timed beside the model');
+        assert.ok(line.event_age_ms >= 1_500, 'counted from the customer\'s tap, as Meta stamps it');
+        assert.ok(!JSON.stringify(line).includes('[redacted]'));
+    });
+
+    it('a message a later one superseded ends at the burst check, and says so', async () => {
+        const r = await run({ event: tapped(), supersession: { newer_unhandled: true } });
+
+        const line = logs(r, 'dm.timing')[0] as Record<string, any>;
+        assert.equal(line.outcome, 'superseded');
+        const steps = Object.keys(line.steps_ms);
+        assert.ok(steps.includes('burst') && !steps.includes('model') && !steps.includes('send'), steps.join(', '));
+    });
+
+    it('a model asked twice (a correction) adds both calls to one model step', async () => {
+        const r = await run({
+            event: tapped(),
+            layer: async (args, call) => saying(reply(call === 1
+                ? { text: 'It is only 25 dollars with a discount!' }
+                : { stage: 'qualify', next_action: 'ask_qualifier', text: 'What is your goal?' }))(),
+        });
+
+        const line = logs(r, 'dm.timing')[0] as Record<string, any>;
+        assert.equal(r.layerCalls.length, 2);
+        assert.equal(line.attempts, 2);
+        assert.equal(line.model_api_ms, 1_800);
+        assert.equal(Object.keys(line.steps_ms).filter((k) => k === 'model').length, 1);
+    });
+});

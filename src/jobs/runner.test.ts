@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { cachedForRequest, withProfileCache } from '../services/profile/cache.js';
 import { setLogSink } from '../utils/log.js';
+import { countStatement } from '../utils/timing.js';
 import { backoffSeconds, drainJobs, orderForRunning } from './runner.js';
 import { memoryQueue } from './testSupport.js';
 import type { EnqueueInput, Job, JobHandlerRegistry, JobKind, JobQueue } from './types.js';
@@ -701,5 +702,38 @@ describe('a background job in a batch (BACKGROUND_JOB_KINDS): what a person is w
         assert.deepEqual(seen.map((j) => j.id), ['r1'], 'a reel takes about the whole budget of a worker drain, so one is run and the rest are handed back');
         assert.deepEqual(queue.released, [claims(['r2', 1], ['r3', 1])]);
         assert.equal(result.claimed, 1);
+    });
+});
+
+describe('where a job\'s time goes (src/utils/timing.ts)', () => {
+    it('says how long the job waited after it was due, and how many statements it sent', async () => {
+        let clock = 10_000;
+        const queue = fakeQueue([[job({ id: 'a', run_after: new Date(9_250) })]]);
+        const { registry } = handlersThat(async () => {
+            await countStatement(Promise.resolve());
+            await countStatement(Promise.resolve());
+            clock += 40;
+        });
+
+        const { lines } = await logged(() => drainJobs({ queue, handlers: registry, budgetMs: 60_000, reapMs: 150, now: () => clock }));
+
+        const succeeded = lines.find((l) => l['event'] === 'job.succeeded');
+        assert.ok(succeeded);
+        assert.equal(typeof succeeded['queued_ms'], 'number');
+        assert.ok(succeeded['queued_ms'] >= 0);
+        assert.equal(succeeded['db_statements'], 2, 'the handler\'s statements, counted in the job\'s own tally');
+        const drained = lines.find((l) => l['event'] === 'job.drain_complete');
+        assert.equal(drained?.['reap_ms'], 150, 'the reap before the claim is time a waiting DM spends too');
+        assert.equal(typeof drained?.['claim_ms'], 'number');
+    });
+
+    it('a job read from nowhere (no run_after) has no queued_ms, and a drain told of no reap has no reap_ms', async () => {
+        const queue = fakeQueue([[job({ id: 'a' })]]);
+        const { registry } = handlersThat(() => {});
+
+        const { lines } = await logged(() => drainJobs({ queue, handlers: registry, budgetMs: 60_000 }));
+
+        assert.ok(!('queued_ms' in lines.find((l) => l['event'] === 'job.succeeded')!));
+        assert.ok(!('reap_ms' in lines.find((l) => l['event'] === 'job.drain_complete')!));
     });
 });

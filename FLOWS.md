@@ -127,10 +127,10 @@ Two fields per job matter:
   resolving the uuid needs a database read, and the whole point of enqueueing is to acknowledge
   Meta *before* doing any. Every job the webhook writes therefore has `jobs.creator_id` NULL.
 
-Each planned job goes through `queue.enqueue` (**`src/jobs/queue.ts:39`**), whose
+Each planned job goes through `queue.enqueue` (**`src/jobs/queue.ts:40`**), whose
 `ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`
-(**`src/jobs/queue.ts:53`**) makes a Meta redelivery a no-op *before* it costs anything. A
-dropped enqueue returns `null` and is logged at `debug` (**`src/jobs/queue.ts:71`**) — on a
+(**`src/jobs/queue.ts:54`**) makes a Meta redelivery a no-op *before* it costs anything. A
+dropped enqueue returns `null` and is logged at `debug` (**`src/jobs/queue.ts:72`**) — on a
 busy account it is the most frequent thing that happens.
 
 **`src/index.ts:439`** — `void acknowledgeThenRun(res, …)`, which sends the 200 first
@@ -146,7 +146,7 @@ busy account it is the most frequent thing that happens.
 
 If the enqueue throws, **`src/index.ts:432`** logs `webhook.enqueue_failed_falling_back` and
 falls through to the legacy inline path (`processWebhookBody`,
-**`src/webhook/router.ts:319`**) rather than dropping the delivery. A *partial* enqueue means
+**`src/webhook/router.ts:335`**) rather than dropping the delivery. A *partial* enqueue means
 some events run twice; that is deliberately tolerated, because both `interactions.comment_id`
 and `messages.meta_message_id` are UNIQUE, so the second pass claims nothing.
 
@@ -160,15 +160,15 @@ table no longer means "no delivery arrived".
 
 **`src/index.ts:439-442`** — the work `acknowledgeThenRun` starts after the 200 is `drainInline()`,
 defined at **`src/jobs/drain.ts:38`**. It reaps
-stale claims first (**`src/jobs/drain.ts:54`**), then calls `drainJobs`
-(**`src/jobs/runner.ts:187`**) with a deliberately short budget: 8 s default
+stale claims first (**`src/jobs/drain.ts:58`**), then calls `drainJobs`
+(**`src/jobs/runner.ts:205`**) with a deliberately short budget: 8 s default
 (**`src/jobs/drain.ts:21-24`**, `JOB_INLINE_BUDGET_MS`), `batchSize: 3`, `maxJobs: 10`
-(**`src/jobs/drain.ts:64-68`**). This is opportunistic work — the response is already sent, so
+(**`src/jobs/drain.ts:68-72`**). This is opportunistic work — the response is already sent, so
 anything it does not finish stays `pending` and costs nothing. Full mechanics in
 [flow 5](#5-job-lifecycle).
 
-The claim itself is **`src/jobs/queue.ts:83`**, `PostgresJobQueue.claim`. The handler lookup and
-dispatch is **`src/jobs/runner.ts:109`**.
+The claim itself is **`src/jobs/queue.ts:84`**, `PostgresJobQueue.claim`. The handler lookup and
+dispatch is **`src/jobs/runner.ts:115`**.
 
 > **The drain runs under `waitUntil`, and nothing awaits it after the 200.**
 > `acknowledgeThenRun` (**`src/webhook/ack.ts:31`**) starts the work as one promise that never
@@ -194,7 +194,7 @@ is `true`. It decides whether the pipeline may leave a failure retryable — get
 optimistically strands an interaction at PENDING forever, which in the dashboard looks exactly
 like the webhook having stopped.
 
-The legacy inline path passes `FINAL_ATTEMPT` (**`src/webhook/router.ts:287`**,
+The legacy inline path passes `FINAL_ATTEMPT` (**`src/webhook/router.ts:303`**,
 **`:306`**) — correctly, because that path has no retry to leave work for.
 `WebhookHandlerOptions.lastAttempt` defaults to `true` everywhere it is omitted
 (**`src/webhook/options.ts:14-26`**), so a caller that forgets gets the safe behaviour.
@@ -488,7 +488,7 @@ interaction, with the campaign whose text was sent (migration v41). One UPDATE b
 `comment.bridge_failed` (`warn`) and changes nothing else, so the status stays SENT and the steps below still run.
 
 The other half is on the DM path, and only in a **sales** turn: `commentSource` (**`src/services/dmSales/bridge.ts:230`**, called
-from **`src/services/dmSales/turn.ts:370`**) looks for the latest SENT interaction whose `recipient_id` is the DM's sender, within
+from **`src/services/dmSales/turn.ts:524`**) looks for the latest SENT interaction whose `recipient_id` is the DM's sender, within
 7 days (`BRIDGE_WINDOW_DAYS`, Meta's private-reply horizon). A match is stored on `conversations.source_campaign_id`, and the turn
 starts at `recommend` with "they commented «keyword» and were sent the link" among its facts, instead of qualifying from scratch.
 It never throws; anything it cannot read means "no source". With `sales_mode = 'off'` it runs no statement at all.
@@ -596,10 +596,10 @@ The handler adapter is **`src/jobs/handlers.ts:40`** → `handleMessagingEvent`.
 
 ### 2.2 — `handleMessagingEvent` and `normalizeDm`'s shapes
 
-**`src/webhook/messaging.ts:235`**. A second echo check at **:130** (the inline fallback path
+**`src/webhook/messaging.ts:250`**. A second echo check at **:130** (the inline fallback path
 does not go through `isActionableMessagingEvent`) hands the event to `handleEcho` (`src/webhook/echo.ts`,
 §2.6d), which with takeover off reads one setting and drops it, as it always did. Then `normalizeDm`
-(**`src/webhook/messaging.ts:112`**).
+(**`src/webhook/messaging.ts:118`**).
 
 | Shape | Source | Stored as |
 |---|---|---|
@@ -628,14 +628,14 @@ not ads, and an unsend, `message.is_deleted`, even one that still lists attachme
 was a person waiting for an answer to a message nobody had stored. `dm.skipped_empty` logs `has_message`, `is_deleted` and the
 attachment types.
 
-`metaMessageId` is `message.mid ?? postback.mid ?? null` (**`src/webhook/messaging.ts:157`**).
+`metaMessageId` is `message.mid ?? postback.mid ?? null` (**`src/webhook/messaging.ts:163`**).
 
 Everything downstream runs inside a `withLogContext` keyed on `mid` and `sender_id`
-(**`src/webhook/messaging.ts:254`**), so one inbound message and all its retries share a filter.
+(**`src/webhook/messaging.ts:270`**), so one inbound message and all its retries share a filter.
 
 ### 2.3 — `mayRetry`
 
-**`src/webhook/messaging.ts:395`** — `Boolean(dm.metaMessageId) && !options.lastAttempt`.
+**`src/webhook/messaging.ts:415`** — `Boolean(dm.metaMessageId) && !options.lastAttempt`.
 
 The `mid` is load-bearing, not decoration: it is the only thing letting a second attempt
 recognise the row the first one wrote. Without it the partial unique index never fires, so a
@@ -644,11 +644,11 @@ retry would insert a **second** inbound row and answer the same person twice. An
 
 ### 2.4 — Tenant, then conversation upsert
 
-**`src/webhook/messaging.ts:399`** — `getCreatorByPageId(recipientId, entryId)`. Two ids, in
+**`src/webhook/messaging.ts:419`** — `getCreatorByPageId(recipientId, entryId)`. Two ids, in
 that order: `recipient.id` on a message event is the Instagram Business Account id (most
 reliable); `entry.id` could be the IG id or the FB Page id depending on subscription type.
 
-**`src/webhook/messaging.ts:425-434`** — the conversation, as **one** statement:
+**`src/webhook/messaging.ts:446-455`** — the conversation, as **one** statement:
 
 ```sql
 INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
@@ -696,7 +696,7 @@ is subscribed again only by the next Facebook reconnect, which re-posts `subscri
 
 ### 2.5 — `claimInbound` and the 300-second re-claim window
 
-**`src/webhook/messaging.ts:446`** → `claimInbound` (**`src/webhook/messaging.ts:282`**).
+**`src/webhook/messaging.ts:468`** → `claimInbound` (**`src/webhook/messaging.ts:298`**).
 
 **Insert** (**:174-189**) with
 `ON CONFLICT (meta_message_id) WHERE meta_message_id IS NOT NULL DO NOTHING` (**:178**),
@@ -712,7 +712,7 @@ UPDATE messages SET reply_claimed_at = NOW(), reply_attempts = reply_attempts + 
    AND (reply_claimed_at IS NULL OR reply_claimed_at < NOW() - make_interval(secs => 300))
 ```
 
-`REPLY_CLAIM_VISIBILITY_SECONDS = 300` (**`src/webhook/messaging.ts:47`**). No row means either
+`REPLY_CLAIM_VISIBILITY_SECONDS = 300` (**`src/webhook/messaging.ts:53`**). No row means either
 *already handled* (the redelivery case the index exists for) or *another attempt holds a live
 claim right now* — both mean "not ours to answer", so it returns null and the caller logs
 `dm.duplicate_ignored` (**:286**).
@@ -751,7 +751,7 @@ thread (`POST /api/conversations/:id/refresh-profile`), through the same claim.
 
 ### 2.6 — The bot-paused check
 
-**`src/webhook/messaging.ts:472`** — `if (!conversation.is_bot_active)`. Logs `dm.bot_paused`,
+**`src/webhook/messaging.ts:497`** — `if (!conversation.is_bot_active)`. Logs `dm.bot_paused`,
 calls **`markHandled`** (**:298**) and returns.
 
 `markHandled`, not release: this is terminal. The operator took the thread over deliberately from
@@ -1033,9 +1033,9 @@ Behind the same switches and allow-list as §2.6h. **Why it exists:** the sales 
 
 ### 2.7 — Gemini
 
-**`src/webhook/messaging.ts:571`** — `generateAiResponse(conversationId, dmPromptText(dm),
+**`src/webhook/messaging.ts:658`** — `generateAiResponse(conversationId, dmPromptText(dm),
 creator.id, undefined, dmCtx)`, at **`src/services/ai.ts:515`**. Timed and logged as `ai.replied` with
-`duration_ms` (**`src/webhook/messaging.ts:583`**), because this is both the dominant
+`duration_ms` (**`src/webhook/messaging.ts:671`**), because this is both the dominant
 marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
 
 **Which engine answers (v37, DM plan S3)** — the call above is now `generateDmReply` (**`src/services/dmEngine.ts`**), which reads
@@ -1046,13 +1046,13 @@ the same `dmSystemInstruction` text, history window and `enforceMetaConstraints`
 no route, 5xx, timeout, a refused budget, an empty answer) is answered by Gemini once when `ai_agents.gemini_fallback` is on, logged
 `dm.engine_fallback`. With the fallback off, or Gemini failing too, the result is `{ kind: 'handoff' }` and `dm.engine_failed`: no
 second try (it would only spend the same budget again), but **not silence either**. The pipeline calls `handOver()`
-(**`src/webhook/messaging.ts:577-578`**), the same `handoffAfterFailure` a reply that fails on its last attempt gets (§2.11): the
+(**`src/webhook/messaging.ts:665-666`**), the same `handoffAfterFailure` a reply that fails on its last attempt gets (§2.11): the
 conversation is stamped (the bot stays on), the customer is sent the handoff line once, and the owner is alerted. Then `markHandled`
 (terminal, not retried). An agent that is
 switched off is `null` for either engine, as below. The sandbox runs the engine on screen (`POST /api/settings/ai/test`, `engine` and
 `gemini_fallback` in the body), labels the layer's spend `eval`, and answers 502 with the reason when nothing could answer.
 
-**The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:530`**,
+**The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:615`**,
 the function at **`src/services/profile/context.ts:344`**) is read once per DM and handed to `generateAiResponse`, the
 disclosure and (in the sandbox, which reads it itself, **`src/services/ai.ts:524`**) the starter persona. It says the language
 and register the `dm` surface speaks and what the creator sells. A profile that can't be read is logged
@@ -1086,7 +1086,7 @@ while every layer reported success.
 
 `decideAgent` returning `speak: false` makes `generateAiResponse` return **`null`**
 (**`src/services/ai.ts:551`**), logged `warn` for unconfigured and `debug` for disabled
-(**:383**). The caller honours it at **`src/webhook/messaging.ts:445-449`**: log
+(**:383**). The caller honours it at **`src/webhook/messaging.ts:467-471`**: log
 `ai.agent_disabled`, `markHandled`, send nothing. **Every other failure throws** — there is no
 fallback persona and no fixed promotional reply.
 
@@ -1163,7 +1163,7 @@ attributed to the send rather than the model, and writing it to `messages` would
 turn back as history), and `enforceMetaConstraints` (**`src/services/ai.ts:383`**) truncates to
 Meta's limits.
 
-Back in the pipeline, **`src/webhook/messaging.ts:598`** maps to the wire format with
+Back in the pipeline, **`src/webhook/messaging.ts:686`** maps to the wire format with
 `toMetaMessage` (**`src/webhook/meta-payload.ts:30`**), which copies template fields explicitly
 rather than spreading, because Meta rejects unknown keys inside template elements and Gemini
 returns both `url` and `payload` on every button regardless of type
@@ -1171,12 +1171,12 @@ returns both `url` and `payload` on every button regardless of type
 
 ### 2.9 — Quota, disclosure, send
 
-**Quota** — **`src/webhook/messaging.ts:602`**, the same `checkFairSendQuota` as
+**Quota** — **`src/webhook/messaging.ts:690`**, the same `checkFairSendQuota` as
 [1.13](#113--checkfairsendquota--two-ceilings). Deliberately **one check per reply, not per
 network call**: a disclosure that has to travel as its own message is still one logical reply to
 one person.
 
-Refusal is **retried, not dropped** (**`src/webhook/messaging.ts:622-629`**): release the claim
+Refusal is **retried, not dropped** (**`src/webhook/messaging.ts:711-718`**): release the claim
 and throw, if `mayRetry`. The counters are hourly and the runner's backoff (~30 s, ~2 m, ~8 m)
 may well spend every attempt inside the same window — but it may not, and the alternative is a
 real customer silently never answered, which is what used to happen. Nothing else will come back
@@ -1187,9 +1187,9 @@ at enqueue and never becomes a second job.
 talking to an automated service *"at the beginning of any conversation or message thread"*, and
 again after a significant lapse of time.
 
-- `needsDisclosure(conversation.ai_disclosed_at)` at **`src/webhook/messaging.ts:228`**, called
+- `needsDisclosure(conversation.ai_disclosed_at)` at **`src/webhook/messaging.ts:243`**, called
   at **:431**. True when the column is null (thread start), unparseable, **or** older than
-  `DISCLOSURE_MAX_AGE_MS = 7 days` (**`src/webhook/messaging.ts:37`**). The policy never
+  `DISCLOSURE_MAX_AGE_MS = 7 days` (**`src/webhook/messaging.ts:43`**). The policy never
   quantifies "a significant lapse"; a week is long enough that the thread reads as a new
   conversation to the person on the other end.
 - `applyDisclosure` (**`src/webhook/meta-payload.ts:111`**) prefixes
@@ -1198,24 +1198,24 @@ again after a significant lapse of time.
   `AI_DISCLOSURE_LINE`, **`:97`**) onto the payload's `text`. **A generic template carries no `text` field** — Meta rejects
   `text` alongside `attachment` — so for a carousel it returns `standalone` instead
   (**`src/webhook/meta-payload.ts:118`**), and the pipeline sends the line as its own message
-  first (**`src/webhook/messaging.ts:640-648`**, logging `dm.disclosure_standalone`).
+  first (**`src/webhook/messaging.ts:729-737`**, logging `dm.disclosure_standalone`).
 
-**Endpoint selection** — `resolveDmPageId` at **`src/webhook/messaging.ts:191`**, called at
+**Endpoint selection** — `resolveDmPageId` at **`src/webhook/messaging.ts:197`**, called at
 **:632**. Meta requires `/{page-id}/messages` for Page access tokens; `/me/messages` only
 resolves correctly for Instagram-Login tokens. There is no `field === 'feed'` marker on a
 messaging event, so the signal is whether the page id the event is addressed to
 (`recipientId` or `entryId`) equals the creator's `facebook_page_id`. The comment path always
 threaded this through; the DM path never did, so every Facebook Messenger reply went to `/me`.
 
-**Send** — **`src/webhook/messaging.ts:652`**, `sendDirectMessage`
+**Send** — **`src/webhook/messaging.ts:741`**, `sendDirectMessage`
 (**`src/services/instagram.ts:323`**), `messaging_type: 'RESPONSE'`
 (**`src/services/instagram.ts:343`** — without it the send is evaluated outside the standard
 messaging window and rejected once that window matters).
 
 **`ai_disclosed_at` is written only after a successful send**
-(**`src/webhook/messaging.ts:659-661`**), so a failed first reply still discloses next time.
+(**`src/webhook/messaging.ts:749-751`**), so a failed first reply still discloses next time.
 
-Then the outbound `messages` row (**`src/webhook/messaging.ts:666-676`**).
+Then the outbound `messages` row (**`src/webhook/messaging.ts:756-766`**).
 
 **Two refusals that belong to ad traffic (A3).**
 
@@ -1232,18 +1232,18 @@ Then the outbound `messages` row (**`src/webhook/messaging.ts:666-676`**).
 
 ### 2.10 — `markHandled`, last
 
-**`src/webhook/messaging.ts:680`** — `await markHandled(claim.id)`, defined at
-**`src/webhook/messaging.ts:330`** (`handled_at = NOW(), reply_claimed_at = NULL`).
+**`src/webhook/messaging.ts:771`** — `await markHandled(claim.id)`, defined at
+**`src/webhook/messaging.ts:346`** (`handled_at = NOW(), reply_claimed_at = NULL`).
 
 > **Why this order — `markHandled` is the final write.**
 > A crash anywhere above it leaves the message claimable again. Writing it earlier — right after
 > the send, say — would turn a failed *outbound log write* into a message nobody ever retries.
-> The comment at **`src/webhook/messaging.ts:678-679`** says exactly this. The 300-second
+> The comment at **`src/webhook/messaging.ts:769-770`** says exactly this. The 300-second
 > visibility window is what makes "claimable again" safe rather than a double-reply.
 
 ### 2.11 — Failure: release vs record
 
-The catch at **`src/webhook/messaging.ts:681-700`** wraps everything from the Gemini call
+The catch at **`src/webhook/messaging.ts:773-792`** wraps everything from the Gemini call
 onwards.
 
 1. Log `dm.pipeline_failed` (**:403**), `noteMetaFailure` (**:405**).
@@ -1258,7 +1258,7 @@ onwards.
    throws and never loops, and answers nobody who has been answered (a reply already sent or recorded, or the owner's own); a message with no
    words (a photo) is not handed over.
 
-`releaseInbound` (**`src/webhook/messaging.ts:344`**) clears `reply_claimed_at` without setting
+`releaseInbound` (**`src/webhook/messaging.ts:360`**) clears `reply_claimed_at` without setting
 `handled_at`. It matters because the runner's first backoff is ~30 seconds, far shorter than the
 300-second visibility window — without an explicit release, the retry would arrive, find a live
 claim, and do nothing. Releasing is what makes the retry actually reach the work
@@ -2303,7 +2303,7 @@ production wiring.
 
 ### 5.1 — Enqueue
 
-**`src/jobs/queue.ts:39`** — `PostgresJobQueue.enqueue`.
+**`src/jobs/queue.ts:40`** — `PostgresJobQueue.enqueue`.
 
 ```sql
 INSERT INTO jobs (kind, payload, creator_id, dedupe_key, run_after, max_attempts, request_id, tenant_key)
@@ -2311,22 +2311,22 @@ VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, $8)
 ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
 RETURNING id
 ```
-(**`src/jobs/queue.ts:51-54`**)
+(**`src/jobs/queue.ts:52-55`**)
 
 - **`ON CONFLICT (dedupe_key)`** drops a second enqueue **whatever the state of the first —
   including `done`**, which is what makes a Meta redelivery a no-op before it costs a Gemini call
   (**`src/jobs/types.ts:75-80`**). The index is partial, so rows with no key never conflict.
 - `max_attempts` defaults to **3**.
 - `run_after` defaults to `NOW()`; supplying it is what makes the queue a scheduler
-  (**`src/jobs/types.ts:189`**).
+  (**`src/jobs/types.ts:214`**).
 - `tenant_key` defaults to `creator_id` **at insert time, in JS** (`input.tenantKey ?? input.creatorId`,
-  **`src/jobs/queue.ts:63`**) so the claim can partition on the bare column and use its index — doing
-  the default in the claim's `PARTITION BY` would cost a sort on every claim (**`src/jobs/queue.ts:41-44`**).
+  **`src/jobs/queue.ts:64`**) so the claim can partition on the bare column and use its index — doing
+  the default in the claim's `PARTITION BY` would cost a sort on every claim (**`src/jobs/queue.ts:42-45`**).
   Not as `COALESCE($8, $3::text)` in the SQL: reusing `$3` made Postgres deduce it as both uuid and
   text and reject the statement with 42P08, so **every enqueue failed from 2026-09-21 to 09-27**
-  (**`src/jobs/queue.ts:46-50`**).
+  (**`src/jobs/queue.ts:47-51`**).
 
-Returns `null` on a dedupe (**`src/jobs/queue.ts:72`**), logged at `debug` (**`src/jobs/queue.ts:71`**).
+Returns `null` on a dedupe (**`src/jobs/queue.ts:73`**), logged at `debug` (**`src/jobs/queue.ts:72`**).
 
 The payload stores the Meta event **verbatim**, not pre-normalised
 (**`src/jobs/types.ts:26-34`**): a bug in the normaliser would otherwise be unrecoverable,
@@ -2340,16 +2340,16 @@ lead-ads notification, §7.8). A closed union rather than a free string, because
 that fails `max_attempts` times and then sits in the table forever.
 
 **A handler may cut its job's payload down as the job ends.** It returns `{ redactPayload }` (`JobResult`,
-**`src/jobs/types.ts:219-227`**), which replaces `jobs.payload` in the same UPDATE that marks the job `done` (`complete`,
-**`src/jobs/queue.ts:159`**). A failure that ends the job does the same through `redactOnFailure` (**`src/jobs/redaction.ts:16`**),
-which the runner reads only when no retry follows (**`src/jobs/runner.ts:136`**): a job that will run again keeps the payload its
+**`src/jobs/types.ts:244-252`**), which replaces `jobs.payload` in the same UPDATE that marks the job `done` (`complete`,
+**`src/jobs/queue.ts:161`**). A failure that ends the job does the same through `redactOnFailure` (**`src/jobs/redaction.ts:16`**),
+which the runner reads only when no retry follows (**`src/jobs/runner.ts:144`**): a job that will run again keeps the payload its
 next attempt needs. Only WhatsApp uses it today: a message from a sender who is not a tester (§10.5), and the `wa.event` statuses
 and preference changes, which name a customer's phone (**`src/jobs/handlers.ts:51-66`**). Every other job keeps the Meta event
 verbatim until the prune, which deletes `done` rows after 7 days and never deletes a `failed` one (§5.7).
 
 ### 5.2 — The atomic claim, and why not `FOR UPDATE SKIP LOCKED`
 
-**`src/jobs/queue.ts:83`** — `claim(limit)`. The query is **`src/jobs/queue.ts:112-132`**:
+**`src/jobs/queue.ts:84`** — `claim(limit)`. The query is **`src/jobs/queue.ts:113-133`**:
 
 ```sql
 WITH ranked AS (
@@ -2381,43 +2381,43 @@ RETURNING …
 > **could never have run at all**. The `status` guard gives the same guarantee. The only thing
 > lost is that a contending claimer waits a moment rather than skipping ahead, and that wait is
 > the length of one autocommit UPDATE. Spelled out twice, at **`src/jobs/queue.ts:17-20`** and
-> **`src/jobs/queue.ts:105-110`**, and again at the route in **`src/routes/api.ts:376-379`** —
+> **`src/jobs/queue.ts:106-111`**, and again at the route in **`src/routes/api.ts:376-379`** —
 > because "just add SKIP LOCKED" is the obvious review comment and it does not compile.
 
 **Round-robin fairness.** `ROW_NUMBER() OVER (PARTITION BY tenant_key ORDER BY run_after,
 created_at)` ranks each tenant's pending jobs oldest-first; `ORDER BY tenant_rank, run_after`
 then takes **every tenant's oldest job before anyone's second**. This was `ORDER BY run_after` —
 strict FIFO — so a tenant whose reel went viral could fill the queue with ten thousand events and
-every other tenant's DMs waited behind all of them (**`src/jobs/queue.ts:84-90`**).
+every other tenant's DMs waited behind all of them (**`src/jobs/queue.ts:85-91`**).
 
 Partitioning on the bare `tenant_key` column lets
 `idx_jobs_claimable_fair (tenant_key, run_after) WHERE status = 'pending'` satisfy both the
 `PARTITION BY` and the `ORDER BY` without a sort. Jobs with no key at all form **one** group
 together — the conservative answer: they share a slot rather than each getting one
-(**`src/jobs/queue.ts:91-97`**).
+(**`src/jobs/queue.ts:92-98`**).
 
-After the query, **`src/jobs/queue.ts:140-144`**: a row whose `kind` has no registered handler is
+After the query, **`src/jobs/queue.ts:141-145`**: a row whose `kind` has no registered handler is
 failed permanently and skipped, rather than crashing the drain — that is how one bad job stops
 every other tenant's work.
 
 ### 5.3 — Running one job
 
-**`src/jobs/runner.ts:77`** — `runOne`. Never throws.
+**`src/jobs/runner.ts:80`** — `runOne`. Never throws.
 
 It re-establishes the **correlation id from the enqueueing request**
-(**`src/jobs/runner.ts:94-101`**), so a log search for one Meta delivery turns up the work it
+(**`src/jobs/runner.ts:97-104`**), so a log search for one Meta delivery turns up the work it
 caused and not just its acknowledgement.
 
-Dispatch is **`src/jobs/runner.ts:109`**. The registry is keyed by the same union `job.kind` is
+Dispatch is **`src/jobs/runner.ts:115`**. The registry is keyed by the same union `job.kind` is
 narrowed to, but the per-kind payload types make the pairing unprovable to the compiler without a
 discriminated switch at every call site — so the cast is asserted once, here.
 
 Success → `queue.complete(job.id)` (**:115**, `status = 'done'`, `last_error = NULL`,
-**`src/jobs/queue.ts:159`**).
+**`src/jobs/queue.ts:161`**).
 
 ### 5.4 — Failure, backoff and jitter
 
-**`src/jobs/runner.ts:118-141`**.
+**`src/jobs/runner.ts:124-147`**.
 
 - `exhausted = job.attempts >= job.max_attempts` (**:97**). `attempts` was already incremented by
   the claim.
@@ -2428,7 +2428,7 @@ Success → `queue.complete(job.id)` (**:115**, `status = 'done'`, `last_error =
   fails the job stays `running` and the reaper is the backstop, so all it can do is say so
   (**:112-116**).
 
-`backoffSeconds` — **`src/jobs/runner.ts:41`**:
+`backoffSeconds` — **`src/jobs/runner.ts:42`**:
 
 ```js
 base   = 30 * 4 ** Math.max(0, attempts - 1)
@@ -2442,14 +2442,14 @@ expired token — so every job in the batch fails at once and would otherwise re
 turning one outage into a thundering herd against a service that is already unhappy. Mirrors
 `withRetry` in `src/services/http.ts`.
 
-`queue.fail` (**`src/jobs/queue.ts:174`**) has two branches: `retryInSeconds === null` →
+`queue.fail` (**`src/jobs/queue.ts:176`**) has two branches: `retryInSeconds === null` →
 `status = 'failed'` (**:186-193**); otherwise back to `'pending'` with
 `run_after = NOW() + interval` (**:197-205**). `last_error` is truncated to 2000 chars both
 ways — a Meta error body can be long and this column is read in a dashboard list view.
 
 ### 5.5 — The drain loop and its budget
 
-**`src/jobs/runner.ts:187`** — `drainJobs`. Loop while `claimed < maxJobs`:
+**`src/jobs/runner.ts:205`** — `drainJobs`. Loop while `claimed < maxJobs`:
 
 1. **Budget check before claiming** (**:202-205**) → `budgetExhausted`, break.
 2. Claim `min(batchSize, maxJobs - claimed)` (**:209**). A claim failure logs and breaks
@@ -2460,9 +2460,9 @@ ways — a Meta error body can be long and this column is read in a dashboard li
    partway.
 5. **Hand back what the loop did not reach** (**:228**, `handBackUnrun`, **:167**). The claim took
    the whole batch in one statement (`status = 'running'`, `attempts + 1`,
-   **`src/jobs/queue.ts:126-128`**), so when the budget stops the loop partway, the jobs after the
+   **`src/jobs/queue.ts:127-129`**), so when the budget stops the loop partway, the jobs after the
    last one it ran are `running` with an attempt counted, and nothing is going to start them.
-   `queue.releaseUnrun(claims)` (**`src/jobs/queue.ts:260`**) is handed each job's id **and the
+   `queue.releaseUnrun(claims)` (**`src/jobs/queue.ts:262`**) is handed each job's id **and the
    attempt number its claim gave it** (`claim` returns the row with it already counted), and
    returns them to `pending` in one UPDATE: `claimed_at = NULL`,
    `attempts = GREATEST(attempts - 1, 0)`, matched on
@@ -2509,15 +2509,15 @@ perfectly able to finish on the next webhook seconds later (**`src/jobs/drain.ts
 
 ### 5.6 — `reapStale`'s two branches
 
-**`src/jobs/queue.ts:208`**, called with `CLAIM_VISIBILITY_SECONDS = 300`
-(**`src/jobs/runner.ts:31`**). Deliberately **two statements**, because the two outcomes are
+**`src/jobs/queue.ts:210`**, called with `CLAIM_VISIBILITY_SECONDS = 300`
+(**`src/jobs/runner.ts:32`**). Deliberately **two statements**, because the two outcomes are
 genuinely different:
 
-1. **Abandoned** (**`src/jobs/queue.ts:212-222`**) — `status = 'running'`, claim older than the
+1. **Abandoned** (**`src/jobs/queue.ts:214-224`**) — `status = 'running'`, claim older than the
    window, **`attempts >= max_attempts`** → `status = 'failed'`, with
    `' [abandoned: the claim went stale and no attempts remain]'` appended to `last_error`. A
    permanent failure an operator has to look at.
-2. **Requeued** (**`src/jobs/queue.ts:224-231`**) — same, but **`attempts < max_attempts`** →
+2. **Requeued** (**`src/jobs/queue.ts:226-233`**) — same, but **`attempts < max_attempts`** →
    back to `'pending'`, `claimed_at = NULL`. It goes round again.
 
 Either logs `job.reaped` with both counts (**:209-211**). Mirrors the scheduled-post reaper in
@@ -2534,7 +2534,7 @@ retried a few minutes late (**`src/jobs/runner.ts:18-25`**).
 
 ### 5.7 — Prune
 
-**`src/jobs/queue.ts:289`** — `pruneCompleted(olderThanDays, limit)`. **Only `done` rows**
+**`src/jobs/queue.ts:291`** — `pruneCompleted(olderThanDays, limit)`. **Only `done` rows**
 (**:233**): a `failed` row is the one an operator needs to look at, and `pending`/`running` are
 live work.
 
@@ -2549,7 +2549,7 @@ storage one.
 
 ### 5.8 — The handler contract
 
-**`src/jobs/types.ts:208`** — `JobHandler`.
+**`src/jobs/types.ts:233`** — `JobHandler`.
 
 > **Throwing means "retry me".** The runner records the error and schedules a backoff until
 > `max_attempts` is spent. Returning normally means done. **There is deliberately no third
@@ -2563,7 +2563,7 @@ That is the whole reason both pipelines take `WebhookHandlerOptions.lastAttempt`
 so the outcome has to be written down as final instead — an interaction stranded at PENDING is
 indistinguishable, in the dashboard, from the webhook having stopped.
 
-`JobStatus` also carries `'cancelled'` (**`src/jobs/types.ts:146`**), set by
+`JobStatus` also carries `'cancelled'` (**`src/jobs/types.ts:166`**), set by
 `POST /api/admin/jobs/:id/cancel` on a pending job an operator has decided must never run. It is
 distinct from `failed` because the failed list is the queue's work list, and nothing on a hot
 path can see it — the claim filters `pending`, the reaper `running`, the retention sweep `done` —
@@ -4375,11 +4375,11 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 1 | 24h recipient cap — **`comments.ts:265`** | `dm.skipped_recipient_cap` | yes, `FAILED` |
 | 1 | quota — **`comments.ts:280`** | `dm.quota_exhausted` | yes, `FAILED` |
 | 2 | filtered at plan time — **`router.ts:88`** | *(none)* | no job at all |
-| 2 | nothing answerable — **`src/webhook/messaging.ts:169`** | `dm.skipped_empty` *(debug)* | no |
+| 2 | nothing answerable — **`src/webhook/messaging.ts:175`** | `dm.skipped_empty` *(debug)* | no |
 | 2 | no creator — **`messaging.ts:257`** | `dm.no_creator` | no |
 | 2 | already handled / live claim — **`messaging.ts:286`** | `dm.duplicate_ignored` | inbound row only |
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
-| 2 | **the send quota refuses the reply on the job's last attempt** (the tenant's hourly DM quota or the app-wide Meta budget) — **`src/webhook/messaging.ts:622-629`**, and the sales turn's at **`src/webhook/messaging.ts:552-558`** | `dm.quota_exhausted` (`error`), once per attempt | inbound row, `handled_at` set; **nothing sent, no handoff line, no outbound row**. Earlier attempts release the claim and retry (~30 s, ~2 min) |
+| 2 | **the send quota refuses the reply on the job's last attempt** (the tenant's hourly DM quota or the app-wide Meta budget) — **`src/webhook/messaging.ts:711-718`**, and the sales turn's at **`src/webhook/messaging.ts:532-538`** | `dm.quota_exhausted` (`error`), once per attempt | inbound row, `handled_at` set; **nothing sent, no handoff line, no outbound row**. Earlier attempts release the claim and retry (~30 s, ~2 min) |
 | 2 | the sender's profile lookup (Instagram only) is refused, throttled, or cannot run on a database without v40 — **`senderProfile.ts`** `refreshSenderProfile` | `dm.profile_failed` (`warn`); a throttled one is silent | no (the reply is unaffected; the attempt is recorded in `conversations.profile_checked_at`) |
 | 2 | a **permanent** Meta refusal of the reply (a blocked recipient, a dead token) — the catch in **`messaging.ts`** (`isPermanentMetaError`) | `dm.pipeline_failed` | inbound row, `handled_at` set; **no outbound row, and nothing in `jobs`** (the job completes `done`): the inbox's "reply failed" chip cannot show it, only the logs can |
 | 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |

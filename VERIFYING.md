@@ -404,7 +404,7 @@ Vercel logs around the test's time:
   tenant never sees another's rows. The unit tests carry those checks (for example
   `src/services/ads/isolation.test.ts`). Fair queueing by `tenant_key` is likewise untestable
   here: with one page id every job lands in one partition, which is exactly the degenerate case
-  the round-robin was written to avoid (`src/jobs/queue.ts:100-123`). (On 2026-09-21 one creator
+  the round-robin was written to avoid (`src/jobs/queue.ts:101-124`). (On 2026-09-21 one creator
   row existed.)
 - **Token re-checking.** This procedure does not test it. The daily cron asks Meta about every
   connected tenant's Page token and flags an invalid one, or data access within 14 days of

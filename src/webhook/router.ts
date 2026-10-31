@@ -23,7 +23,7 @@
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { getJobQueue } from '../jobs/queue.js';
 import type { EnqueueInput } from '../jobs/types.js';
-import { handleMessagingEvent } from './messaging.js';
+import { handleMessagingEvent, messageAgeMs } from './messaging.js';
 import { echoFromOwnApp, echoTakeoverEnabled } from './echo.js';
 import { handleCommentChange } from './comments.js';
 import { FINAL_ATTEMPT } from './options.js';
@@ -215,6 +215,7 @@ export interface EnqueueResult {
  * them on the Meta clock.
  */
 export async function enqueueWebhookBody(body: any, requestId?: string): Promise<EnqueueResult> {
+    const startedAt = Date.now();
     // Asked only when a delivery holds an echo (one indexed row), and read as OFF when it cannot be read: the queue then behaves as it always did.
     let echoes = false;
     if (hasEcho(body)) {
@@ -239,8 +240,23 @@ export async function enqueueWebhookBody(body: any, requestId?: string): Promise
         else result.deduped++;
     }
 
-    log('info', 'webhook.enqueued', { ...result, object: body?.object });
+    // The first hops of a DM's latency: how old its message was when it reached us (Meta's delivery), and what writing it down took
+    // before the 200 (the drain starts right after).
+    const age = oldestMessageAgeMs(body, Date.now());
+    log('info', 'webhook.enqueued', { ...result, object: body?.object, enqueue_ms: Date.now() - startedAt, ...(age !== null ? { event_age_ms: age } : {}) });
     return result;
+}
+
+/** How long ago Meta says the oldest message in this body was sent (`messageAgeMs`), or null when no event in it carries a time (a comment). */
+export function oldestMessageAgeMs(body: any, now: number): number | null {
+    let oldest: number | null = null;
+    for (const entry of Array.isArray(body?.entry) ? body.entry : []) {
+        for (const event of Array.isArray(entry?.messaging) ? entry.messaging : []) {
+            const age = messageAgeMs(event, now);
+            if (age !== null && (oldest === null || age > oldest)) oldest = age;
+        }
+    }
+    return oldest;
 }
 
 // ─── Legacy inline path ─────────────────────────────────────────────────────────────────

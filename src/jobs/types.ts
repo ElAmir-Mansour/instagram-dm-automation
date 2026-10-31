@@ -177,6 +177,11 @@ export interface Job<K extends JobKind = JobKind> {
     creator_id: string | null;
     /** The fair-queueing partition. See `EnqueueInput.tenantKey`. */
     tenant_key: string | null;
+    /**
+     * When the job became due, as the claim read it: the enqueue for a webhook's job, the backoff's end for a retry. The runner logs
+     * how long it waited from then (`queued_ms`). Absent for a job that was not read from the table.
+     */
+    run_after?: Date | null;
 }
 
 /**
