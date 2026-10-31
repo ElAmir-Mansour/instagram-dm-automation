@@ -127,7 +127,8 @@ async function runTurn(c: EvalCase, fx: EvalFixture, index: number, turn: EvalTu
         return { outcome, failed: false };
     }
 
-    const pf = prefilter(turn.user);
+    // A model's description of what was sent is not what the person said (R9): only words they typed are read for a refund, a complaint, an opt-out or an insult.
+    const pf: ReturnType<typeof prefilter> = turn.perceived?.describedText ? { action: 'pass' } : prefilter(turn.user);
     if (pf.action !== 'pass') {
         const signal: PrefilterSignal = pf.action === 'opt_out' ? 'opt_out' : pf.reason;
         if (signal === 'abuse') state.abuseStrikes += 1;
@@ -147,7 +148,9 @@ async function runTurn(c: EvalCase, fx: EvalFixture, index: number, turn: EvalTu
     }
 
     // The model's turn.
-    const prompt = buildSalesPrompt({ persona: fx.persona, knowledge: fx.knowledge, ctx: fx.ctx, timezone: fx.timezone, now: fx.now }, state.facts);
+    // What a model said it saw rides in this turn's facts only: it is not part of the state the next turn starts from.
+    const turnFacts: SalesFacts = turn.perceived?.sent ? { ...state.facts, sent: turn.perceived.sent } : state.facts;
+    const prompt = buildSalesPrompt({ persona: fx.persona, knowledge: fx.knowledge, ctx: fx.ctx, timezone: fx.timezone, now: fx.now }, turnFacts);
     const request = userTurns(c, state, turn.user);
     let response;
     try {

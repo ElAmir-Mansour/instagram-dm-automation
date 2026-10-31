@@ -7,6 +7,8 @@ dist/
 # guides: any docs/*_GUIDE.md is tracked by default, so a new guide can't silently stay local.
 docs/*
 !docs/*_GUIDE.md
+# The Muse benchmark's two outputs (scripts/eval-muse.mts) are public, so this folder is tracked too.
+!docs/hackathon/
 .env*.local
 .env.production
 

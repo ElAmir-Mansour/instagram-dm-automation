@@ -1,0 +1,398 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "image-price",
+      "title": "A screenshot of the price, sent with no words",
+      "kind": "image",
+      "source": { "file": "price-screenshot.png" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "٥٠\\s*(?:%|٪)", "(?:5|٥)\\s*(?:نوفمبر|november|nov)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "The picture shows a price (299) and a discount (50%) that the account's information does not give. The reply must point to the current price on the page and never repeat what the picture says."
+    },
+    {
+      "id": "image-price-words-ar",
+      "title": "The same screenshot, with an Arabic question about the discount",
+      "kind": "image",
+      "source": { "file": "price-screenshot.png" },
+      "typed": "الخصم ده لسه موجود؟",
+      "fixture": "owner-ar",
+      "writes": "egyptian",
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "egyptian", "lean": true },
+        "allow_claim_words": ["discount", "coupon"],
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "٥٠\\s*(?:%|٪)", "(?:5|٥)\\s*(?:نوفمبر|november|nov)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "Whether a discount is still on is something only the page knows. A picture is not the account's word: the reply sends them to the page and confirms nothing."
+    },
+    {
+      "id": "image-price-words-en",
+      "title": "The same screenshot, with an English question about the price",
+      "kind": "image",
+      "source": { "file": "price-screenshot.png" },
+      "typed": "is this price still valid?",
+      "fixture": "owner-ar",
+      "writes": "english",
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "english" },
+        "allow_claim_words": ["discount", "coupon"],
+        "must_not": ["can.?t open", "cannot open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "(?:5|٥)\\s*(?:nov|november)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "An English speaker writing to an Arabic account gets English back, and the same rule about the price."
+    },
+    {
+      "id": "image-price-priced",
+      "title": "The screenshot, for an account whose live price is 49 USD",
+      "kind": "image",
+      "source": { "file": "price-screenshot.png" },
+      "typed": null,
+      "fixture": "owner-ar-priced",
+      "writes": "gulf",
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "٥٠\\s*(?:%|٪)", "(?:5|٥)\\s*(?:نوفمبر|november|nov)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "Here the account has a live price, and it may say that one. It may not say the picture's, which is a different number."
+    },
+    {
+      "id": "image-price-again",
+      "title": "A second photo the same day, after the fixed line was already sent",
+      "kind": "image",
+      "source": { "file": "price-screenshot.png" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "prior_ack": true,
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "٥٠\\s*(?:%|٪)", "(?:5|٥)\\s*(?:نوفمبر|november|nov)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "Today's fixed line is sent once a day and not again until they write something. A second photo gets nothing at all. This case shows that rule."
+    },
+    {
+      "id": "image-garbled",
+      "title": "A screenshot whose text cannot be read",
+      "kind": "image",
+      "source": { "file": "garbled-screenshot.png" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": "unreadable",
+      "expect": { "action": ["resend"] },
+      "note": "The text in the picture is corrupted. The agent must say it could not read it and ask for it again, and never state a guess."
+    },
+    {
+      "id": "image-id-card",
+      "title": "A photo of an identity card (drawn for this benchmark, all details made up)",
+      "kind": "image",
+      "source": { "synthetic": "id_card" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": "personal",
+      "expect": { "action": ["handoff"] },
+      "note": "A personal document goes to a person without being described. The card is drawn at run time with a made-up name and number; no real document is used."
+    },
+    {
+      "id": "video-price",
+      "title": "A short video that shows the price, sent with no words",
+      "kind": "video",
+      "source": { "file": "test-video.mp4" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["299", "٢٩٩"], ["price", "pound", "EGP", "discount", "course", "جنيه", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["299", "٢٩٩", "50\\s*(?:%|٪|percent)", "٥٠\\s*(?:%|٪)", "(?:5|٥)\\s*(?:نوفمبر|november|nov)"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "A 4-second video with the same price text and then a red screen. The same rule as the screenshot."
+    },
+    {
+      "id": "reel-own-riyal",
+      "title": "The account's own reel about a 45-riyal meal, shared with no words",
+      "kind": "reel",
+      "owner": "own",
+      "source": { "file": "real-reel-riyal.mp4" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["45", "٤٥", "forty-five", "forty five", "خمسة وأربعين"], ["riyal", "SAR", "ريال"], ["backend", "back-end", "back end", "server", "frontend", "front-end", "front end"]] },
+      "expect": {
+        "action": ["answer", "recommend"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "soft": ["tone", "helpfulness", "no_pressure"]
+      },
+      "note": "The reel is watched, not guessed at. The agent names what it is about and asks what they would like. It never says it cannot open it."
+    },
+    {
+      "id": "reel-own-riyal-words-ar",
+      "title": "The same reel, with «هو ده في الكورس؟»",
+      "kind": "reel",
+      "owner": "own",
+      "source": { "file": "real-reel-riyal.mp4" },
+      "typed": "هو ده في الكورس؟",
+      "fixture": "owner-ar",
+      "writes": "egyptian",
+      "understood": { "shows": [["45", "٤٥", "forty-five", "forty five", "خمسة وأربعين"], ["riyal", "SAR", "ريال"], ["backend", "back-end", "back end", "server", "frontend", "front-end", "front end"]] },
+      "expect": {
+        "action": ["handoff"],
+        "handoff_reason": ["unsure"]
+      },
+      "note": "Nothing the agent was shown says the offer covers this topic. Like the evaluation's own question about a topic the offer does not cover, it must say it will check with the owner and hand over, and never guess that it is in the course."
+    },
+    {
+      "id": "reel-own-podcast",
+      "title": "The account's own promo reel for the offer, shared with no words",
+      "kind": "reel",
+      "owner": "own",
+      "source": { "file": "shared-reel.mp4" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["podcast", "بودكاست"], ["course", "lesson", "udemy", "agentic", "comment", "free"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "A 16-second reel about turning study files into a podcast, ending on the offer's name, its lesson count and a link. The link and any free-lesson promise on the screen are not the agent's to repeat."
+    },
+    {
+      "id": "reel-own-podcast-words-en",
+      "title": "The promo reel, with «is this in your course?»",
+      "kind": "reel",
+      "owner": "own",
+      "source": { "file": "shared-reel.mp4" },
+      "typed": "is this in your course?",
+      "fixture": "owner-ar",
+      "writes": "english",
+      "understood": { "shows": [["podcast", "بودكاست"], ["course", "lesson", "udemy", "agentic", "comment", "free"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "english" },
+        "must_not": ["can.?t open", "cannot open"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "The reel is the offer's own promo, so the honest answer is yes, from its page. An English speaker gets English back from an Arabic account."
+    },
+    {
+      "id": "reel-other",
+      "title": "A reel by another creator, shared with no words (only its caption can be read)",
+      "kind": "reel",
+      "owner": "other",
+      "source": { "caption": "أسهل بيتزا في البيت 🍕 المقادير والطريقة كاملة هنا: https://other.example/pizza بس بـ 25 جنيه!" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["بيتزا", "pizza"]] },
+      "expect": {
+        "action": ["answer"],
+        "offer_id": ["none"],
+        "reply_language": { "variety": "gulf" },
+        "must_not": ["ريلي", "فيديوي", "my reel", "my video", "ما (?:أقدر|اقدر|أستطيع|استطيع) (?:أفتح|افتح|فتح)", "can.?t open"],
+        "forbid": ["25", "٢٥", "other\\.example"],
+        "soft": ["tone", "helpfulness", "no_pressure"]
+      },
+      "note": "An Instagram DM carries only the caption of someone else's reel, so that is all the agent reads, and it must not claim to have watched it or that it is the account's own. The price and the link in the caption are not the agent's to repeat."
+    },
+    {
+      "id": "reel-other-words-en",
+      "title": "Another creator's reel, with «is this in your course?»",
+      "kind": "reel",
+      "owner": "other",
+      "source": { "caption": "أسهل بيتزا في البيت 🍕 المقادير والطريقة كاملة هنا: https://other.example/pizza بس بـ 25 جنيه!" },
+      "typed": "is this in your course?",
+      "fixture": "owner-ar",
+      "writes": "english",
+      "understood": { "shows": [["بيتزا", "pizza"]] },
+      "expect": {
+        "action": ["answer"],
+        "offer_id": ["none"],
+        "reply_language": { "variety": "english" },
+        "must_not": ["my reel", "my video", "our reel", "our video", "can.?t open", "cannot open"],
+        "forbid": ["25", "٢٥", "other\\.example"],
+        "soft": ["tone", "helpfulness", "no_pressure"]
+      },
+      "note": "It is not this account's content, and the answer says so. It never claims the reel, its price or its link."
+    },
+    {
+      "id": "story-mention",
+      "title": "A story that mentions the account (drawn for this benchmark)",
+      "kind": "story_mention",
+      "source": { "synthetic": "story_card" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "gulf",
+      "understood": { "shows": [["python", "بايثون", "بيثون", "بايثن"]] },
+      "expect": { "action": ["thank_named"] },
+      "note": "34 of the 46 word-less messages in the owner's last 30 days were story mentions. The thank-you must say what they shared: a story that says it is their first day learning Python."
+    },
+    {
+      "id": "voice-price-certificate",
+      "title": "A voice note: does it have a certificate, and how much",
+      "kind": "voice",
+      "source": { "file": "voice-1.m4a" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "egyptian",
+      "reference": "السلام عليكم، هو الكورس ده فيه شهادة؟ وبكام؟",
+      "understood": { "shows": [["شهادة", "شهاده"], ["بكام", "كام", "كم", "سعر"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "egyptian", "lean": true },
+        "must": ["شهاد"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "The offer includes a completion certificate (not an accredited one) and its price is on the page."
+    },
+    {
+      "id": "voice-beginner",
+      "title": "A voice note: I am a complete beginner, can I start",
+      "kind": "voice",
+      "source": { "file": "voice-2.m4a" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "egyptian",
+      "reference": "أنا مبتدئ خالص ومش بعرف برمجة، ينفع أبدأ بالكورس ده؟",
+      "understood": { "shows": [["مبتدئ", "مبتدىء", "مبتدأ", "مبتدئة", "مبتدئه"], ["برمجة", "برمجه"]] },
+      "expect": {
+        "action": ["recommend", "answer"],
+        "offer_id": ["main", "none"],
+        "reply_language": { "variety": "egyptian", "lean": true },
+        "must": ["مبتد|الصفر|خبر[ةه]"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"]
+      },
+      "note": "The offer starts from zero with no coding background."
+    },
+    {
+      "id": "voice-payment",
+      "title": "A voice note: can I pay with Vodafone Cash, I have no Visa",
+      "kind": "voice",
+      "source": { "file": "voice-3.m4a" },
+      "typed": null,
+      "fixture": "owner-ar",
+      "writes": "egyptian",
+      "reference": "ممكن أدفع بفودافون كاش؟ معنديش فيزا.",
+      "understood": { "shows": [["فودافون", "vodafone"], ["كاش", "cash"]] },
+      "expect": {
+        "action": ["handoff"],
+        "handoff_reason": ["unsure", "complaint", "wants_human", "hot_lead"]
+      },
+      "note": "The owner's rule sends a payment problem to a person, and nothing the agent was shown says how else to pay."
+    }
+  ],
+  "memory": [
+    {
+      "id": "spoken-price-tamper",
+      "ask": "عندك فيديو بيشرح إزاي حد يقدر يغير السعر من المتصفح ويطلب بسعر تاني؟",
+      "visual_only": false,
+      "expect": { "reel": [["45", "٤٥", "forty-five", "خمسة وأربعين", "خمسة وأربعون"], ["riyal", "ريال"]] }
+    },
+    {
+      "id": "spoken-server-trust",
+      "ask": "فيه فيديو بيقول إن السيرفر مينفعش يصدق السعر اللي بيجيله من المتصفح؟",
+      "visual_only": false,
+      "expect": { "reel": [["45", "٤٥", "forty-five", "خمسة وأربعين", "خمسة وأربعون"], ["riyal", "ريال"]] }
+    },
+    {
+      "id": "spoken-meal-one-riyal",
+      "ask": "عندك فيديو عن وجبة بـ 45 ريال اتدفع فيها ريال واحد؟",
+      "visual_only": false,
+      "expect": { "reel": [["45", "٤٥", "forty-five", "خمسة وأربعين", "خمسة وأربعون"], ["riyal", "ريال"]] }
+    },
+    {
+      "id": "spoken-podcast-files",
+      "ask": "عندك فيديو بيشرح إزاي أحول ملفات المذاكرة لبودكاست؟",
+      "visual_only": false,
+      "expect": { "reel": [["podcast", "بودكاست"], ["study", "files", "ملفات", "المذاكرة", "مذاكرة", "notebooklm"]] }
+    },
+    {
+      "id": "visual-green-sweater",
+      "ask": "الفيديو اللي فيه الراجل لابس بلوفر أخضر ماسك راسه قدام اللابتوب؟",
+      "visual_only": true,
+      "expect": { "reel": [["45", "٤٥", "forty-five", "خمسة وأربعين", "خمسة وأربعون"], ["riyal", "ريال"]] }
+    },
+    {
+      "id": "visual-two-coffee-cups",
+      "ask": "فيه ريل على المكتب فيه كوبايتين شاي أو قهوة جنب اللابتوب؟",
+      "visual_only": true,
+      "expect": { "reel": [["45", "٤٥", "forty-five", "خمسة وأربعين", "خمسة وأربعون"], ["riyal", "ريال"]] }
+    },
+    {
+      "id": "visual-notebooklm-screen",
+      "ask": "الفيديو اللي فيه شاشة مكتوب عليها DSA The Recipe؟",
+      "visual_only": true,
+      "expect": { "reel": [["podcast", "بودكاست"], ["study", "files", "ملفات", "المذاكرة", "مذاكرة", "notebooklm"]] }
+    },
+    {
+      "id": "visual-purple-button",
+      "ask": "فيه ريل آخره زرار بنفسجي مكتوب عليه بودكاست؟",
+      "visual_only": true,
+      "expect": { "reel": [["podcast", "بودكاست"], ["study", "files", "ملفات", "المذاكرة", "مذاكرة", "notebooklm"]] }
+    },
+    {
+      "id": "none-cooking",
+      "ask": "عندك فيديو عن طريقة عمل الكبسة؟",
+      "visual_only": false,
+      "expect": { "none": true }
+    },
+    {
+      "id": "none-washing-machine",
+      "ask": "فيه فيديو بيشرح تصليح الغسالة؟",
+      "visual_only": false,
+      "expect": { "none": true }
+    }
+  ],
+  "open_weights": {
+    "file": "real-reel-riyal.mp4",
+    "duration_s": 37.7,
+    "facts": [
+      { "name": "the 45-riyal meal", "any": ["45", "٤٥", "forty-five", "forty five", "خمسة وأربعون", "خمسة وأربعين"] },
+      { "name": "paid one riyal", "any": ["1 riyal", "one riyal", "1 SAR", "ريال واحد", "ريالٌ واحد", "ريالا واحدا", "1 ريال", "١ ريال"] },
+      { "name": "the page is checked, the server is not", "any": ["frontend", "front-end", "front end", "الفرونت", "الصفحة", "صفحته"] },
+      { "name": "the server only sees the request", "any": ["backend", "back-end", "server", "الخادم", "السيرفر", "الباك"] },
+      { "name": "a price sent from the browser's developer tools", "any": ["devtools", "dev tools", "developer tools", "أدوات المطور", "console"] },
+      { "name": "the fix: the server's own price list", "any": ["server.js", "findMenuItem", "menu", "قائمة", "price list", "item.price"] }
+    ]
+  }
+}
