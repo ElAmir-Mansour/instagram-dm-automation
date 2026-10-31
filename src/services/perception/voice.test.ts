@@ -16,14 +16,15 @@ import { transcribeWithMeta, type TranscribeWithMetaArgs, type TranscribeWithMet
 import { installAiDb, type AiDb } from '../aiProviders/testDb.js';
 import { assertNoKey, FAKE_KEYS } from '../aiProviders/testKeys.js';
 import { AiError, type AiErrorKind } from '../llm/errors.js';
-import { asrUsd, ASR_MODEL } from '../llm/metaAsr.js';
+import { asrUsd, ASR_MODEL, ASR_TIMEOUT_MS } from '../llm/metaAsr.js';
 import { parseMultipart, wavBytes } from '../llm/testAudio.js';
 import { jsonResponse } from '../llm/testFetch.js';
 import { isAsrWav, parseWav } from '../llm/wav.js';
-import { fetchMedia, type MediaResult } from './media.js';
+import { CONNECT_TIMEOUT_MS, fetchMedia, TOTAL_TIMEOUT_MS, type MediaResult } from './media.js';
+import { MIN_CALL_MS, STEP_BUDGET_MS } from './perceive.js';
 import { TRANSCRIPT_MAX_CHARS } from './text.js';
-import { ffmpegBinary, type TranscodeFailure, type TranscodeResult } from './transcode.js';
-import { MIN_TRANSCRIPT_WORDS, transcribeVoice, VOICE_STEP_BUDGET_MS, wordCount, type VoiceDeps, type VoiceInput, type VoiceResult } from './voice.js';
+import { ffmpegBinary, TRANSCODE_TIMEOUT_MS, type TranscodeFailure, type TranscodeResult } from './transcode.js';
+import { MIN_TRANSCRIPT_WORDS, transcribeVoice, voiceDraft, wordCount, type VoiceDeps, type VoiceInput, type VoiceResult } from './voice.js';
 
 const CREATOR = '44444444-4444-4444-8444-444444444444';
 const OWNER = '11111111-1111-4111-8111-111111111111';
@@ -56,18 +57,21 @@ const heard = (over: Partial<TranscribeWithMetaResult> = {}): TranscribeWithMeta
 const aiError = (kind: AiErrorKind, status?: number): AiError => new AiError({ kind, provider: 'meta', model: ASR_MODEL, message: `${kind} happened`, ...(status ? { status } : {}) });
 
 interface Script {
-    download?: (link: string | null | undefined) => MediaResult | Promise<MediaResult>;
-    decode?: (bytes: Uint8Array) => TranscodeResult | Promise<TranscodeResult>;
+    download?: (link: string | null | undefined, options: { connectMs: number; totalMs: number }) => MediaResult | Promise<MediaResult>;
+    decode?: (bytes: Uint8Array, options: { timeoutMs: number }) => TranscodeResult | Promise<TranscodeResult>;
     /** Throws to fail; `attempt` counts from 1. */
     transcribe?: (args: TranscribeWithMetaArgs, attempt: number) => TranscribeWithMetaResult | Promise<TranscribeWithMetaResult>;
     now?: () => number;
 }
 
 function rig(script: Script = {}) {
-    const calls = { download: [] as (string | null | undefined)[], decode: [] as Uint8Array[], transcribe: [] as TranscribeWithMetaArgs[] };
+    const calls = {
+        download: [] as (string | null | undefined)[], downloadOptions: [] as { connectMs: number; totalMs: number }[],
+        decode: [] as Uint8Array[], decodeOptions: [] as { timeoutMs: number }[], transcribe: [] as TranscribeWithMetaArgs[],
+    };
     const deps: VoiceDeps = {
-        download: async (link) => { calls.download.push(link); return script.download ? script.download(link) : downloaded(); },
-        decode: async (bytes) => { calls.decode.push(bytes); return script.decode ? script.decode(bytes) : decoded(); },
+        download: async (link, options) => { calls.download.push(link); calls.downloadOptions.push(options); return script.download ? script.download(link, options) : downloaded(); },
+        decode: async (bytes, options) => { calls.decode.push(bytes); calls.decodeOptions.push(options); return script.decode ? script.decode(bytes, options) : decoded(); },
         transcribe: async (args) => { calls.transcribe.push(args); return script.transcribe ? script.transcribe(args, calls.transcribe.length) : heard(); },
         ...(script.now ? { now: script.now } : {}),
     };
@@ -249,6 +253,17 @@ describe('transcribeVoice: Meta', () => {
         }
     });
 
+    it('says when Meta refused the key or the account has no credit left, so the caller can tell the owner; no other refusal says it', async () => {
+        for (const [kind, status, expected] of [['auth', 401, 'auth'], ['auth', 403, 'auth'], ['quota', 402, 'quota']] as const) {
+            const { result } = await hear({ transcribe: refuses(kind, status) });
+            assert.equal(only(result, 'failed').errorKind, expected, `${kind} ${status}`);
+        }
+        for (const kind of ['rate', 'server', 'timeout', 'bad_request', 'bad_output'] as const) {
+            const { result } = await hear({ transcribe: refuses(kind, 500) });
+            assert.equal('errorKind' in only(result, 'failed'), false, kind);
+        }
+    });
+
     it('an error that is not an AiError (a database that fell over) is provider_error / unexpected, and is not thrown', async () => {
         const { result } = await hear({ transcribe: () => { throw new Error('connection terminated unexpectedly'); } });
         const failed = only(result, 'failed');
@@ -267,15 +282,17 @@ describe('transcribeVoice: one retry for a passing failure, and only while the s
         assert.equal(logs.filter((l) => l.fields.event === 'perception.voice_retry').length, 1);
     });
 
-    it('a timeout is tried once more as well', async () => {
-        const { result, calls } = await hear({ transcribe: (_args, attempt) => { if (attempt === 1) throw aiError('timeout'); return heard(); } });
-        assert.equal(result.status, 'ok');
-        assert.equal(calls.transcribe.length, 2);
+    it('a timeout, and an answer that was no use, are tried once more as well: the kinds perceive retries', async () => {
+        for (const kind of ['timeout', 'bad_output'] as const) {
+            const { result, calls } = await hear({ transcribe: (_args, attempt) => { if (attempt === 1) throw aiError(kind); return heard(); } });
+            assert.equal(result.status, 'ok', kind);
+            assert.equal(calls.transcribe.length, 2, kind);
+        }
     });
 
     it('the retry is the same call: the same WAV, the same keywords, the same tenant', async () => {
         const { calls } = await hear({ transcribe: (_args, attempt) => { if (attempt === 1) throw aiError('server', 500); return heard(); } }, { keywords: ['x'] });
-        assert.deepEqual(calls.transcribe[1], calls.transcribe[0]);
+        assert.deepEqual({ ...calls.transcribe[1], timeoutMs: 0 }, { ...calls.transcribe[0], timeoutMs: 0 });
     });
 
     it('is ONE retry: a second failure is the result, and a third call is never made', async () => {
@@ -284,31 +301,70 @@ describe('transcribeVoice: one retry for a passing failure, and only while the s
         assert.deepEqual([result.status, result.ok === false && result.reason, result.status === 'failed' && result.detail], ['failed', 'provider_error', 'server_503']);
     });
 
-    it('a 429, a refused key, a bad request, an unusable answer, a budget and a missing key are NEVER retried inside the turn', async () => {
-        for (const [kind, status] of [['rate', 429], ['auth', 401], ['auth', 403], ['bad_request', 400], ['bad_output', 200], ['quota', 402], ['budget', undefined], ['no_provider', undefined]] as const) {
+    it('a 429, a refused key, a bad request, no credit, a budget and a missing key are NEVER retried inside the turn', async () => {
+        for (const [kind, status] of [['rate', 429], ['auth', 401], ['auth', 403], ['bad_request', 400], ['quota', 402], ['budget', undefined], ['no_provider', undefined]] as const) {
             const { calls } = await hear({ transcribe: throwing(kind, status) });
             assert.equal(calls.transcribe.length, 1, kind);
         }
     });
 
-    it('only while the whole step (90 s) has room for another 30 s attempt: a first attempt that ended with 30 s to spare is retried, one that ended with less is not', async () => {
-        assert.equal(VOICE_STEP_BUDGET_MS, 90_000);
-        for (const [spentMs, retried] of [[10_000, true], [29_000, true], [60_000, true], [60_001, false], [75_000, false], [89_000, false]] as const) {
+    it('the step is held to 90 s from the caller\'s deadline: it is the clock perceive and the download use, and the default is that long from now', async () => {
+        assert.equal(STEP_BUDGET_MS, 90_000);
+        assert.equal(MIN_CALL_MS, 8_000);
+        const { calls } = await hear({ now: () => 5_000_000 });
+        // No deadline given: 90 s from the start, so the first call's own deadline is its usual 30 s, and the download's and the decoder's are theirs.
+        assert.deepEqual(calls.downloadOptions[0], { connectMs: CONNECT_TIMEOUT_MS, totalMs: TOTAL_TIMEOUT_MS });
+        assert.deepEqual(calls.decodeOptions[0], { timeoutMs: TRANSCODE_TIMEOUT_MS });
+        assert.equal(calls.transcribe[0]!.timeoutMs, ASR_TIMEOUT_MS);
+    });
+
+    it('cuts every part\'s deadline to what is left of the caller\'s: the download, the decoder and the model never outlast the step', async () => {
+        let t = 1_000;
+        const { calls } = await hear({
+            now: () => t,
+            download: () => { t += 40_000; return downloaded(); },
+            decode: () => { t += 6_000; return decoded(); },
+        }, { deadlineAt: 1_000 + 60_000 });
+        // 60 s in all: the download may use 15 s to connect and 30 in all (both under the 60 left); the decoder then has 20 s left and gets 10; the model has 14 s left.
+        assert.deepEqual(calls.downloadOptions[0], { connectMs: 15_000, totalMs: 30_000 });
+        assert.deepEqual(calls.decodeOptions[0], { timeoutMs: 10_000 });
+        assert.equal(calls.transcribe[0]!.timeoutMs, 14_000);
+
+        t = 1_000;
+        const tight = await hear({ now: () => t, download: () => { t += 1_000; return downloaded(); } }, { deadlineAt: 1_000 + 12_000 });
+        assert.deepEqual(tight.calls.downloadOptions[0], { connectMs: 12_000, totalMs: 12_000 }, 'what is left is less than the usual, so it is what is left');
+        assert.equal(tight.calls.decodeOptions[0]!.timeoutMs, 10_000);
+        assert.equal(tight.calls.transcribe[0]!.timeoutMs, 11_000, 'and the model has what is left of that');
+    });
+
+    it('a retry is made while at least MIN_CALL_MS (8 s) is left, and its deadline is what is left: a first attempt that ended with 8 s to spare is retried, one with less is not', async () => {
+        for (const [spentMs, retried] of [[10_000, true], [40_000, true], [82_000, true], [82_001, false], [89_000, false]] as const) {
             let t = 1_000_000;
             const { calls } = await hear({ now: () => t, transcribe: () => { t += spentMs; throw aiError('timeout'); } });
             assert.equal(calls.transcribe.length, retried ? 2 : 1, `${spentMs} ms spent`);
+            if (retried) assert.equal(calls.transcribe[1]!.timeoutMs, Math.min(ASR_TIMEOUT_MS, STEP_BUDGET_MS - spentMs), `${spentMs} ms spent: the second call is cut to what is left`);
         }
     });
 
-    it('counts the download and the decode against that budget as well', async () => {
+    it('keeps the first attempt\'s refusal when there is no time for a second: the provider\'s 5xx, not a timeout', async () => {
+        let t = 1_000_000;
+        const { result } = await hear({ now: () => t, transcribe: () => { t += 85_000; throw aiError('server', 503); } });
+        const failed = only(result, 'failed');
+        assert.deepEqual([failed.reason, failed.detail], ['provider_error', 'server_503']);
+    });
+
+    it('counts the download and the decode against the same clock: they ate the step, so the model is not asked and the step is a timeout', async () => {
         let t = 0;
         const slow = await hear({
             now: () => t,
-            download: () => { t += 40_000; return downloaded(); },
+            download: () => { t += 70_000; return downloaded(); },
             decode: () => { t += 15_000; return decoded(); },
-            transcribe: () => { t += 10_000; throw aiError('server', 503); },
         });
-        assert.equal(slow.calls.transcribe.length, 1, '65 s are gone: 65 + 30 is more than 90');
+        const failed = only(slow.result, 'failed');
+        assert.deepEqual([failed.reason, failed.detail], ['timeout', 'out_of_time']);
+        assert.equal(slow.calls.transcribe.length, 0, '5 s are left: less than a call needs, so none is started that could not finish');
+        assert.equal(logs.filter((l) => l.fields.event === 'perception.out_of_time').length, 1);
+
         t = 0;
         const quick = await hear({
             now: () => t,
@@ -319,6 +375,20 @@ describe('transcribeVoice: one retry for a passing failure, and only while the s
         assert.equal(quick.calls.transcribe.length, 2);
         assert.equal(quick.result.status, 'ok');
         assert.equal(quick.result.ms, 2_000 + 500 + 3_000 + 3_000, 'the step\'s time is all of it, the retry included');
+    });
+
+    it('a step that is already over starts nothing: no download, no decode, no model', async () => {
+        const { result, calls } = await hear({ now: () => 10_000 }, { deadlineAt: 9_000 });
+        assert.equal(only(result, 'failed').reason, 'timeout');
+        assert.deepEqual([calls.download.length, calls.decode.length, calls.transcribe.length], [0, 0, 0]);
+    });
+
+    it('the decoder is not started when the step ran out in the download', async () => {
+        let t = 0;
+        const { result, calls } = await hear({ now: () => t, download: () => { t += 95_000; return downloaded(); } });
+        const failed = only(result, 'failed');
+        assert.deepEqual([failed.reason, failed.detail], ['timeout', 'decode']);
+        assert.equal(calls.decode.length + calls.transcribe.length, 0);
     });
 });
 
@@ -343,6 +413,34 @@ describe('transcribeVoice: whether it is words', () => {
             assert.equal(result.status, 'ok', transcript);
             assert.equal(only(result, 'ok').words, 2);
         }
+    });
+});
+
+describe('voiceDraft: what is stored of a result', () => {
+    const base = { usd: 0.00015, model: ASR_MODEL, ms: 4_100 };
+
+    it('an ok note is its transcript and what it cost: no description, no owner, no confidence, and the database writes the time', () => {
+        const draft = voiceDraft({ ok: true, status: 'ok', transcript: TRANSCRIPT, words: 6, durationMs: 3000, sessionId: 'sess-1', ...base });
+        assert.deepEqual(draft, { v: 1, kind: 'audio', status: 'ok', transcript: TRANSCRIPT, model: ASR_MODEL, ms: 4_100, usd: 0.00015 });
+        assert.ok(!('stored_at' in draft) && !('seen' in draft) && !('about_owner' in draft) && !('confidence' in draft), 'none of the fields a picture has');
+    });
+
+    it('an unreadable note keeps what little it heard, or nothing, and the reason; it is still paid for', () => {
+        assert.deepEqual(voiceDraft({ ok: false, status: 'unreadable', reason: 'empty_transcript', transcript: 'تمام', words: 1, durationMs: 2000, ...base }),
+            { v: 1, kind: 'audio', status: 'unreadable', reason: 'empty_transcript', transcript: 'تمام', model: ASR_MODEL, ms: 4_100, usd: 0.00015 });
+        const silent = voiceDraft({ ok: false, status: 'unreadable', reason: 'empty_transcript', transcript: '', words: 0, durationMs: 2000, ...base });
+        assert.ok(!('transcript' in silent));
+    });
+
+    it('a skip and a failure keep their reason and nothing of the log\'s detail', () => {
+        assert.deepEqual(voiceDraft({ ok: false, status: 'skipped', reason: 'budget', usd: 0, model: '', ms: 12 }), { v: 1, kind: 'audio', status: 'skipped', reason: 'budget', model: '', ms: 12, usd: 0 });
+        const failed = voiceDraft({ ok: false, status: 'failed', reason: 'decode_failed', detail: 'decoder_unavailable: ENOENT', errorKind: 'auth', usd: 0, model: '', ms: 30 });
+        assert.deepEqual(failed, { v: 1, kind: 'audio', status: 'failed', reason: 'decode_failed', model: '', ms: 30, usd: 0 });
+    });
+
+    it('is JSON the store can write and read back unchanged', () => {
+        const draft = voiceDraft({ ok: true, status: 'ok', transcript: TRANSCRIPT, words: 6, durationMs: 3000, ...base });
+        assert.deepEqual(JSON.parse(JSON.stringify(draft)), draft);
     });
 });
 

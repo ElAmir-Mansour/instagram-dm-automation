@@ -18,8 +18,11 @@
  *      `skipped / budget`; the deadline: `failed / timeout`; any other refusal or answer that is no good: `failed / provider_error` (detail: the kind and the HTTP status).
  *   4. **Words.** Fewer than two: `unreadable / empty_transcript` (silence, noise, a single word: the kit's resend line is the answer, as for media it could not read).
  *
- * **One retry**, for a `server` (5xx) or `timeout` failure of step 3 only (`contracts/perception.md`: "one retry for reads"), and only while the step still has the time: the whole
- * step is held to 90 s, so a second 30 s attempt is made only if the first ended with 30 s to spare. A 429, an auth failure and a bad request are never retried inside the turn.
+ * **The clock is one, and the caller's** (`deadlineAt`, as `perceive` and `resolveSource` take it): the whole step is over at 90 s from the gate's pass, and every part's own deadline is
+ * cut to what is left (the download's 15 s and 30 s, the decoder's 10 s, the model's 30 s). **One retry**, for a `server` (5xx), `timeout` or `bad_output` failure of step 3 only
+ * (`contracts/perception.md`: "one retry for reads", the same kinds `perceive` retries), and only while at least `MIN_CALL_MS` is left, with that much of a deadline at most. A
+ * 429, an auth failure, a bad request, a budget and a missing key are never retried inside the turn. Nothing is started that could not finish: with less than `MIN_CALL_MS` left
+ * before the first call, the step is `failed / timeout` and the model is not asked.
  *
  * ─── What it never does ───
  * Never throws: every outcome is a result, because the caller's answer to each failure is the same fixed line and must not depend on a catch. Never logs the transcript, the audio,
@@ -30,16 +33,14 @@ import { log } from '../../utils/log.js';
 import { transcribeWithMeta, type TranscribeWithMetaArgs, type TranscribeWithMetaResult } from '../aiProviders/asr.js';
 import { isAiError } from '../llm/errors.js';
 import { ASR_MODEL, ASR_TIMEOUT_MS } from '../llm/metaAsr.js';
-import { fetchMedia, type MediaResult } from './media.js';
+import { CONNECT_TIMEOUT_MS, fetchMedia, TOTAL_TIMEOUT_MS, type MediaResult } from './media.js';
+import { MIN_CALL_MS, STEP_BUDGET_MS } from './perceive.js';
 import { oneLine, TRANSCRIPT_MAX_CHARS } from './text.js';
-import { transcodeToWav, type TranscodeFailure, type TranscodeResult } from './transcode.js';
-import type { FailReason, SkipReason } from './types.js';
+import { TRANSCODE_TIMEOUT_MS, transcodeToWav, type TranscodeFailure, type TranscodeResult } from './transcode.js';
+import type { FailReason, Perception, SkipReason } from './types.js';
 
 /** A transcript with fewer words than this is not understood (`contracts/perception.md` §2). */
 export const MIN_TRANSCRIPT_WORDS = 2;
-
-/** The whole step's budget (`contracts/perception.md`, "Errors -> behaviour"): the download, the decode and the call, with a retry only if it fits. */
-export const VOICE_STEP_BUDGET_MS = 90_000;
 
 /** How many words a transcript has: whitespace-separated pieces with a letter or a digit in them, in any script. Punctuation on its own is not a word. */
 export function wordCount(text: string): number {
@@ -53,6 +54,8 @@ export interface VoiceInput {
     link: string | null | undefined;
     /** The names to bias recognition toward (`keywords.ts` `voiceKeywords`). */
     keywords?: readonly string[];
+    /** When the whole step must be over, in epoch milliseconds (`perceiveDm` starts the clock when the gate passes). Absent: `STEP_BUDGET_MS` from now. */
+    deadlineAt?: number;
 }
 
 /** What every result carries, for the record the caller stores: the cost, the model that heard it ('' when none did) and the time the whole step took. */
@@ -69,12 +72,16 @@ export type VoiceResult =
     | ({ ok: true; status: 'ok'; transcript: string; words: number; /** What Meta says it processed. */ durationMs: number; sessionId?: string } & VoiceBase)
     | ({ ok: false; status: 'unreadable'; reason: 'empty_transcript'; /** What there was: nothing, or a single word. */ transcript: string; words: number; durationMs: number } & VoiceBase)
     | ({ ok: false; status: 'skipped'; reason: VoiceSkip } & VoiceBase)
-    | ({ ok: false; status: 'failed'; reason: FailReason; /** For the log, never the customer: which step and why. */ detail?: string } & VoiceBase);
+    | ({
+        ok: false; status: 'failed'; reason: FailReason; /** For the log, never the customer: which step and why. */ detail?: string;
+        /** Meta refused the key (`auth`) or the account has no credit left (`quota`): the caller tells the owner, once a day, as for a picture. */
+        errorKind?: 'auth' | 'quota';
+    } & VoiceBase);
 
 /** The steps, replaceable one by one so a test can reach each outcome without a network, a binary or a database. */
 export interface VoiceDeps {
-    download?: (link: string | null | undefined) => Promise<MediaResult>;
-    decode?: (bytes: Uint8Array) => Promise<TranscodeResult>;
+    download?: (link: string | null | undefined, options: { connectMs: number; totalMs: number }) => Promise<MediaResult>;
+    decode?: (bytes: Uint8Array, options: { timeoutMs: number }) => Promise<TranscodeResult>;
     transcribe?: (args: TranscribeWithMetaArgs) => Promise<TranscribeWithMetaResult>;
     now?: () => number;
 }
@@ -93,29 +100,54 @@ function decodeFailure(reason: TranscodeFailure, detail: string | undefined): { 
 }
 
 /** Meta's refusal as the result it is: a budget and a missing key are skips (the call was never made), the deadline is a timeout, the rest is the provider's. */
-function hearFailure(err: unknown): { status: 'skipped'; reason: 'budget' | 'no_key' } | { status: 'failed'; reason: FailReason; detail: string } {
+function hearFailure(err: unknown): { status: 'skipped'; reason: 'budget' | 'no_key' } | { status: 'failed'; reason: FailReason; detail: string; errorKind?: 'auth' | 'quota' } {
     if (isAiError(err)) {
         if (err.kind === 'budget') return { status: 'skipped', reason: 'budget' };
         if (err.kind === 'no_provider') return { status: 'skipped', reason: 'no_key' };
         if (err.kind === 'timeout') return { status: 'failed', reason: 'timeout', detail: 'asr' };
-        return { status: 'failed', reason: 'provider_error', detail: `${err.kind}${err.status !== undefined ? `_${err.status}` : ''}` };
+        return {
+            status: 'failed', reason: 'provider_error', detail: `${err.kind}${err.status !== undefined ? `_${err.status}` : ''}`,
+            ...(err.kind === 'auth' || err.kind === 'quota' ? { errorKind: err.kind } : {}),
+        };
     }
     return { status: 'failed', reason: 'provider_error', detail: 'unexpected' };
 }
 
-/** Whether a failed attempt to hear is worth one more: a 5xx or a timeout, which are the provider's passing trouble. */
-const worthRetrying = (err: unknown): boolean => isAiError(err) && (err.kind === 'server' || err.kind === 'timeout');
+/** Whether a failed attempt to hear is worth one more: what `perceive` retries, the provider's passing trouble (a 5xx, a timeout, an answer that is no use). */
+const worthRetrying = (err: unknown): boolean => isAiError(err) && (err.kind === 'server' || err.kind === 'timeout' || err.kind === 'bad_output');
+
+/** The record a result is stored as: `messages.perception` without the `stored_at` the database writes. */
+export type VoiceDraft = Omit<Perception, 'stored_at'>;
+
+/**
+ * What `perceiveDm` keeps of a result, once. A voice note's `ok` record is its transcript and what it cost: no description, no owner and no confidence (the speech model
+ * gives none, and a voice note is the customer's own voice, not content that is anyone's). Written with the bare transcript as the row's `text` in the same statement
+ * (`perceivedText`); an `unreadable` one keeps the little it heard (nothing, or one word) and leaves the row's text as the placeholder. A failure keeps its reason: the `detail` is
+ * for the log. Pure.
+ */
+export function voiceDraft(r: VoiceResult): VoiceDraft {
+    const base = { v: 1 as const, kind: 'audio' as const, model: r.model, ms: r.ms, usd: r.usd };
+    switch (r.status) {
+        case 'ok': return { ...base, status: 'ok', transcript: r.transcript };
+        case 'unreadable': return { ...base, status: 'unreadable', reason: r.reason, ...(r.transcript ? { transcript: r.transcript } : {}) };
+        case 'skipped': return { ...base, status: 'skipped', reason: r.reason };
+        case 'failed': return { ...base, status: 'failed', reason: r.reason };
+    }
+}
 
 /**
  * Hear one voice note. Never throws; see the file comment for the steps, the limits and what each failure is called.
  */
 export async function transcribeVoice(input: VoiceInput, deps: VoiceDeps = {}): Promise<VoiceResult> {
     const now = deps.now ?? Date.now;
-    const download = deps.download ?? ((link) => fetchMedia(link, { kind: 'audio' }));
-    const decode = deps.decode ?? ((bytes) => transcodeToWav(bytes));
+    const download = deps.download ?? ((link, options) => fetchMedia(link, { kind: 'audio', ...options }));
+    const decode = deps.decode ?? ((bytes, options) => transcodeToWav(bytes, options));
     const transcribe = deps.transcribe ?? transcribeWithMeta;
     const startedAt = now();
     const elapsed = (): number => now() - startedAt;
+    // The one clock: what is left of the step, which every part's own deadline is cut to.
+    const deadlineAt = input.deadlineAt ?? startedAt + STEP_BUDGET_MS;
+    const left = (): number => deadlineAt - now();
 
     // What the one log line says, filled in as the steps finish.
     const facts: Record<string, string | number | undefined> = {};
@@ -131,22 +163,27 @@ export async function transcribeVoice(input: VoiceInput, deps: VoiceDeps = {}): 
         return result;
     };
     const skipped = (reason: VoiceSkip): VoiceResult => finish({ ok: false, status: 'skipped', reason, usd: 0, model: '', ms: elapsed() });
-    const failed = (reason: FailReason, detail: string | undefined, model = ''): VoiceResult =>
-        finish({ ok: false, status: 'failed', reason, ...(detail ? { detail } : {}), usd: 0, model, ms: elapsed() });
+    const failed = (reason: FailReason, detail: string | undefined, model = '', errorKind?: 'auth' | 'quota'): VoiceResult =>
+        finish({ ok: false, status: 'failed', reason, ...(detail ? { detail } : {}), ...(errorKind ? { errorKind } : {}), usd: 0, model, ms: elapsed() });
 
     try {
-        // 1. The bytes.
+        // 1. The bytes, within what is left of the step (a step that is already over starts nothing).
         const downloadStart = now();
-        const media = await download(input.link);
+        const room = left();
+        const media: MediaResult = room <= 0
+            ? { ok: false, status: 'failed', reason: 'timeout' }
+            : await download(input.link, { connectMs: Math.min(CONNECT_TIMEOUT_MS, room), totalMs: Math.min(TOTAL_TIMEOUT_MS, room) });
         facts['download_ms'] = now() - downloadStart;
         if (!media.ok) return media.status === 'skipped' ? skipped(media.reason) : failed(media.reason, media.detail);
         facts['host'] = media.media.host;
         facts['bytes_in'] = media.media.bytes.length;
         if (media.media.mediaKind !== 'audio') return failed('fetch_failed', 'not_audio');
 
-        // 2. The WAV.
+        // 2. The WAV, killed at 10 s or at what is left of the step, whichever is sooner.
         const decodeStart = now();
-        const decoded = await decode(media.media.bytes);
+        const decodeRoom = left();
+        if (decodeRoom <= 0) return failed('timeout', 'decode');
+        const decoded = await decode(media.media.bytes, { timeoutMs: Math.max(1, Math.floor(Math.min(TRANSCODE_TIMEOUT_MS, decodeRoom))) });
         facts['decode_ms'] = now() - decodeStart;
         if (!decoded.ok) {
             const f = decodeFailure(decoded.reason, decoded.detail);
@@ -154,24 +191,37 @@ export async function transcribeVoice(input: VoiceInput, deps: VoiceDeps = {}): 
         }
         facts['wav_bytes'] = decoded.wav.length;
 
-        // 3. The words, once, and once more for a passing failure if the step has the time.
+        // 3. The words, once, and once more for a passing failure while at least `MIN_CALL_MS` is left. Each call's deadline is cut to what is left.
         const hearStart = now();
         let heard: TranscribeWithMetaResult | undefined;
         let refusal: unknown;
+        let outOfTime = false;
         for (let attempt = 1; ; attempt++) {
+            const room = left();
+            if (room < MIN_CALL_MS) {
+                // Nothing is left to try with. The first attempt gets here only when the download and the decode ate the step; a second, only when the first used it up
+                // (and then the first one's refusal is what it was, not a timeout).
+                log('warn', 'perception.out_of_time', { creator_id: input.creatorId, kind: 'audio', attempt });
+                outOfTime = attempt === 1;
+                break;
+            }
             try {
-                heard = await transcribe({ creatorId: input.creatorId, wav: decoded.wav, ...(input.keywords ? { keywords: input.keywords } : {}) });
+                heard = await transcribe({
+                    creatorId: input.creatorId, wav: decoded.wav, ...(input.keywords ? { keywords: input.keywords } : {}),
+                    timeoutMs: Math.max(1, Math.floor(Math.min(ASR_TIMEOUT_MS, room))),
+                });
                 break;
             } catch (err) {
                 refusal = err;
-                if (attempt >= 2 || !worthRetrying(err) || elapsed() + ASR_TIMEOUT_MS > VOICE_STEP_BUDGET_MS) break;
+                if (attempt >= 2 || !worthRetrying(err)) break;
                 log('info', 'perception.voice_retry', { creator_id: input.creatorId, kind: isAiError(err) ? err.kind : 'error', elapsed_ms: elapsed() });
             }
         }
         facts['asr_ms'] = now() - hearStart;
         if (!heard) {
+            if (outOfTime) return failed('timeout', 'out_of_time');
             const f = hearFailure(refusal);
-            return f.status === 'skipped' ? skipped(f.reason) : failed(f.reason, f.detail, ASR_MODEL);
+            return f.status === 'skipped' ? skipped(f.reason) : failed(f.reason, f.detail, ASR_MODEL, f.errorKind);
         }
         if (heard.sessionId) facts['session_id'] = heard.sessionId;
 
