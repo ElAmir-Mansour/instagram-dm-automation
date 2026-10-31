@@ -24,6 +24,14 @@ import { PROVIDER_IDS, type ProviderId } from '../services/llm/registry.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+/**
+ * The providers whose environment variable the card's own copy of the table (`AiProvidersView.KEY_ENV`, dashboard/js/pages/ai_providers.js) does not name yet.
+ * Baseten (the video memory's open-weights indexer, P4a) was added to the server with no dashboard change on purpose: the library view and its help come in a
+ * later dashboard PR that bumps the cache once for all of it, and that PR adds `baseten: 'BASETEN_API_KEY'` to the card and empties this list. Until then the
+ * card says "In use: the server's key" for it (`ops.ai.key.fromEnvPlain`) and the key can still be saved and removed.
+ */
+const KEY_ENV_NOT_YET_IN_THE_CARD: readonly ProviderId[] = ['baseten'];
+
 // ─── The fake DOM ────────────────────────────────────────────────────────────────────────────
 
 class FakeEl {
@@ -315,7 +323,13 @@ describe('AI providers card — the pure helpers', () => {
         assert.equal(View.keyEnv('meta'), 'META_MODEL_API_KEY');
         assert.equal(View.keyEnv('custom'), null);
         // The card keeps its own copy of the server's table (it cannot import it), so a provider added there and not here would say "the server's key" with no name.
-        for (const id of PROVIDER_IDS) assert.equal(View.keyEnv(id), PROVIDER_KEY_ENV[id], id);
+        for (const id of PROVIDER_IDS) {
+            if (KEY_ENV_NOT_YET_IN_THE_CARD.includes(id)) continue;
+            assert.equal(View.keyEnv(id), PROVIDER_KEY_ENV[id], id);
+        }
+        // The exception is pinned so that it cannot outlive its reason: the card says "the server's key" for a variable it does not name, and when the
+        // dashboard learns the name this assertion fails until the provider is taken off the list above.
+        for (const id of KEY_ENV_NOT_YET_IN_THE_CARD) assert.equal(View.keyEnv(id), null, `${id}: the card now names ${PROVIDER_KEY_ENV[id]}: remove ${id} from KEY_ENV_NOT_YET_IN_THE_CARD`);
         assert.equal(View.keyEnv('constructor'), null, 'a table lookup, not an object property chain');
         assert.equal(View.keyEnv('__proto__'), null);
     });
@@ -469,7 +483,7 @@ describe('AI providers card — what it draws', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
         const inputs = [...markup.matchAll(/<input[^>]*type="password"[^>]*>/g)].map((m) => m[0]);
-        assert.equal(inputs.length, 7, 'one per provider');
+        assert.equal(inputs.length, 8, 'one per provider');
         for (const input of inputs) {
             assert.match(input, /autocomplete="new-password"/);
             assert.match(input, /name="apiKey"/);
@@ -498,10 +512,10 @@ describe('AI providers card — what it draws', () => {
         assert.match(String(Card.providerInner(Card.provider('custom'))).match(/<button[^>]*data-action="aip:loadModels"[^>]*>/)![0], /disabled/, 'Custom needs its base URL first');
     });
 
-    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all seven, the endpoint on Custom only', () => {
+    it('puts the switch, the base URL and the JSON mode where they belong: the switch on all eight, the endpoint on Custom only', () => {
         const { Card } = loaded();
         const markup = String(Card.renderLoaded());
-        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 7);
+        assert.equal([...markup.matchAll(/data-change="aip:toggleEnabled"/g)].length, 8);
         assert.equal([...markup.matchAll(/name="baseUrl"/g)].length, 1);
         assert.equal([...markup.matchAll(/name="jsonMode"/g)].length, 1);
         const custom = String(Card.providerInner(Card.provider('custom')));
@@ -567,7 +581,7 @@ describe('AI providers card — what it draws', () => {
         const markup = String(Card.pricesInner());
         assert.ok(markup.includes('claude-opus-5-5') && markup.includes('gpt-6-astra'));
         assert.ok(markup.includes(t('ops.ai.priceCustom')) && markup.includes(t('ops.ai.priceDefault')));
-        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 15, 'fourteen built in (the Muse models are four of them) and one of the operator\'s');
+        assert.equal([...markup.matchAll(/data-action="aip:editPrice"/g)].length, 17, 'sixteen built in (the Muse models are four of them, Baseten\'s two more) and one of the operator\'s');
         assert.equal([...markup.matchAll(/data-action="aip:removePrice"/g)].length, 1, 'only an override can be removed');
         assert.match(markup, /data-model="gpt-6-astra"[^>]*data-in="2.5"[^>]*data-out="10"/);
     });

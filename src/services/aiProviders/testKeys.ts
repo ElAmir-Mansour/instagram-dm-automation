@@ -14,6 +14,8 @@ export const FAKE_KEYS: Record<ProviderId, string> = {
     openrouter: 'sk-or-v1-' + 'OpenrouterSentinel'.repeat(3) + 'ort4',
     groq: 'gsk_' + 'GroqSentinel'.repeat(4) + 'grq6',
     meta: 'meta-' + 'MetaSentinel'.repeat(3) + 'met7',
+    // Baseten's own shape (docs.baseten.co, 2026-10-30): `b10_`, eight characters, a dot, thirty-two: 45 in all.
+    baseten: 'b10_' + 'BasetenS' + '.' + 'Sentinel'.repeat(3) + 'Sen8' + 'bas9',
     custom: 'custom-' + 'CustomSentinel'.repeat(3) + 'cus5',
 };
 

@@ -10,7 +10,7 @@ import {
 import { PROVIDERS } from './registry.js';
 
 describe('DEFAULT_PRICES', () => {
-    it('seeds the Claude, Gemini, Groq and Muse models the registry offers, at the rates on the providers\' pricing pages', () => {
+    it('seeds the Claude, Gemini, Groq, Muse and Baseten models the registry offers, at the rates on the providers\' pricing pages', () => {
         assert.deepEqual(DEFAULT_PRICES, {
             'claude-opus-5-5': { in: 4, out: 20 },
             'claude-opus-5': { in: 5, out: 25 },
@@ -26,15 +26,34 @@ describe('DEFAULT_PRICES', () => {
             'muse-spark-1.2': { in: 1.25, out: 4.25 },
             'muse-spark-1.1': { in: 1.25, out: 4.25 },
             'muse-wonder-1.0': { in: 4, out: 20 },
+            // Baseten's Model APIs table, read 2026-10-30: Muse Spark Open at the same $1.25 / $4.25 as Meta's own Muse Spark (cached input $0.15, not used here).
+            'meta-models/muse-spark-open-1026': { in: 1.25, out: 4.25 },
+            'meta-models/muse-spark-open': { in: 1.25, out: 4.25 },
         });
     });
 
-    it('prices every Anthropic, Gemini, Groq and Meta model the registry suggests or defaults to', () => {
-        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini' || p.id === 'groq' || p.id === 'meta')) {
+    it('prices every Anthropic, Gemini, Groq, Meta and Baseten model the registry suggests or defaults to', () => {
+        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini' || p.id === 'groq' || p.id === 'meta' || p.id === 'baseten')) {
             for (const model of [p.defaultModel, ...p.suggestedModels]) {
                 assert.equal(priceFor(model, {}).priced, true, `${p.id}: ${model}`);
             }
         }
+    });
+});
+
+describe('Baseten\'s Muse Spark Open', () => {
+    it('is priced under the id the owner\'s key works with, which a dated-snapshot match would not reach (four digits, not six to eight), and under the page\'s own slug', () => {
+        for (const model of ['meta-models/muse-spark-open-1026', 'meta-models/muse-spark-open', '  META-MODELS/Muse-Spark-Open-1026 ']) {
+            assert.deepEqual(priceFor(model, {}), { in: 1.25, out: 4.25, priced: true }, model);
+        }
+        // A model nobody priced under that prefix is not borrowed from it: it is charged at the ceiling and flagged.
+        assert.equal(priceFor('meta-models/some-new-model', {}).priced, false);
+    });
+
+    it('costs the live reel analysis of 2026-10-29 (5,863 tokens in, 3,371 out, reasoning counted in the output) about two cents', () => {
+        const { usd, priced } = usdFor({ in: 5863, out: 3371 }, 'meta-models/muse-spark-open-1026', {});
+        assert.equal(priced, true);
+        assert.equal(usd, 0.0216555, '5,863 at $1.25/M ($0.00732875) plus 3,371 at $4.25/M ($0.01432675)');
     });
 });
 

@@ -17,6 +17,7 @@ import { fetchAndStoreLead } from '../services/ads/leads.js';
 import { redactOnFailure } from './redaction.js';
 import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
 import { advanceProposal } from '../services/ads/proposals/service.js';
+import { runReelIndexJob } from '../services/perception/reelIndex.js';
 
 /**
  * Whether this is the attempt after which nothing else will run.
@@ -79,5 +80,11 @@ export const handlers: JobHandlerRegistry = {
     // 6-hourly catch-up recovers a throttled lead; a locked tenant must not be asked again), and an unknown Page has no one to store it for.
     'ads.lead': async (payload) => {
         await fetchAndStoreLead(payload, 'webhook');
+    },
+    // One of the owner's own reels for the video memory (docs/specs/005-muse-sees T054). The outcome is written into `reel_analyses` by the indexer itself; this throws only
+    // for a failure that may well pass (Meta or the model was unavailable) while the runner has attempts left, so it is retried with a backoff, and returns on every other
+    // outcome: a reel that is too large, a switch that is off, a day's cap that was reached. The payload is ids only, so there is nothing to redact.
+    'muse.reel_index': async (payload, job) => {
+        await runReelIndexJob(payload, { lastAttempt: isLastAttempt(job) });
     },
 };

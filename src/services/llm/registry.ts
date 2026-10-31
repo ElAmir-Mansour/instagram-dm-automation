@@ -9,7 +9,9 @@
  * (adapters/chatCompletions.ts, limits.ts), the privacy and data-deletion pages' lists of who
  * receives a request, and the dashboard's names for the environment variables. Meta (Muse) touched
  * the same places and added two of its own: a cached-input rate in its prices (cost.ts) and the
- * rule that a `-contributor` model id may carry no customer's words (purposes.ts).
+ * rule that a `-contributor` model id may carry no customer's words (purposes.ts). Baseten (Meta's
+ * open model, for the reel indexer alone) touched them again and added the rule in the other
+ * direction: a provider that may answer only some purposes (`PROVIDER_PURPOSE_ALLOWLIST`, purposes.ts).
  *
  * Gemini is deliberately the same provider the DM bot and the Studio already use. Its key is the
  * existing `gemini.api_key` setting (P20c), not a second one.
@@ -26,9 +28,12 @@ export type ProviderFamily = 'anthropic' | 'openai_responses' | 'gemini' | 'chat
  * In `resolveRoute`'s fallback order (P20c): with no saved route, the first of these that has a
  * key is used, at its default model. Meta is late on purpose: a purpose that names no provider is
  * not moved to it while any provider before it can answer, and the purposes only Meta may answer
- * (`PURPOSE_PROVIDER_ALLOWLIST`) are the ones it is for.
+ * (`PURPOSE_PROVIDER_ALLOWLIST`) are the ones it is for. Baseten comes right after Meta, so the reel
+ * indexer with no route saved is answered by Meta's own hosted model when it has a key, and by the
+ * open model only when the operator routes `reel_index` to Baseten (or Meta has no key); no other
+ * purpose can reach it at all (`PROVIDER_PURPOSE_ALLOWLIST`).
  */
-export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'custom'] as const;
+export const PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'meta', 'baseten', 'custom'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface ProviderDef {
@@ -121,6 +126,19 @@ export const PROVIDERS: readonly ProviderDef[] = [
         // lets Meta train on what is sent, so none is suggested and none can be routed (purposes.ts).
         defaultModel: 'muse-spark-1.3',
         suggestedModels: ['muse-spark-1.3', 'muse-spark-1.2'],
+    },
+    {
+        id: 'baseten',
+        label: 'Baseten (Muse Spark Open)',
+        family: 'chat_completions',
+        // Baseten's Model APIs: OpenAI-compatible, a Bearer key, base `https://inference.baseten.co/v1` (docs.baseten.co, read 2026-10-30). Tried live on 2026-10-29.
+        baseUrl: 'https://inference.baseten.co/v1',
+        editableBaseUrl: false,
+        keyRequired: true,
+        // Meta's open-weights Muse Spark: the ONE model the owner's key works with, and the only one suggested. Baseten's own list is wide, but this provider
+        // exists for the reel indexer and for that model alone: it may answer no other purpose (`PROVIDER_PURPOSE_ALLOWLIST`), and any other id can still be typed.
+        defaultModel: 'meta-models/muse-spark-open-1026',
+        suggestedModels: ['meta-models/muse-spark-open-1026'],
     },
     {
         id: 'custom',
