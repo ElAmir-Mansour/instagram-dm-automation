@@ -2187,7 +2187,7 @@
     'ops.ai.purpose.recall': 'إيجاد الفيديو المناسب',
     'ops.ai.purpose.recall.hint': 'لمطابقة سؤال مع أحد ريلز الحساب نفسه وتحديد الثانية التي تبدأ منها المشاهدة. لا يجيب إلا Meta (Muse).',
     'ops.ai.purpose.reel_index': 'قراءة الريلز',
-    'ops.ai.purpose.reel_index.hint': 'لمشاهدة كل ريل نشره الحساب مرة واحدة وتدوين ما يعرضه وما يُقال فيه، ليسهل إيجاده لاحقاً. لا يجيب إلا Meta (Muse).',
+    'ops.ai.purpose.reel_index.hint': 'لمشاهدة كل ريل نشره الحساب مرة واحدة وتدوين ما يعرضه وما يُقال فيه، ليسهل إيجاده لاحقاً. لا يجيب إلا Meta (Muse) أو Baseten (نموذج ميتا المفتوح Muse Spark Open)، ولا يُرسَل إلى Baseten إلا ريلز الحساب نفسه. والاختيار التلقائي يستعمل Meta.',
     'ops.ai.purpose.comment_intent': 'قراءة التعليقات',
     'ops.ai.purpose.comment_intent.hint': 'لمعرفة ما يريده تعليق لا تطابقه أي حملة: شراء أو سؤال أو مدح أو شكوى. لا يجيب إلا Meta (Muse).',
     'ops.ai.purpose.key_test': 'الفحوص والتجارب',
