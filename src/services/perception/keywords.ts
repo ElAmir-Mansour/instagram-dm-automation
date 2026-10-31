@@ -16,7 +16,7 @@
  * **Which twenty.** A profile holds at most ten offers, so the cap is rarely met; when it is, the LONGEST names win: they are the most specific, the least likely to
  * be common words and the likeliest to be misheard when nothing says what they are. The list is in that order, ties in the order the profile gives them (the primary
  * offer first). A name that repeats one already kept, ignoring case, is dropped. One over `KEYWORD_MAX_CHARS` characters (an offer's name may be up to 200) is first cut to
- * the part before its separator («Agentic AI: الدليل العملي…» → «Agentic AI», "Python For Beginners [in Arabic]" → "Python For Beginners"), then at a word: the start of a
+ * the part before its separator («Data Lab: الدليل العملي…» → «Data Lab», "Python For Beginners [in Arabic]" → "Python For Beginners"), then at a word: the start of a
  * title is the part a person says, and Meta's endpoint refuses a keyword over 30 characters (`ASR_MAX_KEYWORD_CHARS`).
  */
 import { graphemes } from '../dmSales/text.js';

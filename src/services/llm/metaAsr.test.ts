@@ -102,7 +102,7 @@ describe('the request part', () => {
     it('leaves out a keyword over 30 characters: the endpoint refuses the whole note for one (live 400, 2026-10-31)', () => {
         assert.equal(ASR_MAX_KEYWORD_CHARS, 30);
         const thirty = 'a'.repeat(30);
-        const request = buildAsrRequest([thirty, 'b'.repeat(31), 'Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي', 'Python']);
+        const request = buildAsrRequest([thirty, 'b'.repeat(31), 'Data Lab: الدليل العملي لبناء لوحات البيانات من الصفر', 'Python']);
         assert.deepEqual(request.keywords, [thirty, 'Python']);
         assert.equal(buildAsrRequest(['c'.repeat(31)]).keywords, undefined, 'with nothing left, the key is left out');
     });

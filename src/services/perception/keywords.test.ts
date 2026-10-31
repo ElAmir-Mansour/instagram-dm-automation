@@ -88,13 +88,13 @@ describe('voiceKeywords: how many, and how long', () => {
     it('says a long title by its name: the part before a colon, a bar, a bracket or a spaced dash (Meta takes at most 30 characters a keyword)', () => {
         assert.equal(KEYWORD_MAX_CHARS, 30);
         const out = voiceKeywords(source({ offers: named(
-            'Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي',
+            'Data Lab: الدليل العملي لبناء لوحات البيانات من الصفر',
             'Swift Programming Language | in Arabic',
             'Problem Solving - with C# [in Arabic]',
             'Python For Beginners [in Arabic]',
-            'GoLang Course: Learn Go in Arabic',
+            'GoLang Track: Learn Go in Arabic',
         ) }));
-        for (const want of ['Agentic AI', 'Swift Programming Language', 'Problem Solving', 'Python For Beginners', 'GoLang Course']) assert.ok(out.includes(want), `${want} in ${JSON.stringify(out)}`);
+        for (const want of ['Data Lab', 'Swift Programming Language', 'Problem Solving', 'Python For Beginners', 'GoLang Track']) assert.ok(out.includes(want), `${want} in ${JSON.stringify(out)}`);
         for (const t of out) assert.ok(t.length <= 30, `${t.length}: ${t}`);
     });
 
