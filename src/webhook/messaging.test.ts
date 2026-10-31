@@ -2302,6 +2302,7 @@ describe('handleMessagingEvent — Meta Muse off: a message with no words is tod
     const REEL = { mid: 'mid-r', attachments: [{ type: 'ig_reel', payload: { url: 'https://www.instagram.com/reel/C1/', title: 'cap', reel_video_id: '17900000000000001' } }] };
     const MENTION = { mid: 'mid-m', attachments: [{ type: 'story_mention', payload: { url: 'https://lookaside.fbsbx.com/m' } }] };
     const STORY_REPLY = { mid: 'mid-s', reply_to: { story: { url: 'https://lookaside.fbsbx.com/s', id: '18000000000000001' } } };
+    const AUDIO = { mid: 'mid-v', attachments: [{ type: 'audio', payload: { url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=7' } }] };
 
     let layerCalls: AiGenerateArgs[];
     let undo: () => void;
@@ -2366,9 +2367,53 @@ describe('handleMessagingEvent — Meta Muse off: a message with no words is tod
         assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
     });
 
-    it('a sticker, a file and a voice note are the old calls with no read at all: not a kind Muse reads (voice is another phase)', async () => {
+    it('a voice note, sales mode off: the old calls plus ONE read, the mode, and the switches never read', async () => {
+        const { timeline, sends, error, geminiCalls } = await runDm(msg(AUDIO), { agent: agentIn('off') });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.equal(count(timeline, SALES_READ), 1);
+        assert.equal(count(timeline, SETTING_READ), 0, 'a sales mode that answers nobody never gets as far as the switches');
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+        assert.equal(geminiCalls, 0);
+        assert.equal(layerCalls.length, 0);
+    });
+
+    it('a voice note, sales mode ON, every switch off: the old calls plus the mode and the gate\'s three settings, no typing, no download, no write, and today\'s line', async () => {
+        const { timeline, sends, executed, lookups, error, geminiCalls } = await runDm(msg(AUDIO), { agent: agentIn('on') });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.equal(count(timeline, SALES_READ), 1);
+        assert.equal(count(timeline, SETTING_READ), 3);
+        assert.deepEqual(executed.filter((e) => /FROM app_settings WHERE key = \$1/.test(e.sql)).map((e) => e.params[0]).sort(), ['muse.allow_senders.creator-1', 'muse.daily_usd.creator-1', 'muse.switches.creator-1']);
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message'], 'no typing indicator');
+        assert.equal(sends[0]!.body.message.text, `${KITS.gulf.disclosure}\n${KITS.gulf.attachments.media}`);
+        assert.equal(geminiCalls, 0);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(lookups.length, 0, 'Meta is not asked anything');
+        assert.ok(!executed.some((e) => /UPDATE messages SET perception|FROM reel_analyses|ai_usage/.test(e.sql)), 'nothing is written or read for a perception or a transcription');
+    });
+
+    it('a voice note with the voice switch on but the sender NOT on the allow-list: the same calls, and nothing is written', async () => {
+        const settings = [[/FROM app_settings WHERE key = \$1/, { rows: [{ value: JSON.stringify({ dm_media: false, voice: true, memory: false }), is_secret: false }] }]] as Array<[RegExp, { rows: any[] }]>;
+        const { timeline, sends, executed, error } = await runDm(msg(AUDIO), { agent: agentIn('on'), extraRoutes: settings });
+        assert.equal(error, null);
+        sameCalls(withoutReads(timeline), WORDLESS_TODAYS_CALLS, 'the calls');
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+        assert.ok(!executed.some((e) => /UPDATE messages SET perception|ai_usage/.test(e.sql)));
+    });
+
+    it('a Messenger voice note is the old calls with NO read at all: perception is Instagram\'s, and the platform is the first thing asked', async () => {
+        const { timeline, sends, error } = await runDm(
+            textEvent({ recipient: { id: 'fb-page-1' }, message: AUDIO }), { agent: agentIn('on') }, { lastAttempt: false, object: 'page' }, 'fb-page-1'
+        );
+        assert.equal(error, null);
+        sameCalls(timeline.filter((c) => !c.startsWith('SQL UPDATE conversations SET profile_checked')), WORDLESS_TODAYS_CALLS.filter((c) => !c.startsWith('SQL UPDATE conversations SET profile_checked')), 'the calls');
+        assert.equal(count(timeline, SALES_READ) + count(timeline, SETTING_READ), 0);
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message']);
+    });
+
+    it('a sticker, a file and an unsupported message are the old calls with no read at all: not a kind Muse reads', async () => {
         const messages: Array<Record<string, unknown>> = [
-            { mid: 'a', attachments: [{ type: 'audio', payload: { url: 'https://lookaside.fbsbx.com/a.mp4' } }] },
             { mid: 'b', attachments: [{ type: 'file', payload: { url: 'https://lookaside.fbsbx.com/f.pdf' } }] },
             { mid: 'c', is_unsupported: true },
         ];

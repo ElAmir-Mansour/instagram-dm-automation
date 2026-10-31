@@ -47,6 +47,12 @@ describe('readPhrase: how a trace begins', () => {
         assert.equal(readPhrase('story_reply', undefined), 'Read a reply to the account\'s story');
     });
 
+    it('says a voice note was HEARD: it is listened to, and nothing about how it was looked at applies, whatever the stored text starts with', () => {
+        assert.equal(readPhrase('audio', undefined), 'Heard a voice note');
+        assert.equal(readPhrase('audio', 'Watched the reel. x'), 'Heard a voice note');
+        assert.equal(readNoun('audio'), 'a voice note');
+    });
+
     it('has a noun for every kind perception reads, and the trace and the description agree on them', () => {
         for (const kind of PERCEIVABLE_KINDS) assert.ok(readNoun(kind).length > 0, kind);
         assert.equal(readNoun('reel'), 'a shared reel');

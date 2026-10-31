@@ -15,6 +15,7 @@ import { generateDmReply } from '../services/dmEngine.js';
 import { answersWithSales, readSalesSettings } from '../services/dmSales/mode.js';
 import { runSalesTurn, type PerceivedTurn, type SalesTurnResult } from '../services/dmSales/turn.js';
 import { perceiveDm, primaryRef, storyReplyRef } from '../services/perception/dm.js';
+import { voiceKeywords } from '../services/perception/keywords.js';
 import { planOf, type WordlessPlan } from '../services/perception/plan.js';
 import { perceivedFact } from '../services/perception/text.js';
 import { profileContextOrLegacy, type ProfileContext } from '../services/profile/context.js';
@@ -786,10 +787,11 @@ const readingLanguage = (ctx: ProfileContext<'dm'>) => kitFor(ctx.language).dm.s
  * What to do with a message that has no words (docs/specs/005-muse-sees T032): the line it has always got, unless Meta Muse can READ it. In this order, each step
  * only if the one before passed, and every "no" is today's line with not one statement more than it cost before, except the reads the questions need:
  *
- *   1. The DM is Instagram's (`platform`, the body's `object`) and holds a thing Muse reads (`primaryRef`): a sticker, a file, a voice note, a view-once and a
- *      Messenger DM stop here, with no reads at all.
+ *   1. The DM is Instagram's (`platform`, the body's `object`) and holds a thing Muse reads (`primaryRef`): a sticker, a file, a view-once and a Messenger DM stop
+ *      here, with no reads at all. A voice note is one: it is heard (Meta's speech model) and not looked at, and is the `voice` switch's.
  *   2. The tenant's sales mode answers this sender (`answersWithSales`): a read is only for a message the sales turn will answer.
- *   3. `perceiveDm`: the tenant's switch, the sender's allow-list, a Meta key, the day's cap; then `typing_on`, what to show, Muse, and the record, stored once.
+ *   3. `perceiveDm`: the tenant's switch for the kind (`dm_media`, or `voice`), the sender's allow-list, a Meta key, the day's cap; then `typing_on`, what to show and
+ *      Muse (or, for a voice note, what is said in it), and the record, stored once.
  *
  * A read that throws (a database that could not take the record, or anything unforeseen) is retried while attempts remain, and on the last one is today's line,
  * never nothing. `planOf` turns what was read into the plan.
@@ -814,6 +816,8 @@ async function planWordless(a: {
             creator: { id: a.creator.id, page_access_token: a.creator.page_access_token, instagram_page_id: a.creator.instagram_page_id },
             pageId: a.pageId, senderId: a.dm.senderId, messageId: a.messageId, ref, typed: false, resumed: a.resumed,
             language: readingLanguage(a.ctx), handle: a.ctx.links.handle,
+            // The names a voice note may say, as hints for the speech model: the account's offers and brand, from the profile this DM is already answered from.
+            ...(ref.kind === 'audio' ? { keywords: voiceKeywords(a.ctx) } : {}),
         });
         if (reading.kind === 'declined') return TODAYS;
         return planOf(reading.perception, kitFor(a.ctx.language).attachments);
