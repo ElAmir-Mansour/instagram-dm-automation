@@ -429,3 +429,80 @@ describe('a perceived turn: a burst of messages with no words is ONE answer', ()
         assert.equal(record(r).pauseBot, true);
     });
 });
+
+// ─── A voice note ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * A voice note's transcript is what the customer SAID, so it is their own words and not a model's description: `describedText` is false and there is no fact. Everything
+ * else a perceived turn does still holds (no Gemini fallback, a trace, a burst is one answer), and what is different is pinned here.
+ */
+describe('a perceived turn: a voice note is answered as the customer\'s own words', () => {
+    const SPOKEN = 'How much is the twelve-week plan and is there a certificate?';
+    const VOICE: PerceivedTurn = { kind: 'audio', describedText: false, sent: null, read: 'Heard a voice note' };
+
+    it('the refund and complaint prefilter READS the transcript: a refund asked for aloud is a hand-off with no model, like a typed one', async () => {
+        const r = await run({ text: 'I want a refund, this is a scam', perceived: VOICE });
+
+        assert.equal(r.error, null);
+        assert.equal(r.layerCalls.length, 0, 'the prefilter decided, as it does for typed words');
+        const rec = record(r);
+        assert.equal(rec.aiMeta.engine, 'prefilter');
+        assert.equal(rec.pauseBot, true);
+        assert.equal(rec.aiMeta.perceived, true);
+        assert.equal(rec.aiMeta.reason, 'Heard a voice note; handed the chat to a person, because they raised a refund.');
+    });
+
+    it('and "stop" said aloud is an opt-out, as it is when typed', async () => {
+        const r = await run({ text: 'stop', perceived: VOICE });
+        assert.equal(r.layerCalls.length, 0);
+        assert.equal(record(r).aiMeta.engine, 'prefilter');
+    });
+
+    it('the model is asked, with the transcript as the customer\'s message and no "What the customer sent" fact beside it', async () => {
+        const r = await run({ text: SPOKEN, perceived: VOICE });
+        assert.equal(r.layerCalls.length, 1);
+        const last = lastUserTurn(r.layerCalls[0]!);
+        assert.ok(last.endsWith(SPOKEN), 'the bare transcript is the last thing the model reads');
+        assert.ok(!last.includes('What the customer sent'), 'a voice note is words: nothing is described to the model');
+    });
+
+    it('says in the reply\'s record that it was perceived, and heard: a line built by the code, with no word the customer said in it', async () => {
+        const r = await run({ text: SPOKEN, perceived: VOICE, layer: saying(reply({ intent: 'price', next_action: 'reply' })) });
+        const meta = record(r).aiMeta;
+        assert.equal(meta.perceived, true);
+        assert.equal(meta.reason, 'Heard a voice note; answered from the account\'s own information, because they asked about the price.');
+        assert.ok(!meta.reason.includes('twelve-week') && !meta.reason.includes('certificate'));
+    });
+
+    it('a model that fails is a hand-off and never Gemini: what the customer SAID is not told to a provider that may train on it', async () => {
+        const r = await run({ text: SPOKEN, perceived: VOICE, layer: failing('server') });
+        assert.equal(r.geminiCalls, 0);
+        assert.equal(messages(r)[0]!.body.message.text, 'The account owner will reply soon.');
+        assert.equal(record(r).pauseBot, true);
+        assert.match(record(r).aiMeta.reason, /^Heard a voice note, but the model could not answer: a person was told\.$/);
+        assert.equal(r.logged.find((l) => l.event === 'dm.engine_failed')?.fallback, 'never');
+    });
+
+    it('is one answer for a burst of voice notes: the check is made again after the model has answered, and a note read in the meantime takes its place', async () => {
+        const r = await run({ text: SPOKEN, perceived: VOICE, supersession: [{ newer_unhandled: false, answered: false }, { newer_unhandled: true, answered: false }] });
+        assert.equal(r.layerCalls.length, 1, 'the model answered');
+        assert.equal(supersessionCount(r), 2, 'once at the top, once before the send');
+        assert.equal(messages(r).length, 0, 'and nothing was sent');
+        assert.equal(r.result?.kind === 'done' && r.result.outcome, 'superseded');
+    });
+
+    it('and so is a reply that was sent after the note was heard; with nothing newer it sends', async () => {
+        const answered = await run({ text: SPOKEN, perceived: VOICE, supersession: [{ newer_unhandled: false, answered: false }, { newer_unhandled: false, answered: true }] });
+        assert.equal(messages(answered).length, 0);
+        const clear = await run({ text: SPOKEN, perceived: VOICE, supersession: [{ newer_unhandled: false, answered: false }] });
+        assert.equal(supersessionCount(clear), 2);
+        assert.equal(messages(clear).length, 1);
+    });
+
+    it('a hand-off the model asks for is not lost to a note that has not been heard yet: only the check at the top', async () => {
+        const r = await run({ text: SPOKEN, perceived: VOICE, layer: saying(reply({ next_action: 'handoff', handoff_reason: 'unsure', stage: 'handoff' })), supersession: [{ newer_unhandled: false, answered: false }, { newer_unhandled: true, answered: false }] });
+        assert.equal(supersessionCount(r), 1);
+        assert.equal(messages(r).length, 1);
+        assert.equal(record(r).pauseBot, true);
+    });
+});

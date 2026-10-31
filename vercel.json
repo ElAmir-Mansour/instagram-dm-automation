@@ -12,7 +12,10 @@
     },
     {
       "src": "src/index.ts",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["node_modules/ffmpeg-static/ffmpeg"]
+      }
     }
   ],
   "routes": [

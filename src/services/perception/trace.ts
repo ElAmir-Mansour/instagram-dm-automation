@@ -8,7 +8,7 @@
  */
 import type { TurnEffect } from '../dmSales/flow.js';
 import type { HandoffReason, Intent, NextAction } from '../dmSales/types.js';
-import { readNoun } from './how.js';
+import { readNoun, readPhrase } from './how.js';
 import type { PerceptionKind } from './types.js';
 
 /** What the turn did, as a verb phrase, by the action the code settled on. */
@@ -71,7 +71,7 @@ export interface TraceInput {
 export const REASON_MAX_CHARS = 200;
 
 export function traceReason(t: TraceInput): string {
-    const read = t.read ?? `Read ${readNoun(t.kind)}`;
+    const read = t.read ?? readPhrase(t.kind, undefined);
     if (t.personal) return `Read ${readNoun(t.kind)}: it is a personal document, so the chat went to a person without describing it.`;
     if (t.modelFailed) return `${read}, but the model could not answer: a person was told.`;
 

@@ -4,7 +4,8 @@
  *   - a story mention is thanked by name when what it showed is fit to say back, and by the usual thanks when it is not; it is never answered by a sales turn;
  *   - what could not be read with confidence is asked for again only when the person SENT it: a story they replied to or mentioned the account in has nothing to resend;
  *   - every read that did not come to be (the link, the cap, the key, the time) is the usual line, with its reason as one sentence for the inbox;
- *   - a personal document is an answer that the sales turn hands to a person, never a description.
+ *   - a personal document is an answer that the sales turn hands to a person, never a description;
+ *   - a voice note is answered from its bare transcript as the customer's OWN words (the prefilter reads them), and asked for again when no words could be made out.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -56,6 +57,57 @@ describe('planOf: a perception that was read', () => {
         assert.ok(plan.kind === 'answer');
         assert.equal(plan.perceived.personal, true);
         assert.equal(plan.text, '[photo] a personal document');
+    });
+});
+
+describe('planOf: a voice note', () => {
+    const voice = (over: Partial<Perception> = {}): Perception => ({
+        v: 1, kind: 'audio', status: 'ok', transcript: 'عايز أعرف بكام الاشتراك وفيه شهادة', model: 'muse-voice-transcribe-1.0', stored_at: '2026-10-30T10:00:00.000+00:00', ms: 4100, usd: 0.00015, ...over,
+    });
+
+    it('is answered by the sales turn from the BARE transcript, as the customer\'s own words: the prefilter reads it, and the model is told no fact beside it', () => {
+        const p = voice();
+        const plan = planOf(p, en);
+        assert.ok(plan.kind === 'answer');
+        assert.equal(plan.text, 'عايز أعرف بكام الاشتراك وفيه شهادة', 'no label, no brackets');
+        assert.equal(plan.text, perceivedText('audio', p));
+        assert.deepEqual(plan.perceived, { kind: 'audio', describedText: false, sent: null, read: 'Heard a voice note', personal: false });
+    });
+
+    it('is the same in every register: the plan is the transcript, whatever the kit', () => {
+        for (const lines of [en, gulf, KITS.egyptian.attachments, KITS.msa.attachments, KITS.levantine.attachments]) {
+            const plan = planOf(voice(), lines);
+            assert.ok(plan.kind === 'answer');
+            assert.equal(plan.perceived.describedText, false);
+        }
+    });
+
+    it('with no words made out is asked for again, in the kit\'s resend line, with a reason that says what was missing', () => {
+        for (const transcript of [undefined, '', 'تمام']) {
+            const plan = planOf(voice({ status: 'unreadable', reason: 'empty_transcript', ...(transcript === undefined ? { transcript: undefined } : { transcript }) }), en);
+            assert.ok(plan.kind === 'ack' && plan.perception, String(transcript));
+            assert.equal(plan.perception.line, en.resend);
+            assert.equal(plan.perception.reason, 'Could not make out any words in it, so it asked them to send it again.');
+            assert.equal(plan.perception.perceived, false);
+        }
+        const arabic = planOf(voice({ status: 'unreadable', reason: 'empty_transcript' }), gulf);
+        assert.ok(arabic.kind === 'ack' && arabic.perception);
+        assert.equal(arabic.perception.line, gulf.resend);
+    });
+
+    it('that failed or was held back is the usual line, with the reason, like any other read', () => {
+        for (const [over, sentence] of [
+            [{ status: 'failed', reason: 'decode_failed' }, 'Could not read it: the voice note could not be decoded, so it sent the usual line.'],
+            [{ status: 'failed', reason: 'too_large' }, 'Could not read it: it was too large to read, so it sent the usual line.'],
+            [{ status: 'failed', reason: 'expired_url' }, 'Could not read it: its link had expired, so it sent the usual line.'],
+            [{ status: 'failed', reason: 'provider_error' }, 'Could not read it: the reading service could not read it, so it sent the usual line.'],
+            [{ status: 'skipped', reason: 'budget' }, 'Could not read it: the daily limit for reading media was reached, so it sent the usual line.'],
+        ] as Array<[Partial<Perception>, string]>) {
+            const plan = planOf(voice({ ...over, transcript: undefined }), en);
+            assert.ok(plan.kind === 'ack' && plan.perception);
+            assert.equal(plan.perception.line, undefined, 'the kit\'s usual line, chosen by the acknowledgement');
+            assert.equal(plan.perception.reason, sentence);
+        }
     });
 });
 
@@ -119,6 +171,7 @@ describe('planOf: a read that did not come to be is the usual line, with the rea
         [{ status: 'failed', reason: 'expired_url' }, 'Could not read it: its link had expired, so it sent the usual line.'],
         [{ status: 'failed', reason: 'provider_error' }, 'Could not read it: the reading service could not read it, so it sent the usual line.'],
         [{ status: 'failed', reason: 'timeout' }, 'Could not read it: it took too long, so it sent the usual line.'],
+        [{ status: 'failed', reason: 'decode_failed' }, 'Could not read it: the voice note could not be decoded, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'budget' }, 'Could not read it: the daily limit for reading media was reached, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'no_key' }, 'Could not read it: no Meta key is set up for reading media, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'no_url' }, 'Could not read it: there was nothing in it to open, so it sent the usual line.'],
