@@ -95,7 +95,7 @@ export function targetsOf(s: ArmSummary): Target[] {
         {
             id: 'action', label: 'Expected action', met: s.expectedAction.pct !== null && s.expectedAction.pct >= BAR.expectedActionPct, value: percent(s.expectedAction), goal: `at least ${BAR.expectedActionPct}%`,
         },
-        { id: 'invented', label: 'Invented facts sent', met: s.inventedSent <= BAR.inventedFacts, value: String(s.inventedSent), goal: String(BAR.inventedFacts) },
+        { id: 'invented', label: 'Invented facts sent', met: s.cases > 0 && s.inventedSent <= BAR.inventedFacts, value: String(s.inventedSent), goal: String(BAR.inventedFacts) },
         { id: 'p90', label: 'p90 latency', met: s.p90Ms !== null && s.p90Ms <= p90Goal, value: secs(s.p90Ms), goal: `at most ${p90Goal / 1000} s` },
         { id: 'cost', label: 'Cost per reply', met: s.usdPerReply !== null && s.usdPerReply <= BAR.usdPerReply, value: dollars(s.usdPerReply), goal: `at most ${dollars(BAR.usdPerReply)}` },
     ];
