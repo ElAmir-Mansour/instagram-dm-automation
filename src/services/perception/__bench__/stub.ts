@@ -159,14 +159,13 @@ export function stubSalesCaller(ledger: Ledger, cases: readonly MuseCase[]): Eva
 export const stubJudge = (): EvalCaller => stubJudgeCaller();
 
 /** The voice stand-in: the words each voice case says it means, heard perfectly, at the speech model's price per hour of audio. */
-export function stubTranscribe(cases: readonly MuseCase[], ledger: Ledger, clock: FakeClock): TranscribeVoice {
+export function stubTranscribe(cases: readonly MuseCase[], clock: FakeClock): TranscribeVoice {
     return async (input) => {
         const c = cases.find((x) => x.id === input.caseId);
         const ms = 3_000;
         // Muse Voice Transcribe is billed by the hour of audio: $0.18 an hour, and these notes are a few seconds.
         const usd = 0.0003;
         clock.advance(ms);
-        ledger.add({ role: 'transcription', provider: 'meta', model: 'muse-voice-transcribe-1.0', usd, priced: true, tokensIn: 0, tokensOut: 0, cacheRead: 0, ms, ok: true });
         return { status: 'ok', transcript: (c?.reference ?? '').replace(/[؟?،,.!]/g, '').trim(), ms, usd };
     };
 }
