@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { AiError } from './errors.js';
 import {
-    ASR_LANGUAGE_BIAS, ASR_MAX_KEYWORDS, ASR_MODEL, ASR_PROVIDER, ASR_TIMEOUT_MS, ASR_USD_PER_HOUR, asrUrl, asrUsd, buildAsrRequest, buildMultipart, callMetaAsr, type AsrArgs,
+    ASR_LANGUAGE_BIAS, ASR_MAX_KEYWORD_CHARS, ASR_MAX_KEYWORDS, ASR_MODEL, ASR_PROVIDER, ASR_TIMEOUT_MS, ASR_USD_PER_HOUR, asrUrl, asrUsd, buildAsrRequest, buildMultipart, callMetaAsr, type AsrArgs,
 } from './metaAsr.js';
 import { parseMultipart, wavBytes } from './testAudio.js';
 import { hangingFetch, jsonResponse } from './testFetch.js';
@@ -97,6 +97,14 @@ describe('the request part', () => {
         const many = Array.from({ length: 30 }, (_, i) => `term ${i}`);
         assert.equal(ASR_MAX_KEYWORDS, 20);
         assert.deepEqual(buildAsrRequest(many).keywords, many.slice(0, 20));
+    });
+
+    it('leaves out a keyword over 30 characters: the endpoint refuses the whole note for one (live 400, 2026-10-31)', () => {
+        assert.equal(ASR_MAX_KEYWORD_CHARS, 30);
+        const thirty = 'a'.repeat(30);
+        const request = buildAsrRequest([thirty, 'b'.repeat(31), 'Data Lab: الدليل العملي لبناء لوحات البيانات من الصفر', 'Python']);
+        assert.deepEqual(request.keywords, [thirty, 'Python']);
+        assert.equal(buildAsrRequest(['c'.repeat(31)]).keywords, undefined, 'with nothing left, the key is left out');
     });
 
     it('is a fresh object each time, so one call cannot change the next', () => {

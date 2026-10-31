@@ -48,6 +48,13 @@ export const ASR_LANGUAGE_BIAS: readonly string[] = Object.freeze(['Arabic', 'En
 export const ASR_MAX_KEYWORDS = 20;
 
 /**
+ * The longest keyword the endpoint takes. Its docs give no limit, but it refuses the whole request with a 400 ("ASR keyword 0 exceeds the maximum length of 30
+ * characters", live 2026-10-31) when one term is longer: an offer's full title sent whole would cost every voice note its transcript. Counted in UTF-16 units, the
+ * stricter of the two counts for anything outside the basic plane, so nothing that passes here can be refused there.
+ */
+export const ASR_MAX_KEYWORD_CHARS = 30;
+
+/**
  * What `ms` of audio costs, in dollars: `ms / 3,600,000 × $0.18`, to the billionth (the precision of `cost.ts`, so that the tiny sums `ai_usage` adds up carry no
  * floating-point noise). Meta meters whole seconds rounded DOWN, so this is at most one second's cost (about $0.00005) above the invoice: over-counting is the
  * safe side of a budget. Not a number, or negative, is free.
@@ -71,9 +78,12 @@ export interface AsrRequest {
     keywords?: string[];
 }
 
-/** The `request` part, in the key order of the contract and of the live probe. Terms are trimmed, empty ones dropped, and no more than `ASR_MAX_KEYWORDS` kept. Pure. */
+/**
+ * The `request` part, in the key order of the contract and of the live probe. Terms are trimmed, empty ones dropped, one over `ASR_MAX_KEYWORD_CHARS` left out
+ * (the endpoint would refuse the whole note for it), and no more than `ASR_MAX_KEYWORDS` kept. Pure.
+ */
 export function buildAsrRequest(keywords: readonly string[] = []): AsrRequest {
-    const terms = keywords.filter((k): k is string => typeof k === 'string').map((k) => k.trim()).filter(Boolean).slice(0, ASR_MAX_KEYWORDS);
+    const terms = keywords.filter((k): k is string => typeof k === 'string').map((k) => k.trim()).filter((k) => k.length > 0 && k.length <= ASR_MAX_KEYWORD_CHARS).slice(0, ASR_MAX_KEYWORDS);
     return { model: ASR_MODEL, audioEncoding: 'WAV', languageBias: [...ASR_LANGUAGE_BIAS], ...(terms.length ? { keywords: terms } : {}) };
 }
 
