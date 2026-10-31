@@ -3,7 +3,8 @@
  *
  * ─── Polling contract (do not regress) ──────────────────────────────────────
  *   - one request per tick (the thread list), not three
- *   - messages are only re-fetched when that thread's last_message_at changed
+ *   - messages are only re-fetched when that thread's last_message_at changed,
+ *     and then only what was stored since the newest message shown (`since`)
  *   - polling stops while the tab is hidden, and on destroy() (navigate/logout)
  *   - an idle list is polled less: 5s, then 15s, then 30s after runs of
  *     unchanged ticks (`POLL_STEPS`), and back to 5s the moment anything
@@ -28,6 +29,15 @@
  * match on their last message — the server matches the sender only. The
  * segmented filter (All · Needs reply · AI paused) is applied last, and is
  * seeded from `#/inbox?filter=waiting`, which is where the Overview links.
+ *
+ * ─── The log: the newest page first, the history on the way up ──────────────
+ * A thread opens on its newest `MESSAGE_PAGE` messages, painted in one insertion and put at the
+ * newest message before the first frame. It used to fetch the newest 100 and then scroll down to
+ * them with the stylesheet's smooth scrolling, so the whole history played past on every open,
+ * and nothing older than those 100 could be reached at all. Now:
+ *   - scrolling near the top fetches the page above (`?before=`), and the reading place is kept;
+ *   - a picture that finishes loading while the log is at its newest message keeps it there;
+ *   - scrolled up, a button goes back down, and says "new messages" when some arrived meanwhile.
  *
  * ─── The detail view ("I want to see everything in here in detail") ─────────
  * What the server stores about a thread, drawn rather than left in the database:
@@ -98,6 +108,18 @@ const InboxPage = {
     /** The route's own cap. */
     LIMIT: 100,
     SEARCH_DEBOUNCE_MS: 300,
+    /** A thread opens on its newest `MESSAGE_PAGE` messages, and each scroll to the top brings the `MESSAGE_PAGE` before them. */
+    MESSAGE_PAGE: 40,
+    /** A poll asks from the newest message shown less this, so a row stored a moment late under an earlier clock still arrives (ids already shown are skipped). */
+    SINCE_OVERLAP_MS: 2 * 60 * 1000,
+    /** The route's cap on one answer (`MESSAGES_ANSWER_MAX`): a poll that fills it has missed more than it can place, and the thread is opened afresh. */
+    MESSAGE_ANSWER_MAX: 200,
+    /** Within this many pixels of the newest message the log follows what arrives; further up, it stays where the operator is reading. */
+    NEAR_BOTTOM_PX: 80,
+    /** Within this many pixels of the top, the page above is fetched. */
+    OLDER_TRIGGER_PX: 240,
+    /** Further up than this, the "latest messages" button shows. */
+    JUMP_BUTTON_PX: 480,
     FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']),
     /** What `effective_ai` says (src/services/inboxAssistant.ts: a test fails when these differ). */
     EFFECTIVE_STATES: Object.freeze(['on', 'off_global', 'paused_thread', 'sales_test', 'sales_live']),
@@ -213,6 +235,21 @@ const InboxPage = {
 
     /** The local day of the last message in the log, so a divider goes in when it changes. */
     _lastDayKey: null,
+
+    /** The open thread's messages as the log shows them, oldest first: what replies are paired over, and where the page above and the next poll start. */
+    loadedMessages: [],
+    /** The thread has messages above the first one shown; a page of them is being fetched; the last try failed and waits for Retry. */
+    _hasOlder: false,
+    _loadingOlder: false,
+    _olderFailed: false,
+    /** The local day of the first message in the log: a page put above it must not repeat its divider. */
+    _firstDayKey: null,
+    /** The log is at its newest message, so a picture that finishes loading keeps it there. */
+    _pinned: true,
+    /** How many messages arrived while the operator was reading further up: the button then says "new messages". */
+    _unseenBelow: 0,
+    /** Bumped on every change of thread: an answer for the thread before is dropped. */
+    _threadSeq: 0,
 
     /** id → the AI state the operator chose, until the server confirms it. */
     pendingBotState: new Map(),
@@ -381,9 +418,7 @@ const InboxPage = {
         this._epoch++;
         this.selectedConversationId = null;
         this.chatShellThreadId = null;
-        this.renderedMessageIds = new Set();
-        this.messagesPainted = false;
-        this._lastDayKey = null;
+        this.resetMessageState();
         this.pendingBotState = new Map();
         this.pendingHandled = new Map();
         this.assistant = null;
@@ -409,6 +444,21 @@ const InboxPage = {
         this.funnel = { open: false, days: 30, data: null, failed: false, loading: false, seq: ((this.funnel && this.funnel.seq) || 0) + 1, at: 0 };
         this.paintFunnel();
         if (this._searchFetch && typeof this._searchFetch.cancel === 'function') this._searchFetch.cancel();
+    },
+
+    /** What the log knows about the open thread, forgotten: a new thread, or this one opened afresh, starts its log from nothing. */
+    resetMessageState() {
+        this._threadSeq++;
+        this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
+        this._lastDayKey = null;
+        this.loadedMessages = [];
+        this._hasOlder = false;
+        this._loadingOlder = false;
+        this._olderFailed = false;
+        this._firstDayKey = null;
+        this._pinned = true;
+        this._unseenBelow = 0;
     },
 
     /**
@@ -1240,11 +1290,11 @@ const InboxPage = {
         const trigger = document.activeElement;
 
         this.resetBackoff();
-        if (this.selectedConversationId === id) { this.focusChatPane(trigger); return; }
+        // The same thread again (mobile: back to the list and in): a log that was hidden can come back scrolled to its top, so one that
+        // was at its newest message goes back there.
+        if (this.selectedConversationId === id) { this.keepPinned(); this.focusChatPane(trigger); return; }
         this.selectedConversationId = id;
-        this.renderedMessageIds = new Set();
-        this.messagesPainted = false;
-        this._lastDayKey = null;
+        this.resetMessageState();
 
         const thread = this.findThread(id);
         this.lastMessageStamp = thread ? thread.last_message_at : null;
@@ -1477,17 +1527,24 @@ const InboxPage = {
                  about to announce the whole thread. It lives outside now. -->
             <div id="chat-messages-loading">${html.raw(UI.loader(t('inbox.loadingMessages')))}</div>
 
-            <!-- aria-live starts OFF.
-                 role="log" carries an implicit polite live region, and
-                 renderMessages() clears the list and appends every bubble — so
-                 opening a conversation read the ENTIRE history aloud before the
-                 operator could reach the composer. The initial paint happens
-                 with the region suppressed and renderMessages() turns it on
-                 afterwards, so only genuinely new messages announce.
-                 aria-relevant drops the default "text", which would otherwise
-                 re-announce a bubble whose text changed in place. -->
-            <div class="chat-messages" id="chat-messages-container" role="log" aria-live="off"
-                 aria-relevant="additions" aria-label="${t('inbox.messages')}"></div>
+            <!-- The log, and what floats over it: the page above as it loads (or why it did not), and the way back down to the
+                 newest message. Both sit outside the log, so neither is announced as a message. -->
+            <div class="chat-log">
+                <div class="chat-older" id="chat-older" hidden></div>
+                <!-- aria-live starts OFF.
+                     role="log" carries an implicit polite live region, and
+                     renderMessages() clears the list and appends every bubble — so
+                     opening a conversation read the ENTIRE history aloud before the
+                     operator could reach the composer. The initial paint happens
+                     with the region suppressed and renderMessages() turns it on
+                     afterwards, so only genuinely new messages announce.
+                     aria-relevant drops the default "text", which would otherwise
+                     re-announce a bubble whose text changed in place.
+                     tabindex="-1": where focus goes when the "latest messages" button that had it disappears. -->
+                <div class="chat-messages" id="chat-messages-container" role="log" aria-live="off" tabindex="-1"
+                     aria-relevant="additions" aria-label="${t('inbox.messages')}"></div>
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'arrow-down', label: t('inbox.latestMessages'), action: 'inbox:jumpToLatest', id: 'chat-jump', className: 'chat-jump' })}
+            </div>
 
             <div class="chat-composer">
                 <!-- Once Meta's 24 h window has closed a reply from here cannot reach the person: the answer is in the Instagram app,
@@ -1507,7 +1564,23 @@ const InboxPage = {
         `);
 
         this.chatShellThreadId = thread.id;
+        this.bindLog();
         UI.icons(chatPane);
+    },
+
+    /**
+     * The log's own listeners, once per shell (the element is new each time a thread opens). A scroll says whether the log is still at its
+     * newest message and fetches the page above near the top; a picture that loads (or fails) while it is there keeps it there. Neither
+     * event bubbles, so they are bound here and not through the page's delegated actions. The button starts hidden.
+     */
+    bindLog() {
+        const jump = document.getElementById('chat-jump');
+        if (jump) jump.hidden = true;
+        const list = document.getElementById('chat-messages-container');
+        if (!list || typeof list.addEventListener !== 'function') return;
+        list.addEventListener('scroll', () => this.onLogScroll(), { passive: true });
+        list.addEventListener('load', () => this.keepPinned(), true);
+        list.addEventListener('error', () => this.keepPinned(), true);
     },
 
     /** The @handle for the header's sub-line: only when the title is the person's NAME, since otherwise the title already is the handle. */
@@ -1815,11 +1888,22 @@ const InboxPage = {
         if (host && host.innerHTML !== '') host.innerHTML = '';
     },
 
+    /**
+     * The open thread's messages. The first call (the thread just opened, or opened afresh) asks for the newest `MESSAGE_PAGE`; every later
+     * one, a poll that saw `last_message_at` move or a reply just sent, asks only for what was stored since the newest message shown
+     * (`sinceStamp`), where it used to download the whole history again for each new message. A poll that comes back full has missed more
+     * than it can place, so the thread is opened afresh.
+     */
     async loadMessages(id, { scroll = false } = {}) {
+        const seq = this._threadSeq;
+        const since = this.messagesPainted ? this.sinceStamp() : null;
         try {
-            const messages = await API.getConversationMessages(id);
-            if (this.selectedConversationId !== id) return; // user moved on mid-flight
-            this.renderMessages(Array.isArray(messages) ? messages : [], scroll);
+            const messages = await API.getConversationMessages(id, since ? { since } : { limit: this.MESSAGE_PAGE });
+            if (this.selectedConversationId !== id || seq !== this._threadSeq) return; // user moved on mid-flight
+            const rows = Array.isArray(messages) ? messages : [];
+            if (since && rows.length >= this.MESSAGE_ANSWER_MAX) { this.reopenLog(id); return; }
+            if (!since) this._hasOlder = rows.length >= this.MESSAGE_PAGE;
+            this.renderMessages(rows, scroll);
         } catch (err) {
             console.error('Messages Load Error:', err);
             const host = document.getElementById('chat-messages-loading');
@@ -1840,10 +1924,43 @@ const InboxPage = {
         return html`<div class="chat-day"><span>${this.dayLabel(value)}</span></div>`;
     },
 
+    /** The log thrown away and the thread opened on its newest page again: what a poll does when more arrived than one answer holds. */
+    reopenLog(id) {
+        this.resetMessageState();
+        this.loadMessages(id, { scroll: true });
+    },
+
+    /** Where a poll asks from: the newest message shown, less `SINCE_OVERLAP_MS`. Null while nothing with a time is shown (the newest page is asked for instead). */
+    sinceStamp() {
+        let newest = -Infinity;
+        this.loadedMessages.forEach((msg) => {
+            const at = Date.parse(msg && msg.created_at);
+            if (Number.isFinite(at) && at > newest) newest = at;
+        });
+        return Number.isFinite(newest) ? new Date(newest - this.SINCE_OVERLAP_MS).toISOString() : null;
+    },
+
+    /** The messages of `rows` that are not in the log yet, each counted as in it from now. */
+    unseen(rows) {
+        const fresh = [];
+        (Array.isArray(rows) ? rows : []).forEach((msg) => {
+            if (!msg) return;
+            const key = msg.id != null ? String(msg.id) : `${msg.created_at}|${msg.direction}|${msg.text}`;
+            if (this.renderedMessageIds.has(key)) return;
+            this.renderedMessageIds.add(key);
+            fresh.push(msg);
+        });
+        return fresh;
+    },
+
     /**
-     * Append-only: existing bubbles are left alone, so scroll position holds.
-     * A divider goes in wherever the local day changes, so a thread that ran
-     * over three days reads as three days rather than one column of HH:MM.
+     * Newer messages, at the bottom, in one insertion: existing bubbles are left alone, so the operator's place holds. A divider goes in
+     * wherever the local day changes, so a thread that ran over three days reads as three days rather than one column of HH:MM. Replies
+     * are paired over every message the log holds, not only this batch: a poll's batch starts two minutes back and may not hold the
+     * message a reply answered.
+     *
+     * The first paint, and a paint forced by a reply the operator just sent, go straight to the newest message. A later batch follows
+     * only when the log was already there; otherwise the button counts what arrived below.
      */
     renderMessages(messages, forceScroll) {
         const list = document.getElementById('chat-messages-container');
@@ -1854,33 +1971,34 @@ const InboxPage = {
         // (an optimistic outbound bubble holds a key of its own).
         const firstPaint = !this.messagesPainted;
         if (firstPaint) {
+            // Off for the history (see armMessageLog), which matters when a log that was live is painted afresh.
+            list.setAttribute('aria-live', 'off');
             list.innerHTML = '';
             this.messagesPainted = true;
             this._lastDayKey = null;
             this.clearChatLoading();
         }
 
-        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-        let appended = 0;
-        // Which inbound each AI reply answered, from the whole batch: the reply's detail line needs the message BEFORE it.
-        const replies = this.pairReplies(messages);
-
-        messages.forEach((msg) => {
-            const key = msg.id != null ? String(msg.id) : `${msg.created_at}|${msg.direction}|${msg.text}`;
-            if (this.renderedMessageIds.has(key)) return;
-            this.renderedMessageIds.add(key);
-            const day = this.dayKey(msg.created_at);
-            if (day && day !== this._lastDayKey) {
-                list.insertAdjacentHTML('beforeend', esc(this.dayDivider(msg.created_at)));
-                this._lastDayKey = day;
-            }
-            list.insertAdjacentHTML('beforeend', esc(this.messageBubble(msg, msg.id != null ? replies.get(String(msg.id)) : undefined)));
-            appended++;
-        });
-
-        if (appended > 0) {
+        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < this.NEAR_BOTTOM_PX;
+        const fresh = this.unseen(messages);
+        if (fresh.length > 0) {
+            this.loadedMessages = this.loadedMessages.concat(fresh);
+            // Which inbound each AI reply answered: the reply's detail line needs the message BEFORE it.
+            const replies = this.pairReplies(this.loadedMessages);
+            const parts = [];
+            fresh.forEach((msg) => {
+                const day = this.dayKey(msg.created_at);
+                if (day && day !== this._lastDayKey) {
+                    parts.push(this.dayDivider(msg.created_at));
+                    if (this._firstDayKey === null) this._firstDayKey = day;
+                    this._lastDayKey = day;
+                }
+                parts.push(this.messageBubble(msg, msg.id != null ? replies.get(String(msg.id)) : undefined));
+            });
+            list.insertAdjacentHTML('beforeend', esc(parts));
             UI.icons(list);
-            if (forceScroll || firstPaint || nearBottom) list.scrollTop = list.scrollHeight;
+            if (forceScroll || firstPaint || nearBottom) this.scrollToLatest(list, !firstPaint && !forceScroll);
+            else { this._unseenBelow += fresh.length; this.paintJump(); }
         }
 
         // The history that was already on screen when the thread opened is not
@@ -1888,6 +2006,146 @@ const InboxPage = {
         // AFTERWARDS — from here on, an append is a message that has just
         // arrived, which is exactly what a log should announce.
         this.armMessageLog();
+        // A first page shorter than the log gives no scroll to fetch the page above with, so it is asked now.
+        if (firstPaint) this.onLogScroll();
+    },
+
+    /**
+     * To the newest message: at once, unless `smooth` (a message that has just arrived while the log was there) and motion is welcome. The
+     * log used to scroll smoothly by CSS, so opening a thread played its whole history past the operator on the way down.
+     */
+    scrollToLatest(list, smooth = false) {
+        if (smooth && typeof list.scrollTo === 'function' && !Motion.reduced()) list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+        else list.scrollTop = list.scrollHeight;
+        this._pinned = true;
+        this._unseenBelow = 0;
+        this.paintJump();
+    },
+
+    /** Every scroll of the log: whether it is at its newest message, whether the button shows, and whether the page above is near enough to fetch. */
+    onLogScroll() {
+        const list = document.getElementById('chat-messages-container');
+        if (!list) return;
+        this._pinned = list.scrollHeight - list.scrollTop - list.clientHeight < this.NEAR_BOTTOM_PX;
+        if (this._pinned) this._unseenBelow = 0;
+        this.paintJump();
+        if (list.scrollTop < this.OLDER_TRIGGER_PX) this.loadOlder(this.selectedConversationId);
+    },
+
+    /** A picture in the log finished loading, or failed: while the log was at its newest message, it stays there instead of being pushed up. */
+    keepPinned() {
+        if (!this._pinned) return;
+        const list = document.getElementById('chat-messages-container');
+        if (list) list.scrollTop = list.scrollHeight;
+    },
+
+    /**
+     * The page above: the `MESSAGE_PAGE` messages before the first one shown, fetched when the log is scrolled near its top, one page at a
+     * time. A failure says so over the log with Retry and is not tried again by scrolling until then: a failing request on every scroll
+     * would be worse than no history.
+     */
+    async loadOlder(id) {
+        if (!id || !this._hasOlder || this._loadingOlder || this._olderFailed) return;
+        const oldest = this.loadedMessages.find((msg) => msg && msg.id != null);
+        if (!oldest) { this._hasOlder = false; return; }
+        const seq = this._threadSeq;
+        this._loadingOlder = true;
+        this.paintOlder('loading');
+        try {
+            const page = await API.getConversationMessages(id, { limit: this.MESSAGE_PAGE, before: oldest.id });
+            if (seq !== this._threadSeq || this.selectedConversationId !== id) return;
+            const rows = Array.isArray(page) ? page : [];
+            this._hasOlder = rows.length >= this.MESSAGE_PAGE;
+            this.prependMessages(rows);
+            this.paintOlder(null);
+        } catch (err) {
+            if (seq !== this._threadSeq) return;
+            console.error('Older Messages Load Error:', err);
+            this._olderFailed = true;
+            this.paintOlder('failed');
+        } finally {
+            if (seq === this._threadSeq) this._loadingOlder = false;
+        }
+    },
+
+    retryOlder() {
+        this._olderFailed = false;
+        this.loadOlder(this.selectedConversationId);
+    },
+
+    /**
+     * Older messages, above the first one shown, in one insertion. The page carries its own dividers from its first day; when it ends on the
+     * day the log began with, the log's top divider would say that day twice, and goes. The place the operator is reading is kept by adding
+     * what was put above to `scrollTop` (not every browser anchors it), and the live region is off for the insertion: history is not news.
+     * Bubbles already drawn are not redrawn, so a reply at the old top keeps the detail line it was drawn with.
+     */
+    prependMessages(rows) {
+        const list = document.getElementById('chat-messages-container');
+        if (!list) return;
+        const fresh = this.unseen(rows);
+        if (fresh.length === 0) return;
+        this.loadedMessages = fresh.concat(this.loadedMessages);
+        const replies = this.pairReplies(this.loadedMessages);
+        const parts = [];
+        let day = null;
+        fresh.forEach((msg) => {
+            const key = this.dayKey(msg.created_at);
+            if (key && key !== day) { parts.push(this.dayDivider(msg.created_at)); day = key; }
+            parts.push(this.messageBubble(msg, msg.id != null ? replies.get(String(msg.id)) : undefined));
+        });
+        const top = list.firstElementChild;
+        const repeated = day !== null && day === this._firstDayKey && top && top.classList && top.classList.contains('chat-day');
+        const height = list.scrollHeight;
+        const scrolled = list.scrollTop;
+        list.setAttribute('aria-live', 'off');
+        list.insertAdjacentHTML('afterbegin', esc(parts));
+        if (repeated) top.remove();
+        const firstDated = fresh.find((msg) => this.dayKey(msg.created_at));
+        if (firstDated) this._firstDayKey = this.dayKey(firstDated.created_at);
+        UI.icons(list);
+        list.scrollTop = scrolled + (list.scrollHeight - height);
+        this.armMessageLog();
+    },
+
+    /** Over the top of the log: the page above loading, or that it did not load with Retry, or nothing. */
+    paintOlder(state) {
+        const host = document.getElementById('chat-older');
+        if (!host) return;
+        if (!state) { host.hidden = true; host.innerHTML = ''; return; }
+        host.innerHTML = esc(state === 'failed'
+            ? html`<span>${t('inbox.olderFailed')}</span>${UI.button({ variant: 'ghost', size: 'sm', label: t('common.retry'), action: 'inbox:retryOlder' })}`
+            : html`<span class="spinner spinner-sm spinner-inline" aria-hidden="true"></span><span>${t('inbox.loadingOlder')}</span>`);
+        host.hidden = false;
+    },
+
+    /**
+     * The button back to the newest message: shown once the operator is far enough up the log, and as soon as something arrived below while
+     * they were up there, when it says "new messages" instead.
+     */
+    paintJump() {
+        const btn = document.getElementById('chat-jump');
+        const list = document.getElementById('chat-messages-container');
+        if (!btn || !list) return;
+        const unseen = this._unseenBelow > 0;
+        const show = unseen || list.scrollHeight - list.scrollTop - list.clientHeight > this.JUMP_BUTTON_PX;
+        const state = show ? (unseen ? 'new' : 'latest') : 'hidden';
+        if (btn.dataset.state === state) return;
+        btn.dataset.state = state;
+        btn.hidden = !show;
+        if (show) {
+            btn.innerHTML = esc(html`<i data-lucide="arrow-down" aria-hidden="true"></i> ${t(unseen ? 'inbox.newMessagesBelow' : 'inbox.latestMessages')}`);
+            UI.icons(btn);
+        }
+    },
+
+    /** The button: straight to the newest message. A button that had focus is gone once the log is there, so focus goes to the log. */
+    jumpToLatest() {
+        const list = document.getElementById('chat-messages-container');
+        if (!list) return;
+        const btn = document.getElementById('chat-jump');
+        const hadFocus = btn && document.activeElement === btn;
+        this.scrollToLatest(list);
+        if (hadFocus && typeof list.focus === 'function') list.focus({ preventScroll: true });
     },
 
     /**
@@ -2308,7 +2566,7 @@ const InboxPage = {
 
     /**
      * For each AI reply in a batch of messages: how long it took, and how many attempts the message it answered needed.
-     * `Map<reply id, { ms, attempts }>`; a reply whose inbound is not in the batch (the history is the newest 100) has no entry.
+     * `Map<reply id, { ms, attempts }>`; a reply whose inbound is not in the batch (still above the pages the log has loaded) has no entry.
      * Pure, and the arithmetic the reply's detail line is made of.
      *
      * Which inbound a reply answered: the pipeline marks the inbound handled the moment it stores the reply, so the inbound whose
@@ -2926,7 +3184,7 @@ const InboxPage = {
             }
             this.renderedMessageIds.add(key);
             list.insertAdjacentHTML('beforeend', esc(this.pendingBubble(key, text)));
-            list.scrollTop = list.scrollHeight;
+            this.scrollToLatest(list);
         }
 
         const placeholder = () => (list ? list.querySelector(`[data-pending="${CSS.escape(key)}"]`) : null);
@@ -2987,4 +3245,6 @@ UI.registerActions('inbox', {
     toggleFunnel: () => InboxPage.toggleFunnel(),
     funnelWindow: (el) => InboxPage.setFunnelWindow(el && el.dataset ? el.dataset.days : ''),
     funnelRetry: () => InboxPage.loadFunnel(InboxPage.funnel.days),
+    jumpToLatest: () => InboxPage.jumpToLatest(),
+    retryOlder: () => InboxPage.retryOlder(),
 });

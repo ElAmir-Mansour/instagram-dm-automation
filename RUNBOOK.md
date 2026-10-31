@@ -90,7 +90,7 @@ in the project to diagnose, and the reason every other check exists
 (`scripts/diagnose.mjs:29-33`).
 
 The `jobs` table is what breaks the tie. Every verified **comment** delivery is written to `jobs`
-*before* the 200 goes back to Meta, matched or not (`src/index.ts:417-436`), so:
+*before* the 200 goes back to Meta, matched or not (`src/index.ts:409-428`), so:
 
 > Note the asymmetry: `entry.changes` elements are enqueued unconditionally, but `entry.messaging`
 > events are filtered first — echoes, read watermarks and delivery receipts never become jobs at
@@ -116,7 +116,7 @@ after 7 days (§5.3), so an empty table now means "no delivery in the last seven
 quiet week looks the same. Post a comment from a second account before you conclude anything.
 
 The one caveat: if `WEBHOOK_QUEUE=off` is set in the environment, nothing is enqueued by design
-(`src/index.ts:418`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
+(`src/index.ts:410`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
 first.
 
 ---
@@ -200,7 +200,7 @@ per problem (`meta.webhooks_checked` and `meta.webhooks_alert` in the log). `dia
 ### 2.3 Was the signature rejected?
 
 **A webhook signature failure is invisible from the database.** The 403 happens before
-anything is written (`src/index.ts:365-374`), so it is indistinguishable from silence. The only
+anything is written (`src/index.ts:357-366`), so it is indistinguishable from silence. The only
 evidence is the Vercel log line:
 
 ```
@@ -298,7 +298,7 @@ a reconnect moves it). Fixing it means re-authorising the app (Settings → Inst
 
 | Writer | Trigger |
 |---|---|
-| `recordTokenStatus` (`src/routes/api.ts:2470`) | someone opens the dashboard token page, saves a token, or runs the extend flow — three routes, one helper |
+| `recordTokenStatus` (`src/routes/api.ts:2511`) | someone opens the dashboard token page, saves a token, or runs the extend flow — three routes, one helper |
 | `persistInspection` (`src/services/tokenHealth.ts:307`) | a deliberate re-check asks Meta and records the answer, including `POST /api/admin/tenants/:id/recheck-token` |
 | `noteMetaFailure` (`src/services/tokenHealth.ts:49`) | **a real Meta send failed with code 190** |
 | `recheckAllMetaTokens` (`src/services/metaTokenRecheck.ts:191`) | **the daily cron** asks Meta about every connected tenant's Page token and writes what Meta definitively said (valid, expiring, invalid). A transient failure writes nothing |
@@ -332,7 +332,7 @@ an answer clears it.
 `creators.page_access_token` is stored as `enc:v1:<iv>:<tag>:<ciphertext>`, AES-256-GCM, with
 the key in `TOKEN_ENCRYPTION_KEY` (`src/config/crypto.ts:42-49`). Decryption happens in one
 place, `withDecryptedToken` in `src/services/tenant.ts:116-122`, plus the publish cron which
-reads off a joined row and decrypts inline (`attemptPublish`, `src/routes/api.ts:723`).
+reads off a joined row and decrypts inline (`attemptPublish`, `src/routes/api.ts:736`).
 
 Two operational consequences:
 
@@ -419,10 +419,10 @@ no drain is running at all, and §5.1 says how to check.
 ### 4.2 Stranded claims
 
 A publish claims its row atomically by flipping `PENDING → PUBLISHING`
-(`src/routes/api.ts:969-975`). If the invocation dies mid-publish the row stays `PUBLISHING`
+(`src/routes/api.ts:982-988`). If the invocation dies mid-publish the row stays `PUBLISHING`
 forever, so each cron run first releases claims older than 15 minutes with attempts left
-(`src/routes/api.ts:1030-1037`), and fails anything past 5 attempts with an explanatory
-`error_log` (`src/routes/api.ts:1043-1050`).
+(`src/routes/api.ts:1043-1050`), and fails anything past 5 attempts with an explanatory
+`error_log` (`src/routes/api.ts:1056-1063`).
 
 If you see rows sitting in `PUBLISHING`, the cron has not run since they were claimed. Running
 `GET /api/cron/publish` will release them — **and publish everything else that is due.**
@@ -430,7 +430,7 @@ If you see rows sitting in `PUBLISHING`, the cron has not run since they were cl
 ### 4.3 The partial-publish case — read this before retrying
 
 On `platform = 'both'`, **Facebook publishes first** (`attemptPublish`,
-`src/routes/api.ts:726`), Instagram second (`:522`). A Facebook success followed by an
+`src/routes/api.ts:739`), Instagram second (`:535`). A Facebook success followed by an
 Instagram failure records the row as `FAILED` **while the Facebook post is live**.
 
 Editing a scheduled post flips `FAILED → PENDING`:
@@ -438,13 +438,13 @@ Editing a scheduled post flips `FAILED → PENDING`:
 ```sql
 status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
 ```
-(`src/routes/api.ts:3214`)
+(`src/routes/api.ts:3255`)
 
 Historically that republished it and **duplicated the Facebook post on the live account**.
 That is fixed, but understand *how*, because the fix is what you are relying on:
 `published_post_id` now retains whatever did go live, as `FB:<id>`, `IG:<id>` or
 `FB:<id> | IG:<id>` (`publishedPlatforms` / `formatPublishedIds`,
-`src/services/publishedIds.ts:22` and `:30`, written on the failure path at `src/routes/api.ts:828-838`), and the next
+`src/services/publishedIds.ts:22` and `:30`, written on the failure path at `src/routes/api.ts:841-851`), and the next
 attempt parses it back and skips the platform that is already public (`:699-701`, and the
 `&& !fbId` / `&& !igId` guards at `:726` and `:749`). The `error_log` also names what is live:
 `Partially published (FB:123) — the rest failed: <reason>`.
@@ -455,13 +455,13 @@ So: **before retrying a `FAILED` post, read `published_post_id` and `error_log`.
 
 `FAILED` is also the status for a partial success, deliberately, because the dashboard filters
 on that vocabulary and a half-published post is not a finished post
-(`src/routes/api.ts:823-838`).
+(`src/routes/api.ts:836-851`).
 
 ### 4.4 Two combinations to know about
 
 - `post_type: 'story'` with `platform: 'facebook'` or `'both'` is rejected at create time —
   Facebook Page stories need a `/photo_stories` + `/video_stories` upload that is not
-  implemented (`unsupportedPlatformCombination`, `src/routes/api.ts:510`, called at `:1937`).
+  implemented (`unsupportedPlatformCombination`, `src/routes/api.ts:523`, called at `:1978`).
   `publishFacebookPost` also throws on it rather than degrading, because a degraded publish
   still returns a post id and is recorded as a success (`src/services/instagram.ts:608-613`).
 - For cross-posting a video, prefer **`video`** over `reel`. This entry used to say
@@ -472,7 +472,7 @@ on that vocabulary and a half-published post is not a finished post
 
 Also always set `cover_url`, or Instagram takes frame 0 as the thumbnail and any video fading
 up from black gets a black tile in the profile grid. `attemptPublish` passes it through
-(`src/routes/api.ts:776`).
+(`src/routes/api.ts:789`).
 
 ---
 
@@ -500,7 +500,7 @@ Three things call `GET /api/jobs/drain`, and all three are live:
 |---|---|---|
 | `heroku-worker/worker.mjs` (Heroku app `autoreply-pro-worker`) | 60 s after the last call finished | **running** (`worker=1`, about $7 a month). On 2026-10-25 the Vercel logs showed `GET /api/jobs/drain` once a minute |
 | `.github/workflows/drain.yml` | written as `*/5`; GitHub delivers it every 2 to 5 hours, see below | **active**, free |
-| Vercel cron → `GET /api/cron/publish`, which calls `drainWorker()` (`src/routes/api.ts:1071`) | once daily, 00:00 UTC | **active**, the backstop |
+| Vercel cron → `GET /api/cron/publish`, which calls `drainWorker()` (`src/routes/api.ts:1084`) | once daily, 00:00 UTC | **active**, the backstop |
 
 The worker has a second job: it is the **only** caller of `POST /api/onboarding/drafts/sweep`,
 which moves tenant profile drafts along (§8.1). Scale it to zero and both stop. How to turn it on
@@ -659,7 +659,7 @@ before the cause is fixed only spends the attempts again.
 ### 5.4 Rolling the queue back entirely
 
 `WEBHOOK_QUEUE=off` in the Vercel environment reverts to processing inline with no queue, which
-is the behaviour that shipped before the queue existed (`src/index.ts:418`,
+is the behaviour that shipped before the queue existed (`src/index.ts:410`,
 `.env.example:57-64`). The handlers are identical either way
 (`src/webhook/router.ts:8-12`), so this is a rollback of the durability layer only.
 
@@ -743,7 +743,7 @@ harmlessly and is recorded, and anything else pending is applied too. Check firs
 ### What the published page commits you to
 
 `https://msg-response-auto.vercel.app/data-deletion` (served from `public/data-deletion.html`
-via `src/index.ts:256-258`) makes four promises:
+via `src/index.ts:257-259`) makes four promises:
 
 1. On request, with an Instagram username: **"we will delete all associated records within 30
    days."**
@@ -770,7 +770,7 @@ minimum accepted is 7; a misconfigured value disables pruning rather than fallin
 default, and logs `retention.misconfigured` (`src/services/retention.ts:89-99`, `:107-112`).
 The sweep runs once daily from the publish cron and converges rather than clearing one batch a
 day — up to 20 passes of 5,000 rows (`src/services/retention.ts:710-783`,
-`src/routes/api.ts:1059`).
+`src/routes/api.ts:1072`).
 
 > **Fixed 2026-09-21.** `.env.example` used to declare `RAW_PAYLOAD_RETENTION_DAYS` twice —
 > empty in one block and `30` in another, with contradictory advice (90 vs 30) — so which one
@@ -961,7 +961,7 @@ So, in this order:
    The log line `webhook.verified { candidates: N }` confirms how many were tried.
    **`candidates: 0` is the specific, actionable failure**: neither source has a token set, so
    every subscription change Meta attempts will 403 opaquely while existing webhooks keep
-   delivering (`src/index.ts:354-358`).
+   delivering (`src/index.ts:346-350`).
 3. **Type it identically** into the Meta console. It is compared as an exact string — a
    trailing space is a 403 with no diagnostic.
 4. Now create or change the subscription, and set the callback URL to
@@ -1043,13 +1043,13 @@ gitignored). This section works backwards from a symptom; the forward walk is FL
 **The ground rule from the top of this file applies to TikTok too.** `GET /api/jobs/drain` and
 `GET /api/cron/publish` publish every due post, TikTok rows included, so neither is a test.
 **Publish now** on one card is the narrow lever: it claims that one row and nothing else
-(`src/routes/api.ts:3336-3363`).
+(`src/routes/api.ts:3377-3404`).
 
 The states a TikTok row moves through, and what moves it:
 
 | Status | Means | Moved on by |
 |---|---|---|
-| `PENDING` | due later — or **held** by the 5-draft limit, with "Waiting for TikTok: …" in `error_log` | a drain or the daily cron claims it (`src/routes/api.ts:969-975`) |
+| `PENDING` | due later — or **held** by the 5-draft limit, with "Waiting for TikTok: …" in `error_log` | a drain or the daily cron claims it (`src/routes/api.ts:982-988`) |
 | `PUBLISHING` | claimed, being sent | the publish call. A dead one is released only by the daily cron, after 15 minutes (§4.2) |
 | `PROCESSING` | TikTok has it | the 12 s poll inside the publish call, the webhook, or the sweep on every drain (`src/services/tiktokPublish.ts:582-641`) |
 | `IN_INBOX` | an inbox draft, waiting for the creator | the creator posting it in TikTok |
@@ -1106,8 +1106,8 @@ the old attempt as failed does a retry make a new post.
 Two ways to retry:
 
 - **Publish now** on the card — claims a `PENDING` or `FAILED` row, publishes it at once and waits
-  up to 12 s for TikTok's verdict (`src/routes/api.ts:3352-3357`, `src/services/tiktokPublish.ts:45`).
-- **Edit and save** — flips `FAILED → PENDING` (`src/routes/api.ts:3214`), and the next drain takes
+  up to 12 s for TikTok's verdict (`src/routes/api.ts:3393-3398`, `src/services/tiktokPublish.ts:45`).
+- **Edit and save** — flips `FAILED → PENDING` (`src/routes/api.ts:3255`), and the next drain takes
   it. Edits are refused once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`:2395-2398`).
 
 **No TikTok init is retried on failure** — a 5xx may already have created the post or the draft
@@ -1164,7 +1164,7 @@ Photo posts only. TikTok pulls each image itself, from `<Public site address>/ap
    ```
 
    Healthy: the file's one line. A `404` means that name is no longer saved — the history keeps the
-   last ten only (`src/services/appSettings.ts:749-759`). Save it again.
+   last ten only (`src/services/appSettings.ts:778-788`). Save it again.
 3. **Is the Public site address that same origin?**
 
    ```sql
@@ -1203,7 +1203,7 @@ What does it: a refresh or a publish call answered with `access_token_invalid`, 
 `scope_not_authorized` or `scope_permission_missed` marks the connection `invalid`
 (`src/services/tiktok.ts:109-114`, `src/services/tiktokConnections.ts:331-344`, `:360-367`).
 Transient failures never do (`:288-290`). The daily cron refreshes every active connection, so a
-revoked account usually shows up the morning after (`src/routes/api.ts:1087`).
+revoked account usually shows up the morning after (`src/routes/api.ts:1100`).
 
 | Cause | Tell |
 |---|---|
@@ -1238,7 +1238,7 @@ What it costs meanwhile:
 - Each one counts against TikTok's 5 unposted drafts per 24 hours, and at five the app **holds** the
   next inbox post: status back to `PENDING`, `error_log` "Waiting for TikTok: *n* drafts from the last
   24 hours…", log line `cron.publish_held_tiktok_inbox`, and **Publish now** answers 409
-  (`src/services/tiktokPublish.ts:486-491`, `:555-563`; `src/routes/api.ts:996-999`, `:2593-2596`).
+  (`src/services/tiktokPublish.ts:486-491`, `:555-563`; `src/routes/api.ts:1009-1012`, `:2634-2637`).
 - The rows stay `IN_INBOX`. The sweep asks about them every 10 minutes for 7 days, then stops
   (`src/services/tiktokPublish.ts:594-598`).
 - Nothing in the app can list or delete a TikTok draft.
@@ -1321,9 +1321,9 @@ SELECT id, status, post_type, claimed_at, status_checked_at,
 | What you see | Means | Do |
 |---|---|---|
 | `PROCESSING`, `status_checked_at` recent | the sweep is asking and TikTok is still working | wait. After 24 h of silence the sweep fails it with "TikTok did not confirm this upload within 24 hours…" (`src/services/tiktokPublish.ts:617-620`) |
-| `PROCESSING`, `status_checked_at` old or NULL | nothing is asking: no drain has run. The sweep runs only inside `/api/jobs/drain` and the daily cron (`src/routes/api.ts:414`, `:894`) | check the drainers (§5.1); a working webhook would have moved it anyway (§10.6) |
+| `PROCESSING`, `status_checked_at` old or NULL | nothing is asking: no drain has run. The sweep runs only inside `/api/jobs/drain` and the daily cron (`src/routes/api.ts:418`, `:907`) | check the drainers (§5.1); a working webhook would have moved it anyway (§10.6) |
 | `PROCESSING`, `status_checked_at` advancing but never settling, `tiktok.reconcile_row_failed` in the logs | the status call itself fails, usually on the token | §10.4; the next sweep settles it |
-| `PUBLISHING`, `claimed_at` more than 15 minutes ago | the invocation died mid-send, and only the daily cron releases it back to `PENDING` (`src/routes/api.ts:1030-1037`) | wait for 00:00 UTC, or call `/api/cron/publish` knowing it publishes everything due (§4.2). With `reached_tiktok` true, the retry asks TikTok before sending anything again |
+| `PUBLISHING`, `claimed_at` more than 15 minutes ago | the invocation died mid-send, and only the daily cron releases it back to `PENDING` (`src/routes/api.ts:1043-1050`) | wait for 00:00 UTC, or call `/api/cron/publish` knowing it publishes everything due (§4.2). With `reached_tiktok` true, the retry asks TikTok before sending anything again |
 | `IN_INBOX` | an inbox draft waiting for the creator, not stuck | §10.5 |
 
 To make the sweep run now — it also publishes every due post and runs queued DM jobs, as §1 warns:
@@ -2583,5 +2583,5 @@ SELECT created_at, actor_email, action, target_type, target_id, detail
 ```
 
 The actions are `studio.settings_write`, `studio.worker_create`, `studio.worker_revoke`,
-`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:131-139`). A worker's token is
+`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:137-145`). A worker's token is
 never in the detail, only its name.

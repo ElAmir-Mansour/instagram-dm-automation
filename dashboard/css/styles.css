@@ -2370,13 +2370,30 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .chat-header-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .chat-back { display: none; }
 
+/* The log and what floats over it (the page above loading, the way back down). The log fills the pane between the header and the
+   composer, and scrolls itself. */
+.chat-log { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* No `scroll-behavior: smooth`: with it, opening a thread scrolled through the whole history on the way to the newest message. The
+   page chooses smooth scrolling itself, for a message that has just arrived, and not under reduced motion (inbox.js scrollToLatest).
+   `overscroll-behavior` keeps a scroll that reaches either end of the log from moving the page behind it. */
 .chat-messages {
-    flex: 1; overflow-y: auto;
+    flex: 1; overflow-y: auto; overscroll-behavior: contain;
     padding: var(--space-4);
     display: flex; flex-direction: column; gap: var(--space-3);
-    scroll-behavior: smooth;
 }
-@media (prefers-reduced-motion: reduce) { .chat-messages { scroll-behavior: auto; } }
+.chat-older {
+    position: absolute; inset-block-start: var(--space-2); inset-inline: 0; z-index: 1;
+    inline-size: fit-content; margin-inline: auto;
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-pill);
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    box-shadow: var(--elev-1);
+    font-size: var(--fs-100); color: var(--text-default);
+}
+.chat-older[hidden] { display: none; }
+.chat-jump { position: absolute; inset-block-end: var(--space-3); inset-inline-end: var(--space-4); z-index: 1; box-shadow: var(--elev-2); }
+.chat-jump[hidden] { display: none; }
 .message-row { display: flex; width: 100%; }
 /* flex-start / flex-end are writing-mode aware: inbound sits at the reading
    edge and outbound opposite it, in both directions, with no override. */

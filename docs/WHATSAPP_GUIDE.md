@@ -77,7 +77,7 @@ use case's **Webhooks** page):
 Leave the rest unsubscribed (calls, groups, flows, templates, `smb_*`/coexistence fields belong to later phases).
 
 **What "verified" looks like from our side** (logs, `vercel logs msg-response-auto.vercel.app --since 30m`):
-`GET /webhook` followed by `webhook.verified`. The handshake lives at `src/index.ts:321`.
+`GET /webhook` followed by `webhook.verified`. The handshake lives at `src/index.ts:322`.
 
 ### 1.4 Create the permanent token (system user)
 
