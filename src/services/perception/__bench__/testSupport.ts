@@ -51,7 +51,7 @@ export type Scripted = { status?: number; json?: unknown; text?: string; headers
 export function scriptedFetch(respond: (r: Recorded, n: number) => Scripted | Promise<Scripted>): { fetch: FetchLike; requests: Recorded[] } {
     const requests: Recorded[] = [];
     const fetchImpl: FetchLike = async (input, init) => {
-        const headers = new Headers(init.headers as HeadersInit | undefined);
+        const headers = new Headers(init.headers as ConstructorParameters<typeof Headers>[0]);
         const raw = typeof init.body === 'string' ? init.body : null;
         let body: unknown = null;
         if (raw !== null) {

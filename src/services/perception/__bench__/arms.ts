@@ -320,7 +320,9 @@ export async function runMetaCase(c: MuseCase, media: LoadedMedia | null, deps: 
                 const action: ActionClass = plan.perception?.line === kit.attachments.resend ? 'resend'
                     : c.kind === 'story_mention' ? (named ? 'thank_named' : 'thank') : 'generic_line';
                 const actionOk = accepts(c, action);
-                const actionWhy = actionOk ? null : `${ACTION_WORDS[action]}${plan.perception?.reason ? ` (${oneLine(plan.perception.reason, 110)})` : ''}; ${expectedWords(c)}`;
+                // The product's own sentence of why it sent this line is the reason, when there is one: it says what happened, in the words the inbox shows.
+                const why = plan.perception?.reason ? oneLine(plan.perception.reason.replace(/\.$/, ''), 150) : ACTION_WORDS[action];
+                const actionWhy = actionOk ? null : `${why} (${expectedWords(c)})`;
                 if (!actionOk) failures.push({ caseId: c.id, arm: 'meta', what: 'action', reason: oneLine(actionWhy ?? '') });
                 const totals = spent(deps, c.id);
                 return { ...common, action, actionOk, actionWhy, reply: line, trace: plan.perception?.reason ?? null, invented: emptyInvented(), failures, ms: reading.ms, ...totals };

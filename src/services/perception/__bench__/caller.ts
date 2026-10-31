@@ -175,8 +175,11 @@ export interface CallerOptions {
     prices?: PriceTable;
 }
 
-/** The purposes Meta alone answers, and the sales turn's own: the only ones the benchmark routes, all to Meta. */
-const ROUTED: ReadonlySet<AiPurpose> = new Set<AiPurpose>(['dm', ...(Object.keys(PURPOSE_PROVIDER_ALLOWLIST) as AiPurpose[]).filter((p) => PURPOSE_PROVIDER_ALLOWLIST[p]?.every((id) => id === 'meta'))]);
+/**
+ * The purposes the benchmark routes, all to Meta: the sales turn's own `dm`, and every purpose whose allow-list names Meta (the Muse purposes: what a word-less message shows, recall,
+ * the reel index, comment intent). A purpose whose list does not name Meta (WhatsApp's, which is for providers that do not train, and every tenant purpose) is not routed here.
+ */
+const ROUTED: ReadonlySet<AiPurpose> = new Set<AiPurpose>(['dm', ...(Object.keys(PURPOSE_PROVIDER_ALLOWLIST) as AiPurpose[]).filter((p) => PURPOSE_PROVIDER_ALLOWLIST[p]?.includes('meta'))]);
 
 /** What a purpose is called in the ledger. */
 const ROLE_OF: Readonly<Partial<Record<AiPurpose, string>>> = { perception_dm: 'perception', dm: 'reply', recall: 'recall', reel_index: 'analysis' };
