@@ -47,6 +47,7 @@ flowchart LR
 | A 37 s Arabic reel through the video library's prompt on **Muse Spark Open (Baseten)** | 42 s: 12 topics, 15 on-screen notes, 8 timestamped moments |
 | The same reel, a price screenshot and a garbled screenshot through the perception prompt (Muse Spark 1.3) | Read correctly in 11 s, 5 s and 6.5 s; the garbled one is marked unreadable, so the person is asked to resend |
 | `ffmpeg` inside the Vercel function, for voice notes | AAC → 24 kHz WAV in 11–19 ms |
+| **The re-runnable benchmark** (`npm run eval:muse`; 15 word-less media cases and 3 real voice notes, every failure listed in [`docs/hackathon/benchmark.md`](docs/hackathon/benchmark.md)) | Media: **understood 93% vs 0% today, the expected action 80% vs 27%**. Voice notes: **the expected action 3 of 3** (today: 0). **0 invented facts** in any reply. Open weights on one reel: Muse Spark Open (Baseten) 60 s and $0.014 vs hosted Muse Spark 12 s and $0.020, both passing every check |
 
 **Privacy by design:**
 - Only Meta's Standard models, which according to Meta don't train on what they receive.
