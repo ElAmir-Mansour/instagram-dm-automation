@@ -77,10 +77,24 @@ export interface TurnExpectation {
     note?: string;
 }
 
+/**
+ * Meta Muse perception (docs/specs/005-muse-sees): this turn answers what a model READ for the customer, and not only words they typed. The same two things
+ * `runSalesTurn` does for such a turn and for no other: the refund/complaint pre-filter does not read a description (R9), and the description is told to the model
+ * as the facts block's "What the customer sent" line. Absent (every golden conversation), the turn is exactly what it was.
+ */
+export interface EvalPerceived {
+    /** The facts block's "What the customer sent: ..." line (`perceivedFact`), or null for nothing to add. Said last in the facts, and never one of the guard's facts. */
+    sent: string | null;
+    /** `user` is a model's DESCRIPTION of what they sent, not words they typed: the pre-filter does not read it. False when `user` is what they typed. */
+    describedText: boolean;
+}
+
 export interface EvalTurn {
     /** What the person writes. */
     user: string;
     expect: TurnExpectation;
+    /** Set only for a turn that answers something a model read (`scripts/eval-muse.mts`). */
+    perceived?: EvalPerceived;
 }
 
 export interface EvalCase {

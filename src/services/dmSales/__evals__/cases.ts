@@ -22,7 +22,7 @@ const KEYS_OF_EXPECT = new Set([
 ]);
 
 /** Collects what is wrong, so one load reports all of it. */
-class Problems {
+export class Problems {
     readonly list: string[] = [];
     constructor(private readonly where: string) {}
     add(field: string, message: string): void {
@@ -53,7 +53,7 @@ function patterns(p: Problems, field: string, value: unknown): string[] | undefi
     return list;
 }
 
-function parseExpect(p: Problems, raw: unknown, offerIds: ReadonlySet<string> | null): TurnExpectation {
+export function parseExpect(p: Problems, raw: unknown, offerIds: ReadonlySet<string> | null): TurnExpectation {
     if (!isObj(raw)) {
         p.add('expect', 'must be an object');
         return {};
