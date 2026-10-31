@@ -252,7 +252,6 @@ describe('video library: "Index my reels"', () => {
         const o = await open();
         let release: () => void = () => {};
         const gate = new Promise<void>((resolve) => { release = resolve; });
-        o.page.eval = undefined;
         const original = o.h.ctx.API.indexMuseLibrary;
         o.h.ctx.API.indexMuseLibrary = async (...args: Json[]) => { await gate; return original(...args); };
         const first = o.page.museIndexAll(o.el('muse-index-btn'));
