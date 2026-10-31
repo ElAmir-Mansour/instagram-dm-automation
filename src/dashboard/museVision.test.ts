@@ -17,6 +17,9 @@
  *   - saving: exactly what is on screen, once, the server's answer adopted, a refusal kept as a draft with the server's words, nothing sent by anyone who may
  *     not, nothing for a cap the server would refuse;
  *   - everything a person or a model wrote (a handle, a name) is text, never markup.
+ *
+ * The video library inside the card (the list, "Index my reels", the details) is `museLibrary.test.ts`'s; here it is only the section the shell draws, the ids it brings
+ * and the API it asks, which every test of the card answers with an empty library.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -51,7 +54,10 @@ const IDS = [
     'muse-card', 'muse-dm-media', 'muse-voice', 'muse-memory', 'muse-who', 'muse-daily-usd', 'muse-save-btn', 'muse-picker-open', 'muse-picker-search',
     'muse-error', 'muse-status', 'muse-people-block', 'muse-everyone-note', 'muse-people-list', 'muse-who-hint', 'muse-cap-hint', 'muse-spent',
     'muse-unsaved-note', 'muse-picker', 'muse-picker-note', 'muse-picker-list',
+    'muse-library', 'muse-index-btn', 'muse-library-refresh', 'muse-library-estimate', 'muse-library-hint', 'muse-library-notice', 'muse-library-count', 'muse-library-list',
 ];
+/** The library's two buttons: the card's own controls, apart from them, are what the shell's tests count. */
+const LIBRARY_CONTROLS = ['muse-index-btn', 'muse-library-refresh'];
 
 /** The `muse` block the server answers with, and a change of it. */
 function view(over: Json = {}): Json {
@@ -104,6 +110,11 @@ function open(setup: { lang?: Lang; role?: Role; view?: Json | null | undefined;
             people: (body.allow_senders as string[]).filter((id) => id !== '*').map((id) => ({ id, username: id === SARA ? 'sara_dev' : id === OMAR ? 'omar.dev' : null, name: id === OMAR ? 'Omar' : null })),
         })),
         getAiSettings: record('getAiSettings', async () => ({ is_active: true, muse: setup.view === undefined ? view() : setup.view })),
+        // The owner's library: an empty one, unless a test says otherwise (museLibrary.test.ts does).
+        getMuseLibrary: record('getMuseLibrary', async () => []),
+        getMuseReel: record('getMuseReel', async () => ({})),
+        indexMuseLibrary: record('indexMuseLibrary', async () => ({ queued: 0, already_indexed: 0, deduped: 0, listed: 0, truncated: false })),
+        reindexMuseReel: record('reindexMuseReel', async () => ({ queued: true })),
         ...(setup.api ?? {}),
     };
     const globals: Json = {
@@ -118,7 +129,7 @@ function open(setup: { lang?: Lang; role?: Role; view?: Json | null | undefined;
     h.UI.toast = (message: unknown, type?: string) => { toasts.push({ message: String(message), type }); };
     for (const id of IDS) h.el(id);
     // As the shell draws them: hidden until the card paints them.
-    for (const id of ['muse-people-block', 'muse-everyone-note', 'muse-who-hint', 'muse-cap-hint', 'muse-unsaved-note', 'muse-picker']) h.el(id).classes.add('hidden');
+    for (const id of ['muse-people-block', 'muse-everyone-note', 'muse-who-hint', 'muse-cap-hint', 'muse-unsaved-note', 'muse-picker', 'muse-library']) h.el(id).classes.add('hidden');
     const page: Json = h.run('AiSettingsPage');
     if (!setup.skipAdopt) page.adoptMuse(setup.view === undefined ? view() : setup.view);
     return { h, page, calls, toasts, el: (id) => h.el(id), flags: (id) => [...h.el(id).classes], t: h.t };
@@ -131,7 +142,7 @@ const hidden = (o: Opened, id: string): boolean => o.el(id).classes.has('hidden'
 
 describe('Meta vision card: the shell', () => {
     for (const lang of ['en', 'ar'] as const) {
-        it(`names the three switches as the owner reads them, marks voice and video memory "coming soon" and the first not, and has no raw key (${lang})`, () => {
+        it(`names the three switches as the owner reads them, marks only voice "coming soon" (video memory is live), and has no raw key (${lang})`, () => {
             const { page, t } = open({ lang, skipAdopt: true });
             const shell = String(page.museShell());
             assert.ok(text(shell).includes(text(t('muse.title'))));
@@ -140,7 +151,8 @@ describe('Meta vision card: the shell', () => {
             assert.equal(rows.length, 3);
             assert.ok(rows[0]!.includes(t('muse.dmMedia')) && !rows[0]!.includes(t('muse.soon')), 'the first is live and says nothing of "soon"');
             assert.ok(rows[1]!.includes(t('muse.voice')) && rows[1]!.includes(t('muse.soon')) && rows[1]!.includes(t('muse.soonNote')), 'voice is coming soon, and says what saving it does');
-            assert.ok(rows[2]!.includes(t('muse.memory')) && rows[2]!.includes(t('muse.soon')), 'so is video memory');
+            assert.ok(rows[2]!.includes(t('muse.memory')) && !rows[2]!.includes(t('muse.soon')) && !rows[2]!.includes(t('muse.soonNote')), 'video memory is live: no "coming soon" and no note about saving only the choice');
+            assert.ok(rows[2]!.includes(t('muse.memoryDesc')));
             for (const id of ['muse-dm-media', 'muse-voice', 'muse-memory']) assert.match(shell, new RegExp(`<input type="checkbox" id="${id}" aria-describedby="${id}-desc"`));
             assert.equal(/muse\.[a-zA-Z.]+/.test(text(shell)), false, 'no raw key reaches the screen');
             assert.equal(/\{\w+\}/.test(text(shell)), false, 'and no placeholder is left unfilled');
@@ -177,16 +189,20 @@ describe('Meta vision card: the shell', () => {
     });
 
     it('is an owner\'s: live controls and no note for an owner, locked controls for a viewer, locked controls AND the owner-only note for an operator', () => {
-        const controls = (shell: string) => [...shell.matchAll(/<(?:input|select|textarea|button)\b[^>]*>/g)].map((m) => m[0]).filter((c) => /id="muse-/.test(c));
+        const controls = (shell: string) => [...shell.matchAll(/<(?:input|select|textarea|button)\b[^>]*>/g)].map((m) => m[0])
+            .filter((c) => /id="muse-/.test(c) && !LIBRARY_CONTROLS.some((id) => c.includes(`id="${id}"`)));
+        const library = (shell: string) => LIBRARY_CONTROLS.map((id) => [id, new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`).exec(shell)?.[0] ?? '']);
         const state = (role: Role) => {
             const { page } = open({ role, skipAdopt: true });
             const shell = String(page.museShell());
-            return { shell, c: controls(shell) };
+            return { shell, c: controls(shell), lib: library(shell) };
         };
         const owner = state('owner');
         assert.equal(owner.c.length, 8, 'three switches, who, the picker button and search, the cap and Save');
         for (const c of owner.c) assert.ok(!/\sdisabled(?=[\s>])/.test(c) && !/\sreadonly(?=[\s>])/.test(c), `live for the owner: ${c}`);
         assert.ok(!owner.shell.includes('muse-owner-note'));
+        // The library's own buttons: Refresh is live for an owner, and Index my reels is off until the card has painted what is saved (it is on only while the saved switch is).
+        assert.deepEqual(owner.lib.map(([id, tag]) => [id, /\sdisabled(?=[\s>])/.test(tag!)]), [['muse-index-btn', true], ['muse-library-refresh', false]]);
         for (const role of ['viewer', 'operator'] as const) {
             const s = state(role);
             for (const c of s.c) {
@@ -194,6 +210,7 @@ describe('Meta vision card: the shell', () => {
                 assert.ok(cap ? /\sreadonly(?=[\s>])/.test(c) : /\sdisabled(?=[\s>])/.test(c), `${role}: locked: ${c}`);
             }
         }
+        for (const role of ['viewer', 'operator'] as const) assert.ok(state(role).lib.every(([, tag]) => /\sdisabled(?=[\s>])/.test(tag!)), `${role}: the library's buttons are locked too`);
         assert.ok(!state('viewer').shell.includes('muse-owner-note'), 'a viewer has the screen\'s own note (ai.readOnly), not this one');
         assert.ok(state('operator').shell.includes('id="muse-owner-note"'), 'an operator is told why');
     });
@@ -788,14 +805,17 @@ describe('Meta vision card: the words', () => {
         'muse.whoEveryone', 'muse.whoDesc', 'muse.whoEveryoneNote', 'muse.whoNobody', 'muse.people', 'muse.add', 'muse.pickerTitle', 'muse.pickerSearch', 'muse.pickerNote',
         'muse.pickerLoading', 'muse.pickerNone', 'muse.pickerNoMatch', 'muse.pickerFailed', 'muse.pickerAdd', 'muse.remove', 'muse.limit', 'muse.cap', 'muse.capDesc',
         'muse.capInvalid', 'muse.spent', 'muse.spentUnknown', 'muse.lessThanCent', 'muse.save', 'muse.saved', 'muse.saveFailed', 'muse.loadErrorTitle', 'muse.loadErrorHint',
-        'help.link.metaVision',
+        'help.link.metaVision', 'help.link.videoMemory',
     ];
 
     it('has every string in both languages, with the same placeholders, and none of the words the product never says', () => {
         const en = open({ lang: 'en', skipAdopt: true }).h.I18N.strings.en as Record<string, string>;
         const ar = open({ lang: 'ar', skipAdopt: true }).h.I18N.strings.ar as Record<string, string>;
         const holes = (value: string): string[] => [...value.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
-        for (const key of KEYS) {
+        // The library's strings are all of `muse.lib.*`: whatever is in one language is in the other, so the list cannot fall behind the dictionary.
+        const library = [...new Set([...Object.keys(en), ...Object.keys(ar)].filter((k) => k.startsWith('muse.lib.')))];
+        assert.ok(library.length > 60, 'the library has its words');
+        for (const key of [...KEYS, ...library]) {
             assert.ok(typeof en[key] === 'string' && en[key]!.length > 0, `en ${key}`);
             assert.ok(typeof ar[key] === 'string' && ar[key]!.length > 0, `ar ${key}`);
             assert.deepEqual(holes(en[key]!), holes(ar[key]!), `${key}: the same placeholders in both languages`);

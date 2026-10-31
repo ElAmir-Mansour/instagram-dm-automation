@@ -11,6 +11,11 @@
  * OWNER's (`POST /api/settings/ai/muse` is `canAdminister`), it has its own Save and its own unsaved note, and its state is the `muse` block of the
  * same `GET /api/settings/ai` the form loads from: `undefined` (a server that predates it) hides the card, `null` (the server could not read it) shows why
  * and offers nothing to save, so a card that failed to load is never saved over his real choice.
+ *
+ * Inside the card, below its own Save, is the video library (docs/specs/005-muse-sees T057): what the agent remembers of each reel the owner published, an "Index my
+ * reels" button with what it costs, and the details of one reel (what is said, what is on screen, its moments, its hook, a caption). It has no draft and no Save: every
+ * button is a request of its own (`/api/settings/ai/muse/library`, the OWNER's, reads included), and the list is asked for again while a reel waits, because there is no
+ * progress route.
  */
 const AiSettingsPage = {
     /**
@@ -81,6 +86,8 @@ const AiSettingsPage = {
 
     destroy() {
         this._seq++;
+        // The library is asked for again on the next visit, and its poll stops with this page.
+        this.museLibraryStop();
         // Navigation is already happening by the time this runs (the router has asked, if it was going to), so the honest
         // move for a LOGOUT or a tenant switch, which never ask, is to keep the
         // text and restore it the next time this screen opens. That is
@@ -99,6 +106,7 @@ const AiSettingsPage = {
         this._variants = undefined;
         this._muse = undefined;
         this._musePicker = null;
+        this.museLibraryStop();
     },
 
     /** What the server last gave us, to compare the fields against. */
@@ -998,8 +1006,8 @@ const AiSettingsPage = {
     MUSE_SWITCHES: Object.freeze(['dm_media', 'voice', 'memory']),
     /** The control each switch is. */
     MUSE_CONTROLS: Object.freeze({ dm_media: 'muse-dm-media', voice: 'muse-voice', memory: 'muse-memory' }),
-    /** The switches whose feature is not live yet (voice ships in P3, video memory in P4): the server stores them and nothing reads them, and the card says so. */
-    MUSE_SOON: Object.freeze({ dm_media: false, voice: true, memory: true }),
+    /** The switches whose feature is not live yet (voice ships in P3): the server stores them and nothing reads them, and the card says so. Video memory is live. */
+    MUSE_SOON: Object.freeze({ dm_media: false, voice: true, memory: false }),
     /** A sender id as the server takes it (`SENDER_ID` in src/services/dmSales/mode.ts): the picker offers only threads whose id is one, so nothing else is ever sent. */
     MUSE_SENDER: /^\d{5,32}$/,
     /** The picker's list is the inbox's own, at the inbox's page size: the newest threads, filtered to Instagram's here. */
@@ -1118,6 +1126,8 @@ const AiSettingsPage = {
                         <span class="unsaved-note hidden" id="muse-unsaved-note" role="status">${t('ai.unsaved')}</span>
                     </div>
                 </div>
+
+                ${this.museLibraryShell()}
             </section>
         `;
     },
@@ -1253,7 +1263,10 @@ const AiSettingsPage = {
         this.paintMuseHints();
         this.paintMuseSpent();
         this.paintMusePicker();
+        this.paintMuseLibrary();
         this.refreshMuseDirty();
+        // The owner's library is asked for once per visit, the first time the card is ready: it is read with the switch off as well, so what was watched stays viewable.
+        if (ready && this.museOwner() && this.museLibState().status === 'idle') this.loadMuseLibrary();
     },
 
     /** The key line: whether a Meta key can answer (the gate's own question) and which model it would read with; what to do when none can. */
@@ -1595,6 +1608,437 @@ const AiSettingsPage = {
         this.adoptMuse(view);
     },
 
+    // ─── Meta vision: the video library (docs/specs/005-muse-sees T057) ────────────────────────────────
+
+    /**
+     * What watching a reel costs and takes, in the card's words: a reel of the live run of 2026-10-29 cost about two cents and about 40 seconds, and the owner has about
+     * seventy (about $1.50 in all). They are said as "about", never promised; what one reel really cost is in its details.
+     */
+    MUSE_REEL_USD: 0.0215,
+    MUSE_REEL_SECONDS: 40,
+    MUSE_SAMPLE_REELS: 70,
+    MUSE_SAMPLE_USD: 1.5,
+    /** How often the list is asked for again while a reel waits (there is no progress route), and how many times: a page left open for hours is not asked forever. */
+    MUSE_POLL_MS: 20000,
+    MUSE_POLL_MAX: 180,
+    /** The longest a summary is drawn in the list: the stylesheet shows two lines of it, and the details hold the rest. */
+    MUSE_SUMMARY_MAX: 400,
+    /** A reel's id as the routes take it (a uuid), and the states a row can be in. */
+    MUSE_REEL_ID: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    MUSE_REEL_STATUSES: Object.freeze(['ok', 'pending', 'failed']),
+    /** The refusals the library routes answer with, each with its own sentence in `muse.lib.e.<CODE>`; any other shows the server's words. */
+    MUSE_LIB_ERRORS: Object.freeze(['MUSE_MEMORY_OFF', 'AI_NOT_CONFIGURED', 'META_NOT_CONNECTED', 'TOKEN_INVALID', 'META_UNAVAILABLE', 'META_ERROR', 'REEL_NOT_FOUND', 'NO_MEDIA_ID']),
+    /** Why a reel could not be watched (`result.error`), each with its own sentence in `muse.lib.fail.<code>`. */
+    MUSE_LIB_FAILURES: Object.freeze([
+        'too_large', 'fetch_failed', 'expired_url', 'timeout', 'no_media_url', 'not_a_video', 'not_found', 'graph_auth', 'graph_unavailable', 'graph_failed', 'provider_error', 'bad_output',
+    ]),
+
+    /**
+     * The library's state, made on first use (`museLibState`); `undefined` before the card asks. `status`: `idle` (not asked), `loading`, `ready` or `failed`. `rows`: the list as the
+     * server gave it, cleaned. `error`: why the last ask failed. `busy`: "Index my reels" is in flight. `again`: the reels whose "Watch again" is in flight. `open`: a reel's id to its
+     * details (`{ status: 'loading' | 'ready' | 'failed', result }`). `notice`: what the last press came to (`{ kind, text }`). `polls`: how many times the list was asked for again by
+     * itself since the last press. `timer`: the next of those.
+     */
+    _museLib: undefined,
+
+    museLibState() {
+        if (!this._museLib) this._museLib = { status: 'idle', rows: [], error: '', busy: false, again: new Set(), open: new Map(), notice: null, polls: 0, timer: null };
+        return this._museLib;
+    },
+
+    /** Stops the poll and forgets the library: a new visit asks again, and another tenant never sees this one's reels. */
+    museLibraryStop() {
+        const lib = this._museLib;
+        if (lib && lib.timer) clearTimeout(lib.timer);
+        this._museLib = undefined;
+    },
+
+    /** The library's routes are the OWNER's, reads included (`requireTenantRole('owner')`): to anyone else the section is not drawn. Optimistic like `canEdit`. */
+    museOwner() {
+        return typeof App === 'undefined' || typeof App.canAdminister !== 'function' || App.canAdminister();
+    },
+
+    /** One line of what the server or a model wrote: control characters out, white space one space, at most `max` characters. '' for anything that is not text. */
+    museLine(value, max) {
+        if (typeof value !== 'string') return '';
+        return Array.from(value.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
+    },
+
+    /** Text that keeps its line breaks (what is said in a reel): control characters out, one space between words, no blank lines, at most `max` characters. */
+    museBlock(value, max) {
+        if (typeof value !== 'string') return '';
+        const lines = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f\u2028\u2029]/g, ' ').split('\n');
+        return Array.from(lines.map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')).slice(0, max).join('');
+    },
+
+    /** A second as the "m:ss" a person reads on a video's timeline, which is how the assistant says it too: 13 is "0:13", 65 is "1:05". */
+    museClock(second) {
+        const whole = Number.isFinite(second) && second > 0 ? Math.floor(second) : 0;
+        return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+    },
+
+    /** The list as the server gave it, as rows the card draws: only a row with a uuid, each once; a state it does not know is a failure; a link only if it is https. */
+    museReelsFrom(result) {
+        const rows = [];
+        (Array.isArray(result) ? result : []).forEach((r) => {
+            if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !this.MUSE_REEL_ID.test(r.id) || rows.some((x) => x.id === r.id)) return;
+            const link = safeUrl(r.permalink);
+            rows.push({
+                id: r.id,
+                mediaId: typeof r.ig_media_id === 'string' ? r.ig_media_id : '',
+                status: this.MUSE_REEL_STATUSES.includes(r.status) ? r.status : 'failed',
+                summary: this.museLine(r.summary, this.MUSE_SUMMARY_MAX),
+                postedAt: typeof r.posted_at === 'string' ? r.posted_at : '',
+                hook: Number.isFinite(r.hook_score) ? Math.round(r.hook_score) : null,
+                error: typeof r.error === 'string' ? r.error : '',
+                link: /^https:\/\//i.test(link) ? link : '',
+                usd: Number.isFinite(r.usd) ? r.usd : null,
+                model: this.museText(r.model),
+            });
+        });
+        return rows;
+    },
+
+    /** The sentence for a reel that could not be watched, from the reason the server stored; a reason it has no sentence for is shown as its code. */
+    museFailureText(code) {
+        if (this.MUSE_LIB_FAILURES.includes(code)) return t(`muse.lib.fail.${code}`);
+        return code ? t('muse.lib.fail.other', { code: this.isolate(this.museText(code)) }) : t('muse.lib.fail.unknown');
+    },
+
+    /** What a refused press says: the sentence for the server's code in the interface language, else the server's own words. */
+    museLibError(err) {
+        const code = err && typeof err.code === 'string' ? err.code : '';
+        if (this.MUSE_LIB_ERRORS.includes(code)) return t(`muse.lib.e.${code}`);
+        return (err && typeof err.message === 'string' && err.message) || t('muse.lib.indexFailed');
+    },
+
+    /** What "Index my reels" came to, from the 202's counts: how many were queued and about what that costs, or why none were. */
+    museQueuedNotice(got) {
+        const n = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+        const queued = n(got && got.queued);
+        const extra = got && got.truncated === true ? ` ${t('muse.lib.truncated')}` : '';
+        if (queued > 0) {
+            return { kind: 'ok', text: `${t('muse.lib.queued', { queued, cost: this.museMoney(queued * this.MUSE_REEL_USD), seconds: this.MUSE_REEL_SECONDS })}${extra}` };
+        }
+        if (n(got && got.deduped) > 0) return { kind: 'info', text: `${t('muse.lib.queuedAlready')}${extra}` };
+        if (n(got && got.listed) === 0) return { kind: 'info', text: `${t('muse.lib.noReels')}${extra}` };
+        return { kind: 'info', text: `${t('muse.lib.allWatched')}${extra}` };
+    },
+
+    // ─── What the section shows ───
+
+    /** The section's markup: drawn hidden, and made visible for an owner once the card is ready (`paintMuseLibrary`). It sits inside the card and outside its form: nothing here is a draft. */
+    museLibraryShell() {
+        const owner = this.museOwner();
+        return html`
+            <section class="muse-library hidden" id="muse-library" aria-labelledby="muse-library-title">
+                <hr class="divider">
+                <div class="muse-library-body">
+                    <h4 id="muse-library-title" aria-level="3">${t('muse.lib.title')}</h4>
+                    <p class="form-hint">${t('muse.lib.intro')} ${UI.helpLink('ai-usage#video-memory', t('help.link.videoMemory'), { newTab: true })}</p>
+                    <div class="muse-library-actions">
+                        ${UI.button({ variant: 'primary', icon: 'film', label: t('muse.lib.index'), action: 'muse:indexAll', id: 'muse-index-btn', disabled: true })}
+                        ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('muse.lib.refresh'), action: 'muse:refreshLibrary', id: 'muse-library-refresh', disabled: !owner })}
+                    </div>
+                    <p class="form-hint" id="muse-library-estimate"></p>
+                    <p class="form-hint text-warning hidden" id="muse-library-hint" role="note"></p>
+                    <p class="form-hint hidden" id="muse-library-notice" role="status" aria-live="polite"></p>
+                    <p class="form-hint muse-library-count" id="muse-library-count" role="status" aria-live="polite"></p>
+                    <ul class="muse-reels" id="muse-library-list" aria-label="${t('muse.lib.title')}"></ul>
+                </div>
+            </section>
+        `;
+    },
+
+    /**
+     * The section from the state: drawn for an owner when the card is ready. "Index my reels" works only while the SAVED switch is on (the server reads what is saved, and answers
+     * 409 for the rest), so while it is not the button is off and a line says why.
+     */
+    paintMuseLibrary() {
+        const m = this._muse;
+        const visible = !!m && m.status === 'ready' && this.museOwner();
+        const box = document.getElementById('muse-library');
+        if (box) box.classList.toggle('hidden', !visible);
+        if (!visible) return;
+        const lib = this.museLibState();
+        const memoryOn = m.saved.switches.memory === true;
+        const put = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
+        put('muse-index-btn', (el) => { el.disabled = !memoryOn || lib.busy; });
+        put('muse-library-refresh', (el) => { el.disabled = lib.status === 'loading'; });
+        put('muse-library-estimate', (el) => {
+            el.textContent = t('muse.lib.estimate', {
+                cost: this.museMoney(this.MUSE_REEL_USD), seconds: this.MUSE_REEL_SECONDS, total: this.museMoney(this.MUSE_SAMPLE_USD), reels: this.MUSE_SAMPLE_REELS,
+            });
+        });
+        put('muse-library-hint', (el) => {
+            el.textContent = memoryOn ? '' : t('muse.lib.memoryOff');
+            el.classList.toggle('hidden', memoryOn);
+        });
+        put('muse-library-notice', (el) => {
+            const notice = lib.notice;
+            el.textContent = notice ? notice.text : '';
+            el.classList.toggle('hidden', !notice);
+            el.classList.toggle('text-warning', !!notice && notice.kind === 'error');
+        });
+        this.paintMuseLibraryList();
+    },
+
+    /** The counts and the list: what is loading, what failed, what is empty, else a line of numbers and a row a reel. A refresh that failed with a list on screen keeps the list. */
+    paintMuseLibraryList() {
+        const list = document.getElementById('muse-library-list');
+        const count = document.getElementById('muse-library-count');
+        if (!list || !count) return;
+        const lib = this.museLibState();
+        let line;
+        if (lib.status === 'failed') line = lib.error || t('muse.lib.loadFailed');
+        else if (lib.status === 'idle' || (lib.status === 'loading' && lib.rows.length === 0)) line = t('muse.lib.loading');
+        else if (lib.rows.length === 0) line = t('muse.lib.empty');
+        else {
+            const n = (status) => lib.rows.filter((r) => r.status === status).length;
+            line = t('muse.lib.count', { total: lib.rows.length, ok: n('ok'), pending: n('pending'), failed: n('failed') });
+            if (lib.error) line = `${line} ${t('muse.lib.refreshFailed')}`;
+        }
+        count.textContent = line;
+        count.classList.toggle('text-warning', lib.status === 'failed' || !!lib.error);
+        list.innerHTML = lib.status === 'failed' ? '' : esc(lib.rows.map((row) => this.museReelRow(row, lib)));
+        UI.icons(list);
+    },
+
+    /** One reel: its state, date and summary (or why it could not be watched), and what can be done with it. Everything a model or the server wrote is text, never markup. */
+    museReelRow(row, lib) {
+        const m = this._muse;
+        const memoryOn = !!m && m.status === 'ready' && m.saved.switches.memory === true;
+        const date = row.postedAt ? UI.formatDay(row.postedAt) : t('muse.lib.undated');
+        const look = {
+            ok: ['badge-success', 'check-circle', 'muse.lib.status.ok'],
+            pending: ['badge-neutral', 'hourglass', 'muse.lib.status.pending'],
+            failed: ['badge-warning', 'alert-triangle', 'muse.lib.status.failed'],
+        }[row.status];
+        let text;
+        if (row.status === 'ok') text = row.summary || t('muse.lib.noSummary');
+        else if (row.status === 'pending') text = t('muse.lib.waiting');
+        else text = t('muse.lib.couldNot', { reason: this.museFailureText(row.error) });
+        const entry = lib.open.get(row.id);
+        const detailId = `muse-detail-${row.id}`;
+        const again = !memoryOn || !row.mediaId || row.status === 'pending' || lib.again.has(row.id);
+        return html`
+            <li class="muse-reel" data-reel="${row.id}">
+                <div class="muse-reel-head">
+                    <span class="badge ${look[0]}"><i data-lucide="${look[1]}" aria-hidden="true"></i>${t(look[2])}</span>
+                    <span class="muse-reel-date">${date}</span>
+                    ${row.hook !== null ? html`<span class="muse-reel-hook">${t('muse.lib.hook', { score: row.hook })}</span>` : ''}
+                </div>
+                <p class="muse-reel-summary user-content" dir="auto">${text}</p>
+                <div class="muse-reel-actions">
+                    ${row.status === 'ok' ? html`
+                        <button type="button" class="btn btn-ghost btn-sm" id="muse-toggle-${row.id}" data-action="muse:toggleReel" data-id="${row.id}"
+                                aria-expanded="${entry ? 'true' : 'false'}" aria-controls="${detailId}"
+                                aria-label="${t(entry ? 'muse.lib.hideOf' : 'muse.lib.detailsOf', { date })}"><i data-lucide="chevron-down" aria-hidden="true"></i> ${t(entry ? 'muse.lib.hide' : 'muse.lib.details')}</button>
+                    ` : ''}
+                    ${UI.button({
+                        variant: 'ghost', size: 'sm', icon: 'rotate-cw', label: t('muse.lib.again'), ariaLabel: t('muse.lib.againOf', { date }), action: 'muse:reindexReel', data: { id: row.id }, disabled: again,
+                    })}
+                    ${row.link ? html`<a class="btn btn-ghost btn-sm" href="${row.link}" target="_blank" rel="noopener noreferrer" aria-label="${t('muse.lib.openOf', { date })}"><i data-lucide="external-link" aria-hidden="true"></i> ${t('muse.lib.open')}</a>` : ''}
+                </div>
+                ${entry ? this.museReelDetail(row, entry, detailId) : ''}
+            </li>
+        `;
+    },
+
+    /** What the agent remembers of one reel, from the row's `result`: what it is about, what is said, what is on screen, the moments, the topics, the hook and a caption. */
+    museReelDetail(row, entry, id) {
+        if (entry.status === 'loading') return html`<div class="muse-reel-detail" id="${id}"><p class="form-hint">${t('muse.lib.detailLoading')}</p></div>`;
+        if (entry.status === 'failed') return html`<div class="muse-reel-detail" id="${id}"><p class="form-hint text-warning">${t('muse.lib.detailFailed')}</p></div>`;
+        const r = entry.result && typeof entry.result === 'object' && !Array.isArray(entry.result) ? entry.result : {};
+        const lines = (v, each, most) => (Array.isArray(v) ? v : []).map((x) => this.museLine(x, each)).filter(Boolean).slice(0, most);
+        const moments = (Array.isArray(r.key_moments) ? r.key_moments : [])
+            .filter((x) => x && typeof x === 'object' && Number.isFinite(x.second) && x.second >= 0)
+            .map((x) => ({ second: x.second, what: this.museLine(x.what, 300) }))
+            .filter((x) => x.what)
+            .slice(0, 15);
+        const summary = this.museLine(r.summary, 800);
+        const narration = this.museBlock(r.narration, 6000);
+        const screen = lines(r.seen_on_screen, 200, 15);
+        const topics = lines(r.topics, 80, 12);
+        const hook = this.museLine(r.hook_first_3s, 400);
+        const score = Number.isFinite(r.hook_score) ? Math.round(r.hook_score) : null;
+        const caption = this.museBlock(r.caption_ar, 1000);
+        const cover = Number.isFinite(r.cover_second) && r.cover_second >= 0 ? { second: r.cover_second, reason: this.museLine(r.cover_reason, 300) } : null;
+        const section = (key, body) => (body ? html`<section class="muse-detail-section"><h5 aria-level="4">${t(key)}</h5>${body}</section>` : '');
+        const empty = !summary && !narration && screen.length === 0 && moments.length === 0 && topics.length === 0 && !hook && !caption;
+        return html`
+            <div class="muse-reel-detail" id="${id}">
+                ${empty ? html`<p class="form-hint">${t('muse.lib.d.nothing')}</p>` : ''}
+                ${section('muse.lib.d.summary', summary ? html`<p class="user-content" dir="auto">${summary}</p>` : '')}
+                ${section('muse.lib.d.narration', narration ? html`<p class="muse-narration user-content" dir="auto">${narration}</p>` : '')}
+                ${section('muse.lib.d.screen', screen.length ? html`<ul class="muse-notes">${screen.map((x) => html`<li class="user-content" dir="auto">${x}</li>`)}</ul>` : '')}
+                ${section('muse.lib.d.moments', moments.length ? html`<ul class="muse-notes muse-moments">${moments.map((x) => html`<li><span class="muse-clock ltr-text" dir="ltr">${this.museClock(x.second)}</span> <span class="user-content" dir="auto">${x.what}</span></li>`)}</ul>` : '')}
+                ${section('muse.lib.d.topics', topics.length ? html`<ul class="growth-chips muse-topics">${topics.map((x) => html`<li class="chip growth-chip"><span class="user-content" dir="auto">${x}</span></li>`)}</ul>` : '')}
+                ${section('muse.lib.d.hook', hook || score !== null ? html`
+                    ${hook ? html`<p class="user-content" dir="auto">${hook}</p>` : ''}
+                    ${score !== null ? html`<p class="form-hint">${t('muse.lib.hook', { score })}</p>` : ''}
+                ` : '')}
+                ${section('muse.lib.d.caption', caption ? html`<p class="muse-narration user-content" dir="auto">${caption}</p>` : '')}
+                ${section('muse.lib.d.cover', cover ? html`<p class="user-content" dir="auto">${t('muse.lib.d.coverAt', { clock: this.museClock(cover.second) })}${cover.reason ? html` ${cover.reason}` : ''}</p>` : '')}
+                ${row.model ? html`<p class="form-hint">${row.usd !== null ? t('muse.lib.d.by', { model: this.isolate(row.model), cost: this.museMoney(row.usd) }) : t('muse.lib.d.model', { model: this.isolate(row.model) })}</p>` : ''}
+            </div>
+        `;
+    },
+
+    // ─── Asking, and pressing ───
+
+    /**
+     * Asks for the list. The first ask (or a press on Refresh) shows "loading"; a poll is quiet, and one that fails keeps the list it has and says so beside the counts. A late answer,
+     * or one for a page that was left or a library that was forgotten, is dropped. When a reel is still waiting the next ask is scheduled.
+     */
+    async loadMuseLibrary(opts) {
+        const lib = this.museLibState();
+        const quiet = !!(opts && opts.quiet);
+        if (lib.status === 'loading') return;
+        if (!quiet || lib.status === 'idle') {
+            lib.status = 'loading';
+            this.paintMuseLibrary();
+        }
+        const page = this._seq;
+        let result = null;
+        let failure = '';
+        try {
+            result = await API.getMuseLibrary();
+        } catch (err) {
+            console.error('Video library load error:', err);
+            failure = (err && typeof err.message === 'string' && err.message) || t('muse.lib.loadFailed');
+        }
+        if (page !== this._seq || lib !== this._museLib) return;
+        if (failure) {
+            lib.status = lib.rows.length ? 'ready' : 'failed';
+            lib.error = failure;
+        } else {
+            lib.rows = this.museReelsFrom(result);
+            lib.status = 'ready';
+            lib.error = '';
+        }
+        this.paintMuseLibrary();
+        this.museLibrarySchedule();
+    },
+
+    /** The next ask, while a reel waits: not forever (`MUSE_POLL_MAX`), not twice, and not for a page that was left. */
+    museLibrarySchedule() {
+        const lib = this._museLib;
+        if (!lib) return;
+        if (lib.timer) {
+            clearTimeout(lib.timer);
+            lib.timer = null;
+        }
+        if (!lib.rows.some((r) => r.status === 'pending') || lib.polls >= this.MUSE_POLL_MAX) return;
+        const page = this._seq;
+        lib.timer = setTimeout(() => {
+            lib.timer = null;
+            if (page !== this._seq || lib !== this._museLib) return;
+            lib.polls += 1;
+            this.loadMuseLibrary({ quiet: true });
+        }, this.MUSE_POLL_MS);
+    },
+
+    /** Refresh: asks for the list again now, and starts the polls over. */
+    museRefreshLibrary() {
+        if (!this.museOwner()) return;
+        const lib = this.museLibState();
+        lib.polls = 0;
+        lib.notice = null;
+        return this.loadMuseLibrary();
+    },
+
+    /**
+     * "Index my reels": queues every published reel that has no notes. Nothing is sent unless the SAVED switch is on (the server answers 409 for the rest, and the button is off
+     * then), by anyone but the owner, or twice at once. What the server counted is what is said, and the list is asked for at once, so the reels show as waiting.
+     */
+    async museIndexAll(button) {
+        const m = this._muse;
+        if (!m || m.status !== 'ready' || !this.museOwner() || m.saved.switches.memory !== true) return;
+        const lib = this.museLibState();
+        if (lib.busy) return;
+        const restore = UI.actionBusy(button, t('muse.lib.indexing'));
+        if (!restore) return; // already in flight
+        lib.busy = true;
+        lib.notice = null;
+        const page = this._seq;
+        try {
+            const got = await API.indexMuseLibrary();
+            if (page !== this._seq || lib !== this._museLib) return;
+            lib.notice = this.museQueuedNotice(got);
+            lib.polls = 0;
+            await this.loadMuseLibrary({ quiet: true });
+        } catch (err) {
+            console.error('Index my reels error:', err);
+            if (page === this._seq && lib === this._museLib) lib.notice = { kind: 'error', text: this.museLibError(err) };
+        } finally {
+            lib.busy = false;
+            restore();
+            if (lib === this._museLib) this.paintMuseLibrary();
+        }
+    },
+
+    /** "Watch again" on one reel: queues it, whatever its state. A reel whose notes are good keeps them until the new ones replace them, which is what the notice says. */
+    async museReindexReel(id) {
+        const m = this._muse;
+        const lib = this.museLibState();
+        const row = lib.rows.find((r) => r.id === id);
+        if (!m || m.status !== 'ready' || !this.museOwner() || m.saved.switches.memory !== true || !row || !row.mediaId || row.status === 'pending' || lib.again.has(id)) return;
+        lib.again.add(id);
+        lib.notice = null;
+        this.paintMuseLibrary();
+        const page = this._seq;
+        try {
+            const got = await API.reindexMuseReel(id);
+            if (page !== this._seq || lib !== this._museLib) return;
+            lib.notice = { kind: 'ok', text: got && got.queued === false ? t('muse.lib.alreadyQueued') : t(row.status === 'ok' ? 'muse.lib.queuedOneKept' : 'muse.lib.queuedOne') };
+            lib.polls = 0;
+            lib.again.delete(id);
+            await this.loadMuseLibrary({ quiet: true });
+        } catch (err) {
+            console.error('Watch again error:', err);
+            if (page === this._seq && lib === this._museLib) lib.notice = { kind: 'error', text: this.museLibError(err) };
+        } finally {
+            if (lib === this._museLib) {
+                lib.again.delete(id);
+                this.paintMuseLibrary();
+            }
+        }
+    },
+
+    /** Opens or closes one reel's details; opening asks for them. The focus stays on the button that was pressed, which is drawn again with the list. */
+    async museToggleReel(id) {
+        if (!this.museOwner() || !this.MUSE_REEL_ID.test(String(id))) return;
+        const lib = this.museLibState();
+        const refocus = () => {
+            const el = document.getElementById(`muse-toggle-${id}`);
+            if (el && typeof el.focus === 'function') el.focus();
+        };
+        if (lib.open.has(id)) {
+            lib.open.delete(id);
+            this.paintMuseLibraryList();
+            refocus();
+            return;
+        }
+        const entry = { status: 'loading', result: null };
+        lib.open.set(id, entry);
+        this.paintMuseLibraryList();
+        refocus();
+        const page = this._seq;
+        try {
+            const result = await API.getMuseReel(id);
+            if (page !== this._seq || lib !== this._museLib || lib.open.get(id) !== entry) return;
+            entry.result = result;
+            entry.status = 'ready';
+        } catch (err) {
+            console.error('Video library reel error:', err);
+            if (page !== this._seq || lib !== this._museLib || lib.open.get(id) !== entry) return;
+            entry.status = 'failed';
+        }
+        this.paintMuseLibraryList();
+        refocus();
+    },
+
     async saveSettings(form, event) {
         event.preventDefault();
         // The server refuses a viewer's save (`canOperate`); nothing is sent, and no toast quotes its 403.
@@ -1896,4 +2340,9 @@ UI.registerActions('muse', {
     removePerson: (el) => AiSettingsPage.museRemovePerson(el && el.dataset ? el.dataset.id : ''),
     save: (el) => AiSettingsPage.museSave(el),
     reload: () => AiSettingsPage.museReload(),
+    // The video library inside the card.
+    indexAll: (el) => AiSettingsPage.museIndexAll(el),
+    refreshLibrary: () => AiSettingsPage.museRefreshLibrary(),
+    toggleReel: (el) => AiSettingsPage.museToggleReel(el && el.dataset ? el.dataset.id : ''),
+    reindexReel: (el) => AiSettingsPage.museReindexReel(el && el.dataset ? el.dataset.id : ''),
 });
