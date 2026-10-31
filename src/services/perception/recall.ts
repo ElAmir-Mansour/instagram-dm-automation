@@ -26,6 +26,10 @@
  *
  * **What the turn is told** (`TurnRecall.line`, the facts block's `video`): "Relevant video: <link> (watch from m:ss): <summary>" for a match, and "No video on this
  * topic yet" for a content request that no reel covers. A message the model says is not a request for content gets no line at all.
+ *
+ * **What the guard is told** (`TurnRecall.claim`): only the code-made part of that line, "Relevant video: <link> (watch from m:ss)", so that the second the reply says is no
+ * invented number. NOT the summary: it was written by a model about a reel, and a number, a price or a discount in it ("50% off, today only") is not a fact the reply may
+ * state, however true it was when the reel was posted (the guard's own rule: its facts are what the owner typed, and "numbers seen in media stay disallowed").
  */
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
@@ -249,6 +253,7 @@ export function snapSecond(requested: number, seconds: readonly number[]): numbe
  * so, and it keeps the model to the notes: the summary is all it knows of the video. No digit in it (the line goes among the guard's facts).
  */
 export const VIDEO_GUIDE = 'It is the account owner\'s own video and it answers what they asked: tell them about it in their language, using only what is said here. '
+    + 'Give the time to watch from when there is one, and repeat no other number, price or discount that this mentions. '
     + 'The link above is the one exception to the rule against writing a link: write it exactly as given. Do not mention any other video.';
 
 /** The fact for a content request that no reel covers. No link: there is nothing to link, and the guard strips any the model writes. */
@@ -259,12 +264,13 @@ export const NO_VIDEO_FACT = 'No video on this topic yet. Tell them so honestly 
 const stop = (text: string): string => (/[.!?؟…]$/.test(text) ? text : `${text}.`);
 
 /** A reel that matched, as the line the turn tells its model: "Relevant video: <link> (watch from 0:13): <summary>", and what to do with it. `second` is the snapped one. Pure. */
-export function recalledFact(entry: LibraryEntry, requestedSecond: number): { line: string; link: string; second: number } {
+export function recalledFact(entry: LibraryEntry, requestedSecond: number): { line: string; link: string; second: number; claim: string } {
     const second = snapSecond(requestedSecond, entry.seconds);
     // An entry always has a link (`entryOf` drops one that has none); the fallback is the Instagram address and then nothing, which never happens.
     const link = videoLink(entry.row, second) ?? '';
     const where = second > 0 ? ` (watch from ${watchFrom(second)})` : '';
-    return { line: `Relevant video: ${link}${where}: ${stop(entry.summary)} ${VIDEO_GUIDE}`, link, second };
+    const claim = `Relevant video: ${link}${where}`;
+    return { line: `${claim}: ${stop(entry.summary)} ${VIDEO_GUIDE}`, link, second, claim };
 }
 
 /**
@@ -281,6 +287,8 @@ export function mentionsLink(text: string, link: string): boolean {
 export interface TurnRecall {
     /** The facts block's `video` line. */
     line: string;
+    /** What goes among the GUARD's facts: the link and the second, the code-made part of `line`, and never the summary. Null when no reel matched: there is nothing to allow. */
+    claim: string | null;
     /** The one link the reply may carry: the matched reel's. Null when no reel matched. */
     link: string | null;
     /** The reel that matched, and the second the line says to watch from (0: from the start). Null when none did. */
@@ -418,12 +426,12 @@ export async function recallForTurn(input: RecallInput, given: RecallDeps = {}):
         }
         if (answer.match === 0) {
             log('info', 'recall.no_match', done);
-            return { line: NO_VIDEO_FACT, link: null, match: null };
+            return { line: NO_VIDEO_FACT, link: null, claim: null, match: null };
         }
         const entry = entries[answer.match - 1]!;
         const fact = recalledFact(entry, answer.second);
         log('info', 'recall.matched', { ...done, reel_id: entry.row.id, second: fact.second });
-        return { line: fact.line, link: fact.link, match: { reelId: entry.row.id, second: fact.second } };
+        return { line: fact.line, link: fact.link, claim: fact.claim, match: { reelId: entry.row.id, second: fact.second } };
     } catch (err) {
         // The customer is answered as they would have been: no recall is never an error for them.
         log('warn', 'recall.failed', { ...logBase, outcome: 'unexpected', ...describeError(err) });

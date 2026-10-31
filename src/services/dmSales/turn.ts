@@ -48,9 +48,10 @@
  *
  * **Meta Muse recall** (`src/services/perception/recall.ts`, docs/specs/005-muse-sees T056): a message the customer TYPED (or said: a voice note's transcript is a typed
  * turn here) that asks for a video is looked up in the owner's video library, when the tenant's `memory` switch is on and the sender is allowed. What is added, for such a turn
- * and for no other: the facts block's "Relevant video: <link> (watch from m:ss): <summary>" (or "No video on this topic yet"), the line among the guard's facts (so the second it
- * names is no invented number) and the video's link on the guard's allow-list for THIS reply alone (the guard still strips any other link, a library permalink that was not
- * recalled included), the link added after the model's words when the model left it out, and `ai_meta.recalled: true` with the trace's reason. Instagram only (never a Messenger
+ * and for no other: the facts block's "Relevant video: <link> (watch from m:ss): <summary>" (or "No video on this topic yet"), the link and the second (not the summary: a number
+ * or a discount in a reel's notes is no fact the reply may state) among the guard's facts, so the second it names is no invented number, and the video's link on the guard's
+ * allow-list for THIS reply alone (the guard still strips any other link, a library permalink that was not recalled included), the link added after the model's words when the
+ * model left it out, and `ai_meta.recalled: true` with the trace's reason. Instagram only (never a Messenger
  * or a WhatsApp turn), never for a button the customer tapped, and never for a DESCRIPTION: what a model wrote about a photo is not words the customer wrote, and it says
  * "reel" or "video" whatever they wanted. Absent (the switch off, no cue in the message, nothing found), none of this exists: the turn is byte for byte what it was.
  *
@@ -505,7 +506,8 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         // What a model said it saw, said last, next to the customer's message. It is NOT among the guard's facts below: a number or a price in a picture is not one the
         // reply may state unless the information above gives it.
         ...(input.perceived?.sent ? { sent: input.perceived.sent } : {}),
-        // What the video library holds for what they asked, said after it. A matched reel's line IS among the guard's facts (below), so the second it names is no invented number.
+        // What the video library holds for what they asked, said after it. Its link and second are among the guard's facts (below), so the second it names is no invented number;
+        // what the summary says is not: a number or a discount in a reel's notes is not one the reply may state.
         ...(recalled ? { video: recalled.line } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
@@ -590,11 +592,11 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         if (sendsModelText(decision)) {
             // The link the server is inserting is on the allowlist, so a model that repeats it (it is never shown it) is not stripped of it.
             // The keyword they commented was shown to the model in the facts, so it is data like the rest (a keyword with a digit in it is no invented number).
-            // A matched video's line is a fact the reply may repeat (the second it names, a number in its summary) and its link is on the list for this reply alone; a reel that
-            // was not matched has no line and no link here, so the guard takes its permalink out like any other link the data does not give.
+            // A matched video's link and second are facts the reply may repeat, and its link is on the list for this reply alone; the summary is not a fact (a model wrote it). A
+            // reel that was not matched has no claim and no link here, so the guard takes its permalink out like any other link the data does not give.
             const claims = {
                 ...prompt.claims,
-                texts: [...prompt.claims.texts, ...(bridged?.comment.keyword ? [bridged.comment.keyword] : []), ...(recalled?.match ? [recalled.line] : [])],
+                texts: [...prompt.claims.texts, ...(bridged?.comment.keyword ? [bridged.comment.keyword] : []), ...(recalled?.claim ? [recalled.claim] : [])],
                 allowedLinks: [...(prompt.claims.allowedLinks ?? []), ...(link ? [link] : []), ...(recalled?.link ? [recalled.link] : [])],
             };
             guarded = guardReply(reply.text, claims);

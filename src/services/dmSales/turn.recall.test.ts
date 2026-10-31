@@ -305,16 +305,31 @@ describe('recall in the turn: a match', () => {
         assert.equal(record(r).aiMeta.reason, 'Found a video in the library; answered from the account\'s own information, because they want to know more.');
     });
 
-    it('a number in the video\'s summary may be repeated, because the line is among the guard\'s facts; the same reply with no recall is refused', async () => {
-        const says = reply({ text: `It breaks it into 3 steps: ${GIT_LINK} from 0:12` });
-        const r = await run({ text: 'is there a reel on rebase?', recall: found(3, 12), dm: () => says });
-        assert.equal(r.layerCalls.length, 2);
-        assert.ok(!r.logged.some((l) => l.event === 'dm.claim_blocked'));
-        assert.ok(sentText(r).includes('3 steps'));
+    it('the link and the second are facts the reply may state; a number in the video\'s summary is NOT (a model wrote it): it is refused, asked again once, and never sent', async () => {
+        const r = await run({
+            text: 'is there a reel on rebase?', recall: found(3, 12),
+            dm: (call) => (call === 1 ? reply({ text: `It breaks it into 3 steps: ${GIT_LINK} from 0:12` }) : reply({ text: `Here it is: ${GIT_LINK} from 0:12` })),
+        });
+        assert.deepEqual(purposes(r), ['recall', 'dm', 'dm']);
+        const blocked = r.logged.filter((l) => l.event === 'dm.claim_blocked');
+        assert.deepEqual(blocked.map((l) => l['violations']), [['number:3']], 'only the number from the summary: the second is the claim\'s');
+        assert.ok(!sentText(r).includes('3 steps') && sentText(r).includes('0:12'));
+        assert.match(lastUserTurn(r.layerCalls[2]!), /NOT sent/);
+    });
 
-        const control = await run({ text: 'is there a reel on rebase?', deps: { gate: async () => ({ ok: false, reason: 'switch_off' }) }, dm: (call) => (call === 1 ? says : reply({ text: 'There is a short one on it.' })) });
-        assert.ok(control.logged.some((l) => l.event === 'dm.claim_blocked'), 'without the line, 3 and 0:12 are numbers the data does not give');
-        assert.ok(!sentText(control).includes('3 steps'));
+    it('a discount a reel\'s notes mention is no discount the reply may offer: the words are refused like any the data does not give', async () => {
+        const promo = reel({
+            ig_media_id: '1004', permalink: 'https://www.instagram.com/reel/PR0M0/', posted_at: '2026-10-25T10:00:00.000Z',
+            result: { summary: 'A promo: a big discount on the plan this week, and a free trial.', key_moments: [{ second: 2, what: 'the offer' }] },
+        });
+        const r = await run({
+            text: 'any reel on offers?', recall: found(4, 2), deps: { gate: async () => ({ ok: true }), library: async () => [...LIBRARY, promo] },
+            dm: (call) => (call === 1 ? reply({ text: 'Yes: there is a discount and a free trial. https://www.instagram.com/reel/PR0M0/ from 0:02' }) : reply({ text: 'Yes, this one covers it: https://www.instagram.com/reel/PR0M0/ from 0:02' })),
+        });
+        assert.deepEqual(purposes(r), ['recall', 'dm', 'dm']);
+        assert.ok(lastUserTurn(r.layerCalls[1]!).includes('a big discount on the plan'), 'the model is shown the notes');
+        assert.deepEqual(r.logged.filter((l) => l.event === 'dm.claim_blocked').map((l) => l['violations']), [['discount:discount', 'free:free']]);
+        assert.ok(!/discount|free/.test(sentText(r)));
     });
 
     it('refuses a second the line does not give, asks again once with the correction, and never sends it', async () => {

@@ -172,7 +172,7 @@ describe('buildLibrary and recallSystem: the library as one stable text', () => 
         assert.equal(parts[4]!.slice('moments: '.length).split('; ').length, LINE_LIMITS.moments);
         assert.ok(entry!.line.length < 6000);
 
-        const dirty = reel({ ig_media_id: 'dirty', result: { summary: 'one | two\nthree\u0007 four‮', topics: ['a | b'], seen_on_screen: [], key_moments: [] } });
+        const dirty = reel({ ig_media_id: 'dirty', result: { summary: 'one | two\nthree\u0007 four\u202e', topics: ['a | b'], seen_on_screen: [], key_moments: [] } });
         const [clean] = buildLibrary([dirty]);
         assert.equal(clean!.line, '2026-10-01 | one / two three four | seen: - | topics: a / b | moments: -');
         assert.doesNotMatch(clean!.line, /[\p{Cc}\p{Cf}]/u);
@@ -298,6 +298,10 @@ describe('recalledFact: the line the turn tells its model', () => {
         assert.ok(fact.line.startsWith('Relevant video: https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=30s (watch from 0:30): Docker volumes keep a container\'s data after it stops, shown with docker run -v. '), fact.line);
         assert.ok(fact.line.endsWith(VIDEO_GUIDE));
         assert.ok(!fact.line.includes('\n'), 'one line');
+        // What the GUARD is told is the code-made part of it: the link and the second, and never the summary a model wrote.
+        assert.equal(fact.claim, 'Relevant video: https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=30s (watch from 0:30)');
+        assert.ok(fact.line.startsWith(`${fact.claim}: `));
+        assert.ok(!fact.claim.includes('Docker') && !fact.claim.includes(VIDEO_GUIDE));
     });
 
     it('leaves "watch from" out for the start of the reel, and links the Instagram page', () => {
@@ -305,7 +309,8 @@ describe('recalledFact: the line the turn tells its model', () => {
         assert.equal(fact.second, 0);
         assert.equal(fact.link, 'https://www.instagram.com/reel/D0CKERVOL/');
         assert.ok(fact.line.startsWith('Relevant video: https://www.instagram.com/reel/D0CKERVOL/: Docker volumes'), fact.line);
-        assert.doesNotMatch(fact.line, /watch from/);
+        assert.doesNotMatch(fact.line, /\(watch from/, 'no second is named for the start of the reel');
+        assert.equal(fact.claim, 'Relevant video: https://www.instagram.com/reel/D0CKERVOL/', 'a reel that starts the answer has no second to allow');
     });
 
     it('formats the time as a person reads it on a timeline', () => {
@@ -317,6 +322,7 @@ describe('recalledFact: the line the turn tells its model', () => {
         assert.doesNotMatch(VIDEO_GUIDE, /\d/);
         assert.doesNotMatch(NO_VIDEO_FACT, /\d/);
         assert.match(VIDEO_GUIDE, /the one exception to the rule against writing a link/);
+        assert.match(VIDEO_GUIDE, /Give the time to watch from when there is one, and repeat no other number, price or discount that this mentions/);
         assert.match(VIDEO_GUIDE, /Do not mention any other video/);
         assert.match(NO_VIDEO_FACT, /^No video on this topic yet\./);
         assert.match(NO_VIDEO_FACT, /do not point to any other video/);
@@ -353,7 +359,7 @@ describe('the guard and recall: a library permalink passes only when it was reca
 
     it('keeps exactly the matched reel\'s link, and takes out every other permalink of the library', () => {
         const fact = recalledFact(git!, 12);
-        const claims = { ...base, texts: [...base.texts, fact.line], allowedLinks: [fact.link] };
+        const claims = { ...base, texts: [...base.texts, fact.claim], allowedLinks: [fact.link] };
         const reply = `Here you go ${fact.link} and also ${decorators!.row.permalink} and ${docker!.row.permalink}, from 0:12.`;
         const guarded = guardReply(reply, claims);
         assert.ok(guarded.text.includes(fact.link));
@@ -370,15 +376,27 @@ describe('the guard and recall: a library permalink passes only when it was reca
 
     it('takes out the recalled reel\'s link written differently (another second, no query): only the exact one is on the list', () => {
         const fact = recalledFact(docker!, 30);
-        const claims = { ...base, texts: [...base.texts, fact.line], allowedLinks: [fact.link] };
+        const claims = { ...base, texts: [...base.texts, fact.claim], allowedLinks: [fact.link] };
         const guarded = guardReply('See https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=7s or https://www.youtube.com/watch?v=Zm9vYmFyYmF6', claims);
         assert.ok(!/youtube/.test(guarded.text), guarded.text);
         assert.equal(guarded.linksRemoved.length, 2);
     });
 
+    it('does not make the reel\'s summary a fact: a number, a price or a discount a model wrote about the reel is not one the reply may state', () => {
+        const promo = buildLibrary([reel({ ig_media_id: 'promo', permalink: 'https://www.instagram.com/reel/PR0M0/', result: { summary: 'Only 3 spots left: a discount of 50 percent ends today, and the plan is free for 7 days.', key_moments: [{ second: 4, what: 'the offer' }] } })])[0]!;
+        const fact = recalledFact(promo, 4);
+        assert.ok(fact.line.includes('discount of 50 percent'), 'the model is shown the notes');
+        assert.ok(!fact.claim.includes('discount') && !fact.claim.includes('50'), 'the guard is not');
+        const claims = { ...base, texts: [...base.texts, fact.claim], allowedLinks: [fact.link] };
+        const said = guardReply(`There is one: ${fact.link} from 0:04. It has a discount of 50 percent, only 3 spots, and it is free.`, claims);
+        assert.equal(said.ok, false);
+        assert.deepEqual(said.violations.map((v) => `${v.kind}:${v.found}`).sort(), ['discount:discount', 'free:free', 'number:3', 'number:50']);
+        assert.equal(guardReply(`There is one: ${fact.link} from 0:04.`, claims).ok, true, 'the link and the second pass');
+    });
+
     it('lets the reply say the second the line names, and refuses one it does not: a time is a number like any other', () => {
         const fact = recalledFact(docker!, 30);
-        const claims = { ...base, texts: [...base.texts, fact.line], allowedLinks: [fact.link] };
+        const claims = { ...base, texts: [...base.texts, fact.claim], allowedLinks: [fact.link] };
         assert.equal(guardReply('Start at 0:30 and watch it.', claims).ok, true);
         assert.equal(guardReply('٠:٣٠', claims).ok, true, 'Arabic-Indic digits are the same number');
         const wrong = guardReply('Start at 5:42 and watch it.', claims);
@@ -440,6 +458,7 @@ describe('recallForTurn: a match', () => {
         assert.equal(got.link, 'https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=30s', 'the YouTube copy, which can start at the second');
         assert.ok(got.line.startsWith('Relevant video: https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=30s (watch from 0:30): Docker volumes keep a container\'s data'), got.line);
         assert.deepEqual(got.match && got.match.second, 30);
+        assert.equal(got.claim, 'Relevant video: https://www.youtube.com/watch?v=Zm9vYmFyYmF6&t=30s (watch from 0:30)', 'what the guard is given');
         assert.equal(meta().length, 1);
         assert.equal(world.ai.usage.length, 1);
         assert.deepEqual([world.ai.usage[0]!.purpose, world.ai.usage[0]!.provider, world.ai.usage[0]!.creator_id, world.ai.usage[0]!.outcome], [RECALL_PURPOSE, 'meta', TENANT, 'ok']);
@@ -492,7 +511,7 @@ describe('recallForTurn: a match', () => {
 
     it('cleans the message and cuts it to one bounded line before it is sent', async () => {
         answerOn(world, 'api.meta.ai', says({ is_content_request: true, match: 0, second: 0, why: '' }));
-        await ask(`video\nabout\u0000 docker‮ ${'z'.repeat(2000)}`);
+        await ask(`video\nabout\u0000 docker\u202e ${'z'.repeat(2000)}`);
         const sent = meta()[0]!.body.messages[1].content as string;
         assert.ok(sent.startsWith('video about docker '));
         assert.ok(Array.from(sent).length <= MESSAGE_MAX_CHARS);
@@ -519,7 +538,7 @@ describe('recallForTurn: no match, and not a request', () => {
     it('a content request that no reel covers is the honest fact: "No video on this topic yet", and no link', async () => {
         answerOn(world, 'api.meta.ai', says({ is_content_request: true, match: 0, second: 0, why: 'nothing on kubernetes' }));
         const got = await ask('do you have a video about kubernetes?');
-        assert.deepEqual(got, { line: NO_VIDEO_FACT, link: null, match: null });
+        assert.deepEqual(got, { line: NO_VIDEO_FACT, link: null, claim: null, match: null });
         assert.equal(events('recall.no_match').length, 1);
     });
 
