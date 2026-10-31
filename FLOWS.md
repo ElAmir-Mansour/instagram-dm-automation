@@ -950,18 +950,20 @@ every one of the conditions below unmet, a message with no words is **today's, c
 reads the questions need. The questions, in this order, each only if the one before passed (**`planWordless`**, `src/webhook/messaging.ts`):
 
 1. **Instagram, and a thing Muse reads.** The DM's platform (the body's `object`) is Instagram, and `primaryRef` (`src/services/perception/dm.ts`) finds one
-   thing in the event to read: a photo, a video, a shared reel or post, a shared or mentioned story, or the story a reply answers (what they SENT comes before
-   the story). A sticker, a file, a view-once, an unsupported message and **a voice note** (another phase) are not: they stop here, with no read at all. Messenger
-   stops here too.
+   thing in the event to read: a photo, a video, a shared reel or post, a shared or mentioned story, **a voice note** (an `audio` attachment: it is HEARD, not
+   looked at, by Meta's speech model, §2.12), or the story a reply answers (what they SENT comes before the story, so a voice note sent in reply to a story is the
+   voice note). A sticker, a file, a view-once and an unsupported message are not: they stop here, with no read at all. Messenger stops here too.
 2. **The sales mode answers this sender** (`readSalesSettings` / `answersWithSales`, §2.6b): a read is only for a message the sales turn will answer. Else
    `perception.skipped:sales_off` and today's line.
 3. **`perceiveDm`** (`src/services/perception/dm.ts`):
    1. A **retry reuses** `messages.perception` if an earlier attempt stored one: no gate, no typing, no download, no model call.
-   2. **`gatePerception`** (`gate.ts`): the switch for the kind (`dm_media`), the allow-list, a Meta route with a key, the day's cap. It logs
+   2. **`gatePerception`** (`gate.ts`): the switch for the kind (`dm_media`, or `voice` for a voice note: two switches, each its own), the allow-list and the
+      day's cap (both shared by the two), a Meta route with a key. It logs
       `perception.skipped:<reason>` itself. A switch off or a sender not allowed leaves nothing behind; the day's cap and a missing key write
       `{status: 'skipped', reason}` on the row (the owner switched it on, so the inbox can say why), and the owner is told once a day of the cap.
    3. **`typing_on`**, best effort, right after the gate passes and before the slow part.
-   4. **`resolveSource`** (`source.ts`) decides what Muse is shown, from what Instagram actually sends (research R18): a shared **reel** carries
+   4. **`resolveSource`** (`source.ts`) decides what Muse is shown (a **voice note** takes another road here: it is not shown to Muse but heard, by `transcribeVoice`
+      under the same 90 s clock and into the same record, §2.12), from what Instagram actually sends (research R18): a shared **reel** carries
       `reel_video_id` and a `url` that is a web PAGE (never downloaded); a shared **post** carries `ig_post_media_id` and a `url` that serves its JPEG cover. The
       creator's **own** media is the library's notes if `reel_analyses` has a row (no model), else `GET /{id}?fields=media_type,media_url,owner,permalink,caption`
       with the Page token (`GraphSession`), and when the owner is this account and the media is a VIDEO, its fresh `*.fbcdn.net` mp4 (at most 35 MB) is
@@ -975,19 +977,22 @@ reads the questions need. The questions, in this order, each only if the one bef
       personal document is `ok` with its description replaced by "a personal document" and nothing it said kept. A 5xx, a timeout and a malformed answer are
       tried once more; a refused key or no credit tells the owner once a day (`alert.ts`); a 429 is not retried.
    6. **`storePerception`** (`store.ts`): `UPDATE messages SET perception = …, text = … WHERE perception IS NULL`, once, with the **database's** clock for
-      `stored_at` and the readable text in the same statement. The media is never written anywhere.
+      `stored_at` and the readable text in the same statement (for a voice note, the BARE transcript). The media is never written anywhere.
 4. **What becomes of it** (`planOf`, `plan.ts`):
    - **`ok`** → the **sales turn answers** the stored description (`runSalesTurn` with `perceived`, §2.6b): the refund/complaint prefilter does **not** read
      the description (only typed words), the description is the facts block's "What the customer sent …" and is **not** among the guard's facts (a price in
      a picture is not one the reply may state), the legacy Gemini path is never the fallback, a personal document is handed to a person with no model, and
      the reply's `ai_meta` says `perceived: true` and a one-line `reason` the code builds (`traceReason`). A story mention is **not** answered: it is thanked
-     by name (`mentionLine` over `kit.attachments.mentionNamed`) through the same `CLAIM_ACK` claim.
-   - **`unreadable`** → the kit's `resend` line for what the person sent (never for the story they replied to or mentioned the account in), else today's line.
+     by name (`mentionLine` over `kit.attachments.mentionNamed`) through the same `CLAIM_ACK` claim. **A voice note is the exception to the prefilter rule**:
+     its transcript is the customer's OWN words (`describedText: false`), so a refund or a complaint said aloud is read like one typed, and no "What the
+     customer sent …" line is told to the model (§2.12).
+   - **`unreadable`** → the kit's `resend` line for what the person sent (never for the story they replied to or mentioned the account in; for a voice note,
+     fewer than two words), else today's line.
    - **`failed` / `skipped`** → today's line, with the reason in `ai_meta.reason` and on the row. Never silence.
 5. **A burst is one answer.** `supersession` (`src/services/dmSales/store.ts`) compares a read word-less message from the moment its perception was stored,
    not its `created_at`: a text sent while a reel is being read does not lose the reel's answer unless a reply came after the read, and a read photo counts as
-   a message waiting (a story mention does not: it is thanked). The sales turn asks again **after** the model has written and before it sends, so the
-   photos of a burst that are not the newest stand down. **A reply to a story that has words** is answered from the words; the story is read too and told as
+   a message waiting (a story mention does not: it is thanked), and so does a read voice note (`audio` is a word-less `message_type`). The sales turn asks
+   again **after** the model has written and before it sends, so the photos and the voice notes of a burst that are not the newest stand down. **A reply to a story that has words** is answered from the words; the story is read too and told as
    context ("The story they replied to shows …"), and the row's text stays what they typed.
 6. **The last attempt.** A failure after the read hands the conversation over like words (`handOver`, §2.11); a message that was only acknowledged asked
    nothing and is not. A read that throws (the database could not take the record) is retried, and on the last attempt is today's line.
@@ -1231,11 +1236,12 @@ with the job marked done and the inbound row permanently unanswerable.
 ### 2.12 — A voice note is heard: download → decode → Meta's speech model (P3)
 
 An Instagram voice note is a message with no words (§2.2): kind `audio`, a link on `lookaside.fbsbx.com` that serves `video/mp4` (AAC inside an MP4).
-With the tenant's `voice` switch on, the sender on its allow-list and the day's Muse cap not reached (`gatePerception`, capability `voice`,
-**`src/services/perception/gate.ts`**), the word-less branch does not send the fixed line: it asks for the words in the note, stores them as the row's
-`text`, and lets the sales turn answer them like typed ones. **`transcribeVoice`** (**`src/services/perception/voice.ts`**) is the media half of that: the
-link goes in, `{ transcript, durationMs, usd, model }` or the reason there is none comes out. It never throws, writes nothing of the conversation, sends
-nothing to the customer and checks no switch: the gate, "typing…", `messages.perception` and `messages.text`, and the answer are the caller's.
+With the tenant's `voice` switch on, the sender on its allow-list, the sales mode answering them and the day's Muse cap not reached (`gatePerception`, capability
+`voice`, **`src/services/perception/gate.ts`**), the word-less branch (§2.6h) does not send the fixed line: it asks for the words in the note, stores them as
+the row's `text`, and lets the sales turn answer them like typed ones. **`transcribeVoice`** (**`src/services/perception/voice.ts`**) is the media half of
+that: the link goes in, `{ transcript, durationMs, usd, model }` or the reason there is none comes out. It never throws, writes nothing of the conversation,
+sends nothing to the customer and checks no switch: the gate, "typing…", `messages.perception` and `messages.text`, and the answer are the caller's, which is
+`perceiveDm` (**`src/services/perception/dm.ts`**), and the last of this section.
 
 1. **Download.** `fetchMedia(link, { kind: 'audio' })` (**`src/services/perception/media.ts`**): Meta's media hosts only, HTTPS, no token, at most 10 MB,
    15 s to connect and 30 s in all, and the bytes are never written anywhere. The response's `Content-Type` decides what they are, and a voice note's
@@ -1258,14 +1264,35 @@ nothing to the customer and checks no switch: the gate, "typing…", `messages.p
    for media it could not read. Meta was paid either way, and the result still carries the cost.
 5. **One result, one log line:** `perception.voice_heard`, `_unreadable`, `_skipped` or `_failed`, with the stage timings (`download_ms`, `decode_ms`,
    `asr_ms`), the sizes, the audio's length, the words counted, the dollars, the model and Meta's `session_id` (its handle for a support ticket).
-   **Never the transcript, the link (a signed URL) or a key.**
+   **Never the transcript, the link (a signed URL) or a key.** The caller adds `perception.stored` (`via: voice`).
 
-**One retry**, for a 5xx or a timeout of step 3 only, and only while the whole step (held to 90 s) has room for another 30 s attempt: a second `ai_usage`
-row, the first settled at $0. A 429, a refused key, a bad request, a budget and a missing key are never retried inside the turn.
+**The clock is the caller's.** `perceiveDm` starts one 90 s clock (`STEP_BUDGET_MS`) when the gate passes and hands `transcribeVoice` its `deadlineAt`; the
+download's 15 s and 30 s, the decoder's 10 s and Meta's 30 s are each cut to what is left, and a first call that cannot have `MIN_CALL_MS` (8 s) is not
+started (`failed / timeout`). **One retry**, for a 5xx, a timeout or an answer that was no use (the kinds `perceive` retries) of step 3 only, and only while the
+step has `MIN_CALL_MS` left (otherwise the first refusal stands): a second `ai_usage` row, the first settled at $0. A 429, a refused key, a bad request, a budget and a missing key are never retried inside
+the turn. A refused key (`auth`) or an account with no credit (`quota`) tells the owner once a day (`tellOwnerProviderTrouble`), as for a picture.
 
 `transcribeVoice` answers in the words perception already stores (`src/services/perception/types.ts`): `skipped` (`no_url`, `no_key`, `budget`), `failed`
-(`too_large`: over 10 MB or 3 minutes; `fetch_failed`: a link or a file that is no good, and a decoder that cannot run, which the log's `detail` says;
-`expired_url`; `timeout`; `provider_error`: Meta's refusal, which `detail` says as the kind and the HTTP status) and `unreadable` (`empty_transcript`).
+(`too_large`: over 10 MB or 3 minutes; `fetch_failed`: a link or a file that is no good, or a download that is not audio; `expired_url`; `timeout`: the
+download, the decoder's 10 s, Meta's 30 s or no time left; **`decode_failed`**: the decoder could not make a WAV (not audio it can read, no sound, an empty
+file) or could not run, which the log's `detail` says; `provider_error`: Meta's refusal, which `detail` says as the kind and the HTTP status) and `unreadable`
+(`empty_transcript`). `voiceDraft` turns each into the record the caller stores.
+
+**What the caller does with it** (`perceiveDm`, in the order §2.6h gives, with the voice step where a picture's is):
+1. A retry reuses what an earlier attempt stored (`messages.perception`): no gate, no typing, no download, no decoding, no second payment.
+2. The gate, capability **`voice`**: its own switch (`muse.switches.<t>.voice`), independent of `dm_media`, so a tenant can have either; the allow-list and the
+   day's cap are the two's together. Refused for the switch or the sender: nothing is written, today's line. Refused for the cap or a missing key: the reason is
+   stored (`skipped`), the owner told once of the cap.
+3. `typing_on`, then `transcribeVoice({ creatorId, link, keywords: voiceKeywords(ctx), deadlineAt })`: the names are the tenant's own offers, brand and display
+   names (never the follower's), from the profile this DM is already answered from.
+4. `storePerception`, once: `{ kind: 'audio', status, transcript, model, ms, usd }` with the database's `stored_at`, and **`messages.text` = the bare
+   transcript** in the same statement (no `[voice note]` before it), so the history the model reads, the inbox and the next turn all see what they said. An
+   `unreadable` or failed note leaves the placeholder as the text.
+5. `planOf`: **`ok`** → the sales turn answers the transcript **as the customer's own words** (`PerceivedTurn.describedText: false`): the refund/complaint
+   prefilter reads it, no description is told to the model, there is no Gemini fallback, and the reply's `ai_meta` says `perceived: true` and "Heard a voice note;
+   answered …". Two voice notes in a burst are one answer: the check after the model has written covers `audio`. **`unreadable`** (fewer than two words) → the kit's
+   `resend` line, the reason "Could not make out any words in it, so it asked them to send it again." **`failed`/`skipped`** → today's line, the reason on the
+   row and in `ai_meta.reason`. Every other "no" (switch off, sender not allowed, sales mode off, Messenger) is today's line, unchanged.
 
 > **Why this way — the decoder is in the function, and the voice goes to Meta or to nobody.**
 > The decoder was proven before it was built (T046, a Vercel preview, 2026-10-30): `ffmpeg-static@5.3.0` ran from
@@ -4313,16 +4340,16 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 2 | an ad's standalone referral with no words (A3) — `handleMessagingEvent` | `ads.touch_recorded` (`recorded`: `entry` / `touch` / `duplicate` / `missing`) | no message row; `entry_source` or `ad_touches` on the conversation; the job ends `ad_referral_recorded` and **nothing is sent** |
 | 2 | **Meta Business AI owns the Instagram thread** (error 100 / 2534037, A3) — `noteBusinessAiBlock` | `ads.alert_business_ai` (`error`), once per conversation | `conversations.no_reply_reason = 'business_ai_owns_thread'`; **not retried**, no outbound row; cleared by the next send that goes out |
 | 2 | a send outside the window on an ad conversation (10 / 2018278, or 551, A3) | `ads.alert_window_error` (`error`) | that platform's `ads.extended_window` is turned OFF; not retried |
-| 2 | **Meta Muse did not read a message with no words** (§2.6h): the switch is off, the sender is not on the allow-list, the sales mode does not answer them, or it is not Instagram — `planWordless`, `gatePerception` | `perception.skipped:<reason>` (`switch_off`, `not_allowed_sender`, `sales_off`; nothing at all for Messenger, a sticker, a file or a voice note) | **no**: the line it always got, and not one write more |
+| 2 | **Meta Muse did not read a message with no words** (§2.6h): the switch is off, the sender is not on the allow-list, the sales mode does not answer them, or it is not Instagram — `planWordless`, `gatePerception` | `perception.skipped:<reason>` (`switch_off`, `not_allowed_sender`, `sales_off`; nothing at all for Messenger, a sticker or a file; a voice note's switch is `voice`, the others' `dm_media`) | **no**: the line it always got, and not one write more |
 | 2 | Muse is on but the day's cap is reached, or no Meta key is set up — `perceiveDm` | `perception.skipped:budget` / `perception.skipped:no_key` | `messages.perception` = `{status: 'skipped', reason}`; the usual line, with the reason in the ack's `ai_meta.reason`; the owner is told of the cap once a day |
 | 2 | a read that came to nothing (the link expired, too large, the model refused or timed out, or could not read it with confidence) — `perceiveDm`, `perceive` | `perception.stored` (`status`, `reason`), `perception.call_failed` | `messages.perception` = `{status: 'failed' \| 'unreadable', reason}`; the usual line, or the kit's "send it again" for what a person sent; a retry reuses it and asks Meta nothing |
 | 2 | Meta refused the key or the account has no credit — `tellOwnerProviderTrouble` | `perception.provider_notice` | the owner is told once a day (`app_settings` `muse.provider_notice.<tenant>`); every word-less message gets the usual line until it is fixed |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
-| 2 | **a voice note's decoder is not in the function** (the `ffmpeg-static` binary missing: `includeFiles` dropped from `vercel.json`, or no build for the platform) — `transcodeToWav`, **`src/services/perception/transcode.ts`** | `perception.voice_failed` (**`error`**, `detail: decoder_unavailable: ENOENT` / `no_binary`) | no `ai_usage` row (Meta is never asked): **every voice note gets the fixed line** until it is fixed |
-| 2 | a voice note that will not decode (not audio, no sound in it, killed after 10 s) or is over 10 MB or 3 minutes — `transcodeToWav` | `perception.voice_failed` (`warn`; `reason`: `fetch_failed` / `timeout` / `too_large`; `detail`: `decode_failed: …` / `decode` / `too_long`) | no `ai_usage` row; the fixed line |
+| 2 | **a voice note's decoder is not in the function** (the `ffmpeg-static` binary missing: `includeFiles` dropped from `vercel.json`, or no build for the platform) — `transcodeToWav`, **`src/services/perception/transcode.ts`** | `perception.voice_failed` (**`error`**, `reason: decode_failed`, `detail: decoder_unavailable: ENOENT` / `no_binary`) | no `ai_usage` row (Meta is never asked): `messages.perception` = `{status: 'failed', reason: 'decode_failed'}`; **every voice note gets the fixed line** until it is fixed |
+| 2 | a voice note that will not decode (not audio, no sound in it, killed after 10 s) or is over 10 MB or 3 minutes — `transcodeToWav` | `perception.voice_failed` (`warn`; `reason`: `decode_failed` / `timeout` / `too_large`; `detail`: `decode_failed: …` / `empty` / `decode` / `too_long`) | no `ai_usage` row; the fixed line, with "the voice note could not be decoded" as the reason in the inbox |
 | 2 | a voice note's link that is missing, not Meta's, expired (403, 404, 410), not audio, or over 10 MB — `fetchMedia` through `transcribeVoice`, **`src/services/perception/voice.ts`** | `perception.voice_skipped` (`no_url`) / `perception.voice_failed` (`fetch_failed`, `expired_url`, `too_large`, `timeout`) | no row; the fixed line |
-| 2 | Meta's speech model refuses or fails (a key it does not take, a 429, a 5xx, the 30 s deadline, an answer with no transcript) — `transcribeWithMeta`, **`src/services/aiProviders/asr.ts`** | `ai.call_failed` (`warn`, `purpose: perception_voice`, `outcome`) and `perception.voice_failed` (`provider_error` / `timeout`; `detail`: the kind and the HTTP status) | yes: an `ai_usage` row, outcome = the kind, **$0** (an answer that came back unusable is charged its estimate); a 5xx or a timeout is tried **once** more if the 90 s step has room; the fixed line |
+| 2 | Meta's speech model refuses or fails (a key it does not take, a 429, a 5xx, the 30 s deadline, an answer with no transcript) — `transcribeWithMeta`, **`src/services/aiProviders/asr.ts`** | `ai.call_failed` (`warn`, `purpose: perception_voice`, `outcome`) and `perception.voice_failed` (`provider_error` / `timeout`; `detail`: the kind and the HTTP status) | yes: an `ai_usage` row, outcome = the kind, **$0** (an answer that came back unusable is charged its estimate); a 5xx, a timeout or an unusable answer is tried **once** more if the 90 s step has room; a refused key or no credit tells the owner once a day (`perception.provider_notice`); the fixed line |
 | 2 | no Meta key (Settings or `META_MODEL_API_KEY`), Meta switched off, or a platform or tenant AI budget reached — `transcribeWithMeta` | `ai.call_refused` (`no_provider` / `budget`) and `perception.voice_skipped` (`no_key` / `budget`) | yes: a refusal row in `ai_usage`. **Never another provider**: the note is sent nowhere else; the fixed line |
 | 2 | **a voice note of fewer than two words** (silence, noise, one word) — `transcribeVoice` | `perception.voice_unreadable` (`reason: empty_transcript`, `words`) | yes: the `ai_usage` row for what Meta billed; the customer is asked to type or resend; the transcript is never logged |
 | 7.8 | a `leadgen` change for a tenant with no lead_ads sign-off — `fetchAndStoreLead` | `ads.lead_locked` (`warn`) | **no** (nothing fetched) |
