@@ -69,6 +69,7 @@ import { DM_MAX_TOKENS, DM_TIMEOUT_MS, failureOf, readDmEngine, type DmFailure }
 import { sendDirectMessage, sendSenderAction, type SenderAction } from '../instagram.js';
 import type { LlmTurn } from '../llm/types.js';
 import { hasContentCue, mentionsLink, recallForTurn, type TurnRecall } from '../perception/recall.js';
+import { hasSensesCue, sensesForTurn } from '../perception/senses.js';
 import { traceReason, type TraceInput } from '../perception/trace.js';
 import type { PerceptionKind } from '../perception/types.js';
 import type { ProfileContext } from '../profile/context.js';
@@ -465,6 +466,13 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         recalled = await recallForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text });
     }
 
+    // 4c. What the agent can take in (`perception/senses.ts`). A message that asks about sending a voice note or a photo is told whether the next one would be read, so the
+    // model does not repeat an older line of this chat ("I can't open voice notes here") to someone the owner's switches now open it to. The same doors as recall: an
+    // Instagram DM, words the customer wrote or said, a cue in them. A message without one reaches no setting, and `sensesForTurn` never throws.
+    const senses = !transport && !input.pageId && !inbound.payload && !input.perceived?.describedText && hasSensesCue(inbound.text)
+        ? await sensesForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text })
+        : null;
+
     // 5. The model. The prompt's static part is the same on every turn of this tenant (cacheable); the facts of this conversation ride with the message.
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
     // Where the conversation began (S10), read beside the history: one statement that never throws (`commentSource`). A source is a conversation that
@@ -509,6 +517,8 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         // What the video library holds for what they asked, said after it. Its link and second are among the guard's facts (below), so the second it names is no invented number;
         // what the summary says is not: a number or a discount in a reel's notes is not one the reply may state.
         ...(recalled ? { video: recalled.line } : {}),
+        // What the agent can take in, when they asked about sending something. No number, price or link in it, so nothing for the guard.
+        ...(senses ? { senses } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);

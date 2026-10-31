@@ -177,6 +177,8 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     if (sent) lines.push(sent);
     const video = facts.video?.trim();
     if (video) lines.push(video);
+    const senses = facts.senses?.trim();
+    if (senses) lines.push(senses);
     return lines.join('\n');
 }
 

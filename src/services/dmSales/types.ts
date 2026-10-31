@@ -109,6 +109,12 @@ export interface SalesFacts {
      * second it names passes the number check.
      */
     video?: string;
+    /**
+     * What the agent can take in (`perception/senses.ts`: "Voice notes the customer sends in this chat are heard and answered…"), already one line, said after `video`.
+     * Given only when the customer's words mention a voice note or a photo and the gate would let the next one be read. Absent (every tenant whose switches are off, and
+     * every message without such a word), the facts block is byte for byte what it was. It holds no number, price or link, so it is not among the guard's facts.
+     */
+    senses?: string;
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */
