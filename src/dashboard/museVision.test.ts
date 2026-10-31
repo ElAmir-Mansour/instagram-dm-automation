@@ -8,7 +8,7 @@
  * chips) is for the live check after the merge.
  *
  * Pinned, because a screenshot cannot show it:
- *   - the shell: the three switches under the names the owner reads (only video memory marked "coming soon": voice notes are live), the help link, who it answers, the cap,
+ *   - the shell: the three switches under the names the owner reads (none marked "coming soon": voice notes and video memory are live), the help link, who it answers, the cap,
  *     its own Save; read-only for a viewer AND for an operator (the route is the owner's), with the owner-only note for the second;
  *   - the state: what the server said is what is drawn (switches, list or everyone, cap, the key line with its model, today's spend), a block the server
  *     could not read draws nothing as chosen and saves nothing, a server without the block hides the card;
@@ -163,9 +163,10 @@ describe('Meta vision card: the shell', () => {
     it('has the brief\'s exact words in English: the switch names and the choices', () => {
         const { page } = open({ skipAdopt: true });
         const shell = text(page.museShell());
-        for (const word of ['Meta vision', 'Beta', 'Answer photos, reels and story mentions', 'Voice notes', 'Video memory', 'Coming soon', 'Only these people', 'Everyone', 'Add a person', 'Daily cap (USD)']) {
+        for (const word of ['Meta vision', 'Beta', 'Answer photos, reels and story mentions', 'Voice notes', 'Video memory', 'Only these people', 'Everyone', 'Add a person', 'Daily cap (USD)']) {
             assert.ok(shell.includes(word), word);
         }
+        assert.ok(!shell.includes('Coming soon'), 'no switch is marked coming soon: all three are live');
     });
 
     it('links to the help section, in a new tab so an unsaved card is not lost, and sits in the grid after the sandbox as a row of its own', () => {
@@ -894,8 +895,8 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(body, /a short description, or the words of a voice note/);
         assert.match(body, /Messenger and WhatsApp are not read/);
         assert.match(body, /Standard models/);
-        assert.match(body, /coming soon/);
-        assert.match(body, /only saves your choice/);
+        assert.doesNotMatch(body, /coming soon/, 'every switch is live');
+        assert.doesNotMatch(body, /only saves your choice/);
     });
 
     it('says in English what a voice note is: who writes it down, how long it may be, what is asked again, that it has its own switch and what it costs', () => {
@@ -907,10 +908,10 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(row, /asked to send it again/);
         assert.match(row, /the switch is its own/);
         assert.match(row, /\$0\.18 per hour of audio/);
-        // The switches row no longer says voice is to come, and still says so for video memory alone.
-        assert.match(body, /\*\*Answer photos, reels and story mentions\*\* and \*\*Voice notes\*\* work today/);
-        assert.match(body, /\*\*Video memory\*\* is coming soon/);
-        assert.doesNotMatch(body, /Voice notes\*\* and \*\*Video memory\*\* are coming soon/);
+        // The switches row says all three work today, and points to how video memory works.
+        assert.match(body, /\*\*Answer photos, reels and story mentions\*\*, \*\*Voice notes\*\* and \*\*Video memory\*\* all work today/);
+        assert.match(body, /\[\[ai-usage#video-memory\]\]/);
+        assert.doesNotMatch(body, /is coming soon/);
     });
 
     it('says the same in Arabic, and in the Help Center\'s own voice, without the words the product never says', () => {
@@ -918,7 +919,7 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(body, /ما نحفظ الملف/);
         assert.match(body, /مدة الرسالة تصل إلى 3 دقائق/);
         assert.match(body, /0\.18 دولار لكل ساعة صوت/);
-        assert.match(body, /\*\*الرسائل الصوتية\*\* يشتغلون اليوم/);
+        assert.match(body, /\*\*الرسائل الصوتية\*\* و\*\*ذاكرة الفيديو\*\* كلها تشتغل اليوم/);
         assert.match(body, /ماسنجر وواتساب/);
         assert.match(body, /النماذج القياسية/);
         for (const banned of [/بوت/, /ذكي/, /\bbots?\b/i, /instant/i]) {
