@@ -3,9 +3,9 @@
  * once its module is in, voice notes), set beside what it did before Muse, with every failure shown. It writes docs/hackathon/benchmark.md and benchmark.svg. A script you run by
  * hand against the LIVE Meta API with your own key: NOT part of `npm test` or CI (a test must never spend money or need a key), and nothing imports it.
  *
- *   npm run eval:muse -- --env ../.env                              the key is META_MODEL_API_KEY in that file
- *   npm run eval:muse -- --settings --env ../.env                   the key saved in Settings -> AI providers (DATABASE_URL and TOKEN_ENCRYPTION_KEY from the file)
- *   npm run eval:muse -- --env ../.env --voice --memory --library library.json --open-weights --judge
+ *   npm run eval:muse -- --env .env                              the key is META_MODEL_API_KEY in that file
+ *   npm run eval:muse -- --settings --env .env                   the key saved in Settings -> AI providers (DATABASE_URL and TOKEN_ENCRYPTION_KEY from the file)
+ *   npm run eval:muse -- --env .env --voice --memory --library library.json --open-weights --judge
  *   npm run eval:muse -- --stub --out scratch/bench                 a dry run: canned answers, no key, no network
  *   npm run eval:muse -- --help
  *

@@ -2142,12 +2142,12 @@ path beside what the agent did before Muse, with every failure listed. It is for
 Meta API with your key (about twenty cents a run), so it is never run by `npm test` or CI.
 
 ```bash
-npm run eval:muse -- --env ../.env                        # the key is META_MODEL_API_KEY in that file
-npm run eval:muse -- --settings --env ../.env             # or the key saved in Settings (a read-only connection, closed before anything runs)
-npm run eval:muse -- --env ../.env --voice --memory --library library.json --open-weights --judge
+npm run eval:muse -- --env .env                        # the key is META_MODEL_API_KEY in that file (run it from the main checkout, where .env is; from a worktree pass the full path)
+npm run eval:muse -- --settings --env .env             # or the key saved in Settings (a read-only connection, closed before anything runs)
+npm run eval:muse -- --env .env --voice --memory --library library.json --open-weights --judge
 npm run eval:muse -- --stub --out scratch/bench           # a dry run: canned answers, no key, no network, writes only where --out says
 npm run eval:muse -- --list                               # the cases
-npm run eval:muse -- --env ../.env --cases image-price,reel-own   # an id is that case alone; anything else is the start of some ids
+npm run eval:muse -- --env .env --cases image-price,reel-own   # an id is that case alone; anything else is the start of some ids
 ```
 
 - **Cases** are one file, `scripts/eval-muse/cases.json`: each says what was sent, what was typed with it, which actions are right, and which facts must not be invented (a price the
@@ -2156,9 +2156,14 @@ npm run eval:muse -- --env ../.env --cases image-price,reel-own   # an id is tha
   `--cases` takes ids: an id is that case alone (`image-price` is not also its four variations), anything else is the start of some ids (`image-price-` is those four, `reel-own` the four
   reels).
 - **Arms.** Meta: `perceive()` and the sales turn's own prompt, schema, coercion and guard, drafted through the DM sales evaluation's runner (`src/services/dmSales/__evals__/`), so
-  nothing is sent. Today: the fixed line the agent sent before Muse (once a day), and for a message with words the same sales turn with the media unopened. `--voice` and `--memory`
-  run the product's own transcription and recall, and are skipped with a note until their modules are in this checkout. `--open-weights` analyses one reel on Muse Spark Open (Baseten,
+  nothing is sent. Today: the fixed line the agent sent before Muse (once a day), and for a message with words the same sales turn with the media unopened. `--voice` runs the
+  product's own `transcribeVoice` on the three voice notes (it needs the `ffmpeg-static` package, which `npm install` brings: without it the arm is left out with a note that says so,
+  and is not counted as voice notes the product could not hear). `--memory --library <rows.json>` runs the product's own recall, ten questions against the library and against a copy
+  that keeps only what each reel says aloud; its module is picked up by itself the day `recall.ts` is in the checkout, and until then the arm is skipped with a note. `--open-weights` analyses one reel on Muse Spark Open (Baseten,
   `BASETEN_API_KEY`) and on hosted Muse Spark with the reel indexer's own request.
+- **The library for `--memory`** is the `reel_analyses` rows with `status = 'ok'`, as JSON: `psql "$DATABASE_URL" -At -c "SELECT json_agg(t) FROM (SELECT * FROM reel_analyses WHERE status = 'ok') t" > scratch/library.json`
+  (a read; the file holds the owner's own reel notes, so it goes in the ignored `scratch/` folder and never in the repository), then `--memory --library scratch/library.json`. The ten
+  questions in `scripts/eval-muse/cases.json` are starters grounded in two known reels: replace them with questions about the reels the library really holds before the numbers mean much.
 - **What it touches.** Keys from the file you name (no `.env` is read unless you name one) or from Settings read-only. It writes no database (the application's pool is closed before
   the run), sends no message and reads no tenant; a Contributor-mode model id is refused unless every selected case is a drawn one. What can be found wrong for free (a missing key, an
   unreadable `--library`, a flag it refuses) is found before the first call that costs, and a case that stops on an error is a row in the report (`crashed`) with what it had cost, so one

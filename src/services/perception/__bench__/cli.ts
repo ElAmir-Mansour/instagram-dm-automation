@@ -3,8 +3,8 @@
  * back. The script itself only reads the key (from `--env <file>` or, with `--settings`, from Settings through a read-only connection), wires the real files and the real
  * console, and calls this.
  *
- *   npm run eval:muse -- --env ../.env                 the benchmark, against the live Meta API, writing docs/hackathon/benchmark.md and benchmark.svg
- *   npm run eval:muse -- --env ../.env --voice --memory --library library.json --open-weights
+ *   npm run eval:muse -- --env .env                 the benchmark, against the live Meta API, writing docs/hackathon/benchmark.md and benchmark.svg
+ *   npm run eval:muse -- --env .env --voice --memory --library library.json --open-weights
  *   npm run eval:muse -- --stub --out scratch/bench    a dry run: canned answers, no key, no network; writes where you say and nowhere else
  *
  * Exit: 0 the run met the bar · 1 it ran and did not meet it (the report is written all the same) · 2 usage, or nothing could run · 3 refused: no key, or a model or a flag it

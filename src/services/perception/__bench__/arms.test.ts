@@ -80,8 +80,11 @@ describe('the event a case is read as', () => {
         assert.match(other.title ?? '', /بيتزا/);
     });
 
-    it('holds nothing Muse reads for a voice note: that is the voice arm\'s, and until it lands the pipeline sends the fixed line', () => {
-        assert.equal(primaryRef(messageFor(caseOf('voice-payment'))), null);
+    it('is an audio reference with a link for a voice note: the product\'s voice branch hears it (the voice arm\'s cases), and the Meta arm, which reads pictures and video, is never given one', () => {
+        const ref = primaryRef(messageFor(caseOf('voice-payment')));
+        assert.equal(ref?.kind, 'audio');
+        assert.match(ref?.url ?? '', /^https:\/\/lookaside\.fbsbx\.com\//);
+        assert.equal(ref?.reelVideoId, null);
     });
 });
 

@@ -138,7 +138,7 @@ describe('it sends no message and reads no tenant', () => {
         const allowed = [
             /^node:/, /^\.\//, /^\.\.\/\.\.\/dmSales\/(?:__evals__\/|prompt\.js$|prefilter\.js$|text\.js$|turn\.js$|types\.js$)/, /^\.\.\/\.\.\/llm\//, /^\.\.\/\.\.\/aiProviders\/(?:generate|purposes)\.js$/,
             /^\.\.\/\.\.\/profile\/kits\.js$/, /^\.\.\/\.\.\/\.\.\/utils\/log\.js$/,
-            /^\.\.\/(?:dm|how|media|plan|source|text|trace|types|reelIndex)\.js$/, /^\.\.\/reelLibrary\.js$/,
+            /^\.\.\/(?:dm|how|media|plan|source|text|trace|types|reelIndex)\.js$/, /^\.\.\/(?:reelLibrary|voice)\.js$/,
         ];
         for (const file of readdirSync(BENCH).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'testSupport.ts')) {
             for (const s of specifiers(codeOf(read(path.join(BENCH, file))))) {
@@ -147,11 +147,15 @@ describe('it sends no message and reads no tenant', () => {
         }
     });
 
-    it('imports the reel library for its type alone: the module reads the database, and the memory arm is handed its rows', () => {
-        const text = read(path.join(BENCH, 'memory.ts'));
-        const imports = [...text.matchAll(/^import (type )?[^;]*from '\.\.\/reelLibrary\.js';/gm)];
-        assert.ok(imports.length >= 1);
-        for (const m of imports) assert.equal(m[1], 'type ', m[0]);
+    it('imports the reel library and the voice module for their types alone: both reach the database, and the arms are handed what they need', () => {
+        let seen = 0;
+        for (const file of readdirSync(BENCH).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'testSupport.ts')) {
+            for (const m of read(path.join(BENCH, file)).matchAll(/^import (type )?[^;]*from '\.\.\/(?:reelLibrary|voice)\.js';/gm)) {
+                seen++;
+                assert.equal(m[1], 'type ', `${file}: ${m[0]}`);
+            }
+        }
+        assert.ok(seen >= 2, 'the memory arm names the library\'s row type and the voice arm the module\'s steps');
     });
 
     it('never touches the environment, the database, a log line or a file system call that writes, below the command line', () => {
