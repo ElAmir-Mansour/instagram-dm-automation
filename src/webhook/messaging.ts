@@ -33,6 +33,7 @@ import { toMetaMessage, applyDisclosure, disclosureLine, type MetaMessagePayload
 import { handleEcho } from './echo.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
+import { lap, noteTiming, withTimeline } from '../utils/timing.js';
 
 /**
  * Meta asks for a fresh disclosure "after a significant lapse of time". The policy never
@@ -229,6 +230,15 @@ export function dmPlatform(
     return null;
 }
 
+/**
+ * How long ago Meta says this message was sent (`timestamp`, epoch milliseconds), or null when the event carries no time. A value in
+ * seconds is no measurement here, so it is not read as one. What a DM's latency is counted from: the customer's tap, not our first row.
+ */
+export function messageAgeMs(event: any, now: number): number | null {
+    const ts = event?.timestamp;
+    return typeof ts === 'number' && ts > 1e12 ? now - ts : null;
+}
+
 /** Exported for src/webhook/messaging.test.ts. */
 export function needsDisclosure(disclosedAt: string | Date | null | undefined): boolean {
     if (!disclosedAt) return true;
@@ -255,9 +265,10 @@ export async function handleMessagingEvent(
     if (!dm) return;
 
     // The Meta message id is the dedupe key, so it is the field to correlate on: every line
-    // below belongs to this one inbound message, retries included.
+    // below belongs to this one inbound message, retries included. ONE `dm.timing` line closes it: each step here and in the
+    // sales turn, with the database statements it sent (src/utils/timing.ts).
     return withLogContext({ mid: dm.metaMessageId, sender_id: dm.senderId }, () =>
-        processDm(dm, event, recipientId, entryId, options)
+        withTimeline('dm.timing', () => processDm(dm, event, recipientId, entryId, options))
     );
 }
 
@@ -369,6 +380,8 @@ async function processDm(
     options: WebhookHandlerOptions
 ): Promise<void> {
     const side: DmSideTasks = { profile: Promise.resolve() };
+    const age = messageAgeMs(event, Date.now());
+    if (age !== null) noteTiming({ event_age_ms: age });
     try {
         await answerDm(dm, event, recipientId, entryId, options, side);
     } finally {
@@ -376,7 +389,9 @@ async function processDm(
         // did not need to spend, and a serverless instance that is frozen after the response does not freeze it half way. For at most
         // `PROFILE_WAIT_MS`: the reply is sent and the message handled by now, and a slow Meta must not hold the job for it. `settleWithin`
         // never rejects: `refreshSenderProfile` does not either, and a profile must not be able to turn an answered DM into a failed job.
+        lap('finish');
         await settleWithin(side.profile, PROFILE_WAIT_MS);
+        lap('profile_wait');
     }
 }
 
@@ -402,6 +417,7 @@ async function answerDm(
     // recipientId from message events = Instagram Business Account ID (most reliable)
     // entryId = could be IG ID (app-level sub) or FB Page ID (page-level sub)
     const creator = await getCreatorByPageId(recipientId, entryId);
+    lap('creator');
     if (!creator) {
         log('warn', 'dm.no_creator', { recipient_id: recipientId, entry_id: entryId });
         return;
@@ -437,6 +453,7 @@ async function answerDm(
          RETURNING id, is_bot_active, ai_disclosed_at, entry_source, no_reply_reason`,
         [creator.id, dm.senderId, platform]
     );
+    lap('conversation');
 
     if (!conversation) {
         // An upsert with DO UPDATE always returns its row, so no row means the statement did
@@ -449,8 +466,10 @@ async function answerDm(
 
     // 2. Log the inbound message — and claim the right to answer it. See `claimInbound`.
     const claim = await claimInbound(conversationId, creator.id, dm, event);
+    lap('claim');
     if (!claim) {
         log('info', 'dm.duplicate_ignored');
+        noteTiming({ path: 'duplicate' });
         return;
     }
     if (claim.resumed) {
@@ -464,6 +483,7 @@ async function answerDm(
     if (dm.adSource) {
         const recorded = await recordAdTouch({ conversationId, creatorId: creator.id, source: dm.adSource, inboundId: claim.id });
         if (recorded === 'entry') entrySource = entrySourceFor(dm.adSource);
+        lap('ad_touch');
     }
 
     // Who the sender is, for the inbox (v40): Instagram only, on first contact and at most once a day after that, started now so it
@@ -476,6 +496,7 @@ async function answerDm(
     // 3. Call AI Agent to reply if Bot is active
     if (!conversation.is_bot_active) {
         log('info', 'dm.bot_paused', { conversation_id: conversationId });
+        noteTiming({ path: 'paused' });
         // Terminal, not a failure: the operator took this thread over deliberately, and a
         // retry must not decide later that the bot should have answered after all.
         await markHandled(claim.id);
@@ -531,7 +552,9 @@ async function answerDm(
         // First in the `try` so the catch below keeps its meaning for it: a transient send failure is retried, a permanent Meta error is final.
         // Always terminal otherwise: a refused quota or a claim that found an answer already on its way is not retried for an acknowledgement.
         if (dm.wordless) {
+            noteTiming({ path: 'wordless', wordless_kind: dm.wordless.kind });
             const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+            lap('profile');
             const disclosure = { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) };
             const pageId = resolveDmPageId(creator, [recipientId, entryId]);
 
@@ -540,11 +563,13 @@ async function answerDm(
             const plan = await planWordless({
                 dm, message: event?.message, creator, platform, pageId, conversationId, messageId: claim.id, resumed: claim.resumed, ctx: dmCtx, mayRetry,
             });
+            lap('perception');
 
             if (plan.kind === 'answer') {
                 handoffCtx = dmCtx;
                 answeringRead = true;
                 const ad = entrySource?.kind === 'ctm' ? await adContextFor(creator.id, entrySource, dmCtx.offers, null) : null;
+                if (entrySource?.kind === 'ctm') lap('ad_context');
                 const turn = await runSalesTurn({
                     creator: { id: creator.id, page_access_token: creator.page_access_token },
                     pageId,
@@ -556,6 +581,7 @@ async function answerDm(
                     perceived: plan.perceived,
                 });
                 await settleSalesTurn(turn);
+                lap('settle');
                 return;
             }
 
@@ -569,8 +595,10 @@ async function answerDm(
                 ctx: dmCtx,
                 disclosure,
             });
+            lap('ack');
             log('info', 'dm.wordless_handled', { wordless_kind: dm.wordless.kind, ack });
             await markHandled(claim.id);
+            lap('settle');
             return;
         }
 
@@ -579,11 +607,14 @@ async function answerDm(
         // toward `off` (a database that is behind, an error): a DM is never answered by an experiment because the lookup broke.
         const salesSettings = await readSalesSettings(creator.id);
         const useSales = answersWithSales(salesSettings, dm.senderId);
+        lap('settings');
+        noteTiming({ path: useSales ? 'sales' : 'legacy' });
 
         // Who the creator is, once for this DM: the model's rules and schema and the disclosure line below are written
         // from it. A profile that cannot be read is the owner's wording (`profileContextOrLegacy`), never a failed reply.
         const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
         handoffCtx = dmCtx;
+        lap('profile');
 
         if (useSales) {
             // The ad's context, for a conversation that began from a click-to-message ad and a tenant who switched `ads.bot_context` on (A3). Off,
@@ -592,6 +623,7 @@ async function answerDm(
             const ad = entrySource?.kind === 'ctm'
                 ? await adContextFor(creator.id, entrySource, dmCtx.offers, event?.postback && dm.text ? dm.text : null)
                 : null;
+            if (entrySource?.kind === 'ctm') lap('ad_context');
             // Meta Muse: a reply to the account's story WITH words. The words stay what they asked; when the tenant's switch is on and the sender is allowed, the story
             // they replied to is read too and told to the model as a fact ("The story they replied to shows …"), so that "how much is this?" can be answered. A message
             // that is not a reply to a story costs not one statement here, and a story that cannot be read is the turn it would have been.
@@ -599,6 +631,7 @@ async function answerDm(
             const perceived = storyRef
                 ? await readStoryContext({ creator, senderId: dm.senderId, messageId: claim.id, resumed: claim.resumed, ctx: dmCtx, ref: storyRef })
                 : null;
+            if (storyRef) lap('story');
             // The sales turn owns the reply, its quota check, the disclosure and the record of both (src/services/dmSales/turn.ts); this
             // function keeps the claim: handled once the turn has concluded, released for a retry when the quota stopped it, and the
             // catch below still decides what a thrown error means.
@@ -613,6 +646,7 @@ async function answerDm(
                 ...(perceived ? { perceived } : {}),
             });
             await settleSalesTurn(turn);
+            lap('settle');
             return;
         }
 
@@ -622,6 +656,7 @@ async function answerDm(
         // `dmPromptText(dm)`, not `dm.text || dm.payload` — the same string `claimInbound`
         // stored, so ai.ts's "is this message already in the history" check can succeed.
         const dmReply = await generateDmReply(conversationId, dmPromptText(dm), creator.id, undefined, dmCtx);
+        lap('model');
 
         // The AI providers engine failed and so did what stands in for it (or the fallback is off): `dm.engine_failed` has said why. No second
         // try, because a retry here would only spend the same budget again; but not silence either: the customer is told once that a person
@@ -653,6 +688,7 @@ async function answerDm(
         // One quota check per reply, not per network call: a disclosure that has to travel as
         // its own message is still one logical reply to one person.
         const quota = await checkFairSendQuota(creator.id, 'dm');
+        lap('quota');
         if (!quota.allowed) {
             // Meta throttles automated sends at roughly 200/hr, and the app-wide pool above
             // that is shared with every other tenant. Real customers are going unanswered
@@ -704,6 +740,7 @@ async function answerDm(
         // Send DM using Meta Send API
         await sendDirectMessage(dm.senderId, metaMessagePayload, creator.page_access_token, pageId);
         replied = true;
+        lap('send');
         log('info', 'dm.sent', {
             creator_id: creator.id, message_type: aiRes.message_type, disclosed: discloseNow,
         });
@@ -727,12 +764,15 @@ async function answerDm(
                 JSON.stringify(metaMessagePayload),
             ]
         );
+        lap('record');
 
         // Last, so that a crash anywhere above leaves the message claimable again. Writing it
         // earlier would turn a failed send into a message nobody ever retries.
         await markHandled(claim.id);
+        lap('settle');
     } catch (aiError: any) {
         log('error', 'dm.pipeline_failed', { creator_id: creator.id, ...describeError(aiError) });
+        lap('failed');
 
         await noteMetaFailure(creator.id, aiError);
 

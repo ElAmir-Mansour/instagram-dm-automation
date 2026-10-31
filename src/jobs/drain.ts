@@ -50,6 +50,10 @@ export async function drainInline(): Promise<DrainResult | null> {
         //
         // Two UPDATEs against a partial index that is empty whenever nothing is stale, so the
         // cost when there is nothing to do is negligible.
+        //
+        // In the database's work, that is. Each is a round trip to the pooler, and both come before
+        // the claim, so the DM this webhook carries waits for them: `reap_ms` says how long.
+        const reapStartedAt = Date.now();
         try {
             await getJobQueue().reapStale(CLAIM_VISIBILITY_SECONDS);
         } catch (err) {
@@ -66,6 +70,7 @@ export async function drainInline(): Promise<DrainResult | null> {
             // unlikely to reach before the budget runs out.
             batchSize: 3,
             maxJobs: 10,
+            reapMs: Date.now() - reapStartedAt,
         });
     } catch (err) {
         log('error', 'job.inline_drain_failed', { message: (err as Error)?.message });
@@ -83,6 +88,7 @@ export async function drainWorker(): Promise<DrainResult & { reaped: number }> {
     const queue = getJobQueue();
 
     let reaped = 0;
+    const reapStartedAt = Date.now();
     try {
         reaped = await queue.reapStale(CLAIM_VISIBILITY_SECONDS);
     } catch (err) {
@@ -96,6 +102,7 @@ export async function drainWorker(): Promise<DrainResult & { reaped: number }> {
         budgetMs: workerBudgetMs(),
         batchSize: 5,
         maxJobs: 100,
+        reapMs: Date.now() - reapStartedAt,
     });
 
     return { ...result, reaped };
