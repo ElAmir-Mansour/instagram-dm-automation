@@ -998,8 +998,8 @@ const AiSettingsPage = {
     MUSE_SWITCHES: Object.freeze(['dm_media', 'voice', 'memory']),
     /** The control each switch is. */
     MUSE_CONTROLS: Object.freeze({ dm_media: 'muse-dm-media', voice: 'muse-voice', memory: 'muse-memory' }),
-    /** The switches whose feature is not live yet (voice ships in P3, video memory in P4): the server stores them and nothing reads them, and the card says so. */
-    MUSE_SOON: Object.freeze({ dm_media: false, voice: true, memory: true }),
+    /** The switches whose feature is not live yet (video memory, P4): the server stores them and nothing reads them, and the card says so. Voice notes went live with P3. */
+    MUSE_SOON: Object.freeze({ dm_media: false, voice: false, memory: true }),
     /** A sender id as the server takes it (`SENDER_ID` in src/services/dmSales/mode.ts): the picker offers only threads whose id is one, so nothing else is ever sent. */
     MUSE_SENDER: /^\d{5,32}$/,
     /** The picker's list is the inbox's own, at the inbox's page size: the newest threads, filtered to Instagram's here. */

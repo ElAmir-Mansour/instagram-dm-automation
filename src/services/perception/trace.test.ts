@@ -17,6 +17,13 @@ describe('traceReason', () => {
         assert.equal(traceReason(input({ kind: 'share', action: 'recommend', intent: 'ready_to_buy' })), 'Read a shared post; recommended the offer that fits, because they are ready to buy.');
     });
 
+    it('says a voice note was HEARD, not read, with or without the pipeline saying so: the same words either way', () => {
+        assert.equal(traceReason(input({ kind: 'audio', action: 'send_link', intent: 'price' })), 'Heard a voice note; sent the offer\'s link, because they asked about the price.');
+        assert.equal(traceReason(input({ kind: 'audio', read: 'Heard a voice note', action: 'send_link', intent: 'price' })), 'Heard a voice note; sent the offer\'s link, because they asked about the price.');
+        assert.equal(traceReason(input({ kind: 'audio', modelFailed: true })), 'Heard a voice note, but the model could not answer: a person was told.');
+        assert.equal(traceReason(input({ kind: 'audio', effect: 'handoff', action: 'handoff', handoffReason: 'refund' })), 'Heard a voice note; handed the chat to a person, because they raised a refund.');
+    });
+
     it('begins with how it was looked at when the pipeline says so, and every other part of the line is the same', () => {
         assert.equal(traceReason(input({ read: 'Watched a shared reel' })), 'Watched a shared reel; answered from the account\'s own information, because they want to know more.');
         assert.equal(traceReason(input({ read: 'Read the caption of a shared reel', action: 'send_link', intent: 'price' })), 'Read the caption of a shared reel; sent the offer\'s link, because they asked about the price.');
@@ -56,7 +63,7 @@ describe('traceReason', () => {
                             const line = traceReason({ kind, effect, action, intent, handoffReason });
                             assert.ok(line.length <= REASON_MAX_CHARS, line);
                             assert.ok(!/\n/.test(line), line);
-                            assert.ok(/^Read /.test(line) && /\.$/.test(line), line);
+                            assert.ok(/^(Read|Heard) /.test(line) && /\.$/.test(line), line);
                             assert.ok(!/\d|["«»]/.test(line), line);
                         }
                     }

@@ -44,8 +44,11 @@ export type PerceptionStatus = (typeof PERCEPTION_STATUSES)[number];
 export const SKIP_REASONS = ['switch_off', 'not_allowed_sender', 'sales_off', 'budget', 'unsupported_kind', 'no_key', 'no_url'] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
-/** Why a step that ran came to nothing. `expired_url`: Meta's link was refused (403/404/410): a story's is gone within a day. */
-export const FAIL_REASONS = ['too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout'] as const;
+/**
+ * Why a step that ran came to nothing. `expired_url`: Meta's link was refused (403/404/410): a story's is gone within a day. `decode_failed`: a voice note's audio
+ * could not be turned into the WAV the speech model takes (not audio, no sound in it, or the decoder is not in the deployment); the log's `detail` says which.
+ */
+export const FAIL_REASONS = ['too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout', 'decode_failed'] as const;
 export type FailReason = (typeof FAIL_REASONS)[number];
 
 /** Why Meta's answer was not good enough to act on: under the confidence floor, or a voice note with no words in it. */

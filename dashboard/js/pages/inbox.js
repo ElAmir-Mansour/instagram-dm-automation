@@ -136,7 +136,7 @@ const InboxPage = {
     /** `perception.reason`, from all three lists the server keeps (skipped, failed, unreadable): each has a sentence of its own, and one outside them is shown as escaped text. */
     PERCEPTION_REASONS: Object.freeze([
         'switch_off', 'not_allowed_sender', 'sales_off', 'budget', 'unsupported_kind', 'no_key', 'no_url',
-        'too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout',
+        'too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout', 'decode_failed',
         'low_confidence', 'empty_transcript',
     ]),
     /** `perception.about_owner`: whose content the media is. "unclear" says nothing, so it is not drawn. */
