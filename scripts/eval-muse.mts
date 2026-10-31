@@ -83,48 +83,19 @@ delete process.env.DATABASE_URL;
 
 // The product modules the benchmark reuses are imported only now, after the environment is settled, as `scripts/eval-dm-sales.mts` does.
 const { runCli } = await import('../src/services/perception/__bench__/cli.js');
-const { loadOptional } = await import('../src/services/perception/__bench__/optional.js');
-const { adaptVoice } = await import('../src/services/perception/__bench__/voice.js');
-const { adaptRecall } = await import('../src/services/perception/__bench__/memory.js');
+const { recallLoader, voiceLoader } = await import('../src/services/perception/__bench__/loaders.js');
 const { pool } = await import('../src/config/db.js');
-type CliDeps = import('../src/services/perception/__bench__/cli.js').CliDeps;
 // Closed before anything runs: a query from anywhere in the run is then refused by the pool, and no statement reaches a database.
 await pool.end();
-
-/** The voice module (P3), wired to the benchmark's key, or why it is not there. The first of the file names it may have. */
-const loadVoice: NonNullable<CliDeps['loadVoice']> = async (k) => {
-    for (const rel of ['src/services/perception/voice', 'src/services/perception/transcribeVoice']) {
-        const voice = await loadOptional<{ transcribeVoice?: unknown }>(ROOT, rel, 'P3, the voice notes');
-        if (!voice.present) continue;
-        const asr = await loadOptional<{ callMetaAsr?: unknown; asrUsd?: unknown }>(ROOT, 'src/services/llm/metaAsr', 'P3, the speech client');
-        if (!asr.present) return { present: false, why: asr.why };
-        if (typeof voice.module.transcribeVoice !== 'function' || typeof asr.module.callMetaAsr !== 'function' || typeof asr.module.asrUsd !== 'function') {
-            return { present: false, why: `${rel}.ts is in, but it does not export transcribeVoice() and metaAsr.ts callMetaAsr() and asrUsd() as the benchmark expects: adapt loadVoice in scripts/eval-muse.mts` };
-        }
-        const names = await loadOptional<{ voiceKeywords?: unknown }>(ROOT, 'src/services/perception/keywords', 'P3, the names to listen for');
-        return {
-            present: true,
-            value: adaptVoice(voice.module as never, asr.module as never, { apiKey: k.meta!, ...(names.present && typeof names.module.voiceKeywords === 'function' ? { keywords: names.module as never } : {}) }),
-        };
-    }
-    return { present: false, why: 'src/services/perception/voice.ts (P3: transcribeVoice) is not in this checkout yet' };
-};
-
-/** The product's recall (P4b), wired, or why it is not there. */
-const loadRecall: NonNullable<CliDeps['loadRecall']> = async (ledger) => {
-    const recall = await loadOptional<{ recallForTurn?: unknown }>(ROOT, 'src/services/perception/recall', 'P4b, the video memory\'s recall');
-    if (!recall.present) return { present: false, why: recall.why };
-    if (typeof recall.module.recallForTurn !== 'function') return { present: false, why: 'src/services/perception/recall.ts is in, but it does not export recallForTurn() as the benchmark expects: adapt loadRecall in scripts/eval-muse.mts' };
-    return { present: true, value: adaptRecall(recall.module as never, { ledgerUsd: () => ledger.usdOf('recall') }) };
-};
 
 const code = await runCli(argv, {
     keys,
     casesFile: path.join(ROOT, 'scripts', 'eval-muse', 'cases.json'),
     defaultMediaDir: path.join(os.homedir(), 'Desktop', 'Meta hackathon tests', 'media'),
     defaultOut: path.join(ROOT, 'docs', 'hackathon'),
-    loadVoice,
-    loadRecall,
+    // The two arms that measure another PR's module: each runs the module the day its file is in the checkout, and says why it did not until then (`loaders.ts`).
+    loadVoice: voiceLoader(ROOT),
+    loadRecall: recallLoader(ROOT),
     readText: (file) => readFile(path.resolve(file), 'utf8'),
     io: {
         out: (text) => process.stdout.write(`${text}\n`),

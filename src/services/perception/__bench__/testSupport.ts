@@ -43,6 +43,8 @@ export interface Recorded {
     /** The JSON body, or null for a body that is not JSON (an audio upload). */
     body: any;
     rawBody: string | null;
+    /** The body when it is bytes and not text (a multipart upload), else null. */
+    bytes: Uint8Array | null;
 }
 
 export type Scripted = { status?: number; json?: unknown; text?: string; headers?: Record<string, string> };
@@ -53,6 +55,7 @@ export function scriptedFetch(respond: (r: Recorded, n: number) => Scripted | Pr
     const fetchImpl: FetchLike = async (input, init) => {
         const headers = new Headers(init.headers as ConstructorParameters<typeof Headers>[0]);
         const raw = typeof init.body === 'string' ? init.body : null;
+        const bytes = init.body instanceof Uint8Array ? init.body : null;
         let body: unknown = null;
         if (raw !== null) {
             try {
@@ -63,7 +66,7 @@ export function scriptedFetch(respond: (r: Recorded, n: number) => Scripted | Pr
         }
         const recorded: Recorded = {
             url: input, host: new URL(input).host, method: String(init.method ?? 'GET'), authorization: headers.get('authorization'), apiKeyHeader: headers.get('x-api-key'),
-            contentType: headers.get('content-type'), body, rawBody: raw,
+            contentType: headers.get('content-type'), body, rawBody: raw, bytes,
         };
         requests.push(recorded);
         const answer = await respond(recorded, requests.length);

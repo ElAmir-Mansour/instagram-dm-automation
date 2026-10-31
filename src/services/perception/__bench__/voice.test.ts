@@ -138,7 +138,7 @@ describe('adaptVoice', () => {
         const mod: VoiceModule = {
             async transcribeVoice(input, d) {
                 seen.input = input;
-                seen.downloaded = await d!.download!(input.link);
+                seen.downloaded = await d!.download!(input.link, { connectMs: 15_000, totalMs: 30_000 });
                 const h = await d!.transcribe!({ creatorId: input.creatorId, wav: new Uint8Array([82, 73, 70, 70]), ...(input.keywords ? { keywords: input.keywords } : {}) });
                 return result(h);
             },
