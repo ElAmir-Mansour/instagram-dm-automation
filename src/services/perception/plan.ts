@@ -33,6 +33,7 @@ const FAILED: Readonly<Record<string, string>> = Object.freeze({
     expired_url: 'its link had expired',
     provider_error: 'the reading service could not read it',
     timeout: 'it took too long',
+    decode_failed: 'the voice note could not be decoded',
 });
 
 const SKIPPED: Readonly<Record<string, string>> = Object.freeze({

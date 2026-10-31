@@ -7068,6 +7068,7 @@
     'inbox.perception.reason.expired_url': 'Instagram’s link to the file had expired.',
     'inbox.perception.reason.provider_error': 'Meta’s model did not answer.',
     'inbox.perception.reason.timeout': 'Meta’s model took too long.',
+    'inbox.perception.reason.decode_failed': 'The voice note could not be decoded.',
     'inbox.perception.reason.switch_off': 'Meta vision was switched off for this message.',
     'inbox.perception.reason.not_allowed_sender': 'This person is not on your Meta vision list.',
     'inbox.perception.reason.sales_off': 'Sales replies were off for this person.',

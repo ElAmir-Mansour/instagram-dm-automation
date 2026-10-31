@@ -7371,6 +7371,7 @@
     'inbox.perception.reason.expired_url': 'انتهت صلاحية رابط إنستغرام للملف.',
     'inbox.perception.reason.provider_error': 'لم يُجب نموذج ميتا.',
     'inbox.perception.reason.timeout': 'استغرق نموذج ميتا وقتاً أطول من المسموح.',
+    'inbox.perception.reason.decode_failed': 'تعذّر فكّ ترميز الرسالة الصوتية.',
     'inbox.perception.reason.switch_off': 'كانت رؤية ميتا متوقفة لهذه الرسالة.',
     'inbox.perception.reason.not_allowed_sender': 'هذا الشخص ليس في قائمة رؤية ميتا.',
     'inbox.perception.reason.sales_off': 'كانت ردود المبيعات متوقفة لهذا الشخص.',

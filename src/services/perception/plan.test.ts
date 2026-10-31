@@ -119,6 +119,7 @@ describe('planOf: a read that did not come to be is the usual line, with the rea
         [{ status: 'failed', reason: 'expired_url' }, 'Could not read it: its link had expired, so it sent the usual line.'],
         [{ status: 'failed', reason: 'provider_error' }, 'Could not read it: the reading service could not read it, so it sent the usual line.'],
         [{ status: 'failed', reason: 'timeout' }, 'Could not read it: it took too long, so it sent the usual line.'],
+        [{ status: 'failed', reason: 'decode_failed' }, 'Could not read it: the voice note could not be decoded, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'budget' }, 'Could not read it: the daily limit for reading media was reached, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'no_key' }, 'Could not read it: no Meta key is set up for reading media, so it sent the usual line.'],
         [{ status: 'skipped', reason: 'no_url' }, 'Could not read it: there was nothing in it to open, so it sent the usual line.'],

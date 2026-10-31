@@ -196,11 +196,11 @@ describe('transcribeVoice: the decode', () => {
             ['too_long', undefined, 'too_large', 'too_long'],
             ['too_large', undefined, 'too_large', 'audio'],
             ['timeout', 'decode', 'timeout', 'decode'],
-            ['empty', undefined, 'fetch_failed', 'empty'],
-            ['decode_failed', 'exit_1: <tmp>/in.bin: Invalid data found when processing input', 'fetch_failed', 'decode_failed: exit_1: <tmp>/in.bin: Invalid data found when processing input'],
-            ['decode_failed', 'no_audio', 'fetch_failed', 'decode_failed: no_audio'],
-            ['decoder_unavailable', 'ENOENT', 'fetch_failed', 'decoder_unavailable: ENOENT'],
-            ['decoder_unavailable', 'no_binary', 'fetch_failed', 'decoder_unavailable: no_binary'],
+            ['empty', undefined, 'decode_failed', 'empty'],
+            ['decode_failed', 'exit_1: <tmp>/in.bin: Invalid data found when processing input', 'decode_failed', 'decode_failed: exit_1: <tmp>/in.bin: Invalid data found when processing input'],
+            ['decode_failed', 'no_audio', 'decode_failed', 'decode_failed: no_audio'],
+            ['decoder_unavailable', 'ENOENT', 'decode_failed', 'decoder_unavailable: ENOENT'],
+            ['decoder_unavailable', 'no_binary', 'decode_failed', 'decoder_unavailable: no_binary'],
         ];
         for (const [reason, detail, expectedReason, expectedDetail] of table) {
             const { result, calls } = await hear({ decode: decodeFails(reason, detail) });

@@ -11,8 +11,8 @@
  *   1. **Download** (`media.ts` `fetchMedia`, kind `audio`): Meta's hosts only, HTTPS, no token, at most 10 MB, 15 s to connect and 30 s in all, never written anywhere. A voice note
  *      arrives as `video/mp4` (AAC inside an MP4) and stays audio.   No link: `skipped / no_url`.   The rest as `fetchMedia` names them: `too_large`, `fetch_failed`, `expired_url`, `timeout`.
  *   2. **Decode** (`transcode.ts`): `ffmpeg-static` inside the function, to mono 16-bit 24 kHz WAV with the tags removed, 10 s. More than 3 minutes is `failed / too_large` (detail
- *      `too_long`); a file that will not decode is `failed / fetch_failed` (detail `decode_failed: …`: bytes that are no use, like a download that was not media); the binary missing
- *      is `failed / fetch_failed` too (detail `decoder_unavailable: …`) and is logged as an ERROR, because it means the deployment is wrong and every voice note will say so.
+ *      `too_long`); a file that will not decode is `failed / decode_failed` (detail `decode_failed: …`); the binary missing is `failed / decode_failed` too (detail
+ *      `decoder_unavailable: …`) and is logged as an ERROR, because it means the deployment is wrong and every voice note will say so.
  *   3. **Hear** (`aiProviders/asr.ts`): Meta's `muse-voice-transcribe-1.0`, with Arabic and English as the language bias and the creator's names as keywords, 30 s, one row in
  *      `ai_usage` (purpose `perception_voice`, $0.18 an hour). **Never another provider.** No Meta key, or Meta switched off: `skipped / no_key`; a platform or tenant budget reached:
  *      `skipped / budget`; the deadline: `failed / timeout`; any other refusal or answer that is no good: `failed / provider_error` (detail: the kind and the HTTP status).
@@ -79,14 +79,16 @@ export interface VoiceDeps {
     now?: () => number;
 }
 
-/** A refusal from the decoder as the reason the record keeps (`types.ts` has no decode reason: the closed list is the download's and Meta's). */
+/**
+ * A refusal from the decoder as the reason the record keeps. Too big or too long is `too_large`, the kill after 10 s is `timeout`, and everything else the decoder can
+ * say (not audio, no sound, no bytes, no binary) is one thing to the record, `decode_failed`: the audio did not become a WAV. The log's `detail` says which.
+ */
 function decodeFailure(reason: TranscodeFailure, detail: string | undefined): { reason: FailReason; detail: string } {
     switch (reason) {
         case 'too_long': return { reason: 'too_large', detail: 'too_long' };
         case 'too_large': return { reason: 'too_large', detail: 'audio' };
         case 'timeout': return { reason: 'timeout', detail: 'decode' };
-        case 'empty': return { reason: 'fetch_failed', detail: 'empty' };
-        default: return { reason: 'fetch_failed', detail: `${reason}${detail ? `: ${detail}` : ''}` };
+        default: return { reason: 'decode_failed', detail: `${reason}${detail ? `: ${detail}` : ''}` };
     }
 }
 
