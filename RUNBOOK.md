@@ -2147,17 +2147,22 @@ npm run eval:muse -- --settings --env ../.env             # or the key saved in 
 npm run eval:muse -- --env ../.env --voice --memory --library library.json --open-weights --judge
 npm run eval:muse -- --stub --out scratch/bench           # a dry run: canned answers, no key, no network, writes only where --out says
 npm run eval:muse -- --list                               # the cases
+npm run eval:muse -- --env ../.env --cases image-price,reel-own   # an id is that case alone; anything else is the start of some ids
 ```
 
 - **Cases** are one file, `scripts/eval-muse/cases.json`: each says what was sent, what was typed with it, which actions are right, and which facts must not be invented (a price the
   picture showed). The loader rejects a misspelt expectation instead of letting it check nothing. The media is read from `--media-dir` (default `~/Desktop/Meta hackathon tests/media`);
   no media file is in the repository, and a case whose file is missing is skipped by name, never passed. Two pictures (a made-up identity card and a story) are drawn at run time.
+  `--cases` takes ids: an id is that case alone (`image-price` is not also its four variations), anything else is the start of some ids (`image-price-` is those four, `reel-own` the four
+  reels).
 - **Arms.** Meta: `perceive()` and the sales turn's own prompt, schema, coercion and guard, drafted through the DM sales evaluation's runner (`src/services/dmSales/__evals__/`), so
   nothing is sent. Today: the fixed line the agent sent before Muse (once a day), and for a message with words the same sales turn with the media unopened. `--voice` and `--memory`
   run the product's own transcription and recall, and are skipped with a note until their modules are in this checkout. `--open-weights` analyses one reel on Muse Spark Open (Baseten,
   `BASETEN_API_KEY`) and on hosted Muse Spark with the reel indexer's own request.
 - **What it touches.** Keys from the file you name (no `.env` is read unless you name one) or from Settings read-only. It writes no database (the application's pool is closed before
-  the run), sends no message and reads no tenant; a Contributor-mode model id is refused unless every selected case is a drawn one.
+  the run), sends no message and reads no tenant; a Contributor-mode model id is refused unless every selected case is a drawn one. What can be found wrong for free (a missing key, an
+  unreadable `--library`, a flag it refuses) is found before the first call that costs, and a case that stops on an error is a row in the report (`crashed`) with what it had cost, so one
+  bad case never takes the others' results with it. A dry run (`--stub`) never writes to `docs/hackathon`: it needs an `--out` of its own. A key is taken out of everything it prints or writes.
 - **Outputs.** `benchmark.md` and `benchmark.svg` in the `docs/hackathon` folder (light and dark): the table per arm, the bar the shipped path is held to, every failure with its case
   id and a line of why, what did not run, the date, the models and the command. Exit 0 = the bar was met, 1 = it ran and was not met, 2 = usage or nothing could run, 3 = refused
   (no key). The code is `src/services/perception/__bench__/`; its tests make no live call.
