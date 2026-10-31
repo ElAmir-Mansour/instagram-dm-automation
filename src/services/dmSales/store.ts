@@ -130,13 +130,17 @@ export async function supersession(conversationId: string, messageId: string): P
  *   - `raw_payload`: on an OUTBOUND row, what was actually sent. A carousel or a row of buttons is stored with the placeholder text
  *     `[Structured Template]`, and its cards and buttons live only here. It is read for outbound rows ONLY: on an inbound row it is the whole
  *     Meta event, which nothing here needs and which is large.
+ *
+ * And one thing for the turn itself: `perception`, on an INBOUND row, what Meta Muse read of a reel or a photo (v60; null on every other row and for
+ * every tenant with Meta vision off). A reel answered by the text sent after it is told to the model from here (`unansweredMediaFact`).
  */
-export type HistoryRow = Pick<MessageRow, 'direction' | 'text' | 'sender'> & { payload?: string | null; raw_payload?: unknown };
+export type HistoryRow = Pick<MessageRow, 'direction' | 'text' | 'sender'> & { payload?: string | null; raw_payload?: unknown; perception?: unknown };
 
 export async function loadHistory(conversationId: string, limit: number): Promise<HistoryRow[]> {
     const rows = await queryRows<HistoryRow>(
         `SELECT direction, text, sender, payload,
-                CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload
+                CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload,
+                CASE WHEN direction = 'inbound' THEN perception END AS perception
            FROM messages
           WHERE conversation_id = $1
           ORDER BY created_at DESC

@@ -119,7 +119,7 @@ describe('loadHistory and loadAgent', () => {
     it('reads what a stored row does not say: the tapped button\'s code, and what the bot actually sent (its own rows only, never an inbound event)', async () => {
         answering([]);
         await loadHistory('conv-1', 12);
-        assert.match(asked[0]!.sql, /^SELECT direction, text, sender, payload, CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload FROM messages WHERE conversation_id = \$1/);
+        assert.match(asked[0]!.sql, /^SELECT direction, text, sender, payload, CASE WHEN direction = 'outbound' THEN raw_payload END AS raw_payload, CASE WHEN direction = 'inbound' THEN perception END AS perception FROM messages WHERE conversation_id = \$1/);
     });
 
     it('reads the agent by its tenant: the switch, the persona and the knowledge base', async () => {
