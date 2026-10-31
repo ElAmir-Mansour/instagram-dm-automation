@@ -2026,7 +2026,7 @@
     'ops.ai.purpose.recall': 'Finding the right video',
     'ops.ai.purpose.recall.hint': 'For matching a question to one of an account’s own reels, and the second to watch from. Only Meta (Muse) may answer.',
     'ops.ai.purpose.reel_index': 'Reading reels',
-    'ops.ai.purpose.reel_index.hint': 'For watching each reel an account has published once and writing down what it shows and says, so that it can be found later. Only Meta (Muse) may answer.',
+    'ops.ai.purpose.reel_index.hint': 'For watching each reel an account has published once and writing down what it shows and says, so that it can be found later. Only Meta (Muse) or Baseten (Meta’s open model, Muse Spark Open) may answer, and Baseten is sent nothing but the account’s own reels. Automatic uses Meta.',
     'ops.ai.purpose.comment_intent': 'Reading comments',
     'ops.ai.purpose.comment_intent.hint': 'For telling what a comment that no campaign matches is asking for: to buy, to ask, to praise or to complain. Only Meta (Muse) may answer.',
     'ops.ai.purpose.key_test': 'Checks and tests',
