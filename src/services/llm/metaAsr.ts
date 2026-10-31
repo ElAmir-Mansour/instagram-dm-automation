@@ -49,7 +49,7 @@ export const ASR_MAX_KEYWORDS = 20;
 
 /**
  * The longest keyword the endpoint takes. Its docs give no limit, but it refuses the whole request with a 400 ("ASR keyword 0 exceeds the maximum length of 30
- * characters", live 2026-10-31) when one term is longer: a course title sent whole would cost every voice note its transcript. Counted in UTF-16 units, the
+ * characters", live 2026-10-31) when one term is longer: an offer's full title sent whole would cost every voice note its transcript. Counted in UTF-16 units, the
  * stricter of the two counts for anything outside the basic plane, so nothing that passes here can be refused there.
  */
 export const ASR_MAX_KEYWORD_CHARS = 30;
