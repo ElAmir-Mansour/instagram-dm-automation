@@ -413,7 +413,14 @@ describe('a real decode with the bundled ffmpeg', () => {
 
     real('says decode_failed, with the decoder\'s own words and not the directory, for a file that is not audio', async () => {
         const result = await transcodeToWav(Buffer.from('this is definitely not audio '.repeat(40)), { tmpRoot: work });
-        assertFailure(result, 'decode_failed', /^exit_\d+: <tmp>\/in\.bin:/);
+        // ffmpeg builds word this differently: the macOS one names the file ("<path>/in.bin: Invalid data…"), the Linux static build
+        // CI and Vercel run does not ("Error opening input files: Invalid data…"). What must hold on both: the exit code, the decoder's
+        // own words, and never the temporary directory (a path, when the build prints one, is shown as <tmp>).
+        assertFailure(result, 'decode_failed', /^exit_\d+: .*Invalid data found when processing input/);
+        if (!result.ok) {
+            assert.ok(!(result.detail ?? '').includes(work), 'the temporary directory never leaves the decoder');
+            assert.doesNotMatch(result.detail ?? '', /\/(?:tmp|var|private)\//, 'no absolute temp path in the detail');
+        }
         assert.deepEqual(await leftBehind(), []);
     });
 
