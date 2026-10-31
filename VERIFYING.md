@@ -366,7 +366,7 @@ Vercel logs around the test's time:
    real run easier to check.
 2. Put the account back the way it is normally kept, unless a real Only me run follows.
 3. If you like, delete the test rows in Posts Scheduler — that removes this app's record only, never
-   the TikTok post (`src/routes/api.ts:3236-3260`).
+   the TikTok post (`src/routes/api.ts:3277-3301`).
 4. Re-run the T1 connection query: still `active`, `last_error` NULL.
 
 ### What the TikTok procedure does not prove

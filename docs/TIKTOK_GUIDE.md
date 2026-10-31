@@ -64,9 +64,9 @@ minute per token (`src/services/tiktok.ts:607-610`, `:584`).
 - **Public posts before the audit**, and branded content before the audit.
 - **A chosen cover.** TikTok picks a video's; a photo post's cover is its first image
   (`photo_cover_index: 0`, `src/services/tiktok.ts:676`). TikTok rows never get a `cover_url`
-  (`src/routes/api.ts:3000-3001`).
+  (`src/routes/api.ts:3041-3042`).
 - **Editing after it has gone.** Once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` the app
-  refuses edits (`src/routes/api.ts:3117-3120`); change the post in TikTok.
+  refuses edits (`src/routes/api.ts:3158-3161`); change the post in TikTok.
 
 ---
 
@@ -121,9 +121,9 @@ the **Public site address** field, so save that first (§3). Copy them; do not t
 
 | Portal field | Value | Served by |
 |---|---|---|
-| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:213` |
-| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:224` |
-| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:218` |
+| Website URL | `https://msg-response-auto.vercel.app/` | the landing page, `src/index.ts:214` |
+| Terms of Service URL | `https://msg-response-auto.vercel.app/terms` | `src/index.ts:225` |
+| Privacy Policy URL | `https://msg-response-auto.vercel.app/privacy` | `src/index.ts:219` |
 | Redirect URI (Login Kit) | `https://msg-response-auto.vercel.app/api/tiktok/callback` | `src/routes/tiktok.ts:83` |
 | Webhook callback URL | `https://msg-response-auto.vercel.app/api/tiktok/webhook` | `src/routes/tiktok.ts:149` |
 | Scopes to request | what Connect will ask for, today `user.info.basic,video.upload,video.publish` | `src/services/tiktok.ts:64` |
@@ -177,7 +177,7 @@ photo can only be *pulled* (`PULL_FROM_URL`), and TikTok pulls only from a verif
 **TikTok handed out three different files over time** — one for the Terms/Privacy URLs, one for
 the prefix, then one more for domains when Direct Post was switched on. **The app keeps serving
 all of them.** Saving a new file moves the previous one into a history (the last ten), and the
-root route answers any of them (`src/services/appSettings.ts:749-759`, `src/index.ts:232-246`).
+root route answers any of them (`src/services/appSettings.ts:778-788`, `src/index.ts:233-247`).
 The Settings form shows only the newest. To see every file being served:
 
 ```sql
@@ -214,8 +214,8 @@ shared `DASHBOARD_PASSWORD` login is a platform admin.
    | Field | What to paste | Notes |
    |---|---|---|
    | **Client key** | the client key | Shown whole once saved — it is not a secret; TikTok puts it in every authorise URL, and seeing it is how a typo gets found (`src/routes/tiktok.ts:335-337`). Must match `[A-Za-z0-9_-]{6,100}` (`:369`) |
-   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:343-346`, `:92-99`) |
-   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:648-658`). Every TikTok URL is built from it (§2.4, §2.5) |
+   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:370-373`, `:103-110`) |
+   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:677-687`). Every TikTok URL is built from it (§2.4, §2.5) |
 
 4. **Save TikTok app**. Healthy: the toast "TikTok app settings saved.", and the section now offers
    **Connect TikTok** to the workspace owner.
@@ -224,7 +224,7 @@ Saving the secret, and later connecting, both encrypt, so both need `TOKEN_ENCRY
 environment — the same requirement as saving a Meta token (RUNBOOK §3.2).
 
 **The database wins over the environment.** `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and
-`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:484-497`,
+`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:513-526`,
 `:200-207`). A value from the environment is labelled "Set in the environment — saving here
 overrides it". With either half of the credentials missing, TikTok is simply "not set up": the
 section says "TikTok isn't set up yet…" and Connect answers 409.
@@ -275,7 +275,7 @@ workspace, and one workspace per TikTok account.
 | Direct post (private until TikTok approves the app) | switch on, not audited, connection holds `video.publish` only |
 | Direct post | switch on and audited |
 
-(`tiktokModeLabel`, `dashboard/js/pages/settings.js:1899-1903`; the server decides the mode with
+(`tiktokModeLabel`, `dashboard/js/pages/settings.js:1926-1930`; the server decides the mode with
 `postModeFor`, `src/routes/tiktok.ts:221-223`.)
 
 Two warnings the card can add: "Reconnect TikTok to allow direct posting." (the switch is on but
@@ -343,7 +343,7 @@ facts about TikTok's portal that the app cannot check for itself — you tell it
 | "TikTok has approved this app for Direct Post (audit passed)" | `tiktok.audited` | TikTok has told you the audit passed |
 
 Both default to off and are saved with **Save TikTok app**, which always sends both — an unticked
-box is a real "no" (`dashboard/js/pages/settings.js:3939-3942`, `src/routes/tiktok.ts:418-425`).
+box is a real "no" (`dashboard/js/pages/settings.js:3966-3969`, `src/routes/tiktok.ts:418-425`).
 
 | Direct Post | Audited | Connect asks for | A new TikTok post goes out as | Privacy allowed |
 |---|---|---|---|---|
@@ -351,7 +351,7 @@ box is a real "no" (`dashboard/js/pages/settings.js:3939-3942`, `src/routes/tikt
 | **on** | **off** — today | all three | the composer asks, per post: "Post directly to my profile" or "Send to my TikTok drafts (inbox)" | **Only me** |
 | on | on | `user.info.basic`, `video.publish` | direct, always | any level TikTok offers the account |
 
-(`tiktokScopes`, `src/services/tiktok.ts:64-70`; the per-post choice, `src/routes/api.ts:2965-2971`.)
+(`tiktokScopes`, `src/services/tiktok.ts:64-70`; the per-post choice, `src/routes/api.ts:3006-3012`.)
 Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 
 ### 5.1 Switching Direct Post on
@@ -363,7 +363,7 @@ Audited on its own does nothing: with Direct Post off, posts are inbox drafts.
 3. **Every connected workspace must Reconnect once.** Until it does, its card says "Reconnect
    TikTok to allow direct posting." and its posts keep going out as inbox drafts — the mode needs
    the scope on the connection, not just the switch (`src/routes/tiktok.ts:221-223`).
-4. The mode is fixed on each post when it is scheduled (`src/routes/api.ts:2960-2971`), so posts
+4. The mode is fixed on each post when it is scheduled (`src/routes/api.ts:3001-3012`), so posts
    scheduled before the switch stay inbox drafts. Edit them and choose "Post directly to my
    profile", or reschedule them.
 
@@ -679,7 +679,7 @@ After approval: swap in the production key and secret and reconnect (§8.3), the
 
 | Token | Lives | Stored | Renewed |
 |---|---|---|---|
-| Access token | **24 hours** | `platform_connections.access_token`, `enc:v1` | on use, when less than 10 minutes are left (`getAccessToken`, `src/services/tiktokConnections.ts:360-381`), and every day by the cron for every active connection (`refreshAllConnections`, `:330-354`, called at `src/routes/api.ts:1087`) |
+| Access token | **24 hours** | `platform_connections.access_token`, `enc:v1` | on use, when less than 10 minutes are left (`getAccessToken`, `src/services/tiktokConnections.ts:360-381`), and every day by the cron for every active connection (`refreshAllConnections`, `:330-354`, called at `src/routes/api.ts:1100`) |
 | Refresh token | **365 days from the first authorisation** — refreshing does not extend it | `refresh_token`, `enc:v1` | replaced on every refresh, because TikTok may rotate it; only one refresh runs at a time, and a claim older than 2 minutes is taken over (`src/services/tiktokConnections.ts:305-350`) |
 | OAuth state | 10 minutes, single use | `oauth_states` | per Connect (`:33`, `:49-75`) |
 
@@ -704,7 +704,7 @@ found at 00:00 UTC, not by the next scheduled post.
 
 While it is invalid: the card shows **Needs reconnecting** and "Last problem: …"; every TikTok post
 that comes due **fails** with that reason (`:307-309`); and scheduling a new TikTok post is refused
-with "TikTok is not connected — connect it in Settings first." (`src/routes/api.ts:2956-2959`).
+with "TikTok is not connected — connect it in Settings first." (`src/routes/api.ts:2997-3000`).
 
 **The only fix is Reconnect** (§4.3); a dead refresh token cannot be revived. Then retry what failed
 in the meantime with **Publish now**.
@@ -750,7 +750,7 @@ Healthy: `status = active`; `last_refreshed_at` within the last day (the daily c
 |---|---|---|---|
 | Unposted inbox drafts | **5 per 24 hours** | TikTok. Counted here conservatively: this workspace's inbox rows `PUBLISHING`, `PROCESSING` or `IN_INBOX` claimed in the last 24 h (`src/services/tiktokPublish.ts:173`, `:190-201`) | the post is **held**, not failed: back to `PENDING` with "Waiting for TikTok: *n* drafts…", and it goes out on a later sweep; **Publish now** answers 409. Direct posts do not count |
 | Photo post init | **6 calls a minute** per token | TikTok (`src/services/tiktok.ts:652-655`) | `rate_limit_exceeded` → the post **fails**; the init is never retried automatically (§11) |
-| Status checks | 30 a minute per token | TikTok | the sweep asks about at most 10 rows per drain and 25 per daily cron (`src/services/tiktokPublish.ts:577-582`, `src/routes/api.ts:1091`) |
+| Status checks | 30 a minute per token | TikTok | the sweep asks about at most 10 rows per drain and 25 per daily cron (`src/services/tiktokPublish.ts:577-582`, `src/routes/api.ts:1104`) |
 | Posts per day per account | TikTok's own cap | TikTok | `spam_risk_too_many_posts` → retry tomorrow |
 | Active users of the app | TikTok's daily cap for this app | TikTok | `reached_active_user_cap` → retry later |
 | Before the audit | Only me, on a private account | TikTok | §6.3 |
@@ -774,7 +774,7 @@ a video caption is cut with a plain `slice`, which can split one that sits exact
 
 **The 40-second stagger only works if the drain runs often.** Rows are due 40 s apart, but they
 go out when a drain runs, and one drain publishes everything already due back to back
-(`publishDuePosts`, `src/routes/api.ts:965-1011`). With the Heroku worker on (it polls every 60 s)
+(`publishDuePosts`, `src/routes/api.ts:978-1024`). With the Heroku worker on (it polls every 60 s)
 that is one or two posts a minute; after an hours-long gap in the GitHub schedule it can be the
 whole batch at once, and a seventh photo post inside one minute fails with `rate_limit_exceeded`.
 Press **Publish now** on those a minute later. Which drainers are running: RUNBOOK §5.1.
@@ -810,12 +810,12 @@ Count in UTF-16 units: one per letter, two per emoji (§9).
 ### 10.3 "Also send to TikTok" copies the Meta caption word for word
 
 The TikTok sibling gets the same caption as the Instagram/Facebook row
-(`src/routes/api.ts:2867-2870`, `:2279`). An Instagram caption built around a comment keyword goes
+(`src/routes/api.ts:2908-2911`, `:2320`). An Instagram caption built around a comment keyword goes
 to TikTok with that keyword in it. So either:
 
 - schedule the TikTok post on its own (Platform: TikTok) with a link-in-bio caption; or
 - edit the TikTok row's caption before it goes out — allowed while it is `PENDING` or `FAILED`,
-  refused once it is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`src/routes/api.ts:3117-3120`).
+  refused once it is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`src/routes/api.ts:3158-3161`).
 
 The Studio does not have this problem: it writes separate Instagram and TikTok captions.
 
@@ -923,7 +923,7 @@ readable.
 | TikTok fetches photos from this app's public address, and none is set — add it in Settings → TikTok app. | `src/services/tiktokPublish.ts:396-399` | §3 |
 | TikTok did not confirm this upload within 24 hours. Check your TikTok inbox; if it is not there, retry. | `src/services/tiktokPublish.ts:617-620` | RUNBOOK §10.7 |
 | TikTok upload has no publish id — schedule it again. | `src/services/tiktokPublish.ts:612-615` | reschedule |
-| Abandoned after 5 publish attempts — each claim went stale without completing. … | `src/routes/api.ts:1043-1050` | RUNBOOK §4.2 |
+| Abandoned after 5 publish attempts — each claim went stale without completing. … | `src/routes/api.ts:1056-1063` | RUNBOOK §4.2 |
 
 ---
 
@@ -986,13 +986,13 @@ its scheduled time — minutes with the Heroku worker on, up to hours on the Git
 **Is it safe to press Publish now twice?**
 
 Yes. The click claims the row atomically, so a second click while it is sending gets "Cannot
-publish now — this post is already PUBLISHING." (`src/routes/api.ts:3352-3380`). And a retry of a
+publish now — this post is already PUBLISHING." (`src/routes/api.ts:3393-3421`). And a retry of a
 row that already reached TikTok asks TikTok about it first, instead of posting it again
 (`src/services/tiktokPublish.ts:430-441`, `:515-528`).
 
 **If I delete a TikTok post from Posts Scheduler, is it deleted on TikTok?**
 
-No. Deleting the row deletes this app's record only (`src/routes/api.ts:3236-3260`). Delete the
+No. Deleting the row deletes this app's record only (`src/routes/api.ts:3277-3301`). Delete the
 post in TikTok.
 
 **Can two workspaces use the same TikTok account?**
