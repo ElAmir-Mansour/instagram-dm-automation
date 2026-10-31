@@ -25,12 +25,12 @@ import { PROVIDER_IDS, type ProviderId } from '../services/llm/registry.js';
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
- * The providers whose environment variable the card's own copy of the table (`AiProvidersView.KEY_ENV`, dashboard/js/pages/ai_providers.js) does not name yet.
- * Baseten (the video memory's open-weights indexer, P4a) was added to the server with no dashboard change on purpose: the library view and its help come in a
- * later dashboard PR that bumps the cache once for all of it, and that PR adds `baseten: 'BASETEN_API_KEY'` to the card and empties this list. Until then the
- * card says "In use: the server's key" for it (`ops.ai.key.fromEnvPlain`) and the key can still be saved and removed.
+ * The providers whose environment variable the card's own copy of the table (`AiProvidersView.KEY_ENV`, dashboard/js/pages/ai_providers.js) does not name yet. Empty:
+ * Baseten (the video memory's open-weights indexer, P4a) was added to the server with no dashboard change on purpose, and the video library's PR (P4b) named it in the card
+ * (`baseten: 'BASETEN_API_KEY'`) in the same cache bump as the library view. A provider added to the server and not here goes on this list WITH its reason, and a name the card
+ * learns takes it off: the last assertion of the test below fails for a provider that is on the list and named.
  */
-const KEY_ENV_NOT_YET_IN_THE_CARD: readonly ProviderId[] = ['baseten'];
+const KEY_ENV_NOT_YET_IN_THE_CARD: readonly ProviderId[] = [];
 
 // ─── The fake DOM ────────────────────────────────────────────────────────────────────────────
 
@@ -321,6 +321,7 @@ describe('AI providers card — the pure helpers', () => {
         assert.equal(View.keyEnv('openrouter'), 'OPENROUTER_API_KEY');
         assert.equal(View.keyEnv('groq'), 'GROQ_API_KEY');
         assert.equal(View.keyEnv('meta'), 'META_MODEL_API_KEY');
+        assert.equal(View.keyEnv('baseten'), 'BASETEN_API_KEY');
         assert.equal(View.keyEnv('custom'), null);
         // The card keeps its own copy of the server's table (it cannot import it), so a provider added there and not here would say "the server's key" with no name.
         for (const id of PROVIDER_IDS) {

@@ -8,7 +8,7 @@
  * chips) is for the live check after the merge.
  *
  * Pinned, because a screenshot cannot show it:
- *   - the shell: the three switches under the names the owner reads (only video memory marked "coming soon": voice notes are live), the help link, who it answers, the cap,
+ *   - the shell: the three switches under the names the owner reads (none marked "coming soon": voice notes and video memory are live), the help link, who it answers, the cap,
  *     its own Save; read-only for a viewer AND for an operator (the route is the owner's), with the owner-only note for the second;
  *   - the state: what the server said is what is drawn (switches, list or everyone, cap, the key line with its model, today's spend), a block the server
  *     could not read draws nothing as chosen and saves nothing, a server without the block hides the card;
@@ -17,6 +17,9 @@
  *   - saving: exactly what is on screen, once, the server's answer adopted, a refusal kept as a draft with the server's words, nothing sent by anyone who may
  *     not, nothing for a cap the server would refuse;
  *   - everything a person or a model wrote (a handle, a name) is text, never markup.
+ *
+ * The video library inside the card (the list, "Index my reels", the details) is `museLibrary.test.ts`'s; here it is only the section the shell draws, the ids it brings
+ * and the API it asks, which every test of the card answers with an empty library.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -51,7 +54,10 @@ const IDS = [
     'muse-card', 'muse-dm-media', 'muse-voice', 'muse-memory', 'muse-who', 'muse-daily-usd', 'muse-save-btn', 'muse-picker-open', 'muse-picker-search',
     'muse-error', 'muse-status', 'muse-people-block', 'muse-everyone-note', 'muse-people-list', 'muse-who-hint', 'muse-cap-hint', 'muse-spent',
     'muse-unsaved-note', 'muse-picker', 'muse-picker-note', 'muse-picker-list',
+    'muse-library', 'muse-index-btn', 'muse-library-refresh', 'muse-library-estimate', 'muse-library-hint', 'muse-library-notice', 'muse-library-count', 'muse-library-list',
 ];
+/** The library's two buttons: the card's own controls, apart from them, are what the shell's tests count. */
+const LIBRARY_CONTROLS = ['muse-index-btn', 'muse-library-refresh'];
 
 /** The `muse` block the server answers with, and a change of it. */
 function view(over: Json = {}): Json {
@@ -104,6 +110,11 @@ function open(setup: { lang?: Lang; role?: Role; view?: Json | null | undefined;
             people: (body.allow_senders as string[]).filter((id) => id !== '*').map((id) => ({ id, username: id === SARA ? 'sara_dev' : id === OMAR ? 'omar.dev' : null, name: id === OMAR ? 'Omar' : null })),
         })),
         getAiSettings: record('getAiSettings', async () => ({ is_active: true, muse: setup.view === undefined ? view() : setup.view })),
+        // The owner's library: an empty one, unless a test says otherwise (museLibrary.test.ts does).
+        getMuseLibrary: record('getMuseLibrary', async () => []),
+        getMuseReel: record('getMuseReel', async () => ({})),
+        indexMuseLibrary: record('indexMuseLibrary', async () => ({ queued: 0, already_indexed: 0, deduped: 0, listed: 0, truncated: false })),
+        reindexMuseReel: record('reindexMuseReel', async () => ({ queued: true })),
         ...(setup.api ?? {}),
     };
     const globals: Json = {
@@ -118,7 +129,7 @@ function open(setup: { lang?: Lang; role?: Role; view?: Json | null | undefined;
     h.UI.toast = (message: unknown, type?: string) => { toasts.push({ message: String(message), type }); };
     for (const id of IDS) h.el(id);
     // As the shell draws them: hidden until the card paints them.
-    for (const id of ['muse-people-block', 'muse-everyone-note', 'muse-who-hint', 'muse-cap-hint', 'muse-unsaved-note', 'muse-picker']) h.el(id).classes.add('hidden');
+    for (const id of ['muse-people-block', 'muse-everyone-note', 'muse-who-hint', 'muse-cap-hint', 'muse-unsaved-note', 'muse-picker', 'muse-library']) h.el(id).classes.add('hidden');
     const page: Json = h.run('AiSettingsPage');
     if (!setup.skipAdopt) page.adoptMuse(setup.view === undefined ? view() : setup.view);
     return { h, page, calls, toasts, el: (id) => h.el(id), flags: (id) => [...h.el(id).classes], t: h.t };
@@ -131,7 +142,7 @@ const hidden = (o: Opened, id: string): boolean => o.el(id).classes.has('hidden'
 
 describe('Meta vision card: the shell', () => {
     for (const lang of ['en', 'ar'] as const) {
-        it(`names the three switches as the owner reads them, marks only video memory "coming soon", and has no raw key (${lang})`, () => {
+        it(`names the three switches as the owner reads them, marks none "coming soon" (voice notes and video memory are live), and has no raw key (${lang})`, () => {
             const { page, t } = open({ lang, skipAdopt: true });
             const shell = String(page.museShell());
             assert.ok(text(shell).includes(text(t('muse.title'))));
@@ -140,8 +151,9 @@ describe('Meta vision card: the shell', () => {
             assert.equal(rows.length, 3);
             assert.ok(rows[0]!.includes(t('muse.dmMedia')) && !rows[0]!.includes(t('muse.soon')), 'the first is live and says nothing of "soon"');
             assert.ok(rows[1]!.includes(t('muse.voice')) && rows[1]!.includes(t('muse.voiceDesc')), 'voice notes are live: named and described');
-            assert.ok(!rows[1]!.includes(t('muse.soon')) && !rows[1]!.includes(t('muse.soonNote')) && !rows[1]!.includes('muse-soon'), 'and say nothing of "soon", nor of what saving the switch does while nothing reads it');
-            assert.ok(rows[2]!.includes(t('muse.memory')) && rows[2]!.includes(t('muse.soon')) && rows[2]!.includes(t('muse.soonNote')), 'video memory is coming soon, and says what saving it does');
+            assert.ok(!rows[1]!.includes(t('muse.soon')) && !rows[1]!.includes(t('muse.soonNote')) && !rows[1]!.includes('muse-soon'), 'and say nothing of "soon"');
+            assert.ok(rows[2]!.includes(t('muse.memory')) && !rows[2]!.includes(t('muse.soon')) && !rows[2]!.includes(t('muse.soonNote')), 'video memory is live: no "coming soon"');
+            assert.ok(rows[2]!.includes(t('muse.memoryDesc')));
             for (const id of ['muse-dm-media', 'muse-voice', 'muse-memory']) assert.match(shell, new RegExp(`<input type="checkbox" id="${id}" aria-describedby="${id}-desc"`));
             assert.equal(/muse\.[a-zA-Z.]+/.test(text(shell)), false, 'no raw key reaches the screen');
             assert.equal(/\{\w+\}/.test(text(shell)), false, 'and no placeholder is left unfilled');
@@ -151,9 +163,10 @@ describe('Meta vision card: the shell', () => {
     it('has the brief\'s exact words in English: the switch names and the choices', () => {
         const { page } = open({ skipAdopt: true });
         const shell = text(page.museShell());
-        for (const word of ['Meta vision', 'Beta', 'Answer photos, reels and story mentions', 'Voice notes', 'Video memory', 'Coming soon', 'Only these people', 'Everyone', 'Add a person', 'Daily cap (USD)']) {
+        for (const word of ['Meta vision', 'Beta', 'Answer photos, reels and story mentions', 'Voice notes', 'Video memory', 'Only these people', 'Everyone', 'Add a person', 'Daily cap (USD)']) {
             assert.ok(shell.includes(word), word);
         }
+        assert.ok(!shell.includes('Coming soon'), 'no switch is marked coming soon: all three are live');
     });
 
     it('links to the help section, in a new tab so an unsaved card is not lost, and sits in the grid after the sandbox as a row of its own', () => {
@@ -178,16 +191,20 @@ describe('Meta vision card: the shell', () => {
     });
 
     it('is an owner\'s: live controls and no note for an owner, locked controls for a viewer, locked controls AND the owner-only note for an operator', () => {
-        const controls = (shell: string) => [...shell.matchAll(/<(?:input|select|textarea|button)\b[^>]*>/g)].map((m) => m[0]).filter((c) => /id="muse-/.test(c));
+        const controls = (shell: string) => [...shell.matchAll(/<(?:input|select|textarea|button)\b[^>]*>/g)].map((m) => m[0])
+            .filter((c) => /id="muse-/.test(c) && !LIBRARY_CONTROLS.some((id) => c.includes(`id="${id}"`)));
+        const library = (shell: string) => LIBRARY_CONTROLS.map((id) => [id, new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`).exec(shell)?.[0] ?? '']);
         const state = (role: Role) => {
             const { page } = open({ role, skipAdopt: true });
             const shell = String(page.museShell());
-            return { shell, c: controls(shell) };
+            return { shell, c: controls(shell), lib: library(shell) };
         };
         const owner = state('owner');
         assert.equal(owner.c.length, 8, 'three switches, who, the picker button and search, the cap and Save');
         for (const c of owner.c) assert.ok(!/\sdisabled(?=[\s>])/.test(c) && !/\sreadonly(?=[\s>])/.test(c), `live for the owner: ${c}`);
         assert.ok(!owner.shell.includes('muse-owner-note'));
+        // The library's own buttons: both live in an owner's shell, like the card's controls; the card's paint turns Index my reels off while the saved switch is off.
+        assert.deepEqual(owner.lib.map(([id, tag]) => [id, /\sdisabled(?=[\s>])/.test(tag!)]), [['muse-index-btn', false], ['muse-library-refresh', false]]);
         for (const role of ['viewer', 'operator'] as const) {
             const s = state(role);
             for (const c of s.c) {
@@ -195,6 +212,7 @@ describe('Meta vision card: the shell', () => {
                 assert.ok(cap ? /\sreadonly(?=[\s>])/.test(c) : /\sdisabled(?=[\s>])/.test(c), `${role}: locked: ${c}`);
             }
         }
+        for (const role of ['viewer', 'operator'] as const) assert.ok(state(role).lib.every(([, tag]) => /\sdisabled(?=[\s>])/.test(tag!)), `${role}: the library's buttons are locked too`);
         assert.ok(!state('viewer').shell.includes('muse-owner-note'), 'a viewer has the screen\'s own note (ai.readOnly), not this one');
         assert.ok(state('operator').shell.includes('id="muse-owner-note"'), 'an operator is told why');
     });
@@ -789,14 +807,17 @@ describe('Meta vision card: the words', () => {
         'muse.whoEveryone', 'muse.whoDesc', 'muse.whoEveryoneNote', 'muse.whoNobody', 'muse.people', 'muse.add', 'muse.pickerTitle', 'muse.pickerSearch', 'muse.pickerNote',
         'muse.pickerLoading', 'muse.pickerNone', 'muse.pickerNoMatch', 'muse.pickerFailed', 'muse.pickerAdd', 'muse.remove', 'muse.limit', 'muse.cap', 'muse.capDesc',
         'muse.capInvalid', 'muse.spent', 'muse.spentUnknown', 'muse.lessThanCent', 'muse.save', 'muse.saved', 'muse.saveFailed', 'muse.loadErrorTitle', 'muse.loadErrorHint',
-        'help.link.metaVision',
+        'help.link.metaVision', 'help.link.videoMemory',
     ];
 
     it('has every string in both languages, with the same placeholders, and none of the words the product never says', () => {
         const en = open({ lang: 'en', skipAdopt: true }).h.I18N.strings.en as Record<string, string>;
         const ar = open({ lang: 'ar', skipAdopt: true }).h.I18N.strings.ar as Record<string, string>;
         const holes = (value: string): string[] => [...value.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
-        for (const key of KEYS) {
+        // The library's strings are all of `muse.lib.*`: whatever is in one language is in the other, so the list cannot fall behind the dictionary.
+        const library = [...new Set([...Object.keys(en), ...Object.keys(ar)].filter((k) => k.startsWith('muse.lib.')))];
+        assert.ok(library.length > 60, 'the library has its words');
+        for (const key of [...KEYS, ...library]) {
             assert.ok(typeof en[key] === 'string' && en[key]!.length > 0, `en ${key}`);
             assert.ok(typeof ar[key] === 'string' && ar[key]!.length > 0, `ar ${key}`);
             assert.deepEqual(holes(en[key]!), holes(ar[key]!), `${key}: the same placeholders in both languages`);
@@ -874,8 +895,8 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(body, /a short description, or the words of a voice note/);
         assert.match(body, /Messenger and WhatsApp are not read/);
         assert.match(body, /Standard models/);
-        assert.match(body, /coming soon/);
-        assert.match(body, /only saves your choice/);
+        assert.doesNotMatch(body, /coming soon/, 'every switch is live');
+        assert.doesNotMatch(body, /only saves your choice/);
     });
 
     it('says in English what a voice note is: who writes it down, how long it may be, what is asked again, that it has its own switch and what it costs', () => {
@@ -887,10 +908,10 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(row, /asked to send it again/);
         assert.match(row, /the switch is its own/);
         assert.match(row, /\$0\.18 per hour of audio/);
-        // The switches row no longer says voice is to come, and still says so for video memory alone.
-        assert.match(body, /\*\*Answer photos, reels and story mentions\*\* and \*\*Voice notes\*\* work today/);
-        assert.match(body, /\*\*Video memory\*\* is coming soon/);
-        assert.doesNotMatch(body, /Voice notes\*\* and \*\*Video memory\*\* are coming soon/);
+        // The switches row says all three work today, and points to how video memory works.
+        assert.match(body, /\*\*Answer photos, reels and story mentions\*\*, \*\*Voice notes\*\* and \*\*Video memory\*\* all work today/);
+        assert.match(body, /\[\[ai-usage#video-memory\]\]/);
+        assert.doesNotMatch(body, /is coming soon/);
     });
 
     it('says the same in Arabic, and in the Help Center\'s own voice, without the words the product never says', () => {
@@ -898,7 +919,7 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(body, /ما نحفظ الملف/);
         assert.match(body, /مدة الرسالة تصل إلى 3 دقائق/);
         assert.match(body, /0\.18 دولار لكل ساعة صوت/);
-        assert.match(body, /\*\*الرسائل الصوتية\*\* يشتغلون اليوم/);
+        assert.match(body, /\*\*الرسائل الصوتية\*\* و\*\*ذاكرة الفيديو\*\* كلها تشتغل اليوم/);
         assert.match(body, /ماسنجر وواتساب/);
         assert.match(body, /النماذج القياسية/);
         for (const banned of [/بوت/, /ذكي/, /\bbots?\b/i, /instant/i]) {

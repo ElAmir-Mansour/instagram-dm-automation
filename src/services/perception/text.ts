@@ -49,6 +49,15 @@ export function oneLine(value: unknown, max: number): string {
     return parts.length > max ? `${parts.slice(0, max - 1).join('').trimEnd()}…` : clean;
 }
 
+/**
+ * A second as the "m:ss" a person reads on a video's timeline: 13 is "0:13", 65 is "1:05", 600 is "10:00". Whole seconds, rounded down; a number that is not a
+ * positive one is "0:00". Recall says where to watch from in these words (`recall.ts`), and the decision trace repeats them (`trace.ts`).
+ */
+export function watchFrom(seconds: number): string {
+    const whole = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
 /** What `perceivedText` reads of a perception. */
 export type PerceivedTextInput = Pick<Perception, 'seen' | 'transcript'>;
 

@@ -79,3 +79,53 @@ describe('traceReason', () => {
         assert.equal(REASON_MAX_CHARS, 200);
     });
 });
+
+describe('traceReason when the owner\'s video library was looked into (recall)', () => {
+    const recalled = (over: Partial<TraceInput> = {}): TraceInput => ({ effect: 'reply', action: 'reply', handoffReason: 'none', intent: 'info', ...over });
+
+    it('says a video was found and the second it points to, beginning the line when nothing was read', () => {
+        assert.equal(traceReason(recalled({ recall: { found: true, second: 13 } })), 'Found a video in the library (from 0:13); answered from the account\'s own information, because they want to know more.');
+        assert.equal(traceReason(recalled({ recall: { found: true, second: 65 }, action: 'send_link', intent: 'price' })), 'Found a video in the library (from 1:05); sent the offer\'s link, because they asked about the price.');
+    });
+
+    it('leaves the second out when the video starts the answer', () => {
+        assert.equal(traceReason(recalled({ recall: { found: true, second: 0 } })), 'Found a video in the library; answered from the account\'s own information, because they want to know more.');
+    });
+
+    it('says plainly when the library had nothing on it', () => {
+        assert.equal(traceReason(recalled({ recall: { found: false } })), 'Looked in the video library and found nothing on it; answered from the account\'s own information, because they want to know more.');
+    });
+
+    it('says what was read first and what the library gave second, as they happened', () => {
+        assert.equal(traceReason({ ...recalled({ recall: { found: true, second: 13 } }), kind: 'story_reply' }), 'Read a reply to the account\'s story, and found a video in the library (from 0:13); answered from the account\'s own information, because they want to know more.');
+        assert.equal(traceReason({ ...recalled({ recall: { found: false } }), kind: 'share', read: 'Saw the cover of a shared post' }), 'Saw the cover of a shared post, and looked in the video library and found nothing on it; answered from the account\'s own information, because they want to know more.');
+    });
+
+    it('is the same line for the other endings: a hand-off, a calm word, a stop, and a model that could not answer', () => {
+        const r = { recall: { found: true, second: 7 } } as const;
+        assert.equal(traceReason(recalled({ ...r, effect: 'handoff', action: 'handoff', handoffReason: 'wants_human' })), 'Found a video in the library (from 0:07); handed the chat to a person, because they asked for a person.');
+        assert.equal(traceReason(recalled({ ...r, effect: 'calm' })), 'Found a video in the library (from 0:07); sent one calm line.');
+        assert.equal(traceReason(recalled({ ...r, effect: 'pause' })), 'Found a video in the library (from 0:07); stopped replying.');
+        assert.equal(traceReason(recalled({ ...r, modelFailed: true })), 'Found a video in the library (from 0:07), but the model could not answer: a person was told.');
+    });
+
+    it('is one line within the limit for every kind (or none), action, intent and hand-off reason, and its only digits are the second it points to', () => {
+        for (const kind of [undefined, ...PERCEIVABLE_KINDS]) {
+            for (const recall of [{ found: true, second: 3725 }, { found: false }] as const) {
+                for (const action of NEXT_ACTIONS) {
+                    for (const intent of [...INTENTS, null]) {
+                        for (const handoffReason of HANDOFF_REASONS) {
+                            for (const effect of ['reply', 'handoff', 'close', 'calm', 'pause'] as const) {
+                                const line = traceReason({ ...(kind ? { kind } : {}), recall, effect, action, intent, handoffReason });
+                                assert.ok(line.length <= REASON_MAX_CHARS, line);
+                                assert.ok(!/\n/.test(line) && /\.$/.test(line), line);
+                                assert.ok(!/["«»]/.test(line), line);
+                                assert.equal(/\d/.test(line.replace(/\(from \d+:\d\d\)/, '')), false, line);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+});

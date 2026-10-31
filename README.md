@@ -1,5 +1,62 @@
 # AutoReply Pro
 
+## Meta AI hackathon 2026: an Arabic sales agent that sees, hears and remembers, on Meta Muse
+
+> **Meta Global AI Developer Hackathon 2026, Startup track.** Built Oct 26 – Nov 4 on top of AutoReply Pro, which has run
+> the creator's own Instagram and Facebook since May 2026. Everything new is in the pull requests labelled
+> [`hackathon`](https://github.com/ElAmir-Mansour/instagram-dm-automation/pulls?q=is%3Apr+label%3Ahackathon).
+
+**Most buyers don't type: they share a reel, send a screenshot or record a voice note.** On the creator's own Instagram,
+36% of DMs in the 30 days before the hackathon had no words at all (46 of 126). Each one got the same fixed line, or no
+reply.
+
+During the hackathon the agent got eyes, ears and memory, all on Meta's models:
+
+- **It sees.** It watches a shared reel (the creator's own as the real video; anyone else's by its caption), story
+  mentions, photos and screenshots.
+- **It hears.** It writes down Egyptian and Gulf voice notes, with the creator's course names as hints, and answers the
+  words like typed ones.
+- **It remembers.** It has watched the creator's reels and recorded what was shown and said, so "do you have a video about
+  X?" gets the right reel and the second to watch from.
+- **It decides, and shows why.** It answers, recommends, sends the right offer link or hands the chat to the creator. The
+  inbox shows **saw → decided → why** under every reply.
+
+| Meta model | What it does here | Code |
+|---|---|---|
+| **Muse Spark 1.3** | Reads what people send; picks the right reel from the library; writes replies when the DM route is set to it | `src/services/perception/`, `src/services/dmSales/` |
+| **Muse Voice Transcribe 1.0** | Voice notes → text (Arabic language bias, product names as keywords) | `src/services/llm/metaAsr.ts` |
+| **Muse Spark Open** (open weights, on Baseten) | Watches each of the creator's reels once to build the video library | `src/services/perception/reelIndex.ts` |
+
+```mermaid
+flowchart LR
+  DM[Instagram DM<br/>reel · photo · story mention · voice note] --> W[Webhook → job queue]
+  W --> G{Gate<br/>switch · allow-list · daily cap}
+  G -->|off| A[Today's reply, unchanged]
+  G -->|on| P[See: Muse Spark<br/>Hear: Muse Voice Transcribe]
+  P --> T[Sales turn<br/>+ recall from the video library]
+  L[(Video library<br/>built by Muse Spark Open)] --> T
+  T --> R[Reply · link · or hand-off]
+  T --> X[Inbox: saw → decided → why]
+```
+
+**Measured, not claimed** (2026-10-31):
+
+| Check | Result |
+|---|---|
+| The sales agent's 15 scripted conversations, hard checks only (`npx tsx scripts/eval-dm-sales.mts --provider meta --model muse-spark-1.3 --no-judge`) | **Muse Spark 1.3: 11 of 15 conversations, 146 of 152 checks (96%)**, p50 5.8 s, about $0.007 a reply. The previous model (Groq `openai/gpt-oss-20b`): 4 of 15, 66 of 83 checks (80%) |
+| A 37 s Arabic reel through the video library's prompt on **Muse Spark Open (Baseten)** | 42 s: 12 topics, 15 on-screen notes, 8 timestamped moments |
+| The same reel, a price screenshot and a garbled screenshot through the perception prompt (Muse Spark 1.3) | Read correctly in 11 s, 5 s and 6.5 s; the garbled one is marked unreadable, so the person is asked to resend |
+| `ffmpeg` inside the Vercel function, for voice notes | AAC → 24 kHz WAV in 11–19 ms |
+
+**Privacy by design:**
+- Only Meta's Standard models, which according to Meta don't train on what they receive.
+- Media files are never stored; only a short description or a transcript is kept with the message.
+- Only the creator's own public reels go to Baseten.
+- Every feature sits behind an owner switch, a sender allow-list and a daily spending cap, and is off by default. See
+  [`/privacy`](https://msg-response-auto.vercel.app/privacy).
+
+---
+
 AutoReply Pro automates a creator's Instagram, Facebook, TikTok, YouTube and WhatsApp. It turns comments into DMs, answers messages with AI, publishes scheduled content, makes content in a Studio, measures growth and runs Meta ads. One deployment can serve several workspaces (tenants), each with its own accounts, people and settings.
 
 Express 5, TypeScript and Postgres, on Vercel. Live: <https://msg-response-auto.vercel.app>. The dashboard is at `/dashboard`, in Arabic and English.
