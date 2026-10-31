@@ -544,7 +544,7 @@ describe('recallForTurn: no match, and not a request', () => {
 
     it('a message the model says is not a request for content adds nothing to the turn, however many reels the library has', async () => {
         answerOn(world, 'api.meta.ai', says({ is_content_request: false, match: 1, second: 5, why: 'a price question' }));
-        assert.equal(await ask('how much is the video course?'), null);
+        assert.equal(await ask('how much is the video bundle?'), null);
         assert.equal(events('recall.not_a_request').length, 1);
     });
 
