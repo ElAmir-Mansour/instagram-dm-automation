@@ -10,7 +10,7 @@
  */
 import type { CliDeps } from './cli.js';
 import { adaptRecall, type RecallModule } from './memory.js';
-import { loadOptional, type Optional } from './optional.js';
+import { loadOptional } from './optional.js';
 import { adaptVoice, decoderMissing, type AsrModule, type KeywordsModule, type VoiceModule } from './voice.js';
 
 /** Where each module lives, from the repository root. The voice module has been called two things; the first of these that is in the checkout is used. */
@@ -25,8 +25,6 @@ export interface LoaderIo {
     exists?: (file: string) => boolean;
     importer?: (url: string) => Promise<unknown>;
 }
-
-const absent = <T>(why: string): Optional<T> => ({ present: false, why });
 
 /** The voice module, wired to the benchmark's Meta key, or why it is not there. */
 export function voiceLoader(root: string, io: LoaderIo = {}): NonNullable<CliDeps['loadVoice']> {
@@ -47,7 +45,7 @@ export function voiceLoader(root: string, io: LoaderIo = {}): NonNullable<CliDep
             const keywords = names.present && typeof names.module.voiceKeywords === 'function' ? { keywords: names.module as KeywordsModule } : {};
             return { present: true, value: adaptVoice(voice.module, asr.module, { apiKey: keys.meta!, ...keywords }) };
         }
-        return absent(`${VOICE_FILES[0]}.ts is not in this checkout yet (the voice notes)`);
+        return { present: false, why: `${VOICE_FILES[0]}.ts is not in this checkout yet (the voice notes)` };
     };
 }
 

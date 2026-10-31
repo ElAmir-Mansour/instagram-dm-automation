@@ -20,6 +20,7 @@ import {
     accepts, ACTION_WORDS, draftTurn, emptyInvented, expectedWords, finishDrafted, judgeUnderstood, oneLine, spent, type ArmDeps,
 } from './arms.js';
 import type { Perception } from '../types.js';
+import type { VoiceDeps } from '../voice.js';
 import { scrubKey } from './caller.js';
 import type { FetchLike } from '../../llm/types.js';
 import type { LoadedMedia } from './cases.js';
@@ -115,22 +116,12 @@ export type VoiceModuleResult =
     | { ok: true; status: 'ok'; transcript: string; usd: number; ms: number }
     | { ok: false; status: 'unreadable' | 'skipped' | 'failed'; reason: string; detail?: string; transcript?: string; usd: number; ms: number };
 
-/** What the module's decoder answers (`TranscodeResult`): a WAV, or why not. */
-export type DecodeResult = { ok: true; wav: Uint8Array } | { ok: false; reason: string; detail?: string };
-
 /**
- * The shape of `src/services/perception/voice.ts`: its steps are replaceable one by one (`VoiceDeps`), which is how the arm reaches it. `voice.test.ts` hands the module itself to
- * `adaptVoice`, so a change to its signature is a type error there before it is a wrong number in a report.
+ * The shape of `src/services/perception/voice.ts` as the arm uses it. The steps it can be given are the module's OWN type (`VoiceDeps`), imported and not copied, so a change to what
+ * a step takes or answers is a type error in `voice.test.ts`, where the module itself is handed to `adaptVoice`, before it is a wrong number in a report.
  */
 export interface VoiceModule {
-    transcribeVoice(
-        input: { creatorId: string; link: string | null | undefined; keywords?: readonly string[]; deadlineAt?: number },
-        deps?: {
-            download?: (link: string | null | undefined, options: { connectMs: number; totalMs: number }) => Promise<{ ok: true; media: { mediaKind: 'audio'; mime: string; bytes: Buffer; host: string; ms: number } }>;
-            decode?: (bytes: Uint8Array, options: { timeoutMs: number }) => Promise<DecodeResult>;
-            transcribe?: (args: { creatorId: string; wav: Uint8Array; keywords?: readonly string[]; timeoutMs?: number }) => Promise<{ transcript: string; durationMs: number; model: string; sessionId?: string; usd: number; usageId: string; elapsedMs: number }>;
-        },
-    ): Promise<VoiceModuleResult>;
+    transcribeVoice(input: { creatorId: string; link: string | null | undefined; keywords?: readonly string[]; deadlineAt?: number }, deps?: VoiceDeps): Promise<VoiceModuleResult>;
 }
 
 /** The speech client, `src/services/llm/metaAsr.ts`: no database and no settings, the key an argument. */
@@ -149,7 +140,7 @@ export interface KeywordsModule {
  * `transcribe` is `callMetaAsr` with the benchmark's key and the deadline the module cut for that call, priced as `transcribeWithMeta` prices it (`asrUsd` of the audio Meta says it
  * processed), and no row is written anywhere. The module's own decoder (unless a test hands in another), its two-word rule and its one retry are what run.
  */
-export function adaptVoice(mod: VoiceModule, asr: AsrModule, o: { apiKey: string; fetchImpl?: FetchLike; keywords?: KeywordsModule; decode?: (bytes: Uint8Array, options: { timeoutMs: number }) => Promise<DecodeResult> }): TranscribeVoice {
+export function adaptVoice(mod: VoiceModule, asr: AsrModule, o: { apiKey: string; fetchImpl?: FetchLike; keywords?: KeywordsModule; decode?: VoiceDeps['decode'] }): TranscribeVoice {
     return async (input) => {
         const result = await mod.transcribeVoice(
             { creatorId: 'benchmark-creator', link: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=benchmark', keywords: o.keywords ? o.keywords.voiceKeywords(input.source) : input.keywords },
