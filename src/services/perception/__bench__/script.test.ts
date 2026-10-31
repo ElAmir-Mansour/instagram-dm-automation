@@ -168,8 +168,9 @@ describe('it sends no message and reads no tenant', () => {
             assert.doesNotMatch(code, /import \* as \w+ from 'node:fs|import fs from 'node:fs|require\('node:fs'\)/, `${file} takes the whole of node:fs`);
             if (file !== 'cli.ts') assert.doesNotMatch(code, /\blog\(/, `${file} writes a log line`);
         }
-        // The one thing read from the environment is the home folder, to print a path in a public file without the user's name in it. No key, no database address.
-        assert.deepEqual(environment, ['cases.ts:HOME']);
+        // Nothing below the command line reads the environment: the home folder, to print a path in a public file without a user name in it, comes from node:os. The application reads
+        // its environment in the places `.env.example` names, and the benchmark has none of its own to name.
+        assert.deepEqual(environment, []);
     });
 
     it('names no field a log line would blank (a field whose name holds secret, token, password or signature)', () => {

@@ -9,6 +9,7 @@
  * with the reason, and never one that silently passes.
  */
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { parseExpect, Problems } from '../../dmSales/__evals__/cases.js';
 import { resolveFixture } from '../../dmSales/__evals__/fixtures.js';
@@ -377,7 +378,7 @@ export async function loadMedia(c: MuseCase, dir: string, io: MediaIo): Promise<
 
 /** A path as it may be printed in a public report: the home directory is `~` wherever it appears, so no user name is in it. */
 export function displayPath(p: string, home?: string): string {
-    const h = home ?? process.env.HOME ?? '';
+    const h = home ?? os.homedir();
     return h.length > 1 ? p.split(h).join('~') : p;
 }
 

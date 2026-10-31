@@ -334,11 +334,11 @@ describe('scoring one drafted turn', () => {
 
     it('is a miss, with the check\'s own line, when the offer is the wrong one even though the action is a recommendation', () => {
         const c = caseOf('image-price');
-        const t = turn({ checks: [{ name: 'offer_id', pass: false, detail: 'got course-golang, expected one of main, none' }] });
+        const t = turn({ checks: [{ name: 'offer_id', pass: false, detail: 'got offer-golang, expected one of main, none' }] });
         const s = scoreTurn(c, 'meta', t, fx);
         assert.equal(s.action, 'recommend');
         assert.equal(s.actionOk, false);
-        assert.equal(s.actionWhy, 'offer_id: got course-golang, expected one of main, none');
+        assert.equal(s.actionWhy, 'offer_id: got offer-golang, expected one of main, none');
         assert.deepEqual(s.failures.map((f) => f.what), ['action']);
     });
 
