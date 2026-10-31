@@ -884,8 +884,10 @@ describe('Meta vision card: the Help section it links to', () => {
             }
             assert.ok(body.includes(lang === 'en' ? `from 0 to ${MUSE_DAILY_USD_MAX}` : `من 0 إلى ${MUSE_DAILY_USD_MAX}`), `${lang}: the cap's bounds are the server's`);
             const terms = (section.body[lang] as Json[]).find((b) => b && Array.isArray(b.dl))!.dl.map((row: string[]) => row[0]);
-            assert.equal(terms.length, 7, 'the switches, voice notes, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
+            assert.equal(terms.length, 8, 'the switches, voice notes, when they ask first, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
             assert.ok(body.includes(`**${labels['muse.voice']}**`) && terms.includes(lang === 'en' ? 'Voice notes' : 'الرسائل الصوتية'), `${lang}: voice notes have a row of their own`);
+            // senses.ts: asked whether a voice note or a photo is fine, the assistant says yes, and only where the gate would read it.
+            assert.ok(terms.includes(lang === 'en' ? 'When they ask first' : 'إذا سألوا قبل ما يرسلوا'), `${lang}: what it says when asked before anything is sent`);
         });
     }
 

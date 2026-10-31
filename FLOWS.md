@@ -1019,6 +1019,18 @@ Behind the same settings as §2.6h, with the **`memory`** switch (`muse.switches
 - `mark_seen` and `typing_on` start **before** the library is read for such a turn (once: `startSeenAndTyping`), so the person sees the reply being written while the one extra call is made. A turn with no recall starts them where it always did.
 - **A failure never costs the turn**: a gate that throws, a library that cannot be read, a model that fails are all `recall.failed` and the customer is answered as if recall had not run.
 
+### 2.6j — The agent says what it can take in (hackathon)
+
+Behind the same switches and allow-list as §2.6h. **Why it exists:** the sales prompt says nothing about attachments, so the model knows only what the conversation shows, and a conversation that began before the owner's switches were on shows the kit's own line, "I can't open photos, voice notes or videos here" (§2.6h's attachment line). On 2026-10-31 the model repeated it to an allowed sender who asked whether a voice note was fine, when a voice note would have been heard.
+
+**Whose turn it is for:** the same plain conditions as recall (§2.6i): an Instagram DM in the customer's own words, not a tapped button, not a model's description of a photo. `sensesForTurn` (`src/services/perception/senses.ts`), step 4c of `runSalesTurn`:
+
+1. **A cue** (`sensesCues`, pure): a voice word (صوت، فويس، ڤويس، ريكورد، أوديو; voice, audio, record, recording, voicenote, voicemail) and/or a picture word (صورة، صورت، الصور، سكرين، لقطة شاشة; photo, picture, pic, image, screenshot, screen shot), in the text folded by `normalizeArabic`. Never the bare «صور» (inside «تصوير», photography). Video and reel words are left to recall. **A message without a cue reaches no setting**, so every other DM is the same turn call for call.
+2. **The gate, once per sense named** (`gatePerception`, as the DM's own perception asks it): `voice` with the kind `audio`, `dm_media` with `image`. The switch, the sender on the allow-list, a route that can answer, the day's cap: "send it" is only said when the next one would be read.
+3. **The line** (`SENSES_FACTS`, English like the facts block's other lines): what is heard or read, to say yes if they ask whether they can send one, and that an older line of this chat saying otherwise is out of date. It is the facts block's **`senses`**, said last (after `video`), in front of the customer's message, **not in the cached system text**. No number, price or link in it, so nothing is added to the guard's facts or allow-list, and `ai_meta` is unchanged.
+
+**A failure never costs the turn**: a gate that throws is `senses.failed` and the turn goes on without the line. A line that was told logs `senses.told` (`senses`: `voice`, `dm_media` or both).
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:571`** — `generateAiResponse(conversationId, dmPromptText(dm),
@@ -4378,6 +4390,7 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 2 | a read that came to nothing (the link expired, too large, the model refused or timed out, or could not read it with confidence) — `perceiveDm`, `perceive` | `perception.stored` (`status`, `reason`), `perception.call_failed` | `messages.perception` = `{status: 'failed' \| 'unreadable', reason}`; the usual line, or the kit's "send it again" for what a person sent; a retry reuses it and asks Meta nothing |
 | 2 | Meta refused the key or the account has no credit — `tellOwnerProviderTrouble` | `perception.provider_notice` | the owner is told once a day (`app_settings` `muse.provider_notice.<tenant>`); every word-less message gets the usual line until it is fixed |
 | 2 | **Muse did not recall a video** (§2.6i): the `memory` switch is off, the sender is not on the allow-list, no Meta route can answer `recall`, or the day's cap is reached — `recallForTurn`, `gatePerception` | `perception.skipped:<reason>` (`capability: memory`) | no: the turn goes on with no video line and is today's |
+| 2 | **the agent was not told it can hear or see** (§2.6j): the message had no voice or picture word, or the gate refused (switch off, sender not allowed, no route, the day's cap) — `sensesForTurn`, `gatePerception` | `perception.skipped:<reason>` (`capability`: `voice` / `dm_media`), `senses.failed` | no: the turn goes on with no `senses` line and is today's |
 | 2 | recall asked and had nothing to add — `recallForTurn` | `recall.empty_library` (nothing watched yet, or no reel with a link), `recall.not_a_request` (the model said it was not asking for content), `recall.no_match` (the reply says there is no video on it yet, with no link) | no: only a no-match changes the turn, by one honest line |
 | 2 | recall's model failed: a refused key, no credit, a 429, a timeout, an answer that was no use twice, or the step ran out of time — `askLibrary` | `recall.call_failed`, `recall.bad_answer`, `recall.out_of_time`, `recall.failed` (`outcome`) | no: the customer is answered as if recall had not run; the guard still takes out any library permalink the model writes |
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
