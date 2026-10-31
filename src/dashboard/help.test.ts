@@ -656,6 +656,7 @@ describe('Help Center — contextual links', () => {
             'pages/ai_settings.js → dm-assistant',
             'pages/ai_settings.js → ai-usage',
             'pages/ai_settings.js → ai-usage#meta-vision',
+            'pages/ai_settings.js → ai-usage#video-memory',
             'pages/ice_breakers.js → dm-assistant#ice-breakers',
             'pages/whatsapp_card.js → whatsapp',
             'pages/meta_connect.js → connect-meta',

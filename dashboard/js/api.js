@@ -546,6 +546,13 @@ const API = {
     saveMuseSettings: (data) => API.request('/settings/ai/muse', { method: 'POST', body: JSON.stringify(data) }),
     // The people that card offers: the inbox's own list of threads (`GET /conversations`) at its page size, the newest 100. The card keeps the Instagram ones.
     getRecentConversations: () => API.request('/conversations?limit=100'),
+    // The card's video library (docs/specs/005-muse-sees T057): what the agent remembers of each reel the owner published. All four are the OWNER's, reads included. The list is the
+    // only progress there is (a reel is `pending` until it has been watched), so the card asks for it again while one waits. `index` queues every reel without notes; `:id/index`
+    // queues one again. Both answer 202 and spend a little of the daily cap as each reel is watched.
+    getMuseLibrary: () => API.request('/settings/ai/muse/library'),
+    getMuseReel: (id) => API.request(`/settings/ai/muse/library/${encodeURIComponent(id)}`),
+    indexMuseLibrary: () => API.request('/settings/ai/muse/library/index', { method: 'POST' }),
+    reindexMuseReel: (id) => API.request(`/settings/ai/muse/library/${encodeURIComponent(id)}/index`, { method: 'POST' }),
 
     // ─── Carousel Studio (STUDIO.md §4) ─────────────────────────────────────
     // The worker on the Mac does the slow parts (indexing, rendering); these

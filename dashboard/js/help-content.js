@@ -5664,8 +5664,8 @@ const HelpContent = {
             icon: 'bot',
             title: { ar: 'استخدام الذكاء الاصطناعي وتكلفته', en: 'AI usage and costs' },
             summary: {
-                ar: 'وين يستخدم أوتوريبلاي برو Gemini، وحدود الاستخدام، وليش تفعيل الفوترة يفرق، وما يكلّفه Muse من Meta.',
-                en: 'Where AutoReply Pro uses Gemini, the usage limits, why turning on billing matters, and what Meta’s Muse models cost.',
+                ar: 'وين يستخدم أوتوريبلاي برو Gemini، وحدود الاستخدام، وليش تفعيل الفوترة يفرق، وما يكلّفه Muse من Meta، وكيف تشاهد ذاكرة الفيديو ريلزك.',
+                en: 'Where AutoReply Pro uses Gemini, the usage limits, why turning on billing matters, what Meta’s Muse models cost, and how the video memory watches your reels.',
             },
             related: ['dm-assistant', 'troubleshooting', 'worker', 'create'],
             sections: [
@@ -5782,7 +5782,7 @@ const HelpContent = {
                         ar: [
                             '**رؤية ميتا** تخلّي مساعد المبيعات يقرأ اللي يرسله لك الناس على إنستغرام، بدل السطر الثابت الواحد اللي ياخذونه اليوم: صورة أو لقطة شاشة، أو ريل أو منشور مُشارَك، أو ردّ على قصتك، أو قصة يشيرون فيها لك، أو رسالة صوتية. نموذج Muse من ميتا يشوف الصورة أو الفيديو ويوصفه، ونموذج الكلام من ميتا يكتب الرسالة الصوتية نصاً، والمساعد يرد من عروضك، و**الرسائل** تعرض تحت الرسالة وش شاف أو وش سمع، وتحت الرد وش قرّر وليش. هي تجريبية ومتوقفة لين تشغّلها، من **مساعد الرسائل** ← **رؤية ميتا**.',
                             { dl: [
-                                ['المفاتيح', 'كل مفتاح مستقل. **الردّ على الصور والريلز والإشارات في القصص** و**الرسائل الصوتية** يشتغلون اليوم. أما **ذاكرة الفيديو** فقريباً: تقدر تشغّلها الحين، لكن هذا يحفظ اختيارك بس، وتبدأ لما تصدر.'],
+                                ['المفاتيح', 'كل مفتاح مستقل. **الردّ على الصور والريلز والإشارات في القصص** و**الرسائل الصوتية** و**ذاكرة الفيديو** كلها تشتغل اليوم، وشرح ذاكرة الفيديو في [[ai-usage#video-memory]].'],
                                 ['الرسائل الصوتية', 'نموذج الكلام من ميتا يكتب الرسالة الصوتية نصاً (عربي وإنجليزي)، والمساعد يرد على الكلام مثل الرسالة المكتوبة: استرجاع أو شكوى تُقال بالصوت تُقرأ مثل المكتوبة. وأسماء عروضك وعلامتك تروح مع الصوت كتلميحات، عشان تنكتب مثل ما تكتبها أنت. مدة الرسالة تصل إلى 3 دقائق. وإذا ما انفهمت منها كلمات يُطلب من الشخص يرسلها مرة ثانية، وإذا ما انسمعت أبداً (طويلة جداً، أو تالفة، أو الخدمة واقفة) ياخذ السطر المعتاد، و**الرسائل** تقول ليش. وتنطبق قائمة الأشخاص نفسها والحد اليومي نفسه، لكن المفتاح مستقل. وتكلّف 0.18 دولار لكل ساعة صوت: الدقيقة تقريباً ثلث سنت.'],
                                 ['من يُجاب عنهم', 'اختر **هؤلاء الأشخاص فقط** واضغط **أضف شخصاً**: تختار من محادثات إنستغرام الأخيرة بالاسم أو اسم المستخدم اللي تعرضه **الرسائل**، ويبقى أي أحد ثاني على الردود المعتادة. واختر **الجميع** لما تطمئن، وبعدها كل من يراسل حسابك على إنستغرام ممكن يُقرأ اللي يرسله.'],
                                 ['الحد اليومي', '**الحد اليومي (بالدولار)** هو أقصى ما تصرفه في اليوم، من 0 إلى 50 (من منتصف الليل لمنتصفه بتوقيت UTC). والبطاقة تعرض كم انصرف اليوم. إذا وصل الحد توقفت لين اليوم التالي، وتاخذ هالرسائل السطر الثابت المعتاد، ويوصلك تنبيه مرة وحدة. والصفر يخليها متوقفة.'],
@@ -5796,7 +5796,7 @@ const HelpContent = {
                         en: [
                             '**Meta vision** lets the sales assistant read what people send you on Instagram, instead of giving them the one fixed line they get today: a photo or screenshot, a shared reel or post, a reply to your story, a story that mentions you, or a voice note. Meta’s Muse model looks at a picture or video and describes it, Meta’s speech model writes a voice note down, the assistant answers from your offers, and the **Inbox** shows under the message what it saw or heard, and under the reply what it decided and why. It is in beta and off until you switch it on, in **DM assistant** → **Meta vision**.',
                             { dl: [
-                                ['The switches', 'Each one is separate. **Answer photos, reels and story mentions** and **Voice notes** work today. **Video memory** is coming soon: you can switch it on now, but that only saves your choice, and it starts working when it ships.'],
+                                ['The switches', 'Each one is separate. **Answer photos, reels and story mentions**, **Voice notes** and **Video memory** all work today, and how **Video memory** works is in [[ai-usage#video-memory]].'],
                                 ['Voice notes', 'Meta’s speech model writes a voice note down (Arabic and English), and the assistant answers the words like a message that was typed: a refund or a complaint said aloud is read like one written. The names of your offers and your brand go with the audio as hints, so they are spelled as you spell them. A note can run up to 3 minutes. When no words can be made out, the person is asked to send it again; when it cannot be heard at all (too long, damaged, or the service is down) they get the usual line, and the **Inbox** says why. The same people list and the same daily cap apply, but the switch is its own. It costs $0.18 per hour of audio: a minute is about a third of a cent.'],
                                 ['Who it answers', 'Choose **Only these people** and press **Add a person**: you pick from your recent Instagram conversations, by the name or username the **Inbox** shows, and anyone else keeps getting today’s replies. Choose **Everyone** when you are happy with it, and every person who messages your Instagram account can have what they send read.'],
                                 ['The daily cap', '**Daily cap (USD)** is the most it may spend in a day, from 0 to 50 (UTC midnight to midnight). The card shows what was spent today. When the cap is reached it stops until the next day, those messages get the usual fixed line, and you are told once. 0 keeps it off.'],
@@ -5806,6 +5806,38 @@ const HelpContent = {
                             ] },
                             { tip: 'Start with **Only these people** and your own test accounts: send a reel and a screenshot from one, read the **Inbox**, and only then choose **Everyone**. Press **Save Meta vision** after any change: it has its own button, apart from the assistant’s above it.' },
                             'When it cannot read something with confidence it does not guess: the person gets the usual line, or is asked to send it again, and the **Inbox** says what happened, honestly: unreadable, expired, too large or skipped, and why.',
+                        ],
+                    },
+                },
+                {
+                    id: 'video-memory',
+                    title: { ar: 'ذاكرة الفيديو (تجريبية)', en: 'Video memory (beta)' },
+                    body: {
+                        ar: [
+                            '**ذاكرة الفيديو** تخلّي المساعد يرد على «عندك فيديو عن…؟» بالريل المناسب من ريلزك، وبالثانية اللي يبدأ منها المشاهد. أول ما تشغّلها يشاهد نموذج Muse Spark من ميتا كل ريل نشرته مرة وحدة، ويدوّن اللي شافه وسمعه: وش يُقال فيه، وش يظهر على الشاشة (نص، كود، شخصيات)، واللحظات المهمة بثوانيها، والمواضيع. هي تجريبية ومتوقفة لين تشغّلها، من **مساعد الرسائل** ← **رؤية ميتا**.',
+                            { dl: [
+                                ['وش يشاهد', 'ريلزك أنت المنشورة بس، وهي عامة. ولا يدخل فيها شي كتبه متابع: الريل يروح للنموذج مع تعليماتنا له، وما معه رسالة ولا تعليق ولا متابع. ملف الفيديو ما نحتفظ به: يبقى الملاحظات بس، مع رابط الريل وتاريخه.'],
+                                ['من يشاهده', 'Muse Spark من ميتا: النموذج المفتوح اللي يشغّله لنا شريكنا Baseten، أو نموذج ميتا المستضاف عندها، بحسب اختيار مسؤول المنصة. وإذا فشل الأول جُرّب الريل نفسه مرة وحدة على نموذج ميتا المستضاف.'],
+                                ['وش يسوي الرد فيها', 'لما يطلب شخصٌ تسمح له فيديو (يكتب مثل «عندك فيديو عن دوكر؟») يبحث المساعد في المكتبة: ملاحظات المكتبة وكلام الشخص تُرسل لنموذج Muse من ميتا، وهو يختار الريل الوحيد اللي يغطي طلبه. بعدها يعطيه الرد رابط ذاك الريل ويقول من وين يبدأ المشاهدة، مثل «من 0:13»، والريل اللي له نسخة على يوتيوب يربط نسخة يوتيوب عند هذي الثانية. وإذا ما في ريل يغطيه، يقول الرد إنه ما في فيديو عن الموضوع هذا لسا، بدون أي رابط. وما يرسل أبداً رابطاً مو في مكتبتك.'],
+                                ['افهرس ريلزي', 'اضغط **افهرس ريلزي** ليُشاهَد كل ريل نشرته. يشتغل بعد ما تشغّل **ذاكرة الفيديو** وتضغط **احفظ رؤية ميتا**. تُشاهَد الريلز واحداً بعد الآخر، نحو 40 ثانية ونحو 0.02 دولار للريل، يعني نحو 1.50 دولار لسبعين ريل، وتُحسب من **الحد اليومي (بالدولار)**. وكل يوم تُضاف تلقائياً الريلز اللي نشرتها بعد آخر مرة، ما دامت **ذاكرة الفيديو** مشغّلة.'],
+                                ['القائمة', 'تحت **مكتبة الفيديو** في نفس البطاقة ترى ريلزك: **شوهد** أو **في الانتظار** أو **تعذّرت المشاهدة**، وسببها بالكلمات. **التفاصيل** تفتح اللي تتذكره المكتبة عن الريل: عمّ يتحدث، وما يُقال فيه، وما يظهر على الشاشة، واللحظات، والمواضيع، والخطّاف، ووصفاً مقترحاً. **شاهده مرة أخرى** يعيد مشاهدة ريل واحد، و**حدّث** يقرأ القائمة من جديد.'],
+                                ['حدود', 'الريل الأكبر من 35 ميغابايت ما يُشاهَد، والقائمة تقول ذلك. وتُقرأ أحدث 300 منشور فقط. وتعمل في رسائل إنستغرام بس، مثل بقية رؤية ميتا.'],
+                            ] },
+                            { tip: 'شغّل **ذاكرة الفيديو**، واضغط **احفظ رؤية ميتا**، ثم **افهرس ريلزي** وشاهد القائمة تمتلئ. بعدها اسأل من حسابك التجريبي «عندك فيديو عن …؟» واقرأ **الرسائل**: يظهر تحت الرد «تذكّر: فيديو من مكتبتك».' },
+                            'هي تتذكّر اللي شاهدته بس. فموضوع ما في أي ريل من ريلزك ياخذ جواباً صادقاً «ما في فيديو عنه لسا»، ولا يُخمَّن. وإذا وصل الحد اليومي ما يُشاهَد ريل جديد ولا يُقترح فيديو لين اليوم التالي.',
+                        ],
+                        en: [
+                            '**Video memory** lets the assistant answer “do you have a video about…?” with the right one of your reels and the second to watch from. Once you switch it on, Meta’s Muse Spark model watches each reel you published, once, and keeps notes on what it saw and heard: what is said, what is shown on screen (text, code, characters), the key moments with their seconds, and the topics. It is in beta and off until you switch it on, in **DM assistant** → **Meta vision**.',
+                            { dl: [
+                                ['What it watches', 'Only your own published reels, which are public. Nothing a follower wrote is part of it: a reel goes to the model with our instructions for it, and no message, comment or follower goes with it. We do not keep the video file: only the notes, with the reel’s link and date.'],
+                                ['Who watches', 'Meta’s Muse Spark: the open-weights model that our partner Baseten runs for us, or Meta’s own hosted one, whichever the platform administrator chose. If the first one fails, the same reel is tried once on Meta’s hosted model.'],
+                                ['What a reply does with it', 'When someone you allow asks for a video (they write something like “do you have a video about Docker?”), the assistant looks in the library: the library’s notes and what they wrote are sent to Meta’s Muse model, which picks the one reel that covers it. The reply then gives that reel’s link and says where to watch from, like “from 0:13”; a reel that is also on YouTube links its YouTube copy at that second. If no reel covers it, the reply says there is no video on that yet, with no link. It never sends a link that is not in your library.'],
+                                ['Index my reels', 'Press **Index my reels** to have every reel you published watched. It works once **Video memory** is on and saved (press **Save Meta vision**). The reels are watched one after another: about 40 seconds and about $0.02 a reel, so about $1.50 for seventy, counted toward **Daily cap (USD)**. Every day, the reels you published since are added by themselves while **Video memory** is on.'],
+                                ['The list', 'Under **Video library** in the same card you see your reels: **Watched**, **Waiting** or **Could not watch**, with the reason in words. **Details** opens what the library remembers of a reel: what it is about, what is said, what is on screen, the moments, the topics, the hook and a suggested caption. **Watch again** watches one reel again, and **Refresh** reads the list again.'],
+                                ['Limits', 'A reel larger than 35 MB is not watched, and the list says so. Only your 300 newest posts are looked at. It works in Instagram messages only, like the rest of Meta vision.'],
+                            ] },
+                            { tip: 'Switch on **Video memory**, press **Save Meta vision**, then **Index my reels** and watch the list fill. Then ask from your test account “do you have a video about …?” and read the **Inbox**: under the reply it shows “Recalled: a video from your library”.' },
+                            'It remembers what it watched, and only that: a topic that is in none of your reels gets an honest “no video on that yet”, never a guess. When the daily cap is reached, no new reel is watched and no video is suggested until the next day.',
                         ],
                     },
                 },
