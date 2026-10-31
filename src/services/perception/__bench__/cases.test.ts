@@ -214,6 +214,10 @@ describe('selectMuseCases', () => {
 
     it('takes an id or the start of one, comma-separated, in the order of the file; nothing named is all of them', () => {
         assert.deepEqual(selectMuseCases(all, 'story-mention,image-garbled').map((c) => c.id), ['image-garbled', 'story-mention']);
+        // An id is that case alone, even when it is also the start of others; the start of an id that is not one is all that start.
+        assert.deepEqual(selectMuseCases(all, 'image-price').map((c) => c.id), ['image-price']);
+        assert.deepEqual(selectMuseCases(all, 'image-price-').map((c) => c.id), ['image-price-words-ar', 'image-price-words-en', 'image-price-priced', 'image-price-again']);
+        assert.deepEqual(selectMuseCases(all, 'image-price,image-price-').length, 5);
         assert.deepEqual(selectMuseCases(all, 'reel-own').map((c) => c.id), ['reel-own-riyal', 'reel-own-riyal-words-ar', 'reel-own-podcast', 'reel-own-podcast-words-en']);
         for (const spec of [undefined, '', '  ', 'all', 'ALL']) assert.equal(selectMuseCases(all, spec).length, all.length);
     });

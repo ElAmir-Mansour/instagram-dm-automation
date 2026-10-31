@@ -290,6 +290,19 @@ export function spent(deps: ArmDeps, caseId: string): { usd: number; tokensIn: n
 
 export const emptyInvented = (): InventedFacts => ({ draft: [], sent: [] });
 
+/**
+ * A case whose run stopped on an error nobody planned for, as a row that says so: a miss with the error as its one line, and what it had cost before it stopped. The benchmark is paid
+ * for call by call, and one case that throws must not take the results of the cases before it (and their cost) with it. The known ways a call fails (a refused request, a timeout, a
+ * reply that is not the schema) are rows already; this is for the rest.
+ */
+export function crashedResult(arm: ArmId, c: MuseCase, reason: string, deps: Pick<ArmDeps, 'ledger'>, ms: number): ArmCaseResult {
+    const line = oneLine(reason, 200);
+    return {
+        arm, caseId: c.id, status: 'ran', note: null, understood: false, understoodWhy: 'the case stopped on an error before it could be read', action: 'error', actionOk: false, actionWhy: line,
+        seen: null, reply: '', trace: null, invented: emptyInvented(), failures: [{ caseId: c.id, arm, what: 'crashed', reason: line }], ms: Math.round(ms), ...deps.ledger.totalsFor(c.id), judge: null,
+    };
+}
+
 /** The fixed line a hand-off sends: the account's own message when it typed one, else the kit's. What `lineFor` does in the sales turn. */
 export function handoffLine(fx: EvalFixture): string {
     const kit = kitFor(fx.ctx.language).sales;

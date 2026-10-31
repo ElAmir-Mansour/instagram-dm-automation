@@ -24,11 +24,11 @@ import { promptDigest } from '../../dmSales/__evals__/fixtures.js';
 import { JUDGE_EFFORT } from '../../dmSales/__evals__/judge.js';
 import { assertNoLiveFlags, EvalRefusal } from '../../dmSales/__evals__/refusal.js';
 import type { FetchLike } from '../../llm/types.js';
-import { runMetaCase, runTodayCase, type ArmDeps } from './arms.js';
+import { crashedResult, runMetaCase, runTodayCase, type ArmDeps } from './arms.js';
 import { Ledger, makeAiCaller, makeEvalCaller, redactKeys } from './caller.js';
 import { displayPath, loadCasesFile, loadFile, loadMedia, selectMuseCases, type MediaLoad } from './cases.js';
 import { ARM_LABELS, barMet, summarizeArm } from './metrics.js';
-import { parseLibrary, runMemoryArm, summarizeMemory, transcriptOnly, type MemoryResult, type Recall } from './memory.js';
+import { parseLibrary, runMemoryArm, summarizeMemory, transcriptOnly, type LibraryRow, type MemoryResult, type Recall } from './memory.js';
 import { analyse, HOSTED_MODEL, OPEN_MODEL, reelAnalyzer, type AnalysisRun } from './openWeights.js';
 import { renderMarkdown, renderTerminal, type BenchmarkRun } from './report.js';
 import { FakeClock, stubAiCaller, stubJudge, stubSalesCaller, stubTranscribe } from './stub.js';
@@ -49,7 +49,7 @@ export const USAGE = `Muse benchmark: what the sales agent does with what follow
   --env <file>          the .env that holds the key (and, for --settings, DATABASE_URL and TOKEN_ENCRYPTION_KEY). No .env is read unless you name it
   --settings            read the key from Settings instead of the file (a read-only database connection, opened only for that)
   --media-dir <dir>     where the media files are (default: ~/Desktop/Meta hackathon tests/media). No media is in the repository
-  --cases <list>        which cases: ids or starts of ids, comma-separated (default all). --list shows them
+  --cases <list>        which cases, comma-separated (default all): an id is that case alone, anything else is the start of some ids (reel-own, image-price-). --list shows them
   --model <id>          the Muse Spark model for perception and replies (default ${DEFAULT_MODEL}); a -contributor id only for the drawn cases
   --voice               also run the voice notes through the product's transcription (needs src/services/perception/voice.ts: skipped with a note until it lands)
   --memory              also ask the video memory its ten questions of two libraries (needs src/services/perception/recall.ts and --library)
@@ -69,6 +69,25 @@ It calls the live Meta API with your key (about twenty cents a run, a few dollar
 Exit: 0 the bar was met · 1 it ran and the bar was not met · 2 usage, or nothing could run · 3 refused (no key, a model or flag it does not take).`;
 
 class UsageError extends Error {}
+
+/**
+ * One case of one arm: its result, or, when it stopped on an error nobody planned for, a row that says so (and the error said on stderr, with every key taken out). The known ways a call
+ * fails are rows already, made by the arms; this is for the rest, so that a case that throws does not take the cases before it, and what they cost, with it.
+ */
+export async function guardedCase(
+    arm: ArmId, c: MuseCase, run: () => Promise<ArmCaseResult | null>,
+    o: { ledger: Ledger; say(text: string): void; redact(text: string): string; clock?: () => number },
+): Promise<ArmCaseResult | null> {
+    const clock = o.clock ?? (() => performance.now());
+    const started = clock();
+    try {
+        return await run();
+    } catch (e) {
+        const reason = o.redact(e instanceof Error ? e.message : String(e));
+        o.say(`${c.id} (${arm}) stopped on an error: ${reason}`);
+        return crashedResult(arm, c, reason, { ledger: o.ledger }, clock() - started);
+    }
+}
 
 export interface CliIo {
     out(text: string): void;
@@ -220,6 +239,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     let selected: MuseCase[];
     try {
         options = resolveOptions(flags);
+        if (options.stub && options.out !== null && path.resolve(options.out) === path.resolve(deps.defaultOut)) {
+            throw new UsageError(`--stub never writes to ${displayPath(deps.defaultOut)}: that is where a real run's document goes, and a dry run's canned answers would replace it. Pick another --out.`);
+        }
         parsed = loadCasesFile(deps.casesFile);
         if (flags.has('list')) {
             for (const c of parsed.cases) out(`${c.id.padEnd(28)} ${c.kind.padEnd(14)} ${c.fixture.padEnd(16)} ${c.typed ? 'words' : 'no words'}   ${c.title}`);
@@ -257,6 +279,21 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         err(`--library is for --memory\n\n${USAGE}`);
         return 2;
     }
+    // Everything that can be found wrong for free is found before the first call that costs: a library that is missing or is not a list of rows must not be discovered after the cases ran.
+    let library: LibraryRow[] | null = null;
+    if (options.memory && !options.stub) {
+        if (options.library === null) {
+            err(`--memory needs --library <file>: the reel_analyses rows with status ok, as JSON\n\n${USAGE}`);
+            return 2;
+        }
+        try {
+            const text = deps.readText ? await deps.readText(options.library) : (await io.readFile(options.library)).toString('utf8');
+            library = parseLibrary(JSON.parse(text));
+        } catch (e) {
+            err(`--library ${displayPath(options.library)} cannot be used: ${e instanceof Error ? e.message : String(e)}`);
+            return 2;
+        }
+    }
 
     const outDir = path.resolve(options.out ?? deps.defaultOut);
     const mediaDir = options.mediaDir ?? deps.defaultMediaDir;
@@ -288,10 +325,16 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
             if (loaded.present) transcribe = loaded.value;
             else skippedArms.push({ arm: 'voice', label: ARM_LABELS.voice, why: `${loaded.why}. The voice notes are left out of every arm.` });
         } else if (voiceCases.length > 0) {
-            skippedArms.push({ arm: 'voice', label: ARM_LABELS.voice, why: 'switch it on with --voice (it also needs the P3 module)' });
+            skippedArms.push({ arm: 'voice', label: ARM_LABELS.voice, why: 'not asked for: add --voice to run the voice notes through the product\'s own transcription' });
         }
 
         // ─── The cases ───
+        // The known ways a call fails are rows already (the arms say so); an error nobody planned for is a row too (`guardedCase`).
+        const attempt = async (armId: ArmId, c: MuseCase, run: () => Promise<ArmCaseResult | null>): Promise<void> => {
+            const r = await guardedCase(armId, c, run, { ledger, say: err, redact: (t) => redactKeys(t, keys.meta, keys.anthropic, keys.baseten) });
+            if (r) results.push(r);
+        };
+
         // A dry run sends the bytes nowhere, so it needs no file: the same arms run wherever the repository is, with no media folder.
         const media = { readFile: options.stub ? async () => Buffer.from('dry run: placeholder bytes') : (f: string) => io.readFile(f) };
         for (const c of selected) {
@@ -306,13 +349,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
             const loaded = load ? load.media : null;
             err(`-- ${c.id}`);
             if (isVoice) {
-                results.push(await runVoiceCase(c, loaded!, transcribe!, arm));
-                const today = await runTodayCase(c, arm, 'today_voice');
-                if (today) results.push(today);
+                await attempt('voice', c, () => runVoiceCase(c, loaded!, transcribe!, arm));
+                await attempt('today_voice', c, () => runTodayCase(c, arm, 'today_voice'));
             } else {
-                results.push(await runMetaCase(c, loaded, arm));
-                const today = await runTodayCase(c, arm);
-                if (today) results.push(today);
+                await attempt('meta', c, () => runMetaCase(c, loaded, arm));
+                await attempt('today', c, () => runTodayCase(c, arm));
             }
         }
         if (results.length === 0) {
@@ -323,20 +364,20 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         // ─── The memory arm ───
         let memory: BenchmarkRun['memory'] = null;
         if (options.memory) {
-            const loaded = options.stub ? null : deps.loadRecall ? await deps.loadRecall(ledger) : ({ present: false, why: 'no loader for it' } as const);
-            if (options.stub) skippedArms.push({ arm: 'memory', label: 'Memory', why: 'a dry run has no library to ask' });
-            else if (loaded && !loaded.present) skippedArms.push({ arm: 'memory', label: 'Memory', why: loaded.why });
-            else if (loaded && loaded.present) {
-                if (options.library === null) {
-                    err(`--memory needs --library <file>: the reel_analyses rows with status ok, as JSON\n\n${USAGE}`);
-                    return 2;
+            if (options.stub) {
+                skippedArms.push({ arm: 'memory', label: 'Memory', why: 'a dry run has no library to ask' });
+            } else {
+                const loaded = deps.loadRecall ? await deps.loadRecall(ledger) : ({ present: false, why: 'no loader for it' } as const);
+                if (!loaded.present) {
+                    skippedArms.push({ arm: 'memory', label: 'Memory', why: loaded.why });
+                } else {
+                    const rows = library!;
+                    const recall: Recall = loaded.value;
+                    const visual = await runMemoryArm('memory_visual', parsed.memory, rows, rows, recall);
+                    const plain = await runMemoryArm('memory_transcript', parsed.memory, transcriptOnly(rows), rows, recall);
+                    const all: MemoryResult[] = [...visual, ...plain];
+                    memory = { library: rows.length, results: all, summaries: [summarizeMemory('memory_visual', all), summarizeMemory('memory_transcript', all)] };
                 }
-                const rows = parseLibrary(JSON.parse(await (deps.readText ? deps.readText(options.library) : io.readFile(options.library).then((b) => b.toString('utf8')))));
-                const recall: Recall = loaded.value;
-                const visual = await runMemoryArm('memory_visual', parsed.memory, rows, rows, recall);
-                const plain = await runMemoryArm('memory_transcript', parsed.memory, transcriptOnly(rows), rows, recall);
-                const all: MemoryResult[] = [...visual, ...plain];
-                memory = { library: rows.length, results: all, summaries: [summarizeMemory('memory_visual', all), summarizeMemory('memory_transcript', all)] };
             }
         }
 
@@ -370,23 +411,28 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         const armsRun = [...new Set(results.map((r) => r.arm))];
         const summaries = armsRun.map((a) => summarizeArm(a, modelsOf[a], results));
         const ran = selected.filter((c) => !skippedCases.some((s) => s.caseId === c.id) && !(c.kind === 'voice' && transcribe === null));
+        // What a module or a file said about why an arm did not run goes into the document and the chart: with a key taken out BEFORE the chart cuts it to length, or a cut through the
+        // middle of a key would leave a piece of it that no longer matches.
+        const clean = (text: string): string => redactKeys(text, keys.meta, keys.anthropic, keys.baseten);
+        const notes = { arms: skippedArms.map((s) => ({ ...s, why: clean(s.why) })), cases: skippedCases.map((s) => ({ ...s, why: clean(s.why) })) };
         const run: BenchmarkRun = {
             at: io.now(), command: printable(argv), stub: options.stub,
             models: { perception: options.model, reply: options.model, judge: options.judgeModel, speech, open: openWeights ? OPEN_MODEL : null },
             casesDigest: digestOf(ran), promptDigest: promptDigest([...new Set(ran.map((c) => c.fixture))]), mediaDir: displayPath(mediaDir),
-            cases: ran, skippedCases, results, summaries, skippedArms, memory, openWeights, judgeUsd: judgeCaller ? ledger.judgeUsd() : null, unpriced: ledger.unpriced(),
+            cases: ran, skippedCases: notes.cases, results, summaries, skippedArms: notes.arms, memory, openWeights, judgeUsd: judgeCaller ? ledger.judgeUsd() : null, unpriced: ledger.unpriced(),
         };
 
         const md = renderMarkdown(run);
         const svg = renderChart({
             title: 'What the agent does with what it is sent',
             subtitle: `${ran.length} cases · ${options.model} · ${io.now().toISOString().slice(0, 10)}${options.stub ? ' · dry run' : ''}`,
-            arms: summaries, memory: memory?.summaries ?? [], skipped: skippedArms.filter((s) => s.arm === 'voice' || s.arm === 'memory'), stub: options.stub,
+            arms: summaries, memory: memory?.summaries ?? [], skipped: notes.arms.filter((s) => s.arm === 'voice' || s.arm === 'memory'), stub: options.stub,
         });
         out(renderTerminal(run));
         if (!options.noWrite) {
-            io.writeFile(path.join(outDir, MD_FILE), md);
-            io.writeFile(path.join(outDir, SVG_FILE), svg);
+            // A public file: a key is taken out of it too, though nothing the benchmark sends a model holds one.
+            io.writeFile(path.join(outDir, MD_FILE), clean(md));
+            io.writeFile(path.join(outDir, SVG_FILE), clean(svg));
             err(`written: ${displayPath(path.join(outDir, MD_FILE))} and ${SVG_FILE}`);
         }
         return options.stub || barMet(summaries) ? 0 : 1;

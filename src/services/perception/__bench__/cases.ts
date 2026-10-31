@@ -324,7 +324,9 @@ export function selectMuseCases(all: readonly MuseCase[], spec: string | undefin
     if (spec === undefined || spec.trim() === '' || spec.trim().toLowerCase() === 'all') return [...all];
     const chosen = new Set<MuseCase>();
     for (const token of spec.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)) {
-        const hits = all.filter((c) => c.id === token || c.id.startsWith(token));
+        // An id is that case alone (`image-price` is not also its four variations); anything else is the start of some ids (`image-price-` is those four).
+        const exact = all.filter((c) => c.id === token);
+        const hits = exact.length > 0 ? exact : all.filter((c) => c.id.startsWith(token));
         if (hits.length === 0) throw new Error(`no case matches "${token.slice(0, 40)}" (use --list to see them)`);
         for (const h of hits) chosen.add(h);
     }

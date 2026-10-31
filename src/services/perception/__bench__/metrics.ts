@@ -61,6 +61,19 @@ export function summarizeArm(arm: ArmId, models: string, results: readonly ArmCa
     };
 }
 
+/**
+ * A reason for a skip, as a PUBLIC FILE says it (the document and the chart). A path the document names has to be a tracked file (`npm run check:docs` fails on one that is not), and a module that has not landed
+ * is not one, so every repository path in the reason is cut to its file name; and the plan's own labels (P3, P4b) mean nothing to a reader, so a bracket that opens with one is left
+ * out. The terminal keeps the reason whole, where the person running it wants the path.
+ */
+export function forDoc(why: string): string {
+    return why
+        .replace(/(?<![\w/.@-])(?:src|dashboard|scripts|public|heroku-worker|docs)\/(?:[\w.@-]+\/)*([\w.@-]+)/g, '$1')
+        .replace(/\s*\(P\d+[a-z]?\b[^)]*\)/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
 // ─── The bar ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The success criteria the spec sets for the shipped path. */

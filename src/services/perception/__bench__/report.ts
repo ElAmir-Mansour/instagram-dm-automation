@@ -8,10 +8,12 @@
  */
 import { SOFT_CRITERIA } from '../../dmSales/__evals__/types.js';
 import { DEFAULT_PRICES } from '../../llm/cost.js';
-import { ARM_LABELS, dollars, percent, secs, targetsOf, barMet } from './metrics.js';
+import { ARM_LABELS, dollars, forDoc, percent, secs, targetsOf, barMet } from './metrics.js';
 import type { MemoryResult, MemorySummary } from './memory.js';
 import type { AnalysisRun } from './openWeights.js';
 import type { ActionClass, ArmCaseResult, ArmId, ArmSummary, Failure, MuseCase, SkippedArm } from './types.js';
+
+export { forDoc };
 
 export interface BenchmarkRun {
     at: Date;
@@ -195,19 +197,6 @@ export function renderMarkdown(run: BenchmarkRun): string {
 
     out.push(...methodSection(run));
     return `${out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
-}
-
-/**
- * A reason for a skip, as the DOCUMENT says it. A path the document names has to be a tracked file (`npm run check:docs` fails on one that is not), and a module that has not landed
- * is not one, so every repository path in the reason is cut to its file name; and the plan's own labels (P3, P4b) mean nothing to a reader, so a bracket that opens with one is left
- * out. The terminal keeps the reason whole, where the person running it wants the path.
- */
-export function forDoc(why: string): string {
-    return why
-        .replace(/(?<![\w/.@-])(?:src|dashboard|scripts|public|heroku-worker|docs)\/(?:[\w.@-]+\/)*([\w.@-]+)/g, '$1')
-        .replace(/\s*\(P\d+[a-z]?\b[^)]*\)/g, '')
-        .replace(/\s{2,}/g, ' ')
-        .trim();
 }
 
 function openWeightsSection(rows: readonly AnalysisRun[]): string[] {

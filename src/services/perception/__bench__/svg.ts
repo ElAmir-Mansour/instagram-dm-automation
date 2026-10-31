@@ -8,7 +8,7 @@
  *
  * What a bar says: 100% is every case the arm ran. An arm that did not run is not a bar of zero: it is a line that says it did not run.
  */
-import { BAR, dollars, percent, secs } from './metrics.js';
+import { BAR, dollars, forDoc, percent, secs } from './metrics.js';
 import type { MemorySummary } from './memory.js';
 import type { ArmId, ArmSummary, Rate, SkippedArm } from './types.js';
 
@@ -127,7 +127,7 @@ export function renderChart(d: ChartData): string {
     }
 
     for (const s of skipped) {
-        out.push(`<text class="small muted" x="${PAD}" y="${y + 14}">${esc(`${s.label}: not run. ${upper(s.why)}`.slice(0, 130))}</text>`);
+        out.push(`<text class="small muted" x="${PAD}" y="${y + 14}">${esc(`${s.label}: not run. ${upper(forDoc(s.why))}`.slice(0, 130))}</text>`);
         y += 20;
     }
 
