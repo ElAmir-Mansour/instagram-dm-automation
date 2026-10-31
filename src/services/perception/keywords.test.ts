@@ -85,11 +85,24 @@ describe('voiceKeywords: how many, and how long', () => {
         assert.ok(!out.includes('n'.repeat(10)), 'the shortest ten were left out');
     });
 
-    it('cuts a name over 80 characters at a word (the start of a title is the part a person says), with no ellipsis and no trailing space', () => {
-        const title = 'Data Academy: build real dashboards from scratch, with SQL, charts and stories, step by step';
+    it('says a long title by its name: the part before a colon, a bar, a bracket or a spaced dash (Meta takes at most 30 characters a keyword)', () => {
+        assert.equal(KEYWORD_MAX_CHARS, 30);
+        const out = voiceKeywords(source({ offers: named(
+            'Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي',
+            'Swift Programming Language | in Arabic',
+            'Problem Solving - with C# [in Arabic]',
+            'Python For Beginners [in Arabic]',
+            'GoLang Course: Learn Go in Arabic',
+        ) }));
+        for (const want of ['Agentic AI', 'Swift Programming Language', 'Problem Solving', 'Python For Beginners', 'GoLang Course']) assert.ok(out.includes(want), `${want} in ${JSON.stringify(out)}`);
+        for (const t of out) assert.ok(t.length <= 30, `${t.length}: ${t}`);
+    });
+
+    it('cuts a name over 30 characters with no separator at a word, with no ellipsis and no trailing space', () => {
+        const title = 'Data Academy build real dashboards from scratch with SQL';
         assert.ok(title.length > KEYWORD_MAX_CHARS);
         const [out] = voiceKeywords(source({ offers: named(title) }));
-        assert.equal(out, 'Data Academy: build real dashboards from scratch, with SQL, charts and stories');
+        assert.equal(out, 'Data Academy build real');
         assert.ok(length(out!) <= KEYWORD_MAX_CHARS);
         assert.doesNotMatch(out!, /[\s,;:…-]$/, 'no trailing space, separator or ellipsis');
     });
@@ -99,16 +112,22 @@ describe('voiceKeywords: how many, and how long', () => {
         assert.equal(out, 'x'.repeat(KEYWORD_MAX_CHARS));
     });
 
-    it('keeps a name of exactly the limit whole, and counts Arabic by what is seen', () => {
-        const eighty = 'ا'.repeat(80);
-        assert.equal(voiceKeywords(source({ offers: named(eighty) }))[0], eighty);
-        assert.equal(voiceKeywords(source({ offers: named('ا'.repeat(81)) }))[0], eighty);
+    it('keeps a name of exactly the limit whole, and cuts one letter over it', () => {
+        const thirty = 'ا'.repeat(30);
+        assert.equal(voiceKeywords(source({ offers: named(thirty) }))[0], thirty);
+        assert.equal(voiceKeywords(source({ offers: named('ا'.repeat(31)) }))[0], thirty);
     });
 
-    it('every term is at most 80 characters, whatever the profile holds (an offer\'s name may be 200)', () => {
+    it('trims Arabic diacritics off the end when they would push the UTF-16 length over 30, though fewer letters are seen', () => {
+        const [out] = voiceKeywords(source({ offers: named('مَرْحَبًا بِكُمْ فِي دَوْرَةِ البَرْمَجَةِ الكَامِلَةِ') }));
+        assert.ok(out!.length <= 30, `${out!.length}: ${out}`);
+        assert.ok(out!.length > 0);
+    });
+
+    it('every term is at most 30 characters, whatever the profile holds (an offer\'s name may be 200)', () => {
         const out = voiceKeywords(source({ offers: named(...Array.from({ length: 10 }, (_, i) => `title ${i} ${'word '.repeat(40)}`)), brand: 'B'.repeat(80) }));
         assert.ok(out.length > 0);
-        for (const term of out) assert.ok(length(term) <= KEYWORD_MAX_CHARS, `${length(term)}: ${term}`);
+        for (const term of out) assert.ok(term.length <= KEYWORD_MAX_CHARS && length(term) <= KEYWORD_MAX_CHARS, `${term.length}: ${term}`);
     });
 });
 
