@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { setLogSink } from '../utils/log.js';
 import { setJobQueue } from '../jobs/queue.js';
 import type { EnqueueInput, JobQueue } from '../jobs/types.js';
-import { enqueueWebhookBody, isAcceptedWebhookObject, planJobs } from './router.js';
+import { enqueueWebhookBody, isAcceptedWebhookObject, oldestMessageAgeMs, planJobs } from './router.js';
 import { normalizeWhatsAppChange } from './whatsapp.js';
 
 let restoreSink: (() => void) | undefined;
@@ -318,6 +318,25 @@ describe('enqueueWebhookBody', () => {
         }
     });
 
+    it('says how old the message was when it reached us, and what writing it down took before the 200', async () => {
+        const queue = recordingQueue();
+        const previousQueue = setJobQueue(queue);
+        const lines: Record<string, any>[] = [];
+        const previousSink = setLogSink((_level, line) => { lines.push(JSON.parse(line)); });
+        try {
+            await enqueueWebhookBody({
+                object: 'instagram',
+                entry: [{ id: 'ig-1', messaging: [{ sender: { id: 'u-1' }, recipient: { id: 'ig-1' }, timestamp: Date.now() - 1_700, message: { mid: 'm-1', text: 'hi' } }] }],
+            });
+        } finally {
+            setLogSink(previousSink);
+            setJobQueue(previousQueue);
+        }
+        const enqueued = lines.find((l) => l.event === 'webhook.enqueued');
+        assert.ok(enqueued?.event_age_ms >= 1_700, 'Meta\'s delivery, from the customer\'s tap to our door');
+        assert.equal(typeof enqueued?.enqueue_ms, 'number');
+    });
+
     it('propagates a queue failure so the caller can fall back to the inline path', async () => {
         // Deliberate: the webhook catches this and processes inline instead. Swallowing it
         // here would mean the delivery is silently dropped, which is the one outcome worse
@@ -329,6 +348,21 @@ describe('enqueueWebhookBody', () => {
         } finally {
             setJobQueue(previous);
         }
+    });
+});
+
+describe('oldestMessageAgeMs', () => {
+    const NOW = 1_761_930_000_000;
+    const body = (...timestamps: unknown[]) => ({ object: 'instagram', entry: [{ id: 'ig-1', messaging: timestamps.map((timestamp) => ({ timestamp })) }] });
+
+    it('is the age of the oldest message, in milliseconds', () => {
+        assert.equal(oldestMessageAgeMs(body(NOW - 900, NOW - 2_400), NOW), 2_400);
+    });
+
+    it('is null for a body whose events carry no time (a comment), or one in seconds, which is no measurement here', () => {
+        assert.equal(oldestMessageAgeMs({ object: 'instagram', entry: [{ id: 'ig-1', changes: [{ field: 'comments' }] }] }, NOW), null);
+        assert.equal(oldestMessageAgeMs(body(Math.floor(NOW / 1000)), NOW), null);
+        assert.equal(oldestMessageAgeMs(body('1761930000000'), NOW), null);
     });
 });
 

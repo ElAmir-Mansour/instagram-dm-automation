@@ -172,6 +172,16 @@ describe('claim', () => {
             assert.equal(first.max_attempts, 3);
             assert.equal(first.request_id, 'req-1');
             assert.equal(first.tenant_key, 'creator-1');
+            assert.equal(first.run_after, null, 'a row without the column reads as unknown, not as a date');
+        });
+    });
+
+    it('returns when each job became due, for the runner\'s queued_ms', async () => {
+        const due = new Date('2026-10-31T17:06:00.000Z');
+        await withDb([[/UPDATE jobs/, { rows: [row({ run_after: due })] }]], async (executed) => {
+            const [claimed] = await queue.claim(1);
+            assert.match(flat(executed[0]!.sql), /RETURNING id, kind, payload, attempts, max_attempts, request_id, creator_id, tenant_key, run_after/);
+            assert.equal(claimed!.run_after, due);
         });
     });
 

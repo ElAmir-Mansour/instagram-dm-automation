@@ -1995,6 +1995,33 @@ SELECT kind, status, count(*) AS jobs, min(run_after) AS oldest_due, max(attempt
  GROUP BY kind, status;
 ```
 
+**Where the seconds go.** Every DM ends with ONE `dm.timing` line (`src/utils/timing.ts`, opened by
+`handleMessagingEvent`). `steps_ms` lists each step in the order it ran, and the steps add up to
+`total_ms`:
+
+- the pipeline's `creator`, `conversation`, `claim`, `settings` and `profile`;
+- the sales turn's `state`, `burst`, `agent`, `prefilter`, `context`, `model`, `guard`,
+  `sender_wait`, `quota`, `send` and `record`;
+- then `settle` and `profile_wait`.
+
+`steps_db` counts the database statements each step sent, and `db_statements` counts them for the
+whole DM. Each statement is a round trip to the pooler in `eu-west-1`. `model` is that step's wall
+time and `model_api_ms` is the provider's own time; the gap is the AI layer's settings read and
+budget reservation. `sender_actions_ms` is how long `mark_seen` and `typing_on` took beside the
+model. `event_age_ms` is how old the customer's message was when the job took it.
+
+The hops before the job:
+
+- `webhook.enqueued` carries `event_age_ms` (Meta's delivery) and `enqueue_ms`;
+- `job.drain_complete` carries `reap_ms` and `claim_ms`;
+- `job.succeeded` carries `queued_ms` and the job's `db_statements`.
+
+The logs reach back about an hour:
+
+```bash
+vercel logs --environment production --since 30m --json --limit 400 | grep '"dm.timing"'
+```
+
 ### 16.2 "A DM got no reply at all"
 
 Find the message in the logs and read what follows `dm.received`:

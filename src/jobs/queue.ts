@@ -33,6 +33,7 @@ interface JobDbRow {
     request_id: string | null;
     creator_id: string | null;
     tenant_key: string | null;
+    run_after: Date | null;
 }
 
 export class PostgresJobQueue implements JobQueue {
@@ -129,7 +130,7 @@ export class PostgresJobQueue implements JobQueue {
                     updated_at = NOW()
               WHERE id IN (SELECT id FROM picked)
                 AND status = 'pending'
-          RETURNING id, kind, payload, attempts, max_attempts, request_id, creator_id, tenant_key`,
+          RETURNING id, kind, payload, attempts, max_attempts, request_id, creator_id, tenant_key, run_after`,
             [limit]
         );
 
@@ -151,6 +152,7 @@ export class PostgresJobQueue implements JobQueue {
                 request_id: row.request_id,
                 creator_id: row.creator_id,
                 tenant_key: row.tenant_key,
+                run_after: row.run_after instanceof Date ? row.run_after : null,
             });
         }
         return claimed;

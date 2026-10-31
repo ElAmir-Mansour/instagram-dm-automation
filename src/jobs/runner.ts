@@ -17,6 +17,7 @@
  */
 import { withProfileCache } from '../services/profile/cache.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
+import { queryTally, withQueryTally } from '../utils/timing.js';
 import { failureRedaction } from './redaction.js';
 import { BACKGROUND_JOB_KINDS, type Job, type JobHandlerRegistry, type JobQueue, type JobResult } from './types.js';
 
@@ -53,6 +54,8 @@ export interface DrainOptions {
     batchSize?: number;
     /** Hard ceiling on jobs per drain, so one call cannot loop forever. */
     maxJobs?: number;
+    /** What the caller spent reaping stale claims just before this drain, for `job.drain_complete`'s `reap_ms`: it is time a waiting DM spends too. */
+    reapMs?: number;
     /** Injected for tests. */
     now?: () => number;
     /** Injected for tests. */
@@ -99,8 +102,11 @@ async function runInScope(
             ...(job.request_id ? { request_id: job.request_id } : {}),
             ...(job.creator_id ? { creator_id: job.creator_id } : {}),
         },
-        async () => {
+        // Every statement the job sends is counted (`db_statements`, src/utils/timing.ts), and `queued_ms` is how long it had been due
+        // when this drain started it: the hop from the webhook's enqueue (or a retry's backoff) to the work.
+        () => withQueryTally(async () => {
             const startedAt = Date.now();
+            const queued = job.run_after ? { queued_ms: Math.max(0, startedAt - job.run_after.getTime()) } : {};
             try {
                 // The registry is keyed by the same union `job.kind` is narrowed to, but the
                 // per-kind payload types make the pairing unprovable to the compiler without
@@ -113,7 +119,7 @@ async function runInScope(
                 // completes the job. Every other handler returns nothing and completes exactly as it always did.
                 if (result && result.redactPayload !== undefined) await queue.complete(job.id, { payload: result.redactPayload });
                 else await queue.complete(job.id);
-                log('info', 'job.succeeded', { duration_ms: Date.now() - startedAt });
+                log('info', 'job.succeeded', { duration_ms: Date.now() - startedAt, ...queued, ...queryTally() });
                 return true;
             } catch (err) {
                 const fields = describeError(err);
@@ -126,6 +132,8 @@ async function runInScope(
                 log(exhausted ? 'error' : 'warn', exhausted ? 'job.failed' : 'job.retrying', {
                     ...fields,
                     duration_ms: Date.now() - startedAt,
+                    ...queued,
+                    ...queryTally(),
                     retry_in_seconds: retryIn,
                     attempts_remaining: Math.max(0, job.max_attempts - job.attempts),
                 });
@@ -144,7 +152,7 @@ async function runInScope(
                 }
                 return false;
             }
-        }
+        })
     );
 }
 
@@ -207,6 +215,8 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
 
     const startedAt = now();
     const result: DrainResult = { claimed: 0, succeeded: 0, failed: 0, budgetExhausted: false };
+    // The claim statements' own time, summed: the empty claim that ends a drain included.
+    let claimMs = 0;
 
     while (result.claimed < maxJobs) {
         if (now() - startedAt >= budgetMs) {
@@ -215,11 +225,14 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
         }
 
         let batch: Job[];
+        const claimStartedAt = now();
         try {
             batch = await queue.claim(Math.min(batchSize, maxJobs - result.claimed));
         } catch (err) {
             log('error', 'job.claim_failed', describeError(err));
             break;
+        } finally {
+            claimMs += now() - claimStartedAt;
         }
 
         if (batch.length === 0) break;
@@ -248,6 +261,8 @@ export async function drainJobs(options: DrainOptions): Promise<DrainResult> {
         log('info', 'job.drain_complete', {
             ...result,
             duration_ms: now() - startedAt,
+            claim_ms: claimMs,
+            ...(options.reapMs !== undefined ? { reap_ms: options.reapMs } : {}),
         });
     }
     return result;

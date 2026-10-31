@@ -62,6 +62,7 @@
 import { queryCount } from '../../db/query.js';
 import { checkFairSendQuota } from '../../utils/rateLimiter.js';
 import { describeError, log } from '../../utils/log.js';
+import { lap, noteTiming, withTimeline } from '../../utils/timing.js';
 import { applyDisclosure, toMetaMessage, type MetaMessagePayload } from '../../webhook/meta-payload.js';
 import { decideAgent, generateAiResponse, type AiResponse } from '../ai.js';
 import { generate } from '../aiProviders/generate.js';
@@ -264,7 +265,15 @@ function decisionReason(perceived: PerceivedTurn | undefined, recall: TraceInput
     });
 }
 
-export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
+/**
+ * The turn, timed: each numbered step above is a step of ONE `dm.timing` line (src/utils/timing.ts), with the database statements it
+ * sent. Inside the DM pipeline's timeline (`messaging.ts`) the steps join that line; a turn called without one (WhatsApp) logs its own.
+ */
+export function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
+    return withTimeline('dm.timing', () => salesTurn(input));
+}
+
+async function salesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
     const startedAt = Date.now();
     const { creator, conversation, inbound, ctx, transport } = input;
     const kit = kitFor(ctx.language).sales;
@@ -272,6 +281,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     const logBase = { creator_id: creator.id, conversation_id: conversation.id };
 
     const state = await loadSalesState(conversation.id);
+    lap('state');
 
     /** The A/B arm this conversation is in, once the turn knows it (S14): what `ai_meta.variant` records, and what the record assigns when it is new. */
     let variantId: string | null = null;
@@ -286,9 +296,18 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
      */
     let seenAndTypingStarted: Promise<void> | null = null;
     const startSeenAndTyping = (): Promise<void> => {
-        seenAndTypingStarted ??= transport ? transport.seen() : startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
+        if (!seenAndTypingStarted) {
+            const sentAt = Date.now();
+            seenAndTypingStarted = transport ? transport.seen() : startSenderActions(inbound.senderId, creator.page_access_token, input.pageId);
+            // How long they took beside the turn, which waits for them before it sends (`sender_wait`).
+            const settled = (): void => noteTiming({ sender_actions_ms: Date.now() - sentAt });
+            seenAndTypingStarted.then(settled, settled);
+        }
         return seenAndTypingStarted;
     };
+
+    /** What the model itself took (the provider's own `elapsed_ms`), over every attempt: `model` minus this is the AI layer's own work. */
+    let modelApiMs = 0;
 
     /** What the library gave this reply, for the trace: nothing unless the model's own words were what was sent, because only then did the reply use it. */
     const recallTrace = (decision: TurnDecision, o: Ending): TraceInput['recall'] => {
@@ -318,18 +337,26 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 ...logBase, outcome, effect: decision.effect, stage: decision.stage, action: decision.action, intent: o.intent,
                 handoff_reason: decision.handoffReason, overrides: decision.overrides, engine: o.meta.engine, duration_ms: Date.now() - startedAt,
             });
+            noteTiming({
+                outcome, engine: o.meta.engine, model: o.meta.model, provider: o.meta.provider, attempts: o.meta.attempts, model_api_ms: modelApiMs,
+                ...(input.perceived ? { perceived: input.perceived.kind } : {}),
+            });
             return { kind: 'done', outcome, ...(transport && typeof o.meta.model_failed === 'string' ? { modelFailed: o.meta.model_failed } : {}) };
         };
 
         /** Recorded: now, and only now, the owner is told (when this turn is one he needs to hear of). `notifyOwner` never throws. */
         const finish = async (): Promise<SalesTurnResult> => {
             const plan = noticeFor(decision, { intent: o.intent, linkSent: o.link !== null });
-            if (plan) await notifyOwner({ creatorId: creator.id, conversationId: conversation.id, plan, language: ctx.language.code });
+            if (plan) {
+                await notifyOwner({ creatorId: creator.id, conversationId: conversation.id, plan, language: ctx.language.code });
+                lap('notify');
+            }
             return done();
         };
 
         if (o.text === null && o.payload === undefined) {
             await recordTurn(record);
+            lap('record');
             return finish();
         }
 
@@ -341,10 +368,12 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         // (a pool shared by every tenant's Instagram and Messenger sends): WhatsApp's own limits are Meta's, and the sender answers for them.
         if (!transport) {
             const quota = await checkFairSendQuota(creator.id, 'dm');
+            lap('quota');
             if (!quota.allowed) {
                 log('error', 'dm.quota_exhausted', {
                     ...logBase, count: quota.count, limit: quota.limit, blocked_by: quota.blockedBy, app_count: quota.app.count, app_limit: quota.app.limit, source: 'dm',
                 });
+                noteTiming({ outcome: 'quota' });
                 return { kind: 'quota', count: quota.count, limit: quota.limit, blockedBy: quota.blockedBy };
             }
         }
@@ -372,9 +401,13 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
             await sendDirectMessage(inbound.senderId, outgoing, creator.page_access_token, input.pageId);
             log('info', 'dm.sent', { ...logBase, message_type: messageType, disclosed: input.disclosure.needed, sales: true });
         }
+        lap('send');
 
         // Recorded only after the send landed, so a failed first reply still discloses next time: the statement the old path uses.
-        if (input.disclosure.needed) await queryCount('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversation.id]);
+        if (input.disclosure.needed) {
+            await queryCount('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversation.id]);
+            lap('disclosed');
+        }
 
         record.message = {
             type: messageType,
@@ -398,6 +431,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         const recorded = await recordTurn(record);
         // The channel's own bookkeeping for the row just written (WhatsApp: the id a delivery status finds the message by). Never throws.
         if (transport && sent) await transport.recorded(recorded.replyId, sent);
+        lap('record');
 
         // 12. A link just went out: queue the ONE follow-up for it (`followupJob.ts`). After the record, best effort and never throwing, so a
         // failure to queue can never make this job run again and answer the person twice. Only a sales turn is here, so `sales_mode = 'off'`
@@ -408,21 +442,26 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 offerId: record.linkedOfferId, recorded,
                 ...(transport ? { channel: transport.channel } : {}),
             });
+            lap('followup');
         }
         return finish();
     };
 
     // 2. Is this still the message to answer?
     const gone = await supersession(conversation.id, inbound.id);
+    lap('burst');
     if (gone.newerUnhandled || gone.answered) {
         log('info', 'dm.sales_superseded', { ...logBase, newer_unhandled: gone.newerUnhandled, answered: gone.answered });
+        noteTiming({ outcome: 'superseded' });
         return { kind: 'done', outcome: 'superseded' };
     }
 
     // 3. The agent. The owner's switch is honoured exactly as `generateAiResponse` honours it: off or unconfigured, say nothing.
     const agentChoice = decideAgent(await loadAgent(creator.id), false, ctx.language.code);
+    lap('agent');
     if (!agentChoice.speak) {
         log(agentChoice.reason === 'unconfigured' ? 'warn' : 'debug', `ai.${agentChoice.reason}`, { creator_id: creator.id });
+        noteTiming({ outcome: 'agent_off' });
         return { kind: 'done', outcome: 'agent_off' };
     }
     const agent = agentChoice.agent;
@@ -447,6 +486,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     // 4. Before any model: the messages that need a person, or a stop, or a calm word. A DESCRIPTION is not read for them (R9): what a model said it saw is not what
     // the person said, and a screenshot of a refund policy is not a refund request.
     const pre: PrefilterDecision = input.perceived?.describedText ? { action: 'pass' } : prefilter(inbound.text);
+    lap('prefilter');
     if (pre.action !== 'pass') {
         const signal = pre.action === 'opt_out' ? 'opt_out' : pre.reason;
         const decision = decisionForPrefilter(pre, state);
@@ -464,14 +504,15 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     if (!transport && !input.pageId && !inbound.payload && !input.perceived?.describedText && hasContentCue(inbound.text)) {
         void startSeenAndTyping();
         recalled = await recallForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text });
+        lap('recall');
     }
 
     // 4c. What the agent can take in (`perception/senses.ts`). A message that asks about sending a voice note or a photo is told whether the next one would be read, so the
     // model does not repeat an older line of this chat ("I can't open voice notes here") to someone the owner's switches now open it to. The same doors as recall: an
     // Instagram DM, words the customer wrote or said, a cue in them. A message without one reaches no setting, and `sensesForTurn` never throws.
-    const senses = !transport && !input.pageId && !inbound.payload && !input.perceived?.describedText && hasSensesCue(inbound.text)
-        ? await sensesForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text })
-        : null;
+    const sensesCue = !transport && !input.pageId && !inbound.payload && !input.perceived?.describedText && hasSensesCue(inbound.text);
+    const senses = sensesCue ? await sensesForTurn({ creatorId: creator.id, senderId: inbound.senderId, text: inbound.text }) : null;
+    if (sensesCue) lap('senses');
 
     // 5. The model. The prompt's static part is the same on every turn of this tenant (cacheable); the facts of this conversation ride with the message.
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
@@ -524,6 +565,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
     const offers = new Map(ctx.offers.map((o) => [o.id, o]));
     const refs: SalesOfferRef[] = prompt.offers.map((o) => ({ id: o.id, hasLink: o.hasLink }));
+    lap('context');
 
     /** Never silence: the legacy Gemini path once, when the owner wants it; else a hand-off. */
     const modelFailed = async (failure: DmFailure): Promise<SalesTurnResult> => {
@@ -554,6 +596,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                     fallback: 'failed', fallback_reason: second.reason, fallback_message: second.message, sales: true,
                 });
             }
+            lap('fallback');
         } else {
             log('error', 'dm.engine_failed', { ...logBase, source: 'dm', engine: 'providers', reason: failure.reason, message: failure.message, fallback: 'off', sales: true });
         }
@@ -578,9 +621,12 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 // `dm_whatsapp` answers only from providers that do not train on what they are sent (`aiProviders/purposes.ts`); any other is `no_provider`.
                 purpose: transport ? 'dm_whatsapp' : 'dm', creatorId: creator.id, system: prompt.prefix, user: turns, schema, maxTokens: DM_MAX_TOKENS, timeoutMs: DM_TIMEOUT_MS, cacheSystem: true,
             });
+            modelApiMs += result.elapsed_ms;
             return { ok: true, answer: { json: result.json, model: result.model, provider: result.provider, usageId: result.usageId, ms: result.elapsed_ms } };
         } catch (err) {
             return { ok: false, failure: failureOf(err) };
+        } finally {
+            lap('model');
         }
     };
 
@@ -629,12 +675,15 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         const asked = await ask(turns);
         if (!asked.ok) {
             await seenAndTyping;
+            lap('sender_wait');
             return modelFailed(asked.failure);
         }
         answer = asked.answer;
         const evaluated = await evaluate(asked.answer.json, attempt === 1);
+        lap('guard');
         if (evaluated.empty) {
             await seenAndTyping;
+            lap('sender_wait');
             return modelFailed({ reason: 'empty_reply', message: 'The model returned a structured response with no usable text.' });
         }
         const violations = evaluated.guarded?.violations ?? [];
@@ -651,6 +700,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         if (attempt === 1) {
             // Written again and still wrong. The kit's safe line, and a person: never the text.
             await seenAndTyping;
+            lap('sender_wait');
             const decision = handoffDecision('unsure', state);
             return conclude(decision, {
                 intent: evaluated.reply.intent, offerId: null, text: lineFor(decision, null, ctx, kit, owner, 'unsure'), link: null, quick: [],
@@ -661,6 +711,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         turns = [...baseTurns, { role: 'model', text: evaluated.guarded?.text || evaluated.reply.text || '…' }, { role: 'user', text: correction }];
     }
     await seenAndTyping;
+    lap('sender_wait');
     if (!chosen || !answer) return modelFailed({ reason: 'no_answer', message: 'The model gave no answer to act on.' });
 
     const { decision } = chosen;
@@ -671,8 +722,10 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     // reply: a hand-off, an opt-out and a calm word are decisions that must not be lost to a message that has not been read yet.
     if (input.perceived && (input.perceived.describedText || input.perceived.kind === 'audio') && decision.effect === 'reply') {
         const late = await supersession(conversation.id, inbound.id);
+        lap('late_burst');
         if (late.newerUnhandled || late.answered) {
             log('info', 'dm.sales_superseded', { ...logBase, newer_unhandled: late.newerUnhandled, answered: late.answered, late: true });
+            noteTiming({ outcome: 'superseded' });
             return { kind: 'done', outcome: 'superseded' };
         }
     }
