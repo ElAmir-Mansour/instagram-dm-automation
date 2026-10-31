@@ -264,6 +264,54 @@ describe('what the keyword pre-filter decides, the model is never asked', () => 
     });
 });
 
+describe('a turn that answers what a model read (the Muse benchmark\'s seam)', () => {
+    const perceived = (sent: string | null, describedText: boolean) => ({ sent, describedText });
+    const withPerceived = (user: string, p: ReturnType<typeof perceived> | undefined, expectation = { route: 'model' } as const) => {
+        const c = adhoc([[user, { ...expectation, next_action: ['recommend'] }]]);
+        if (p) c.turns[0] = { ...c.turns[0]!, perceived: p };
+        return c;
+    };
+
+    it('does not read a description with the pre-filter (R9): "refund" in what a picture shows is not a refund request, though the same words typed are', async () => {
+        const typed = await runCase(adhoc([['I want a refund please', { route: 'prefilter', prefilter: 'refund', sent: ['handoff'] }]]), { caller: never, judge: null });
+        assert.equal(typed.turns[0]!.route, 'prefilter', 'typed, it is a refund request and a person is told');
+
+        const described = withPerceived('A screenshot of a refund policy page with a complaint form.', perceived('What the customer sent: a photo. What it shows: a refund policy page', true));
+        const out = await runCase(described, { caller: answering(described.id, [answer()]), judge: null });
+        assert.equal(out.turns[0]!.route, 'model', 'described, it is read by the model, which is asked');
+        assert.equal(out.turns[0]!.prefilter, 'pass', 'the filter was told to let it through, not asked');
+        assert.equal(out.pass, true, sentFailures(out).join(', '));
+
+        // And the words typed with a picture are still read: a description is the only thing the filter skips.
+        const words = withPerceived('I want a refund please', perceived('What the customer sent: a photo. What it shows: a receipt', false), { route: 'prefilter' } as never);
+        const wordsOut = await runCase({ ...words, turns: [{ ...words.turns[0]!, expect: { route: 'prefilter', prefilter: 'refund', sent: ['handoff'] } }] }, { caller: never, judge: null });
+        assert.equal(wordsOut.turns[0]!.route, 'prefilter');
+    });
+
+    it('tells the model what was sent as the facts block\'s own line for that turn, and the next turn does not carry it', async () => {
+        const seen: ModelRequest[] = [];
+        const c = adhoc([['A screenshot of a price.', { route: 'model', next_action: ['recommend'] }], ['وكم المدة؟', { route: 'model' }]]);
+        c.turns[0] = { ...c.turns[0]!, perceived: perceived('What the customer sent: a photo. What it shows: a price list', true) };
+        const out = await runCase(c, { caller: stubSalesCaller({ [c.id]: [answer(), answer()] }, (r) => seen.push(r)), judge: null });
+        assert.equal(out.turns.length, 2);
+        assert.match(seen[0]!.system, /What the customer sent: a photo\. What it shows: a price list/);
+        assert.equal(seen[0]!.system.split('What the customer sent:').length, 2, 'said once');
+        assert.doesNotMatch(seen[1]!.system, /What the customer sent:/, 'what was read for one message is not a fact of the conversation');
+    });
+
+    it('changes nothing when it says nothing: no field, or a field with nothing to add, is the prompt it always was', async () => {
+        const run = async (p: ReturnType<typeof perceived> | undefined): Promise<string> => {
+            const seen: ModelRequest[] = [];
+            const c = withPerceived('هلا، وش سعر الكورس؟', p);
+            await runCase(c, { caller: stubSalesCaller({ [c.id]: [answer()] }, (r) => seen.push(r)), judge: null });
+            return seen[0]!.system;
+        };
+        const plain = await run(undefined);
+        assert.equal(await run(perceived(null, false)), plain);
+        assert.doesNotMatch(plain, /What the customer sent:/);
+    });
+});
+
 describe('what a conversation carries from one turn to the next', () => {
     const multi = caseById('15-multi-turn-gulf');
     const answers: StubAnswer[] = [
