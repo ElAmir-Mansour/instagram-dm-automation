@@ -10,7 +10,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { metaHttp } from '../services/http.js';
 import { setLogSink } from '../utils/log.js';
-import apiRouter, { conversationsQuery } from './api.js';
+import apiRouter, { conversationsQuery, messagesQuery, MESSAGES_ANSWER_MAX } from './api.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const CONV = '33333333-3333-4333-8333-333333333333';
@@ -298,6 +298,71 @@ describe('GET /conversations/:id/messages — the perception and the decision tr
 });
 
 // ─── POST /conversations/:id/refresh-profile ─────────────────────────────────────────────────
+// ─── GET /conversations/:id/messages — pages: the newest first, the history on the way up, and a poll for what is new ───────────────
+describe('GET /conversations/:id/messages — the pages the inbox asks for', () => {
+    const MSG = '44444444-4444-4444-8444-444444444444';
+    // Two rows in the order the query is asked to return them; whether the route turns them is what a test looks at.
+    const rows = [
+        { id: 'r2', direction: 'outbound', sender: 'operator', text: 'second', created_at: '2026-10-31T10:00:02Z' },
+        { id: 'r1', direction: 'inbound', sender: 'customer', text: 'first', created_at: '2026-10-31T10:00:01Z' },
+    ];
+    const answer = (sql: string) => {
+        if (/SELECT 1 FROM conversations/.test(sql)) return { rows: [{ '?column?': 1 }] };
+        if (/FROM messages WHERE conversation_id/.test(sql)) return { rows: rows.map((r) => ({ ...r })) };
+        return { rows: [] };
+    };
+    const read = (sent: Array<{ sql: string; params: unknown[] }>) => sent.find((s) => /FROM messages WHERE conversation_id/.test(s.sql))!;
+
+    it('opens on the newest `limit`, ties broken by id, and answers them oldest first', async () => {
+        const { res, sent } = await call('get', '/conversations/:id/messages', { params: { id: CONV }, query: { limit: '40' } }, answer);
+        assert.equal(res.statusCode, 200);
+        const q = read(sent);
+        assert.equal(q.sql, 'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2');
+        assert.deepEqual(q.params, [CONV, 40]);
+        assert.deepEqual(res.body.map((r: any) => r.id), ['r1', 'r2']);
+    });
+
+    it('answers the page before a message by that message’s own (created_at, id), inside this conversation only', async () => {
+        const { res, sent } = await call('get', '/conversations/:id/messages', { params: { id: CONV }, query: { limit: '40', before: MSG } }, answer);
+        const q = read(sent);
+        assert.match(q.sql, /AND \(created_at, id\) < \(SELECT b\.created_at, b\.id FROM messages b WHERE b\.id = \$3 AND b\.conversation_id = \$1\) ORDER BY created_at DESC, id DESC LIMIT \$2$/);
+        assert.deepEqual(q.params, [CONV, 40, MSG]);
+        assert.deepEqual(res.body.map((r: any) => r.id), ['r1', 'r2'], 'turned to oldest first');
+    });
+
+    it('answers a poll with what was stored since a time, oldest first as the query returns them, up to the cap', async () => {
+        const since = '2026-10-31T09:58:00.000Z';
+        const { res, sent } = await call('get', '/conversations/:id/messages', { params: { id: CONV }, query: { since } }, answer);
+        const q = read(sent);
+        assert.equal(q.sql, 'SELECT * FROM messages WHERE conversation_id = $1 AND created_at >= $2 ORDER BY created_at ASC, id ASC LIMIT $3');
+        assert.deepEqual(q.params, [CONV, since, MESSAGES_ANSWER_MAX]);
+        assert.deepEqual(res.body.map((r: any) => r.id), ['r2', 'r1'], 'not turned: the query already ran oldest first');
+    });
+
+    it('refuses a cursor that is not a message id, a time that is not a time, and both at once, before reading anything', async () => {
+        for (const query of [{ before: 'not-a-uuid' }, { since: 'yesterday-ish' }, { before: MSG, since: '2026-10-31T10:00:00Z' }]) {
+            const { res, sent } = await call('get', '/conversations/:id/messages', { params: { id: CONV }, query }, answer);
+            assert.equal(res.statusCode, 400, JSON.stringify(query));
+            assert.equal(sent.length, 0, 'not even the ownership check');
+        }
+    });
+
+    it('keeps `limit` between 1 and the cap, and a missing one at 100', () => {
+        const limitOf = (query: Record<string, unknown>) => {
+            const page = messagesQuery(query);
+            assert.ok(page.ok);
+            return page.params[0];
+        };
+        assert.equal(limitOf({ limit: '9999' }), MESSAGES_ANSWER_MAX);
+        assert.equal(limitOf({ limit: '-3' }), 1);
+        assert.equal(limitOf({ limit: 'many' }), 100);
+        assert.equal(limitOf({ limit: '40', before: MSG }), 40);
+        assert.equal(limitOf({ limit: ['25', '30'] }), 25, 'a repeated parameter counts once');
+        const plain = messagesQuery({});
+        assert.ok(plain.ok && plain.params.length === 0 && plain.newestFirst, 'no parameter: the newest 100 as before, for a dashboard cached from then');
+    });
+});
+
 describe('POST /conversations/:id/refresh-profile — the lazy backfill', () => {
     const THREAD = { id: CONV, instagram_user_id: '17841400003051', platform: 'instagram', page_access_token: 'EAAGplain' };
 

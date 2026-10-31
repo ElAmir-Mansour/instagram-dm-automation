@@ -508,7 +508,16 @@ const API = {
         ).toString();
         return API.request(`/conversations${query ? `?${query}` : ''}`);
     },
-    getConversationMessages: (id) => API.request(`/conversations/${encodeURIComponent(id)}/messages`),
+    /**
+     * `{ limit, before, since }`, each optional. With none the route answers the newest 100 (what a dashboard cached from before pages
+     * asks for); the inbox opens a thread on `limit`, pages up with `limit` + `before` (a message id) and polls with `since` (a time).
+     */
+    getConversationMessages: (id, params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+        ).toString();
+        return API.request(`/conversations/${encodeURIComponent(id)}/messages${query ? `?${query}` : ''}`);
+    },
     sendConversationMessage: (id, text) => API.request(`/conversations/${encodeURIComponent(id)}/messages`, {
         method: 'POST', body: JSON.stringify({ text }),
     }),

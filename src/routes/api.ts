@@ -3759,12 +3759,72 @@ router.get('/conversations', async (req, res) => {
     }
 });
 
+/** The most rows one answer of `GET /conversations/:id/messages` holds when the inbox asks for a page or a poll. */
+export const MESSAGES_ANSWER_MAX = 200;
+
+/**
+ * Which of a thread's messages `GET /conversations/:id/messages` answers: the query string in, the SQL and its parameters out (`$1` is
+ * the conversation). Pure. Every answer reaches the page oldest first; `newestFirst` says the rows come back the other way and are turned.
+ *
+ *   (nothing)          the newest 100, the route's only answer before it had pages: a dashboard still cached from then asks this way
+ *   limit=N            the newest N (1–200): what a thread opens on
+ *   limit=N&before=M   the N before message M: the page above, when the operator scrolls to the top
+ *   since=T            what was stored at or after T, up to 200: a poll, which asks from a little before the newest message it shows
+ *
+ * `before` is a message id, not a time: a time that went through JSON has lost its microseconds, and two rows stored by one transaction
+ * share theirs, so a page cut at a time could skip a row or show it twice. Ties are broken by id, the same way on every page.
+ */
+export function messagesQuery(query: Record<string, unknown>):
+    | { ok: true; sql: string; params: unknown[]; newestFirst: boolean }
+    | { ok: false; error: string } {
+    const first = (value: unknown): unknown => (Array.isArray(value) ? value[0] : value);
+    const given = (value: unknown): boolean => value !== undefined && value !== null && value !== '';
+    const limitRaw = first(query.limit);
+    const before = first(query.before);
+    const since = first(query.since);
+    const limit = Math.min(Math.max(parseInt(String(limitRaw), 10) || 100, 1), MESSAGES_ANSWER_MAX);
+
+    if (given(before) && given(since)) return { ok: false, error: 'Ask for the messages before one, or since a time, not both.' };
+    if (given(since)) {
+        const at = Date.parse(String(since));
+        if (!Number.isFinite(at)) return { ok: false, error: '`since` is not a time.' };
+        return {
+            ok: true, newestFirst: false,
+            sql: 'SELECT * FROM messages WHERE conversation_id = $1 AND created_at >= $2 ORDER BY created_at ASC, id ASC LIMIT $3',
+            params: [new Date(at).toISOString(), given(limitRaw) ? limit : MESSAGES_ANSWER_MAX],
+        };
+    }
+    if (given(before)) {
+        if (!isUuid(before)) return { ok: false, error: '`before` is not a message id.' };
+        // A row comparison against the cursor's own (created_at, id): a cursor that is not in this conversation compares as NULL, and the
+        // answer is empty rather than another thread's history.
+        return {
+            ok: true, newestFirst: true,
+            sql: 'SELECT * FROM messages WHERE conversation_id = $1 AND (created_at, id) < (SELECT b.created_at, b.id FROM messages b WHERE b.id = $3 AND b.conversation_id = $1) ORDER BY created_at DESC, id DESC LIMIT $2',
+            params: [limit, before],
+        };
+    }
+    if (given(limitRaw)) {
+        return { ok: true, newestFirst: true, sql: 'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2', params: [limit] };
+    }
+    // DESC then reverse, not ASC: with ASC LIMIT 100 a thread froze at message 101 —
+    // the UI appends only unseen ids, so every newer DM, including the one being
+    // answered, was invisible and the 5s poll refetched the same first 100 forever.
+    return { ok: true, newestFirst: true, sql: 'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 100', params: [] };
+}
+
 router.get('/conversations/:id/messages', async (req, res) => {
     try {
         const { id } = req.params;
 
         if (!isUuid(id)) {
             res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        const page = messagesQuery(req.query as Record<string, unknown>);
+        if (!page.ok) {
+            res.status(400).json({ error: page.error });
             return;
         }
 
@@ -3780,16 +3840,11 @@ router.get('/conversations/:id/messages', async (req, res) => {
             return;
         }
 
-        const messages = await pool.query(
-            // DESC then reverse, not ASC: with ASC LIMIT 100 a thread froze at message 101 —
-            // the UI appends only unseen ids, so every newer DM, including the one being
-            // answered, was invisible and the 5s poll refetched the same first 100 forever.
-            'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 100',
-            [id]
-        );
-        // Reversed back to chronological: the query takes the NEWEST 100, the client renders
+        const messages = await pool.query(page.sql, [id, ...page.params]);
+        // Turned back to chronological when the query took the newest end: the client renders
         // oldest-first. `sender` (v26) is always present, null before v26 and on old rows.
-        const rows = messages.rows.reverse().map((row) => ({ ...row, sender: messageSenderOf(row.sender) }));
+        const ordered = page.newestFirst ? messages.rows.reverse() : messages.rows;
+        const rows = ordered.map((row) => ({ ...row, sender: messageSenderOf(row.sender) }));
         // `ai` on the AI's replies (which model) and `delivery` on the customer's messages (is the reply failing): read-side extras that
         // never fail the list. See src/services/inboxDetail.ts for where each comes from and how sure it is.
         res.json(annotateMessages(rows, await loadMessageExtras(getTenantId(req), rows)));
