@@ -14,6 +14,7 @@ import { mediaRefsOf, type DownloadedMedia, type MediaRef } from './media.js';
 import { STEP_BUDGET_MS, type PerceiveResult } from './perceive.js';
 import type { Source } from './source.js';
 import type { Perception } from './types.js';
+import type { VoiceInput, VoiceResult } from './voice.js';
 
 setLogSink(() => {});
 
@@ -22,8 +23,8 @@ setLogSink(() => {});
 describe('primaryRef: the one thing in an event that Muse reads', () => {
     const attachment = (type: string, payload: Record<string, unknown> = { url: 'https://lookaside.fbsbx.com/x' }) => ({ type, payload });
 
-    it('is the first thing the customer SENT: a photo, a video, a shared reel or post, a shared story, a story mention', () => {
-        for (const [type, kind] of [['image', 'image'], ['video', 'video'], ['ig_reel', 'reel'], ['ig_post', 'share'], ['story', 'story_share'], ['story_mention', 'story_mention']] as const) {
+    it('is the first thing the customer SENT: a photo, a video, a voice note, a shared reel or post, a shared story, a story mention', () => {
+        for (const [type, kind] of [['image', 'image'], ['video', 'video'], ['audio', 'audio'], ['ig_reel', 'reel'], ['ig_post', 'share'], ['story', 'story_share'], ['story_mention', 'story_mention']] as const) {
             assert.equal(primaryRef({ attachments: [attachment(type)] })?.kind, kind, type);
         }
     });
@@ -34,9 +35,8 @@ describe('primaryRef: the one thing in an event that Muse reads', () => {
         assert.equal(primaryRef({ reply_to: { story: { url: 'https://lookaside.fbsbx.com/s', id: '1' } } })?.kind, 'story_reply');
     });
 
-    it('is null for what Muse does not read: a voice note (another phase), a sticker, a file, a view-once, an unsupported message, and no attachment at all', () => {
+    it('is null for what Muse does not read: a sticker, a file, a view-once, an unsupported message, and no attachment at all', () => {
         const none: unknown[] = [
-            { attachments: [attachment('audio')] },
             { attachments: [attachment('sticker', { url: 'https://x/s.png', sticker_id: 1 })] },
             { attachments: [attachment('image', { url: 'https://x/s.png', sticker_id: 369239263222822 })] },
             { attachments: [attachment('file')] },
@@ -47,8 +47,11 @@ describe('primaryRef: the one thing in an event that Muse reads', () => {
         for (const message of none) assert.equal(primaryRef(message), null, JSON.stringify(message));
     });
 
-    it('skips a voice note that comes with a photo and reads the photo', () => {
-        assert.equal(primaryRef({ attachments: [attachment('audio'), attachment('image')] })?.kind, 'image');
+    it('a voice note is read like the rest: the first thing sent is the one, and a voice reply to a story is the voice note and not the story', () => {
+        assert.equal(primaryRef({ attachments: [attachment('audio'), attachment('image')] })?.kind, 'audio');
+        assert.equal(primaryRef({ attachments: [attachment('image'), attachment('audio')] })?.kind, 'image');
+        assert.equal(primaryRef({ reply_to: { story: { url: 'https://lookaside.fbsbx.com/s', id: '1' } }, attachments: [attachment('audio')] })?.kind, 'audio');
+        assert.equal(primaryRef({ attachments: [attachment('audio', { url: 'https://lookaside.fbsbx.com/a.mp4' })] })?.url, 'https://lookaside.fbsbx.com/a.mp4');
     });
 
     it('storyReplyRef is the story a message answers, or null', () => {
@@ -65,6 +68,9 @@ const REF: MediaRef = mediaRefsOf({ attachments: [{ type: 'image', payload: { ur
 const MEDIA: DownloadedMedia = { mediaKind: 'image', mime: 'image/jpeg', bytes: Buffer.from('jpegbytes'), host: 'lookaside.fbsbx.com', ms: 80 };
 const VIDEO: DownloadedMedia = { mediaKind: 'video', mime: 'video/mp4', bytes: Buffer.from('mp4bytes'), host: 'scontent.fna.fbcdn.net', ms: 200 };
 const STORED_AT = '2026-10-30T10:00:20.000000+00:00';
+const VOICE: MediaRef = mediaRefsOf({ attachments: [{ type: 'audio', payload: { url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=7' } }] })[0]!;
+const TRANSCRIPT = 'عايز أعرف بكام الاشتراك';
+const HEARD: VoiceResult = { ok: true, status: 'ok', transcript: TRANSCRIPT, words: 4, durationMs: 3000, usd: 0.00015, model: 'muse-voice-transcribe-1.0', ms: 4_100 };
 
 const input = (over: Partial<PerceiveDmInput> = {}): PerceiveDmInput => ({
     creator: { id: 'creator-1', page_access_token: 'EAAGplaintext', instagram_page_id: 'ig-page-1' }, pageId: undefined, senderId: 'user-1', messageId: 'msg-1',
@@ -77,6 +83,7 @@ interface Probe {
     stored: any[];
     resolved: { ref: MediaRef; ctx: any }[];
     perceived: any[];
+    heardInputs: VoiceInput[];
     troubles: { creatorId: string; kind: string }[];
     deps: PerceiveDmDeps;
 }
@@ -88,12 +95,14 @@ function probe(world: {
     storeResult?: 'echo' | 'conflict' | 'gone';
     source?: Source;
     perception?: PerceiveResult;
+    heard?: VoiceResult;
 } = {}): Probe {
     const calls: string[] = [];
     const gated: any[] = [];
     const stored: any[] = [];
     const resolved: Probe['resolved'] = [];
     const perceived: any[] = [];
+    const heardInputs: VoiceInput[] = [];
     const troubles: Probe['troubles'] = [];
     let clock = 1_000_000;
     const deps: PerceiveDmDeps = {
@@ -111,9 +120,10 @@ function probe(world: {
             calls.push('perceive'); perceived.push(args); clock += 3_000;
             return world.perception ?? { perception: { v: 1, kind: args.kind, status: 'ok', seen: 'A price list.', about_owner: 'unclear', confidence: 0.9, model: 'muse-spark-1.3', ms: 3000, usd: 0.005 } };
         },
+        hear: async (i) => { calls.push('hear'); heardInputs.push(i); clock += 4_000; return world.heard ?? HEARD; },
         onProviderTrouble: async (creatorId, kind) => { calls.push('trouble'); troubles.push({ creatorId, kind }); },
     };
-    return { calls, gated, stored, resolved, perceived, troubles, deps };
+    return { calls, gated, stored, resolved, perceived, heardInputs, troubles, deps };
 }
 
 const stored = (p: Probe): Record<string, any> => p.stored[0]!.perception;
@@ -287,6 +297,127 @@ describe('perceiveDm: what is shown, and what is stored', () => {
         assert.equal(p.stored[0].text, null, 'the typed words stay what the row says');
         assert.equal(p.perceived[0].typed, true);
         assert.equal(stored(p).status, 'ok', 'but what was read is stored');
+    });
+});
+
+describe('perceiveDm: a voice note is heard through the same steps', () => {
+    const voice = (over: Partial<PerceiveDmInput> = {}): PerceiveDmInput => input({ ref: VOICE, keywords: ['Twelve-week plan', 'Sami Fit'], ...over });
+
+    it('gate (the voice switch), typing, what is said in it, the record: in that order, and Muse and the download of a picture are not used', async () => {
+        const p = probe();
+        const out = await perceiveDm(voice(), p.deps);
+
+        assert.deepEqual(p.calls, ['gate', 'typing', 'hear', 'store']);
+        assert.ok(out.kind === 'read' && !out.reused);
+        assert.equal(p.resolved.length + p.perceived.length, 0, 'a voice note is not shown to Muse');
+        assert.deepEqual(p.gated, [{ creatorId: 'creator-1', senderId: 'user-1', kind: 'audio', capability: 'voice' }], 'the switch is `voice`, not `dm_media`');
+    });
+
+    it('is told the tenant, the link Meta sent, the names to listen for, and the same 90-second clock the download of a picture is under', async () => {
+        const p = probe();
+        await perceiveDm(voice(), p.deps);
+        assert.deepEqual(p.heardInputs, [{
+            creatorId: 'creator-1', link: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=7', keywords: ['Twelve-week plan', 'Sami Fit'], deadlineAt: 1_000_000 + STEP_BUDGET_MS,
+        }]);
+    });
+
+    it('sends no keywords when it has none, and a picture is never told any', async () => {
+        const none = probe();
+        await perceiveDm(input({ ref: VOICE }), none.deps);
+        assert.ok(!('keywords' in none.heardInputs[0]!));
+        const picture = probe();
+        await perceiveDm(input({ keywords: ['x'] }), picture.deps);
+        assert.equal(picture.heardInputs.length, 0);
+        assert.equal(picture.perceived.length, 1);
+    });
+
+    it('stores what was said, once, and the BARE transcript is the row\'s text in the same statement: no label, no brackets', async () => {
+        const p = probe();
+        const out = await perceiveDm(voice(), p.deps);
+        assert.deepEqual(stored(p), { v: 1, kind: 'audio', status: 'ok', transcript: TRANSCRIPT, model: 'muse-voice-transcribe-1.0', ms: 4_100, usd: 0.00015 });
+        assert.equal(p.stored[0].text, TRANSCRIPT);
+        assert.ok(!p.stored[0].text.includes('['));
+        assert.deepEqual([p.stored[0].messageId, p.stored[0].creatorId], ['msg-1', 'creator-1']);
+        assert.ok(out.kind === 'read');
+        assert.equal(out.perception.stored_at, STORED_AT);
+    });
+
+    it('a note with no words in it is stored as unreadable, with what it cost, and leaves the row\'s text as the placeholder', async () => {
+        const p = probe({ heard: { ok: false, status: 'unreadable', reason: 'empty_transcript', transcript: '', words: 0, durationMs: 2000, usd: 0.0001, model: 'muse-voice-transcribe-1.0', ms: 3_900 } });
+        await perceiveDm(voice(), p.deps);
+        assert.deepEqual(stored(p), { v: 1, kind: 'audio', status: 'unreadable', reason: 'empty_transcript', model: 'muse-voice-transcribe-1.0', ms: 3_900, usd: 0.0001 });
+        assert.equal(p.stored[0].text, null);
+    });
+
+    it('a note that could not be heard is stored with its reason and no text: it did not decode, was too long, timed out, or Meta refused it', async () => {
+        for (const [reason, status] of [['decode_failed', 'failed'], ['too_large', 'failed'], ['timeout', 'failed'], ['provider_error', 'failed'], ['expired_url', 'failed'], ['budget', 'skipped'], ['no_key', 'skipped']] as const) {
+            const heard: VoiceResult = status === 'failed'
+                ? { ok: false, status: 'failed', reason, usd: 0, model: '', ms: 50 }
+                : { ok: false, status: 'skipped', reason: reason as 'budget' | 'no_key', usd: 0, model: '', ms: 50 };
+            const p = probe({ heard });
+            await perceiveDm(voice(), p.deps);
+            assert.deepEqual([stored(p).status, stored(p).reason, p.stored[0].text], [status, reason, null], reason);
+        }
+    });
+
+    it('a switch that is off or a sender who is not allowed leaves NOTHING behind for a voice note too: no typing, no download, no model, no write', async () => {
+        for (const reason of ['switch_off', 'not_allowed_sender', 'unsupported_kind'] as const) {
+            const p = probe({ gate: { ok: false, reason } });
+            const out = await perceiveDm(voice(), p.deps);
+            assert.deepEqual(out, { kind: 'declined', reason }, reason);
+            assert.deepEqual(p.calls, ['gate'], reason);
+        }
+    });
+
+    it('the day\'s cap and a missing key are written to the row for a voice note, as for a picture: no typing, nothing heard', async () => {
+        for (const reason of ['budget', 'no_key'] as const) {
+            const p = probe({ gate: { ok: false, reason } });
+            await perceiveDm(voice(), p.deps);
+            assert.deepEqual(p.calls, ['gate', 'store'], reason);
+            assert.deepEqual([stored(p).kind, stored(p).status, stored(p).reason], ['audio', 'skipped', reason]);
+        }
+    });
+
+    it('a retry reuses what was stored, and does not hear the note again or pay for it twice', async () => {
+        const earlier: Perception = { v: 1, kind: 'audio', status: 'ok', transcript: TRANSCRIPT, model: 'muse-voice-transcribe-1.0', stored_at: STORED_AT, ms: 4_100, usd: 0.00015 };
+        const p = probe({ stored: earlier });
+        const out = await perceiveDm(voice({ resumed: true }), p.deps);
+        assert.deepEqual(p.calls, ['readStored']);
+        assert.deepEqual(out, { kind: 'read', perception: earlier, reused: true });
+    });
+
+    it('is stored ONCE: when the row already has a record, that one is used and not ours', async () => {
+        const theirs: Perception = { v: 1, kind: 'audio', status: 'ok', transcript: 'what the other attempt heard', model: 'm', stored_at: STORED_AT, ms: 1, usd: 0 };
+        const p = probe({ storeResult: 'conflict', stored: theirs });
+        const out = await perceiveDm(voice(), p.deps);
+        assert.deepEqual(p.calls, ['gate', 'typing', 'hear', 'store', 'readStored']);
+        assert.ok(out.kind === 'read');
+        assert.equal(out.perception.transcript, 'what the other attempt heard');
+    });
+
+    it('tells the owner, once a day by the hook\'s own claim, when Meta refused the key or has no credit for a voice note; no other failure does', async () => {
+        for (const errorKind of ['auth', 'quota'] as const) {
+            const p = probe({ heard: { ok: false, status: 'failed', reason: 'provider_error', detail: `${errorKind}_401`, errorKind, usd: 0, model: 'muse-voice-transcribe-1.0', ms: 80 } });
+            await perceiveDm(voice(), p.deps);
+            assert.deepEqual(p.calls, ['gate', 'typing', 'hear', 'trouble', 'store'], errorKind);
+            assert.deepEqual(p.troubles, [{ creatorId: 'creator-1', kind: errorKind }], errorKind);
+        }
+        const other = probe({ heard: { ok: false, status: 'failed', reason: 'provider_error', detail: 'server_503', usd: 0, model: 'muse-voice-transcribe-1.0', ms: 80 } });
+        await perceiveDm(voice(), other.deps);
+        assert.deepEqual(other.troubles, []);
+    });
+
+    it('a notice that throws never changes what is stored or returned', async () => {
+        const p = probe({ heard: { ok: false, status: 'failed', reason: 'provider_error', errorKind: 'auth', usd: 0, model: '', ms: 1 } });
+        p.deps.onProviderTrouble = async () => { throw new Error('telegram down'); };
+        const out = await perceiveDm(voice(), p.deps);
+        assert.ok(out.kind === 'read' && out.perception.status === 'failed');
+    });
+
+    it('lets a database that cannot take the record through, for the pipeline to retry', async () => {
+        const p = probe();
+        p.deps.store = async () => { throw new Error('connection terminated'); };
+        await assert.rejects(perceiveDm(voice(), p.deps), /connection terminated/);
     });
 });
 

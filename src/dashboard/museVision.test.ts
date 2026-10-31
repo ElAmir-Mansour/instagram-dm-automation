@@ -8,7 +8,7 @@
  * chips) is for the live check after the merge.
  *
  * Pinned, because a screenshot cannot show it:
- *   - the shell: the three switches under the names the owner reads (voice and video memory marked "coming soon"), the help link, who it answers, the cap,
+ *   - the shell: the three switches under the names the owner reads (only video memory marked "coming soon": voice notes are live), the help link, who it answers, the cap,
  *     its own Save; read-only for a viewer AND for an operator (the route is the owner's), with the owner-only note for the second;
  *   - the state: what the server said is what is drawn (switches, list or everyone, cap, the key line with its model, today's spend), a block the server
  *     could not read draws nothing as chosen and saves nothing, a server without the block hides the card;
@@ -142,7 +142,7 @@ const hidden = (o: Opened, id: string): boolean => o.el(id).classes.has('hidden'
 
 describe('Meta vision card: the shell', () => {
     for (const lang of ['en', 'ar'] as const) {
-        it(`names the three switches as the owner reads them, marks only voice "coming soon" (video memory is live), and has no raw key (${lang})`, () => {
+        it(`names the three switches as the owner reads them, marks none "coming soon" (voice notes and video memory are live), and has no raw key (${lang})`, () => {
             const { page, t } = open({ lang, skipAdopt: true });
             const shell = String(page.museShell());
             assert.ok(text(shell).includes(text(t('muse.title'))));
@@ -150,8 +150,9 @@ describe('Meta vision card: the shell', () => {
             const rows = [...shell.matchAll(/<div class="toggle-block">([\s\S]*?)<\/div>\s*<label/g)].map((m) => m[1]!);
             assert.equal(rows.length, 3);
             assert.ok(rows[0]!.includes(t('muse.dmMedia')) && !rows[0]!.includes(t('muse.soon')), 'the first is live and says nothing of "soon"');
-            assert.ok(rows[1]!.includes(t('muse.voice')) && rows[1]!.includes(t('muse.soon')) && rows[1]!.includes(t('muse.soonNote')), 'voice is coming soon, and says what saving it does');
-            assert.ok(rows[2]!.includes(t('muse.memory')) && !rows[2]!.includes(t('muse.soon')) && !rows[2]!.includes(t('muse.soonNote')), 'video memory is live: no "coming soon" and no note about saving only the choice');
+            assert.ok(rows[1]!.includes(t('muse.voice')) && rows[1]!.includes(t('muse.voiceDesc')), 'voice notes are live: named and described');
+            assert.ok(!rows[1]!.includes(t('muse.soon')) && !rows[1]!.includes(t('muse.soonNote')) && !rows[1]!.includes('muse-soon'), 'and say nothing of "soon"');
+            assert.ok(rows[2]!.includes(t('muse.memory')) && !rows[2]!.includes(t('muse.soon')) && !rows[2]!.includes(t('muse.soonNote')), 'video memory is live: no "coming soon"');
             assert.ok(rows[2]!.includes(t('muse.memoryDesc')));
             for (const id of ['muse-dm-media', 'muse-voice', 'muse-memory']) assert.match(shell, new RegExp(`<input type="checkbox" id="${id}" aria-describedby="${id}-desc"`));
             assert.equal(/muse\.[a-zA-Z.]+/.test(text(shell)), false, 'no raw key reaches the screen');
@@ -827,12 +828,22 @@ describe('Meta vision card: the words', () => {
         }
     });
 
-    it('says what the card does in the owner\'s own terms: voice and memory are stored and read by nothing yet, and a file is not stored', () => {
+    it('says what the card does in the owner\'s own terms: video memory is stored and read by nothing yet, and a file is not stored', () => {
         const { t } = open({ skipAdopt: true });
         assert.match(t('muse.soonNote'), /only saves your choice/);
         assert.match(t('muse.intro'), /not stored by us/);
         assert.match(t('muse.capDesc'), /0 keeps it off/);
     });
+
+    for (const lang of ['en', 'ar'] as const) {
+        it(`names a voice note wherever the card says what is read, kept and capped, so it never promises less than the pipeline does (${lang})`, () => {
+            const { t } = open({ lang, skipAdopt: true });
+            const word = lang === 'en' ? /voice note/i : /الرسائل? الصوتية|رسالة صوتية|رسائلهم الصوتية/;
+            for (const key of ['muse.intro', 'muse.whoEveryoneNote', 'muse.capDesc']) assert.match(t(key), word, `${lang} ${key}`);
+            // Under the switch named «Voice notes», what is kept of one and what is not: the words, never the audio.
+            assert.match(t('muse.voiceDesc'), lang === 'en' ? /the audio is not/ : /ولا يُحفظ الصوت/);
+        });
+    }
 });
 
 // ─── The Help section ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -872,7 +883,8 @@ describe('Meta vision card: the Help section it links to', () => {
             }
             assert.ok(body.includes(lang === 'en' ? `from 0 to ${MUSE_DAILY_USD_MAX}` : `من 0 إلى ${MUSE_DAILY_USD_MAX}`), `${lang}: the cap's bounds are the server's`);
             const terms = (section.body[lang] as Json[]).find((b) => b && Array.isArray(b.dl))!.dl.map((row: string[]) => row[0]);
-            assert.equal(terms.length, 6, 'the switches, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
+            assert.equal(terms.length, 7, 'the switches, voice notes, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
+            assert.ok(body.includes(`**${labels['muse.voice']}**`) && terms.includes(lang === 'en' ? 'Voice notes' : 'الرسائل الصوتية'), `${lang}: voice notes have a row of their own`);
         });
     }
 
@@ -886,9 +898,27 @@ describe('Meta vision card: the Help section it links to', () => {
         assert.match(body, /only saves your choice/);
     });
 
+    it('says in English what a voice note is: who writes it down, how long it may be, what is asked again, that it has its own switch and what it costs', () => {
+        const body = textOf('en');
+        const row = ((section.body.en as Json[]).find((b) => b && Array.isArray(b.dl))!.dl as string[][]).find((r) => r[0] === 'Voice notes')![1]!;
+        assert.match(row, /Meta’s speech model writes a voice note down/);
+        assert.match(row, /a refund or a complaint said aloud is read like one written/);
+        assert.match(row, /up to 3 minutes/);
+        assert.match(row, /asked to send it again/);
+        assert.match(row, /the switch is its own/);
+        assert.match(row, /\$0\.18 per hour of audio/);
+        // The switches row no longer says voice is to come, and still says so for video memory alone.
+        assert.match(body, /\*\*Answer photos, reels and story mentions\*\* and \*\*Voice notes\*\* work today/);
+        assert.match(body, /\*\*Video memory\*\* is coming soon/);
+        assert.doesNotMatch(body, /Voice notes\*\* and \*\*Video memory\*\* are coming soon/);
+    });
+
     it('says the same in Arabic, and in the Help Center\'s own voice, without the words the product never says', () => {
         const body = textOf('ar');
         assert.match(body, /ما نحفظ الملف/);
+        assert.match(body, /مدة الرسالة تصل إلى 3 دقائق/);
+        assert.match(body, /0\.18 دولار لكل ساعة صوت/);
+        assert.match(body, /\*\*الرسائل الصوتية\*\* يشتغلون اليوم/);
         assert.match(body, /ماسنجر وواتساب/);
         assert.match(body, /النماذج القياسية/);
         for (const banned of [/بوت/, /ذكي/, /\bbots?\b/i, /instant/i]) {

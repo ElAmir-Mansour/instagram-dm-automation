@@ -176,8 +176,8 @@ export interface PerceivedTurn {
     kind: PerceptionKind;
     /**
      * `inbound.text` is the model's DESCRIPTION of what they sent (`[shared reel] A reel about …`), not words they typed, so the refund/complaint prefilter does not read it
-     * (R9), and the reply is answered from the description alone. False when they typed the words (a reply to a story that has some: the story is only context),
-     * and the prefilter then reads them as ever.
+     * (R9), and the reply is answered from the description alone. False when the words are theirs: typed (a reply to a story that has some: the story is only context) or
+     * SPOKEN (a voice note's transcript is what they said, and a refund asked for aloud is a refund asked for), and the prefilter then reads them as ever.
      */
     describedText: boolean;
     /** The facts block's "What the customer sent: …" line (`perceivedFact`), already one line. Null: nothing to add. */
@@ -655,10 +655,11 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     const { decision } = chosen;
 
-    // A message with no words is answered after a read that takes seconds, and its siblings arrive in them: three photos in a burst are ONE answer, the newest's. The check
-    // made at the top of the turn could not see a sibling whose own read had not finished, so it is made again now that the answer is written and before it is sent. Only
-    // for such a turn, and only for a plain reply: a hand-off, an opt-out and a calm word are decisions that must not be lost to a message that has not been read yet.
-    if (input.perceived?.describedText && decision.effect === 'reply') {
+    // A message with no words is answered after a read that takes seconds, and its siblings arrive in them: three photos in a burst are ONE answer, the newest's, and so are
+    // two voice notes. The check made at the top of the turn could not see a sibling whose own read had not finished, so it is made again now that the answer is written and
+    // before it is sent. Only for a turn whose text a read made (a description, or a voice note's words: typed words are ready when they arrive), and only for a plain
+    // reply: a hand-off, an opt-out and a calm word are decisions that must not be lost to a message that has not been read yet.
+    if (input.perceived && (input.perceived.describedText || input.perceived.kind === 'audio') && decision.effect === 'reply') {
         const late = await supersession(conversation.id, inbound.id);
         if (late.newerUnhandled || late.answered) {
             log('info', 'dm.sales_superseded', { ...logBase, newer_unhandled: late.newerUnhandled, answered: late.answered, late: true });

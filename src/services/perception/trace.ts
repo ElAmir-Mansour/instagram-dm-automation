@@ -9,7 +9,7 @@
  */
 import type { TurnEffect } from '../dmSales/flow.js';
 import type { HandoffReason, Intent, NextAction } from '../dmSales/types.js';
-import { readNoun } from './how.js';
+import { readNoun, readPhrase } from './how.js';
 import { watchFrom } from './text.js';
 import type { PerceptionKind } from './types.js';
 
@@ -85,7 +85,7 @@ function recallPhrase(recall: NonNullable<TraceInput['recall']>): string {
 
 /** How the line begins: what was read and how, then what the library gave, in the order they happened. */
 function opening(t: TraceInput): string {
-    const read = t.kind ? (t.read ?? `Read ${readNoun(t.kind)}`) : null;
+    const read = t.kind ? (t.read ?? readPhrase(t.kind, undefined)) : null;
     const recall = t.recall ? recallPhrase(t.recall) : null;
     if (read && recall) return `${read}, and ${recall}`;
     if (read) return read;

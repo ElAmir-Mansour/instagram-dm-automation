@@ -179,7 +179,11 @@ export function setMediaFetch(next: FetchLike | undefined): FetchLike | undefine
     return previous;
 }
 
-const liveDownload: NonNullable<SourceDeps['download']> = (link, options) => fetchMedia(link, { kind: options.kind, connectMs: options.connectMs, totalMs: options.totalMs, ...(mediaFetch ? { fetchImpl: mediaFetch } : {}) });
+/**
+ * One media download, through the seam above. Exported so that a voice note is downloaded by the same code, through the same seam, as a picture (`dm.ts`): a test that
+ * replaces the CDN replaces it for both.
+ */
+export const liveDownload: NonNullable<SourceDeps['download']> = (link, options) => fetchMedia(link, { kind: options.kind, connectMs: options.connectMs, totalMs: options.totalMs, ...(mediaFetch ? { fetchImpl: mediaFetch } : {}) });
 
 /** A library read that fails is no library: the reel is then watched instead. */
 const liveLibrary: NonNullable<SourceDeps['library']> = async (creatorId, id) => {

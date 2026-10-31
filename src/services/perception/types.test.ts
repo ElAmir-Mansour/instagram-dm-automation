@@ -46,7 +46,7 @@ describe('the reasons perception gives, as the data model lists them', () => {
     });
 
     it('failed and unreadable', () => {
-        assert.deepEqual([...FAIL_REASONS], ['too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout']);
+        assert.deepEqual([...FAIL_REASONS], ['too_large', 'fetch_failed', 'expired_url', 'provider_error', 'timeout', 'decode_failed']);
         assert.deepEqual([...UNREADABLE_REASONS], ['low_confidence', 'empty_transcript']);
     });
 

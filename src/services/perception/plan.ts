@@ -3,7 +3,8 @@
  * language in, one of two plans out, and `src/webhook/messaging.ts` carries it out.
  *
  *   answer   the sales turn answers it: the description is the row's `text` and its fact is told to the model (a shared reel, a photo, a story, a video).
- *            A personal document is an answer too, and is handed to a person by the turn without a model.
+ *            A personal document is an answer too, and is handed to a person by the turn without a model. A VOICE NOTE is answered from its bare transcript, which is
+ *            the customer's own words and not a description: the turn reads it for a refund or a complaint as it reads typed words, and tells the model no fact beside it.
  *   ack      the fixed line goes out, exactly as it always did (`attachmentAck.ts`), with a trace of why: the kit's `resend` when the model could not read what a
  *            person SENT with confidence, the thanks that NAMES the story for a story mention, and today's line for every other outcome (the media did not come, the
  *            daily cap was reached, the model failed).
@@ -23,8 +24,11 @@ export type WordlessPlan =
     /** A fixed line goes out. `line` is the kit's request or thanks when perception chose one; absent, the kit's usual line. */
     | { kind: 'ack'; perception?: { line?: string; reason: string; perceived: boolean } };
 
-/** The kinds a person SENT, for which "send it again" means something. A story they replied to is the account's own, and a mention is their own story: nothing to resend. */
-const RESENDABLE: ReadonlySet<PerceptionKind> = new Set<PerceptionKind>(['reel', 'share', 'story_share', 'image', 'video']);
+/**
+ * The kinds a person SENT, for which "send it again" means something: a voice note in which no words could be made out among them. A story they replied to is the
+ * account's own, and a mention is their own story: nothing to resend.
+ */
+const RESENDABLE: ReadonlySet<PerceptionKind> = new Set<PerceptionKind>(['reel', 'share', 'story_share', 'image', 'video', 'audio']);
 
 /** Why a step that was asked for did not come to be, as a sentence. */
 const FAILED: Readonly<Record<string, string>> = Object.freeze({
@@ -33,6 +37,7 @@ const FAILED: Readonly<Record<string, string>> = Object.freeze({
     expired_url: 'its link had expired',
     provider_error: 'the reading service could not read it',
     timeout: 'it took too long',
+    decode_failed: 'the voice note could not be decoded',
 });
 
 const SKIPPED: Readonly<Record<string, string>> = Object.freeze({
@@ -62,13 +67,22 @@ export function planOf(p: Perception, lines: Pick<AttachmentLines, 'mentionNamed
         return {
             kind: 'answer',
             text: perceivedText(p.kind, p),
-            perceived: { kind: p.kind, describedText: true, sent: perceivedFact(p), read: readPhrase(p.kind, p.seen), personal: p.about_owner === 'personal' },
+            perceived: {
+                kind: p.kind,
+                // A voice note's text is what they SAID: their own words, which the refund/complaint prefilter reads as it reads typed ones (R9 is about a model's description).
+                describedText: p.kind !== 'audio',
+                sent: perceivedFact(p),
+                read: readPhrase(p.kind, p.seen),
+                personal: p.about_owner === 'personal',
+            },
         };
     }
     if (p.status === 'unreadable') {
-        return RESENDABLE.has(p.kind)
-            ? { kind: 'ack', perception: { line: lines.resend, reason: 'Could not read it with confidence, so it asked them to send it again.', perceived: false } }
-            : { kind: 'ack', perception: { reason: 'Could not read it with confidence, so it sent the usual line.', perceived: false } };
+        if (!RESENDABLE.has(p.kind)) return { kind: 'ack', perception: { reason: 'Could not read it with confidence, so it sent the usual line.', perceived: false } };
+        const reason = p.kind === 'audio'
+            ? 'Could not make out any words in it, so it asked them to send it again.'
+            : 'Could not read it with confidence, so it asked them to send it again.';
+        return { kind: 'ack', perception: { line: lines.resend, reason, perceived: false } };
     }
     return { kind: 'ack', perception: { reason: notReadReason(p), perceived: false } };
 }

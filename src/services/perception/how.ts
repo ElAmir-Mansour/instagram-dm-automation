@@ -58,9 +58,10 @@ const READ: Readonly<Record<PerceptionKind, string>> = Object.freeze({
 
 export const readNoun = (kind: PerceptionKind): string => READ[kind];
 
-/** How the trace begins: what was read and how, in the words of what really happened. Pure. */
+/** How the trace begins: what was read and how, in the words of what really happened. A voice note is not looked at: it is heard. Pure. */
 export function readPhrase(kind: PerceptionKind, seen: string | undefined): string {
     const noun = READ[kind];
+    if (kind === 'audio') return `Heard ${noun}`;
     const { how, captioned } = howOf(seen);
     switch (how) {
         case 'watched': return `Watched ${noun}`;

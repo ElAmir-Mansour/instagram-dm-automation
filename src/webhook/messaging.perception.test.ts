@@ -12,7 +12,9 @@
  *   - a shared reel is watched only when it is the creator's own (the Graph API says so), and anyone else's is read from its cover and caption or its caption alone;
  *   - a story mention is thanked by name, and every failure of the read is the line it always got, with the reason on the row;
  *   - a story reply that has words is answered from the words, with the story as context;
- *   - the follower's name, username and id never leave: the call to Meta holds the media, a caption and the account's own handle.
+ *   - the follower's name, username and id never leave: the call to Meta holds the media, a caption and the account's own handle;
+ *   - a voice note is heard (T050): downloaded, decoded and written down by Meta's speech model, stored as its BARE transcript, and answered as the customer's own words
+ *     (the refund prefilter reads them); fewer than two words is asked for again; every "no" and every failure is today's line.
  * The calls with Muse OFF are pinned in `messaging.test.ts`.
  */
 import assert from 'node:assert/strict';
@@ -20,12 +22,16 @@ import axios from 'axios';
 import { after, before, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../services/aiProviders/generate.js';
-import { AiError } from '../services/llm/errors.js';
+import type { TranscribeWithMetaArgs, TranscribeWithMetaResult } from '../services/aiProviders/asr.js';
+import { AiError, type AiErrorKind } from '../services/llm/errors.js';
+import { wavBytes } from '../services/llm/testAudio.js';
 import { metaHttp } from '../services/http.js';
 import { withSales } from '../services/dmSales/testFixtures.js';
 import { gatePerception } from '../services/perception/gate.js';
 import { setPerceiveDmDeps } from '../services/perception/dm.js';
-import { setMediaFetch } from '../services/perception/source.js';
+import { liveDownload, setMediaFetch } from '../services/perception/source.js';
+import type { TranscodeResult } from '../services/perception/transcode.js';
+import { transcribeVoice } from '../services/perception/voice.js';
 import { FITNESS_EN } from '../services/profile/fixtures.js';
 import { KITS } from '../services/profile/kits.js';
 import { throughJsonb } from '../services/profile/testSupport.js';
@@ -58,6 +64,13 @@ const STORED_AT = '2026-10-30T10:00:20.000000+00:00';
 const reading = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     readable: true, seen: 'A screenshot of the plan price list.', transcript: '', about_owner: 'unclear', confidence: 0.92, mention_summary: '', ...over,
 });
+/** What Meta's speech model answers for a voice note: a question about the plan, as a customer would put it. */
+const SPOKEN = 'How much is the twelve-week plan and is there a certificate?';
+const heardBy = (over: Partial<TranscribeWithMetaResult> = {}): TranscribeWithMetaResult => ({
+    transcript: SPOKEN, durationMs: 3000, model: 'muse-voice-transcribe-1.0', usd: 0.00015, usageId: '8', elapsedMs: 900, ...over,
+});
+const asrFailure = (kind: AiErrorKind, status?: number): never => { throw new AiError({ kind, provider: 'meta', model: 'muse-voice-transcribe-1.0', message: `a ${kind} failure`, ...(status ? { status } : {}) }); };
+
 /** What a sales answer looks like. */
 const salesReply = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     intent: 'info', stage: 'recommend', next_action: 'reply', offer_id: 'none', handoff_reason: 'none', text: 'It is a twelve-week plan for busy parents.', quick_replies: [], ...over,
@@ -97,6 +110,10 @@ interface World {
     /** What `UPDATE messages SET perception` returns; absent, the statement's own record with `stored_at`; `[]` is "the row already had one". */
     storeRows?: Row[] | 'throw';
     history?: { direction: 'inbound' | 'outbound'; text: string; sender?: string }[];
+    /** A voice note: what Meta's speech model answers (each call, counted from 1; it may throw an `AiError`); absent, a question about the plan. */
+    transcribe?: (args: TranscribeWithMetaArgs, n: number) => Promise<TranscribeWithMetaResult>;
+    /** A voice note: what the decoder makes of the downloaded bytes; absent, a 3-second WAV. */
+    decode?: () => TranscodeResult;
 }
 
 interface R {
@@ -106,6 +123,7 @@ interface R {
     sends: Sent[];
     perceiveCalls: AiGenerateArgs[];
     salesCalls: AiGenerateArgs[];
+    asrCalls: TranscribeWithMetaArgs[];
     fetched: string[];
     graphGets: { url: string; fields: unknown }[];
     logged: { level: string; event: string; [k: string]: unknown }[];
@@ -124,6 +142,7 @@ async function run(event: any, world: World = {}, options: WebhookHandlerOptions
     const sends: Sent[] = [];
     const perceiveCalls: AiGenerateArgs[] = [];
     const salesCalls: AiGenerateArgs[] = [];
+    const asrCalls: TranscribeWithMetaArgs[] = [];
     const fetched: string[] = [];
     const graphGets: R['graphGets'] = [];
     const logged: R['logged'] = [];
@@ -174,6 +193,13 @@ async function run(event: any, world: World = {}, options: WebhookHandlerOptions
             tellOwner: async (n) => { budgetNotices.push(n); },
         }),
         onProviderTrouble: async (creatorId, kind) => { notices.push({ creatorId, kind }); },
+        // A voice note: the REAL steps. The download is the CDN stub through the same seam a picture's uses; the decoder (it needs a binary) and the speech model (it needs
+        // Meta's key and a database for its row) are stand-ins, and every other part (the clock, the retry, the words, the record) is the real one.
+        hear: (input) => transcribeVoice(input, {
+            download: (link, options) => liveDownload(link, { kind: 'audio', ...options }),
+            decode: async () => { timeline.push('DECODE'); return (world.decode ?? (() => ({ ok: true, wav: wavBytes({ seconds: 3 }), durationMs: 3000, ms: 5 })))(); },
+            transcribe: async (args) => { timeline.push('ASR'); asrCalls.push(args); return (world.transcribe ?? (async () => heardBy()))(args, asrCalls.length); },
+        }),
     });
     invalidateTenantCache();
 
@@ -249,7 +275,7 @@ async function run(event: any, world: World = {}, options: WebhookHandlerOptions
         setLogSink(sink);
         invalidateTenantCache();
     }
-    return { error, executed, timeline, sends, perceiveCalls, salesCalls, fetched, graphGets, logged, notices, budgetNotices, geminiCalls };
+    return { error, executed, timeline, sends, perceiveCalls, salesCalls, asrCalls, fetched, graphGets, logged, notices, budgetNotices, geminiCalls };
 }
 
 // ─── Events ─────────────────────────────────────────────────────────────────────────────────
@@ -265,6 +291,14 @@ const post = () => ev({ mid: 'mid-post', attachments: [{ type: 'ig_post', payloa
 const mention = () => ev({ mid: 'mid-mention', attachments: [{ type: 'story_mention', payload: { url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=444' } }] });
 const STORY_URL = 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=555';
 const storyReply = (text?: string) => ev({ mid: 'mid-sr', ...(text ? { text } : {}), reply_to: { story: { url: STORY_URL, id: '18000000000000001' } } });
+
+/** A voice note: type `audio`, a Meta CDN link, no words. */
+const VOICE_URL = 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=666';
+const voice = (mid = 'mid-voice') => ev({ mid, attachments: [{ type: 'audio', payload: { url: VOICE_URL } }] });
+/** The CDN serves a voice note as an MP4 with the AAC inside. */
+const AUDIO: Media = { status: 200, type: 'video/mp4', body: 'm4abytes' };
+/** Everything a voice note needs to be heard: its own switch on (and `dm_media` as the default leaves it, on), and a link that answers. */
+const VOICE_ON: World = { switches: { voice: true }, media: { 'asset_id=666': AUDIO } };
 
 const OWN_REEL_NODE = { data: { media_type: 'VIDEO', media_url: 'https://scontent.fna.fbcdn.net/o1/v/t2/reel.mp4', owner: { id: OWN_IG }, caption: 'Backend in 37 seconds', id: REEL_ID } };
 const notOurs = () => Object.assign(new Error('graph'), { response: { status: 400, data: { error: { code: 100, message: 'Unsupported get request.' } } } });
@@ -621,14 +655,6 @@ describe('Meta Muse on: every "no" is today\'s line, in the order the questions 
         assert.equal(logs(r, 'perception.skipped:switch_off').length, 1);
     });
 
-    it('a voice note is not read, whatever is switched on: it is another phase, and today\'s line stays', async () => {
-        const r = await run(ev({ mid: 'mid-a', attachments: [{ type: 'audio', payload: { url: 'https://lookaside.fbsbx.com/a.mp4' } }] }), { switches: { dm_media: true, voice: true }, media: { 'a.mp4': MP4 } });
-        assert.equal(r.fetched.length, 0);
-        assert.equal(r.perceiveCalls.length, 0);
-        assert.equal(claimOf(r)!.params[3], KITS.en.attachments.media);
-        assert.deepEqual(aiMetaOfAck(r), { engine: 'rule', reply: 'attachment_ack', kind: 'audio' });
-    });
-
     it('the day\'s cap reached: today\'s line, the reason on the row, the owner told once; and nothing is downloaded or asked', async () => {
         const r = await run(photo(), { spentUsd: 3, dailyUsd: 3, media: { 'asset_id=111': JPEG } });
         assert.equal(r.fetched.length, 0);
@@ -790,6 +816,399 @@ describe('Meta Muse on: a read message that cannot be answered is handed over li
         assert.equal(r.error, null);
         assert.ok(!r.executed.some((e) => /stage = 'handoff'/.test(e.sql)));
         assert.ok(handled(r));
+    });
+});
+
+// ─── A voice note (T050) ────────────────────────────────────────────────────────────────────
+
+describe('Meta Muse on: a voice note', () => {
+    it('is heard after "typing…", stored once as its BARE transcript, and the sales turn answers the words as the customer\'s own', async () => {
+        const r = await run(voice(), VOICE_ON);
+
+        assert.equal(r.error, null);
+        // The order: the gate's reads, typing, the download, the decoder, Meta's speech model, the record, the sales turn, the reply. The picture model is not in it.
+        const order = r.timeline.filter((c) => /^(META|FETCH|DECODE|ASR|MUSE|SALES|SQL UPDATE messages SET perception)/.test(c)).map((c) => c.replace(/ = \$3.*$/, ''));
+        assert.deepEqual(order, ['META typing_on', 'FETCH', 'DECODE', 'ASR', 'SQL UPDATE messages SET perception', 'META mark_seen', 'META typing_on', 'SALES', 'META message']);
+        assert.equal(r.timeline.filter((c) => c === 'META typing_on').length, 2, 'once before the slow part, once by the sales turn while its model thinks');
+        assert.deepEqual(r.fetched, [VOICE_URL], 'the link Meta sent, and nothing else');
+        assert.equal(r.perceiveCalls.length, 0, 'the picture model is never asked about a voice note');
+        assert.equal(r.asrCalls.length, 1);
+
+        const stored = storeOf(r)!;
+        assert.deepEqual(stored.params.slice(0, 2), ['msg-1', 'creator-1']);
+        assert.equal(stored.params[3], SPOKEN, 'the row\'s text is the bare transcript: no "[voice note]" in front of it, so history, the inbox and the sales turn all read their words');
+        assert.match(stored.sql, /WHERE id = \$1 AND creator_id = \$2 AND perception IS NULL/);
+        assert.deepEqual(storedRecord(r), { v: 1, kind: 'audio', status: 'ok', transcript: SPOKEN, model: 'muse-voice-transcribe-1.0', ms: storedRecord(r).ms, usd: 0.00015 });
+
+        assert.equal(r.salesCalls.length, 1);
+        assert.equal(r.salesCalls[0]!.purpose, 'dm');
+        assert.ok(lastUser(r.salesCalls[0]!).endsWith(SPOKEN), 'the model reads what they said, as they said it');
+        assert.ok(!lastUser(r.salesCalls[0]!).includes('What the customer sent'), 'and is told no "description": a voice note has none');
+        const reply = recordedReply(r)!;
+        assert.equal(reply.aiMeta.perceived, true);
+        assert.equal(reply.aiMeta.reason, 'Heard a voice note; answered from the account\'s own information, because they want to know more.');
+        assert.equal(messages(r).length, 1);
+        assert.match(messages(r)[0]!.body.message.text, /It is a twelve-week plan/);
+        assert.equal(claimOf(r), undefined, 'no fixed line: the sales turn answered');
+        assert.ok(handled(r));
+        assert.equal(r.geminiCalls, 0);
+    });
+
+    it('the call to the speech model holds the audio, the account\'s names as hints, and nothing of the follower: no name, no username, no id', async () => {
+        const r = await run(voice(), VOICE_ON);
+        const call = r.asrCalls[0]!;
+        assert.equal(call.creatorId, 'creator-1');
+        assert.deepEqual(call.wav, wavBytes({ seconds: 3 }), 'what the decoder made');
+        assert.ok(call.keywords!.includes('Twelve-week plan') && call.keywords!.includes('One-to-one call'), 'the offers\' names');
+        assert.ok(call.timeoutMs! > 0 && call.timeoutMs! <= 30_000, 'cut to the step\'s own clock');
+        const text = JSON.stringify({ ...call, wav: undefined });
+        assert.ok(!/user-1/.test(text), 'the sender\'s id');
+        assert.ok(!/sami\.fit/.test(text), 'a handle is not a spoken word');
+    });
+
+    it('is never written anywhere as a file: the only writes are the record and the replies', async () => {
+        const r = await run(voice(), VOICE_ON);
+        assert.ok(!r.executed.some((e) => /media_uploads/.test(e.sql)));
+        assert.ok(!JSON.stringify(r.executed.map((e) => e.params)).includes(Buffer.from('m4abytes').toString('base64')), 'not even in a parameter');
+    });
+
+    it('the log says how long it was, how many words and what it cost, and never the words, the link or the audio', async () => {
+        const r = await run(voice(), VOICE_ON);
+        const heard = logs(r, 'perception.voice_heard');
+        assert.equal(heard.length, 1);
+        assert.equal(heard[0]!.words, 11);
+        assert.equal(heard[0]!.audio_ms, 3000);
+        assert.equal(heard[0]!.usd, 0.00015);
+        assert.equal(logs(r, 'perception.stored')[0]!.via, 'voice');
+        const everything = JSON.stringify(r.logged);
+        assert.ok(!everything.includes('twelve-week plan and is there'), 'the words');
+        assert.ok(!everything.includes('asset_id=666'), 'the link');
+        assert.ok(!everything.includes('m4abytes'), 'the audio');
+    });
+
+    it('is the customer\'s OWN words: a refund asked for aloud is handed to a person, as one typed would be, and no model is asked', async () => {
+        const r = await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: 'I want a refund for the plan please' }) });
+        assert.equal(r.error, null);
+        assert.equal(r.salesCalls.length, 0, 'the prefilter reads what they said');
+        const reply = recordedReply(r)!;
+        assert.equal(reply.aiMeta.engine, 'prefilter');
+        assert.equal(reply.pauseBot, true);
+        assert.equal(reply.stage, 'handoff');
+        assert.equal(storeOf(r)!.params[3], 'I want a refund for the plan please');
+    });
+
+    it('is answered in Arabic as it is heard: the transcript is stored as it came, one line, and the model gets it', async () => {
+        const spoken = 'كم سعر الخطة وهل فيها شهادة؟';
+        const r = await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: spoken }) });
+        assert.equal(storeOf(r)!.params[3], spoken);
+        assert.ok(lastUser(r.salesCalls[0]!).endsWith(spoken));
+    });
+
+    it('fewer than two words is asked for again, in the kit\'s words: no guess, no sales turn, one fixed line with the reason on the row', async () => {
+        for (const said of ['Hello', '', '...', 'mm']) {
+            const r = await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: said }) });
+
+            assert.equal(r.error, null, said);
+            assert.equal(r.salesCalls.length, 0, said);
+            assert.equal(claimOf(r)!.params[3], KITS.en.attachments.resend, said);
+            assert.deepEqual(aiMetaOfAck(r), { engine: 'rule', reply: 'attachment_ack', kind: 'audio', reason: 'Could not make out any words in it, so it asked them to send it again.' }, said);
+            assert.equal(messages(r)[0]!.body.message.text, `${KITS.en.disclosure}\n${KITS.en.attachments.resend}`, said);
+            const record = storedRecord(r);
+            assert.equal(record.status, 'unreadable', said);
+            assert.equal(record.reason, 'empty_transcript', said);
+            assert.equal(storeOf(r)!.params[3], null, 'and the row\'s text is still the placeholder');
+            assert.ok(handled(r), said);
+        }
+        // What little was heard is kept with the record, and nothing at all is not.
+        assert.equal(storedRecord(await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: 'Hello' }) })).transcript, 'Hello');
+        assert.equal(storedRecord(await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: '' }) })).transcript, undefined);
+    });
+
+    it('two words are enough: they are answered', async () => {
+        const r = await run(voice(), { ...VOICE_ON, transcribe: async () => heardBy({ transcript: 'Plan price?' }) });
+        assert.equal(r.salesCalls.length, 1);
+        assert.equal(claimOf(r), undefined);
+    });
+
+    it('a voice note sent as the reply to a story is the voice note: what they SENT comes before the story, so it is heard and the story is not downloaded', async () => {
+        const r = await run(
+            ev({ mid: 'mid-vr', attachments: [{ type: 'audio', payload: { url: VOICE_URL } }], reply_to: { story: { url: STORY_URL, id: '18000000000000001' } } }),
+            { ...VOICE_ON, media: { 'asset_id=666': AUDIO, 'asset_id=555': JPEG } }
+        );
+        assert.equal(r.error, null);
+        assert.deepEqual(r.fetched, [VOICE_URL]);
+        assert.equal(storedRecord(r).kind, 'audio');
+        assert.equal(r.perceiveCalls.length, 0);
+        assert.equal(r.salesCalls.length, 1);
+    });
+});
+
+describe('Meta Muse on: a voice note has its own switch, and every "no" is today\'s line', () => {
+    const today = (r: R, why?: string) => {
+        assert.equal(r.error, null);
+        assert.deepEqual(r.fetched, [], 'nothing is downloaded');
+        assert.equal(r.asrCalls.length, 0, 'the speech model is not asked');
+        assert.equal(r.perceiveCalls.length, 0);
+        assert.deepEqual(actions(r), [], 'no typing: nothing is being worked on');
+        assert.equal(claimOf(r)!.params[3], KITS.en.attachments.media);
+        assert.ok(!r.timeline.includes('DECODE'));
+        if (why) assert.equal(logs(r, `perception.skipped:${why}`).length, 1);
+    };
+
+    it('the voice switch OFF (the default) with the media switch ON: today\'s line, nothing written, and the gate says why', async () => {
+        const r = await run(voice(), { switches: { dm_media: true, voice: false }, media: { 'asset_id=666': AUDIO } });
+        today(r, 'switch_off');
+        assert.equal(storeOf(r), undefined, 'nothing is written');
+        assert.deepEqual(aiMetaOfAck(r), { engine: 'rule', reply: 'attachment_ack', kind: 'audio' }, 'the row is exactly what it always was');
+    });
+
+    it('the voice switch is its own: ON with the media switch OFF, a voice note is heard and a photo is not', async () => {
+        const world: World = { ...VOICE_ON, switches: { dm_media: false, voice: true }, media: { 'asset_id=666': AUDIO, 'asset_id=111': JPEG } };
+        const heard = await run(voice(), world);
+        assert.equal(heard.asrCalls.length, 1);
+        assert.equal(heard.salesCalls.length, 1);
+
+        const seen = await run(photo(), world);
+        assert.equal(seen.perceiveCalls.length, 0);
+        assert.equal(seen.fetched.length, 0);
+        assert.equal(logs(seen, 'perception.skipped:switch_off').length, 1);
+    });
+
+    it('and the media switch is not the voice switch: ON with the voice switch OFF, a photo is read and a voice note is not', async () => {
+        const world: World = { switches: { dm_media: true, voice: false }, media: { 'asset_id=666': AUDIO, 'asset_id=111': JPEG } };
+        const seen = await run(photo(), world);
+        assert.equal(seen.perceiveCalls.length, 1);
+        today(await run(voice(), world), 'switch_off');
+    });
+
+    it('a sender who is not on the allow-list: today\'s line, no typing, no download, no write, and the gate says why', async () => {
+        const r = await run(voice(), { ...VOICE_ON, allow: ['999999'] });
+        today(r, 'not_allowed_sender');
+        assert.equal(storeOf(r), undefined);
+        assert.deepEqual(aiMetaOfAck(r), { engine: 'rule', reply: 'attachment_ack', kind: 'audio' });
+    });
+
+    it('a sales mode that does not answer this sender: today\'s line, the switches never read, and the reason logged', async () => {
+        const r = await run(voice(), { ...VOICE_ON, salesMode: 'off' });
+        today(r, 'sales_off');
+        assert.ok(!r.executed.some((e) => /muse\./.test(JSON.stringify(e.params))));
+    });
+
+    it('Instagram only: a Messenger voice note is the line it always got, with the switch ON and everyone allowed', async () => {
+        const r = await run(
+            ev({ mid: 'mid-fbv', attachments: [{ type: 'audio', payload: { url: VOICE_URL } }] }, { recipient: { id: 'fb-page-1' } }),
+            VOICE_ON, { lastAttempt: false, object: 'page' }, 'fb-page-1'
+        );
+        today(r);
+        assert.ok(!r.executed.some((e) => /sales_mode|muse\./.test(e.sql + JSON.stringify(e.params))), 'not one read of Meta Muse\'s');
+    });
+
+    it('the day\'s cap reached: today\'s line, the reason on the row, the owner told once; nothing is downloaded or heard', async () => {
+        const r = await run(voice(), { ...VOICE_ON, spentUsd: 3, dailyUsd: 3 });
+        today(r, 'budget');
+        assert.equal(storedRecord(r).kind, 'audio');
+        assert.equal(storedRecord(r).status, 'skipped');
+        assert.equal(storedRecord(r).reason, 'budget');
+        assert.equal(storeOf(r)!.params[3], null);
+        assert.equal(aiMetaOfAck(r).reason, 'Could not read it: the daily limit for reading media was reached, so it sent the usual line.');
+        assert.equal(r.budgetNotices.length, 1);
+    });
+});
+
+describe('Meta Muse on: a voice note that cannot be heard is today\'s line, never nothing', () => {
+    const failed = (r: R, reason: string, extra: Record<string, unknown> = {}) => {
+        assert.equal(r.error, null);
+        assert.equal(storedRecord(r).kind, 'audio');
+        assert.equal(storedRecord(r).status, 'failed');
+        assert.equal(storedRecord(r).reason, reason);
+        assert.equal(storeOf(r)!.params[3], null, 'the row\'s text is still the placeholder');
+        assert.equal(claimOf(r)!.params[3], KITS.en.attachments.media);
+        assert.equal(r.salesCalls.length, 0);
+        assert.ok(handled(r));
+        for (const [k, v] of Object.entries(extra)) assert.equal((logs(r, 'perception.voice_failed')[0] as any)?.[k], v, k);
+    };
+    const refused = (kind: AiErrorKind, status?: number) => async (): Promise<TranscribeWithMetaResult> => asrFailure(kind, status);
+
+    it('a link that has expired (403), is gone (404) or will not come (500): nothing is decoded or asked of the speech model', async () => {
+        for (const [status, reason] of [[403, 'expired_url'], [404, 'expired_url'], [500, 'fetch_failed']] as const) {
+            const r = await run(voice(), { ...VOICE_ON, media: { 'asset_id=666': { status } } });
+            failed(r, reason);
+            assert.ok(!r.timeline.includes('DECODE'));
+            assert.equal(r.asrCalls.length, 0);
+        }
+    });
+
+    it('a download that is not audio (a picture, a page) is not sent to a decoder', async () => {
+        failed(await run(voice(), { ...VOICE_ON, media: { 'asset_id=666': JPEG } }), 'fetch_failed', { detail: 'not_audio' });
+        failed(await run(voice(), { ...VOICE_ON, media: { 'asset_id=666': { status: 200, type: 'text/html', body: '<html>' } } }), 'fetch_failed');
+    });
+
+    it('a file the decoder cannot decode is DECODE_FAILED, with the sentence for it on the row, and the speech model is not asked', async () => {
+        for (const reason of ['decode_failed', 'decoder_unavailable', 'empty'] as const) {
+            const r = await run(voice(), { ...VOICE_ON, decode: () => ({ ok: false, reason, detail: 'ffmpeg said no', ms: 4 }) });
+            failed(r, 'decode_failed');
+            assert.equal(r.asrCalls.length, 0, reason);
+            assert.equal(aiMetaOfAck(r).reason, 'Could not read it: the voice note could not be decoded, so it sent the usual line.', reason);
+        }
+    });
+
+    it('a voice note that is too long (over three minutes) or too large is TOO_LARGE, and a decoder that hangs is a TIMEOUT', async () => {
+        failed(await run(voice(), { ...VOICE_ON, decode: () => ({ ok: false, reason: 'too_long', ms: 4 }) }), 'too_large');
+        failed(await run(voice(), { ...VOICE_ON, decode: () => ({ ok: false, reason: 'too_large', ms: 4 }) }), 'too_large');
+        failed(await run(voice(), { ...VOICE_ON, decode: () => ({ ok: false, reason: 'timeout', ms: 10_000 }) }), 'timeout');
+    });
+
+    it('the key refused (401): today\'s line, the owner is told, and a refused key is not asked again', async () => {
+        const r = await run(voice(), { ...VOICE_ON, transcribe: refused('auth', 401) });
+        failed(r, 'provider_error', { detail: 'auth_401' });
+        assert.deepEqual(r.notices, [{ creatorId: 'creator-1', kind: 'auth' }]);
+        assert.equal(r.asrCalls.length, 1);
+        assert.equal(aiMetaOfAck(r).reason, 'Could not read it: the reading service could not read it, so it sent the usual line.');
+    });
+
+    it('no credit left (402): the owner is told it ran out, once', async () => {
+        const r = await run(voice(), { ...VOICE_ON, transcribe: refused('quota', 402) });
+        failed(r, 'provider_error');
+        assert.deepEqual(r.notices, [{ creatorId: 'creator-1', kind: 'quota' }]);
+        assert.equal(r.asrCalls.length, 1);
+    });
+
+    it('a 429 is not retried and nobody is told; a 5xx is tried once more, and a second one is the line', async () => {
+        const rate = await run(voice(), { ...VOICE_ON, transcribe: refused('rate', 429) });
+        failed(rate, 'provider_error');
+        assert.equal(rate.asrCalls.length, 1);
+        assert.deepEqual(rate.notices, []);
+
+        const flaky = await run(voice(), { ...VOICE_ON, transcribe: async (_a, n) => (n === 1 ? asrFailure('server', 503) : heardBy()) });
+        assert.equal(flaky.asrCalls.length, 2);
+        assert.equal(flaky.salesCalls.length, 1, 'the second try was heard, and answered');
+        assert.equal(flaky.timeline.filter((c) => c === 'DECODE').length, 1, 'the audio is decoded once, not once a try');
+        assert.equal(flaky.fetched.length, 1, 'and downloaded once');
+
+        const down = await run(voice(), { ...VOICE_ON, transcribe: refused('server', 503) });
+        failed(down, 'provider_error');
+        assert.equal(down.asrCalls.length, 2);
+        assert.deepEqual(down.notices, []);
+    });
+
+    it('a call that times out is tried once more, and then it is a timeout on the row', async () => {
+        const r = await run(voice(), { ...VOICE_ON, transcribe: refused('timeout') });
+        failed(r, 'timeout');
+        assert.equal(r.asrCalls.length, 2);
+    });
+
+    it('Meta\'s own budget or a missing key is SKIPPED, not failed: the same line, a different reason', async () => {
+        const budget = await run(voice(), { ...VOICE_ON, transcribe: refused('budget') });
+        assert.equal(storedRecord(budget).status, 'skipped');
+        assert.equal(storedRecord(budget).reason, 'budget');
+        assert.equal(claimOf(budget)!.params[3], KITS.en.attachments.media);
+
+        const noKey = await run(voice(), { ...VOICE_ON, transcribe: refused('no_provider') });
+        assert.equal(storedRecord(noKey).status, 'skipped');
+        assert.equal(storedRecord(noKey).reason, 'no_key');
+        assert.equal(aiMetaOfAck(noKey).reason, 'Could not read it: no Meta key is set up for reading media, so it sent the usual line.');
+    });
+
+    it('never falls back to another provider: Gemini is not asked, whatever went wrong', async () => {
+        for (const transcribe of [refused('auth', 401), refused('server', 503), refused('no_provider')]) {
+            const r = await run(voice(), { ...VOICE_ON, transcribe });
+            assert.equal(r.geminiCalls, 0);
+            assert.equal(r.salesCalls.length, 0);
+        }
+    });
+
+    it('a database that cannot take the record: retried while attempts remain; on the last attempt the customer still gets today\'s line', async () => {
+        const mid = await run(voice(), { ...VOICE_ON, storeRows: 'throw' }, { lastAttempt: false });
+        assert.ok(mid.error, 're-raised for the runner');
+        assert.ok(released(mid), 'and the claim is released so the retry reaches the work');
+        assert.equal(claimOf(mid), undefined);
+
+        const last = await run(voice(), { ...VOICE_ON, storeRows: 'throw' }, { lastAttempt: true });
+        assert.equal(last.error, null);
+        assert.equal(claimOf(last)!.params[3], KITS.en.attachments.media, 'never silence');
+        assert.ok(handled(last));
+        assert.equal(logs(last, 'perception.step_failed').length, 1);
+    });
+});
+
+describe('Meta Muse on: a voice note, retries and bursts', () => {
+    const STORED = { v: 1, kind: 'audio', status: 'ok', transcript: SPOKEN, model: 'muse-voice-transcribe-1.0', stored_at: STORED_AT, ms: 3000, usd: 0.00015 };
+    const resumed = { inboundInsert: [] as Row[], resumeClaim: [{ id: 'msg-1', reply_attempts: 2 }] };
+
+    it('a retry reuses the stored transcript: no gate, no typing, no download, no decoding, no second payment, and the sales turn answers the words', async () => {
+        const r = await run(voice(), { ...resumed, storedPerception: STORED, history: [{ direction: 'inbound', text: SPOKEN }] });
+
+        assert.equal(r.error, null);
+        assert.equal(r.asrCalls.length, 0);
+        assert.equal(r.fetched.length, 0);
+        assert.ok(!r.timeline.includes('DECODE'));
+        assert.equal(storeOf(r), undefined, 'written once');
+        assert.equal(r.executed.filter((e) => /muse\./.test(JSON.stringify(e.params))).length, 0, 'the gate is not even asked: the work was done and paid for');
+        assert.equal(r.timeline.filter((c) => c === 'META typing_on').length, 1, 'once, by the sales turn, and not before the read');
+        assert.equal(r.salesCalls.length, 1);
+        assert.ok(lastUser(r.salesCalls[0]!).endsWith(SPOKEN));
+        assert.equal(logs(r, 'perception.reused').length, 1);
+    });
+
+    it('a stored voice note that did not end ok is today\'s line again, with its reason: the retry does not hear it a second time', async () => {
+        const r = await run(voice(), { ...resumed, storedPerception: { ...STORED, status: 'failed', reason: 'decode_failed', transcript: undefined } });
+        assert.equal(r.asrCalls.length, 0);
+        assert.equal(r.fetched.length, 0);
+        assert.equal(claimOf(r)!.params[3], KITS.en.attachments.media);
+        assert.equal(aiMetaOfAck(r).reason, 'Could not read it: the voice note could not be decoded, so it sent the usual line.');
+    });
+
+    it('a stored silence is asked for again, as it was the first time', async () => {
+        const r = await run(voice(), { ...resumed, storedPerception: { ...STORED, status: 'unreadable', reason: 'empty_transcript', transcript: undefined } });
+        assert.equal(r.asrCalls.length, 0);
+        assert.equal(claimOf(r)!.params[3], KITS.en.attachments.resend);
+    });
+
+    it('a transcript that another attempt stored first is the one used: the write finds a row that already has one', async () => {
+        const r = await run(voice(), { ...VOICE_ON, storeRows: [], storedPerception: STORED, history: [{ direction: 'inbound', text: SPOKEN }] });
+        assert.equal(r.error, null);
+        assert.equal(r.executed.filter((e) => /SELECT perception FROM messages/.test(e.sql)).length, 1, 'read back');
+        assert.equal(r.salesCalls.length, 1);
+    });
+
+    it('two voice notes in a burst are ONE answer: the one that is not the newest stands down after it was heard and the model has written, and sends nothing', async () => {
+        const r = await run(voice(), { ...VOICE_ON, supersession: [{ newer_unhandled: false, answered: false }, { newer_unhandled: true, answered: false }] });
+
+        assert.equal(r.error, null);
+        assert.equal(r.asrCalls.length, 1, 'it was heard, so its words are in the history for the newest');
+        assert.equal(r.salesCalls.length, 1);
+        assert.equal(messages(r).length, 0);
+        assert.equal(recordedReply(r), undefined);
+        assert.equal(claimOf(r), undefined);
+        assert.ok(handled(r), 'handled: the newest answers it');
+        const superseded = logs(r, 'dm.sales_superseded');
+        assert.equal(superseded.length, 1);
+        assert.equal(superseded[0]!.late, true, 'caught by the check made after the read, which a typed message does not need');
+    });
+
+    it('a reply that was already sent after the read stands this one down as well', async () => {
+        const r = await run(voice(), { ...VOICE_ON, supersession: [{ newer_unhandled: false, answered: false }, { newer_unhandled: false, answered: true }] });
+        assert.equal(messages(r).length, 0);
+        assert.equal(logs(r, 'dm.sales_superseded').length, 1);
+    });
+
+    it('a text sent while the voice note is heard does not lose its answer: nothing newer is waiting and no reply came after the read, so it answers', async () => {
+        const r = await run(voice(), { ...VOICE_ON, supersession: [{ newer_unhandled: false, answered: false }] });
+        assert.equal(messages(r).length, 1);
+        assert.equal(r.executed.filter((e) => /SELECT EXISTS \(SELECT 1 FROM messages n/.test(e.sql)).length, 2, 'once at the top, once before the send');
+    });
+
+    it('on the last attempt a failure after it was heard is the hand-over line and the stamp; mid-budget it is released and re-raised', async () => {
+        const transient = async () => { throw Object.assign(new Error('socket closed'), { code: 'EPIPE' }); };
+        const mid = await run(voice(), { ...VOICE_ON, send: transient }, { lastAttempt: false });
+        assert.ok(mid.error);
+        assert.ok(released(mid));
+        assert.ok(!mid.executed.some((e) => /stage = 'handoff'/.test(e.sql)));
+
+        const last = await run(voice(), { ...VOICE_ON, send: transient }, { lastAttempt: true });
+        assert.equal(last.error, null);
+        assert.ok(last.executed.some((e) => /SET stage = 'handoff', handoff_at = NOW\(\)/.test(e.sql)), 'the thread is stamped as handed over');
+        assert.ok(handled(last));
     });
 });
 
