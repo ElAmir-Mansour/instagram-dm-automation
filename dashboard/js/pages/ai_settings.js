@@ -1637,12 +1637,12 @@ const AiSettingsPage = {
      * The library's state, made on first use (`museLibState`); `undefined` before the card asks. `status`: `idle` (not asked), `loading`, `ready` or `failed`. `rows`: the list as the
      * server gave it, cleaned. `error`: why the last ask failed. `busy`: "Index my reels" is in flight. `again`: the reels whose "Watch again" is in flight. `open`: a reel's id to its
      * details (`{ status: 'loading' | 'ready' | 'failed', result }`). `notice`: what the last press came to (`{ kind, text }`). `polls`: how many times the list was asked for again by
-     * itself since the last press. `timer`: the next of those.
+     * itself since the last press. `timer`: the next of those. `asks`: how many times the list was asked for, so that only the newest answer is applied.
      */
     _museLib: undefined,
 
     museLibState() {
-        if (!this._museLib) this._museLib = { status: 'idle', rows: [], error: '', busy: false, again: new Set(), open: new Map(), notice: null, polls: 0, timer: null };
+        if (!this._museLib) this._museLib = { status: 'idle', rows: [], error: '', busy: false, again: new Set(), open: new Map(), notice: null, polls: 0, timer: null, asks: 0 };
         return this._museLib;
     },
 
@@ -1653,9 +1653,12 @@ const AiSettingsPage = {
         this._museLib = undefined;
     },
 
-    /** The library's routes are the OWNER's, reads included (`requireTenantRole('owner')`): to anyone else the section is not drawn. Optimistic like `canEdit`. */
+    /**
+     * The library's routes are the OWNER's, reads included (`requireTenantRole('owner')`): to anyone else the section is not drawn and its buttons are locked. The owner is who may
+     * change the card (`canEditMuse`: a viewer is never one, wherever the shell cannot say which role this is). Optimistic like `canEdit`.
+     */
     museOwner() {
-        return typeof App === 'undefined' || typeof App.canAdminister !== 'function' || App.canAdminister();
+        return this.canEditMuse();
     },
 
     /** One line of what the server or a model wrote: control characters out, white space one space, at most `max` characters. '' for anything that is not text. */
@@ -1727,7 +1730,10 @@ const AiSettingsPage = {
 
     // ─── What the section shows ───
 
-    /** The section's markup: drawn hidden, and made visible for an owner once the card is ready (`paintMuseLibrary`). It sits inside the card and outside its form: nothing here is a draft. */
+    /**
+     * The section's markup: drawn hidden, and made visible for an owner once the card is ready (`paintMuseLibrary`). It sits inside the card and outside its form: nothing here is a
+     * draft. Both buttons are live in the shell for an owner and locked for anyone else, like the card's own controls; what is saved decides the first one when the card paints.
+     */
     museLibraryShell() {
         const owner = this.museOwner();
         return html`
@@ -1737,7 +1743,7 @@ const AiSettingsPage = {
                     <h4 id="muse-library-title" aria-level="3">${t('muse.lib.title')}</h4>
                     <p class="form-hint">${t('muse.lib.intro')} ${UI.helpLink('ai-usage#video-memory', t('help.link.videoMemory'), { newTab: true })}</p>
                     <div class="muse-library-actions">
-                        ${UI.button({ variant: 'primary', icon: 'film', label: t('muse.lib.index'), action: 'muse:indexAll', id: 'muse-index-btn', disabled: true })}
+                        ${UI.button({ variant: 'primary', icon: 'film', label: t('muse.lib.index'), action: 'muse:indexAll', id: 'muse-index-btn', disabled: !owner })}
                         ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('muse.lib.refresh'), action: 'muse:refreshLibrary', id: 'muse-library-refresh', disabled: !owner })}
                     </div>
                     <p class="form-hint" id="muse-library-estimate"></p>
@@ -1888,13 +1894,14 @@ const AiSettingsPage = {
     // ─── Asking, and pressing ───
 
     /**
-     * Asks for the list. The first ask (or a press on Refresh) shows "loading"; a poll is quiet, and one that fails keeps the list it has and says so beside the counts. A late answer,
-     * or one for a page that was left or a library that was forgotten, is dropped. When a reel is still waiting the next ask is scheduled.
+     * Asks for the list. The first ask (or a press on Refresh) shows "loading"; a poll is quiet, and one that fails keeps the list it has and says so beside the counts. Asks can
+     * overlap (a poll while a press is answered), and only the NEWEST answer is applied: an older one that comes late may be the stale one. An answer for a page that was left or a
+     * library that was forgotten is dropped too. When a reel is still waiting the next ask is scheduled.
      */
     async loadMuseLibrary(opts) {
         const lib = this.museLibState();
         const quiet = !!(opts && opts.quiet);
-        if (lib.status === 'loading') return;
+        const mine = ++lib.asks;
         if (!quiet || lib.status === 'idle') {
             lib.status = 'loading';
             this.paintMuseLibrary();
@@ -1908,7 +1915,7 @@ const AiSettingsPage = {
             console.error('Video library load error:', err);
             failure = (err && typeof err.message === 'string' && err.message) || t('muse.lib.loadFailed');
         }
-        if (page !== this._seq || lib !== this._museLib) return;
+        if (page !== this._seq || lib !== this._museLib || mine !== lib.asks) return;
         if (failure) {
             lib.status = lib.rows.length ? 'ready' : 'failed';
             lib.error = failure;

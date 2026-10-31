@@ -201,8 +201,8 @@ describe('Meta vision card: the shell', () => {
         assert.equal(owner.c.length, 8, 'three switches, who, the picker button and search, the cap and Save');
         for (const c of owner.c) assert.ok(!/\sdisabled(?=[\s>])/.test(c) && !/\sreadonly(?=[\s>])/.test(c), `live for the owner: ${c}`);
         assert.ok(!owner.shell.includes('muse-owner-note'));
-        // The library's own buttons: Refresh is live for an owner, and Index my reels is off until the card has painted what is saved (it is on only while the saved switch is).
-        assert.deepEqual(owner.lib.map(([id, tag]) => [id, /\sdisabled(?=[\s>])/.test(tag!)]), [['muse-index-btn', true], ['muse-library-refresh', false]]);
+        // The library's own buttons: both live in an owner's shell, like the card's controls; the card's paint turns Index my reels off while the saved switch is off.
+        assert.deepEqual(owner.lib.map(([id, tag]) => [id, /\sdisabled(?=[\s>])/.test(tag!)]), [['muse-index-btn', false], ['muse-library-refresh', false]]);
         for (const role of ['viewer', 'operator'] as const) {
             const s = state(role);
             for (const c of s.c) {

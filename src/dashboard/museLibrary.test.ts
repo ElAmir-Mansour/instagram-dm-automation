@@ -404,6 +404,26 @@ describe('video library: the list', () => {
         assert.doesNotMatch(o.el('muse-library-count').textContent, /refreshed/);
     });
 
+    it('applies only the NEWEST answer when asks overlap: a poll that answers late does not put an older list over a newer one', { timeout: 10_000 }, async () => {
+        const o = await open({ rows: [item({ status: 'pending', summary: null })] });
+        let releaseOld: () => void = () => {};
+        const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+        let asked = 0;
+        const stale = [item({ status: 'pending', summary: null })];
+        const fresh = [item(), item()];
+        o.h.ctx.API.getMuseLibrary = async () => { const n = ++asked; if (n === 1) { await oldGate; return plain(stale); } return plain(fresh); };
+        const older = o.page.loadMuseLibrary({ quiet: true });
+        const newer = o.page.loadMuseLibrary({ quiet: true });
+        await newer;
+        await settle();
+        assert.equal(rowsOf(o).length, 2, 'the newer answer is on screen');
+        releaseOld();
+        await older;
+        await settle();
+        assert.equal(rowsOf(o).length, 2, 'and the older one, which came last, did not replace it');
+        assert.equal(o.page.museLibState().timer, null, 'nothing waits in the list that was kept, so nothing is polled');
+    });
+
     it('Refresh asks again and is off while it asks', async () => {
         const o = await open({ rows: [item()] });
         o.answers.library = [item(), item()];

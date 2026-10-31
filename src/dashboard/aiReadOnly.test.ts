@@ -9,8 +9,9 @@
  *   - a viewer's shell has NO live control: every input, select, textarea and button is disabled or read-only (a scan of the whole markup, so a
  *     control added to the shell later without a decision fails here), with the note in both languages;
  *   - Save and the sandbox send nothing for a viewer, a load does not hand Save back, and the wording experiment's cards are read-only too;
- *   - the write paths this page calls are exactly the five audited here, each behind the server guard the page's question mirrors (`canOperate`, and for
- *     Meta vision's card `canAdminister`: the owner's, so an operator reads that card and changes only the agent).
+ *   - the write paths this page calls are exactly the seven audited here, each behind the server guard the page's question mirrors (`canOperate`, and for
+ *     Meta vision's card and its video library `canAdminister`: the owner's, so an operator reads that card and changes only the agent), and the library's
+ *     reads are the owner's as well.
  *
  * The REAL `ai_settings.js` in a `node:vm` context, as `aiVariants.test.ts` loads it.
  */
@@ -122,6 +123,8 @@ const GATED = [
     'save-settings-btn', 'sandbox-user-input', 'sandbox-btn',
     // Meta vision (beta), the owner's card: the three switches, who it answers, the picker's button and search, the cap, and its own Save.
     'muse-dm-media', 'muse-voice', 'muse-memory', 'muse-who', 'muse-picker-open', 'muse-picker-search', 'muse-daily-usd', 'muse-save-btn',
+    // and its video library: "Index my reels" and Refresh (the buttons of each reel are drawn by the list, and only for an owner).
+    'muse-index-btn', 'muse-library-refresh',
 ];
 
 describe('AI settings — an operator keeps every control', () => {
@@ -260,18 +263,23 @@ describe('AI settings — the write paths, audited against the server\'s guards'
     const page = readFileSync('dashboard/js/pages/ai_settings.js', 'utf8');
     const client = readFileSync('dashboard/js/api.js', 'utf8');
     const routes = readFileSync('src/routes/api.ts', 'utf8');
+    const libraryRoutes = readFileSync('src/routes/museLibrary.ts', 'utf8');
 
-    /** Every `API.<name>(` the page calls, with the method and path `api.js` gives it. */
+    /**
+     * Every `API.<name>(` the page calls, with the method and path `api.js` gives it. A path is a quoted string, or a template that holds an id
+     * (`/settings/ai/muse/library/${encodeURIComponent(id)}/index`), whose id is written `:id` here, as the route names it.
+     */
     function callsOfThePage(): { name: string; path: string; method: string }[] {
+        const quoted = "(?:'([^']+)'|`([^`]+)`)";
         return [...new Set([...page.matchAll(/\bAPI\.(\w+)\(/g)].map((m) => m[1]!))].map((name) => {
-            const def = new RegExp(`\\b${name}: \\([^)]*\\) => API\\.request\\('([^']+)'(?:, \\{ method: '(\\w+)')?`).exec(client);
+            const def = new RegExp(`\\b${name}: \\([^)]*\\) => API\\.request\\(${quoted}(?:, \\{ method: '(\\w+)')?`).exec(client);
             assert.ok(def, `api.js defines ${name}`);
-            return { name, path: def![1]!, method: def![2] ?? 'GET' };
+            return { name, path: (def![1] ?? def![2]!).replace(/\$\{[^}]*\}/g, ':id'), method: def![3] ?? 'GET' };
         });
     }
 
     /** What this screen may write, and the guard each write sits behind on the server: the audit of 2026-10-25. */
-    const AUDITED: Record<string, { path: string; guard: 'canOperate' | 'canAdminister' }> = {
+    const AUDITED: Record<string, { path: string; guard: 'canOperate' | 'canAdminister'; router?: 'museLibrary' }> = {
         saveAiSettings: { path: '/settings/ai', guard: 'canOperate' },
         testAiSettings: { path: '/settings/ai/test', guard: 'canOperate' },
         saveSalesVariants: { path: '/settings/sales-variants', guard: 'canOperate' },
@@ -280,9 +288,13 @@ describe('AI settings — the write paths, audited against the server\'s guards'
         // Meta vision's card (T038): the OWNER's, because it decides whether a customer's media is sent to Meta's models and sets his daily spend. The card draws
         // itself read-only for an operator as well as a viewer (`canEditMuse`), which the card's own tests pin.
         saveMuseSettings: { path: '/settings/ai/muse', guard: 'canAdminister' },
+        // The video library inside that card (T057): its own router (`routes/museLibrary.ts`), mounted under `/settings/ai/muse/library`, the owner's on EVERY route.
+        indexMuseLibrary: { path: '/settings/ai/muse/library/index', guard: 'canAdminister', router: 'museLibrary' },
+        reindexMuseReel: { path: '/settings/ai/muse/library/:id/index', guard: 'canAdminister', router: 'museLibrary' },
     };
+    const MOUNT = '/settings/ai/muse/library';
 
-    it('calls exactly the five writes audited here: a sixth means deciding who may make it, and drawing it read-only for the rest', () => {
+    it('calls exactly the seven writes audited here: an eighth means deciding who may make it, and drawing it read-only for the rest', () => {
         const calls = callsOfThePage();
         assert.deepEqual(calls.filter((c) => c.method !== 'GET').map((c) => c.name).sort(), Object.keys(AUDITED).sort());
         for (const [name, want] of Object.entries(AUDITED)) {
@@ -294,12 +306,25 @@ describe('AI settings — the write paths, audited against the server\'s guards'
 
     it('finds each of them behind the guard this page\'s question mirrors, and the reads behind none', () => {
         for (const [name, want] of Object.entries(AUDITED)) {
-            const m = new RegExp(`router\\.post\\('${want.path.replace(/\//g, '\\/')}',\\s*([^{]*?)async`).exec(routes);
+            // The library's routes are in their own file, named relative to where `api.ts` mounts it; the others are `router.post(<the whole path>, …)` in `api.ts`.
+            const [source, owner, path] = want.router ? [libraryRoutes, 'museLibraryRouter', want.path.slice(MOUNT.length)] : [routes, 'router', want.path];
+            const m = new RegExp(`${owner}\\.post\\('${path.replace(/\//g, '\\/')}',\\s*([^{]*?)async`).exec(source);
             assert.ok(m, `${name}: the route ${want.path} exists`);
             assert.ok(m![1]!.includes(want.guard), `${name}: ${want.path} is behind ${want.guard} (found: ${m![1]!.trim()})`);
         }
         // What the viewer's screen is made of: any role may read it.
         assert.match(routes, /router\.get\('\/settings\/ai',\s*async/, 'GET /settings/ai has no role guard');
         assert.match(routes, /router\.get\('\/settings\/sales-variants',\s*async/, 'nor has the wording experiment\'s read');
+    });
+
+    it('keeps the video library the owner\'s on every route, reads included, and mounted where the page asks for it: the card is not drawn for anyone else', () => {
+        assert.match(libraryRoutes, /const canAdminister = requireTenantRole\('owner'\);/);
+        const all = [...libraryRoutes.matchAll(/museLibraryRouter\.(get|post|put|patch|delete)\('([^']*)',\s*([^{]*?)async/g)].map((m) => [m[1], m[2], m[3]!.trim()]);
+        assert.deepEqual(all.map(([method, path]) => `${method} ${path}`).sort(), ['get /', 'get /:id', 'post /:id/index', 'post /index']);
+        for (const [method, path, guard] of all) assert.equal(String(guard).replace(/,$/, ''), 'canAdminister', `${method} ${path} is behind canAdminister`);
+        assert.match(routes, new RegExp(`router\\.use\\('${MOUNT.replace(/\//g, '\\/')}', museLibraryRouter\\);`), 'api.ts mounts it where api.js asks');
+        // The two reads the page makes are asked only for an owner: the section is not drawn, and nothing is requested, for any other role.
+        const reads = callsOfThePage().filter((c) => c.method === 'GET' && c.name.includes('Muse'));
+        assert.deepEqual(reads.map((c) => `${c.name} ${c.path}`).sort(), ['getMuseLibrary /settings/ai/muse/library', 'getMuseReel /settings/ai/muse/library/:id']);
     });
 });
