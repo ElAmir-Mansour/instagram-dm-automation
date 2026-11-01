@@ -71,6 +71,7 @@ import { sendDirectMessage, sendSenderAction, type SenderAction } from '../insta
 import type { LlmTurn } from '../llm/types.js';
 import { hasContentCue, mentionsLink, recallForTurn, type TurnRecall } from '../perception/recall.js';
 import { hasSensesCue, sensesForTurn } from '../perception/senses.js';
+import { unansweredMediaFact } from '../perception/text.js';
 import { traceReason, type TraceInput } from '../perception/trace.js';
 import type { PerceptionKind } from '../perception/types.js';
 import type { ProfileContext } from '../profile/context.js';
@@ -526,6 +527,10 @@ async function salesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
         transport ? Promise.resolve(null) : readVariantConfig(creator.id),
     ]);
 
+    // A reel or a photo Meta Muse read, sent just before this message and answered by it (Instagram only, like every reading). Null for every tenant with
+    // Meta vision off: no row of theirs holds a perception.
+    const mediaBefore = !transport && !input.perceived?.sent ? unansweredMediaFact(history) : null;
+
     // S14: the owner's wording experiment, when one is RUNNING. Only a conversation with no bot reply yet is new; the arm is the one it already has, or
     // the one its id hashes to. A tenant with no experiment goes no further than the read above, and every failure here is "no arm".
     const firstReply = !history.some((h) => h.direction === 'outbound' && h.sender === 'ai');
@@ -553,8 +558,9 @@ async function salesTurn(input: SalesTurnInput): Promise<SalesTurnResult> {
         ...(transport ? { channel: transport.channel } : {}),
         ...(input.ad ? { ad: input.ad } : {}),
         // What a model said it saw, said last, next to the customer's message. It is NOT among the guard's facts below: a number or a price in a picture is not one the
-        // reply may state unless the information above gives it.
-        ...(input.perceived?.sent ? { sent: input.perceived.sent } : {}),
+        // reply may state unless the information above gives it. A message with no fact of its own (words, or a voice note) answers the reel or photo sent just
+        // before it, if Meta Muse read one: a burst is answered once, by its newest message, and the reel's own turn stood down.
+        ...(input.perceived?.sent ? { sent: input.perceived.sent } : mediaBefore ? { sent: mediaBefore } : {}),
         // What the video library holds for what they asked, said after it. Its link and second are among the guard's facts (below), so the second it names is no invented number;
         // what the summary says is not: a number or a discount in a reel's notes is not one the reply may state.
         ...(recalled ? { video: recalled.line } : {}),

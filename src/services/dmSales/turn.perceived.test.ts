@@ -21,7 +21,7 @@ import { setLogSink } from '../../utils/log.js';
 import { metaHttp } from '../http.js';
 import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
 import { AiError } from '../llm/errors.js';
-import { LANGUAGE_NOTE, perceivedFact } from '../perception/text.js';
+import { LANGUAGE_NOTE, perceivedFact, USE_NOTE } from '../perception/text.js';
 import { contextFor } from '../profile/context.js';
 import { FITNESS_EN, SHOP_EG } from '../profile/fixtures.js';
 import { kitFor } from '../profile/kits.js';
@@ -67,7 +67,7 @@ interface World {
     perceived?: PerceivedTurn | null;
     text?: string;
     profile?: CreatorProfile;
-    history?: { direction: 'inbound' | 'outbound'; text: string; sender?: string }[];
+    history?: { direction: 'inbound' | 'outbound'; text: string; sender?: string; perception?: unknown }[];
     /** What `supersession` answers on each call; the last one repeats. */
     supersession?: { newer_unhandled: boolean; answered: boolean }[];
     layer?: (args: AiGenerateArgs, call: number) => Promise<AiGenerateResult>;
@@ -504,5 +504,24 @@ describe('a perceived turn: a voice note is answered as the customer\'s own word
         assert.equal(supersessionCount(r), 1);
         assert.equal(messages(r).length, 1);
         assert.equal(record(r).pauseBot, true);
+    });
+});
+
+describe('runSalesTurn: words sent right after a reel answer the reel too (a burst is answered once, by its newest message)', () => {
+    const typed = 'ايه الفيديو';
+    const reelRow = { direction: 'inbound' as const, text: DESCRIPTION, perception: { kind: 'reel', status: 'ok', seen: SEEN, about_owner: 'own_content' } };
+
+    it('tells the model what the reel showed, word for word as its own turn would have, when the words are the message answered', async () => {
+        const r = await run({ perceived: null, text: typed, history: [{ direction: 'outbound', text: 'Hello!' }, reelRow, { direction: 'inbound', text: typed }] });
+        assert.equal(r.layerCalls.length, 1);
+        const last = lastUserTurn(r.layerCalls[0]!);
+        assert.ok(last.includes(factOf()), 'the reel\'s fact');
+        assert.ok(last.includes(USE_NOTE), 'with leave to answer from it');
+    });
+
+    it('adds nothing to words with no reel before them since the last reply: that turn is the one it always was', async () => {
+        const plain = await run({ perceived: null, text: typed, history: [{ direction: 'outbound', text: 'Hello!' }, { direction: 'inbound', text: typed }] });
+        const answered = await run({ perceived: null, text: typed, history: [reelRow, { direction: 'outbound', text: 'It is about scaling.' }, { direction: 'inbound', text: typed }] });
+        for (const r of [plain, answered]) assert.ok(!lastUserTurn(r.layerCalls[0]!).includes('What the customer sent'));
     });
 });

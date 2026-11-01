@@ -981,7 +981,9 @@ reads the questions need. The questions, in this order, each only if the one bef
 4. **What becomes of it** (`planOf`, `plan.ts`):
    - **`ok`** → the **sales turn answers** the stored description (`runSalesTurn` with `perceived`, §2.6b): the refund/complaint prefilter does **not** read
      the description (only typed words), the description is the facts block's "What the customer sent …" and is **not** among the guard's facts (a price in
-     a picture is not one the reply may state), the legacy Gemini path is never the fallback, a personal document is handed to a person with no model, and
+     a picture is not one the reply may state). The line also says the description **may be answered from** (`USE_NOTE`) and that a reel or a photo sent with
+     no words asks what it is about (`NO_WORDS_NOTE`): the kit's rule is "use only the information in this message, else hand off", and without it the owner's
+     own reel was handed to a person as a question nothing answered (2026-10-31). Nothing personal is offered to answer from. The legacy Gemini path is never the fallback, a personal document is handed to a person with no model, and
      the reply's `ai_meta` says `perceived: true` and a one-line `reason` the code builds (`traceReason`). A story mention is **not** answered: it is thanked
      by name (`mentionLine` over `kit.attachments.mentionNamed`) through the same `CLAIM_ACK` claim. **A voice note is the exception to the prefilter rule**:
      its transcript is the customer's OWN words (`describedText: false`), so a refund or a complaint said aloud is read like one typed, and no "What the
@@ -992,7 +994,9 @@ reads the questions need. The questions, in this order, each only if the one bef
 5. **A burst is one answer.** `supersession` (`src/services/dmSales/store.ts`) compares a read word-less message from the moment its perception was stored,
    not its `created_at`: a text sent while a reel is being read does not lose the reel's answer unless a reply came after the read, and a read photo counts as
    a message waiting (a story mention does not: it is thanked), and so does a read voice note (`audio` is a word-less `message_type`). The sales turn asks
-   again **after** the model has written and before it sends, so the photos and the voice notes of a burst that are not the newest stand down. **A reply to a story that has words** is answered from the words; the story is read too and told as
+   again **after** the model has written and before it sends, so the photos and the voice notes of a burst that are not the newest stand down. When the
+   newest is words (or a voice note) sent right after a read reel or photo, the turn tells the model that reel's fact anyway (`unansweredMediaFact` over the
+   history, which carries `perception` on inbound rows): «ايه الفيديو» after a reel is answered about the reel. **A reply to a story that has words** is answered from the words; the story is read too and told as
    context ("The story they replied to shows …"), and the row's text stays what they typed.
 6. **The last attempt.** A failure after the read hands the conversation over like words (`handOver`, §2.11); a message that was only acknowledged asked
    nothing and is not. A read that throws (the database could not take the record) is retried, and on the last attempt is today's line.

@@ -8,8 +8,8 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { WORDLESS_PLACEHOLDERS } from '../../webhook/attachments.js';
 import {
-    LANGUAGE_NOTE, MENTION_MAX_CHARS, MENTION_MAX_WORDS, mentionLine, oneLine, perceivedFact, perceivedText, SEEN_MAX_CHARS, SPEECH_MAX_CHARS, TRANSCRIPT_MAX_CHARS,
-    type PerceivedFactInput,
+    LANGUAGE_NOTE, MENTION_MAX_CHARS, MENTION_MAX_WORDS, mentionLine, NO_WORDS_NOTE, oneLine, perceivedFact, perceivedText, SEEN_MAX_CHARS, SPEECH_MAX_CHARS,
+    TRANSCRIPT_MAX_CHARS, unansweredMediaFact, USE_NOTE, type PerceivedFactInput,
 } from './text.js';
 import { PERCEIVABLE_KINDS, type PerceptionKind } from './types.js';
 
@@ -222,7 +222,54 @@ describe('perceivedFact: what the sales turn is told', () => {
 
     it('is bounded however much the model wrote', () => {
         const fact = perceivedFact(base({ seen: 'a'.repeat(5000), transcript: 'b'.repeat(5000) }))!;
-        assert.ok(fact.length < 1500, `${fact.length} characters`);
+        // The model's part is capped at SEEN_MAX_CHARS + SPEECH_MAX_CHARS (900); the fixed sentences around it are about 850.
+        assert.ok(fact.length < 1800, `${fact.length} characters`);
+    });
+
+    it('says the description may be answered from, and what one sent with no words asks, for a reel or a photo', () => {
+        for (const owner of ['own_content', 'other_content', undefined] as const) {
+            const fact = perceivedFact(base({ about_owner: owner }))!;
+            assert.ok(fact.includes(USE_NOTE), `${owner}: answered from`);
+            assert.ok(fact.includes(NO_WORDS_NOTE), `${owner}: no words asks what it is about`);
+            assert.ok(fact.indexOf(USE_NOTE) < fact.indexOf(LANGUAGE_NOTE), 'before the language note and the caution, which close the line');
+        }
+        assert.match(USE_NOTE, /nothing about what an offer covers/, 'what an offer covers stays the data\'s');
+    });
+
+    it('offers nothing personal to answer from, and does not call a reply to a story wordless', () => {
+        const personal = perceivedFact(base({ about_owner: 'personal' }))!;
+        assert.ok(!personal.includes(USE_NOTE) && !personal.includes(NO_WORDS_NOTE));
+        assert.match(personal, /say nothing about its details/);
+        const story = perceivedFact(base({ kind: 'story_reply', about_owner: 'own_content' }))!;
+        assert.ok(story.includes(USE_NOTE) && !story.includes(NO_WORDS_NOTE));
+    });
+});
+
+describe('unansweredMediaFact: the reel a burst\'s newest message answers', () => {
+    const reel = { kind: 'reel', status: 'ok', seen: 'A reel about horizontal scaling.', about_owner: 'own_content' };
+
+    it('finds the reel read just before the message being answered, as the fact its own turn would have had', () => {
+        const rows = [
+            { direction: 'outbound', perception: null },
+            { direction: 'inbound', perception: reel },
+            { direction: 'inbound', perception: null }, // «ايه الفيديو», the message being answered
+        ];
+        assert.equal(unansweredMediaFact(rows), perceivedFact(reel as Parameters<typeof perceivedFact>[0]));
+    });
+
+    it('looks no further back than the last reply, and past a voice note, which is words', () => {
+        assert.equal(unansweredMediaFact([{ direction: 'inbound', perception: reel }, { direction: 'outbound' }, { direction: 'inbound', perception: null }]), null);
+        const voice = { kind: 'audio', status: 'ok', transcript: 'what is this video about?' };
+        assert.ok(unansweredMediaFact([{ direction: 'outbound' }, { direction: 'inbound', perception: reel }, { direction: 'inbound', perception: voice }])!.includes('horizontal scaling'));
+    });
+
+    it('takes the newest one read, and nothing that was not read, is personal, or is not a perception at all', () => {
+        const photo = { kind: 'image', status: 'ok', seen: 'A screenshot of an error.', about_owner: 'other_content' };
+        assert.ok(unansweredMediaFact([{ direction: 'inbound', perception: reel }, { direction: 'inbound', perception: photo }])!.includes('screenshot of an error'));
+        for (const perception of [{ ...reel, status: 'failed' }, { ...reel, about_owner: 'personal' }, { kind: 'toString', status: 'ok', seen: 'x' }, 'reel', [reel], null]) {
+            assert.equal(unansweredMediaFact([{ direction: 'outbound' }, { direction: 'inbound', perception }]), null, JSON.stringify(perception));
+        }
+        assert.equal(unansweredMediaFact([]), null);
     });
 });
 
