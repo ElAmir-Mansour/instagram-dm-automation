@@ -66,6 +66,7 @@ import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
+import { mediaClient } from '../utils/mediaClient.js';
 import { StorageApiError } from '../services/supabaseStorage.js';
 import { R2CounterError, R2LimitError, readR2Banner } from '../services/r2Usage.js';
 import { runCopyBatch } from '../services/r2Copy.js';
@@ -1283,6 +1284,20 @@ const MAX_UPLOAD_BYTES = 3.2 * 1024 * 1024;
 // streamed response is not held to the 4.5MB body cap.
 router.get('/uploads/:id', async (req, res) => {
     let id: string | null = null;
+    // One line per file served, with who asked and how much went out: storage downloads cost money, and this is how a spike is traced to its
+    // caller (src/utils/mediaClient.ts). Written when the answer is done, whatever it was.
+    res.on?.('finish', () => {
+        try {
+            if (!id) return;
+            const length = Number(res.getHeader?.('Content-Length'));
+            log('info', 'media.served', {
+                media_id: id, status: res.statusCode, client: mediaClient(req.headers, req.headers?.host), ranged: Boolean(req.headers?.range),
+                sent_bytes: Number.isFinite(length) ? length : null, method: req.method,
+            });
+        } catch {
+            // a log line must never break an answer already sent
+        }
+    });
     try {
         // `<uuid>` or `<uuid>.jpg` — TikTok's photo fetcher is sent the second form. Postgres
         // raises 22P02 on a malformed uuid literal, which surfaced as a 500 for what is really
