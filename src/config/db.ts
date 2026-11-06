@@ -1,5 +1,6 @@
 import pkg from 'pg';
 import type { PoolClient } from 'pg';
+import { attachDatabasePool } from '@vercel/functions';
 import { log } from '../utils/log.js';
 import { countStatement, isTallying } from '../utils/timing.js';
 const { Pool } = pkg;
@@ -9,7 +10,8 @@ export const pool = new Pool({
     ssl: { rejectUnauthorized: false },
     // Essential for serverless/pgBouncer
     connectionTimeoutMillis: 10000, // Wait up to 10s to connect
-    idleTimeoutMillis: 30000,       // Close idle clients after 30s
+    // Close idle clients after 5 s. Short on purpose: see attachDatabasePool below, which keeps the instance awake until they are closed.
+    idleTimeoutMillis: 5000,
 
     // 3, not 10. This is a per-lambda pool, and Vercel runs many lambdas concurrently —
     // so the real connection count is `max` x (concurrent instances), against a shared
@@ -29,6 +31,14 @@ export const pool = new Pool({
 pool.on('error', (err) => {
     log('error', 'db.idle_client_error', { message: err.message });
 });
+
+/**
+ * Vercel pauses an instance between requests, and a paused instance's idle timer does not run: its connections stayed open, and the
+ * paused instances of a day's deploys filled the Supabase pooler's 200 client slots (EMAXCONN on every settings read, 2026-11-06).
+ * `attachDatabasePool` keeps the instance awake after a client is released until the idle timeout has closed it, so a paused instance
+ * holds no connection. It does nothing off Vercel (tests, scripts).
+ */
+attachDatabasePool(pool);
 
 /**
  * Every statement this pool sends is counted against the timing tally of the work that sent it (src/utils/timing.ts): what a job's
