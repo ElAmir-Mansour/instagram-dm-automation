@@ -5657,6 +5657,136 @@ const HelpContent = {
                 },
             ],
         },
+        // ─── 11b. Where files are kept (Supabase, Cloudflare R2) ───────────────
+        {
+            slug: 'media-storage',
+            group: 'more',
+            icon: 'cloud',
+            title: { ar: 'أين تُحفظ الملفات: Supabase وCloudflare R2', en: 'Where files are kept: Supabase and Cloudflare R2' },
+            summary: {
+                ar: 'وين تروح الصور والفيديوهات اللي ترفعها، وكيف تفعّل Cloudflare R2 (تنزيله مجاني)، وكيف تنسخ ملفاتك القديمة له، وليش التطبيق ما يتجاوز باقته المجانية أبداً.',
+                en: 'Where the pictures and videos you upload go, how to switch on Cloudflare R2 (free downloads), how to copy your existing files to it, and why the app never goes over its free tier.',
+            },
+            related: ['scheduling', 'troubleshooting', 'faq'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'ما هو R2 وليش أضفناه', en: 'What R2 is, and why it was added' },
+                    body: {
+                        ar: [
+                            'كل صورة أو فيديو ترفعه تنحفظ في مكان تخزين، ويبقى رابطه دايماً من عنوان التطبيق نفسه (`/api/uploads/…`): هذا العنوان اللي تسحب منه ميتا وتيك توك ملفاتك، وما يتغير مهما كان مكان التخزين.',
+                            'المكان الأول **Supabase Storage**. لكن باقة Supabase المجانية لها حد على كمية التنزيل، وإذا انتهى يرفض Supabase كل قراءة، فتتوقف الملفات عن الظهور. لهذا أضفنا **Cloudflare R2**: يخزّن الملفات بنفس الطريقة، وتنزيله مجاني، وباقته المجانية 10 جيجابايت.',
+                            { note: 'أنت تختار مكان الملفات الجديدة فقط. كل ملف مرفوع من قبل يبقى يُقدَّم من مكانه، ولا ينكسر أي رابط.' },
+                        ],
+                        en: [
+                            'Every picture or video you upload is kept in a storage place, and its link is always on the app’s own address (`/api/uploads/…`): the address Meta and TikTok pull your files from. It never changes, wherever the file is kept.',
+                            'The first place is **Supabase Storage**. But Supabase’s free plan limits how much can be downloaded, and when that runs out Supabase refuses every read, so files stop showing. That is why **Cloudflare R2** was added: it stores files the same way, downloads are free, and its free tier is 10 GB.',
+                            { note: 'You choose where new files go. Every file already uploaded keeps being served from where it is, and no link breaks.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'setup',
+                    title: { ar: 'كيف تفعّل R2', en: 'How to switch R2 on' },
+                    body: {
+                        ar: [
+                            { ol: [
+                                'في Cloudflare افتح R2 ثم Create bucket، وسمّه مثلاً `media`. أنشئه أنت: التطبيق لا ينشئ حاويات.',
+                                'من صفحة R2 الرئيسية انسخ Account ID.',
+                                'افتح Manage API tokens ثم Create API token، واختر الصلاحية Object Read & Write لهذه الحاوية وحدها. انسخ Access Key ID وSecret Access Key فوراً: Cloudflare يعرض المفتاح السري مرة واحدة.',
+                                'في أوتوريبلاي برو افتح **الإعدادات** ← **المنصة** ← **تخزين الوسائط**، وفي قسم **Cloudflare R2** الصق الأربع قيم واضغط **احفظ وتحقق**. لا يُحفظ شيء إلا بعد أن يقبله Cloudflare.',
+                                'اختر **Cloudflare R2** تحت **أين تذهب الملفات الجديدة**.',
+                            ] },
+                            { warn: 'إذا قال التحقق «Create the bucket … in Cloudflare first» فالحاوية غير موجودة أو الاسم غلط. أنشئها في Cloudflare ثم احفظ من جديد.' },
+                            { h: 'سياسة CORS (لرفع وسائط الإعلانات من المتصفح فقط)' },
+                            'رفع وسائط الإعلانات يتم من متصفحك مباشرة إلى R2، فيحتاج الحاوية تسمح بعنوان التطبيق. التطبيق يحاول ضبط ذلك بنفسه، لكن مفتاح Object Read & Write ما يقدر. إذا ظهرت لك رسالة بهذا المعنى تحت القسم، افتح في Cloudflare: R2 ← حاويتك ← Settings ← CORS Policy، والصق السياسة الظاهرة في البطاقة (فيها زر نسخ). رفع الملفات من الخادم ومن العامل في جهازك ما يحتاجها.',
+                        ],
+                        en: [
+                            { ol: [
+                                'In Cloudflare, open R2 and choose Create bucket, and name it, for example, `media`. You create it: the app never creates buckets.',
+                                'Copy the Account ID from the R2 overview page.',
+                                'Open Manage API tokens and Create API token, and give it Object Read & Write for this bucket only. Copy the Access Key ID and the Secret Access Key right away: Cloudflare shows the secret once.',
+                                'In AutoReply Pro open Settings → **Platform** → **Media storage**, and in the **Cloudflare R2** section paste the four values and press **Save and check**. Nothing is saved until Cloudflare accepts it.',
+                                'Choose **Cloudflare R2** under **Where new uploads go**.',
+                            ] },
+                            { warn: 'If the check says “Create the bucket … in Cloudflare first”, the bucket doesn’t exist or its name is wrong. Create it in Cloudflare and save again.' },
+                            { h: 'The CORS policy (browser uploads of ad media only)' },
+                            'Ad media is uploaded from your browser straight to R2, so the bucket has to allow the app’s address. The app tries to set that itself, but an Object Read & Write token can’t. If a message under the section says so, open R2 → your bucket → Settings → CORS Policy in Cloudflare and paste the policy shown on the card (it has a copy button). Uploads from the server and from the worker on your computer don’t need it.',
+                        ],
+                    },
+                },
+                {
+                    id: 'copy',
+                    title: { ar: 'انسخ ملفاتك القديمة إلى R2', en: 'Copy your existing files to R2' },
+                    body: {
+                        ar: [
+                            'زر **انسخ الملفات الموجودة إلى R2** يطلب من التطبيق ينقل ملفات Supabase إلى R2 في الخلفية، بضعة ملفات كل دقيقة. كل ملف يُنسخ ويُتحقق من حجمه ثم يتحول رابطه إلى R2، وتبقى نسخة Supabase كما هي.',
+                            { ul: [
+                                'البطاقة تعرض «N من M ملف في R2» وآخر سبب أوقف النسخ.',
+                                'إذا رفض Supabase تسليم الملفات (مثلاً لأن حد التنزيل انتهى) ينتظر النسخ ويعيد المحاولة وحده، ولا يتغير شيء.',
+                                'يتوقف النسخ وحده قبل أن يتجاوز باقة R2 المجانية.',
+                            ] },
+                        ],
+                        en: [
+                            'The **Copy existing files to R2** button asks the app to move the Supabase files to R2 in the background, a few every minute. Each file is copied, its size is checked, and then its link switches to R2, while the Supabase copy stays as it is.',
+                            { ul: [
+                                'The card shows “N of M files are in R2” and the last reason the copy stopped.',
+                                'If Supabase refuses to hand the files over (for example because its download limit ran out), the copy waits and tries again by itself, and nothing changes.',
+                                'It stops by itself before it would pass R2’s free tier.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'limits',
+                    title: { ar: 'الباقة المجانية وحدودك', en: 'The free tier and your limits' },
+                    body: {
+                        ar: [
+                            'باقة R2 المجانية كل شهر: 10 جيجابايت تخزين، ومليون عملية كتابة (Class A: الرفع والقوائم)، و10 ملايين عملية قراءة (Class B: عرض ملف أو فحصه). التنزيل نفسه مجاني.',
+                            'التطبيق لا يتجاوز هذه الباقة أبداً: يعدّ كل طلب يرسله إلى R2 قبل إرساله، ويحتفظ بهامش (9 جيجابايت، و900 ألف كتابة، و9 ملايين قراءة). تقدر تخفّض هذه الحدود من البطاقة، لكن لا ترفعها فوق باقة Cloudflare.',
+                            { dl: [
+                                ['عند 80%', 'تصلك رسالة بريد مرة في اليوم لكل حد، ويظهر تنبيه في **اليوم** وفي بطاقة تخزين الوسائط.'],
+                                ['عند 100% من التخزين', 'يُرفض أي رفع جديد إلى R2 برسالة واضحة. حوّل الملفات الجديدة إلى Supabase أو احذف ملفات.'],
+                                ['عند 100% من الكتابة أو القراءة', 'يُرفض الرفع، وتتوقف ملفات R2 عن الظهور (الرد 503) حتى يتجدد العدّاد تلقائياً في أول الشهر بتوقيت UTC. ملفات Supabase لا تتأثر.'],
+                            ] },
+                            { note: 'العدّاد يحسب ما يرسله هذا التطبيق فقط. لوحة Cloudflare نفسها لها الكلمة الأخيرة، فراجعها إن استخدمت الحاوية من أداة ثانية.' },
+                        ],
+                        en: [
+                            'R2’s free tier each month is 10 GB of storage, 1 million write operations (Class A: uploads and listings) and 10 million read operations (Class B: showing or checking a file). The download itself is free.',
+                            'The app never goes over this tier: it counts every request it sends to R2 before sending it, and keeps a margin (9 GB, 900,000 writes and 9 million reads). You can lower those limits on the card, but not raise them above Cloudflare’s tier.',
+                            { dl: [
+                                ['At 80%', 'You get one email a day per limit, and a notice appears on **Today** and on the Media storage card.'],
+                                ['At 100% of storage', 'Any new upload to R2 is refused with a clear message. Switch new files to Supabase, or delete files.'],
+                                ['At 100% of writes or reads', 'Uploads are refused and R2 files stop showing (the answer is 503) until the count starts again, by itself, on the 1st of the month (UTC). Supabase files are not affected.'],
+                            ] },
+                            { note: 'The count covers what this app sends. Cloudflare’s own dashboard has the final word, so check it if you use the bucket from another tool.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'problems',
+                    title: { ar: 'إذا ظهرت مشكلة', en: 'If something goes wrong' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['«Cloudflare R2 refused … AccessDenied» عند الحفظ', 'المفتاح لا يملك صلاحية هذه الحاوية. أنشئ مفتاحاً بصلاحية Object Read & Write على الحاوية نفسها.'],
+                                ['«SignatureDoesNotMatch»', 'المفتاح السري أو معرّف الحساب فيه خطأ. انسخهما من جديد (المفتاح السري يظهر مرة واحدة، فأنشئ مفتاحاً جديداً إن ضاع).'],
+                                ['رسالة «free allowance is used up» (R2_LIMIT) عند الرفع', 'وصلت لأحد حدود R2. شاهد البطاقة لتعرف أيها، ثم حوّل الملفات الجديدة إلى Supabase أو انتظر أول الشهر.'],
+                                ['صور R2 لا تظهر (503)', 'غالباً انتهت قراءات الشهر. تتجدد وحدها في أول الشهر UTC، وتقدر تتأكد من البطاقة.'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['“Cloudflare R2 refused … AccessDenied” when saving', 'The key has no access to this bucket. Create a key with Object Read & Write on that bucket.'],
+                                ['“SignatureDoesNotMatch”', 'The Secret Access Key or the Account ID has a typo. Copy them again (the secret is shown once, so make a new key if it is lost).'],
+                                ['“free allowance is used up” (R2_LIMIT) on an upload', 'You reached one of R2’s limits. The card shows which one: switch new files to Supabase, or wait for the 1st of the month.'],
+                                ['R2 pictures don’t show (503)', 'This month’s reads are probably used up. They start again by themselves on the 1st (UTC), and the card confirms it.'],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
         // ─── 12. AI usage and costs ──────────────────────────────────────────
         {
             slug: 'ai-usage',

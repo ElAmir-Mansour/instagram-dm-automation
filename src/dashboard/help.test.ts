@@ -167,7 +167,7 @@ const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').repla
 
 const REQUIRED = [
     'getting-started', 'onboarding', 'connect-meta', 'campaigns', 'dm-assistant', 'scheduling', 'growth', 'seo', 'tiktok', 'youtube', 'whatsapp', 'ads',
-    'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'ai-usage', 'troubleshooting', 'faq',
+    'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'media-storage', 'ai-usage', 'troubleshooting', 'faq',
 ];
 
 const ARABIC = /[\u0600-\u06FF]/g;
@@ -653,6 +653,7 @@ describe('Help Center — contextual links', () => {
             'pages/monteur.js → monteur',
             'pages/infographics.js → infographics',
             'pages/settings.js → youtube',
+            'pages/settings.js → media-storage',
             'pages/ai_settings.js → dm-assistant',
             'pages/ai_settings.js → ai-usage',
             'pages/ai_settings.js → ai-usage#meta-vision',

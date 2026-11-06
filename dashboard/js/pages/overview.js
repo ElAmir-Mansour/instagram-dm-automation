@@ -719,6 +719,18 @@ const OverviewPage = {
             });
         }
 
+        // 1d. Cloudflare R2's free tier at 80% or more, or used up (src/services/r2Usage.ts): the platform admin's, so the server sends it to nobody else. At 100% new
+        //     uploads to R2 are refused and its files stop being served until the 1st (UTC), so it is the owner's to know before a post fails on it.
+        const r2 = healthRes && healthRes.status === 'fulfilled' && healthRes.value ? healthRes.value.r2 : null;
+        if (r2 && (r2.level === 'warn' || r2.level === 'full') && typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin()) {
+            alerts.push({
+                level: r2.level === 'full' ? 'danger' : 'warning', icon: 'cloud-off',
+                title: t(r2.level === 'full' ? 'overview.alert.r2Full' : 'overview.alert.r2Warn'),
+                body: [...(Array.isArray(r2.items) ? r2.items : []).map((i) => `${t(`settings.media.r2.meter.${i.kind}`)} ${UI.formatNumber(i.pct)}%`), t('overview.alert.r2Body', { date: UI.formatDate(r2.resetsAt) })].join(' · '),
+                action: t('overview.alert.r2Fix'), target: 'settings', query: 's=platform&card=storage',
+            });
+        }
+
         // 2. DMs that failed today. Asked for with `since` = local midnight
         //    (O9), so every row is today's; the client-side date check stays as
         //    a belt to that brace. One page is at most FAILED_TODAY_LIMIT rows,

@@ -12,9 +12,10 @@ import { pool } from '../../config/db.js';
 import { queryOne } from '../../db/query.js';
 import { log } from '../../utils/log.js';
 import { AdsError } from '../adBoosts.js';
-import { getMediaStore, SupabaseStorageMediaStore } from '../storage.js';
+import { directUploadStore, getMediaStore } from '../storage.js';
 import { clipText } from '../studio/common.js';
-import { objectPathFor, StorageApiError } from '../supabaseStorage.js';
+import { R2CounterError, R2LimitError } from '../r2Usage.js';
+import { StorageApiError } from '../supabaseStorage.js';
 
 const MB = 1024 * 1024;
 
@@ -68,21 +69,23 @@ export function parseAdUploadRequest(body: unknown): { filename: string; mime: s
 }
 
 /**
- * Sign one upload for the tenant. 400 for a type or size an ad cannot use, 409 when media here is not on Supabase Storage (there is nothing
- * to sign against), 502 when Storage says no.
+ * Sign one upload for the tenant. 400 for a type or size an ad cannot use, 409 when media here is not on Supabase Storage or Cloudflare R2 (there is nothing
+ * to sign against) or R2's free tier would be passed (`R2_LIMIT`), 502 when Storage says no.
  */
 export async function signAdUpload(creatorId: string, body: unknown, publicBase: string): Promise<SignAdUploadAnswer> {
     const request = parseAdUploadRequest(body);
-    const store = await getMediaStore();
-    if (!(store instanceof SupabaseStorageMediaStore)) {
-        throw new AdsError(409, 'INVALID', 'Uploading ad media needs Supabase Storage, and media here is not stored there. Set it up in Settings → Media storage.');
+    const store = directUploadStore(await getMediaStore());
+    if (!store) {
+        throw new AdsError(409, 'INVALID', 'Uploading ad media needs Supabase Storage or Cloudflare R2, and media here is not stored in either. Set one up in Settings → Media storage.');
     }
     const id = randomUUID();
-    const path = objectPathFor(creatorId, id, request.mime);
+    const path = store.newObjectPath(creatorId, id, request.mime);
     let signed;
     try {
-        signed = await store.client.createSignedUploadUrl(path, request.mime);
+        signed = await store.signUpload(path, request.mime, request.size);
     } catch (err) {
+        if (err instanceof R2LimitError) throw new AdsError(409, 'R2_LIMIT', err.message);
+        if (err instanceof R2CounterError) throw new AdsError(503, 'STORAGE_ERROR', err.message);
         if (err instanceof StorageApiError) throw new AdsError(502, 'STORAGE_ERROR', `Storage refused the upload: ${err.message}`);
         throw err;
     }

@@ -196,7 +196,7 @@ describe('/privacy — the AI providers are named as sub-processors, in both lan
             const h2 = [...doc.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
             assert.deepEqual([...toc.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]), h2, lang);
         }
-        assert.ok(privacy.ar.includes('آخر تحديث: 30 أكتوبر 2026') && privacy.en.includes('Last updated: 30 October 2026'));
+        assert.ok(privacy.ar.includes('آخر تحديث: 6 نوفمبر 2026') && privacy.en.includes('Last updated: 6 November 2026'));
     });
 });
 
@@ -744,6 +744,22 @@ describe('both pages — no provider is promised as live', () => {
             // the one that is new, that no sentence states a provider as in use. Meta (Muse) and Baseten are the newest, and the furthest
             // ahead of their code (hackathon P1), so they are on the list too.
             assert.equal(/we (?:use|send to|rely on) (?:Anthropic|OpenAI|OpenRouter|Groq|Baseten|Meta's AI|Muse)/i.test(words(html)), false);
+        });
+    }
+});
+
+describe('/privacy names Cloudflare R2 as a place uploaded media may be kept (src/services/r2Storage.ts)', () => {
+    for (const lang of ['ar', 'en'] as const) {
+        it(`says, in ${lang}, that media may be stored in R2 as well as Supabase Storage, in a private bucket reached only through the app's address`, () => {
+            const text = words(privacy[lang]);
+            assert.ok(/Cloudflare R2/.test(text), 'R2 is named');
+            assert.ok(/Supabase Storage/.test(text), 'Supabase Storage is still named');
+            if (lang === 'en') {
+                assert.match(text, /optional second place for those same uploaded media/);
+                assert.match(text, /private bucket whose files are shown only through this app's own address/);
+            } else {
+                assert.match(text, /حاوية خاصة لا تُعرض ملفاتها إلا عبر عنوان التطبيق نفسه/);
+            }
         });
     }
 });

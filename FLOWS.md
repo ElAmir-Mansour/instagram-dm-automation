@@ -1518,7 +1518,7 @@ publish, not just this one.
 
 ### 3.4c — `GET /api/uploads/:id`
 
-**`src/routes/api.ts:1271`**. A row with `storage_path` streams the object from Supabase Storage
+**`src/routes/api.ts:1271`**. A row with `storage_path` streams the object from Supabase Storage or Cloudflare R2 (a path starting `r2:`, 3.4d)
 (`pipeline(media.body, res)`, **`src/routes/api.ts:1336`**); a legacy row serves `data`. The URL never
 changes, which is what TikTok's verified prefix and Meta's stored URLs need.
 
@@ -1535,6 +1535,36 @@ changes, which is what TikTok's verified prefix and Meta's stored URLs need.
 - **Types**: what `/api/upload` stores, plus the infographic's GIF and the explainers' audio (`SERVED_MIME_TYPES`,
   **`src/routes/api.ts:1247`**). Anything else is served as `application/octet-stream`, because this origin also serves the
   dashboard and an echoed `text/html` would be same-origin script.
+
+### 3.4d — Where a file lives: Supabase Storage or Cloudflare R2
+
+Two object stores, one URL. `media_uploads.storage_path` says where a row's bytes are, with no migration: a plain path
+(`<creator>/<id>.mp4`, or `private/…`) is Supabase Storage, and **`r2:<key>`** is Cloudflare R2, where the key is what `objectPathFor`
+gives (R2 has ONE private bucket, so a customer's file is `r2:private/<creator>/<id>.ogg`). `getMediaStore` (`src/services/storage.ts`)
+builds one `ObjectMediaStore` from both configs and the owner's choice (`storage.backend`, `resolveWriteTarget`): the choice only decides
+where NEW uploads go, and every read goes by the row's own path. A row whose backend is not configured here is a 503
+(`MediaStorageUnavailableError`), never a read from the other store. The URL is `/api/uploads/<id>` either way: R2's own address is never
+handed out (the bucket is private).
+
+- **Why**: Supabase's free plan answers `exceed_cached_egress_quota` once its download allowance is gone, and then refuses every read (the
+  route's 502). R2 has free downloads and a free tier of 10 GB, 1,000,000 Class A and 10,000,000 Class B operations a month.
+- **R2 client**: `R2StorageClient` (`src/services/r2Storage.ts`), S3-compatible, path-style, region `auto`, signed with SigV4
+  (`src/services/awsSigV4.ts`, tested against AWS's published examples). A presigned PUT (2 h) serves the browser's ad media and the Mac
+  worker, so `signAdUpload`, `signWorkerUpload` and `signExplainerUpload` go through `store.newObjectPath` and `store.signUpload`.
+- **The free tier is never passed** (`src/services/r2Usage.ts`): `R2StorageClient.send` is the ONE place a request leaves, and it reserves the
+  operation first, in `app_settings.storage.r2_usage.<YYYY-MM>` (one atomic `INSERT … ON CONFLICT … WHERE counter + n <= limit`; Class B in
+  batches of 50 per instance). Nothing back means the limit is reached and nothing is sent; a counter that cannot be written refuses too
+  (fail closed). A presigned upload counts as one Class A when it is signed. Before any write the stored R2 bytes (`r2:` rows' `size_bytes`,
+  signed-but-unconfirmed ones included) plus the new file must fit the storage limit. Limits are `storage.r2_limits`, lower than the ceilings
+  in code (10 GB, 1,000,000, 10,000,000), never higher. Over a limit: a write is a 409 `R2_LIMIT`; a read is a 503 (`media.r2_limit_reached`),
+  and Supabase rows are untouched. The count covers requests THIS app makes: Cloudflare's own dashboard is the final word. It starts again
+  on the 1st (UTC). At 80% the drain's `checkR2Warnings` emails the owner once a day per limit, and Today and the Settings card show a banner.
+- **Copy existing files** (`src/services/r2Copy.ts`): the card's button records `storage.r2_copy`; each `/api/jobs/drain`, last, runs `runCopyBatch`
+  (at most 25 s and 150 MB): download from Supabase, upload to R2, `headObject` to verify the size, then `UPDATE … SET storage_path = 'r2:' || …
+  WHERE id = $1 AND storage_path = <old>` (a concurrent change wins). Supabase is left untouched. A refusal from either side ends the batch,
+  is logged once and shown on the card; the next drain tries again.
+- **Deleting**: the v23 trigger queues the row's `storage_path`, so an `r2:` path goes to `removeQueuedMediaObjects`, which sends it to R2 as one
+  DeleteObjects (free, never refused by the limits) and the rest to Supabase's buckets.
 
 ### 3.5 — Daily maintenance, only on the daily cron
 

@@ -163,3 +163,111 @@ describe('Settings → Media storage', () => {
         assert.ok(card.includes('&lt;img src=x onerror=alert(1)&gt;'));
     });
 });
+
+// ─── Cloudflare R2 (src/services/r2Storage.ts, r2Usage.ts) ───────────────────────────────────
+
+const SECRET = 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0123456789abcdef0123';
+const ORIGIN = 'https://msg-response-auto.vercel.app';
+const LIMITS = { storage_bytes: 9 * 1024 ** 3, class_a: 900_000, class_b: 9_000_000 };
+const CEILINGS = { storage_bytes: 10_000_000_000, class_a: 1_000_000, class_b: 10_000_000 };
+const item = (kind: string, used: number, limit: number) => ({ kind, used, limit, ceiling: limit, pct: Math.floor((used / limit) * 100) });
+const summary = (over: Json = {}) => ({
+    month: '2026-11', resetsAt: '2026-12-01T00:00:00.000Z', limits: LIMITS, ceilings: CEILINGS, level: 'ok',
+    items: [item('storage', 1_000_000_000, LIMITS.storage_bytes), item('class_a', 1200, LIMITS.class_a), item('class_b', 45_000, LIMITS.class_b)], ...over,
+});
+const R2_OFF = {
+    configured: false, accountId: null, bucket: 'media', accessKeyId: { set: false, preview: null }, secretAccessKey: { set: false, preview: null },
+    connection: null, summary: null, copy: null, cors: { status: null, origin: ORIGIN, policy: null },
+};
+const R2_ON = {
+    configured: true, accountId: '0123456789abcdef0123456789abcdef', bucket: 'media',
+    accessKeyId: { set: true, preview: 'AKI•••••45' }, secretAccessKey: { set: true, preview: 'wJa•••••23' },
+    connection: { ok: true, bucketExists: true, created: false, cors: 'unchecked' }, summary: summary(),
+    copy: { active: true, requestedAt: '2026-11-06T10:00:00.000Z', doneAt: null, lastError: null, inR2: 3, total: 10, skipped: 0 },
+    cors: { status: 'ok', origin: ORIGIN, policy: JSON.stringify([{ AllowedOrigins: [ORIGIN] }], null, 2) },
+};
+const WITH_R2 = (r2: Json, over: Json = {}) => ({ ...CONNECTED, choice: null, usage: { ...CONNECTED.usage, r2: { files: 3, bytes: 12_000_000 } }, r2, ...over });
+
+describe('Settings → Media storage: Cloudflare R2', () => {
+    for (const lang of ['ar', 'en'] as const) {
+        it(`offers the R2 keys form before R2 is set up, without the choice of where uploads go or any meter (${lang})`, () => {
+            const { render, t } = load(lang);
+            const card = render(WITH_R2(R2_OFF));
+            assert.ok(card.includes(t('settings.media.r2.title')));
+            assert.ok(card.includes(t('settings.media.r2.statusOff')));
+            for (const id of ['r2-account', 'r2-bucket', 'r2-key-id', 'r2-secret']) assert.ok(card.includes(`id="${id}"`), id);
+            assert.ok(card.includes('data-submit="settings:saveR2Storage"'));
+            assert.ok(text(card).includes(text(t('settings.media.r2.help'))), 'where to find the keys in Cloudflare');
+            assert.ok(!card.includes('name="media-backend"'), 'nothing to choose yet');
+            assert.ok(!card.includes('r2-meter-'));
+            assert.ok(!card.includes('settings:copyToR2'));
+        });
+
+        it(`once set up: the choice, this month's meters against each limit, the reset date, the copy progress, and never the secret (${lang})`, () => {
+            const { render, t } = load(lang);
+            const card = render(WITH_R2(R2_ON, { backend: 'supabase', choice: 'supabase' }));
+            assert.ok(card.includes('name="media-backend"') && card.includes('data-change="settings:setMediaBackend"'));
+            assert.match(card, /id="media-backend-supabase"[^>]*checked/);
+            assert.ok(!/id="media-backend-r2"[^>]*checked/.test(card));
+            for (const kind of ['storage', 'class_a', 'class_b']) {
+                assert.ok(card.includes(`id="r2-meter-${kind}"`), kind);
+                assert.ok(card.includes(t(`settings.media.r2.meter.${kind}`)), kind);
+            }
+            assert.match(card, /<progress id="r2-meter-class_a" value="1200" max="900000">/);
+            assert.ok(card.includes(t('settings.media.r2.usageTitle', { month: '2026-11' })));
+            assert.ok(card.includes(t('settings.media.r2.copyProgress', { done: '3', total: '10' })) || /3/.test(text(card)), 'N of M');
+            assert.ok(card.includes('data-action="settings:copyToR2"'));
+            assert.ok(card.includes('id="r2-limits-form"'));
+            assert.match(card, /id="r2-limit-a"[^>]*max="1000000"/, 'the field cannot go above Cloudflare\'s tier');
+            assert.match(card, /id="r2-limit-b"[^>]*max="10000000"/);
+            assert.ok(card.includes('AKI•••••45') && card.includes('wJa•••••23'), 'masked hints');
+            assert.ok(!card.includes(SECRET));
+            assert.ok(card.includes('id="r2-secret"') && !/id="r2-secret"[^>]*value=/.test(card), 'the secret field is never prefilled');
+            assert.ok(!card.includes('class="inline-error"'), 'no banner under 80%');
+        });
+
+        it(`warns at 80% and says it is used up at 100%, with the reset date (${lang})`, () => {
+            const { render, t } = load(lang);
+            const warn = render(WITH_R2({ ...R2_ON, summary: summary({ level: 'warn', items: [item('storage', 1, 10), item('class_a', 1200, 900_000), item('class_b', 7_500_000, 9_000_000)] }) }));
+            assert.ok(warn.includes(t('settings.media.r2.bannerWarn')));
+            assert.ok(!warn.includes(t('settings.media.r2.bannerFull')));
+            const full = render(WITH_R2({ ...R2_ON, summary: summary({ level: 'full', items: [item('storage', 1, 10), item('class_a', 1200, 900_000), item('class_b', 9_000_000, 9_000_000)] }) }));
+            assert.ok(full.includes(t('settings.media.r2.bannerFull')));
+            assert.match(full, /role="alert"/);
+            assert.ok(text(full).includes('100%'));
+        });
+
+        it(`shows the CORS policy to paste, with a copy button, only when the token could not set it (${lang})`, () => {
+            const { render, t } = load(lang);
+            const refused = render(WITH_R2({ ...R2_ON, cors: { ...R2_ON.cors, status: 'refused' } }));
+            assert.ok(refused.includes(t('settings.media.r2.corsNotice')));
+            assert.ok(refused.includes('id="r2-cors-policy"') && refused.includes('data-action="settings:copyR2Cors"'));
+            assert.ok(refused.includes('AllowedOrigins'));
+            assert.ok(!render(WITH_R2(R2_ON)).includes('id="r2-cors-policy"'));
+        });
+
+        it(`says why the copy is waiting when Supabase refused (${lang})`, () => {
+            const { render, t } = load(lang);
+            const card = render(WITH_R2({ ...R2_ON, copy: { ...R2_ON.copy!, lastError: 'Supabase Storage refused to download the file: Egress quota exceeded' } }));
+            assert.ok(card.includes(t('settings.media.r2.copyError', { message: 'Supabase Storage refused to download the file: Egress quota exceeded' })));
+        });
+    }
+
+    it('writes the new R2 strings in Arabic as Arabic prose', () => {
+        const { t } = load('ar');
+        for (const key of ['settings.media.r2.intro', 'settings.media.r2.help', 'settings.media.r2.bannerFull', 'settings.media.r2.corsNotice', 'settings.media.r2.copyHint', 'errors.R2_LIMIT', 'errors.R2_LIMIT.next', 'overview.alert.r2Full']) {
+            assert.match(t(key), /[؀-ۿ]/, key);
+        }
+    });
+
+    it('is still a card when the server predates R2: no r2 block, no throw', () => {
+        const { render, t } = load('en');
+        assert.ok(render(CONNECTED).includes(t('settings.media.title')));
+    });
+
+    it('escapes what the server says about R2', () => {
+        const { render } = load('en');
+        const card = render(WITH_R2({ ...R2_ON, connection: { ok: false, status: 400, error: '<img src=x onerror=alert(1)>' } }));
+        assert.ok(!card.includes('<img src=x'));
+    });
+});

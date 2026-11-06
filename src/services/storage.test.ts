@@ -16,7 +16,7 @@ import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    canServePrivately, canServePublicly, getMediaStore, MediaStorageUnavailableError, PostgresMediaStore, PrivateBucketIsPublicError, removeQueuedMediaObjects, setMediaStore,
+    canServePrivately, canServePublicly, getMediaStore, MediaStorageUnavailableError, ObjectMediaStore, PostgresMediaStore, PrivateBucketIsPublicError, removeQueuedMediaObjects, setMediaStore,
     SupabaseStorageMediaStore, uploadIdFromSegment, uploadIdFromUrl, type MediaStore,
 } from './storage.js';
 import {
@@ -106,6 +106,10 @@ async function fakeQuery(sql: string, params: any[] = []) {
 
     if (preV51 && /\bis_private\b/.test(flat)) throw Object.assign(new Error('column "is_private" does not exist'), { code: '42703' });
 
+    if (/^SELECT key, value, is_secret FROM app_settings WHERE key = ANY/.test(flat)) {
+        const found = (params[0] as string[]).flatMap((k) => { const r = settings.get(k); return r ? [{ key: k, ...r }] : []; });
+        return { rows: found, rowCount: found.length };
+    }
     if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(flat)) {
         const row = settings.get(String(params[0]));
         return row ? { rows: [row], rowCount: 1 } : none;
@@ -291,17 +295,17 @@ describe('getMediaStore', () => {
     it('is Supabase Storage once Settings holds a URL and a key', async () => {
         saved(PROJECT, SECRET_KEY);
         const store = await getMediaStore();
-        assert.ok(store instanceof SupabaseStorageMediaStore);
-        assert.equal((store as SupabaseStorageMediaStore).config.key, SECRET_KEY);
+        assert.ok(store instanceof ObjectMediaStore);
+        assert.equal((store as ObjectMediaStore).writesTo, 'supabase');
+        assert.ok((store as ObjectMediaStore).has('supabase') && !(store as ObjectMediaStore).has('r2'));
     });
 
     it('is Supabase Storage from SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY when nothing is saved', async () => {
         process.env.SUPABASE_URL = `  ${PROJECT}/  `;
         process.env.SUPABASE_SERVICE_ROLE_KEY = SERVICE_ROLE_KEY;
         const store = await getMediaStore();
-        assert.ok(store instanceof SupabaseStorageMediaStore);
-        assert.equal((store as SupabaseStorageMediaStore).config.url, PROJECT);
-        assert.deepEqual((store as SupabaseStorageMediaStore).config.source, { url: 'env', key: 'env' });
+        assert.ok(store instanceof ObjectMediaStore);
+        assert.equal((store as ObjectMediaStore).writesTo, 'supabase');
     });
 
     it('stays Postgres with only half a config — a URL with no key cannot write anything', async () => {
@@ -319,7 +323,7 @@ describe('getMediaStore', () => {
         saved(null, 'sb_secret_rotated_0123456789abcdef');
         const second = await getMediaStore();
         assert.notEqual(second, first);
-        assert.equal((second as SupabaseStorageMediaStore).config.key, 'sb_secret_rotated_0123456789abcdef');
+        assert.ok(second instanceof ObjectMediaStore && second.writesTo === 'supabase');
     });
 
     it('returns a substitute set by a test, without reading any config', async () => {

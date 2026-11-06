@@ -134,6 +134,10 @@ beforeEach(() => {
 
     (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
         const flat = sql.replace(/\s+/g, ' ').trim();
+        if (/^SELECT key, value, is_secret FROM app_settings WHERE key = ANY/.test(flat)) {
+            const found = (params[0] as string[]).flatMap((k) => { const r = settings.get(k); return r ? [{ key: k, ...r }] : []; });
+            return { rows: found, rowCount: found.length };
+        }
         if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(flat)) {
             const row = settings.get(String(params[0]));
             return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };

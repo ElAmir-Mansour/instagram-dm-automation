@@ -30,7 +30,9 @@ import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
 } from '../monteur/results.js';
-import { getMediaStore, SupabaseStorageMediaStore, uploadIdFromUrl } from '../storage.js';
+import { getMediaStore, objectStoreOf, uploadIdFromUrl } from '../storage.js';
+import { R2CounterError, R2LimitError } from '../r2Usage.js';
+import { isR2Path } from '../supabaseStorage.js';
 import {
     type Exec, clipText, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN,
     withTransaction,
@@ -944,17 +946,36 @@ export async function checkRenderFiles(exec: Exec, creatorId: string, wanted: re
 
     const inStorage = rows.filter((r) => r.storage_path);
     if (!inStorage.length) return;
-    const store = await getMediaStore();
-    if (!(store instanceof SupabaseStorageMediaStore)) {
-        throw new StudioError(409, 'The render is in Supabase Storage, and media storage is not configured to check it.');
+    const store = objectStoreOf(await getMediaStore());
+    const unreachable = () => new StudioError(409, 'The render is in Supabase Storage or Cloudflare R2, and media storage is not configured to check it.');
+    if (!store) throw unreachable();
+    // What each R2 upload was signed for: a presigned PUT carries no size limit of its own, so R2 may hold MORE than was declared, and the storage cap
+    // (which counts the declared size) would be wrong by the difference. Asked only when an R2 file is in play.
+    const declared = new Map<string, number>();
+    if (inStorage.some((r) => isR2Path(r.storage_path))) {
+        const sizes = await exec.query<{ id: string; size_bytes: string | number | null }>(
+            'SELECT id, size_bytes FROM media_uploads WHERE id = ANY($1::uuid[])', [ids]
+        );
+        for (const r of sizes.rows) declared.set(String(r.id).toLowerCase(), Number(r.size_bytes ?? 0) || 0);
     }
     for (const [id, mime, label] of wanted) {
         const row = byId.get(id)!;
         if (!row.storage_path) continue;
-        const object = await store.client.headObject(row.storage_path);
+        if (!store.canReach(row.storage_path)) throw unreachable();
+        let object;
+        try {
+            object = await store.headStored(row.storage_path);
+        } catch (err) {
+            if (err instanceof R2LimitError) throw new StudioError(409, err.message, undefined, 'R2_LIMIT', err.params);
+            if (err instanceof R2CounterError) throw new StudioError(503, err.message);
+            throw err;
+        }
+        const wasDeclared = declared.get(id);
         if (!object) problems.push(`${label}: upload ${id} was signed but its file never arrived`);
         else if (object.size !== null && object.size > MAX_RENDER_FILE_BYTES) problems.push(`${label}: upload ${id} is over 100MB`);
-        else if (object.contentType && object.contentType !== mime) problems.push(`${label}: upload ${id} was stored as ${object.contentType}, not ${mime}`);
+        else if (object.size !== null && isR2Path(row.storage_path) && wasDeclared && object.size > wasDeclared) {
+            problems.push(`${label}: upload ${id} was signed for ${wasDeclared} bytes but R2 holds ${object.size}`);
+        } else if (object.contentType && object.contentType !== mime) problems.push(`${label}: upload ${id} was stored as ${object.contentType}, not ${mime}`);
     }
     if (problems.length) throw problemsError(problems, 'the render result');
 }

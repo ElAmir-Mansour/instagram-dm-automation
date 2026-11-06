@@ -59,8 +59,28 @@ export const PRIVATE_MEDIA_BUCKET = 'media-private';
  */
 export const PRIVATE_PATH_PREFIX = 'private/';
 
-/** The bucket a `storage_path` lives in. */
+/**
+ * A row whose bytes are in Cloudflare R2 keeps `r2:<key>` as its `storage_path` (no migration: the column is free text, and the deletion
+ * queue copies it). A Supabase row keeps its plain path. The key after the prefix is what `objectPathFor` gives, so a private file is
+ * `r2:private/<creator>/<id>.ogg`: R2 has ONE bucket for both, since every byte is served through this app's own route anyway.
+ */
+export const R2_PATH_PREFIX = 'r2:';
+
+export function isR2Path(path: string | null | undefined): boolean {
+    return typeof path === 'string' && path.startsWith(R2_PATH_PREFIX);
+}
+
+/** The key inside the R2 bucket of an `r2:` path. */
+export function r2KeyOf(path: string): string {
+    return path.slice(R2_PATH_PREFIX.length);
+}
+
+/** What `bucketForPath` answers for an R2 path: not a Supabase bucket, so nothing here can mistake it for one. */
+export const R2_BUCKET_TOKEN = 'r2';
+
+/** The bucket a `storage_path` lives in: `r2` for a Cloudflare R2 path, else one of Supabase's two buckets. */
 export function bucketForPath(path: string): string {
+    if (isR2Path(path)) return R2_BUCKET_TOKEN;
     return path.startsWith(PRIVATE_PATH_PREFIX) ? PRIVATE_MEDIA_BUCKET : MEDIA_BUCKET;
 }
 
@@ -79,6 +99,11 @@ const FIRST_BYTE_TIMEOUT_MS = 15_000;
 export type StorageFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 let fetchOverride: StorageFetch | null = null;
+
+/** The test override, for the R2 client, which answers to the same hook. */
+export function storageFetchOverride(): StorageFetch | null {
+    return fetchOverride;
+}
 
 /** Override `fetch` for every client made after this — tests only. Returns the previous override. */
 export function setStorageFetch(next: StorageFetch | null): StorageFetch | null {
@@ -257,7 +282,22 @@ export interface SignedUpload {
     expiresAt: string;
 }
 
-export class SupabaseStorageClient {
+/**
+ * What the media store and its callers need of an object store, whichever one it is (Supabase Storage, Cloudflare R2). Paths are keys inside
+ * one bucket: the store strips the `r2:` prefix before it asks R2.
+ */
+export interface ObjectStorageClient {
+    getBucket(): Promise<BucketInfo | null>;
+    ensureBucket(options?: { public?: boolean }): Promise<{ created: boolean; public: boolean }>;
+    upload(path: string, data: Buffer, contentType: string, options?: { upsert?: boolean }): Promise<void>;
+    createSignedUploadUrl(path: string, contentType: string): Promise<SignedUpload>;
+    headObject(path: string): Promise<{ size: number | null; contentType: string | null } | null>;
+    download(path: string): Promise<Buffer | null>;
+    openStream(path: string, range?: { start: number; end: number }): Promise<ObjectStream | null>;
+    remove(paths: readonly string[]): Promise<number>;
+}
+
+export class SupabaseStorageClient implements ObjectStorageClient {
     readonly bucket: string;
     private readonly base: string;
     private readonly key: string;

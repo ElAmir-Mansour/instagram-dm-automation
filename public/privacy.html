@@ -211,6 +211,15 @@
       src/services/ads/notify.ts, which renders only the ad account, amounts and
       Meta's status, and it stays true. The new paragraph says the two differ.
 
+  MEDIA STORAGE ON CLOUDFLARE R2 — ADDED 2026-11-06 (src/services/r2Storage.ts). Section 5's Supabase and Cloudflare R2 entries claim:
+    · uploaded media (post images and videos, and a customer's WhatsApp files) are kept in Supabase Storage or in Cloudflare R2, whichever the platform
+      owner chose for new uploads (storage.backend); a file stays where it was written;
+    · R2 is one PRIVATE bucket: no public bucket and no r2.dev address, every byte reaches a reader through /api/uploads/<id> on this app's own
+      address (a customer's file only through the authenticated inbox route, as before);
+    · R2 receives only the uploaded files (the bytes, their type and a key made of ids): no message text, no follower name, no profile;
+    · it stays inside Cloudflare's free tier by design (hard ceilings in code, src/services/r2Usage.ts), so nothing here is paid for.
+  If any of these changes, change both languages here and the stamp.
+
   META'S AI MODELS (MUSE) AND BASETEN — ADDED 2026-10-30, AHEAD OF THE CODE ON
   PURPOSE. Every block above describes code that is on main. This one does not:
   the code it describes arrives in the hackathon PRs (hackathon/p0-meta-provider:
@@ -475,7 +484,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.91">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.92">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1313,7 +1322,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 30 أكتوبر 2026</p>
+                <p class="stamp">آخر تحديث: 6 نوفمبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1988,8 +1997,15 @@
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Supabase</bdi></strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
-                        سبق.
+                        سبق، وكذلك الوسائط المرفوعة (صور المنشورات ومقاطعها، وما يرسله العملاء على واتساب) حين يختار صاحب المنصة
+                        <bdi lang="en" dir="ltr">Supabase Storage</bdi> مكاناً لها.
                         <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Supabase</bdi></a>.
+                    </li>
+                    <li>
+                        <strong><bdi lang="en" dir="ltr">Cloudflare R2</bdi></strong> — مكان بديل اختياري لتخزين الوسائط المرفوعة نفسها بدلاً من
+                        <bdi lang="en" dir="ltr">Supabase Storage</bdi>، يختاره صاحب المنصة من الإعدادات: حاوية خاصة لا تُعرض ملفاتها إلا عبر عنوان
+                        التطبيق نفسه، ولا يُرسل إليها غير الملفات المرفوعة.
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Cloudflare</bdi></a>.
                     </li>
                     <li>
                         <strong><bdi lang="en" dir="ltr">Vercel</bdi></strong> — استضافة التطبيق. تتلقّى <bdi lang="en" dir="ltr">Vercel</bdi> أيضاً سجلّات
@@ -2152,7 +2168,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 30 October 2026</p>
+                <p class="stamp">Last updated: 6 November 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
 
@@ -2878,8 +2894,15 @@
                     </li>
                     <li>
                         <strong>Supabase</strong> — hosts the database everything above is
-                        stored in.
+                        stored in, and the uploaded media (post pictures and videos, and files customers send on WhatsApp) when the
+                        platform owner has chosen Supabase Storage to keep them.
                         <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">Supabase's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Cloudflare R2</strong> — an optional second place for those same uploaded media, instead of Supabase Storage,
+                        chosen by the platform owner in Settings: a private bucket whose files are shown only through this app's own address,
+                        and which receives nothing but the uploaded files themselves.
+                        <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's privacy policy</a>.
                     </li>
                     <li>
                         <strong>Vercel</strong> — hosts the application. Vercel also receives

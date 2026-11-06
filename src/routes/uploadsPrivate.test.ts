@@ -66,6 +66,7 @@ beforeEach(() => {
         const flat = sql.replace(/\s+/g, ' ').trim();
         statements.push(flat);
         if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(flat)) return { rows: [], rowCount: 0 };
+        if (/^SELECT key, value, is_secret FROM app_settings WHERE key = ANY/.test(flat)) return { rows: [], rowCount: 0 };
         if (/^SELECT mime_type, storage_path, size_bytes, /.test(flat)) {
             const row = rows.get(String(params[0]));
             if (!row) return { rows: [], rowCount: 0 };

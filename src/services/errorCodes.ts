@@ -79,6 +79,8 @@ export const ERROR_CODES = {
     UPLOAD_TYPE_UNSUPPORTED: { status: [400], meaning: 'A file type the platforms cannot ingest.', params: ['mimeType'] },
     UPLOAD_TOO_LARGE: { status: [400, 413], meaning: 'A file over the cap this endpoint can take (3.2MB; Vercel caps the request at 4.5MB).', params: ['maxMb', 'maxBytes'] },
 
+    R2_LIMIT: { status: [409, 503], meaning: 'Cloudflare R2\'s free tier is used up (storage, writes or reads): an upload to R2 is refused (409), or an R2 file cannot be served until the month resets (503). See src/services/r2Usage.ts.', params: ['kind', 'used', 'limit', 'resets'] },
+
     // ─── Jobs and erasure (platform admin) ──────────────────────────────────────────────────────────────
     JOB_NOT_RETRYABLE: { status: [409], meaning: 'Retry on a job that has not stopped (only failed or cancelled jobs can be retried).', params: ['status'] },
     JOB_NOT_CANCELLABLE: { status: [409], meaning: 'Cancel on a job that has started or finished (only a pending job can be cancelled).', params: ['status'] },

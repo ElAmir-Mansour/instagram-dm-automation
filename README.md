@@ -102,7 +102,7 @@ The maintainers also keep local notes and specs outside this public repository.
 ## How it runs
 
 - **App:** one Express app (`src/index.ts`) on Vercel serverless (`vercel.json`, `@vercel/node`). There is no build step. No instance keeps state that the others need: sessions are signed tokens, and the send-rate counters are database rows.
-- **Data:** Supabase Postgres, through its pooler (`src/config/db.ts`). Uploads go to Supabase Storage once Settings → Media storage is filled in, and stay in Postgres until then. Either way the URL is `/api/uploads/<id>`.
+- **Data:** Supabase Postgres, through its pooler (`src/config/db.ts`). Uploads go to Supabase Storage or Cloudflare R2 (the owner chooses where NEW ones go, and R2 stays inside its free tier by design) once Settings → Media storage is filled in, and stay in Postgres until then. Either way the URL is `/api/uploads/<id>`.
 - **Work queue:** `POST /webhook` checks the signature, writes each event to the `jobs` table (`src/jobs/`), answers `200`, then drains the queue under `waitUntil` for up to 8 seconds (`src/webhook/ack.ts`). Unfinished jobs stay `pending`. Failed jobs are retried with backoff.
 - **Publishing:** `GET /api/jobs/drain` and `GET /api/cron/publish` both publish due posts, so a scheduled post goes out at the first call after its time. With only the daily cron, that can be a day late.
 

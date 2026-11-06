@@ -57,8 +57,10 @@ import {
 import { sendError } from '../services/errorCodes.js';
 import { LegalSignoffError, listSignoffs, parseSignoffInput, recordSignoff, revokeSignoff } from '../services/ads/legalSignoff.js';
 import { syncLeadgenSubscription } from '../services/ads/leads.js';
-import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
-import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
+import { APP_SETTING_KEYS, describeGeminiKey, getMediaConfigs, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, r2FieldProblem, setSetting, DEFAULT_R2_BUCKET } from '../services/appSettings.js';
+import { checkMediaStorage, checkR2Storage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
+import { requestCopy } from '../services/r2Copy.js';
+import { checkLimitsInput, clearR2BannerCache } from '../services/r2Usage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
@@ -359,9 +361,9 @@ router.use('/explainers', adminExplainersRouter);
  * The status never carries the key. Saving asks Supabase first — reading the bucket and
  * creating it, public, if it is missing — so a key Supabase refuses is never written.
  */
-router.get('/media-storage', async (_req, res) => {
+router.get('/media-storage', async (req, res) => {
     try {
-        res.json(await describeMediaStorage());
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
     } catch (err) {
         failWith(res, err, 'admin.media_storage_read_failed', 'Failed to read the media storage status.');
     }
@@ -412,9 +414,148 @@ router.put('/media-storage', async (req, res) => {
             credential_kind: storageKeyKind(key),
             bucket_created: check.created,
         });
-        res.json(await describeMediaStorage());
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
     } catch (err) {
         failWith(res, err, 'admin.media_storage_save_failed', 'Failed to save the media storage settings.');
+    }
+});
+
+/**
+ * Where NEW uploads go (`storage.backend`): Supabase Storage or Cloudflare R2. Every existing file keeps being served from where it lives. Choosing a
+ * backend that is not set up is refused, so a choice can never send uploads nowhere.
+ */
+router.put('/media-storage/backend', async (req, res) => {
+    const backend = req.body?.backend;
+    if (backend !== 'supabase' && backend !== 'r2') {
+        res.status(400).json({ error: 'backend must be "supabase" or "r2".' });
+        return;
+    }
+    try {
+        const configs = await getMediaConfigs();
+        if (backend === 'r2' && !configs.r2) {
+            res.status(400).json({ error: 'Cloudflare R2 is not set up yet: save its Account ID, bucket and keys first.' });
+            return;
+        }
+        if (backend === 'supabase' && !configs.supabase) {
+            res.status(400).json({ error: 'Supabase Storage is not set up yet: save its Project URL and secret key first.' });
+            return;
+        }
+        await setSetting(APP_SETTING_KEYS.mediaBackend, backend, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'backend', backend });
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.media_backend_save_failed', 'Failed to save where new uploads go.');
+    }
+});
+
+/**
+ * Cloudflare R2 (src/services/r2Storage.ts): Account ID, bucket and an API token's key pair (saved encrypted, never returned, only masked). A blank
+ * Access Key ID or Secret keeps the saved one. Saving asks Cloudflare first: the bucket must exist (HeadBucket is all the least-privilege token
+ * "Object Read & Write" can do: the owner creates the bucket in Cloudflare), so a wrong key or bucket is never saved. The bucket's CORS rules are set
+ * when the token may; when it may not the save still goes through and the card shows the policy to paste.
+ */
+router.put('/media-storage/r2', async (req, res) => {
+    const body = req.body ?? {};
+    const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+    try {
+        const accountId = text(body.accountId) || (await getSetting(APP_SETTING_KEYS.r2AccountId)) || '';
+        const bucket = text(body.bucket) || (await getSetting(APP_SETTING_KEYS.r2Bucket)) || DEFAULT_R2_BUCKET;
+        const accessKeyId = text(body.accessKeyId) || (await getSetting(APP_SETTING_KEYS.r2AccessKeyId)) || '';
+        const secretAccessKey = text(body.secretAccessKey) || (await getSetting(APP_SETTING_KEYS.r2SecretAccessKey)) || '';
+        const fields = { accountId, bucket, accessKeyId, secretAccessKey } as const;
+        for (const [field, value] of Object.entries(fields) as Array<[keyof typeof fields, string]>) {
+            if (!value) {
+                res.status(400).json({ error: `${field === 'accountId' ? 'The Account ID' : field === 'bucket' ? 'The bucket name' : field === 'accessKeyId' ? 'The Access Key ID' : 'The Secret Access Key'} is required.`, field });
+                return;
+            }
+            const problem = r2FieldProblem(field, value);
+            if (problem) {
+                res.status(400).json({ error: problem, field });
+                return;
+            }
+        }
+
+        const base = await getPublicBaseUrl(requestOrigin(req));
+        const check = await checkR2Storage({ accountId: accountId.toLowerCase(), bucket, accessKeyId, secretAccessKey }, { create: true, origins: base ? [base] : [] });
+        if (!check.ok) {
+            log('warn', 'admin.r2_refused', { http_status: check.status, reason: check.error });
+            res.status(check.status).json({ error: check.error });
+            return;
+        }
+
+        const updatedBy = req.session?.userId ?? null;
+        await setSetting(APP_SETTING_KEYS.r2AccountId, accountId.toLowerCase(), updatedBy);
+        await setSetting(APP_SETTING_KEYS.r2Bucket, bucket, updatedBy);
+        if (text(body.accessKeyId)) await setSetting(APP_SETTING_KEYS.r2AccessKeyId, accessKeyId, updatedBy);
+        if (text(body.secretAccessKey)) await setSetting(APP_SETTING_KEYS.r2SecretAccessKey, secretAccessKey, updatedBy);
+        if (check.cors !== 'unchecked') await setSetting(APP_SETTING_KEYS.r2Cors, check.cors, updatedBy);
+        clearR2BannerCache();
+        // The fact, never the value.
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, {
+            change: 'r2_saved',
+            fields: ['account', 'bucket', ...(text(body.accessKeyId) ? ['access_key'] : []), ...(text(body.secretAccessKey) ? ['credential'] : [])],
+            cors: check.cors,
+        });
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.r2_save_failed', 'Failed to save the Cloudflare R2 settings.');
+    }
+});
+
+/** Forget the R2 config. Refused while files are in R2: they would stop being served. */
+router.delete('/media-storage/r2', async (req, res) => {
+    try {
+        const usage = await getMediaUsage();
+        if (usage.r2.files > 0) {
+            res.status(409).json({ error: `${usage.r2.files} file(s) are in Cloudflare R2. Without this config they cannot be served, so it stays. Replace the keys instead.` });
+            return;
+        }
+        const updatedBy = req.session?.userId ?? null;
+        for (const key of [APP_SETTING_KEYS.r2AccountId, APP_SETTING_KEYS.r2Bucket, APP_SETTING_KEYS.r2AccessKeyId, APP_SETTING_KEYS.r2SecretAccessKey, APP_SETTING_KEYS.r2Cors, APP_SETTING_KEYS.r2Copy] as const) {
+            await setSetting(key, null, updatedBy);
+        }
+        if ((await getSetting(APP_SETTING_KEYS.mediaBackend)) === 'r2') await setSetting(APP_SETTING_KEYS.mediaBackend, null, updatedBy);
+        clearR2BannerCache();
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'r2_removed' });
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.r2_remove_failed', 'Failed to remove the Cloudflare R2 settings.');
+    }
+});
+
+/**
+ * The owner's R2 limits (`storage.r2_limits`), which can only be LOWER than Cloudflare's free tier: a value above a ceiling is refused here, and a stored one
+ * above it is read as the ceiling anyway (src/services/r2Usage.ts).
+ */
+router.put('/media-storage/r2-limits', async (req, res) => {
+    const checked = checkLimitsInput(req.body);
+    if (!checked.ok) {
+        res.status(400).json({ error: checked.error, ...(checked.field ? { field: checked.field } : {}) });
+        return;
+    }
+    try {
+        await setSetting(APP_SETTING_KEYS.r2Limits, JSON.stringify(checked.value), req.session?.userId ?? null);
+        clearR2BannerCache();
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'r2_limits', ...checked.value });
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.r2_limits_save_failed', 'Failed to save the R2 limits.');
+    }
+});
+
+/** "Copy existing files to R2": records the request; the drain does the copying a batch at a time (src/services/r2Copy.ts). */
+router.post('/media-storage/r2-copy', async (req, res) => {
+    try {
+        const configs = await getMediaConfigs();
+        if (!configs.r2 || !configs.supabase) {
+            res.status(400).json({ error: 'Copying needs both Supabase Storage and Cloudflare R2 to be set up.' });
+            return;
+        }
+        await requestCopy(req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'r2_copy_requested' });
+        res.status(202).json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.r2_copy_request_failed', 'Failed to start the copy.');
     }
 });
 
@@ -447,7 +588,7 @@ router.delete('/media-storage', async (req, res) => {
         await setSetting(APP_SETTING_KEYS.mediaStorageUrl, null, updatedBy);
         await setSetting(APP_SETTING_KEYS.mediaStorageKey, null, updatedBy);
         await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'removed' });
-        res.json(await describeMediaStorage());
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
     } catch (err) {
         failWith(res, err, 'admin.media_storage_remove_failed', 'Failed to remove the media storage settings.');
     }
