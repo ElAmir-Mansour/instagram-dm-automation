@@ -201,7 +201,13 @@ export class R2StorageClient implements ObjectStorageClient {
             if (wanted.every(covers)) return { changed: false };
         } else {
             const err = await errorFrom(current, 'read the CORS rules');
-            if (err.code !== 'NoSuchCORSConfiguration' && err.status !== 404) throw err;
+            if (err.refused) {
+                // A token limited to the bucket's objects may not read its rules. Ask the way a browser does instead: a preflight, which needs no key.
+                // Rules set by hand in Cloudflare that already allow every origin are then "ok", not "set it by hand".
+                if (await this.preflightAllows(wanted)) return { changed: false };
+            } else if (err.code !== 'NoSuchCORSConfiguration' && err.status !== 404) {
+                throw err;
+            }
         }
         const body = '<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration><CORSRule>'
             + wanted.map((o) => `<AllowedOrigin>${xmlEscape(o)}</AllowedOrigin>`).join('')
@@ -215,6 +221,32 @@ export class R2StorageClient implements ObjectStorageClient {
         if (!put.ok) throw await errorFrom(put, 'set the CORS rules');
         await put.body?.cancel().catch(() => undefined);
         return { changed: true };
+    }
+
+    /**
+     * Whether a browser on each of `origins` may PUT here, asked exactly as the browser asks: an unsigned CORS preflight (OPTIONS) per origin. Counted as
+     * Class B like any read, although Cloudflare may not bill it. Anything but a 2xx naming the origin and PUT is "no".
+     */
+    async preflightAllows(origins: readonly string[]): Promise<boolean> {
+        const send = this.fetchImpl ?? storageFetchOverride() ?? fetch;
+        for (const origin of origins) {
+            await this.guard.reserve('B');
+            let response: Response;
+            try {
+                response = await send(this.urlOf(this.pathOf('cors-preflight-check')), {
+                    method: 'OPTIONS',
+                    headers: { origin, 'access-control-request-method': 'PUT', 'access-control-request-headers': 'content-type', 'user-agent': SERVER_USER_AGENT },
+                    signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+                });
+            } catch {
+                return false;
+            }
+            await response.body?.cancel().catch(() => undefined);
+            const allowOrigin = response.headers.get('access-control-allow-origin');
+            const allowMethods = (response.headers.get('access-control-allow-methods') ?? '').toUpperCase().split(/\s*,\s*/);
+            if (!response.ok || (allowOrigin !== origin && allowOrigin !== '*') || !allowMethods.includes('PUT')) return false;
+        }
+        return true;
     }
 
     /** PutObject (Class A). A path names one upload: nothing overwrites it on purpose, so `upsert` is accepted and ignored. */

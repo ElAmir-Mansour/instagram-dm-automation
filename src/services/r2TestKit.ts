@@ -231,6 +231,8 @@ export class FakeStores {
     /** The bucket-level calls a least-privilege token cannot make: HeadBucket answers 403 when `headDenied`, PutBucketCors when `corsDenied`. */
     headDenied = false;
     corsDenied = false;
+    /** An object-only token may not READ the rules either (GetBucketCors 403). */
+    corsReadDenied = false;
     cors: string | null = null;
     /** Supabase: `bucket/path` → bytes. `refuse`: every call fails like an exhausted quota. */
     supabase = new Map<string, { data: Buffer; contentType: string }>();
@@ -260,6 +262,14 @@ export class FakeStores {
 
     private r2Answer(call: Seen): Response {
         if (this.r2Mode === 'down') throw new TypeError('fetch failed');
+        if (call.method === 'OPTIONS') {
+            // A browser's CORS preflight: unsigned, answered from the rules alone, as R2 does.
+            const origin = call.headers['origin'] ?? '';
+            const allowed = this.cors !== null && this.cors.includes(`<AllowedOrigin>${origin}</AllowedOrigin>`) && this.cors.includes('<AllowedMethod>PUT</AllowedMethod>');
+            return allowed
+                ? new Response(null, { status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, PUT, HEAD' } })
+                : new Response(null, { status: 403 });
+        }
         const auth = call.headers['authorization'] ?? '';
         if (!new RegExp(`^AWS4-HMAC-SHA256 Credential=${R2_KEY_ID}/\\d{8}/auto/s3/aws4_request,SignedHeaders=[a-z0-9;-]*host[a-z0-9;-]*,Signature=[0-9a-f]{64}$`).test(auth)) {
             return s3Error(403, 'InvalidAccessKeyId', 'the request was not signed as SigV4 for region auto, service s3');
@@ -276,6 +286,7 @@ export class FakeStores {
             if (call.method === 'HEAD') return this.headDenied ? new Response(null, { status: 403 }) : new Response(null, { status: this.r2BucketExists ? 200 : 404 });
             if (!this.r2BucketExists) return s3Error(404, 'NoSuchBucket', 'The specified bucket does not exist');
             if (call.method === 'GET' && 'cors' in call.query) {
+                if (this.corsReadDenied) return s3Error(403, 'AccessDenied', 'Access Denied');
                 return this.cors === null ? s3Error(404, 'NoSuchCORSConfiguration', 'The CORS configuration does not exist') : xml(200, this.cors);
             }
             if (call.method === 'PUT' && 'cors' in call.query) {

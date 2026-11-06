@@ -262,6 +262,27 @@ describe('CORS, best effort', () => {
         await assert.rejects(client().ensureCors([ORIGIN]), (err: unknown) => err instanceof StorageApiError && err.refused && err.code === 'AccessDenied');
     });
 
+    it('a token that may not READ the rules asks the way a browser does: rules set by hand in Cloudflare are "ok", nothing is changed', async () => {
+        stores.cors = `<CORSConfiguration><CORSRule><AllowedOrigin>${ORIGIN}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod></CORSRule></CORSConfiguration>`;
+        stores.corsReadDenied = true;
+        stores.corsDenied = true;
+        assert.deepEqual(await client().ensureCors([ORIGIN]), { changed: false });
+        const preflights = stores.r2Calls().filter((c) => c.method === 'OPTIONS');
+        assert.equal(preflights.length, 1);
+        assert.equal(preflights[0]!.headers['origin'], ORIGIN);
+        assert.equal(preflights[0]!.headers['access-control-request-method'], 'PUT');
+        assert.equal(preflights[0]!.headers['authorization'], undefined, 'a preflight carries no key');
+        assert.equal(stores.r2Calls().filter((c) => c.method === 'PUT').length, 0, 'no PutBucketCors');
+        assert.equal(guard.count('B'), 2, 'the refused read and the preflight are both counted');
+    });
+
+    it('when the rules cannot be read and the preflight says no, it still tries to set them, and a refusal there is "set it by hand"', async () => {
+        stores.corsReadDenied = true;
+        stores.corsDenied = true;
+        await assert.rejects(client().ensureCors([ORIGIN]), (err: unknown) => err instanceof StorageApiError && err.refused && err.code === 'AccessDenied');
+        assert.equal(stores.r2Calls().filter((c) => c.method === 'OPTIONS').length, 1);
+    });
+
     it('offers the policy to paste in Cloudflare, with exactly the fields asked for', () => {
         assert.deepEqual(JSON.parse(r2CorsPolicy(ORIGIN)), [{
             AllowedOrigins: [ORIGIN], AllowedMethods: ['GET', 'PUT', 'HEAD'], AllowedHeaders: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3600,
