@@ -122,6 +122,8 @@ const PostsPage = {
     _pollTimer: null,
     _refreshing: false,
     QUEUE_POLL_MS: 15000,
+    /** A row still in flight (publishing, processing, in TikTok's inbox) this long after its time no longer keeps the queue's poll alive. */
+    STALE_IN_FLIGHT_MS: 2 * 24 * 60 * 60 * 1000,
     /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
     _doneOpen: false,
     /**
@@ -290,7 +292,12 @@ const PostsPage = {
             // An archived row is put away: it is not about to change, and nothing here should keep a poll alive for it.
             if (this.isArchived(post)) return false;
             const status = post && post.status;
-            if (status === 'PUBLISHING' || status === 'PROCESSING' || status === 'IN_INBOX') return true;
+            if (status === 'PUBLISHING' || status === 'PROCESSING' || status === 'IN_INBOX') {
+                // A TikTok draft can wait in the inbox for weeks until it is posted by hand. Past two days it keeps no 15 s repaint alive: each
+                // repaint rebuilt every card, and with it every video the browser had loaded (22 GB of storage downloads in Oct–Nov 2026).
+                const since = new Date(post.scheduled_time).getTime();
+                return Number.isNaN(since) || at - since < this.STALE_IN_FLIGHT_MS;
+            }
             if (status !== 'PENDING') return false;
             // The window promised for the requested time, measured FROM that time:
             // asked as of now, an overdue row always gets a fresh window that has
@@ -999,7 +1006,7 @@ const PostsPage = {
                 ${!slides.length && mediaUrl ? html`
                     <div class="post-media-frame">
                         ${isVideo
-                            ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted controls
+                            ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted controls preload="none"
                                           aria-label="${t('posts.mediaPreview')}"></video>`
                             : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`}
                     </div>

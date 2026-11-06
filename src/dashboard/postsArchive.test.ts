@@ -454,6 +454,25 @@ describe('an archived post is never in Needs attention, and is listed under Arch
         assert.equal(r.P.queueNeedsPoll([late('2026-10-19T09:00:00.000Z')], now), false);
         assert.equal(r.P.queueNeedsPoll([post({ status: 'IN_INBOX', archived_at: '2026-10-19T09:00:00.000Z' })], now), false);
     });
+
+    it('a row in flight keeps the poll alive for two days after its time, and not after', () => {
+        const r = load();
+        const now = Date.parse('2026-11-06T18:00:00.000Z');
+        const at = (hoursAgo: number, status: string) => post({ status, scheduled_time: new Date(now - hoursAgo * HOUR).toISOString() });
+        for (const status of ['IN_INBOX', 'PUBLISHING', 'PROCESSING']) {
+            assert.equal(r.P.queueNeedsPoll([at(1, status)], now), true, `${status} an hour ago`);
+            assert.equal(r.P.queueNeedsPoll([at(47, status)], now), true, `${status} 47 h ago`);
+            assert.equal(r.P.queueNeedsPoll([at(49, status)], now), false, `${status} 49 h ago`);
+        }
+    });
+
+    it('a card\'s video loads nothing until it is played: the queue repaints every 15 s', () => {
+        const r = load();
+        const markup = card(r, post({ post_type: 'video', media_url: 'https://app.example/api/uploads/11111111-1111-4111-8111-111111111111.mp4', cover_url: 'https://app.example/api/uploads/c.jpg' }));
+        const videos = markup.match(/<video[^>]*>/g) ?? [];
+        assert.ok(videos.length >= 1, 'the card shows a video');
+        for (const v of videos) assert.match(v, /preload="none"/);
+    });
 });
 
 describe('Today\'s alerts leave an archived post out too (the "gone from Today" half of Archive)', () => {
