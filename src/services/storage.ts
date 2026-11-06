@@ -53,10 +53,15 @@ import { queryCount, queryOne, queryRows } from '../db/query.js';
 import { parseByteRange } from '../utils/byteRange.js';
 import { describeError, log } from '../utils/log.js';
 import type { MediaObjectDeletionRow, MediaUploadRow } from '../db/rows.js';
-import { APP_SETTING_KEYS, getMediaStorageConfig, getSetting, maskValue, type MediaStorageConfig } from './appSettings.js';
 import {
-    bucketForPath, MEDIA_BUCKET, MAX_REMOVE_PER_REQUEST, objectPathFor, PRIVATE_MEDIA_BUCKET, StorageApiError, storageKeyKind,
-    SupabaseStorageClient, type StorageKeyKind,
+    APP_SETTING_KEYS, DEFAULT_R2_BUCKET, getMediaConfigs, getMediaStorageConfig, getPublicBaseUrl, getSetting, getSettings, maskValue, type MediaStorageConfig, type R2Config,
+} from './appSettings.js';
+import { readCopyStatus, type R2CopyStatus } from './r2Copy.js';
+import { R2StorageClient, r2CorsPolicy } from './r2Storage.js';
+import { assertR2Room, R2LimitError, readR2Summary, type R2UsageSummary } from './r2Usage.js';
+import {
+    bucketForPath, isR2Path, MEDIA_BUCKET, MAX_REMOVE_PER_REQUEST, objectPathFor, PRIVATE_MEDIA_BUCKET, R2_BUCKET_TOKEN, R2_PATH_PREFIX, r2KeyOf, StorageApiError,
+    storageKeyKind, SupabaseStorageClient, type ObjectStorageClient, type SignedUpload, type StorageKeyKind,
 } from './supabaseStorage.js';
 
 export interface PutMediaInput {
@@ -142,8 +147,8 @@ export interface MediaStore {
  * this deployment just cannot reach it.
  */
 export class MediaStorageUnavailableError extends Error {
-    constructor(readonly mediaId: string) {
-        super(`Upload ${mediaId} is in Supabase Storage, and no Storage config is set to read it with.`);
+    constructor(readonly mediaId: string, readonly backend: 'supabase' | 'r2' = 'supabase') {
+        super(`Upload ${mediaId} is in ${backend === 'r2' ? 'Cloudflare R2' : 'Supabase Storage'}, and no ${backend === 'r2' ? 'R2' : 'Storage'} config is set to read it with.`);
         this.name = 'MediaStorageUnavailableError';
     }
 }
@@ -315,27 +320,99 @@ export class PrivateBucketIsPublicError extends Error {
     }
 }
 
+export interface ObjectStoreOptions {
+    /** Supabase Storage, when configured. */
+    supabase?: MediaStorageConfig | null;
+    /** Cloudflare R2, when configured. */
+    r2?: R2Config | null;
+    /** An R2 client to use instead of one built from `r2` — tests. */
+    r2Client?: ObjectStorageClient | null;
+    /**
+     * Where NEW uploads go. Reads never look at this: a row's `storage_path` says where its bytes are (an `r2:` prefix is R2, anything else is
+     * Supabase). Defaults to Supabase when it is given, else R2. `null`: nowhere here, so `put` stays in Postgres while this store still reads both.
+     */
+    writesTo?: 'supabase' | 'r2' | null;
+}
+
+/** Where new uploads go, from what the owner chose and what is configured. Pure, so the rule is testable. */
+export function resolveWriteTarget(choice: 'supabase' | 'r2' | null, hasSupabase: boolean, hasR2: boolean): 'supabase' | 'r2' | null {
+    if (choice === 'r2') return hasR2 ? 'r2' : hasSupabase ? 'supabase' : null;
+    if (choice === 'supabase') return hasSupabase ? 'supabase' : null;
+    return hasSupabase ? 'supabase' : hasR2 ? 'r2' : null;
+}
+
 /**
- * Bytes in the Supabase Storage bucket `media`, at `<creatorId>/<id><ext>`; the row keeps the
- * metadata with `data` NULL. Legacy rows are still served from `data`. A private upload goes to
- * the private bucket instead (see the header): `clientFor(path)` picks the bucket from the path.
+ * Bytes in object storage: the Supabase Storage bucket `media` at `<creatorId>/<id><ext>` and/or Cloudflare R2 at `r2:<creatorId>/<id><ext>`
+ * (one private bucket for both public and private files); the row keeps the metadata with `data` NULL. Legacy rows are still served from `data`.
+ * A private upload goes to Supabase's private bucket, or under `private/` in R2 (see the header): `target(path)` picks the client from the path.
+ *
+ * ONE store reads both, whichever backend takes new uploads: an existing file keeps working from where it lives. A row whose backend is not
+ * configured is `MediaStorageUnavailableError` (503), as a Supabase row always was.
  */
-export class SupabaseStorageMediaStore implements MediaStore {
-    readonly client: SupabaseStorageClient;
-    /** The private bucket's client: customer files only, never a post's media. */
-    readonly privateClient: SupabaseStorageClient;
+export class ObjectMediaStore implements MediaStore {
+    private readonly supabase: { client: SupabaseStorageClient; privateClient: SupabaseStorageClient } | null;
+    private readonly r2: ObjectStorageClient | null;
+    readonly writesTo: 'supabase' | 'r2' | null;
+    private readonly postgres = new PostgresMediaStore();
     /** Checked once per instance, and instances are kept per config (`getMediaStore`). */
     private bucketReady: Promise<unknown> | null = null;
     private privateBucketReady: Promise<unknown> | null = null;
 
-    constructor(readonly config: MediaStorageConfig) {
-        this.client = new SupabaseStorageClient({ url: config.url, key: config.key, bucket: MEDIA_BUCKET });
-        this.privateClient = new SupabaseStorageClient({ url: config.url, key: config.key, bucket: PRIVATE_MEDIA_BUCKET });
+    constructor(options: ObjectStoreOptions) {
+        const s = options.supabase ?? null;
+        this.supabase = s ? {
+            client: new SupabaseStorageClient({ url: s.url, key: s.key, bucket: MEDIA_BUCKET }),
+            privateClient: new SupabaseStorageClient({ url: s.url, key: s.key, bucket: PRIVATE_MEDIA_BUCKET }),
+        } : null;
+        this.r2 = options.r2Client ?? (options.r2 ? new R2StorageClient(options.r2) : null);
+        const wanted = options.writesTo === undefined ? (this.supabase ? 'supabase' : this.r2 ? 'r2' : null) : options.writesTo;
+        // A write target that is not configured here is nowhere: never a silent switch of backend.
+        this.writesTo = (wanted === 'supabase' && this.supabase) || (wanted === 'r2' && this.r2) ? wanted : null;
     }
 
-    /** The client of the bucket this path lives in: `private/…` in the private bucket, everything else in `media`. */
-    private clientFor(path: string): SupabaseStorageClient {
-        return bucketForPath(path) === PRIVATE_MEDIA_BUCKET ? this.privateClient : this.client;
+    /** Whether this store can read and write that backend. */
+    has(backend: 'supabase' | 'r2'): boolean {
+        return backend === 'r2' ? this.r2 !== null : this.supabase !== null;
+    }
+
+    /** The client and key of the backend this path lives in. `mediaId` only names the upload in the error. */
+    private target(path: string, mediaId = '?'): { client: ObjectStorageClient; key: string; backend: 'supabase' | 'r2' } {
+        if (isR2Path(path)) {
+            if (!this.r2) throw new MediaStorageUnavailableError(mediaId, 'r2');
+            return { client: this.r2, key: r2KeyOf(path), backend: 'r2' };
+        }
+        if (!this.supabase) throw new MediaStorageUnavailableError(mediaId, 'supabase');
+        return { client: bucketForPath(path) === PRIVATE_MEDIA_BUCKET ? this.supabase.privateClient : this.supabase.client, key: path, backend: 'supabase' };
+    }
+
+    /**
+     * The `storage_path` a NEW upload gets in the backend that takes new uploads (`r2:` in front for R2). For the callers that sign an upload
+     * and write the row themselves. Throws when no object store takes new uploads here: they check `writesTo` first for their own message.
+     */
+    newObjectPath(creatorId: string | null, id: string, mimeType: string, options: { private?: boolean } = {}): string {
+        if (!this.writesTo) throw new Error('No object store takes new uploads here.');
+        return `${this.writesTo === 'r2' ? R2_PATH_PREFIX : ''}${objectPathFor(creatorId, id, mimeType, options)}`;
+    }
+
+    /**
+     * A URL the bytes of `path` can be PUT to without the backend's key. For R2 the declared size is first checked against the storage limit
+     * (`R2LimitError`), and the signing counts as one Class A operation: the PUT is not ours to count.
+     */
+    async signUpload(path: string, mimeType: string, sizeBytes: number): Promise<SignedUpload> {
+        const t = this.target(path);
+        if (t.backend === 'r2') await assertR2Room(sizeBytes);
+        return t.client.createSignedUploadUrl(t.key, mimeType);
+    }
+
+    /** What is actually stored at `path` (length and type), or null: how a signed upload is checked against what was declared. */
+    headStored(path: string): Promise<{ size: number | null; contentType: string | null } | null> {
+        const t = this.target(path);
+        return t.client.headObject(t.key);
+    }
+
+    /** Whether this path's backend is one this store can reach. */
+    canReach(path: string): boolean {
+        return isR2Path(path) ? this.r2 !== null : this.supabase !== null;
     }
 
     /**
@@ -344,7 +421,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
      * until it is fixed. Only a bucket seen to be private is remembered.
      */
     private ensurePrivateBucket(): Promise<unknown> {
-        this.privateBucketReady ??= this.privateClient.ensureBucket({ public: false }).then((outcome) => {
+        this.privateBucketReady ??= this.supabase!.privateClient.ensureBucket({ public: false }).then((outcome) => {
             if (outcome.public) throw new PrivateBucketIsPublicError();
             if (outcome.created) log('info', 'media.bucket_created', { bucket: PRIVATE_MEDIA_BUCKET, public: false });
             return outcome;
@@ -358,7 +435,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
 
     /** Creates the public bucket `media` the first time this instance needs it, if it is missing. */
     private ensureBucket(): Promise<unknown> {
-        this.bucketReady ??= this.client.ensureBucket().then((outcome) => {
+        this.bucketReady ??= this.supabase!.client.ensureBucket().then((outcome) => {
             if (outcome.created) log('info', 'media.bucket_created', { bucket: MEDIA_BUCKET });
             return outcome;
         }).catch((err) => {
@@ -369,15 +446,24 @@ export class SupabaseStorageMediaStore implements MediaStore {
     }
 
     async put(input: PutMediaInput): Promise<{ id: string }> {
+        if (!this.writesTo) return this.postgres.put(input);
         // The id is made here, not by Postgres, because the object is written first and its path
         // carries the id. Same uuid shape as ever, so the URL is unchanged.
         const id = randomUUID();
-        const path = objectPathFor(input.creatorId, id, input.mimeType, { private: input.private === true });
+        const path = this.newObjectPath(input.creatorId, id, input.mimeType, { private: input.private === true });
+        const backend = this.writesTo;
+        const t = this.target(path, id);
 
-        // A customer's file goes to the private bucket and ONLY there; a post's media to `media`, as it always did.
-        if (input.private) await this.ensurePrivateBucket();
-        else await this.ensureBucket();
-        await this.clientFor(path).upload(path, input.data, input.mimeType);
+        if (backend === 'r2') {
+            // Over the free tier it is not written at all (`R2LimitError`); the upload itself counts as one Class A.
+            await assertR2Room(input.data.length);
+        } else if (input.private) {
+            // A customer's file goes to the private bucket and ONLY there; a post's media to `media`, as it always did.
+            await this.ensurePrivateBucket();
+        } else {
+            await this.ensureBucket();
+        }
+        await t.client.upload(t.key, input.data, input.mimeType);
 
         let row: Pick<MediaUploadRow, 'id'> | null;
         try {
@@ -407,7 +493,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
             media_id: row.id,
             bytes: input.data.length,
             mime_type: input.mimeType,
-            backend: 'supabase',
+            backend,
             ...(input.private ? { private: true } : {}),
         });
         return { id: row.id };
@@ -416,7 +502,8 @@ export class SupabaseStorageMediaStore implements MediaStore {
     /** The object was written but its row was not: nothing will ever name it, so take it back out. */
     private async discard(path: string): Promise<void> {
         try {
-            await this.clientFor(path).remove([path]);
+            const t = this.target(path);
+            await t.client.remove([t.key]);
         } catch (err) {
             log('error', 'media.orphan_object', { storage_path: path, message: (err as Error)?.message });
         }
@@ -427,7 +514,8 @@ export class SupabaseStorageMediaStore implements MediaStore {
         if (!row || !mayRead(row, options.privateFor)) return null;
         if (!row.storage_path) return row.data ? { id, mimeType: row.mime_type, data: row.data } : null;
 
-        const data = await this.clientFor(row.storage_path).download(row.storage_path);
+        const t = this.target(row.storage_path, id);
+        const data = await t.client.download(t.key);
         if (!data) {
             log('error', 'media.object_missing', { media_id: id, storage_path: row.storage_path });
             return null;
@@ -449,7 +537,8 @@ export class SupabaseStorageMediaStore implements MediaStore {
         if (asked.kind === 'unsatisfiable') return { kind: 'unsatisfiable', id, mimeType: row.mime_type, total: asked.total };
         const wanted = asked.kind === 'range' ? asked : undefined;
 
-        const object = await this.clientFor(row.storage_path).openStream(row.storage_path, wanted);
+        const t = this.target(row.storage_path, id);
+        const object = await t.client.openStream(t.key, wanted);
         if (!object) {
             // The row says the object exists and Storage says it does not. Nothing the caller can
             // do about it, so a 404 — but loudly, because it means a file was lost.
@@ -459,7 +548,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
         if (wanted && object.partial) {
             const length = wanted.end - wanted.start + 1;
             if (object.length !== null && object.length !== length) {
-                // Supabase sent a slice of another length than asked: the recorded size is stale. Say so; trust what is sent.
+                // The store sent a slice of another length than asked: the recorded size is stale. Say so; trust what is sent.
                 log('warn', 'media.range_mismatch', { media_id: id, asked_bytes: length, stored_bytes: object.length });
             }
             return {
@@ -470,7 +559,7 @@ export class SupabaseStorageMediaStore implements MediaStore {
         if (recorded !== null && object.length !== null && recorded !== object.length) {
             log('warn', 'media.size_mismatch', { media_id: id, recorded_bytes: recorded, stored_bytes: object.length });
         }
-        // What Supabase says it is sending wins: a Content-Length that disagrees with the body
+        // What the store says it is sending wins: a Content-Length that disagrees with the body
         // makes Node abort the response.
         return { kind: 'stream', id, mimeType: row.mime_type, size: object.length ?? recorded, body: object.body };
     }
@@ -483,6 +572,29 @@ export class SupabaseStorageMediaStore implements MediaStore {
         return uploadsUrl(id, origin);
     }
 }
+
+/** A store with Supabase Storage only, as there was before R2: what a test or a script builds from one config. */
+export class SupabaseStorageMediaStore extends ObjectMediaStore {
+    constructor(readonly config: MediaStorageConfig) {
+        super({ supabase: config, writesTo: 'supabase' });
+    }
+}
+
+/**
+ * The store when it takes object storage's side of a direct upload (a signed URL a browser or the Mac worker PUTs to), or null when new uploads here
+ * go to Postgres: there is nothing to sign against. The callers answer 409 with "Large uploads need Supabase Storage or Cloudflare R2".
+ */
+export function directUploadStore(store: MediaStore): ObjectMediaStore | null {
+    return store instanceof ObjectMediaStore && store.writesTo !== null ? store : null;
+}
+
+/** The store when it can reach object storage at all (to check what a signed upload delivered), else null. */
+export function objectStoreOf(store: MediaStore): ObjectMediaStore | null {
+    return store instanceof ObjectMediaStore ? store : null;
+}
+
+/** The sentence for a caller that wants a direct upload and cannot have one. */
+export const NO_DIRECT_UPLOAD_MESSAGE = 'Large uploads need Supabase Storage or Cloudflare R2, and media here is not stored in either. Set one up in Settings → Media storage.';
 
 const UPLOAD_ID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 /**
@@ -512,25 +624,27 @@ export function uploadIdFromSegment(segment: unknown): string | null {
 }
 
 const postgresStore = new PostgresMediaStore();
-let supabaseStore: { url: string; key: string; store: SupabaseStorageMediaStore } | null = null;
+let objectStore: { signature: string; store: ObjectMediaStore } | null = null;
 let storeOverride: MediaStore | null = null;
 
 /**
- * The store new uploads go to: Supabase Storage when the operator has configured it (Settings
- * first, then `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`), Postgres otherwise.
+ * The store new uploads go to, which also reads every file wherever it lives: Supabase Storage and/or Cloudflare R2 when the operator has configured
+ * them (Settings first, then `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` for Supabase), Postgres otherwise. Which one takes NEW uploads is the
+ * owner's choice (`storage.backend`, `resolveWriteTarget`).
  *
- * Read on every call, like the Gemini key: a config saved in Settings has to reach every warm
- * instance at once, and it is two indexed rows. The instance is kept while the config is
- * unchanged, so its bucket check happens once.
+ * Read on every call, like the Gemini key: a config saved in Settings has to reach every warm instance at once, and it is ONE indexed read
+ * (`getMediaConfigs`). The instance is kept while the config is unchanged, so its bucket check happens once.
  */
 export async function getMediaStore(): Promise<MediaStore> {
     if (storeOverride) return storeOverride;
-    const config = await getMediaStorageConfig();
-    if (!config) return postgresStore;
-    if (!supabaseStore || supabaseStore.url !== config.url || supabaseStore.key !== config.key) {
-        supabaseStore = { url: config.url, key: config.key, store: new SupabaseStorageMediaStore(config) };
+    const { supabase, r2, choice } = await getMediaConfigs();
+    if (!supabase && !r2) return postgresStore;
+    const writesTo = resolveWriteTarget(choice, Boolean(supabase), Boolean(r2));
+    const signature = JSON.stringify([supabase?.url, supabase?.key, r2?.accountId, r2?.bucket, r2?.accessKeyId, r2?.secretAccessKey, writesTo]);
+    if (!objectStore || objectStore.signature !== signature) {
+        objectStore = { signature, store: new ObjectMediaStore({ supabase, r2, writesTo }) };
     }
-    return supabaseStore.store;
+    return objectStore.store;
 }
 
 /** Override the store — tests only. Returns the previous override. */
@@ -573,20 +687,22 @@ export async function removeQueuedMediaObjects(limit = MAX_REMOVE_PER_REQUEST): 
     }
     if (paths.length === 0) return { removed: 0, failed: 0, skipped: false };
 
-    let config: MediaStorageConfig | null;
+    let supabase: MediaStorageConfig | null;
+    let r2: R2Config | null;
     try {
-        config = await getMediaStorageConfig();
+        ({ supabase, r2 } = await getMediaConfigs());
     } catch (err) {
         log('error', 'media.object_queue_unreadable', describeError(err));
         return { removed: 0, failed: 0, skipped: true, reason: 'error' };
     }
-    if (!config) {
+    if (!supabase && !r2) {
         log('warn', 'media.objects_waiting', { waiting: paths.length, reason: 'storage_unconfigured' });
         return { removed: 0, failed: 0, skipped: true, reason: 'unconfigured', waiting: paths.length };
     }
 
-    // The queue holds paths and nothing else, so the bucket is read off each path (`private/…` is the private bucket's). One request per
-    // bucket; a bucket that fails keeps its entries and does not hold back the other's.
+    // The queue holds paths and nothing else, so the backend is read off each path: `r2:…` is Cloudflare R2's, `private/…` Supabase's private
+    // bucket, the rest its public one. One request per bucket; a bucket that fails keeps its entries and does not hold back the others. A backend
+    // that is not configured here leaves its entries waiting (not counted as a failure: nothing was tried).
     const byBucket = new Map<string, string[]>();
     for (const path of paths) {
         const bucket = bucketForPath(path);
@@ -596,9 +712,14 @@ export async function removeQueuedMediaObjects(limit = MAX_REMOVE_PER_REQUEST): 
     const removed: string[] = [];
     let failed = 0;
     for (const [bucket, group] of byBucket) {
-        const client = new SupabaseStorageClient({ url: config.url, key: config.key, bucket });
+        const isR2 = bucket === R2_BUCKET_TOKEN;
+        if (isR2 ? !r2 : !supabase) {
+            log('warn', 'media.objects_waiting', { waiting: group.length, reason: isR2 ? 'r2_unconfigured' : 'storage_unconfigured' });
+            continue;
+        }
         try {
-            await client.remove(group);
+            if (isR2) await new R2StorageClient(r2!).remove(group.map(r2KeyOf));
+            else await new SupabaseStorageClient({ url: supabase!.url, key: supabase!.key, bucket }).remove(group);
             removed.push(...group);
         } catch (err) {
             const message = (err as Error)?.message ?? 'unknown error';
@@ -631,8 +752,10 @@ export async function removeQueuedMediaObjects(limit = MAX_REMOVE_PER_REQUEST): 
 export const STORAGE_TIER_BYTES = 1024 ** 3;
 
 export interface MediaUsage {
-    /** Rows whose bytes are an object in Storage, and what they add up to. */
+    /** Rows whose bytes are an object in Supabase Storage, and what they add up to. */
     storage: { files: number; bytes: number };
+    /** Rows whose bytes are an object in Cloudflare R2 (`storage_path` starts `r2:`), and what they add up to. */
+    r2: { files: number; bytes: number };
     /** Rows whose bytes are still in `media_uploads.data`. The backfill moves them. */
     database: { files: number; bytes: number };
     /** Objects of deleted rows not yet removed from Storage. */
@@ -643,17 +766,21 @@ export interface MediaUsage {
 export async function getMediaUsage(): Promise<MediaUsage> {
     const row = await queryOne<{
         storage_files: string; storage_bytes: string; database_files: string; database_bytes: string; queued: string;
+        r2_files?: string; r2_bytes?: string;
     }>(
-        `SELECT count(*) FILTER (WHERE storage_path IS NOT NULL)                        AS storage_files,
-                COALESCE(sum(size_bytes) FILTER (WHERE storage_path IS NOT NULL), 0)    AS storage_bytes,
-                count(*) FILTER (WHERE data IS NOT NULL)                                AS database_files,
-                COALESCE(sum(octet_length(data)), 0)                                    AS database_bytes,
-                (SELECT count(*) FROM media_object_deletions)                           AS queued
+        `SELECT count(*) FILTER (WHERE storage_path IS NOT NULL AND storage_path NOT LIKE 'r2:%')                       AS storage_files,
+                COALESCE(sum(size_bytes) FILTER (WHERE storage_path IS NOT NULL AND storage_path NOT LIKE 'r2:%'), 0)   AS storage_bytes,
+                count(*) FILTER (WHERE storage_path LIKE 'r2:%')                                                       AS r2_files,
+                COALESCE(sum(size_bytes) FILTER (WHERE storage_path LIKE 'r2:%'), 0)                                   AS r2_bytes,
+                count(*) FILTER (WHERE data IS NOT NULL)                                                               AS database_files,
+                COALESCE(sum(octet_length(data)), 0)                                                                   AS database_bytes,
+                (SELECT count(*) FROM media_object_deletions)                                                          AS queued
            FROM media_uploads`
     );
     const n = (value: string | undefined) => Number(value ?? 0) || 0;
     return {
         storage: { files: n(row?.storage_files), bytes: n(row?.storage_bytes) },
+        r2: { files: n(row?.r2_files), bytes: n(row?.r2_bytes) },
         database: { files: n(row?.database_files), bytes: n(row?.database_bytes) },
         queuedDeletions: n(row?.queued),
         tierBytes: STORAGE_TIER_BYTES,
@@ -688,9 +815,61 @@ export async function checkMediaStorage(
     }
 }
 
+export type R2Check =
+    | {
+        ok: true; bucketExists: boolean; created: boolean;
+        /** `ok`: the rules already allow the app's origin; `set`: this check set them; `refused`: the token may not set them (say so, do not fail); `unchecked`: not asked. */
+        cors: 'ok' | 'set' | 'refused' | 'unchecked'; corsError?: string;
+    }
+    /** 400: Cloudflare refused the key. 409: a free-tier limit is reached. 502: Cloudflare could not be asked. */
+    | { ok: false; status: 400 | 409 | 502; error: string };
+
+/**
+ * Ask Cloudflare whether this R2 config works: read the bucket (Class B), and with `create` also create it if missing and make sure the browser's direct upload
+ * is allowed by the bucket's CORS rules for `origins`. What Settings runs before saving, so a wrong key is never saved. A token that may not set CORS
+ * (an "Object Read & Write" token cannot) is NOT a failure: uploads from the server work without it, so the answer carries `cors: 'refused'` and the card says
+ * to add the rule in Cloudflare. Every request is counted against the free tier (`R2StorageClient`); one that would pass it is `409`.
+ */
+export async function checkR2Storage(
+    config: R2Config, options: { create?: boolean; origins?: readonly string[]; client?: ObjectStorageClient & { ensureCors?: (origins: readonly string[]) => Promise<unknown> } } = {}
+): Promise<R2Check> {
+    const client = options.client ?? new R2StorageClient(config);
+    try {
+        if (!options.create) {
+            const bucket = await client.getBucket();
+            return { ok: true, bucketExists: Boolean(bucket), created: false, cors: 'unchecked' };
+        }
+        const outcome = await client.ensureBucket();
+        let cors: 'ok' | 'set' | 'refused' | 'unchecked' = 'unchecked';
+        let corsError: string | undefined;
+        if (options.origins && options.origins.length > 0 && client.ensureCors) {
+            try {
+                const done = await client.ensureCors(options.origins) as { changed?: boolean };
+                cors = done.changed ? 'set' : 'ok';
+            } catch (err) {
+                if (err instanceof StorageApiError && err.refused) {
+                    cors = 'refused';
+                    corsError = err.message;
+                } else {
+                    throw err;
+                }
+            }
+        }
+        return { ok: true, bucketExists: true, created: outcome.created, cors, ...(corsError ? { corsError } : {}) };
+    } catch (err) {
+        if (err instanceof R2LimitError) return { ok: false, status: 409, error: err.message };
+        if (err instanceof StorageApiError && !err.unreachable && err.status < 500) {
+            return { ok: false, status: 400, error: err.message };
+        }
+        return { ok: false, status: 502, error: (err as Error)?.message ?? 'Could not reach Cloudflare R2.' };
+    }
+}
+
 export interface MediaStorageStatus {
     /** Where new uploads go right now. */
-    backend: 'supabase' | 'postgres';
+    backend: 'supabase' | 'r2' | 'postgres';
+    /** What the owner chose (`storage.backend`), or null when nothing was chosen. */
+    choice: 'supabase' | 'r2' | null;
     bucket: string;
     url: { value: string | null; source: 'database' | 'env' | null };
     /** Never the key: whether one is set, where from, its kind, and a masked hint of a saved one. */
@@ -701,14 +880,35 @@ export interface MediaStorageStatus {
     connection: StorageCheck | null;
     usage: MediaUsage | null;
     usageError?: string;
+    /** Cloudflare R2: what is saved (never the secret), its live status, this month's use against the limits, and the copy job. */
+    r2: {
+        configured: boolean;
+        accountId: string | null;
+        bucket: string;
+        accessKeyId: { set: boolean; preview: string | null };
+        secretAccessKey: { set: boolean; preview: string | null };
+        connection: R2Check | null;
+        summary: R2UsageSummary | null;
+        summaryError?: string;
+        copy: R2CopyStatus | null;
+        /**
+         * The bucket's CORS rules, which only the browser's direct upload of ad media needs. `status` is what the last save learned (`refused`: the token may not set
+         * them, so the owner pastes `policy` in Cloudflare: R2 → the bucket → Settings → CORS Policy). `policy` is null when the app has no public address yet.
+         */
+        cors: { status: 'ok' | 'set' | 'refused' | null; origin: string | null; policy: string | null };
+    };
 }
 
-/** Everything the Settings card shows, including a live round trip to Supabase. Never the key. */
-export async function describeMediaStorage(): Promise<MediaStorageStatus> {
-    const [config, savedUrl, savedKey] = await Promise.all([
+/** Everything the Settings card shows, including a live round trip to Supabase and to R2. Never a key. */
+export async function describeMediaStorage(options: { origin?: string | null } = {}): Promise<MediaStorageStatus> {
+    const [config, savedUrl, savedKey, configs, r2Saved, corsSaved, publicBase] = await Promise.all([
         getMediaStorageConfig(),
         getSetting(APP_SETTING_KEYS.mediaStorageUrl),
         getSetting(APP_SETTING_KEYS.mediaStorageKey),
+        getMediaConfigs(),
+        getSettings([APP_SETTING_KEYS.r2AccountId, APP_SETTING_KEYS.r2Bucket, APP_SETTING_KEYS.r2AccessKeyId, APP_SETTING_KEYS.r2SecretAccessKey]),
+        getSetting(APP_SETTING_KEYS.r2Cors),
+        getPublicBaseUrl(options.origin ?? null),
     ]);
     const envUrl = Boolean(process.env.SUPABASE_URL?.trim());
     const envKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
@@ -722,8 +922,24 @@ export async function describeMediaStorage(): Promise<MediaStorageStatus> {
         usageError = (err as Error)?.message ?? 'Could not measure media.';
     }
 
+    const writesTo = resolveWriteTarget(configs.choice, Boolean(configs.supabase), Boolean(configs.r2));
+    const savedAccessKeyId = r2Saved.get(APP_SETTING_KEYS.r2AccessKeyId) ?? null;
+    const savedSecret = r2Saved.get(APP_SETTING_KEYS.r2SecretAccessKey) ?? null;
+    let summary: R2UsageSummary | null = null;
+    let summaryError: string | undefined;
+    let copy: R2CopyStatus | null = null;
+    if (configs.r2) {
+        try {
+            summary = await readR2Summary();
+        } catch (err) {
+            summaryError = (err as Error)?.message ?? 'Could not read the R2 usage.';
+        }
+        copy = await readCopyStatus().catch(() => null);
+    }
+
     return {
-        backend: config ? 'supabase' : 'postgres',
+        backend: writesTo ?? 'postgres',
+        choice: configs.choice,
         bucket: MEDIA_BUCKET,
         url: {
             value: config?.url ?? savedUrl ?? null,
@@ -739,5 +955,21 @@ export async function describeMediaStorage(): Promise<MediaStorageStatus> {
         connection: config ? await checkMediaStorage(config) : null,
         usage,
         ...(usageError ? { usageError } : {}),
+        r2: {
+            configured: Boolean(configs.r2),
+            accountId: r2Saved.get(APP_SETTING_KEYS.r2AccountId) ?? null,
+            bucket: r2Saved.get(APP_SETTING_KEYS.r2Bucket) ?? DEFAULT_R2_BUCKET,
+            accessKeyId: { set: Boolean(savedAccessKeyId), preview: savedAccessKeyId ? maskValue(savedAccessKeyId) : null },
+            secretAccessKey: { set: Boolean(savedSecret), preview: savedSecret ? maskValue(savedSecret) : null },
+            connection: configs.r2 ? await checkR2Storage(configs.r2) : null,
+            summary,
+            ...(summaryError ? { summaryError } : {}),
+            copy,
+            cors: {
+                status: corsSaved === 'ok' || corsSaved === 'set' || corsSaved === 'refused' ? corsSaved : null,
+                origin: publicBase,
+                policy: publicBase ? r2CorsPolicy(publicBase) : null,
+            },
+        },
     };
 }

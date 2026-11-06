@@ -523,6 +523,10 @@ describe('the Gemini key', () => {
         (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
             statements.push({ sql, params });
             if (/SELECT DISTINCT model FROM ai_agents/.test(sql)) return { rows: agentModels.map((model) => ({ model })), rowCount: agentModels.length };
+            if (/^SELECT key, value, is_secret FROM app_settings WHERE key = ANY/.test(sql)) {
+                const found = (params[0] as string[]).flatMap((k) => { const r = store.get(k); return r ? [{ key: k, ...r }] : []; });
+                return { rows: found, rowCount: found.length };
+            }
             if (/SELECT value, is_secret FROM app_settings/.test(sql)) {
                 const row = store.get(String(params[0]));
                 return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
@@ -849,6 +853,10 @@ describe('media storage config', () => {
 
         (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
             statements.push({ sql, params });
+            if (/^SELECT key, value, is_secret FROM app_settings WHERE key = ANY/.test(sql)) {
+                const found = (params[0] as string[]).flatMap((k) => { const r = store.get(k); return r ? [{ key: k, ...r }] : []; });
+                return { rows: found, rowCount: found.length };
+            }
             if (/SELECT value, is_secret FROM app_settings/.test(sql)) {
                 const row = store.get(String(params[0]));
                 return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };

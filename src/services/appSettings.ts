@@ -136,6 +136,25 @@ export const APP_SETTING_KEYS = {
      */
     mediaStorageKey: 'storage.supabase_service_key',
     /**
+     * Where NEW uploads go: `supabase` or `r2` (Cloudflare R2). Unset means Supabase when it is configured, else R2 when that is, else Postgres.
+     * Every file keeps being served from where it lives, whatever this says (src/services/storage.ts: a row's `storage_path` names its store).
+     */
+    mediaBackend: 'storage.backend',
+    /** Cloudflare R2 (S3-compatible, free downloads): the account id from the R2 overview page, the bucket, and an API token's key pair. */
+    r2AccountId: 'storage.r2_account_id',
+    r2Bucket: 'storage.r2_bucket',
+    r2AccessKeyId: 'storage.r2_access_key_id',
+    /** ENCRYPTED, like the Supabase key; never returned, only masked. */
+    r2SecretAccessKey: 'storage.r2_secret_access_key',
+    /** What the last save learned about the bucket's CORS rules: `ok`, `set` or `refused` (the token may not set them: the owner pastes the policy by hand). */
+    r2Cors: 'storage.r2_cors',
+    /** JSON `{storage_bytes, class_a, class_b}`: the owner's limits, which can only be LOWER than Cloudflare's free tier (src/services/r2Usage.ts). */
+    r2Limits: 'storage.r2_limits',
+    /** JSON `{requested_at, ...}`: "Copy existing files to R2" asked for; the drain does the work and keeps its progress here (src/services/r2Copy.ts). */
+    r2Copy: 'storage.r2_copy',
+    /** JSON `{day, kinds}`: which R2 limit warnings the owner was already emailed today (src/services/r2Usage.ts). */
+    r2Alerted: 'storage.r2_alerted',
+    /**
      * 'true': the daily sweep deletes a file as soon as the post that used it is PUBLISHED and
      * nothing else still needs it (Meta, TikTok and YouTube keep their own copies), and any file
      * nothing names after a week (src/services/retention.ts). The owner asked for it on 2026-10-04,
@@ -373,6 +392,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.youtubeApiKey,
     APP_SETTING_KEYS.geminiApiKey,
     APP_SETTING_KEYS.mediaStorageKey,
+    APP_SETTING_KEYS.r2SecretAccessKey,
     APP_SETTING_KEYS.aiProviderKeyAnthropic,
     APP_SETTING_KEYS.aiProviderKeyOpenai,
     APP_SETTING_KEYS.aiProviderKeyOpenrouter,
@@ -667,6 +687,87 @@ export async function getMediaStorageConfig(): Promise<MediaStorageConfig | null
     const key = dbKey ?? (process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || null);
     if (!url || !key) return null;
     return { url, key, source: { url: dbUrl ? 'database' : 'env', key: dbKey ? 'database' : 'env' } };
+}
+
+export interface R2Config {
+    /** The Cloudflare account id: 32 hex characters, on the R2 overview page. */
+    accountId: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+}
+
+export const DEFAULT_R2_BUCKET = 'media';
+
+/** Why these R2 fields cannot be right, or null. Loose about the keys on purpose (Cloudflare's answer is the real check); strict where a value becomes part of a host name. */
+export function r2FieldProblem(field: 'accountId' | 'bucket' | 'accessKeyId' | 'secretAccessKey', value: string): string | null {
+    switch (field) {
+        case 'accountId':
+            return /^[0-9a-f]{32}$/i.test(value) ? null : 'The Account ID is 32 letters and digits (a-f, 0-9): copy it from the R2 overview page in Cloudflare.';
+        case 'bucket':
+            return /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value) ? null : 'A bucket name is 3 to 63 characters: lower-case letters, digits and hyphens.';
+        case 'accessKeyId':
+            return /^[A-Za-z0-9]{16,128}$/.test(value) ? null : 'That Access Key ID does not look right: copy it again, in one piece, from the API token Cloudflare showed you.';
+        case 'secretAccessKey':
+            return /^[A-Za-z0-9/+=_-]{16,200}$/.test(value) ? null : 'That Secret Access Key does not look right: copy it again, in one piece. Cloudflare shows it only once.';
+    }
+}
+
+/**
+ * Cloudflare R2 for media: what is saved in Settings. Null unless all four parts are there and valid (the bucket defaults to `media`).
+ * No environment fallback: R2 is new, and its keys belong in the dashboard like the Supabase ones. Read on every call, like the Supabase config.
+ */
+export async function getR2Config(): Promise<R2Config | null> {
+    const values = await getSettings([
+        APP_SETTING_KEYS.r2AccountId, APP_SETTING_KEYS.r2Bucket, APP_SETTING_KEYS.r2AccessKeyId, APP_SETTING_KEYS.r2SecretAccessKey,
+    ]);
+    const accountId = values.get(APP_SETTING_KEYS.r2AccountId);
+    const bucket = values.get(APP_SETTING_KEYS.r2Bucket) ?? DEFAULT_R2_BUCKET;
+    const accessKeyId = values.get(APP_SETTING_KEYS.r2AccessKeyId);
+    const secretAccessKey = values.get(APP_SETTING_KEYS.r2SecretAccessKey);
+    if (!accountId || !accessKeyId || !secretAccessKey) return null;
+    if (r2FieldProblem('accountId', accountId) || r2FieldProblem('bucket', bucket)) return null;
+    return { accountId: accountId.toLowerCase(), bucket, accessKeyId, secretAccessKey };
+}
+
+/** What the owner chose for new uploads, or null when nothing was chosen. */
+export async function getMediaBackendChoice(): Promise<'supabase' | 'r2' | null> {
+    const raw = await getSetting(APP_SETTING_KEYS.mediaBackend);
+    return raw === 'supabase' || raw === 'r2' ? raw : null;
+}
+
+export interface MediaConfigs {
+    supabase: MediaStorageConfig | null;
+    r2: R2Config | null;
+    /** What the owner chose for new uploads, or null. */
+    choice: 'supabase' | 'r2' | null;
+}
+
+/**
+ * Both object stores' configs and the owner's choice in ONE query: the media store is looked up on every served file, so seven separate setting
+ * reads would be seven round trips each time. Same rules as `getMediaStorageConfig` and `getR2Config`.
+ */
+export async function getMediaConfigs(): Promise<MediaConfigs> {
+    const K = APP_SETTING_KEYS;
+    const v = await getSettings([K.mediaStorageUrl, K.mediaStorageKey, K.r2AccountId, K.r2Bucket, K.r2AccessKeyId, K.r2SecretAccessKey, K.mediaBackend]);
+    const dbUrl = v.get(K.mediaStorageUrl) ?? null;
+    const dbKey = v.get(K.mediaStorageKey) ?? null;
+    const rawUrl = dbUrl ?? (process.env.SUPABASE_URL?.trim() || null);
+    const url = rawUrl ? normaliseOrigin(rawUrl) : null;
+    const key = dbKey ?? (process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || null);
+    const supabase: MediaStorageConfig | null = url && key
+        ? { url, key, source: { url: dbUrl ? 'database' : 'env', key: dbKey ? 'database' : 'env' } }
+        : null;
+
+    const accountId = v.get(K.r2AccountId);
+    const bucket = v.get(K.r2Bucket) ?? DEFAULT_R2_BUCKET;
+    const accessKeyId = v.get(K.r2AccessKeyId);
+    const secretAccessKey = v.get(K.r2SecretAccessKey);
+    const r2: R2Config | null = accountId && accessKeyId && secretAccessKey && !r2FieldProblem('accountId', accountId) && !r2FieldProblem('bucket', bucket)
+        ? { accountId: accountId.toLowerCase(), bucket, accessKeyId, secretAccessKey }
+        : null;
+    const raw = v.get(K.mediaBackend);
+    return { supabase, r2, choice: raw === 'supabase' || raw === 'r2' ? raw : null };
 }
 
 /**

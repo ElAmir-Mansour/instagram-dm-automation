@@ -67,6 +67,9 @@ import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
 import { StorageApiError } from '../services/supabaseStorage.js';
+import { R2CounterError, R2LimitError, readR2Banner } from '../services/r2Usage.js';
+import { runCopyBatch } from '../services/r2Copy.js';
+import { checkR2Warnings } from '../services/r2Usage.js';
 import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
@@ -162,9 +165,9 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
         // Post previews are served straight off Meta's CDN, whose hostnames rotate.
         "img-src 'self' data: blob: https:",
         "media-src 'self' data: blob: https:",
-        // The ad builder (A5) uploads a video straight to Supabase Storage through a signed URL (Vercel's 4.5 MB body limit), and shows
+        // The ad builder (A5) uploads a video straight to Supabase Storage or Cloudflare R2 through a signed URL (Vercel's 4.5 MB body limit), and shows
         // Meta's own ad previews, which are iframes on www.facebook.com. Nothing else is framed or fetched cross-origin.
-        "connect-src 'self' https://*.supabase.co",
+        "connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com",
         "frame-src https://www.facebook.com",
         "object-src 'none'",
         "base-uri 'self'",
@@ -479,6 +482,16 @@ router.get('/jobs/drain', async (req, res) => {
         monteurError = err instanceof Error ? err.message : String(err);
         log('error', 'monteur.sweep_failed', describeError(err));
     }
+
+    // Cloudflare R2 (src/services/r2Copy.ts, r2Usage.ts), after everything else so it only ever uses what is left: a batch of "Copy existing files to R2"
+    // (at most 25 s and 150 MB a call; a no-op unless the owner asked) and the once-a-day email when a free-tier limit is at 80%. Neither throws.
+    try {
+        const copied = await runCopyBatch({ deadline: Math.min(Date.now() + 25_000, startedAt + 240_000) });
+        if (copied.copied > 0 || copied.stoppedBecause || copied.done) log('info', 'media.r2_copy_sweep', { copied: copied.copied, skipped: copied.skipped, done: copied.done });
+    } catch (err) {
+        log('error', 'media.r2_copy_sweep_failed', describeError(err));
+    }
+    await checkR2Warnings();
 
     const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError, { result: monteur, error: monteurError });
     res.status(status).json(status === 200 ? { ...body, tiktok } : body);
@@ -1340,6 +1353,14 @@ router.get('/uploads/:id', async (req, res) => {
             res.status(503).send('Service Unavailable');
             return;
         }
+        if (err instanceof R2LimitError || err instanceof R2CounterError) {
+            // Cloudflare R2's free tier is used up (or its counter cannot be read, which refuses just the same): nothing was sent to R2. It resets by itself
+            // on the 1st (UTC). `media.r2_limit_reached` is logged where the limit was met (src/services/r2Usage.ts).
+            if (err instanceof R2CounterError) log('error', 'media.r2_counter_refused', { media_id: id });
+            else log('warn', 'media.r2_limit_reached', { media_id: id, class: err.kind });
+            res.status(503).send('Service Unavailable');
+            return;
+        }
         if ((err as { code?: string })?.code === 'ERR_STREAM_PREMATURE_CLOSE' && res.destroyed) {
             // The client went away mid-file — a player seeking, a fetch cancelled. Not a fault.
             log('info', 'media.serve_aborted', { media_id: id });
@@ -1804,7 +1825,7 @@ const canAdminister = requireTenantRole('owner');
 
 router.get('/health/tenant', async (req, res) => {
     try {
-        const [health, webhooks] = await Promise.all([
+        const [health, webhooks, r2] = await Promise.all([
             getTenantHealth(getTenantId(req)),
             // Where Meta sends each event type, as the last check stored it (app settings only: no call to Meta on a page load). The same for every tenant, because the
             // Meta app is. A setting that cannot be read leaves it null, which the dashboard reads as "not known": never as "all well", and never as "broken".
@@ -1812,12 +1833,14 @@ router.get('/health/tenant', async (req, res) => {
                 log('warn', 'api.tenant_health_webhooks_unread', describeError(err));
                 return null;
             }),
+            // Cloudflare R2's free tier at 80% or more (src/services/r2Usage.ts): the platform admin's, so nobody else is asked. Null while it is under 80% or R2 is not set up.
+            req.session?.role === 'platform_admin' ? readR2Banner() : Promise.resolve(null),
         ]);
         if (!health) {
             res.status(404).json({ error: 'Not found.' });
             return;
         }
-        res.json({ ...health, webhooks });
+        res.json({ ...health, webhooks, r2 });
     } catch (err) {
         log('error', 'api.tenant_health_failed', describeError(err));
         if (isMissingSchema(err)) {
@@ -3609,6 +3632,10 @@ router.post('/upload', canOperate, async (req, res) => {
             filename
         });
     } catch (err) {
+        if (err instanceof R2LimitError) {
+            sendError(res, 409, 'R2_LIMIT', err.params, err.message);
+            return;
+        }
         log('error', 'media.upload_failed', describeError(err));
         res.status(500).json({ error: 'Failed to handle file upload.' });
     }

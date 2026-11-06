@@ -14,7 +14,7 @@
  *   - **a failure is no recall, never an error**: the customer is answered as they would have been.
  */
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { FAKE_KEYS } from '../aiProviders/testKeys.js';
 import { jsonResponse } from '../llm/testFetch.js';
 import { guardReply } from '../dmSales/guard.js';
@@ -695,10 +695,16 @@ describe('recallForTurn: a failure is no recall, never an error', () => {
     });
 
     it('a platform budget that is spent is no recall', async () => {
-        world.ai.setSetting('ai.budget.daily_usd', '0.001');
-        world.ai.seedUsage({ creator_id: null, purpose: 'dm', provider: 'meta', model: 'muse-spark-1.3', usd: 5, at: NOW });
-        assert.equal(await ask('any video on docker?'), null);
-        assert.equal(meta().length, 0);
+        // The platform budget reads "today" off the real clock: pinned, or this passes only on the day NOW names.
+        mock.timers.enable({ apis: ['Date'], now: NOW });
+        try {
+            world.ai.setSetting('ai.budget.daily_usd', '0.001');
+            world.ai.seedUsage({ creator_id: null, purpose: 'dm', provider: 'meta', model: 'muse-spark-1.3', usd: 5, at: NOW });
+            assert.equal(await ask('any video on docker?'), null);
+            assert.equal(meta().length, 0);
+        } finally {
+            mock.timers.reset();
+        }
     });
 
     it('anything that throws inside it, the library read included, is no recall too, and is logged', async () => {

@@ -20,9 +20,10 @@
 import { randomUUID } from 'node:crypto';
 import { pool } from '../../config/db.js';
 import { log } from '../../utils/log.js';
-import { getMediaStore, SupabaseStorageMediaStore } from '../storage.js';
+import { directUploadStore, getMediaStore, NO_DIRECT_UPLOAD_MESSAGE } from '../storage.js';
 import { clipText, isPlainObject, problemsError, StudioError } from '../studio/common.js';
-import { objectPathFor, StorageApiError } from '../supabaseStorage.js';
+import { R2CounterError, R2LimitError } from '../r2Usage.js';
+import { StorageApiError } from '../supabaseStorage.js';
 
 /** A reel and its cover; an infographic's GIF (v31); and an explainer's voiced narration, an m4a (v59). */
 export const SIGNED_UPLOAD_TYPES: readonly string[] = ['video/mp4', 'image/jpeg', 'image/gif', 'audio/mp4'];
@@ -62,23 +63,23 @@ interface SignedFile {
 type PublicBase = string | null | (() => Promise<string | null>);
 
 /**
- * Sign one file for a tenant and write its row: the one place both callers do it. 409 when media does not go to Supabase Storage (there is nothing
- * to sign against), 500 when the app has no public address, 502 when Storage says no. Signed first, then written, so a refusal leaves no row.
+ * Sign one file for a tenant and write its row: the one place both callers do it. 409 when media does not go to Supabase Storage or Cloudflare R2 (there is nothing
+ * to sign against) or R2's free tier would be passed (`R2_LIMIT`), 500 when the app has no public address, 502 when Storage says no. Signed first, then written, so a refusal leaves no row.
  */
 async function signAndRecord(creatorId: string, file: SignedFile, publicBase: PublicBase) {
-    const store = await getMediaStore();
-    if (!(store instanceof SupabaseStorageMediaStore)) {
-        throw new StudioError(409, 'Large uploads go straight to Supabase Storage, and media here is not stored there. Set it up in Settings → Media storage.');
-    }
+    const store = directUploadStore(await getMediaStore());
+    if (!store) throw new StudioError(409, NO_DIRECT_UPLOAD_MESSAGE);
     const base = typeof publicBase === 'function' ? await publicBase() : publicBase;
     if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
 
     const id = randomUUID();
-    const path = objectPathFor(creatorId, id, file.mimeType);
+    const path = store.newObjectPath(creatorId, id, file.mimeType);
     let signed;
     try {
-        signed = await store.client.createSignedUploadUrl(path, file.mimeType);
+        signed = await store.signUpload(path, file.mimeType, file.sizeBytes);
     } catch (err) {
+        if (err instanceof R2LimitError) throw new StudioError(409, err.message, undefined, 'R2_LIMIT', err.params);
+        if (err instanceof R2CounterError) throw new StudioError(503, err.message);
         if (err instanceof StorageApiError) throw new StudioError(502, err.message);
         throw err;
     }

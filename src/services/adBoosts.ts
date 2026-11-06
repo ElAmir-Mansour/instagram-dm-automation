@@ -64,6 +64,7 @@ export type AdsErrorCode =
     | 'POLICY_WARNINGS'
     | 'VIDEO_PROCESSING'
     | 'STORAGE_ERROR'
+    | 'R2_LIMIT'
     | 'UNSUPPORTED'
     | 'LOCKED_LEGAL';
 

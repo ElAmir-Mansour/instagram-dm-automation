@@ -2095,13 +2095,13 @@ const SettingsPage = {
                 })}
             `;
         } else if (ms) {
-            body = html`${this.mediaStorageStatus(ms)}${cleanup ? this.mediaCleanupBlock(cleanup) : ''}${this.mediaStorageForm(ms)}`;
+            body = html`${this.mediaR2Banner(ms)}${this.mediaBackendChoice(ms)}${this.mediaStorageStatus(ms)}${cleanup ? this.mediaCleanupBlock(cleanup) : ''}${this.mediaStorageForm(ms)}${this.mediaR2Block(ms)}`;
         }
         return html`
             <section class="section">
                 <h2 class="section-title">${t('settings.media.title')}</h2>
                 <div class="settings-card surface">
-                    <p class="form-hint mbe-4">${t('settings.media.intro')}</p>
+                    <p class="form-hint mbe-4">${t('settings.media.intro')} ${UI.helpLink('media-storage', t('help.link.mediaStorage'))}</p>
                     ${body}
                 </div>
             </section>
@@ -2169,11 +2169,305 @@ const SettingsPage = {
         await this.render();
     },
 
+    // ─── Cloudflare R2: where new uploads go, the keys, the free-tier meters (src/services/r2Usage.ts), the copy ───────────
+
+    /** The free-tier warning (80% and 100%): from the live summary the server just read. Empty while all is well or R2 is not set up. */
+    mediaR2Banner(ms) {
+        const r2 = ms && ms.r2;
+        const summary = r2 && r2.summary;
+        if (!summary || (summary.level !== 'warn' && summary.level !== 'full')) return '';
+        const hot = (summary.items || []).filter((i) => i.pct >= 80);
+        const lines = hot.map((i) => t(`settings.media.r2.meter.${i.kind}`) + ': ' + this.r2Amount(i.kind, i.used) + ' / ' + this.r2Amount(i.kind, i.limit) + ' (' + UI.formatNumber(i.pct) + '%)');
+        return html`
+            <div class="inline-error" role="${summary.level === 'full' ? 'alert' : 'status'}">
+                <i data-lucide="${summary.level === 'full' ? 'alert-circle' : 'alert-triangle'}" aria-hidden="true"></i>
+                <div>
+                    <strong dir="auto">${t(summary.level === 'full' ? 'settings.media.r2.bannerFull' : 'settings.media.r2.bannerWarn')}</strong>
+                    ${lines.map((line) => html`<p class="form-hint" dir="auto">${line}</p>`)}
+                    <p class="form-hint" dir="auto">${t('settings.media.r2.bannerReset', { date: UI.formatDate ? UI.formatDate(summary.resetsAt) : String(summary.resetsAt).slice(0, 10) })}</p>
+                </div>
+            </div>
+        `;
+    },
+
+    r2Amount(kind, n) {
+        return kind === 'storage' ? Admin.bytes(n) : UI.formatNumber(n);
+    },
+
+    /** "Where new uploads go": one choice, shown once R2 is set up (until then Supabase or the database is the only place). */
+    mediaBackendChoice(ms) {
+        const r2 = ms && ms.r2;
+        if (!r2 || !r2.configured) return '';
+        const supabaseOn = !!(ms.connection);
+        const now = ms.backend;
+        const radio = (value, labelKey, disabled) => html`
+            <label class="check-row" for="media-backend-${value}">
+                <input type="radio" name="media-backend" id="media-backend-${value}" value="${value}" data-change="settings:setMediaBackend"
+                       ${now === value ? html.raw('checked') : ''} ${disabled ? html.raw('disabled') : ''}>
+                <span class="check-label">${t(labelKey)}</span>
+            </label>
+        `;
+        return html`
+            <fieldset class="settings-block mbe-4">
+                <legend class="form-label">${t('settings.media.backend.title')}</legend>
+                ${radio('supabase', 'settings.media.backend.supabase', !supabaseOn)}
+                ${radio('r2', 'settings.media.backend.r2', false)}
+                <p class="form-hint">${t('settings.media.backend.hint')}</p>
+            </fieldset>
+        `;
+    },
+
+    mediaR2Block(ms) {
+        const r2 = ms && ms.r2;
+        if (!r2) return '';
+        const c = r2.connection;
+        const connected = !!(c && c.ok);
+        const pill = !r2.configured
+            ? { cls: 'health-stale', icon: 'cloud', text: t('settings.media.r2.statusOff') }
+            : connected
+                ? { cls: 'health-fresh', icon: 'check-circle', text: t('settings.media.r2.statusConnected') }
+                : { cls: 'health-stale', icon: 'alert-triangle', text: t('settings.media.statusFailed') };
+        const u = ms.usage;
+        return html`
+            <div class="settings-block mbs-4">
+                <h3 class="section-subtitle">${t('settings.media.r2.title')}</h3>
+                <p class="form-hint mbe-3">${t('settings.media.r2.intro')}</p>
+                <div class="token-status">
+                    <span class="health-pill ${html.raw(pill.cls)}"><i data-lucide="${pill.icon}" aria-hidden="true"></i> ${pill.text}</span>
+                    ${r2.configured ? html`<span class="text-meta">${UI.ltr(r2.bucket)}</span>` : ''}
+                </div>
+                ${c && !c.ok ? html`<p class="form-hint text-warning mbe-3" dir="auto">${c.error}</p>` : ''}
+                ${u && r2.configured ? html`<dl class="ops-facts mbe-4">${Admin.field(t('settings.media.r2.files'), UI.num(u.r2.files))}${Admin.field(t('settings.media.r2.size'), UI.ltr(Admin.bytes(u.r2.bytes)))}</dl>` : ''}
+                ${r2.configured ? this.mediaR2Usage(r2) : ''}
+                ${r2.configured ? this.mediaR2Cors(r2) : ''}
+                ${this.mediaR2Form(r2)}
+                ${r2.configured ? this.mediaR2Limits(r2) : ''}
+                ${r2.configured ? this.mediaR2Copy(ms, r2) : ''}
+            </div>
+        `;
+    },
+
+    /** This month's R2 use against each limit, and when it starts again. Cloudflare's own dashboard is the final word. */
+    mediaR2Usage(r2) {
+        const summary = r2.summary;
+        if (!summary) {
+            return html`<p class="form-hint text-warning mbe-4" dir="auto">${t('settings.media.r2.usageFailed', { message: r2.summaryError || '' })}</p>`;
+        }
+        return html`
+            <h4 class="form-label">${t('settings.media.r2.usageTitle', { month: summary.month })}</h4>
+            ${(summary.items || []).map((i) => html`
+                <div class="mbe-2">
+                    <label class="form-hint" for="r2-meter-${i.kind}" dir="auto">${t(`settings.media.r2.meter.${i.kind}`)}: ${this.r2Amount(i.kind, i.used)} / ${this.r2Amount(i.kind, i.limit)} (${UI.formatNumber(i.pct)}%)</label>
+                    <progress id="r2-meter-${i.kind}" value="${Math.min(i.used, i.limit)}" max="${i.limit}"></progress>
+                </div>
+            `)}
+            <p class="form-hint mbe-4" dir="auto">${t('settings.media.r2.usageNote', { date: UI.formatDate ? UI.formatDate(summary.resetsAt) : String(summary.resetsAt).slice(0, 10) })}</p>
+        `;
+    },
+
+    /** When the token could not set the bucket's CORS rules itself: the policy to paste in Cloudflare (browser uploads of ad media only). */
+    mediaR2Cors(r2) {
+        const cors = r2.cors || {};
+        if (cors.status !== 'refused' || !cors.policy) return '';
+        return html`
+            <div class="settings-block mbe-4">
+                <p class="form-hint text-warning" dir="auto">${t('settings.media.r2.corsNotice')}</p>
+                <textarea class="field field-mono" id="r2-cors-policy" rows="12" readonly dir="ltr" spellcheck="false">${cors.policy}</textarea>
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'copy', label: t('settings.media.r2.corsCopy'), action: 'settings:copyR2Cors', id: 'r2-cors-copy' })}
+            </div>
+        `;
+    },
+
+    mediaR2Form(r2) {
+        const note = (field, saved) => (saved && saved.set ? t('settings.media.r2.savedHint', { preview: saved.preview || '' }) : '');
+        return html`
+            <form id="r2-storage-form" data-submit="settings:saveR2Storage">
+                <div class="form-group">
+                    <label class="form-label" for="r2-account">${t('settings.media.r2.account')}</label>
+                    <input class="field field-mono" id="r2-account" name="accountId" type="text" dir="ltr" autocomplete="off" spellcheck="false" autocapitalize="off" required
+                           placeholder="0123456789abcdef0123456789abcdef" value="${r2.accountId || ''}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="r2-bucket">${t('settings.media.r2.bucket')}</label>
+                    <input class="field field-mono" id="r2-bucket" name="bucket" type="text" dir="ltr" autocomplete="off" spellcheck="false" autocapitalize="off" required
+                           placeholder="media" value="${r2.bucket || 'media'}">
+                    <p class="form-hint">${t('settings.media.r2.bucketHint')}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="r2-key-id">${t('settings.media.r2.accessKeyId')}</label>
+                    <input class="field field-mono" id="r2-key-id" name="accessKeyId" type="text" dir="ltr" autocomplete="off" spellcheck="false" autocapitalize="off"
+                           value="${(r2.accessKeyId && r2.accessKeyId.set) ? '' : ''}">
+                    ${note('accessKeyId', r2.accessKeyId) ? html`<p class="form-hint" dir="auto">${note('accessKeyId', r2.accessKeyId)}</p>` : ''}
+                </div>
+                <div class="form-group">
+                    <!-- Never prefilled: the secret is never sent back. Blank means "keep what is saved". -->
+                    <label class="form-label" for="r2-secret">${t('settings.media.r2.secret')}</label>
+                    <input class="field field-mono" id="r2-secret" name="secretAccessKey" type="password" dir="ltr" autocomplete="new-password" spellcheck="false" autocapitalize="off">
+                    ${note('secretAccessKey', r2.secretAccessKey) ? html`<p class="form-hint" dir="auto">${note('secretAccessKey', r2.secretAccessKey)}</p>` : ''}
+                    <p class="form-hint">${t('settings.media.r2.help')}</p>
+                </div>
+                <div class="form-actions">
+                    ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.media.r2.save'), id: 'r2-storage-submit' })}
+                    ${r2.configured ? UI.button({ variant: 'secondary', size: 'sm', icon: 'trash-2', label: t('settings.media.remove'), action: 'settings:removeR2Storage', id: 'r2-storage-remove' }) : ''}
+                </div>
+            </form>
+        `;
+    },
+
+    /** The owner's own limits: lower than Cloudflare's free tier, never above it. */
+    mediaR2Limits(r2) {
+        const summary = r2.summary;
+        if (!summary) return '';
+        const l = summary.limits;
+        const c = summary.ceilings;
+        const gb = (n) => (Math.round(n / 1e7) / 100);
+        return html`
+            <form id="r2-limits-form" class="mbs-4" data-submit="settings:saveR2Limits">
+                <h4 class="form-label">${t('settings.media.r2.limitsTitle')}</h4>
+                <p class="form-hint mbe-3" dir="auto">${t('settings.media.r2.limitsHint', { storage: Admin.bytes(c.storage_bytes), a: UI.formatNumber(c.class_a), b: UI.formatNumber(c.class_b) })}</p>
+                <div class="form-group">
+                    <label class="form-label" for="r2-limit-storage">${t('settings.media.r2.limitStorage')}</label>
+                    <input class="field" id="r2-limit-storage" name="storage_gb" type="number" inputmode="decimal" dir="ltr" min="0.01" max="${gb(c.storage_bytes)}" step="0.01" value="${gb(l.storage_bytes)}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="r2-limit-a">${t('settings.media.r2.limitA')}</label>
+                    <input class="field" id="r2-limit-a" name="class_a" type="number" inputmode="numeric" dir="ltr" min="1" max="${c.class_a}" step="1" value="${l.class_a}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="r2-limit-b">${t('settings.media.r2.limitB')}</label>
+                    <input class="field" id="r2-limit-b" name="class_b" type="number" inputmode="numeric" dir="ltr" min="1" max="${c.class_b}" step="1" value="${l.class_b}" required>
+                </div>
+                <div class="form-actions">
+                    ${UI.button({ variant: 'secondary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.media.r2.limitsSave'), id: 'r2-limits-submit' })}
+                </div>
+            </form>
+        `;
+    },
+
+    /** "Copy existing files to R2": the drain copies a few at a time; this shows "N of M" and the last reason it stopped. */
+    mediaR2Copy(ms, r2) {
+        const copy = r2.copy;
+        const canCopy = !!ms.connection;
+        return html`
+            <div class="settings-block mbs-4">
+                <h4 class="form-label">${t('settings.media.r2.copyTitle')}</h4>
+                <p class="form-hint mbe-2" dir="auto">${t('settings.media.r2.copyHint')}</p>
+                ${copy ? html`<p class="token-info" dir="auto">${t('settings.media.r2.copyProgress', { done: UI.formatNumber(copy.inR2), total: UI.formatNumber(copy.total) })}${copy.active ? ' ' + t('settings.media.r2.copyRunning') : (copy.doneAt ? ' ' + t('settings.media.r2.copyDone') : '')}${copy.skipped > 0 ? ' ' + t('settings.media.r2.copySkipped', { n: UI.formatNumber(copy.skipped) }) : ''}</p>` : ''}
+                ${copy && copy.lastError ? html`<p class="form-hint text-warning" dir="auto">${t('settings.media.r2.copyError', { message: copy.lastError })}</p>` : ''}
+                ${canCopy ? UI.button({ variant: 'secondary', size: 'sm', icon: 'copy', label: t('settings.media.r2.copyButton'), action: 'settings:copyToR2', id: 'r2-copy-start', disabled: !!(copy && copy.active) }) : html`<p class="form-hint">${t('settings.media.r2.copyNeedsSupabase')}</p>`}
+            </div>
+        `;
+    },
+
+    async setMediaBackend(input) {
+        if (!input || !input.checked) return;
+        try {
+            await API.setMediaBackend(input.value);
+            UI.toast(t(input.value === 'r2' ? 'settings.media.backend.savedR2' : 'settings.media.backend.savedSupabase'), 'success');
+            await this.render();
+        } catch (err) {
+            UI.toast(err.message, 'error');
+            await this.render();
+        }
+    },
+
+    async saveR2Storage(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const payload = {};
+        for (const field of ['accountId', 'bucket', 'accessKeyId', 'secretAccessKey']) {
+            const value = (data.get(field) || '').toString().trim();
+            // A blank key means "leave it": the saved ones are never sent back to the page.
+            if (value) payload[field] = value;
+        }
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            const out = await API.saveR2Storage(payload);
+            const refused = out && out.r2 && out.r2.cors && out.r2.cors.status === 'refused';
+            UI.toast(t(refused ? 'settings.media.r2.savedNoCors' : 'settings.media.r2.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
+    },
+
+    async saveR2Limits(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const payload = {
+            storage_bytes: Math.round(Number(data.get('storage_gb')) * 1e9),
+            class_a: Math.round(Number(data.get('class_a'))),
+            class_b: Math.round(Number(data.get('class_b'))),
+        };
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveR2Limits(payload);
+            UI.toast(t('settings.media.r2.limitsSaved'), 'success');
+            await this.render();
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
+    },
+
+    copyToR2(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.media.r2.copyConfirmTitle'),
+            body: t('settings.media.r2.copyConfirmBody'),
+            hint: t('settings.media.r2.copyConfirmHint'),
+            confirmLabel: t('settings.media.r2.copyButton'),
+            confirmIcon: 'copy',
+            onConfirm: () => SettingsPage.copyToR2Confirmed(),
+        });
+    },
+
+    async copyToR2Confirmed() {
+        await API.copyToR2();
+        UI.toast(t('settings.media.r2.copyStarted'), 'success');
+        await this.render();
+    },
+
+    removeR2Storage(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.media.r2.removeTitle'),
+            body: t('settings.media.r2.removeBody'),
+            hint: t('settings.media.r2.removeHint'),
+            confirmLabel: t('settings.media.remove'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.removeR2StorageConfirmed(),
+        });
+    },
+
+    async removeR2StorageConfirmed() {
+        await API.removeR2Storage();
+        UI.toast(t('settings.media.r2.removed'), 'success');
+        await this.render();
+    },
+
+    async copyR2Cors() {
+        const box = document.getElementById('r2-cors-policy');
+        if (!box) return;
+        try {
+            await navigator.clipboard.writeText(box.value);
+            UI.toast(t('settings.media.r2.corsCopied'), 'success');
+        } catch (err) {
+            box.focus();
+            box.select();
+        }
+    },
+
     mediaStorageStatus(ms) {
         const c = ms.connection;
         const connected = !!(c && c.ok);
-        const pill = ms.backend !== 'supabase'
-            ? { cls: 'health-stale', icon: 'database', text: t('settings.media.statusPostgres') }
+        const pill = !c
+            ? { cls: 'health-stale', icon: 'database', text: ms.backend === 'r2' ? t('settings.media.supabaseNotSetUp') : t('settings.media.statusPostgres') }
             : connected
                 ? { cls: 'health-fresh', icon: 'check-circle', text: t('settings.media.statusConnected') }
                 : { cls: 'health-stale', icon: 'alert-triangle', text: t('settings.media.statusFailed') };
@@ -4206,6 +4500,12 @@ UI.registerActions('settings', {
     toggleExplainers: (el) => SettingsPage.toggleExplainers(el),
     readYouTubeJson: (el) => SettingsPage.readYouTubeJson(el),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
+    setMediaBackend: (el) => SettingsPage.setMediaBackend(el),
+    saveR2Storage: (el, e) => SettingsPage.saveR2Storage(el, e),
+    saveR2Limits: (el, e) => SettingsPage.saveR2Limits(el, e),
+    copyToR2: (el) => SettingsPage.copyToR2(el),
+    removeR2Storage: (el) => SettingsPage.removeR2Storage(el),
+    copyR2Cors: () => SettingsPage.copyR2Cors(),
     toggleMediaCleanup: (el) => SettingsPage.toggleMediaCleanup(el),
     cleanUpMedia: (el) => SettingsPage.cleanUpMedia(el),
     removeMediaStorage: (el) => SettingsPage.removeMediaStorage(el),

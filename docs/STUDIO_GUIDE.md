@@ -1243,7 +1243,7 @@ A budget alert in Google Cloud Billing (**Budgets & alerts**) is cheap insurance
 
 | What | Where | Notes |
 |---|---|---|
-| Storage | `media_uploads`: since v23 the files go to Supabase Storage once Settings → Platform → Media storage is filled in (the table keeps only their details); before that, or without it, the bytes sit inside the database (the Supabase free tier is 500 MB) | A 480px thumbnail per moment, and two images per slide per render (at most 3 MB each, usually far less). A newer render deletes the older one's images unless a scheduled post uses them. The retention sweep is opt-in (`MEDIA_RETENTION_DAYS`) |
+| Storage | `media_uploads`: since v23 the files go to Supabase Storage, or to Cloudflare R2 when the owner chose it there (R2 stays inside its free tier: see the Help article «Where files are kept»), once Settings → Platform → Media storage is filled in (the table keeps only their details); before that, or without it, the bytes sit inside the database (the Supabase free tier is 500 MB) | A 480px thumbnail per moment, and two images per slide per render (at most 3 MB each, usually far less). A newer render deletes the older one's images unless a scheduled post uses them. The retention sweep is opt-in (`MEDIA_RETENTION_DAYS`) |
 | Upload time | Your connection | Per lesson: the proxy (0.6 MB took 31 s) and 12 to 30 thumbnails. Per render: two images per slide. At 20 to 30 KB/s, the uploads are most of a render's 170 s |
 | Function time | Vercel | Each generation holds one request open for up to two minutes |
 | Your Mac | Electricity | It must be on, awake and logged in for jobs to run |
