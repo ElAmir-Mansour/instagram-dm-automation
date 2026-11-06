@@ -13,6 +13,50 @@
   updates <html lang dir>, exactly as dashboard/js/i18n.js does
   (applyDocument()). Same mechanism as public/privacy.html.
 
+  ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-10-19 — the page stops saying direct messages are unavailable
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The matrix had ONE row for messages, "Automated replies to messages — after Meta approves the app" with
+  "Not available today", and this comment said the AI DM path was parked. Neither has been true since
+  2026-10-13 (CLAUDE.md, "AI DM replies are LIVE again"): the agent answers real people, and a WhatsApp
+  agent answers too, on test numbers. A public pricing page that says the opposite
+  of the product is a claim a Meta or TikTok reviewer can read, so it is corrected here. Where an older
+  section of this comment names something this one changes, the older section is history. landing.html's
+  platform strip (same date) says the same things in the same words; its header holds the longer reasoning.
+
+  1. THE DIRECT-MESSAGES ROW says an AI agent answers direct messages on Instagram and on your Facebook
+     Page, ticked on every plan like every in-product row (the product has no per-plan locks).
+         src/webhook/messaging.ts (the DM pipeline: `entry.messaging` to a reply, runSalesTurn when the
+         tenant's sales mode answers); src/services/dmSales/turn.ts (the sales turn: the owner's persona
+         and knowledge base, the hand-off); src/services/dmEngine.ts (who writes the reply: the engine
+         chosen per tenant). A switched-off agent says nothing (messaging.ts, "ai.agent_disabled").
+  2. A WHATSAPP GROUP, one row: "An AI agent answers customers and hands the chat to you", and the cell
+     "Live today on test numbers" (the same scope as landing.html's strip, word for word).
+         src/webhook/whatsappAnswer.ts: runSalesTurn with a WhatsApp transport answers an inbound message,
+         and a flow that asks for a person (a refund, a person wanted) hands the chat over: the bot pauses
+         on the thread and the customer gets the hand-off line.
+         src/routes/whatsapp.ts: `PUT /agent` refuses `everyone` (409) until the go-live gate exists, so the
+         agent answers only the numbers the owner lists as test senders (that is why the cell says "test
+         numbers" and why no sentence says "all your customers"); `POST /connect` is how a managed client
+         connects their own number (Settings, WhatsApp), and the agent stays off until the owner switches
+         it on.
+  3. THE "ONE PER 24 HOURS" LINES NOW SAY "CAMPAIGN" (the row, the table note, the FAQ). `canDmRecipient`
+     (src/utils/rateLimiter.ts) is called from src/webhook/comments.ts only: it limits the DM a keyword
+     comment triggers, not the agent's replies inside a conversation, so "one automated DM per person per
+     24 hours" read next to an agent that answers messages would have been false. The 180 an hour ceiling
+     is shared by both paths (checkFairSendQuota in comments.ts, messaging.ts and dmSales/turn.ts) and is
+     unchanged.
+  4. "DOES ANYTHING GO OUT WITHOUT ME SEEING IT?" gains one sentence: the AI agent also answers messages on
+     its own, writes each reply itself from what the owner set for it, and can be switched off. Its first
+     answer ("By default, no") would otherwise have been untrue the day the agent went live.
+  NOT CLAIMED, and pinned absent from the page: any WhatsApp broadcast, bulk send, template, newsletter or
+  promotion (nothing here starts a conversation with a number; the agent answers one that wrote first), and
+  "all your customers". Also still not claimed: the automated-service disclosure line, a named model
+  provider (privacy.html owns the processors), and the inbox's manual reply as a plan feature. Prices, the
+  three plans and their names did not change, and neither did the meta description or the share surface:
+  they said "comments and messages" for Instagram and Facebook already, and name no WhatsApp and no AI.
+
   EVERY FEATURE CLAIMED BELOW EXISTS IN THE CODE. The evidence, per claim:
 
     comment → keyword → DM, plus an optional public reply and a like
@@ -22,12 +66,18 @@
         keywordMatches + src/services/matching.ts
     per-post or global campaign targeting
         src/services/matching.ts (bySpecificity, post_id)
-    (Four entries stood here until 2026-10-13 and are gone, because the page
-    no longer makes the claims: AI DM replies, quick replies and carousels, the
+    (Four entries stood here until 2026-10-13 and were removed, because the page
+    did not make the claims then: AI DM replies, quick replies and carousels, the
     automated-service disclosure, and the inbox with manual reply and a pause.
-    The code exists; the path does not work in production until Meta verifies
-    the app, so the matrix has ONE row for it, "after Meta approves the app",
-    and says it is not available today. Put the rows back only when that changes.)
+    SUPERSEDED 2026-10-19 for the first of them only: see "WHAT CHANGED ON
+    2026-10-19" above. The matrix has its rows back for the AI agent on
+    Instagram and Facebook and on WhatsApp; quick replies and carousels, the
+    disclosure line and the inbox's manual reply are still not claimed.)
+    an AI agent answers direct messages on Instagram and on a Page, and answers
+    WhatsApp customers (test numbers today), handing the chat to a person
+        src/webhook/messaging.ts, src/services/dmSales/turn.ts,
+        src/services/dmEngine.ts (Instagram and Facebook);
+        src/webhook/whatsappAnswer.ts, src/routes/whatsapp.ts (WhatsApp)
     scheduling to Instagram, Facebook or both
         src/routes/api.ts /posts/scheduled; src/services/instagram.ts
         (publishInstagramPost, publishFacebookPost)
@@ -53,15 +103,22 @@
 
   THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
   adding them back:
-    · No AI replies to direct messages, no inbox, no disclosure line. That
-      path is parked until Meta verifies the app (CLAUDE.md, "AI DM replies
-      are parked"). The only message the page describes is a campaign's own
-      text, sent after a keyword comment.
+    · No inbox send path, no disclosure line, no named model provider.
+      (Until 2026-10-19 this line also said "no AI replies to direct messages",
+      because that path was parked; it is live now, CLAUDE.md "AI DM replies
+      are LIVE again", and the page says so in the matrix, the WhatsApp row and
+      one FAQ sentence, and nowhere else.)
+    · No WhatsApp broadcast, bulk send, template, newsletter or promotion, and
+      no "all your customers": the WhatsApp agent answers a number that wrote
+      first and, until the go-live gate exists, only the numbers the owner
+      lists (src/routes/whatsapp.ts `PUT /agent`). landingTruth.test.ts scans
+      this page for each of those words.
     · No claim that all the code is open. Only the server is MIT.
     · No "every feature in the product": the Monteur and Infographics run on
       the founder's accounts only until M8, so each tier says "every feature
       open to client accounts". No "24-hour reply window" row either: it
-      described replying inside a conversation, which is parked.
+      described Meta's window for replying inside a conversation, and the page
+      promises no window.
     · No minute-accurate publishing time. The drain runs every ~5-15 minutes
       (.github/workflows/drain.yml says so in its own header) and
       ARCHITECTURE.md §2.4 calls the UI's minute-level promise "a genuine
@@ -1402,8 +1459,18 @@
                         <tbody>
                             <tr><th scope="rowgroup" colspan="4">الرسائل الخاصة</th></tr>
                             <tr>
-                                <th scope="row">الردود الآلية على الرسائل — بعد اعتماد ميتا للتطبيق</th>
-                                <td colspan="3">غير متاحة اليوم</td>
+                                <th scope="row">وكيل بالذكاء الاصطناعي يردّ على الرسائل الخاصة في إنستجرام وعلى رسائل صفحتك في فيسبوك</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">واتساب</th></tr>
+                            <tr>
+                                <th scope="row">وكيل بالذكاء الاصطناعي يردّ على العملاء ويسلّمك المحادثة</th>
+                                <td colspan="3">يعمل اليوم على أرقام اختبار</td>
                             </tr>
                         </tbody>
 
@@ -1468,7 +1535,7 @@
                                 <td colspan="3">180 رسالة في الساعة</td>
                             </tr>
                             <tr>
-                                <th scope="row">رسالة آلية واحدة لكل شخص خلال 24 ساعة</th>
+                                <th scope="row">رسالة آلية واحدة من الحملات لكل شخص خلال 24 ساعة</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مطبَّق في كل الباقات</span></td>
                             </tr>
                         </tbody>
@@ -1478,7 +1545,7 @@
                 <p class="tablenote">
                     أعداد الحسابات والمستخدمين أعلاه <strong>حدود اتفاق، لا حدود يفرضها
                     البرنامج</strong>: نحن مَن ينشئ الحسابات، فنلتزم بما اتفقنا عليه. أمّا سقف
-                    الإرسال وحدّ الرسالة الواحدة للشخص كل 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
+                    الإرسال وحدّ رسالة الحملة الواحدة للشخص كل 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
                     نفسها في كل الباقات ولا تُشترى زيادتها.
                 </p>
 
@@ -1536,7 +1603,8 @@
                             ومسودّات الكاروسيل تراجعها قبل جدولتها، والإنفوجرافيك لا يُجدوَل حتى
                             يذكر نصّه كل عمود فيه. أمّا الحملة فتعمل وحدها: الرسالة الخاصة
                             والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر
-                            مكانها ردٌّ عامّ قصير بنصٍّ ثابت.
+                            مكانها ردٌّ عامّ قصير بنصٍّ ثابت. ويردّ وكيل الذكاء الاصطناعي على
+                            الرسائل وحده كذلك: هو من يكتب كل ردّ بحسب ما تحدّده له، ويمكنك إيقافه.
                         </p>
                     </div>
                 </details>
@@ -1560,7 +1628,7 @@
                     <div>
                         <p>
                             حتى 180 رسالة في الساعة لكل حساب — وهو سقف نضعه تحت حدّ ميتا
-                            (نحو 200) لتفادي الإيقاف — ورسالة آلية واحدة لكل شخص خلال 24 ساعة.
+                            (نحو 200) لتفادي الإيقاف — ورسالة آلية واحدة من الحملات لكل شخص خلال 24 ساعة.
                             الرقمان نفسهما في كل الباقات.
                         </p>
                     </div>
@@ -1756,8 +1824,18 @@
                         <tbody>
                             <tr><th scope="rowgroup" colspan="4">Direct messages</th></tr>
                             <tr>
-                                <th scope="row">Automated replies to messages — after Meta approves the app</th>
-                                <td colspan="3">Not available today</td>
+                                <th scope="row">An AI agent answers direct messages on Instagram and on your Facebook Page</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">WhatsApp</th></tr>
+                            <tr>
+                                <th scope="row">An AI agent answers customers and hands the chat to you</th>
+                                <td colspan="3">Live today on test numbers</td>
                             </tr>
                         </tbody>
 
@@ -1822,7 +1900,7 @@
                                 <td colspan="3">180 messages per hour</td>
                             </tr>
                             <tr>
-                                <th scope="row">One automated DM per person per 24 hours</th>
+                                <th scope="row">One automated campaign DM per person per 24 hours</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Enforced on every plan</span></td>
                             </tr>
                         </tbody>
@@ -1832,7 +1910,7 @@
                 <p class="tablenote">
                     The account and user counts above are <strong>limits of the agreement, not
                     limits the software enforces</strong>: we create the accounts, so we hold to
-                    what was agreed. The send ceiling and the one-message-per-person-per-24-hours rule
+                    what was agreed. The send ceiling and the one-campaign-DM-per-person-per-24-hours rule
                     are different — they come from Meta and from the app's own send protection, they are the
                     same on every plan, and more of them cannot be bought.
                 </p>
@@ -1896,7 +1974,9 @@
                             and an infographic can't be scheduled until its caption names every
                             column. A campaign does run on its own: the private message and the
                             public reply are text you wrote, and if the private message can't
-                            be delivered, a short fixed public reply goes out instead.
+                            be delivered, a short fixed public reply goes out instead. The AI
+                            agent also answers messages on its own: it writes each reply itself,
+                            from what you set for it, and you can switch it off.
                         </p>
                     </div>
                 </details>
@@ -1920,8 +2000,8 @@
                     <div>
                         <p>
                             Up to 180 an hour per account — a ceiling we hold below Meta's own
-                            (around 200) to avoid being cut off — and one automated DM per
-                            person per 24 hours. Both numbers are the same on every plan.
+                            (around 200) to avoid being cut off — and one automated campaign
+                            DM per person per 24 hours. Both numbers are the same on every plan.
                         </p>
                     </div>
                 </details>
