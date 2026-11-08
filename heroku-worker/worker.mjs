@@ -26,7 +26,9 @@
 
 const BASE_URL = process.env.DRAIN_BASE_URL || 'https://msg-response-auto.vercel.app';
 const CRON_SECRET = process.env.CRON_SECRET;
-const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS) || 60_000;
+// 2 minutes, not 1 (2026-11-08): every call costs Vercel Active CPU, and the Hobby plan includes 4 h a month. A webhook already
+// drains its own jobs inline, so this only sets how late a scheduled post can go out.
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS) || 120_000;
 // Just under Vercel's 300 s function limit. The drain now ends with the Monteur's pick sweep
 // (MONTEUR.md §6), two Gemini calls for one video, so a drain can take minutes: aborting at 20 s
 // logged every such run as a failure while the work finished anyway. The polls stay sequential,
@@ -35,7 +37,9 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 290_000;
 // The profile-draft backstop (docs/onboarding/03 §4): its own loop, below. A draft takes minutes (two model calls of up to 150 s), so
 // it must never share a request with the drain, whose queue would then wait on a model. The wait is between the END of one sweep and
 // the start of the next, so a long sweep only delays the next one.
-const DRAFT_SWEEP_INTERVAL_MS = Number(process.env.DRAFT_SWEEP_INTERVAL_MS) || 60_000;
+// 15 minutes, not 1 (2026-11-08): a draft is first moved on by whoever asks, so this backstop rarely finds work, and each
+// call costs Vercel Active CPU.
+const DRAFT_SWEEP_INTERVAL_MS = Number(process.env.DRAFT_SWEEP_INTERVAL_MS) || 900_000;
 
 if (!CRON_SECRET) {
     console.error(JSON.stringify({ level: 'error', event: 'worker.missing_secret', message: 'CRON_SECRET is not set' }));
