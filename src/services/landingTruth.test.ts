@@ -61,6 +61,20 @@ const words = (html: string) =>
 const L = articles(landing);
 const P = articles(pricing);
 
+/**
+ * The AI agent on pricing.html (2026-10-19), pinned word for word below ("pricing — the agent answers"). The page says an AI agent answers messages
+ * in exactly three places per language: the Direct messages row, the WhatsApp row and one sentence of the "does anything go out without me seeing
+ * it" answer. The scan for the removed claims runs on the page WITHOUT them, so a fourth place, or a reworded claim, fails it.
+ */
+const PRICING_AGENT_FAQ = {
+    ar: 'ويردّ وكيل الذكاء الاصطناعي على الرسائل وحده كذلك: هو من يكتب كل ردّ بحسب ما تحدّده له، ويمكنك إيقافه.',
+    en: 'The AI agent also answers messages on its own: it writes each reply itself, from what you set for it, and you can switch it off.',
+} as const;
+const PRICING_AGENT_GROUPS = /<tbody>\s*<tr><th scope="rowgroup" colspan="4">(?:الرسائل الخاصة|Direct messages|واتساب|WhatsApp)<\/th><\/tr>[\s\S]*?<\/tbody>/g;
+/** pricing.html without the three places it says an AI agent answers messages (whitespace collapsed, so a sentence wrapped across lines still matches). */
+const pricingWithoutAgentClaims = (html: string) =>
+    Object.values(PRICING_AGENT_FAQ).reduce((out, sentence) => out.replace(sentence, ''), html.replace(PRICING_AGENT_GROUPS, '').replace(/\s+/g, ' '));
+
 const ALL = { whatsappNumber: '966501234567', contactEmail: 'hello@example.com', eidCouponsExpire: null };
 const BARE = { whatsappNumber: null, contactEmail: 'hello@example.com', eidCouponsExpire: null };
 
@@ -147,11 +161,11 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
         /\bAI\b[^.]{0,40}\b(?:repl|answer|conversation|message)/i,
     ];
 
-    for (const [name, html] of [['landing', landing], ['pricing', pricing]] as const) {
-        it(`${name}: none of the removed claims is in the visible markup${name === 'landing' ? ' (outside the platform strip, whose lines are pinned exactly in the last describe)' : ''}`, () => {
+    for (const [name, html] of [['landing', landing], ['pricing', pricingWithoutAgentClaims(pricing)]] as const) {
+        it(`${name}: none of the removed claims is in the visible markup${name === 'landing' ? ' (outside the platform strip, whose lines are pinned exactly in the last describe)' : ' (outside the three places that say the AI agent answers, pinned below)'}`, () => {
             // The strip's WhatsApp, Instagram and Facebook lines say an AI agent answers messages, which is true since 2026-10-13 (the DM
-            // pipeline answers: src/webhook/messaging.ts; WhatsApp: src/webhook/whatsappAnswer.ts). They are the only place the page may say so, so
-            // the scan runs on the page without them, and the last describe pins each of those lines.
+            // pipeline answers: src/webhook/messaging.ts; WhatsApp: src/webhook/whatsappAnswer.ts). They are the only place the landing page may
+            // say so, so its scan runs without them; on pricing, the three agent sentences are removed by `pricingWithoutAgentClaims` and pinned below.
             const visible = visibleText(name === 'landing' ? html.replace(PLATFORM_STRIP, '') : html);
             for (const re of CLAIMS) assert.equal(re.test(visible), false, `${name}: ${re}`);
         });
@@ -226,18 +240,8 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
         }
     });
 
-    it('pricing: every direct-message row is one row, "after Meta approves the app", not included today', () => {
-        for (const [doc, label, cell] of [
-            [P.ar, 'الردود الآلية على الرسائل — بعد اعتماد ميتا للتطبيق', 'غير متاحة اليوم'],
-            [P.en, 'Automated replies to messages — after Meta approves the app', 'Not available today'],
-        ] as const) {
-            const group = /<tbody>\s*<tr><th scope="rowgroup" colspan="4">(?:الرسائل الخاصة|Direct messages)<\/th><\/tr>[\s\S]*?<\/tbody>/.exec(doc);
-            assert.ok(group, 'the direct-messages group exists');
-            assert.equal((group[0].match(/<th scope="row"/g) ?? []).length, 1, 'exactly one row');
-            assert.ok(group[0].includes(label) && group[0].includes(cell));
-            assert.equal(group[0].includes('class="yes"'), false, 'not marked as included');
-        }
-    });
+    // (The pin that stood here required the pricing row "Automated replies to messages — after Meta approves the app: Not available today". It is
+    // replaced by the describe "pricing — the agent answers", below, which pins the rows that say the opposite and forbids the old wording.)
 
     it('pricing: the follower-disclosure FAQ and the language-model bullet are gone', () => {
         for (const doc of [P.ar, P.en]) {
@@ -245,6 +249,202 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
         }
         assert.ok(P.ar.includes('<summary>هل يُنشر شيء دون أن أراه؟</summary>'));
         assert.ok(P.en.includes('<summary>Does anything go out without me seeing it?</summary>'));
+    });
+});
+
+describe('pricing — the agent answers: direct messages and WhatsApp are no longer "not available" (2026-10-19)', () => {
+    // pricing.html used to say, in a row of its own, "Automated replies to messages — after Meta approves the app: Not available today". The AI agent has
+    // answered real people since 2026-10-13 (CLAUDE.md, "AI DM replies are LIVE again") and a WhatsApp agent answers too, so the page now says so, in
+    // three places per language, each pinned here word for word, with the code that makes it true cited in the page's "WHAT CHANGED ON 2026-10-19":
+    //   Direct messages   src/webhook/messaging.ts, src/services/dmSales/turn.ts, src/services/dmEngine.ts: an AI agent answers Instagram and Page messages
+    //   WhatsApp          src/webhook/whatsappAnswer.ts (answers, and hands the chat over), src/routes/whatsapp.ts (`PUT /agent` refuses `everyone`, so the
+    //                     agent answers the numbers the owner lists, "test numbers", and nobody else yet)
+    //   FAQ               "does anything go out without me seeing it": the agent answers on its own, and can be switched off
+    const ROWS = {
+        ar: {
+            dm: 'وكيل بالذكاء الاصطناعي يردّ على الرسائل الخاصة في إنستجرام وعلى رسائل صفحتك في فيسبوك',
+            wa: 'وكيل بالذكاء الاصطناعي يردّ على العملاء ويسلّمك المحادثة',
+            waCell: 'يعمل اليوم على أرقام اختبار',
+        },
+        en: {
+            dm: 'An AI agent answers direct messages on Instagram and on your Facebook Page',
+            wa: 'An AI agent answers customers and hands the chat to you',
+            waCell: 'Live today on test numbers',
+        },
+    } as const;
+    const GROUPS = { ar: ['الرسائل الخاصة', 'واتساب'], en: ['Direct messages', 'WhatsApp'] } as const;
+    const DOCS = { ar: P.ar, en: P.en } as const;
+    /** The page's markup as a reader or a crawler gets it: attributes included, its comments, CSS and script not. */
+    const markup = noComments(pricing).replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/g, '');
+
+    /** One matrix group (a <tbody>) by its heading. */
+    const group = (doc: string, heading: string) => {
+        const found = new RegExp(`<tbody>\\s*<tr><th scope="rowgroup" colspan="4">${heading}</th></tr>[\\s\\S]*?</tbody>`).exec(doc);
+        assert.ok(found, `the "${heading}" group exists`);
+        return found[0];
+    };
+    const rowLabels = (g: string) => [...g.matchAll(/<th scope="row">([^<]*)<\/th>/g)].map((m) => m[1]);
+
+    it('the matrix has a Direct messages group with ONE row, ticked on all three plans, and a WhatsApp group with ONE row, live on test numbers', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const doc = DOCS[lang];
+            const dm = group(doc, GROUPS[lang][0]);
+            assert.deepEqual(rowLabels(dm), [ROWS[lang].dm], `${lang}: exactly the one row`);
+            assert.equal((dm.match(/class="yes"/g) ?? []).length, 3, `${lang}: included on Starter, Growth and Agency`);
+            assert.equal(dm.includes('class="no"'), false, `${lang}: not marked as excluded anywhere`);
+
+            const wa = group(doc, GROUPS[lang][1]);
+            assert.deepEqual(rowLabels(wa), [ROWS[lang].wa], `${lang}: exactly the one row`);
+            assert.ok(wa.includes(`<td colspan="3">${ROWS[lang].waCell}</td>`), `${lang}: one cell across the plans, with today's reach`);
+            assert.equal(wa.includes('class="yes"'), false, `${lang}: a status, not a tick: the agent is not for everyone yet`);
+            // Messages, then WhatsApp, then publishing.
+            const at = (h: string) => doc.indexOf(`colspan="4">${h}</th>`);
+            assert.ok(at(GROUPS[lang][0]) < at(GROUPS[lang][1]) && at(GROUPS[lang][1]) < at(lang === 'ar' ? 'النشر والتقارير' : 'Publishing and reporting'), `${lang}: the order`);
+        }
+    });
+
+    /** The forms the old row took: "not available today", "after Meta approves the app", "automated replies to messages", "parked". */
+    const OLD_WORDING = [
+        /غير متاحة اليوم|غير متاح اليوم/, /Not available today/i,
+        /بعد اعتماد ميتا|اعتماد ميتا للتطبيق/, /after Meta approves/i,
+        /Automated replies to messages/i, /الردود الآلية على الرسائل/,
+        /parked|مُعلَّق|معلّق/i,
+    ];
+    const oldWordingIn = (html: string) => OLD_WORDING.filter((re) => re.test(html)).map(String);
+
+    it('the old wording cannot come back: nothing says replies to messages are unavailable, parked, or waiting for Meta, in the markup or its attributes', () => {
+        assert.deepEqual(oldWordingIn(markup), []);
+        // The header comment may quote the old row as history, and says it is superseded; it must not still say the path does not work.
+        const header = pricing.slice(0, pricing.indexOf('-->'));
+        assert.ok(header.includes('SUPERSEDED 2026-10-19'), 'the old ledger entry is marked history');
+        assert.equal(/does not work in production until Meta verifies/i.test(header), false, 'the header no longer says the path does not work');
+    });
+
+    it('the old-wording scan is not blind: it catches each sentence the old row said, in both languages, wherever it is put', () => {
+        for (const sentence of [
+            'Automated replies to messages — after Meta approves the app',
+            'Not available today',
+            'الردود الآلية على الرسائل — بعد اعتماد ميتا للتطبيق',
+            'غير متاحة اليوم',
+        ]) {
+            assert.notDeepEqual(oldWordingIn(`<tr><th scope="row">${sentence}</th></tr>`), [], sentence);
+            assert.notDeepEqual(oldWordingIn(`<meta name="description" content="${sentence}">`), [], `${sentence} (as an attribute)`);
+        }
+        assert.deepEqual(oldWordingIn(`<th scope="row">${ROWS.en.dm}</th><td colspan="3">${ROWS.en.waCell}</td>`), [], 'the page\'s own wording passes');
+        assert.deepEqual(oldWordingIn(`<th scope="row">${ROWS.ar.dm}</th><td colspan="3">${ROWS.ar.waCell}</td>`), [], 'the page\'s own wording passes (Arabic)');
+    });
+
+    it('the agent is claimed in exactly three places per language, and the scan for the removed claims sees nothing else', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const doc = DOCS[lang];
+            const ai = /\bAI\b|الذكاء الاصطناعي/g;
+            assert.equal((words(doc).match(ai) ?? []).length, 3, `${lang}: the Direct messages row, the WhatsApp row, one FAQ sentence`);
+            assert.equal((words(pricingWithoutAgentClaims(doc)).match(ai) ?? []).length, 0, `${lang}: the page minus those three says nothing of AI`);
+            assert.ok(words(doc).includes(PRICING_AGENT_FAQ[lang]), `${lang}: the FAQ sentence is on the page, word for word`);
+        }
+        // The share surface says nothing of it, and nothing of WhatsApp: it said "comments and messages" for Instagram and Facebook already.
+        const head = markup.slice(0, markup.indexOf('</head>'));
+        const texts = [...head.matchAll(/<(?:title|meta)\b[^>]*?(?:content="([^"]*)"|>([^<]*)<\/title>)/g)].map((m) => m[1] ?? m[2] ?? '');
+        assert.ok(texts.length > 15, 'the share surface was read');
+        for (const t of texts) assert.equal(/WhatsApp|واتساب|\bAI\b|الذكاء الاصطناعي/.test(t), false, t);
+    });
+
+    it('the FAQ: the agent answers on its own and can be switched off, right after the campaign sentence the landing page pins too, which is unchanged', () => {
+        const CAMPAIGN = {
+            ar: 'أمّا الحملة فتعمل وحدها: الرسالة الخاصة والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر مكانها ردٌّ عامّ قصير بنصٍّ ثابت.',
+            en: "A campaign does run on its own: the private message and the public reply are text you wrote, and if the private message can't be delivered, a short fixed public reply goes out instead.",
+        } as const;
+        for (const lang of ['ar', 'en'] as const) {
+            assert.ok(words(DOCS[lang]).includes(`${CAMPAIGN[lang]} ${PRICING_AGENT_FAQ[lang]}`), `${lang}: the agent's sentence follows the campaign's`);
+        }
+        // The two things the sentence stands on: a switched-off agent says nothing, and the agent writes its own replies from the owner's setup.
+        const messaging = read('src/webhook/messaging.ts');
+        assert.ok(/ai\.agent_disabled/.test(messaging) && /switched off/.test(messaging), 'messaging.ts: a switched-off agent says nothing');
+        assert.ok(/persona and knowledge base/.test(read('src/services/dmSales/turn.ts')), "turn.ts: the owner's persona and knowledge base");
+    });
+
+    it("WhatsApp: today's reach is \"test numbers\", never everyone, and the code the row stands on still says so", () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const wa = words(group(DOCS[lang], GROUPS[lang][1]));
+            assert.equal(/everyone|all your customers|any number|كل عملائك|جميع العملاء|كل العملاء|أي رقم/i.test(wa), false, `${lang}: no "everyone"`);
+        }
+        const answer = read('src/webhook/whatsappAnswer.ts');
+        assert.ok(/runSalesTurn/.test(answer) && /handed to a person|handed the conversation to a person|hand-off line/.test(answer), 'whatsappAnswer.ts answers and hands over');
+        const routes = read('src/routes/whatsapp.ts');
+        assert.ok(/`everyone` is refused \(409\) until the go-live gate exists/.test(routes), 'the routes still refuse `everyone`: if this changes, the row may say more');
+        assert.ok(/POST\s+\/connect\s+owner/.test(routes), 'a managed client can connect their own number');
+    });
+
+    // The sentences of a page's visible text, one per block (a cell, an item, a paragraph) and then per full stop, so a WhatsApp cell never runs into the
+    // paragraph after it. Naming WhatsApp and saying a broadcast, a bulk send, a template, a newsletter or a promotion: none, because the agent answers a
+    // number that wrote first and nothing here starts a conversation with one.
+    const UNBACKED = /broadcast|bulk|mass[\s-]?(?:message|messag|send|text)|template|newsletter|blast|promotion|promo\b|marketing|cold\b|opt-?in list|بث|رسائل جماعية|إرسال جماعي|جماعي|قوالب|قالب|نشرة|ترويج|تسويق/i;
+    const sentencesOf = (html: string) =>
+        visibleText(html.replace(/<\/(?:td|th|p|li|summary|h[1-6]|caption|div)>/g, '. '))
+            .split(/(?<=[.!?؟؛])\s+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+    const unbackedWhatsApp = (html: string) => sentencesOf(html).filter((t) => /WhatsApp|واتساب/.test(t) && UNBACKED.test(t));
+
+    it('WhatsApp: no broadcast, bulk send, template, newsletter or promotion is claimed on the page', () => {
+        assert.deepEqual(unbackedWhatsApp(pricing), []);
+        for (const lang of ['ar', 'en'] as const) {
+            assert.equal(UNBACKED.test(words(group(DOCS[lang], GROUPS[lang][1]))), false, `${lang}: the WhatsApp group itself`);
+        }
+    });
+
+    it("the WhatsApp scan is not blind: it catches the claims it is for, and passes the page's own WhatsApp lines", () => {
+        for (const bad of [
+            '<p>Broadcast an offer to every WhatsApp contact.</p>',
+            '<li>Send bulk messages on WhatsApp</li>',
+            '<td>Approved WhatsApp templates for your campaigns</td>',
+            '<p>A WhatsApp newsletter to your list.</p>',
+            '<p>بث عروضك إلى جهات اتصال واتساب.</p>',
+            '<li>إرسال جماعي عبر واتساب</li>',
+            '<td>قوالب واتساب جاهزة</td>',
+            '<p>WhatsApp marketing for your shop.</p>',
+        ]) {
+            assert.notDeepEqual(unbackedWhatsApp(bad), [], bad);
+        }
+        for (const lang of ['ar', 'en'] as const) {
+            assert.deepEqual(unbackedWhatsApp(`<tr><th scope="row">${ROWS[lang].wa}</th><td colspan="3">${ROWS[lang].waCell}</td></tr>`), [], lang);
+        }
+        assert.deepEqual(unbackedWhatsApp('<p>Broadcast to everyone on Instagram.</p>'), [], "a sentence that does not name WhatsApp is not this scan's business");
+    });
+
+    it('prices, tiers and plan names did not change: three tiers, each still "priced per account", and the same three names', () => {
+        const names = { ar: ['البداية', 'النمو', 'الوكالات'], en: ['Starter', 'Growth', 'Agency'] } as const;
+        const quote = { ar: 'السعر بعرض بحسب الحساب — تواصل معنا', en: 'Priced per account — contact us' } as const;
+        for (const lang of ['ar', 'en'] as const) {
+            const doc = DOCS[lang];
+            assert.deepEqual([...doc.matchAll(/<h3 id="tier-[a-z]+-(?:ar|en)">([^<]+)<\/h3>/g)].map((m) => m[1]), [...names[lang]], `${lang}: the plan names`);
+            assert.equal(doc.split(`<span class="quote">${quote[lang]}</span>`).length - 1, 3, `${lang}: three quotes, no price`);
+            assert.equal(/\$|ريال|\bSAR\b|\bUSD\b|\d\s*\/\s*(?:mo|month|شهر)/i.test(words(doc)), false, `${lang}: no price crept in`);
+        }
+    });
+
+    it('the header comment records the change and cites code that exists', () => {
+        const header = pricing.slice(0, pricing.indexOf('-->'));
+        assert.ok(header.includes('WHAT CHANGED ON 2026-10-19'));
+        for (const file of ['src/webhook/messaging.ts', 'src/services/dmSales/turn.ts', 'src/services/dmEngine.ts', 'src/webhook/whatsappAnswer.ts', 'src/routes/whatsapp.ts', 'src/utils/rateLimiter.ts', 'src/webhook/comments.ts']) {
+            assert.ok(header.includes(file), `${file} is cited`);
+            assert.ok(read(file).length > 0, `${file} exists`);
+        }
+    });
+
+    it("the one-per-person-per-24-hours rule is the campaign's alone: only comments.ts enforces it, so the page says \"campaign\" wherever it states the rule", () => {
+        assert.ok(/canDmRecipient/.test(read('src/webhook/comments.ts')));
+        for (const file of ['src/webhook/messaging.ts', 'src/services/dmSales/turn.ts', 'src/webhook/whatsappAnswer.ts']) {
+            assert.equal(/canDmRecipient/.test(read(file)), false, `${file} does not use the campaign's per-person rule`);
+        }
+        // The row and the FAQ state it in full, the table note by name; none states it without the campaign.
+        for (const [lang, qualified, unqualified] of [
+            ['ar', 'من الحملات لكل شخص خلال 24 ساعة', /رسالة آلية واحدة لكل شخص خلال 24/],
+            ['en', 'campaign DM per person per 24 hours', /automated DM per person per 24/],
+        ] as const) {
+            assert.equal(words(DOCS[lang]).split(qualified).length - 1, 2, `${lang}: the row and the FAQ`);
+            assert.equal(unqualified.test(words(DOCS[lang])), false, `${lang}: no unqualified statement of the rule`);
+        }
     });
 });
 
@@ -588,11 +788,12 @@ describe('landing and pricing — nothing says every plan has every feature', ()
         for (const doc of [P.ar, P.en]) {
             assert.equal(/نافذة الردّ|reply window|24 ساعة من آخر تفاعل|24 hours from that person/i.test(words(doc)), false);
         }
-        assert.ok(words(P.ar).includes('وحدّ الرسالة الواحدة للشخص كل 24 ساعة'));
-        assert.ok(words(P.en).includes('the one-message-per-person-per-24-hours rule'));
+        assert.ok(words(P.ar).includes('وحدّ رسالة الحملة الواحدة للشخص كل 24 ساعة'));
+        assert.ok(words(P.en).includes('the one-campaign-DM-per-person-per-24-hours rule'));
         assert.equal(/نافذة الـ 24|24-hour window/.test(words(P.ar) + words(P.en)), false);
-        // The one-message-per-person row stays: it is enforced (canDmRecipient).
-        assert.ok(P.ar.includes('رسالة آلية واحدة لكل شخص خلال 24 ساعة') && P.en.includes('One automated DM per person per 24 hours'));
+        // The one-per-person row stays: it is enforced (canDmRecipient). Since 2026-10-19 it says whose rule it is, the campaign's: the AI agent the
+        // page now describes answers inside a conversation, which this rule never limited (see the describe "pricing — the agent answers").
+        assert.ok(P.ar.includes('رسالة آلية واحدة من الحملات لكل شخص خلال 24 ساعة') && P.en.includes('One automated campaign DM per person per 24 hours'));
     });
 });
 
