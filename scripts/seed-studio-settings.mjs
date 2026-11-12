@@ -148,6 +148,7 @@ export const STUDIO_SETTINGS = {
         writer: 'claude_mac',
         writer_fallback: true,
         title_color: '#FFD43B',
+        motion: 'layers',
         defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
         music: [],
     },

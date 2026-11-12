@@ -1631,6 +1631,7 @@ export interface ExplainerRenderPayload {
     words: ExplainerWords;
     brand: { name: string; handle: string; site: string; photo_url?: string };
     title_color: string;
+    motion: 'layers' | 'still';
     formats: ('vertical' | 'horizontal')[];
 }
 

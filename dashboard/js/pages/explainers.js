@@ -537,6 +537,7 @@ const ExplainersPage = {
             writer: s.writer === 'gemini' ? 'gemini' : 'claude_mac',
             writer_fallback: s.writer_fallback !== false,
             title_color: this.COLOUR_RE.test(str(s.title_color, '')) ? s.title_color : base.title_color,
+            motion: s.motion === 'still' ? 'still' : 'layers',
             defaults: {
                 sound_mode: defaults.sound_mode === 'music' ? 'music' : 'sfx',
                 subtitles: defaults.subtitles !== false,
@@ -2227,6 +2228,14 @@ const ExplainersPage = {
                         <input class="field ig-colour" id="ex-l-colour" name="title_color" type="color" value="${c.title_color}" aria-describedby="ex-l-colour-hint">
                         <p class="form-hint" id="ex-l-colour-hint">${t('explainers.look.titleColourHint')}</p>
                     </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ex-l-motion">${t('explainers.look.motion')}</label>
+                        <select class="select" id="ex-l-motion" name="motion" aria-describedby="ex-l-motion-hint">
+                            ${option('layers', t('explainers.look.motionLayers'), c.motion !== 'still')}
+                            ${option('still', t('explainers.look.motionStill'), c.motion === 'still')}
+                        </select>
+                        <p class="form-hint" id="ex-l-motion-hint">${t('explainers.look.motionHint')}</p>
+                    </div>
                     <fieldset class="ex-defaults">
                         <legend class="form-label">${t('explainers.look.defaults')}</legend>
                         <div class="ex-row">
@@ -2276,6 +2285,7 @@ const ExplainersPage = {
             voices: { ar: v('voice_ar'), en: v('voice_en') },
             pace: { ar: n('pace_ar', base.pace.ar), en: n('pace_en', base.pace.en) },
             title_color: v('title_color').toUpperCase(),
+            motion: v('motion') === 'still' ? 'still' : 'layers',
             defaults: {
                 sound_mode: v('default_sound') === 'music' ? 'music' : 'sfx',
                 subtitles: !!(form.elements.default_subtitles && form.elements.default_subtitles.checked),

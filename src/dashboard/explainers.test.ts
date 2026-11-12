@@ -54,7 +54,7 @@ const TRACK = { key: 'calm', title: 'Calm', artist: 'Ana', media_id: UUID, url: 
 const CHARACTER = { key: 'karim', name: 'كريم', description: 'a curious young man with a round head', ref_media_id: null, ref_url: null, approved_at: null };
 const CONFIG = {
     style: 'warm hand-painted gouache', characters: [CHARACTER], voices: { ar: 'ar-001-commercial-3', en: 'Sadaltager' }, voice_style: 'calm',
-    pace: { ar: 2.1, en: 2.5 }, writer: 'claude_mac', writer_fallback: true, title_color: '#FFD43B',
+    pace: { ar: 2.1, en: 2.5 }, writer: 'claude_mac', writer_fallback: true, title_color: '#FFD43B', motion: 'layers',
     defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' }, music: [TRACK],
 };
 const SETTINGS = { settings: { explainer: CONFIG, schedule: { timezone: 'Asia/Dubai' } } };
@@ -1603,10 +1603,10 @@ describe('Explainers: the settings view', () => {
         const el = (value: string): Json => ({ value });
         const form = { elements: {
             style: el(' warm '), voice_style: el(' calm '), voice_ar: el('Charon'), voice_en: el('Gacrux'), pace_ar: el('2.4'), pace_en: el(''),
-            title_color: el('#aabbcc'), default_language: el('en'), default_tier: el('nonsense'), default_sound: el('music'), default_subtitles: { checked: false },
+            title_color: el('#aabbcc'), motion: el('still'), default_language: el('en'), default_tier: el('nonsense'), default_sound: el('music'), default_subtitles: { checked: false },
         } };
         assert.deepEqual(plain(w.P.readLook(form)), {
-            style: 'warm', voice_style: 'calm', voices: { ar: 'Charon', en: 'Gacrux' }, pace: { ar: 2.4, en: 2.5 }, title_color: '#AABBCC',
+            style: 'warm', voice_style: 'calm', voices: { ar: 'Charon', en: 'Gacrux' }, pace: { ar: 2.4, en: 2.5 }, title_color: '#AABBCC', motion: 'still',
             defaults: { sound_mode: 'music', subtitles: false, language: 'en', length_tier: 'short' },
         });
     });

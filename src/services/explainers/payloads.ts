@@ -161,6 +161,7 @@ export function renderPayload(
         words: subtitleWordsFor(scenes, row.words ?? {}),
         brand: { name, handle: brand.handle, site: brand.site, ...(brand.photo_url ? { photo_url: absoluteUrl(brand.photo_url, base) } : {}) },
         title_color: settings.explainer.title_color,
+        motion: settings.explainer.motion,
         formats: ['vertical', 'horizontal'],
     };
 }
