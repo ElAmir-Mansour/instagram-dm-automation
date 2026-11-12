@@ -546,6 +546,7 @@ describe('the explainer section (data-model §6.1)', () => {
             writer: 'claude_mac',
             writer_fallback: true,
             title_color: '#FFD43B',
+            motion: 'layers',
             defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
             music: [],
         });
@@ -646,6 +647,7 @@ describe('the explainer section (data-model §6.1)', () => {
             ['a track with no id', { explainer: { music: [track({ media_id: null })] } }, /media_id must be the id of one of your uploads/],
             ['two tracks with one key', { explainer: { music: [track(), track({ title: 'Other' })] } }, /^explainer\.music\[1\]\.key "calm-01" is used twice/],
             ['a title colour that is not #RRGGBB', { explainer: { title_color: 'yellow' } }, /^explainer\.title_color must be a colour like/],
+            ['a motion that is neither layers nor still', { explainer: { motion: 'wobble' } }, /^explainer\.motion must be one of layers, still/],
             ['an Arabic voice that is not in the list', { explainer: { voices: { ar: 'Kore' } } }, /^explainer\.voices\.ar must be one of ar-001-commercial-3, Charon/],
             ['an English voice that is the Arabic-only one', { explainer: { voices: { en: 'ar-001-commercial-3' } } }, /^explainer\.voices\.en must be one of Charon, Sadaltager/],
             ['a voice with the wrong case', { explainer: { voices: { en: 'charon' } } }, /^explainer\.voices\.en must be one of/],
@@ -771,6 +773,8 @@ describe('the explainer section (data-model §6.1)', () => {
             assert.deepEqual(explainer.voices, { ar: 'ar-001-commercial-3', en: 'Charon' });
             assert.equal(explainer.characters.length, 1);
             assert.equal(explainer.title_color, '#FFD43B');
+            assert.equal(explainer.motion, 'layers', 'a section saved before Motion existed reads as layers');
+            assert.equal(defaultStudioSettings().explainer.motion, 'layers');
         });
 
         it('keeps what the tenant saved when another section is saved: the whole row is written back, this section as stored', async () => {

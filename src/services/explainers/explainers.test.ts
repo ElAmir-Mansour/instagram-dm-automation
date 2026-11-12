@@ -848,8 +848,9 @@ describe('approvePictures', () => {
         const [job] = world.jobsOf('explainer_render');
         assert.equal(world.explainer().job_id, job!.id);
         const p = job!.payload;
-        assert.deepEqual(Object.keys(p).sort(), ['audio', 'brand', 'explainer_id', 'formats', 'language', 'music', 'scenes', 'sfx', 'sound_mode', 'subtitles', 'title', 'title_color', 'version', 'words']);
+        assert.deepEqual(Object.keys(p).sort(), ['audio', 'brand', 'explainer_id', 'formats', 'language', 'motion', 'music', 'scenes', 'sfx', 'sound_mode', 'subtitles', 'title', 'title_color', 'version', 'words']);
         assert.deepEqual([p.explainer_id, p.version, p.title, p.language, p.subtitles, p.sound_mode, p.sfx, p.title_color], [EXPLAINER, 1, 'Why AI answers with confidence', 'en', false, 'music', false, '#FFD43B']);
+        assert.equal(p.motion, 'layers', 'the render motion rides in the payload, layers by default');
         assert.deepEqual(p.audio, { url: up(1), duration: 71.2 });
         assert.deepEqual(p.music, { url: `${BASE}/api/uploads/${id(9)}`, credit_required: true }, 'the track’s address is made absolute for the worker');
         assert.deepEqual(p.formats, ['vertical', 'horizontal']);

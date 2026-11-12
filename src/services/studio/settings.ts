@@ -59,6 +59,8 @@ export const EXPLAINER_LANGUAGES: readonly ExplainerLanguage[] = ['ar', 'en'];
 export const EXPLAINER_SOUND_MODES: readonly ExplainerSoundMode[] = ['music', 'sfx'];
 /** Claude on the owner's Mac, or Gemini on the server (research.md R2b). */
 export const EXPLAINER_WRITERS: readonly ExplainerWriter[] = ['claude_mac', 'gemini'];
+/** How the render moves the pictures: `layers` (subject apart from background) or `still`. */
+export const EXPLAINER_MOTIONS: readonly string[] = ['layers', 'still'];
 export const MAX_EXPLAINER_CHARACTERS = 6;
 export const MAX_EXPLAINER_TRACKS = 30;
 /** What a scene's brief names a character by, and what a track is chosen by: short, lower case, nothing that needs escaping. */
@@ -278,6 +280,7 @@ export function settingsProblems(s: StudioSettings): string[] {
             oneOf(explainer.writer, 'explainer.writer', EXPLAINER_WRITERS);
             if (typeof explainer.writer_fallback !== 'boolean') problems.push('explainer.writer_fallback must be true or false');
             colour(explainer.title_color, 'explainer.title_color');
+            oneOf(explainer.motion, 'explainer.motion', EXPLAINER_MOTIONS);
             const defaults = explainer.defaults;
             if (!isPlainObject(defaults)) {
                 problems.push('explainer.defaults must be an object');

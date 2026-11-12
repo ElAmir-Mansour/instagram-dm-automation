@@ -219,6 +219,8 @@ export type ExplainerConfig = {
     writer_fallback: boolean;
     /** `#RRGGBB`: the title at the top of the vertical video. */
     title_color: string;
+    /** `layers`: the Mac lifts each picture's subject into its own layer and moves it against the background; `still`: the pictures as painted. */
+    motion: 'layers' | 'still';
     /** What a new explainer starts with. */
     defaults: { sound_mode: ExplainerSoundMode; subtitles: boolean; language: ExplainerLanguage; length_tier: ExplainerLengthTier };
     music: ExplainerTrack[];
@@ -302,6 +304,7 @@ export function defaultExplainerConfig(): ExplainerConfig {
         writer: 'claude_mac',
         writer_fallback: true,
         title_color: '#FFD43B',
+        motion: 'layers',
         defaults: { sound_mode: 'sfx', subtitles: true, language: 'ar', length_tier: 'short' },
         music: [],
     };
