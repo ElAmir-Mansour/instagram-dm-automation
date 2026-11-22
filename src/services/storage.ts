@@ -54,10 +54,11 @@ import { parseByteRange } from '../utils/byteRange.js';
 import { describeError, log } from '../utils/log.js';
 import type { MediaObjectDeletionRow, MediaUploadRow } from '../db/rows.js';
 import {
-    APP_SETTING_KEYS, DEFAULT_R2_BUCKET, getMediaConfigs, getMediaStorageConfig, getPublicBaseUrl, getSetting, getSettings, maskValue, type MediaStorageConfig, type R2Config,
+    APP_SETTING_KEYS, DEFAULT_MEDIA_DIRECT, DEFAULT_R2_BUCKET, getMediaConfigs, getMediaStorageConfig, getPublicBaseUrl, getSetting, getSettings, maskValue, type MediaDirectMode, type MediaStorageConfig, type R2Config,
 } from './appSettings.js';
 import { readCopyStatus, type R2CopyStatus } from './r2Copy.js';
 import { R2StorageClient, r2CorsPolicy } from './r2Storage.js';
+import type { MediaClient } from '../utils/mediaClient.js';
 import { assertR2Room, R2LimitError, readR2Summary, type R2UsageSummary } from './r2Usage.js';
 import {
     bucketForPath, isR2Path, MEDIA_BUCKET, MAX_REMOVE_PER_REQUEST, objectPathFor, PRIVATE_MEDIA_BUCKET, R2_BUCKET_TOKEN, R2_PATH_PREFIX, r2KeyOf, StorageApiError,
@@ -139,6 +140,19 @@ export interface MediaStore {
      * holds the bytes. Takes the origin because the caller decides which one is public.
      */
     publicUrl(id: string, origin: string): string;
+    /**
+     * Where `client` may fetch this PUBLIC file directly instead of through this app (a signed Cloudflare R2 link), or null to serve it here as always:
+     * not an R2 row, private, missing, or a client the owner's `storage.r2_direct` keeps on our URL. `servedType` maps the stored type to the one the
+     * answer must carry (the route's allowlist).
+     */
+    directUrl?(id: string, client: MediaClient, servedType: (mimeType: string) => string): Promise<string | null>;
+}
+
+/** Whether `storage.r2_direct` sends this client straight to R2. TikTok never: it pulls only from the prefix verified in its portal. */
+export function directAllowed(mode: MediaDirectMode, client: MediaClient): boolean {
+    if (mode === 'off' || client === 'tiktok') return false;
+    if (client === 'dashboard' || client === 'browser' || client === 'script') return true;
+    return mode === 'all';
 }
 
 /**
@@ -332,6 +346,8 @@ export interface ObjectStoreOptions {
      * Supabase). Defaults to Supabase when it is given, else R2. `null`: nowhere here, so `put` stays in Postgres while this store still reads both.
      */
     writesTo?: 'supabase' | 'r2' | null;
+    /** Who is sent straight to R2 for an R2 file (`storage.r2_direct`). Default `apps`. */
+    direct?: MediaDirectMode;
 }
 
 /** Where new uploads go, from what the owner chose and what is configured. Pure, so the rule is testable. */
@@ -353,6 +369,7 @@ export class ObjectMediaStore implements MediaStore {
     private readonly supabase: { client: SupabaseStorageClient; privateClient: SupabaseStorageClient } | null;
     private readonly r2: ObjectStorageClient | null;
     readonly writesTo: 'supabase' | 'r2' | null;
+    readonly direct: MediaDirectMode;
     private readonly postgres = new PostgresMediaStore();
     /** Checked once per instance, and instances are kept per config (`getMediaStore`). */
     private bucketReady: Promise<unknown> | null = null;
@@ -368,6 +385,7 @@ export class ObjectMediaStore implements MediaStore {
         const wanted = options.writesTo === undefined ? (this.supabase ? 'supabase' : this.r2 ? 'r2' : null) : options.writesTo;
         // A write target that is not configured here is nowhere: never a silent switch of backend.
         this.writesTo = (wanted === 'supabase' && this.supabase) || (wanted === 'r2' && this.r2) ? wanted : null;
+        this.direct = options.direct ?? DEFAULT_MEDIA_DIRECT;
     }
 
     /** Whether this store can read and write that backend. */
@@ -571,6 +589,13 @@ export class ObjectMediaStore implements MediaStore {
     publicUrl(id: string, origin: string): string {
         return uploadsUrl(id, origin);
     }
+
+    async directUrl(id: string, client: MediaClient, servedType: (mimeType: string) => string): Promise<string | null> {
+        if (!this.r2?.createSignedDownloadUrl || !directAllowed(this.direct, client)) return null;
+        const row = await locate(id, 'storage');
+        if (!row || !mayRead(row, undefined) || !row.storage_path || !isR2Path(row.storage_path)) return null;
+        return this.r2.createSignedDownloadUrl(r2KeyOf(row.storage_path), { contentType: servedType(row.mime_type) });
+    }
 }
 
 /** A store with Supabase Storage only, as there was before R2: what a test or a script builds from one config. */
@@ -637,12 +662,12 @@ let storeOverride: MediaStore | null = null;
  */
 export async function getMediaStore(): Promise<MediaStore> {
     if (storeOverride) return storeOverride;
-    const { supabase, r2, choice } = await getMediaConfigs();
+    const { supabase, r2, choice, direct } = await getMediaConfigs();
     if (!supabase && !r2) return postgresStore;
     const writesTo = resolveWriteTarget(choice, Boolean(supabase), Boolean(r2));
-    const signature = JSON.stringify([supabase?.url, supabase?.key, r2?.accountId, r2?.bucket, r2?.accessKeyId, r2?.secretAccessKey, writesTo]);
+    const signature = JSON.stringify([supabase?.url, supabase?.key, r2?.accountId, r2?.bucket, r2?.accessKeyId, r2?.secretAccessKey, writesTo, direct]);
     if (!objectStore || objectStore.signature !== signature) {
-        objectStore = { signature, store: new ObjectMediaStore({ supabase, r2, writesTo }) };
+        objectStore = { signature, store: new ObjectMediaStore({ supabase, r2, writesTo, direct }) };
     }
     return objectStore.store;
 }
@@ -891,6 +916,8 @@ export interface MediaStorageStatus {
         summary: R2UsageSummary | null;
         summaryError?: string;
         copy: R2CopyStatus | null;
+        /** Who is sent straight to R2 for a file (`storage.r2_direct`). */
+        direct: MediaDirectMode;
         /**
          * The bucket's CORS rules, which only the browser's direct upload of ad media needs. `status` is what the last save learned (`refused`: the token may not set
          * them, so the owner pastes `policy` in Cloudflare: R2 → the bucket → Settings → CORS Policy). `policy` is null when the app has no public address yet.
@@ -965,6 +992,7 @@ export async function describeMediaStorage(options: { origin?: string | null } =
             summary,
             ...(summaryError ? { summaryError } : {}),
             copy,
+            direct: configs.direct,
             cors: {
                 status: corsSaved === 'ok' || corsSaved === 'set' || corsSaved === 'refused' ? corsSaved : null,
                 origin: publicBase,

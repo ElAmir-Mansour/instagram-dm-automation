@@ -279,6 +279,7 @@ const API = {
     removeMediaStorage: () => API.request('/admin/media-storage', { method: 'DELETE' }),
     // Cloudflare R2 (src/services/r2Storage.ts): where new uploads go, the keys (the secret is only ever sent, never read back), the owner's lower limits, the copy.
     setMediaBackend: (backend) => API.request('/admin/media-storage/backend', { method: 'PUT', body: JSON.stringify({ backend }) }),
+    setMediaDirect: (mode) => API.request('/admin/media-storage/direct', { method: 'PUT', body: JSON.stringify({ mode }) }),
     saveR2Storage: (data) => API.request('/admin/media-storage/r2', { method: 'PUT', body: JSON.stringify(data) }),
     removeR2Storage: () => API.request('/admin/media-storage/r2', { method: 'DELETE' }),
     saveR2Limits: (data) => API.request('/admin/media-storage/r2-limits', { method: 'PUT', body: JSON.stringify(data) }),

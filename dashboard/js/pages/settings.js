@@ -2214,6 +2214,28 @@ const SettingsPage = {
                 ${radio('r2', 'settings.media.backend.r2', false)}
                 <p class="form-hint">${t('settings.media.backend.hint')}</p>
             </fieldset>
+            ${this.mediaDirectChoice(r2.direct || 'apps')}
+        `;
+    },
+
+    /** Who downloads R2 files straight from Cloudflare (`storage.r2_direct`), which keeps the bytes off Vercel's monthly transfer allowance. */
+    mediaDirectChoice(now) {
+        const labels = { apps: t('settings.media.direct.apps'), all: t('settings.media.direct.all'), off: t('settings.media.direct.off') };
+        const radio = (value) => html`
+            <label class="check-row" for="media-direct-${value}">
+                <input type="radio" name="media-direct" id="media-direct-${value}" value="${value}" data-change="settings:setMediaDirect"
+                       ${now === value ? html.raw('checked') : ''}>
+                <span class="check-label">${labels[value]}</span>
+            </label>
+        `;
+        return html`
+            <fieldset class="settings-block mbe-4">
+                <legend class="form-label">${t('settings.media.direct.title')}</legend>
+                ${radio('apps')}
+                ${radio('all')}
+                ${radio('off')}
+                <p class="form-hint">${t('settings.media.direct.hint')}</p>
+            </fieldset>
         `;
     },
 
@@ -2357,6 +2379,18 @@ const SettingsPage = {
                 ${canCopy ? UI.button({ variant: 'secondary', size: 'sm', icon: 'copy', label: t('settings.media.r2.copyButton'), action: 'settings:copyToR2', id: 'r2-copy-start', disabled: !!(copy && copy.active) }) : html`<p class="form-hint">${t('settings.media.r2.copyNeedsSupabase')}</p>`}
             </div>
         `;
+    },
+
+    async setMediaDirect(input) {
+        if (!input || !input.checked) return;
+        try {
+            await API.setMediaDirect(input.value);
+            UI.toast(t('settings.media.direct.saved'), 'success');
+            await this.render();
+        } catch (err) {
+            UI.toast(err.message, 'error');
+            await this.render();
+        }
     },
 
     async setMediaBackend(input) {
@@ -4501,6 +4535,7 @@ UI.registerActions('settings', {
     readYouTubeJson: (el) => SettingsPage.readYouTubeJson(el),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
     setMediaBackend: (el) => SettingsPage.setMediaBackend(el),
+    setMediaDirect: (el) => SettingsPage.setMediaDirect(el),
     saveR2Storage: (el, e) => SettingsPage.saveR2Storage(el, e),
     saveR2Limits: (el, e) => SettingsPage.saveR2Limits(el, e),
     copyToR2: (el) => SettingsPage.copyToR2(el),

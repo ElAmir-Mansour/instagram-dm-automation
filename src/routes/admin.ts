@@ -57,7 +57,7 @@ import {
 import { sendError } from '../services/errorCodes.js';
 import { LegalSignoffError, listSignoffs, parseSignoffInput, recordSignoff, revokeSignoff } from '../services/ads/legalSignoff.js';
 import { syncLeadgenSubscription } from '../services/ads/leads.js';
-import { APP_SETTING_KEYS, describeGeminiKey, getMediaConfigs, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, r2FieldProblem, setSetting, DEFAULT_R2_BUCKET } from '../services/appSettings.js';
+import { APP_SETTING_KEYS, describeGeminiKey, getMediaConfigs, MEDIA_DIRECT_MODES, type MediaDirectMode, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, r2FieldProblem, setSetting, DEFAULT_R2_BUCKET } from '../services/appSettings.js';
 import { checkMediaStorage, checkR2Storage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { requestCopy } from '../services/r2Copy.js';
 import { checkLimitsInput, clearR2BannerCache } from '../services/r2Usage.js';
@@ -417,6 +417,25 @@ router.put('/media-storage', async (req, res) => {
         res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
     } catch (err) {
         failWith(res, err, 'admin.media_storage_save_failed', 'Failed to save the media storage settings.');
+    }
+});
+
+/**
+ * Who gets an R2 file straight from Cloudflare (`storage.r2_direct`): `off`, `apps` (dashboard, browsers, the Mac worker) or `all` (also Meta's and
+ * Google's fetchers). TikTok always gets our own URL. Saves Vercel's Fast Origin Transfer: R2's downloads are free (src/routes/api.ts `/uploads/:id`).
+ */
+router.put('/media-storage/direct', async (req, res) => {
+    const mode = req.body?.mode;
+    if (!MEDIA_DIRECT_MODES.includes(mode)) {
+        res.status(400).json({ error: 'mode must be "off", "apps" or "all".' });
+        return;
+    }
+    try {
+        await setSetting(APP_SETTING_KEYS.mediaDirect, mode as MediaDirectMode, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'direct', mode });
+        res.json(await describeMediaStorage({ origin: requestOrigin(req) }));
+    } catch (err) {
+        failWith(res, err, 'admin.media_direct_save_failed', 'Failed to save who downloads files straight from R2.');
     }
 });
 

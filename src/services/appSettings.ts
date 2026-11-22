@@ -140,6 +140,13 @@ export const APP_SETTING_KEYS = {
      * Every file keeps being served from where it lives, whatever this says (src/services/storage.ts: a row's `storage_path` names its store).
      */
     mediaBackend: 'storage.backend',
+    /**
+     * Who gets an R2 file straight from Cloudflare (a 302 to a signed R2 link valid a few hours) instead of through this app: `off`, `apps` (the dashboard,
+     * other browsers and the Mac worker: the default) or `all` (also Meta's and Google's fetchers). TikTok always gets the bytes from our own URL: it pulls
+     * only from the prefix verified in its portal. Bytes streamed through `/api/uploads` count toward Vercel's Fast Origin Transfer (10 GB a month on Hobby);
+     * R2's downloads are free (src/services/storage.ts `directUrl`).
+     */
+    mediaDirect: 'storage.r2_direct',
     /** Cloudflare R2 (S3-compatible, free downloads): the account id from the R2 overview page, the bucket, and an API token's key pair. */
     r2AccountId: 'storage.r2_account_id',
     r2Bucket: 'storage.r2_bucket',
@@ -736,11 +743,21 @@ export async function getMediaBackendChoice(): Promise<'supabase' | 'r2' | null>
     return raw === 'supabase' || raw === 'r2' ? raw : null;
 }
 
+/** Who is sent straight to R2 for a file (`storage.r2_direct`). */
+export type MediaDirectMode = 'off' | 'apps' | 'all';
+export const MEDIA_DIRECT_MODES: readonly MediaDirectMode[] = ['off', 'apps', 'all'];
+export const DEFAULT_MEDIA_DIRECT: MediaDirectMode = 'apps';
+export function parseMediaDirect(raw: string | null | undefined): MediaDirectMode {
+    return raw === 'off' || raw === 'apps' || raw === 'all' ? raw : DEFAULT_MEDIA_DIRECT;
+}
+
 export interface MediaConfigs {
     supabase: MediaStorageConfig | null;
     r2: R2Config | null;
     /** What the owner chose for new uploads, or null. */
     choice: 'supabase' | 'r2' | null;
+    /** Who is sent straight to R2 for an R2 file. */
+    direct: MediaDirectMode;
 }
 
 /**
@@ -749,7 +766,7 @@ export interface MediaConfigs {
  */
 export async function getMediaConfigs(): Promise<MediaConfigs> {
     const K = APP_SETTING_KEYS;
-    const v = await getSettings([K.mediaStorageUrl, K.mediaStorageKey, K.r2AccountId, K.r2Bucket, K.r2AccessKeyId, K.r2SecretAccessKey, K.mediaBackend]);
+    const v = await getSettings([K.mediaStorageUrl, K.mediaStorageKey, K.r2AccountId, K.r2Bucket, K.r2AccessKeyId, K.r2SecretAccessKey, K.mediaBackend, K.mediaDirect]);
     const dbUrl = v.get(K.mediaStorageUrl) ?? null;
     const dbKey = v.get(K.mediaStorageKey) ?? null;
     const rawUrl = dbUrl ?? (process.env.SUPABASE_URL?.trim() || null);
@@ -767,7 +784,7 @@ export async function getMediaConfigs(): Promise<MediaConfigs> {
         ? { accountId: accountId.toLowerCase(), bucket, accessKeyId, secretAccessKey }
         : null;
     const raw = v.get(K.mediaBackend);
-    return { supabase, r2, choice: raw === 'supabase' || raw === 'r2' ? raw : null };
+    return { supabase, r2, choice: raw === 'supabase' || raw === 'r2' ? raw : null, direct: parseMediaDirect(v.get(K.mediaDirect)) };
 }
 
 /**

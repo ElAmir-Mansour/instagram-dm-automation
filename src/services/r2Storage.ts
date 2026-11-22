@@ -25,6 +25,8 @@ import {
     type BucketInfo, type ObjectStorageClient, type ObjectStream, type SignedUpload, type StorageFetch,
 } from './supabaseStorage.js';
 
+/** How long a signed download link works: long enough for Meta to fetch a reel well after the post asks it to, short enough that a copied link dies. */
+export const SIGNED_DOWNLOAD_TTL_S = 6 * 3600;
 export const R2_REGION = 'auto';
 const JSON_TIMEOUT_MS = 10_000;
 const TRANSFER_TIMEOUT_MS = 120_000;
@@ -278,6 +280,23 @@ export class R2StorageClient implements ObjectStorageClient {
             headers: { 'content-type': contentType },
             expiresAt: new Date(now.getTime() + SIGNED_UPLOAD_TTL_MS).toISOString(),
         };
+    }
+
+    /**
+     * A presigned GET of `path`, so the client downloads it from Cloudflare (free) instead of through this app (Vercel's Fast Origin Transfer). Counted
+     * as one Class B when signed: the GET itself, and any further ranged GETs on the same link, are made by the client and never pass here, so a
+     * player asking in pieces is counted once. `contentType` is forced on the answer (`response-content-type`, signed), whatever the object was stored
+     * as. Nothing is sent to Cloudflare here.
+     */
+    async createSignedDownloadUrl(path: string, options: { contentType: string; expiresSeconds?: number }): Promise<string> {
+        await this.guard.reserve('B');
+        const full = this.pathOf(path);
+        const query = presignQuery({
+            ...this.creds, region: R2_REGION, service: 's3', method: 'GET', path: full, host: this.host, now: this.now(),
+            expiresSeconds: options.expiresSeconds ?? SIGNED_DOWNLOAD_TTL_S,
+            query: { 'response-content-type': options.contentType },
+        });
+        return `https://${this.host}${encodePath(full)}?${query}`;
     }
 
     /** HeadObject (Class B): what is stored at `path`, or null when nothing is. */

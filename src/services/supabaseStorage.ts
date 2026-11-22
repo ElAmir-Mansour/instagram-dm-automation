@@ -295,6 +295,8 @@ export interface ObjectStorageClient {
     download(path: string): Promise<Buffer | null>;
     openStream(path: string, range?: { start: number; end: number }): Promise<ObjectStream | null>;
     remove(paths: readonly string[]): Promise<number>;
+    /** A link the client downloads `path` from directly. Only Cloudflare R2 has one (free downloads); Supabase's egress is what got it blocked. */
+    createSignedDownloadUrl?(path: string, options: { contentType: string; expiresSeconds?: number }): Promise<string>;
 }
 
 export class SupabaseStorageClient implements ObjectStorageClient {

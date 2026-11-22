@@ -8,7 +8,7 @@ import { Writable } from 'node:stream';
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { setLogSink } from '../utils/log.js';
 import { R2UsageGuard, setR2Guard, type R2Guard } from '../services/r2Usage.js';
-import { CREATOR, FakeDb, FakeStores } from '../services/r2TestKit.js';
+import { CREATOR, FakeDb, FakeStores, R2_BUCKET, R2_HOST } from '../services/r2TestKit.js';
 import { getMediaStore } from '../services/storage.js';
 import apiRouter from './api.js';
 
@@ -81,6 +81,66 @@ async function serve(headers: Record<string, string> = {}, method = 'GET'): Prom
     await routeHandler('/uploads/:id', 'get')({ method, params: { id: ID }, headers }, res);
     return res;
 }
+
+const DASHBOARD = { referer: 'https://msg-response-auto.vercel.app/dashboard', host: 'msg-response-auto.vercel.app', 'user-agent': 'Mozilla/5.0' };
+const META = { 'user-agent': 'facebookexternalhit/1.1' };
+const TIKTOK = { 'user-agent': 'TikTok-Fetcher/1.0' };
+
+async function serveId(id: string, headers: Record<string, string>, method = 'GET'): Promise<FakeResponse> {
+    const res = new FakeResponse();
+    await routeHandler('/uploads/:id', 'get')({ method, params: { id }, headers }, res);
+    return res;
+}
+
+describe('GET /uploads/:id sends allowed clients straight to R2 (storage.r2_direct)', () => {
+    it('by default (apps) redirects the dashboard to a signed R2 GET with the served type, not cached, and streams nothing', async () => {
+        const res = await serve(DASHBOARD);
+        assert.equal(res.statusCode, 302);
+        const url = new URL(res.headers['location']!);
+        assert.equal(url.host, R2_HOST);
+        assert.equal(decodeURIComponent(url.pathname), `/${R2_BUCKET}/${CREATOR}/${ID}.mp4`);
+        assert.equal(url.searchParams.get('response-content-type'), 'video/mp4');
+        assert.equal(url.searchParams.get('X-Amz-Expires'), String(6 * 3600));
+        assert.match(url.searchParams.get('X-Amz-Signature')!, /^[0-9a-f]{64}$/);
+        assert.equal(res.headers['cache-control'], 'no-store');
+        assert.equal(stores.r2Calls().length, 0, 'nothing is fetched from R2 by the app');
+        assert.equal(db.counters('2026-11').b, 50, 'the signing reserves the read');
+        assert.equal(res.body().length, 0);
+    });
+
+    it('a type outside the allowlist is forced to an opaque download on the link too', async () => {
+        db.addMedia({ id: ID, storage_path: `r2:${CREATOR}/${ID}.mp4`, size_bytes: '10', mime_type: 'text/html' });
+        const res = await serve(DASHBOARD);
+        assert.equal(new URL(res.headers['location']!).searchParams.get('response-content-type'), 'application/octet-stream');
+    });
+
+    it('keeps Meta on our URL in apps mode, and redirects it in all mode', async () => {
+        assert.equal((await serve(META)).statusCode, 200);
+        db.set('storage.r2_direct', 'all');
+        assert.equal((await serve(META)).statusCode, 302);
+    });
+
+    it('never redirects TikTok, a <uuid>.jpg URL or a HEAD, even in all mode', async () => {
+        db.set('storage.r2_direct', 'all');
+        assert.equal((await serve(TIKTOK)).statusCode, 200);
+        assert.equal((await serveId(`${ID}.jpg`, DASHBOARD)).statusCode, 200);
+        assert.equal((await serve(DASHBOARD, 'HEAD')).statusCode, 200);
+    });
+
+    it('off streams everything through the app as before', async () => {
+        db.set('storage.r2_direct', 'off');
+        const res = await serve(DASHBOARD);
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body().toString(), '0123456789');
+    });
+
+    it('a Supabase row is never redirected', async () => {
+        db.addMedia({ id: ID, storage_path: `${CREATOR}/${ID}.mp4`, size_bytes: '10' });
+        stores.supabase.set(`media/${CREATOR}/${ID}.mp4`, { data: CONTENT, contentType: 'video/mp4' });
+        const res = await serve(DASHBOARD);
+        assert.notEqual(res.statusCode, 302);
+    });
+});
 
 describe('GET /uploads/:id for an R2 row', () => {
     it('streams it from R2 under our own URL, with the stored type, and counts one Class B', async () => {

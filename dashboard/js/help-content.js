@@ -5740,6 +5740,32 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'direct',
+                    title: { ar: 'التنزيل مباشرة من R2', en: 'Downloads straight from R2' },
+                    body: {
+                        ar: [
+                            'رابط كل ملف يبقى عنوان التطبيق نفسه. لكن الملف الذي يمر عبر التطبيق يُحسب من حصة Vercel المجانية للنقل (10 جيجابايت في الشهر)، وإذا انتهت يوقف Vercel المشروع. لذلك يرسل التطبيق من يطلب ملفًا في R2 إلى رابط مؤقت من Cloudflare، صالح بضع ساعات، فيُنزَّل الملف من R2 مجانًا.',
+                            'اختر في **الإعدادات** ← **المنصة** ← **تخزين الوسائط**، تحت **من يُنزِّل ملفات R2 مباشرة من Cloudflare**:',
+                            { ul: [
+                                '**هذه اللوحة والمتصفحات الأخرى وعامل الماك** (الافتراضي): معاينات الفيديو وما ينزّله العامل.',
+                                '**الجميع**: ومعهم Meta ويوتيوب حين يجلبون فيديو المنشور، وهو أكبر توفير.',
+                                '**لا أحد**: كل ملف يمر عبر التطبيق كما كان.',
+                            ] },
+                            'تيك توك يأخذ الملف دائمًا من عنوان التطبيق، لأنه لا يقبل إلا العنوان الموثَّق في بوابته. وملفات Supabase القديمة تمر عبر التطبيق كما كانت.',
+                        ],
+                        en: [
+                            'Every file’s link stays the app’s own address. But a file that passes through the app counts toward Vercel’s free transfer allowance (10 GB a month), and when it runs out Vercel pauses the project. So the app sends whoever asks for a file in R2 to a temporary Cloudflare link, valid a few hours, and the file downloads from R2 for free.',
+                            'Choose under Settings → **Platform** → **Media storage**, in **Who downloads R2 files straight from Cloudflare**:',
+                            { ul: [
+                                '**This dashboard, other browsers and the Mac worker** (the default): video previews and what the worker downloads.',
+                                '**Everyone**: Meta and YouTube too, when they fetch a post’s video. This saves the most.',
+                                '**Nobody**: every file passes through the app, as before.',
+                            ] },
+                            'TikTok always gets the file from the app’s address, because it accepts only the address verified in its portal. Old Supabase files still pass through the app.',
+                        ],
+                    },
+                },
+                {
                     id: 'limits',
                     title: { ar: 'الباقة المجانية وحدودك', en: 'The free tier and your limits' },
                     body: {

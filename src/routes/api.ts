@@ -1292,7 +1292,7 @@ router.get('/uploads/:id', async (req, res) => {
             const length = Number(res.getHeader?.('Content-Length'));
             log('info', 'media.served', {
                 media_id: id, status: res.statusCode, client: mediaClient(req.headers, req.headers?.host), ranged: Boolean(req.headers?.range),
-                sent_bytes: Number.isFinite(length) ? length : null, method: req.method,
+                sent_bytes: Number.isFinite(length) ? length : null, method: req.method, direct: res.statusCode === 302,
             });
         } catch {
             // a log line must never break an answer already sent
@@ -1309,6 +1309,21 @@ router.get('/uploads/:id', async (req, res) => {
         }
 
         const store = await getMediaStore();
+
+        // An R2 file goes to the client straight from Cloudflare when the owner's `storage.r2_direct` allows this client: a 302 to a signed link, so the
+        // bytes never pass through this function. Bytes streamed from here count toward Vercel's Fast Origin Transfer (10 GB a month on Hobby; 75% was
+        // used by 2026-11-20); R2's downloads are free. Never for `<uuid>.jpg` (TikTok's photo fetcher must get our verified prefix) or a HEAD (answered
+        // from the row, costing nothing). The link is not cached: it dies after a few hours.
+        if (req.method === 'GET' && store.directUrl && !/\.[a-z0-9]+$/i.test(String(req.params.id))) {
+            const direct = await store.directUrl(id, mediaClient(req.headers, req.headers?.host), (mime) => (SERVED_MIME_TYPES.has(mime) ? mime : 'application/octet-stream'));
+            if (direct) {
+                res.setHeader('Cache-Control', 'no-store');
+                res.setHeader('Location', direct);
+                res.status(302).end();
+                return;
+            }
+        }
+
         const media = await store.open(id, { headOnly: req.method === 'HEAD', range: req.headers?.range });
 
         if (!media) {
