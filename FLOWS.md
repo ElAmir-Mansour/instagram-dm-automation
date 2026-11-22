@@ -1544,7 +1544,15 @@ gives (R2 has ONE private bucket, so a customer's file is `r2:private/<creator>/
 builds one `ObjectMediaStore` from both configs and the owner's choice (`storage.backend`, `resolveWriteTarget`): the choice only decides
 where NEW uploads go, and every read goes by the row's own path. A row whose backend is not configured here is a 503
 (`MediaStorageUnavailableError`), never a read from the other store. The URL is `/api/uploads/<id>` either way: R2's own address is never
-handed out (the bucket is private).
+handed out as a lasting link (the bucket is private).
+
+- **Direct downloads** (`storage.r2_direct`, 2026-11-22): a GET of an R2 row from a client the owner's mode allows is a **302 to a presigned R2
+  GET** (6 h, `response-content-type` signed to the route's allowlisted type, `Cache-Control: no-store`), so the bytes skip Vercel's Fast Origin
+  Transfer (10 GB a month on Hobby; 75% used by 2026-11-20). `apps` (default): dashboard, browsers, scripts (the Mac worker); `all`: also Meta,
+  Google and an unknown agent; `off`: nobody. TikTok and `<uuid>.jpg` are never redirected (TikTok pulls only from the verified prefix), nor HEAD.
+  The signing counts one Class B; the client's own GETs on that link are not seen, so a player asking in pieces is counted once. `media.served`
+  logs `direct: true` with status 302. Code: `directAllowed` / `ObjectMediaStore.directUrl` (`src/services/storage.ts`),
+  `R2StorageClient.createSignedDownloadUrl`, the route in `src/routes/api.ts`, `PUT /api/admin/media-storage/direct`.
 
 - **Why**: Supabase's free plan answers `exceed_cached_egress_quota` once its download allowance is gone, and then refuses every read (the
   route's 502). R2 has free downloads and a free tier of 10 GB, 1,000,000 Class A and 10,000,000 Class B operations a month.

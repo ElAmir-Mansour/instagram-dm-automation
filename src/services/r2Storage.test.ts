@@ -118,6 +118,18 @@ describe('requests', () => {
         assert.ok(!signed.url.includes(R2_SECRET));
     });
 
+    it('the presigned GET is valid 6 hours, forces the content type, signs only the host, and sends nothing', async () => {
+        const url = new URL(await client().createSignedDownloadUrl(KEY, { contentType: 'video/mp4' }));
+        assert.equal(url.host, R2_HOST);
+        assert.equal(decodeURIComponent(url.pathname), `/${R2_BUCKET}/${KEY}`);
+        assert.equal(url.searchParams.get('response-content-type'), 'video/mp4');
+        assert.equal(url.searchParams.get('X-Amz-Expires'), '21600');
+        assert.equal(url.searchParams.get('X-Amz-SignedHeaders'), 'host');
+        assert.match(url.searchParams.get('X-Amz-Signature')!, /^[0-9a-f]{64}$/);
+        assert.ok(!url.toString().includes(R2_SECRET));
+        assert.equal(stores.seen.length, 0);
+    });
+
     it('streams a range as 206 (partial) and a whole object as 200', async () => {
         await client().upload(KEY, Buffer.from('0123456789'), 'video/mp4');
         const part = await client().openStream(KEY, { start: 2, end: 5 });
