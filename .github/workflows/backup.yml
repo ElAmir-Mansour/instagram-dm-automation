@@ -1,0 +1,149 @@
+name: Nightly encrypted backup
+
+# ─── Why this exists ────────────────────────────────────────────────────────────────────────
+#
+# Supabase's free plan has no point-in-time recovery and no downloadable backups, and a free project pauses after about a week of
+# inactivity. Until this workflow the only copy of the database was the live one (RUNBOOK "Backups"). Recovery point: 24 hours.
+#
+# What it does, nightly: pg_dump (custom format, `public` schema) -> age encryption -> a PRIVATE Cloudflare R2 bucket through the S3 API,
+# 14 daily + 8 weekly copies kept. The plaintext dump is piped straight into `age` and NEVER touches the runner's disk, let alone leaves it.
+#
+# ─── Secrets (Settings -> Secrets and variables -> Actions) ──────────────────────────────────
+#
+#   BACKUP_DATABASE_URL       the SESSION pooler (aws-0-<region>.pooler.supabase.com, port 5432, user postgres.<ref>), NOT the transaction
+#                             pooler (6543): pg_dump needs session features the transaction pooler does not keep between statements.
+#                             Not the "Direct connection" either: on Supabase's free plan it is IPv6 only and GitHub's runners have no IPv6.
+#   BACKUP_AGE_RECIPIENT      the age PUBLIC key (age1...). A repository variable or a secret. The private key stays with the owner, off the
+#                             Mac's synced folders, and is only ever used by scripts/backup-restore-drill.mjs.
+#   R2_BACKUP_ACCOUNT_ID, R2_BACKUP_ACCESS_KEY_ID, R2_BACKUP_SECRET_ACCESS_KEY, R2_BACKUP_BUCKET
+#                             a token scoped to the one private bucket (Object Read & Write), never the public media bucket's token.
+#
+# With any of them missing the workflow SKIPS with a notice and does nothing else (a green run that says it skipped).
+#
+# ─── pg_dump version ────────────────────────────────────────────────────────────────────────
+#
+# pg_dump refuses a server newer than itself. Production runs PostgreSQL 17.6 (read-only `select version()` on 2026-11-27), and the runner's
+# default client is older, so the PGDG client 17 is installed. When Supabase moves the project to 18, change PG_MAJOR below FIRST.
+
+on:
+  schedule:
+    # 02:17 UTC nightly (an odd minute: GitHub is busiest on the hour). Delivery can be late; it is a backup, not a clock.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  PG_MAJOR: '17'
+  KEEP_DAILY: '14'
+  KEEP_WEEKLY: '8'
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check the secrets
+        id: gate
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT || secrets.BACKUP_AGE_RECIPIENT }}
+          R2_BACKUP_ACCOUNT_ID: ${{ secrets.R2_BACKUP_ACCOUNT_ID }}
+          R2_BACKUP_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          R2_BACKUP_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in BACKUP_DATABASE_URL BACKUP_AGE_RECIPIENT R2_BACKUP_ACCOUNT_ID R2_BACKUP_ACCESS_KEY_ID R2_BACKUP_SECRET_ACCESS_KEY R2_BACKUP_BUCKET; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=Backup skipped::Not set up yet, missing:$missing. See RUNBOOK.md, Backups."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$BACKUP_AGE_RECIPIENT" in
+            age1*) ;;
+            *) echo "::error title=Backup::BACKUP_AGE_RECIPIENT must be an age public key (age1...). Never put the private key here."; exit 1 ;;
+          esac
+          case "$BACKUP_DATABASE_URL" in
+            *:6543/*) echo "::error title=Backup::BACKUP_DATABASE_URL points at the transaction pooler (port 6543). Use the direct or session connection (port 5432)."; exit 1 ;;
+          esac
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install pg_dump and age
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "postgresql-client-${PG_MAJOR}" age
+          "/usr/lib/postgresql/${PG_MAJOR}/bin/pg_dump" --version
+          age --version
+
+      - name: Dump, encrypt, upload, prune
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT || secrets.BACKUP_AGE_RECIPIENT }}
+          R2_BACKUP_ACCOUNT_ID: ${{ secrets.R2_BACKUP_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          set -euo pipefail
+          set +x   # never trace: the environment holds the secrets
+          PG_DUMP="/usr/lib/postgresql/${PG_MAJOR}/bin/pg_dump"
+          ENDPOINT="https://${R2_BACKUP_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          S3="aws --endpoint-url ${ENDPOINT} s3"
+
+          day="$(date -u +%Y-%m-%d)"
+          week="$(date -u +%G-W%V)"
+          # RUNNER_TEMP is wiped with the runner; only the ENCRYPTED file is ever written there.
+          file="${RUNNER_TEMP}/backup-${day}.dump.age"
+
+          # Plaintext goes from pg_dump into age through a pipe: it is never written anywhere. pipefail makes a failed dump fail the step.
+          "$PG_DUMP" --format=custom --compress=6 --schema=public --no-owner --no-privileges --dbname="$BACKUP_DATABASE_URL" \
+            | age --recipient "$BACKUP_AGE_RECIPIENT" --output "$file"
+
+          size="$(stat -c %s "$file")"
+          if [ "$size" -lt 10240 ]; then
+            echo "::error title=Backup::The encrypted dump is only ${size} bytes: something is wrong, nothing was uploaded."
+            exit 1
+          fi
+          echo "Encrypted dump: ${size} bytes."
+
+          # One object a day (a re-run the same day replaces it), and a copy under weekly/ on Sundays (UTC).
+          $S3 cp "$file" "s3://${R2_BACKUP_BUCKET}/daily/${day}.dump.age" --only-show-errors
+          if [ "$(date -u +%u)" = "7" ]; then
+            $S3 cp "$file" "s3://${R2_BACKUP_BUCKET}/weekly/${week}.dump.age" --only-show-errors
+          fi
+
+          # Read it back: a listing that does not show the object means the run did not back anything up.
+          $S3 ls "s3://${R2_BACKUP_BUCKET}/daily/${day}.dump.age" | grep -q "${day}.dump.age"
+
+          # Retention by date prefix: names sort by date, so everything but the newest N goes. Only names of exactly our shape are touched.
+          prune() {
+            prefix="$1"; keep="$2"; pattern="$3"
+            keys="$($S3 ls "s3://${R2_BACKUP_BUCKET}/${prefix}/" | awk '{print $4}' | grep -E "$pattern" | sort || true)"
+            count="$(printf '%s\n' "$keys" | grep -c . || true)"
+            if [ "$count" -gt "$keep" ]; then
+              printf '%s\n' "$keys" | head -n "$((count - keep))" | while read -r key; do
+                $S3 rm "s3://${R2_BACKUP_BUCKET}/${prefix}/${key}" --only-show-errors
+                echo "Pruned ${prefix}/${key}"
+              done
+            fi
+          }
+          prune daily  "$KEEP_DAILY"  '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.dump\.age$'
+          prune weekly "$KEEP_WEEKLY" '^[0-9]{4}-W[0-9]{2}\.dump\.age$'
+          echo "Backup ${day} done."

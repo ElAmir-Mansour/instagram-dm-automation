@@ -105,6 +105,7 @@ const SettingsPage = {
         Object.freeze({ id: 'explainers', group: 'platform', who: 'admin', dom: 'settings-explainers', platform: true }),
         Object.freeze({ id: 'storage', group: 'platform', who: 'admin', dom: 'settings-media', platform: true }),
         Object.freeze({ id: 'site', group: 'platform', who: 'admin', dom: 'settings-site', platform: true }),
+        Object.freeze({ id: 'monitoring', group: 'platform', who: 'admin', dom: 'settings-monitoring', platform: true }),
         Object.freeze({ id: 'onboarding', group: 'platform', who: 'admin', dom: 'settings-onboarding', platform: true }),
     ]),
 
@@ -208,6 +209,7 @@ const SettingsPage = {
             media: null, mediaError: null, cleanup: null,
             site: null, siteError: null,
             notify: null, notifyError: null,
+            monitoring: null, monitoringError: null,
             youtube: null, youtubeError: null, youtubeApp: null, youtubeAppError: null,
             onboarding: null, onboardingError: null,
             // Explainers (v59): the platform admin's switch and the picture provider. A 404 here is a server that does not have the routes yet.
@@ -227,7 +229,7 @@ const SettingsPage = {
             // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev] = await Promise.allSettled([
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev, mon] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
@@ -259,6 +261,7 @@ const SettingsPage = {
             }) : Promise.resolve(null),
             App.isAdmin() ? API.getAdminExplainers() : Promise.resolve(null),
             App.isAdmin() ? API.getMetaWebhooks() : Promise.resolve(null),
+            App.isAdmin() ? API.getMonitoringSettings() : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -289,6 +292,7 @@ const SettingsPage = {
         if (ob.status === 'fulfilled') ctx.onboarding = ob.value; else ctx.onboardingError = ob.reason;
         if (ex.status === 'fulfilled') ctx.explainers = ex.value; else ctx.explainersError = ex.reason;
         if (mev.status === 'fulfilled') ctx.metaEvents = mev.value; else ctx.metaEventsError = mev.reason;
+        if (mon.status === 'fulfilled') ctx.monitoring = mon.value; else ctx.monitoringError = mon.reason;
         return ctx;
     },
 
@@ -399,6 +403,7 @@ const SettingsPage = {
             case 'explainers': return this.explainersSection(ctx);
             case 'storage': return this.mediaStorageSection(ctx.media, ctx.mediaError, ctx.cleanup);
             case 'site': return this.siteSection(ctx.site, ctx.siteError);
+            case 'monitoring': return this.monitoringSection(ctx.monitoring, ctx.monitoringError);
             case 'onboarding': return this.onboardingSection(ctx.onboarding, ctx.onboardingError);
             default: return '';
         }
@@ -2793,6 +2798,112 @@ const SettingsPage = {
         }
     },
 
+    // ─── Monitoring (platform admin): the dead-man ping URL ───────────────────────────────────────────────
+
+    monitoringSection(monitoring, error) {
+        if (error || !monitoring) {
+            if (!error) return '';
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.monitoring.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.monitoring.loadFailed', { message: error.message })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        const ping = monitoring.pingUrl || {};
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.monitoring.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.monitoring.intro')}</p>
+                    <div id="monitoring-settings-error"></div>
+                    <form id="monitoring-settings-form" data-submit="settings:saveMonitoring" novalidate>
+                        <div class="form-group">
+                            <!-- Never prefilled: the address is a secret and is never sent back. Blank means "keep what is saved". -->
+                            <label class="form-label" for="monitoring-ping">${t('settings.monitoring.pingUrl')}</label>
+                            <input class="field field-mono" id="monitoring-ping" name="pingUrl" type="password" dir="ltr" maxlength="300"
+                                   autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="https://hc-ping.com/…"
+                                   aria-describedby="monitoring-ping-hint">
+                            <p class="form-hint" id="monitoring-ping-hint">${ping.set
+                                ? (ping.last4 ? this.ltrIn('settings.monitoring.pingUrlSaved', { last4: ping.last4 }, 'last4') : t('settings.monitoring.pingUrlSavedShort'))
+                                : t('settings.monitoring.pingUrlNone')}</p>
+                        </div>
+                        <p class="form-hint">${t('settings.monitoring.hint')}</p>
+                        <div class="form-actions">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                                label: t('settings.monitoring.save'), id: 'monitoring-settings-submit',
+                            })}
+                            ${ping.set ? UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'trash-2',
+                                label: t('settings.monitoring.remove'), action: 'settings:removeMonitoringPing', id: 'monitoring-remove-ping',
+                            }) : ''}
+                        </div>
+                    </form>
+                </div>
+            </section>
+        `;
+    },
+
+    showMonitoringError(field, message) {
+        const host = document.getElementById('monitoring-settings-error');
+        const form = document.getElementById('monitoring-settings-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'monitoring-settings-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field === 'pingUrl' ? document.getElementById('monitoring-ping') : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    async saveMonitoring(form, event) {
+        event.preventDefault();
+        const pingUrl = ((new FormData(form)).get('pingUrl') || '').toString().trim();
+        const host = document.getElementById('monitoring-settings-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+        // A blank field is "keep it": the saved address is never sent back to this page, so it cannot be re-sent.
+        if (!pingUrl) return;
+        // Checked here first so the answer is on the field; the server checks again and has the last word.
+        if (!/^https:\/\/[^\s/]+\S*$/i.test(pingUrl)) { this.showMonitoringError('pingUrl', t('settings.monitoring.invalid.pingUrl')); return; }
+        await this.sendMonitoring(form, pingUrl, 'settings.monitoring.saved');
+    },
+
+    /** Removing the address is one click: it only stops a ping, and saving a new one brings it back. */
+    async removeMonitoringPing(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        try {
+            await this.sendMonitoring(null, '', 'settings.monitoring.removed');
+        } finally {
+            restore();
+        }
+    },
+
+    async sendMonitoring(form, pingUrl, toastKey) {
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = form ? UI.formBusy(form, t('common.saving')) : () => {};
+        if (form && !restore) return;
+        try {
+            await API.saveMonitoringSettings({ pingUrl });
+            UI.toast(t(toastKey), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            const field = err && err.body && err.body.field;
+            this.showMonitoringError(field, field === 'pingUrl' ? t('settings.monitoring.invalid.pingUrl') : ((err && err.message) || t('error.unexpected')));
+        }
+    },
+
     // ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────────────
 
     /** The field each input maps to, for marking the one a refusal names. */
@@ -4549,6 +4660,8 @@ UI.registerActions('settings', {
     previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
     saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
     saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
+    saveMonitoring: (el, e) => SettingsPage.saveMonitoring(el, e),
+    removeMonitoringPing: (el) => SettingsPage.removeMonitoringPing(el),
     saveAds: (el, e) => SettingsPage.saveAds(el, e),
     clearAdsToken: (el) => SettingsPage.clearAdsToken(el),
     testAdsConnection: (el) => SettingsPage.testAdsConnection(el),

@@ -312,6 +312,17 @@ export const APP_SETTING_KEYS = {
      * characters. Platform-wide, because the provider account is the owner's. Edited by a platform admin (`PUT /api/admin/explainers/provider`).
      */
     explainersImageProvider: 'explainers.image_provider',
+    /**
+     * The URL of a free dead-man check (Healthchecks.io or alike): the drain GETs it at most once every 5 minutes after a good run
+     * (`src/services/monitoring.ts`), so a silent worker or a dead deployment makes the check late and the service emails the owner. A
+     * SECRET: Healthchecks' ping URLs carry the check's id and anyone holding one can ping it. Encrypted; every answer is `{ set, last4 }`.
+     * Unset means no ping. Platform admin, Settings → Platform → Monitoring.
+     */
+    monitoringPingUrl: 'monitoring.ping_url',
+    /** When the drain last ran, written at most once a minute: the row's `updated_at` IS the heartbeat (`/health` reads its age). Not a secret. */
+    opsDrainHeartbeat: 'ops.drain_heartbeat',
+    /** When the dead-man ping was last attempted (its `updated_at`), so one ping goes out per 5 minutes across every instance. Not a secret. */
+    opsPingLast: 'ops.ping_last',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -409,6 +420,7 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.aiProviderKeyCustom,
     APP_SETTING_KEYS.notifyTelegramBotToken,
     APP_SETTING_KEYS.notifyEmailApiKey,
+    APP_SETTING_KEYS.monitoringPingUrl,
 ]);
 
 export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {

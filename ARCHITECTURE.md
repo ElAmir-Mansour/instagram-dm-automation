@@ -487,7 +487,8 @@ about the system, and the gap above is still open.
 **There is no health signal for "the pipeline is working".** Every alert above is
 failure-triggered, and the defining characteristic of this system's worst failures is silence.
 A comment matching no campaign writes no row; a webhook that stops arriving writes nothing at
-all. `GET /health` still checks the database and nothing else (`SELECT NOW()`). The closest things are run by hand:
+all. `GET /health` (since 2026-11-27) reports the database and whether the queue is moving, and answers 503 when it is stuck, but it cannot see a
+webhook that stopped arriving: `webhook_fresh` is informational. See RUNBOOK §18. The closest things to a pipeline check are run by hand:
 `scripts/diagnose.mjs`, and the admin Tenants screen's last-webhook column.
 
 The fix is a liveness metric, not a log: last successful `comment.matched` / `dm.sent`
