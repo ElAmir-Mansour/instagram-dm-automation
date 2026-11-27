@@ -276,7 +276,11 @@ const App = {
     },
 
     title(page) { return t(`nav.${page}`); },
-    subtitle(page) { return t(`page.${page}.subtitle`); },
+    subtitle(page) {
+        // Settings (U3): the owner's sentence names the team; anyone else gets one that names no role.
+        if (page === 'settings' && !this.canAdminister()) return t('page.settings.subtitleMember');
+        return t(`page.${page}.subtitle`);
+    },
 
     /** The entry named `name`, or null. Own keys only: an address is data, and `#/constructor` is not a page. */
     entryOf(name) {
@@ -957,15 +961,12 @@ const App = {
         }
         const pw = document.getElementById('login-password');
         if (pw) pw.value = '';
-        // The one-field form (the shared password, the operator's only way in) unless an address was remembered: somebody
-        // who set a password from an invite link, or signed in with an account, comes back to the email field already filled.
-        const remembered = this.rememberedEmail();
+        // The form opens on EMAIL (U3, SA-06): most people who sign in have an account of their own. The shared platform password is one link
+        // below, and the browser remembers which one this person used last (`login_mode`), so the owner clicks it once. An address remembered
+        // from the last account sign-in is filled in.
         const email = document.getElementById('login-email');
-        if (email) email.value = remembered;
-        const group = document.getElementById('login-email-group');
-        if (group) group.classList.toggle('hidden', !remembered);
-        const toggle = document.getElementById('login-email-toggle');
-        if (toggle) toggle.classList.toggle('hidden', !!remembered);
+        if (email) email.value = this.rememberedEmail();
+        this.applyLoginMode(this.loginMode());
         const keep = document.getElementById('login-keep');
         if (keep) keep.checked = false;
     },
@@ -973,6 +974,43 @@ const App = {
     // ─── Remembering who signed in last ──────────────────────────────────────
 
     EMAIL_KEY: 'login_email',
+
+    /** Which form the sign-in opens on: `email` (the default) or `platform` (the shared dashboard password). Remembered per browser. */
+    LOGIN_MODE_KEY: 'login_mode',
+
+    loginMode() {
+        try {
+            return localStorage.getItem(this.LOGIN_MODE_KEY) === 'platform' ? 'platform' : 'email';
+        } catch {
+            return 'email';
+        }
+    },
+
+    rememberLoginMode(mode) {
+        try {
+            localStorage.setItem(this.LOGIN_MODE_KEY, mode === 'platform' ? 'platform' : 'email');
+        } catch { /* private mode: the form simply opens on email, as it does for everyone else */ }
+    },
+
+    /**
+     * Show the sign-in as `email` (an address and a password) or `platform` (the shared password alone, exactly the one-field form it always was).
+     * The email field is `required` only while it is showing, and the way to the other form is the one link that is not the current one.
+     */
+    applyLoginMode(mode) {
+        const platform = mode === 'platform';
+        const group = document.getElementById('login-email-group');
+        if (group) group.classList.toggle('hidden', platform);
+        const email = document.getElementById('login-email');
+        if (email) email.required = !platform;
+        const toggle = document.getElementById('login-email-toggle');
+        if (toggle) toggle.classList.toggle('hidden', !platform);
+        const label = document.getElementById('login-password-label');
+        if (label) {
+            const key = platform ? 'login.sharedPassword' : 'login.password';
+            label.textContent = t(key);
+            if (typeof label.setAttribute === 'function') label.setAttribute('data-i18n', key);
+        }
+    },
 
     rememberedEmail() {
         try {
@@ -1697,17 +1735,31 @@ const App = {
     },
 
     /**
-     * Hidden entirely below two tenants — a dropdown with one option is noise,
-     * and for the single-tenant operator this whole feature should be invisible.
+     * The workspace chip (U3, WA-3). Two or more workspaces: the switcher, as it always was. ONE workspace: a static chip with its name and no
+     * `<select>` (a dropdown with one option is noise, but company staff should always see which workspace they are in). None: hidden.
      */
     renderTenantSwitcher() {
         const wrap = document.getElementById('tenant-switcher');
         if (!wrap) return;
 
         const tenants = (this.session && this.session.tenants) || [];
-        if (!this.session || !this.session.available || tenants.length < 2 || this.needsSetup()) {
+        if (!this.session || !this.session.available || tenants.length < 1 || this.needsSetup()) {
             wrap.classList.add('hidden');
             wrap.innerHTML = '';
+            return;
+        }
+        if (tenants.length === 1) {
+            const only = tenants[0];
+            const name = String((only && (only.name || only.id)) || '');
+            const initial = (Array.from(name.trim())[0] || '?').toUpperCase();
+            wrap.setAttribute('title', name);
+            wrap.innerHTML = esc(html`
+                <i data-lucide="building-2" aria-hidden="true"></i>
+                <span class="chip-initial" aria-hidden="true">${initial}</span>
+                <span class="tenant-chip-name" dir="auto"><span class="sr-only">${t('app.tenant')}: </span>${name}</span>
+            `);
+            wrap.classList.remove('hidden');
+            UI.icons(wrap);
             return;
         }
 
@@ -2356,6 +2408,11 @@ const App = {
         }
     },
 
+    /** "Your settings" in the account area: the You tab, which holds language and theme, your password and sign out everywhere. */
+    openYourSettings() {
+        location.hash = this.route('settings', { s: 'you' });
+    },
+
     // ─── Your own password ───────────────────────────────────────────────────
     /**
      * `POST /api/auth/password` needs a user identity. The shared dashboard
@@ -2517,30 +2574,29 @@ UI.registerActions('app', {
         App.setTheme(el.value);
     },
     /**
-     * The email field is hidden behind an affordance so the shared-password
-     * path — still the operator's only way in — stays a one-field form.
+     * The way back to the email form: from the shared-password form, whose link this is. The choice is remembered.
      */
-    revealEmailField(el) {
-        const group = document.getElementById('login-email-group');
-        if (!group) return;
-        group.classList.remove('hidden');
-        el.classList.add('hidden');
+    revealEmailField() {
+        App.rememberLoginMode('email');
+        App.applyLoginMode('email');
         const input = document.getElementById('login-email');
         if (input) input.focus();
     },
     /**
-     * Back to the one-field form: an address was remembered and the operator wants the shared password. An empty email
-     * is what makes the login send the body it always sent.
+     * The shared platform password: the one-field form, address cleared. An empty email is what makes the login send the body it always sent.
+     * The choice is remembered, so the owner who signs in this way opens on it next time.
      */
     useSharedPassword() {
-        const group = document.getElementById('login-email-group');
-        const toggle = document.getElementById('login-email-toggle');
         const email = document.getElementById('login-email');
         if (email) email.value = '';
-        if (group) group.classList.add('hidden');
-        if (toggle) toggle.classList.remove('hidden');
+        App.rememberLoginMode('platform');
+        App.applyLoginMode('platform');
         const pw = document.getElementById('login-password');
         if (pw) pw.focus();
+    },
+    /** The account area's "Your settings": the You tab of Settings (U3). */
+    openYourSettings() {
+        App.openYourSettings();
     },
 });
 

@@ -718,7 +718,9 @@ describe('Help Center — the DM assistant', () => {
         assert.deepEqual([ICE_BREAKER_MAX, ICE_BREAKER_QUESTION_MAX, MENU_ITEMS_MAX, MENU_TITLE_MAX], [4, 80, 5, 30]);
         const route = readFileSync('src/routes/iceBreakers.ts', 'utf8');
         assert.match(route, /const canAdminister = requireTenantRole\('owner'\);/, 'every route is the owner\'s');
-        assert.match(readFileSync('dashboard/js/pages/settings.js', 'utf8'), /id: 'iceb', group: 'messages', who: 'owner'/, 'and the card is the owner\'s, under Messages & alerts');
+        const ai = readFileSync('dashboard/js/pages/ai_settings.js', 'utf8');
+        assert.match(ai, /canEditIceBreakers\(\) \{\s*const owner = [^;]*App\.canAdminister\(\);\s*return owner && this\.moduleOn\('dm_assistant'\);/, 'and the card is the owner\'s, on the DM assistant page');
+        assert.doesNotMatch(readFileSync('dashboard/js/pages/settings.js', 'utf8'), /id: 'iceb', group:/, 'no longer a Settings card (U3)');
         for (const lang of LANGS) {
             const steps = listOf('dm-assistant', 'ice-breakers', lang, 'ol') as string[];
             const asks = TAP_CODES.map((code) => bold(label(lang, `iceb.tap.${code}`)));
@@ -727,7 +729,7 @@ describe('Help Center — the DM assistant', () => {
             assert.deepEqual([...asks].sort((a, b) => at(a) - at(b)), asks, `${lang}: in the screen's order`);
             assert.ok(steps[0]!.includes(lang === 'en' ? `up to ${ICE_BREAKER_MAX} questions, each at most ${ICE_BREAKER_QUESTION_MAX} characters` : `حتى ${ICE_BREAKER_MAX} أسئلة، وطول كل سؤال ${ICE_BREAKER_QUESTION_MAX} حرفاً`), `${lang}: questions`);
             assert.ok(steps[2]!.includes(lang === 'en' ? `up to ${MENU_ITEMS_MAX} items, each title at most ${MENU_TITLE_MAX} characters` : `حتى ${MENU_ITEMS_MAX} عناصر، وعنوان كل عنصر ${MENU_TITLE_MAX} حرفاً`), `${lang}: menu`);
-            assert.ok(textOf('dm-assistant', 'ice-breakers', lang).includes(bold(label(lang, 'settings.group.messages'))), `${lang}: where to find it`);
+            assert.ok(textOf('dm-assistant', 'ice-breakers', lang).includes(bold(label(lang, 'nav.ai_settings'))), `${lang}: where to find it: the DM assistant page`);
         }
     });
 });

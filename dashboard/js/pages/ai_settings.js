@@ -67,6 +67,7 @@ const AiSettingsPage = {
         // changes page, and its one shared `beforeunload` asks it for a reload,
         // a closed tab and the language switch: this page binds no handler of its own.
         this.loadSettings();
+        this.mountIceBreakers();
     },
 
     /**
@@ -75,6 +76,8 @@ const AiSettingsPage = {
      * the two texts, the switch, the model, the temperature, the engine, the sales choice, the follow-up delay and the A/B wordings.
      */
     canLeave() {
+        if (typeof IceBreakersCard !== 'undefined' && IceBreakersCard.state && !IceBreakersCard.suggested && IceBreakersCard.dirty()
+            && typeof document !== 'undefined' && document.getElementById('iceb-card')) return false;
         return !this.hasUnsavedChanges() && !this.museDirty();
     },
 
@@ -86,6 +89,7 @@ const AiSettingsPage = {
 
     destroy() {
         this._seq++;
+        this._icebSeq++;
         // The library is asked for again on the next visit, and its poll stops with this page.
         this.museLibraryStop();
         // Navigation is already happening by the time this runs (the router has asked, if it was going to), so the honest
@@ -417,9 +421,77 @@ const AiSettingsPage = {
                     </div>
                 </section>
 
-                ${this.museShell()}
+                ${this.moduleOn('muse') ? this.museShell() : ''}
             </div>
+            ${this.canEditIceBreakers() ? html`<div class="mbs-5" id="iceb-host"></div>` : ''}
         `;
+    },
+
+    // ─── Instagram ice breakers (the workspace owner's): moved here from Settings (U3, SA-10) ───────────────
+
+    /** Is the workspace's module on? `App.hasModule` (the shell's) is fail-open itself; the `typeof` only keeps a page drawn where `App` is a bare stand-in. */
+    moduleOn(id) {
+        return typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule(id);
+    },
+
+    /**
+     * Ice breakers and the persistent menu are the OWNER's (`/api/dm/ice-breakers` answers an operator 403, reads included), and a part of the
+     * assistant: this page is the module's own (`dm_assistant`), so the card is here, after the Meta vision card, and not in Settings.
+     */
+    canEditIceBreakers() {
+        const owner = typeof App === 'undefined' || typeof App.canAdminister !== 'function' || App.canAdminister();
+        return owner && this.moduleOn('dm_assistant');
+    },
+
+    _icebSeq: 0,
+
+    /** The card's own error, drawn here (not by the module): a module that could not be fetched is the very case it is for. */
+    iceBreakersFailure(error) {
+        const message = (error && error.message) || t('iceb.moduleFailed');
+        return html`
+            <section class="section" id="iceb-card">
+                <h2 class="section-title">${t('iceb.title')}</h2>
+                <div class="settings-card surface">
+                    <div class="inline-error" role="alert">
+                        <i data-lucide="alert-circle" aria-hidden="true"></i>
+                        <div><strong dir="auto">${t('iceb.loadFailed', { message })}</strong></div>
+                    </div>
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'ai:mountIceBreakers' })}
+                </div>
+            </section>
+        `;
+    },
+
+    /** Fill the card's host: the module and the server's answer, each its own failure with a Retry. A deep link (`?card=iceb`, the old `?s=iceb`) lands on it. */
+    async mountIceBreakers() {
+        const host = document.getElementById('iceb-host');
+        if (!host || !this.canEditIceBreakers()) return;
+        const seq = ++this._icebSeq;
+        let data = null;
+        let card = null;
+        let failure = null;
+        try {
+            [data, card] = await Promise.all([API.getIceBreakers(), App.loadPageModule('ice_breakers')]);
+        } catch (err) {
+            failure = err;
+        }
+        if (seq !== this._icebSeq) return;
+        const here = document.getElementById('iceb-host');
+        if (!here) return;
+        here.innerHTML = esc(failure || !data || !card ? this.iceBreakersFailure(failure) : card.section(data));
+        UI.icons(here);
+        if (typeof App.hashParam === 'function' && App.hashParam('card') === 'iceb') this.revealIceBreakers();
+    },
+
+    revealIceBreakers() {
+        const el = document.getElementById('iceb-card');
+        if (!el) return;
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start', behavior: Motion.reduced() ? 'auto' : 'smooth' });
+        const title = typeof el.querySelector === 'function' ? el.querySelector('h2') : null;
+        if (title && typeof title.focus === 'function') {
+            if (typeof title.setAttribute === 'function') title.setAttribute('tabindex', '-1');
+            title.focus({ preventScroll: true });
+        }
     },
 
     async loadSettings() {
@@ -2410,6 +2482,7 @@ const AiSettingsPage = {
 };
 
 UI.registerActions('ai', {
+    mountIceBreakers: () => AiSettingsPage.mountIceBreakers(),
     saveSettings: (el, e) => AiSettingsPage.saveSettings(el, e),
     sendSandboxTest: (el, e) => AiSettingsPage.sendSandboxTest(el, e),
     updateTemperature: (el) => AiSettingsPage.updateTemperature(el.value),

@@ -947,17 +947,17 @@ describe('the WhatsApp card: the client, the registration, Settings, and a tenan
         assert.ok(existsSync('dashboard/js/pages/whatsapp_card.js'));
     });
 
-    it('Settings asks for the connection and loads the module for EVERY member, and draws the card right after YouTube', () => {
+    it('Settings asks for the connection and loads the module for EVERY member (while the workspace has the module), and draws the card right after YouTube', () => {
         const settings = readFileSync('dashboard/js/pages/settings.js', 'utf8');
-        assert.match(settings, /^\s+API\.getWhatsAppConnection\(\),$/m, 'not gated on the owner: a member reads');
-        assert.match(settings, /^\s+App\.loadPageModule\('whatsapp_card'\),$/m);
+        assert.match(settings, /^\s+on\('whatsapp'\) \? API\.getWhatsAppConnection\(\) : Promise\.resolve\(null\),$/m, 'not gated on the owner: a member reads; gated on the module (U3)');
+        assert.match(settings, /^\s+on\('whatsapp'\) \? App\.loadPageModule\('whatsapp_card'\) : Promise\.resolve\(null\),$/m);
         assert.match(settings, /case 'whatsapp': return this\.whatsappSection\(ctx\.whatsapp, ctx\.whatsappError\);/);
-        // Where it is drawn is the card map (UX US10): the Connections tab, YouTube then WhatsApp, for everyone; the admin cards are other tabs.
+        // Where it is drawn is the card map (UX US10, U3): the Channels tab, YouTube then WhatsApp, for everyone; the admin cards are other tabs.
         const cards = Array.from(load().Settings.CARDS as Array<{ id: string; group: string; who: string }>);
         const ids = cards.map((card) => card.id);
         assert.ok(ids.indexOf('youtube') >= 0 && ids.indexOf('whatsapp') === ids.indexOf('youtube') + 1, 'YouTube, then WhatsApp');
         const whatsapp = cards.find((card) => card.id === 'whatsapp')!;
-        assert.deepEqual({ group: whatsapp.group, who: whatsapp.who }, { group: 'connections', who: 'all' }, 'not gated on a role');
+        assert.deepEqual({ group: whatsapp.group, who: whatsapp.who }, { group: 'channels', who: 'all' }, 'not gated on a role');
         assert.ok(cards.filter((card) => card.group === 'platform').every((card) => card.who === 'admin'), 'the platform cards stay the admin\'s');
     });
 

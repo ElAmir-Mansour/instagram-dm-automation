@@ -63,7 +63,7 @@ shared with) the Meta business you use. The ad account needs a payment method (a
 5. **Token expiration:** **Never**.
 6. Tick the permissions: `ads_management`, `ads_read`, `business_management`, `pages_read_engagement`, `pages_manage_ads`.
 7. **Generate token**, copy it. Meta shows it once.
-8. In AutoReply: **Settings → Connections → Meta ads (Boost)** → paste into **System-user ads token** → enter the
+8. In AutoReply: **Settings → Channels → Meta ads (Boost)** → paste into **System-user ads token** → enter the
    **ad account ID** → **Save** (the token is encrypted before it is stored and is never returned by the API again).
 9. Press **Test connection**. The server (`POST /api/ads/settings/test`, 1 to 2 Meta calls) lists the scopes the token has and the
    ones it lacks, and the assigned ad accounts, Pages and Instagram accounts. Fix whatever is missing in Meta, then test again.
@@ -150,7 +150,7 @@ only code that reads each ad's delivery state from Meta, so one arrives within a
   sync sees no change. The `ads.sync_structure` log line carries `status_alerts`, how many a run raised.
 - The rule template is a separate way in: it judges what is rejected right now and sends a `rule_acted` alert, not these two kinds.
 
-Tenant side: **Settings → Connections → Meta ads (Boost) → Alert recipients** has the chat id, email, language, one toggle per kind and
+Tenant side: **Settings → Channels → Meta ads (Boost) → Alert recipients** has the chat id, email, language, one toggle per kind and
 **Send a test** (`POST /api/ads/settings/alerts` with `test: true`). To find a Telegram chat id: press Start on the
 alerts account, then message `@userinfobot`, which replies with the Id.
 
@@ -277,7 +277,7 @@ Scheduler (Posts) screen's **Boost** button → goal **Send messages** (the "qui
 
 ### Ads and the DM assistant (A3)
 
-How a click-to-message ad reaches the DM assistant, and the two switches under **Conversations from ads** (Settings → Connections →
+How a click-to-message ad reaches the DM assistant, and the two switches under **Conversations from ads** (Settings → Channels →
 Meta ads; both off by default, `src/services/ads/switches.ts`):
 
 - **Where the ad id arrives.** Instagram sends it on the first message; Messenger on the greeting or ice-breaker tap of a NEW

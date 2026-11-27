@@ -80,6 +80,8 @@ import { checkR2Warnings } from '../services/r2Usage.js';
 import { annotateMissingMedia, isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
+import { accountRouter } from './account.js';
+import { teamRouter } from './team.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
 import { whatsappRouter } from './whatsapp.js';
@@ -1751,12 +1753,8 @@ router.post('/auth/password', async (req, res) => {
         // than 404ing: on this deployment it is the *only* kind of session that exists, so
         // "not found" would read as a bug in the endpoint.
         if (!session.userId) {
-            res.status(400).json({
-                code: 'NO_USER_ACCOUNT',
-                error: 'This session was created with the shared dashboard password, which is not a user '
-                    + 'account and has no password to change here. Rotate DASHBOARD_PASSWORD in the '
-                    + 'environment, or create a user account and sign in with it.',
-            });
+            sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'This session was created with the shared dashboard password, which is not a user account '
+                + 'and has no password to change here. Rotate DASHBOARD_PASSWORD in the environment, or create a user account and sign in with it.');
             return;
         }
 
@@ -1845,6 +1843,9 @@ router.post('/auth/password', async (req, res) => {
     }
 });
 
+// Your own account (U3): sign out everywhere. Above resolveTenant, like /auth/password: it is about the person, and carries no workspace.
+router.use('/account', accountRouter);
+
 // ─── Everything below acts as exactly one tenant ────────────────────────────
 // resolveTenant pins it and enforces the membership check, so no route has to remember to.
 // `getTenantId(req)` throws rather than falling back to "the first active creator" — that
@@ -1878,6 +1879,9 @@ router.use('/growth', growthRouter);
 
 // The Creator Profile (FLOWS.md §4.7) — tenant-scoped. Any member reads it; only an owner changes it (the router carries the guard).
 router.use('/profile', profileRouter);
+
+// Team (U3, CO-2): the workspace owner's people: invite, change a role, remove, reset link. The owner's on every route, reads included (the router carries the guard).
+router.use('/team', teamRouter);
 
 // The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
 // POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.

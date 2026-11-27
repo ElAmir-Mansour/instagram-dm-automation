@@ -291,18 +291,18 @@ describe('B2: where it is used', () => {
         I18N.applyStatic(doc([lit]));
         const [before, kw, after] = lit.parts as [string, { className: string; textContent: string }, string];
         assert.equal(kw.className, 'kw');
-        assert.equal(`${before}${kw.textContent}${after}`, 'استوديو نموّ لصنّاع المحتوى العرب', 'the sentence is intact');
-        assert.equal(kw.textContent, 'نموّ');
+        assert.equal(`${before}${kw.textContent}${after}`, 'الردود والمنشورات والمحادثات في مكان واحد', 'the sentence is intact');
+        assert.equal(kw.textContent, 'المحادثات');
 
         I18N.lang = 'en';
         const en = el('login.subtitle', 'login.subtitleKw');
         I18N.applyStatic(doc([en]));
-        assert.equal((en.parts[1] as { textContent: string }).textContent, 'growth');
+        assert.equal((en.parts[1] as { textContent: string }).textContent, 'conversations');
 
         const none = el('login.subtitle', 'login.email');   // a key whose word is not in the sentence
         I18N.applyStatic(doc([none]));
         assert.equal(none.parts.length, 0, 'nothing is wrapped');
-        assert.equal(none.textContent, 'A growth studio for Arabic creators');
+        assert.equal(none.textContent, 'Replies, posts and conversations, in one place');
     });
 });
 

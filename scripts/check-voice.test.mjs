@@ -78,8 +78,8 @@ describe('the strings B3 wrote', () => {
         // IDENTITY.md §7 tagline 1 and the descriptor; §8 puts the descriptor under the login title.
         assert.equal(en['app.tagline'], 'One word opens the conversation');
         assert.equal(ar['app.tagline'].normalize('NFC'), 'كلمةٌ واحدة تفتح المحادثة');
-        assert.equal(en['login.subtitle'], 'A growth studio for Arabic creators');
-        assert.equal(ar['login.subtitle'], 'استوديو نموّ لصنّاع المحتوى العرب');
+        assert.equal(en['login.subtitle'], 'Replies, posts and conversations, in one place');
+        assert.equal(ar['login.subtitle'], 'الردود والمنشورات والمحادثات في مكان واحد');
         // DESIGN.md §9: "the limit stated in the same paragraph as the feature".
         assert.match(en['app.description'], /one message per person a day, within Meta’s limits/);
         assert.match(ar['app.description'], /رسالة واحدة لكل شخص في اليوم، وضمن حدود ميتا/);

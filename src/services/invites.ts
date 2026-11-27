@@ -309,19 +309,23 @@ export interface RevokeOutcome {
     changed: boolean;
 }
 
-/** Revoke a link: it stops working at once. A used one cannot be (409): somebody already got in. Idempotent for one already revoked. */
-export async function revokeInvite(id: string, exec: Exec = pool as unknown as Exec): Promise<RevokeOutcome> {
+/**
+ * Revoke a link: it stops working at once. A used one cannot be (409): somebody already got in. Idempotent for one already revoked.
+ * With a `scope` (the Team screen: a workspace owner), an invite of another workspace is "not found", like one that does not exist.
+ */
+export async function revokeInvite(id: string, exec: Exec = pool as unknown as Exec, scope?: { creatorId: string }): Promise<RevokeOutcome> {
     const revoked = await exec.query<{ id: string; creator_id: string; purpose: InvitePurpose }>(
         `UPDATE invites SET revoked_at = NOW()
-          WHERE id = $1 AND used_at IS NULL AND revoked_at IS NULL
+          WHERE id = $1 AND used_at IS NULL AND revoked_at IS NULL${scope ? ' AND creator_id = $2' : ''}
       RETURNING id, creator_id, purpose`,
-        [id]
+        scope ? [id, scope.creatorId] : [id]
     );
     const row = revoked.rows[0];
     if (row) return { id: row.id, creatorId: row.creator_id, purpose: row.purpose, changed: true };
 
     const existing = await exec.query<{ id: string; creator_id: string; purpose: InvitePurpose; used_at: Date | null }>(
-        'SELECT id, creator_id, purpose, used_at FROM invites WHERE id = $1', [id]
+        `SELECT id, creator_id, purpose, used_at FROM invites WHERE id = $1${scope ? ' AND creator_id = $2' : ''}`,
+        scope ? [id, scope.creatorId] : [id]
     );
     const found = existing.rows[0];
     if (!found) throw new InviteError(404, 'INVITE_NOT_FOUND', 'Invite not found.');
@@ -334,14 +338,14 @@ export async function revokeInvite(id: string, exec: Exec = pool as unknown as E
  * never a moment with two live links, and never one with none if the new one cannot be made.
  */
 export async function regenerateInvite(
-    id: string, createdBy: string | null, settings?: OnboardingSettings
+    id: string, createdBy: string | null, settings?: OnboardingSettings, scope?: { creatorId: string }
 ): Promise<CreatedInvite & { previousId: string; tenantName: string | null }> {
     const config = settings ?? await getOnboardingSettings();
     return withTransaction(async (tx) => {
         const found = await tx.query<Pick<InviteRow, 'id' | 'creator_id' | 'email' | 'membership_role' | 'purpose' | 'user_id' | 'used_at' | 'revoked_at' | 'expires_at'>>(
             `SELECT id, creator_id, email, membership_role, purpose, user_id, used_at, revoked_at, expires_at
-               FROM invites WHERE id = $1 FOR UPDATE`,
-            [id]
+               FROM invites WHERE id = $1${scope ? ' AND creator_id = $2' : ''} FOR UPDATE`,
+            scope ? [id, scope.creatorId] : [id]
         );
         const old = found.rows[0];
         if (!old) throw new InviteError(404, 'INVITE_NOT_FOUND', 'Invite not found.');
