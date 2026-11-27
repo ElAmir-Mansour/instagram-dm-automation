@@ -324,12 +324,17 @@ describe('Attention is the only copy', () => {
         );
     });
 
-    it('keeps the Overview\'s own briefing on "waiting" (a link to the waiting filter), oldest first, from the same predicate', () => {
+    it('counts the Overview\'s "waiting" with the same predicate as the badge (handed over included, handled left out), oldest first', () => {
         const h = loadDashboard({ files: ['dashboard/js/pages/overview.js'] });
         const Overview = h.run('OverviewPage');
-        const rows = [waiting({ id: 'new', last_message_at: ago(HOUR) }), waiting({ id: 'old', last_message_at: ago(9 * HOUR) }), handed({ id: 'handoff' })];
+        const rows = [
+            waiting({ id: 'new', last_message_at: ago(HOUR), last_inbound_message_at: ago(HOUR) }),
+            waiting({ id: 'old', last_message_at: ago(9 * HOUR), last_inbound_message_at: ago(9 * HOUR) }),
+            handed({ id: 'handoff', last_inbound_message_at: ago(5 * HOUR) }),
+            waiting({ id: 'done', last_message_at: ago(30 * HOUR), last_inbound_message_at: ago(30 * HOUR), handled_at: ago(HOUR) }),
+        ];
         const got = Overview.waitingThreads({ status: 'fulfilled', value: { data: rows } }).map((x: Json) => x.id);
-        assert.deepEqual(got, ['old', 'new']);
+        assert.deepEqual(got, ['old', 'handoff', 'new']);
         // Arrays made inside the page's vm context have that context's Array.prototype: compare what they hold, not their realm.
         assert.deepEqual(plain(Overview.waitingThreads({ status: 'rejected', reason: new Error('x') })), []);
         assert.deepEqual(plain(Overview.waitingThreads(null)), []);
