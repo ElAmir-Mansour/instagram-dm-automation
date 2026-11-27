@@ -20,16 +20,12 @@
  * `notify.ts`; the audit rows carry the user id only.
  */
 import { describeError, log } from '../utils/log.js';
-import { actorFromSession, writeAudit, type ActorSession } from './audit.js';
+import { actorFromSession, AUDIT_ACTIONS, writeAudit, type ActorSession } from './audit.js';
 import {
     readTelegramSettings, scrub, sendTelegramMessage, telegramGetMe, telegramGetUpdates,
 } from './notify.js';
 import { consumeOAuthState, createOAuthState, isOAuthStateLive, NONCE_PATTERN, OAUTH_STATE_TTL_MS } from './oauthState.js';
 import { readUserNotify, writeUserNotify } from './notifyPeople.js';
-
-// until PR A: `AUDIT_ACTIONS.notifyTelegramLink` / `notifyTelegramUnlink` in audit.ts. Same strings.
-export const AUDIT_TELEGRAM_LINK = 'notify.telegram_link';
-export const AUDIT_TELEGRAM_UNLINK = 'notify.telegram_unlink';
 
 /** What a refusal is, as the route turns it into a status and a code. */
 export class TelegramLinkError extends Error {
@@ -105,7 +101,7 @@ export async function confirmLink(who: LinkWho, code: unknown, actor: ActorSessi
     } catch (err) {
         log('warn', 'notify.telegram_link_confirm_failed', describeError(err));
     }
-    await writeAudit(await actorFromSession(actor), { action: AUDIT_TELEGRAM_LINK, targetType: 'user', targetId: who.userId, detail: { user_id: who.userId } });
+    await writeAudit(await actorFromSession(actor), { action: AUDIT_ACTIONS.notifyTelegramLink, targetType: 'user', targetId: who.userId, detail: { user_id: who.userId } });
     return { linked: true, name };
 }
 
@@ -114,7 +110,7 @@ export async function unlink(who: LinkWho, actor: ActorSession | undefined): Pro
     const current = await readUserNotify(who.userId);
     if (!current.telegram) return;
     await writeUserNotify(who.userId, { v: 1, telegram: null }, who.userId);
-    await writeAudit(await actorFromSession(actor), { action: AUDIT_TELEGRAM_UNLINK, targetType: 'user', targetId: who.userId, detail: { user_id: who.userId } });
+    await writeAudit(await actorFromSession(actor), { action: AUDIT_ACTIONS.notifyTelegramUnlink, targetType: 'user', targetId: who.userId, detail: { user_id: who.userId } });
 }
 
 /** Pause or resume: the link stays, the notices stop (or start). Null when nothing is linked. */

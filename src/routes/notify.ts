@@ -15,8 +15,8 @@
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { actorFromSession, writeAudit } from '../services/audit.js';
-import { errorBody, type ErrorCode } from '../services/errorCodes.js';
+import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { sendError } from '../services/errorCodes.js';
 import { readTelegramSettings } from '../services/notify.js';
 import { coveredBy, readTeamNotify, writeRouting, type Routing } from '../services/notifyPeople.js';
 import { confirmLink, setPaused, startLink, TelegramLinkError, unlink } from '../services/telegramLink.js';
@@ -28,17 +28,6 @@ export const notifyRouter = Router();
 /** Everyone in the workspace sees and changes their OWN notices; only the owner chooses who covers what. */
 const anyMember = requireTenantRole('viewer');
 const canAdminister = requireTenantRole('owner');
-
-// until PR A: `AUDIT_ACTIONS.notifyRoutingWrite` in audit.ts. Same string.
-const AUDIT_ROUTING_WRITE = 'notify.routing_write';
-
-/**
- * A refusal in the registry's envelope. until PR A: `sendError(res, status, code, params, message)`, once `NO_USER_ACCOUNT`, `TELEGRAM_BOT_MISSING`,
- * `TELEGRAM_UNREACHABLE`, `TELEGRAM_LINK_EXPIRED` and `ROUTING_INVALID` are in `ERROR_CODES` (they are not yet, and `sendError` reads the registry).
- */
-function refuse(res: Response, status: number, code: string, params: Record<string, unknown>, message: string): void {
-    res.status(status).json(errorBody(code as ErrorCode, params, message));
-}
 
 const REFUSALS = {
     TELEGRAM_BOT_MISSING: { status: 409, message: 'Telegram alerts are not set up on this platform yet.' },
@@ -54,7 +43,7 @@ function userOf(req: Request): string | null {
 function handle(res: Response, event: string, err: unknown): void {
     if (err instanceof TelegramLinkError) {
         const r = REFUSALS[err.code];
-        refuse(res, r.status, err.code, {}, r.message);
+        sendError(res, r.status, err.code, {}, r.message);
         return;
     }
     log('error', event, describeError(err));
@@ -95,7 +84,7 @@ notifyRouter.get('/me', anyMember, async (req, res) => {
 notifyRouter.post('/telegram/link', anyMember, async (req, res) => {
     const userId = userOf(req);
     if (userId === null) {
-        refuse(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
+        sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
         return;
     }
     try {
@@ -108,7 +97,7 @@ notifyRouter.post('/telegram/link', anyMember, async (req, res) => {
 notifyRouter.post('/telegram/confirm', anyMember, async (req, res) => {
     const userId = userOf(req);
     if (userId === null) {
-        refuse(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
+        sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
         return;
     }
     try {
@@ -121,7 +110,7 @@ notifyRouter.post('/telegram/confirm', anyMember, async (req, res) => {
 notifyRouter.patch('/me', anyMember, async (req, res) => {
     const userId = userOf(req);
     if (userId === null) {
-        refuse(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
+        sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
         return;
     }
     const paused = (req.body as { paused?: unknown } | undefined)?.paused;
@@ -140,7 +129,7 @@ notifyRouter.patch('/me', anyMember, async (req, res) => {
 notifyRouter.delete('/telegram', anyMember, async (req, res) => {
     const userId = userOf(req);
     if (userId === null) {
-        refuse(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
+        sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'Sign in with your own account to get notices on Telegram.');
         return;
     }
     try {
@@ -180,7 +169,7 @@ notifyRouter.put('/routing', canAdminister, async (req, res) => {
     for (const field of ['handoff', 'hotLeads'] as const) {
         const raw = body[field];
         if (!Array.isArray(raw) || raw.some((v) => typeof v !== 'string')) {
-            refuse(res, 400, 'ROUTING_INVALID', { userId: '' }, 'Choose people from this workspace.');
+            sendError(res, 400, 'ROUTING_INVALID', { userId: '' }, 'Choose people from this workspace.');
             return;
         }
         lists[field] = [...new Set(raw as string[])];
@@ -192,13 +181,13 @@ notifyRouter.put('/routing', canAdminister, async (req, res) => {
         for (const id of [...lists.handoff, ...lists.hotLeads]) {
             if (!known.has(id)) {
                 // The id is the caller's own, echoed back so the screen can say which row; it is not a secret.
-                refuse(res, 400, 'ROUTING_INVALID', { userId: id.slice(0, 64) }, 'That person is not in this workspace.');
+                sendError(res, 400, 'ROUTING_INVALID', { userId: id.slice(0, 64) }, 'That person is not in this workspace.');
                 return;
             }
         }
         await writeRouting(tenantId, lists, userOf(req));
         await writeAudit(await actorFromSession(req.session), {
-            action: AUDIT_ROUTING_WRITE, targetType: 'creator', targetId: tenantId,
+            action: AUDIT_ACTIONS.notifyRoutingWrite, targetType: 'creator', targetId: tenantId,
             detail: { handoff_count: lists.handoff.length, hot_leads_count: lists.hotLeads.length },
         });
         res.json(await routingView(tenantId));

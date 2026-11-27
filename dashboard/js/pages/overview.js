@@ -141,11 +141,16 @@ const OverviewPage = {
     },
 
     /**
-     * Is this module part of the workspace? Fails open until the shell's registry is on the page (U3: `App.hasModule`), so a screen that cannot ask
-     * shows everything, as it always did.
+     * Is this module part of the workspace? `App.hasModule` (the shell's registry). Fails open when it cannot be asked (no `App`, or a session with no
+     * module list), so a screen that cannot ask shows everything, as it always did.
      */
     hasModule(id) {
-        return typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule(id);
+        if (typeof App === 'undefined' || typeof App.hasModule !== 'function') return true;
+        try {
+            return App.hasModule(id) !== false;
+        } catch (_) {
+            return true;
+        }
     },
 
     /** The growth strip: an operator's, and only for a workspace that has the Growth module. */

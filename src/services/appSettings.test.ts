@@ -11,8 +11,8 @@ import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getMetaLoginSettings, getOnboardingDefaultRules, getYouTubeApiKey,
-    isSecretSetting, META_CONFIG_ID_PATTERN, parseOnboardingRules,
+    APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getMetaLoginSettings, getOnboardingDefaultRules, getSettings, getYouTubeApiKey,
+    isSecretSetting, META_CONFIG_ID_PATTERN, parseOnboardingRules, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES, USER_SETTING_PREFIXES, userSettingKey,
 } from './appSettings.js';
 
 const TEST_ENCRYPTION_KEY = 'cd'.repeat(32);
@@ -329,5 +329,72 @@ describe('the Meta login settings (P26)', () => {
     it('accept a configuration id of 6 to 30 digits and nothing else', () => {
         for (const ok of ['123456', '987654321098765', '1'.repeat(30)]) assert.ok(META_CONFIG_ID_PATTERN.test(ok), ok);
         for (const bad of ['', '12345', '1'.repeat(31), 'abc123456', '123 456', '123456\n', '-123456']) assert.equal(META_CONFIG_ID_PATTERN.test(bad), false, JSON.stringify(bad));
+    });
+});
+
+// ─── The families U3 adds: a workspace's modules, who is told, the go-live card, and a person's own notices ─────────────
+
+describe('the U3 setting families', () => {
+    const TENANT = '11111111-2222-4333-8444-555555555555';
+    const USER = '99999999-2222-4333-8444-555555555555';
+
+    it('declares the three workspace prefixes and the one person prefix the contract names, none of them secret', () => {
+        assert.equal(TENANT_SETTING_PREFIXES.tenantModules, 'tenant.modules.');
+        assert.equal(TENANT_SETTING_PREFIXES.notifyRouting, 'notify.routing.');
+        assert.equal(TENANT_SETTING_PREFIXES.goLive, 'golive.');
+        assert.equal(USER_SETTING_PREFIXES.userNotify, 'user.notify.');
+        assert.equal(tenantSettingKey(TENANT_SETTING_PREFIXES.tenantModules, TENANT), `tenant.modules.${TENANT}`);
+        assert.equal(userSettingKey(USER_SETTING_PREFIXES.userNotify, USER), `user.notify.${USER}`);
+        for (const key of [tenantSettingKey(TENANT_SETTING_PREFIXES.tenantModules, TENANT), tenantSettingKey(TENANT_SETTING_PREFIXES.notifyRouting, TENANT),
+            tenantSettingKey(TENANT_SETTING_PREFIXES.goLive, TENANT), userSettingKey(USER_SETTING_PREFIXES.userNotify, USER)]) {
+            assert.equal(isSecretSetting(key), false, key);
+            assert.ok(key.length <= 100, 'app_settings.key is VARCHAR(100)');
+        }
+    });
+
+    it('declares no prefix that is the start of another, so a LIKE on one never reads another\'s rows', () => {
+        const all = [...Object.values(TENANT_SETTING_PREFIXES), ...Object.values(USER_SETTING_PREFIXES)];
+        for (const a of all) for (const b of all) if (a !== b) assert.equal(b.startsWith(a), false, `${a} starts ${b}`);
+    });
+
+    it('userSettingKey refuses anything that is not the shape of an id, like tenantSettingKey, so a request cannot choose another key', () => {
+        for (const bad of ['', 'a/b', 'x'.repeat(65), 'user id', 'a.b', '../x']) {
+            assert.throws(() => userSettingKey(USER_SETTING_PREFIXES.userNotify, bad), /not a user id/, JSON.stringify(bad));
+            assert.throws(() => tenantSettingKey(TENANT_SETTING_PREFIXES.tenantModules, bad), /not a tenant id/, JSON.stringify(bad));
+        }
+    });
+
+    it('setSetting writes through the executor it is given (a transaction), and through the pool when it is given none', async () => {
+        const seen: string[] = [];
+        const exec = { query: async (sql: string, params?: unknown[]) => { seen.push(`${sql.trim().split(/\s+/)[0]} ${String(params?.[0])}`); return { rows: [], rowCount: 1 }; } };
+        const viaPool: string[] = [];
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => { viaPool.push(`${sql.trim().split(/\s+/)[0]} ${String(params[0])}`); return { rows: [], rowCount: 1 }; };
+        try {
+            const key = tenantSettingKey(TENANT_SETTING_PREFIXES.tenantModules, TENANT);
+            await setSetting(key, '{"v":1}', 'admin', exec);
+            await setSetting(key, null, 'admin', exec);
+            assert.deepEqual(seen, [`INSERT ${key}`, `DELETE ${key}`]);
+            assert.deepEqual(viaPool, [], 'the pool was not touched');
+            await setSetting(key, '{"v":1}', 'admin');
+            assert.deepEqual(viaPool, [`INSERT ${key}`]);
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+    });
+
+    it('getSettings reads any of the three key families, and a key asked for is always in the map', async () => {
+        const original = pool.query;
+        const key = tenantSettingKey(TENANT_SETTING_PREFIXES.goLive, TENANT);
+        const personal = userSettingKey(USER_SETTING_PREFIXES.userNotify, USER);
+        (pool as unknown as { query: unknown }).query = async (_sql: string, params: unknown[] = []) => ({ rows: [{ key: (params[0] as string[])[0], value: '{"v":1}', is_secret: false }], rowCount: 1 });
+        try {
+            const out = await getSettings([key, personal, APP_SETTING_KEYS.publicBaseUrl]);
+            assert.equal(out.get(key), '{"v":1}');
+            assert.equal(out.get(personal), null);
+            assert.equal(out.has(APP_SETTING_KEYS.publicBaseUrl), true);
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
     });
 });

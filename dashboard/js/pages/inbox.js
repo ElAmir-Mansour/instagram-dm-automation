@@ -2868,6 +2868,8 @@ const InboxPage = {
      * three statements over the whole period, which is not something to repeat every five seconds.
      */
     funnelShell() {
+        // The funnel is the DM assistant's: a workspace without it has no card (and the server would refuse the read).
+        if (typeof App !== 'undefined' && typeof App.hasModule === 'function' && !App.hasModule('dm_assistant')) return '';
         const open = !!(this.funnel && this.funnel.open);
         return html`
             <section class="dm-funnel" id="dm-funnel" aria-label="${t('inbox.funnel.title')}">

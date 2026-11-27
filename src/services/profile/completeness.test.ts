@@ -321,3 +321,57 @@ describe('the actions', () => {
         assert.equal(JSON.stringify(FINISHED_WIZARD), before);
     });
 });
+
+// ─── Modules (U3, contract §1.3 and §12.1) ──────────────────────────────────────────────────────────────
+
+describe('nextBestActions with the workspace\'s modules', () => {
+    const EVERY_MODULE = ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results', 'growth', 'studio', 'explainers', 'ads', 'tiktok', 'youtube', 'whatsapp', 'muse'];
+    const COMPANY_MODULES = ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'];
+    const DONE = edit(FINISHED_WIZARD, (p) => { p.voice.samples = Array.from({ length: SAMPLES_ENOUGH }, (_, i) => ({ text: `sample ${i}`, source: 'typed' })) as never; });
+
+    it('with every module on, is exactly the actions it gave before there were modules: on every profile, connection and option the file already tests', () => {
+        const profiles: CreatorProfile[] = [defaultProfile({ lang: 'en', rules: [] }), FINISHED_WIZARD, DONE, FITNESS_EN, SHOP_EG];
+        const connections: Connections[] = [NONE, ALL, { meta: true, tiktok: false, youtube: false }, { meta: true, tiktok: true, youtube: false }];
+        const options = [{}, { dm: true }, { legacy: true }, { legacy: true, dm: true }];
+        for (const profile of profiles) {
+            for (const c of connections) {
+                for (const opts of options) {
+                    assert.deepEqual(nextBestActions(profile, c, { ...opts, modules: EVERY_MODULE }), nextBestActions(profile, c, opts));
+                    assert.deepEqual(nextBestActions(profile, c, { ...opts, modules: null }), nextBestActions(profile, c, opts), 'null is everything on');
+                }
+            }
+        }
+    });
+
+    it('never offers the action of a module that is off: presenter and portrait need studio, audience needs growth, the hand-off rule the assistant', () => {
+        const without = (off: string) => EVERY_MODULE.filter((m) => m !== off && !(off === 'studio' && m === 'explainers') && !(off === 'dm_assistant' && m === 'muse'));
+        const all = (modules: string[]) => ids(nextBestActions(FINISHED_WIZARD, ALL, { dm: true, modules })).concat(ids(nextBestActions(FINISHED_WIZARD, NONE, { dm: true, modules })));
+        assert.equal(all(without('studio')).some((id) => id === 'presenter' || id === 'portrait'), false);
+        assert.equal(all(without('growth')).includes('audience'), false);
+        assert.equal(all(without('dm_assistant')).includes('dm_handoff'), false);
+        assert.equal(all(EVERY_MODULE).includes('dm_handoff'), true, 'and with it on, it is offered');
+        assert.equal(ids(nextBestActions(DONE, { meta: true, tiktok: false, youtube: false }, { modules: without('tiktok') })).includes('connect_tiktok'), false);
+        assert.equal(ids(nextBestActions(DONE, { meta: true, tiktok: false, youtube: false }, { modules: without('youtube') })).includes('connect_youtube'), false);
+    });
+
+    it('a company workspace is asked for none of the Studio\'s, Growth\'s or the channels\' things: setup, Meta and its voice are what is left', () => {
+        const company = nextBestActions(FINISHED_WIZARD, NONE, { modules: COMPANY_MODULES, dm: true });
+        assert.deepEqual(ids(company), ['connect_meta', 'voice_samples', 'dm_handoff']);
+        const connected = nextBestActions(DONE, { meta: true, tiktok: false, youtube: false }, { modules: COMPANY_MODULES });
+        for (const id of ['presenter', 'portrait', 'audience', 'connect_tiktok', 'connect_youtube'] as ActionId[]) assert.equal(ids(connected).includes(id), false, `${id}: no nag for a module this workspace does not have`);
+    });
+
+    it('fills the three places from what is left: a hidden action does not leave a gap while there is something to offer', () => {
+        const all = nextBestActions(FINISHED_WIZARD, NONE, { modules: EVERY_MODULE });
+        assert.equal(all.length, MAX_ACTIONS);
+        const noStudio = nextBestActions(FINISHED_WIZARD, NONE, { modules: EVERY_MODULE.filter((m) => m !== 'studio' && m !== 'explainers') });
+        assert.equal(noStudio.length, MAX_ACTIONS);
+        assert.equal(noStudio.some((a) => a.id === 'presenter'), false);
+    });
+
+    it('moves nothing about the meter: the percentage is the same whatever the modules are (only ACTIONS are filtered)', () => {
+        const base = completeness(FINISHED_WIZARD, {});
+        assert.deepEqual(completeness(FINISHED_WIZARD, { modules: COMPANY_MODULES }), base);
+        assert.deepEqual(completeness(FINISHED_WIZARD, { modules: [] }), base);
+    });
+});

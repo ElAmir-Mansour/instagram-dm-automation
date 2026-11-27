@@ -398,22 +398,8 @@ const StudioPage = {
 
     /** Carousels | Monteur | Infographics | Explainers | Settings — navigation, so links with aria-current. The Monteur, Infographics and Explainers are pages of their own. */
     tabsMarkup(active) {
-        // Quiet segments, not blue buttons: the page's one primary is the step's own.
-        const tab = (key, href, icon, label) => html`
-            <a class="btn btn-sm btn-ghost" href="${href}"
-               ${active === key ? html.raw('aria-current="page"') : ''}>
-                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
-            </a>
-        `;
-        return html`
-            <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
-                ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
-                ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
-                ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
-                ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
-                ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
-            </nav>
-        `;
+        // The one registry draws every Studio tab strip (Shell.AREAS.studio): quiet segments, not blue buttons, and only the tabs this workspace has.
+        return Shell.areaNav('studio', active);
     },
 
     /** Settle one of the three home fetches onto state. */
@@ -767,7 +753,10 @@ const StudioPage = {
     },
 
     paintStatus() {
-        this.paintRegion('studio-status', this.statusMarkup());
+        const markup = this.statusMarkup();
+        const host = this.paintRegion('studio-status', markup);
+        // A bar with nothing to say (no Mac ever seen, no lessons) is not drawn as an empty box.
+        if (host) host.classList.toggle('hidden', String(markup).trim() === '');
     },
 
     statusMarkup() {
@@ -786,10 +775,18 @@ const StudioPage = {
         // carousels waiting for the batch, or the audit that retired the batch.
         const tiktok = s.tiktok || {};
         const showTikTok = tiktok.audited === true || (Number(tiktok.queued) || 0) > 0;
+        // The owner's machinery stays off a workspace that never used it (WA-11): the Mac block only once a Mac has been seen or work is
+        // waiting for one, the library card only once there are lessons. Both are there, unchanged, for the owner.
+        const worker = s.worker || {};
+        const jobs = s.jobs || {};
+        const lessons = s.lessons || {};
+        const showWorker = !!worker.lastSeen || (Number(jobs.pending) || 0) > 0 || (Number(jobs.claimed) || 0) > 0;
+        const showLibrary = (Number(lessons.total) || 0) > 0;
+        if (!showWorker && !showLibrary && !showTikTok && !this.statusError) return '';
         return html`
             <div class="studio-status-grid">
-                ${this.workerMarkup(s.worker || {}, s.jobs || {}, s.claude || null)}
-                ${this.libraryMarkup(s.lessons || {})}
+                ${showWorker ? this.workerMarkup(worker, jobs, s.claude || null) : ''}
+                ${showLibrary ? this.libraryMarkup(lessons) : ''}
                 ${showTikTok ? this.tiktokQueueMarkup(tiktok) : ''}
             </div>
             ${this.statusError ? html`

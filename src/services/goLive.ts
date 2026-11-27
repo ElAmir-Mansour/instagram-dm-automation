@@ -19,26 +19,17 @@
  * outcomes): how long from accepting the invite to the first DM, whether the assistant was tested, how many staff replied.
  */
 import { queryOne } from '../db/query.js';
-import { getSetting, setSetting, type TenantSettingKey } from './appSettings.js';
+import { getSetting, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES, type TenantSettingKey } from './appSettings.js';
 import { readCommentCheck } from './metaCommentCheck.js';
+import { readDocModules } from './modules.js';
 import { readTeamNotify } from './notifyPeople.js';
 import { recordEvent } from './onboardingEvents.js';
 import { getPlatformOwnerId } from './tenant.js';
 import { log, describeError } from '../utils/log.js';
 
-// ─── Storage (until PR A) ────────────────────────────────────────────────────────────────────────────────
+// ─── Storage ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// until PR A: `TENANT_SETTING_PREFIXES.goLive` in appSettings.ts. The same string.
-export const GOLIVE_PREFIX = 'golive.';
-const ID_PART = /^[A-Za-z0-9-]{1,64}$/;
-
-export function goLiveKey(tenantId: string): string {
-    if (!ID_PART.test(tenantId)) throw new Error('goLiveKey: not a tenant id.');
-    return `${GOLIVE_PREFIX}${tenantId}`;
-}
-
-// until PR A: `getSetting`/`setSetting` take the union with `goLive` in it. This is the narrowest cast.
-const asKey = (key: string): TenantSettingKey => key as unknown as TenantSettingKey;
+export const goLiveKey = (tenantId: string): TenantSettingKey => tenantSettingKey(TENANT_SETTING_PREFIXES.goLive, tenantId);
 
 export interface GoLiveDoc {
     v: 1;
@@ -64,41 +55,17 @@ export function parseGoLiveDoc(raw: string | null | undefined): GoLiveDoc {
 }
 
 export async function readGoLiveDoc(tenantId: string): Promise<GoLiveDoc> {
-    return parseGoLiveDoc(await getSetting(asKey(goLiveKey(tenantId))));
+    return parseGoLiveDoc(await getSetting(goLiveKey(tenantId)));
 }
 
 export async function writeGoLiveDoc(tenantId: string, doc: GoLiveDoc, updatedBy: string | null): Promise<void> {
-    await setSetting(asKey(goLiveKey(tenantId)), JSON.stringify(doc), updatedBy);
+    await setSetting(goLiveKey(tenantId), JSON.stringify(doc), updatedBy);
 }
 
-// ─── Modules (until PR A) ────────────────────────────────────────────────────────────────────────────────
+// ─── Modules ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The module ids this checklist asks about. */
 export type GoLiveModule = 'inbox' | 'keyword_replies' | 'dm_assistant' | 'scheduler' | 'whatsapp' | 'youtube';
-
-/**
- * until PR A: `readModules(creatorId)` in modules.ts. This reads the same stored doc (`tenant.modules.<t>`: `{ v, on, … }`) and nothing more:
- * no doc, or one that cannot be read, is everything on (legacy), and a module whose requirement is off is off. Returns null for "all on".
- */
-export async function readEnabledModules(tenantId: string): Promise<ReadonlySet<string> | null> {
-    let raw: string | null;
-    try {
-        raw = await getSetting(asKey(`tenant.modules.${tenantId}`));
-    } catch {
-        return null;
-    }
-    if (!raw) return null;
-    try {
-        const doc = JSON.parse(raw) as { on?: unknown };
-        if (!Array.isArray(doc.on)) return null;
-        const on = new Set<string>(doc.on.filter((v): v is string => typeof v === 'string'));
-        const requires: Record<string, string> = { dm_assistant: 'inbox', whatsapp: 'inbox', youtube: 'scheduler' };
-        for (const [id, needs] of Object.entries(requires)) if (!on.has(needs)) on.delete(id);
-        return on;
-    } catch {
-        return null;
-    }
-}
 
 const has = (modules: ReadonlySet<string> | null, id: GoLiveModule | null): boolean => id === null || modules === null || modules.has(id);
 
@@ -303,7 +270,8 @@ export async function readGoLive(who: GoLiveWho, now: number = Date.now()): Prom
     // No onboarding row: a workspace made before the wizard existed. It has nothing to go live from.
     if (!row || row.onboarding_status === null) return { show: false };
 
-    const modules = await readEnabledModules(who.tenantId);
+    // A workspace with no document (legacy), or one that cannot be read, has every document module on: `readDocModules` says so.
+    const modules: ReadonlySet<string> = new Set<string>(await readDocModules(who.tenantId));
     const showsComment = has(modules, 'keyword_replies');
     const [check, team] = await Promise.all([
         showsComment && !doc.seen.test_comment ? readCommentCheck(who.tenantId, now) : Promise.resolve(null),

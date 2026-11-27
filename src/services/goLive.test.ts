@@ -20,6 +20,7 @@ import {
     evaluateItems, goLiveKey, isLive, LIVE_LINE_MS, parseGoLiveDoc, readGoLive, setDismissed, shouldShow,
     type GoLiveDoc, type GoLiveFacts,
 } from './goLive.js';
+import { invalidateModulesCache } from './modules.js';
 import { NotifyWorld } from './notifyTestSupport.js';
 
 const TENANT = 'tenant-company';
@@ -41,7 +42,7 @@ const ROW = {
 };
 
 let world: NotifyWorld;
-beforeEach(() => { world = new NotifyWorld(); world.install(); });
+beforeEach(() => { world = new NotifyWorld(); world.install(); invalidateModulesCache(); });
 afterEach(() => world.restore());
 
 describe('the items (pure)', () => {

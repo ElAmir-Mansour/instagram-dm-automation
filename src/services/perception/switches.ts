@@ -18,6 +18,7 @@
  */
 import { describeError, log } from '../../utils/log.js';
 import { getSetting, tenantSettingKey, TENANT_SETTING_PREFIXES } from '../appSettings.js';
+import { isModuleOn } from '../modules.js';
 import type { MuseCapability } from './types.js';
 
 export interface MuseSwitches {
@@ -93,14 +94,22 @@ export function senderAllowed(allowSenders: readonly string[], senderId: string)
 /** Is this capability switched on? (The allow-list and the budget are `gate.ts`'s.) Pure. */
 export const capabilityOn = (settings: Pick<MuseSettings, 'switches'>, capability: MuseCapability): boolean => settings.switches[capability] === true;
 
-/** The tenant's three settings, in one round of reads. Fails toward off: see the top of the file. */
+/**
+ * The tenant's three settings, in one round of reads. Fails toward off: see the top of the file.
+ *
+ * A workspace without the `muse` module (U3, contract §1.3) reads as `museSettingsOff()` whatever its switches say: every reader, the daily reel library
+ * included, comes through here, so this is the one place the module is enforced for Muse. The module is read in the SAME `Promise.all`, so it adds a
+ * parallel (cached) read and no round trip.
+ */
 export async function readMuseSettings(creatorId: string): Promise<MuseSettings> {
     try {
-        const [switches, allow, daily] = await Promise.all([
+        const [switches, allow, daily, moduleOn] = await Promise.all([
             getSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.museSwitches, creatorId)),
             getSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.museAllowSenders, creatorId)),
             getSetting(tenantSettingKey(TENANT_SETTING_PREFIXES.museDailyUsd, creatorId)),
+            isModuleOn(creatorId, 'muse'),
         ]);
+        if (!moduleOn) return museSettingsOff();
         return { switches: parseMuseSwitches(switches), allowSenders: parseAllowSenders(allow), dailyUsd: parseDailyUsd(daily) };
     } catch (err) {
         log('warn', 'perception.settings_unreadable', { creator_id: creatorId, ...describeError(err) });

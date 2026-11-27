@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { goLiveKey } from '../services/goLive.js';
 import { INSUFFICIENT_ROLE_CODE, resolveTenant } from '../services/tenant.js';
+import { invalidateModulesCache } from '../services/modules.js';
 import { NotifyWorld } from '../services/notifyTestSupport.js';
 import apiRouter from './api.js';
 import { goLiveRouter } from './goLive.js';
@@ -47,6 +48,7 @@ beforeEach(() => {
     world.members = [{ userId: 'u-owner', email: 'o@c.test', role: 'owner' }];
     world.goliveFacts = ROW;
     world.install();
+    invalidateModulesCache();
 });
 afterEach(() => world.restore());
 

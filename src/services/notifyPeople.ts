@@ -20,29 +20,19 @@
 import { queryRows } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
 import { checkSendQuota } from '../utils/rateLimiter.js';
-import { getSetting, setSetting, type TenantSettingKey } from './appSettings.js';
+import {
+    getSetting, setSetting, tenantSettingKey, TENANT_SETTING_PREFIXES, userSettingKey, USER_SETTING_PREFIXES, type TenantSettingKey, type UserSettingKey,
+} from './appSettings.js';
 import { buildNoticeText, sendTelegramMessage, type NoticeInput, type NoticeKind, type TelegramSettings } from './notify.js';
 import { getPlatformOwnerId, normalizeTenantRole, type TenantRole } from './tenant.js';
 
-// ─── Keys (until PR A) ───────────────────────────────────────────────────────────────────────────────────
+// ─── Keys ────────────────────────────────────────────────────────────────────────────────────────────────
 
-// until PR A: `TENANT_SETTING_PREFIXES.notifyRouting`, `USER_SETTING_PREFIXES.userNotify` and `userSettingKey()` in appSettings.ts. Same strings.
-export const USER_NOTIFY_PREFIX = 'user.notify.';
-export const NOTIFY_ROUTING_PREFIX = 'notify.routing.';
-
-/** An id as a key part: a uuid's characters, at most 64. The key is built only from a session's own ids, never from a body. */
+/** An id as a document's own part: a uuid's characters, at most 64 (the routing's user ids are checked with it). */
 const ID_PART = /^[A-Za-z0-9-]{1,64}$/;
 
-function keyOf(prefix: string, id: string): string {
-    if (!ID_PART.test(id)) throw new Error('notify key: not an id.');
-    return `${prefix}${id}`;
-}
-
-export const userNotifyKey = (userId: string): string => keyOf(USER_NOTIFY_PREFIX, userId);
-export const notifyRoutingKey = (tenantId: string): string => keyOf(NOTIFY_ROUTING_PREFIX, tenantId);
-
-// until PR A: `getSetting`/`setSetting` take `AppSettingKey | TenantSettingKey | UserSettingKey`; these two families are not in the union yet.
-const asKey = (key: string): TenantSettingKey => key as unknown as TenantSettingKey;
+export const userNotifyKey = (userId: string): UserSettingKey => userSettingKey(USER_SETTING_PREFIXES.userNotify, userId);
+export const notifyRoutingKey = (tenantId: string): TenantSettingKey => tenantSettingKey(TENANT_SETTING_PREFIXES.notifyRouting, tenantId);
 
 // ─── The documents ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -105,20 +95,20 @@ export function parseRouting(raw: string | null | undefined): Routing | null {
 }
 
 export async function readUserNotify(userId: string): Promise<UserNotify> {
-    return parseUserNotify(await getSetting(asKey(userNotifyKey(userId))));
+    return parseUserNotify(await getSetting(userNotifyKey(userId)));
 }
 
 export async function writeUserNotify(userId: string, doc: UserNotify, updatedBy: string | null): Promise<void> {
     // A person with nothing linked has no row at all: nothing of them is kept.
-    await setSetting(asKey(userNotifyKey(userId)), doc.telegram ? JSON.stringify(doc) : null, updatedBy);
+    await setSetting(userNotifyKey(userId), doc.telegram ? JSON.stringify(doc) : null, updatedBy);
 }
 
 export async function readRouting(tenantId: string): Promise<Routing | null> {
-    return parseRouting(await getSetting(asKey(notifyRoutingKey(tenantId))));
+    return parseRouting(await getSetting(notifyRoutingKey(tenantId)));
 }
 
 export async function writeRouting(tenantId: string, routing: { handoff: string[]; hotLeads: string[] }, updatedBy: string | null): Promise<void> {
-    await setSetting(asKey(notifyRoutingKey(tenantId)), JSON.stringify({ v: 1, handoff: routing.handoff, hotLeads: routing.hotLeads }), updatedBy);
+    await setSetting(notifyRoutingKey(tenantId), JSON.stringify({ v: 1, handoff: routing.handoff, hotLeads: routing.hotLeads }), updatedBy);
 }
 
 // ─── The members ─────────────────────────────────────────────────────────────────────────────────────────
@@ -144,7 +134,7 @@ export async function readTeamNotify(tenantId: string): Promise<{ members: Notif
            LEFT JOIN app_settings n ON n.key = $3::text || m.user_id::text
           WHERE m.creator_id = $1 AND u.is_active AND u.role <> 'platform_admin'
           ORDER BY u.email`,
-        [tenantId, notifyRoutingKey(tenantId), USER_NOTIFY_PREFIX]
+        [tenantId, notifyRoutingKey(tenantId), USER_SETTING_PREFIXES.userNotify]
     );
     return {
         members: rows.map((r) => ({ userId: r.user_id, email: r.email, role: normalizeTenantRole(r.role), notify: parseUserNotify(r.notify) })),
