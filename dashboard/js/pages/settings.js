@@ -385,7 +385,7 @@ const SettingsPage = {
 
     renderCard(id, ctx) {
         switch (id) {
-            case 'meta': return this.metaSection({ meta: ctx.meta, metaError: ctx.metaError, metaApp: null, metaAppError: null });
+            case 'meta': return this.metaSection({ meta: ctx.meta, metaError: ctx.metaError, metaApp: null, metaAppError: null, health: ctx.health });
             case 'tiktok': return this.tiktokSection({ tiktok: ctx.tiktok, tiktokError: ctx.tiktokError });
             case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
@@ -787,6 +787,9 @@ const SettingsPage = {
         if (ctx.mediaError) return row('unknown', t('settings.health.unknown'));
         const ms = ctx.media;
         if (!ms) return null;
+        // New uploads go to Cloudflare R2 in production (`storage.backend = r2`, src/services/r2Usage.ts keeps the month's usage). "Database" is
+        // only the answer when neither store is the backend (UX U1, SA-02: this row said "kept in the database" while 449 MB sat in R2).
+        if (ms.backend === 'r2' && ms.r2 && ms.r2.configured) return this.r2StorageRow(ms.r2, row);
         if (ms.backend !== 'supabase') return row('not_set_up', t('settings.health.media.database'));
         const c = ms.connection;
         if (!(c && c.ok)) return row('broken', t('settings.health.media.failed'));
@@ -799,6 +802,21 @@ const SettingsPage = {
             return row(near ? 'expiring' : 'fine', this.ltrMany(near ? 'settings.health.media.nearFull' : 'settings.health.media.used', { used, total }, ['used', 'total']));
         }
         return row('fine', t('settings.health.media.ok'));
+    },
+
+    /** The storage row when R2 holds the files: "R2 · 449 MB of 9.0 GB", amber from 80% of any free-tier meter, red once one is used up. */
+    r2StorageRow(r2, row) {
+        if (!(r2.connection && r2.connection.ok)) return row('broken', t('settings.health.media.failed'));
+        const summary = r2.summary;
+        const storage = summary && (summary.items || []).find((i) => i.kind === 'storage');
+        if (!storage) return row('fine', t('settings.health.media.r2Ok'));
+        const level = summary.level === 'full' || summary.level === 'warn' ? summary.level : 'ok';
+        const hottest = (summary.items || []).slice().sort((a, b) => b.pct - a.pct)[0];
+        const used = this.ltrMany('settings.health.media.r2Used', { used: this.bytesText(storage.used), total: this.bytesText(storage.limit) }, ['used', 'total']);
+        const parts = [used];
+        if (level !== 'ok' && hottest) parts.push(`${t(`settings.media.r2.meter.${hottest.kind}`)} ${UI.formatNumber(hottest.pct)}%`);
+        if (level === 'full') parts.push(t('settings.health.media.r2Full', { date: UI.formatDate(summary.resetsAt) }));
+        return row(level === 'full' ? 'broken' : level === 'warn' ? 'expiring' : 'fine', this.joinDetail(parts));
     },
 
     alertsRow(ctx) {
@@ -1437,13 +1455,15 @@ const SettingsPage = {
      * this only hands it what it needs and says what to repaint when something changed. The operator's own block (the switch and the
      * configuration id) is not in it: a platform admin finds that in the Platform tab (`metaAppSection`).
      */
-    metaSection({ meta, metaError, metaApp, metaAppError }) {
+    metaSection({ meta, metaError, metaApp, metaAppError, health }) {
         if (typeof MetaConnect === 'undefined') return this.metaFallback(metaError || new Error(t('meta.moduleFailed')));
         // After a Page is chosen or Meta is disconnected, this screen is read again. Dropped when the screen is left (`destroy`).
         this._afterMeta = this._afterMeta || (() => SettingsPage.render());
         MetaConnect.afterChange = this._afterMeta;
         return MetaConnect.settingsSection({
             meta, metaError, app: metaApp, appError: metaAppError, canAdminister: App.canAdminister(), isAdmin: false,
+            // The workspace's own health (newest event) and whether the viewer is the platform admin (the one who sees the Token card).
+            health, operator: typeof App.isAdmin === 'function' && App.isAdmin(),
         });
     },
 

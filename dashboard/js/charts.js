@@ -133,7 +133,7 @@ const Charts = {
      *
      * At most 8 labels are ever drawn, evenly spaced and always including the
      * most recent day — this same builder also renders a 30-day strip
-     * (`analytics.chart30`), and a label under every one of 30 cells would be
+     * (`analytics.chartDays`), and a label under every one of 30 cells would be
      * overlapping noise, not information.
      *
      * The strip's own max-width is capped at a fixed size per cell (see

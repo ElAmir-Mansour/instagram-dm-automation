@@ -1514,6 +1514,13 @@ router.get('/interactions/export', async (req, res) => {
             conditions.push(`i.status = $${params.length}`);
         }
 
+        // The Log filters by what became of the DM (`?outcome=`), so its export must too: "Export 12" has to hold those 12.
+        const outcome = req.query.outcome;
+        if (isOutcome(outcome)) {
+            params.push(outcome);
+            conditions.push(`${outcomeSql()} = $${params.length}`);
+        }
+
         if (search) {
             params.push(`%${search}%`);
             conditions.push(`i.sender_username ILIKE $${params.length}`);

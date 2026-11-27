@@ -125,6 +125,8 @@ const GATED = [
     'muse-dm-media', 'muse-voice', 'muse-memory', 'muse-who', 'muse-picker-open', 'muse-picker-search', 'muse-daily-usd', 'muse-save-btn',
     // and its video library: "Index my reels" and Refresh (the buttons of each reel are drawn by the list, and only for an owner).
     'muse-index-btn', 'muse-library-refresh',
+    // and the folded list's own: Show the list, its search box and Show 20 more.
+    'muse-library-toggle', 'muse-library-search', 'muse-library-more',
 ];
 
 describe('AI settings — an operator keeps every control', () => {

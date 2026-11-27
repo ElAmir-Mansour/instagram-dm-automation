@@ -41,6 +41,7 @@ const IDS = [
     'muse-error', 'muse-status', 'muse-people-block', 'muse-everyone-note', 'muse-people-list', 'muse-who-hint', 'muse-cap-hint', 'muse-spent',
     'muse-unsaved-note', 'muse-picker', 'muse-picker-note', 'muse-picker-list',
     'muse-library', 'muse-index-btn', 'muse-library-refresh', 'muse-library-estimate', 'muse-library-hint', 'muse-library-notice', 'muse-library-count', 'muse-library-list',
+    'muse-library-toggle', 'muse-library-toggle-label', 'muse-library-listbox', 'muse-library-search', 'muse-library-shown', 'muse-library-more',
 ];
 
 /** The `muse` block the server answers with. */
@@ -91,7 +92,7 @@ interface Opened {
 }
 
 /** The page with the card's elements mounted and the card adopted. `rows` is what the library first answers. */
-async function open(setup: { lang?: Lang; role?: Role; view?: Json | null; rows?: Json[]; wait?: boolean; skipAdopt?: boolean } = {}): Promise<Opened> {
+async function open(setup: { lang?: Lang; role?: Role; view?: Json | null; rows?: Json[]; wait?: boolean; skipAdopt?: boolean; folded?: boolean } = {}): Promise<Opened> {
     const role = setup.role ?? 'owner';
     const calls: Array<{ name: string; args: Json[] }> = [];
     const answers: Opened['answers'] = { library: setup.rows ?? [], reel: RESULT(), index: { queued: 0, already_indexed: 0, deduped: 0, listed: 0, truncated: false }, reindex: { queued: true } };
@@ -120,6 +121,8 @@ async function open(setup: { lang?: Lang; role?: Role; view?: Json | null; rows?
     // What the page logs when a request fails is what these tests make fail on purpose: it is not output for the run.
     h.ctx.console = Object.assign(Object.create(console), { error: () => undefined });
     const page: Json = h.run('AiSettingsPage');
+    // The list is folded until "Show the list" (UX U1, DW-A1); the suites about its rows start with it open, the new group below starts folded.
+    if (!setup.folded) page.museLibState().listOpen = true;
     if (!setup.skipAdopt) page.adoptMuse(setup.view === undefined ? view() : setup.view);
     if (setup.wait !== false) await settle();
     return { h, page, calls, toasts, el: (id) => h.el(id), t: h.t, answers };
@@ -364,8 +367,7 @@ describe('video library: the list', () => {
 
     it('counts them, and says when there is nothing, when it is loading, and when it could not be loaded', async () => {
         const o = await open({ rows: [item(), item(), item({ status: 'pending', summary: null }), item({ status: 'failed', summary: null, error: 'timeout' })] });
-        assert.equal(o.el('muse-library-count').textContent, o.t('muse.lib.count', { total: 4, ok: 2, pending: 1, failed: 1 }));
-        assert.match(o.el('muse-library-count').textContent, /^Reels: 4 · watched 2 · waiting 1 · could not be watched 1$/);
+        assert.match(o.el('muse-library-count').textContent, /^Reels remembered: 2 · last added .+ · 1 waiting · 1 could not be watched$/);
 
         const empty = await open({ rows: [] });
         assert.equal(empty.el('muse-library-count').textContent, empty.t('muse.lib.empty'));
@@ -970,5 +972,80 @@ describe('video library: the Help section it links to', () => {
                 assert.doesNotMatch(everything, banned, `${lang}: ${banned}`);
             }
         }
+    });
+});
+
+// ─── The folded library (UX U1, DW-A1: 139 reels were 44 phone screens) ─────────────────────────────────────────────────
+
+describe('the library is one line, and a searchable list 20 at a time only when it is opened', () => {
+    const many = (n: number): Json[] => Array.from({ length: n }, (_, i) => item({ summary: `Reel number ${i + 1} about docker`, updated_at: `2026-11-${String(1 + (i % 26)).padStart(2, '0')}T08:00:00.000Z` }));
+
+    it('draws the summary line and NO row until "Show the list" is pressed', async () => {
+        const o = await open({ rows: many(139), folded: true });
+        assert.match(o.el('muse-library-count').textContent, /^Reels remembered: 139 · last added .+ · 0 waiting$/);
+        assert.equal(o.el('muse-library-list').innerHTML, '', 'no rows in the page');
+        assert.ok(hidden(o, 'muse-library-listbox'));
+        assert.equal(o.el('muse-library-toggle').attrs.get('aria-expanded'), 'false');
+        assert.equal(o.el('muse-library-toggle-label').textContent, 'Show the list');
+        assert.equal(o.el('muse-library-refresh').disabled, false, 'Index and Refresh stay on the page');
+    });
+
+    it('shows the newest "last added" date, and waiting and failed counts', async () => {
+        const o = await open({ rows: [item({ updated_at: '2026-11-26T08:00:00.000Z' }), item({ updated_at: '2026-11-02T08:00:00.000Z' }), item({ status: 'pending', summary: null }), item({ status: 'failed', summary: null, error: 'timeout' })], folded: true });
+        const line = o.el('muse-library-count').textContent;
+        assert.match(line, /^Reels remembered: 2 · last added/);
+        assert.ok(line.includes(o.h.UI.formatDay('2026-11-26T08:00:00.000Z')), line);
+        assert.ok(line.includes('1 waiting') && line.includes('1 could not be watched'), line);
+        const none = await open({ rows: [item({ status: 'pending', summary: null })], folded: true });
+        assert.equal(none.el('muse-library-count').textContent, 'No reel remembered yet · 1 waiting');
+    });
+
+    it('opens to 20 rows, adds 20 on "Show 20 more", and folds back to nothing', async () => {
+        const o = await open({ rows: many(139), folded: true });
+        o.page.museToggleList();
+        assert.equal(rowsOf(o).length, 20);
+        assert.equal(o.el('muse-library-shown').textContent, 'Showing 20 of 139');
+        assert.ok(!hidden(o, 'muse-library-listbox') && !hidden(o, 'muse-library-more'));
+        assert.equal(o.el('muse-library-toggle-label').textContent, 'Hide the list');
+        assert.equal(o.el('muse-library-toggle').attrs.get('aria-expanded'), 'true');
+        o.page.museMoreReels();
+        assert.equal(rowsOf(o).length, 40);
+        for (let i = 0; i < 5; i++) o.page.museMoreReels();
+        assert.equal(rowsOf(o).length, 139);
+        assert.ok(hidden(o, 'muse-library-more'), 'nothing more to show');
+        o.page.museToggleList();
+        assert.equal(o.el('muse-library-list').innerHTML, '');
+        assert.ok(hidden(o, 'muse-library-listbox'));
+        o.page.museToggleList();
+        assert.equal(rowsOf(o).length, 20, 'opening again starts at the first page');
+    });
+
+    it('searches the summaries (Arabic folded) and starts again at the first page', async () => {
+        const rows = [...many(30), item({ summary: 'أدوات الذكاء الاصطناعي للمبتدئين' }), item({ summary: 'Kubernetes pods explained' })];
+        const o = await open({ rows, folded: true });
+        o.page.museToggleList();
+        o.page.museMoreReels();
+        o.page.museSearchList({ value: 'kubernetes' });
+        assert.equal(rowsOf(o).length, 1);
+        assert.equal(o.el('muse-library-shown').textContent, 'Showing 1 of 1');
+        o.page.museSearchList({ value: 'ادوات' });
+        assert.equal(rowsOf(o).length, 1, 'أ and ا are one letter');
+        o.page.museSearchList({ value: 'nothing like this' });
+        assert.equal(rowsOf(o).length, 0);
+        assert.equal(o.el('muse-library-shown').textContent, 'No reel matches.');
+        o.page.museSearchList({ value: '' });
+        assert.equal(rowsOf(o).length, 20);
+    });
+
+    it('is the owner\'s alone: a viewer\'s press changes nothing', async () => {
+        const o = await open({ role: 'viewer', rows: many(3), folded: true });
+        o.page.museToggleList();
+        assert.equal(o.page.museLibState().listOpen, false);
+    });
+
+    it('says the line in Arabic', async () => {
+        const o = await open({ lang: 'ar', rows: many(139), folded: true });
+        assert.ok(o.el('muse-library-count').textContent.startsWith('الريلز المحفوظة في الذاكرة: 139 · آخر إضافة'), o.el('muse-library-count').textContent);
+        assert.ok(o.el('muse-library-count').textContent.endsWith('· 0 في الانتظار'), o.el('muse-library-count').textContent);
     });
 });

@@ -329,7 +329,7 @@ const CampaignsPage = {
             return html`
                 <button type="button" class="campaign-stat campaign-stat-link"
                         data-action="app:navigate" data-target="activity"
-                        data-query="${new URLSearchParams({ campaign: String(c.id), status: 'FAILED' }).toString()}"
+                        data-query="${new URLSearchParams({ campaign: String(c.id), outcome: 'actionable' }).toString()}"
                         title="${t('campaigns.openFailed')}">
                     <span class="dot bad" aria-hidden="true"></span> ${label}
                     <span class="sr-only">${t('campaigns.openFailed')}</span>
@@ -637,6 +637,65 @@ const CampaignsPage = {
         this.inspect(this.draftOf(form).trigger_keyword, this.draftOf(form).match_mode);
     },
 
+    /** The shortest stem, in letters, either form of a keyword may have: «ال» + 2 letters is as likely a word as a prefix («الم», «الف»), so no suggestion. */
+    FORM_MIN_STEM: 3,
+    /** The most "Also add" buttons under the field. */
+    FORM_MAX_SUGGESTIONS: 6,
+
+    /**
+     * The other way people write one Arabic keyword: «كورس» -> «الكورس», «الكورس» -> «كورس», or '' when there is no reliable one.
+     * In whole-word mode the keyword must stand alone, and the matcher folds spelling (hamza, ة, ى, tashkeel, tatweel: `normalizeArabic`)
+     * but never adds or drops letters, so «الكورس» does not match «كورس». This is the ONE rule that is always right to offer;
+     * broken plurals («كتاب» -> «كتب») follow no rule that is, so none is suggested. Only a single Arabic word qualifies (not a phrase,
+     * not Latin, not a number), and the stem must keep at least `FORM_MIN_STEM` letters either way.
+     */
+    otherForm(keyword) {
+        const typed = String(keyword || '').trim();
+        const normalized = UI.normalizeArabic(typed);
+        if (!normalized || !/^[\u0621-\u063A\u0641-\u064A]+$/.test(normalized)) return '';
+        if (normalized.startsWith('ال')) {
+            const stem = normalized.slice(2);
+            if (stem.length < this.FORM_MIN_STEM) return '';
+            // From what was typed, so the suggestion keeps the owner's own spelling: only the leading alef + lam goes.
+            const bare = typed.replace(/^[اأإآ]\u0640*ل/, '');
+            return UI.normalizeArabic(bare) === stem ? bare : stem;
+        }
+        if (normalized.length < this.FORM_MIN_STEM) return '';
+        return `ال${typed}`;
+    },
+
+    /**
+     * The "Also add" buttons: the other form of each Arabic keyword, in whole-word mode only (in substring mode «كورس» already sits
+     * inside «الكورس»), left out when the list already has it (compared as the matcher compares).
+     */
+    formSuggestions(value, mode) {
+        if (mode !== 'word') return [];
+        const keywords = this.splitKeywords(value);
+        const have = new Set(keywords.map((k) => UI.normalizeArabic(k)));
+        const out = [];
+        for (const keyword of keywords) {
+            const form = this.otherForm(keyword);
+            const key = UI.normalizeArabic(form);
+            if (!form || have.has(key)) continue;
+            have.add(key);
+            out.push(form);
+            if (out.length >= this.FORM_MAX_SUGGESTIONS) break;
+        }
+        return out;
+    },
+
+    /** "Also add «الكورس»": put the other form in the keyword list and ask the inspector again, with focus back on the field. */
+    addKeywordForm(el) {
+        const form = el && typeof el.closest === 'function' ? el.closest('form') : null;
+        const input = (form && form.querySelector('#campaign-trigger')) || document.getElementById('campaign-trigger');
+        const add = el && el.dataset ? String(el.dataset.form || '').trim() : '';
+        if (!input || !add) return;
+        const current = String(input.value || '').replace(/[\s,،]+$/, '');
+        input.value = current ? `${current}, ${add}` : add;
+        this.inspectKeywords(input);
+        if (typeof input.focus === 'function') input.focus();
+    },
+
     /**
      * What this keyword will also fire on. Computed on every keystroke, so the
      * warning appears at the moment of the decision rather than after the
@@ -672,6 +731,8 @@ const CampaignsPage = {
         const collisions = current ? answer.rows : [];
         const unchecked = current ? answer.unchecked : 0;
 
+        const suggestions = this.formSuggestions(value, mode);
+
         const hasProblem = risks.length > 0 || duplicates.length > 0 || collisions.length > 0;
         const safe = keywords.length > 0 && !hasProblem && current && answer.state === 'done' && unchecked === 0;
 
@@ -693,6 +754,17 @@ const CampaignsPage = {
                         ${duplicates.map((d) => html`<li dir="auto">${t('campaigns.match.duplicate', { keyword: d })}</li>`)}
                     </ul>
                     ${risks.length > 0 ? html`<p class="mbs-4">${t('campaigns.match.advice')} ${t('campaigns.match.adviceWord')}</p>` : ''}
+                ` : ''}
+                ${suggestions.length > 0 ? html`
+                    <div class="match-forms" data-match-forms>
+                        <p class="form-hint">${t('campaigns.forms.hint')}</p>
+                        <span class="row gap-2 row--wrap">
+                            ${suggestions.map((form) => UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'plus', label: t('campaigns.forms.add', { form: this.iso(form) }),
+                                action: 'campaigns:addKeywordForm', data: { form },
+                            }))}
+                        </span>
+                    </div>
                 ` : ''}
                 <!-- Said, not left out: with no word about the other campaigns this would read as "none clash". While it runs the
                      line is hidden from assistive technology (the live region would speak it after every pause in typing); the
@@ -892,7 +964,7 @@ const CampaignsPage = {
             ${this.modalHeader(t('campaigns.createTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleCreate">
                 <div id="campaign-form-error"></div>
-                ${this.keywordField('')}
+                ${this.keywordField('', 'word')}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
                     <!-- data-guard-dirty: closing this modal by Escape, by the
@@ -983,7 +1055,7 @@ const CampaignsPage = {
         try {
             await API.createCampaign({
                 trigger_keyword: data.get('trigger_keyword'),
-                match_mode: data.get('match_mode') === 'word' ? 'word' : 'substring',
+                match_mode: data.get('match_mode') === 'substring' ? 'substring' : 'word',
                 dm_template: data.get('dm_template'),
                 public_reply_template: data.get('public_reply_template') || null,
                 post_id: data.get('post_id') || null,
@@ -1557,6 +1629,7 @@ UI.registerActions('campaigns', {
     matchModeChange: (el) => CampaignsPage.matchModeChange(el),
     draftChange: (el) => CampaignsPage.reinspect(el),
     useWholeWord: (el) => CampaignsPage.useWholeWord(el),
+    addKeywordForm: (el) => CampaignsPage.addKeywordForm(el),
     editOther: (el) => CampaignsPage.editOther(el.dataset.id),
     retryCollisions: (el) => CampaignsPage.retryCollisions(el),
     openPostPicker: (el) => CampaignsPage.openPostPicker(el),
