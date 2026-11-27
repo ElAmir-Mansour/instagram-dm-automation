@@ -26,6 +26,7 @@ import { studioView } from '../profile/views.js';
 import { invalidateTenantCache } from '../tenant.js';
 import { dialectLine, writeSystemPrompt, writeUserPrompt } from './infographicSpec.js';
 import { StudioError } from './common.js';
+import { NO_BRAND } from '../brand/resolve.js';
 import { createInfographic, infographicContext, PROFILE_UNREADABLE_MESSAGE, renderPayload, rerenderInfographic } from './infographics.js';
 import { ENGLISH_SETTINGS } from './testFixtures.js';
 
@@ -317,7 +318,7 @@ describe('renderPayload', () => {
     const row = { topic: 'Whey vs casein vs plant protein', notes: null, language: 'en' as const };
 
     it('writes with the context it is handed: the tenant\'s role in the system prompt, their never-mention list in the user prompt', () => {
-        const payload = renderPayload(ID, row, 'dark', settings, null, ctxOf(FITNESS_EN));
+        const payload = renderPayload(ID, row, 'dark', settings, NO_BRAND, null, ctxOf(FITNESS_EN));
         assert.equal(payload.write!.system, writeSystemPrompt('en', ctxOf(FITNESS_EN)));
         assert.equal(payload.write!.user, writeUserPrompt({ topic: row.topic, notes: null, language: 'en', avoid: ['steroids'] }));
         assert.match(payload.write!.user, /Never use these words or topics: steroids\./);
@@ -329,9 +330,9 @@ describe('renderPayload', () => {
         // The signatures refuse it at compile time (`tsc` fails on an unused directive); a caller that gets past them is stopped here.
         assert.throws(() => {
             // @ts-expect-error asking Claude to write needs the writer's context
-            return renderPayload(ID, row, 'dark', settings, null);
+            return renderPayload(ID, row, 'dark', settings, NO_BRAND, null);
         }, /needs the writer's context/);
-        const rendered = renderPayload(ID, row, 'dark', settings, { columns: [] });
+        const rendered = renderPayload(ID, row, 'dark', settings, NO_BRAND, { columns: [] });
         assert.deepEqual(rendered.spec, { columns: [] });
         assert.equal(rendered.write, undefined);
     });
@@ -417,14 +418,14 @@ describe('the callers resolve the context through profileContext', () => {
     });
 
     /**
-     * The settings reader's own profile read answers, and every read after it throws, as a connection that drops would. The
-     * reads that fail are the context's: by SQL, with no count of how many came before (the settings' read is always first).
+     * The settings reader's own profile read and the Brand Kit's (`loadRenderBrand`, made beside it, and uncached here: no request) answer, and every
+     * read after them throws, as a connection that drops would. The reads that fail are the context's.
      */
     function profileDropsAfterSettings(profile: CreatorProfile): void {
         let reads = 0;
         db.routes.unshift([PROFILE_READ, () => {
             reads += 1;
-            if (reads > 1) throw new Error('connection reset');
+            if (reads > 2) throw new Error('connection reset');
             return { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] };
         }]);
     }

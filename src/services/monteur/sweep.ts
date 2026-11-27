@@ -35,6 +35,8 @@ import type { ClipCopy, ClipDirection, ClipEdit, MonteurSourceRow, SourcePick, S
 import { describeError, log } from '../../utils/log.js';
 import { MacBrainRefused } from '../macBrain.js';
 import { ProfileUnreadableError } from '../profile/context.js';
+import { loadRenderBrand } from '../brand/load.js';
+import type { RenderBrand } from '../brand/resolve.js';
 import { profileVersionFor } from '../profile/stamp.js';
 import { withTransaction } from '../studio/common.js';
 import { buildGenContext } from '../studio/drafts.js';
@@ -271,7 +273,7 @@ type ReadyClip = { clip: PickedClip; copy: ClipCopy; edits: ClipEdit[]; directio
  */
 async function handOff(
     source: ClaimedSource, settings: StudioSettings, ready: readonly ReadyClip[], record: SourcePick, topic: string | null,
-    profileVersion: number | null,
+    profileVersion: number | null, brand: RenderBrand,
 ): Promise<{ outcome: PickOutcomeKind; clips: number }> {
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
@@ -282,7 +284,7 @@ async function handOff(
             [source.id, JSON.stringify(record), source.attempts]
         );
         if (!rows[0]) return { outcome: 'lost', clips: 0 };
-        const accents = await accentsFor(client, source.creator_id, settings, ready.length);
+        const accents = await accentsFor(client, source.creator_id, settings, ready.length, brand);
         const digits = settings.voice.digits === 'arabic-indic' ? toArabicDigits : (s: string) => s;
         for (const [i, { clip, copy, edits, direction }] of ready.entries()) {
             const title = digits(clip.title);
@@ -302,7 +304,7 @@ async function handOff(
             await enqueueMonteurRender(client, source.creator_id, buildRenderPayload({
                 clipId: inserted[0]!.id,
                 source: { id: source.id, path: source.path, words: source.words as TranscriptWord[] | null },
-                start: clip.start, end: clip.end, title, keyword: copy.keyword, accent: accents[i]!, settings, edits, direction,
+                start: clip.start, end: clip.end, title, keyword: copy.keyword, accent: accents[i]!, settings, edits, direction, brand,
             }));
         }
         return { outcome: 'rendering', clips: ready.length };
@@ -401,6 +403,8 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         // Read once per drain of this attempt: every clip of the pick carries it (profile/stamp.ts). With the Mac brain an
         // attempt spans several drains, so the stamp is the version at hand-off, which can be newer than the pick's prompt.
         const profileVersion = await profileVersionFor(source.creator_id);
+        // The Brand Kit's logo and switch, read here and not inside `handOff`'s transaction.
+        const brand = await loadRenderBrand(source.creator_id);
         // Claude on the Mac, keyed by this attempt: the drain that finds an answer reads it by the same key.
         // `api` is the AI providers layer, for a tenant the Mac is not for; for the owner it is the Mac (brain.ts). Only `api` reads the database here.
         const brain = await effectiveBrain(source.creator_id, settings.monteur.brain);
@@ -482,7 +486,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         if (!ready.length) throw new Error(`The Marketer's copy could not be used: ${unusable.join('; ')}`);
 
         await editReady(source, settings, ready, picked.lines, words, record, deadline, think, api);
-        const handed = await handOff(source, settings, ready, record, picked.topic, profileVersion);
+        const handed = await handOff(source, settings, ready, record, picked.topic, profileVersion, brand);
         return { source_id: source.id, outcome: handed.outcome, clips: handed.clips };
     } catch (err) {
         if (err instanceof ThinkWaiting) return releaseWaiting(source, err);

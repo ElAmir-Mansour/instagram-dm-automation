@@ -21,6 +21,7 @@
  * database. Selecting a subset of columns is expressed at the call site with `Pick<>`, so the
  * type says which columns the query actually asked for.
  */
+import type { RenderLogo } from '../services/brand/resolve.js';
 import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel, ExampleCarousel } from '../services/studio/carouselTypes.js';
 import type { DraftFinding } from '../services/explainers/spec.js';
@@ -789,7 +790,7 @@ export interface RenderCarouselPayload {
     draftId: string;
     carousel: Carousel;
     shots: Record<string, ShotSpec & { video_path: string }>;
-    brand: BrandKit;
+    brand: BrandKit & { logo?: RenderLogo };
     cta: CtaSlideWords;
     facts: string[];
 }
@@ -1134,7 +1135,7 @@ export interface MonteurRenderPayload {
     /** A second MP4 with TikTok's CTA (`slide.ttPill`, `slide.ttSub`), or null when TikTok is off. */
     cta_tiktok: { line1: string; line2: string } | null;
     /** `style` is the tenant's `monteur.style`; a worker that doesn't know it renders 'classic'. */
-    brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr'; style: MonteurStyle };
+    brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr'; style: MonteurStyle; logo?: RenderLogo };
     /** Seconds into the clip. */
     cover_at: number;
     /** The Editor's pro edits, `t` in seconds on the clip's clock; `[]` renders the reel without any. */
@@ -1414,6 +1415,8 @@ export interface RenderInfographicPayload {
     brand: {
         name: { ar: string; en: string }; site: string; handle: string; socials: InfographicSocial[];
         primary: string; accent: string; photo: string | null;
+        /** Brand Kit: appended last, and only when the tenant has a logo. */
+        logo?: RenderLogo;
     };
     spec?: unknown;
     write?: { model: string; purpose: string; system: string; user: string; schema: Record<string, unknown> };
@@ -1644,7 +1647,7 @@ export interface ExplainerRenderPayload {
     audio: { url: string; duration: number };
     scenes: { position: number; start: number; end: number; label: string; picture_url: string }[];
     words: ExplainerWords;
-    brand: { name: string; handle: string; site: string; photo_url?: string };
+    brand: { name: string; handle: string; site: string; photo_url?: string; logo?: RenderLogo };
     title_color: string;
     motion: 'layers' | 'still';
     formats: ('vertical' | 'horizontal')[];

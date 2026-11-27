@@ -61,6 +61,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { pool } from '../../config/db.js';
 import type { ProfileSource } from '../../db/rows.js';
+import { checkLogoUpload } from '../brand/logoCheck.js';
 import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
 import { getPlatformOwnerId } from '../tenant.js';
 import { clearProfileCache } from './cache.js';
@@ -88,7 +89,7 @@ export function nestedTooDeep(value: unknown, depth = 0): boolean {
 const isKeyedMap = (path: string): boolean => path === 'language.surfaces' || path === 'socials.links' || /^language\.surfaces\.[^.]+$/.test(path);
 
 /** Fields that are absent, not null, when they have no value: a `null` for one takes it away. */
-const REMOVABLE: ReadonlySet<string> = new Set(['audience.timezone']);
+const REMOVABLE: ReadonlySet<string> = new Set(['audience.timezone', 'brand.logos.main']);
 
 /** The content rule the platform owner's editor prompt is written from, and the one a patch may not take from his profile unconfirmed. */
 export const OWNER_LOCKED_RULE: ContentRulePreset = 'no_women_imagery';
@@ -124,6 +125,32 @@ export function mergePatch(current: unknown, patch: unknown, path = ''): unknown
 }
 
 /**
+ * `merged` with the brand's `logo_url` made a copy of `logos.main.url` (Brand Kit, contract §1.4): the logo's address lives in `logos.main`, and
+ * `logo_url` is kept for the readers that predate it (retention). Called right after `mergePatch`, before the check, so a client sends the logo
+ * once and the two can never disagree.
+ *
+ *   - a `logos.main` that exists: `logo_url` is its `url`;
+ *   - otherwise, when the patch touched `brand.logos`: `logo_url` is null;
+ *   - otherwise `logo_url` stays as stored (a legacy value; nothing renders it).
+ *
+ * A `main: null` that survived the merge (a removal sent to a profile that held no `logos` to merge it into) is dropped, and so is a `logos` left
+ * empty, so taking a logo away returns the profile to the shape it had without one. Pure: `merged` is changed in place and returned.
+ */
+export function withLogoCopy(merged: Loose, patch: Loose): Loose {
+    const brand = merged.brand;
+    if (!isObj(brand)) return merged;
+    const touched = isObj(patch.brand) && patch.brand.logos !== undefined;
+    if (isObj(brand.logos)) {
+        if (brand.logos.main === null) delete brand.logos.main;
+        if (Object.keys(brand.logos).length === 0) delete brand.logos;
+    }
+    const main = isObj(brand.logos) && isObj(brand.logos.main) ? brand.logos.main : null;
+    if (main && typeof main.url === 'string') brand.logo_url = main.url;
+    else if (touched) brand.logo_url = null;
+    return merged;
+}
+
+/**
  * The top-level sections (`identity`, `offers`…) in which `after` differs from `before`: the profile's own sections in
  * their order, then any other key either has (an unknown section a patch invented). Names only, never values, which
  * is what the audit trail records.
@@ -149,6 +176,16 @@ export interface ProfileState {
 export interface PatchOutcome extends ProfileState {
     /** The top-level sections the patch changed: empty when it changed nothing and so wrote nothing. */
     changed: string[];
+    /** Did the save set or take away the logo (`logos.main`, compared by its `url`)? For the audit row: a route takes it out of the answer. */
+    logoChange: 'set' | 'removed' | null;
+}
+
+/** What a save did to the logo, by its address: a new or different one is `set`, a missing one `removed`, the same one nothing. */
+export function logoChangeOf(before: Pick<CreatorProfile, 'brand'>, after: Pick<CreatorProfile, 'brand'>): 'set' | 'removed' | null {
+    const was = before.brand.logos?.main?.url;
+    const now = after.brand.logos?.main?.url;
+    if (was === now) return null;
+    return now === undefined ? 'removed' : 'set';
 }
 
 /** The profile as `GET /api/profile` answers it. */
@@ -179,7 +216,7 @@ function plan(found: Found, version: number | null, patch: Loose): Plan {
     // A profile this release cannot fully read takes no write: it would delete what the newer release stored.
     if (found.newerSchema) throw newerSchemaError(found.version ?? 0);
     if (found.version !== version) throw versionConflict(found.version);
-    const merged = mergePatch(found.profile, patch) as Loose;
+    const merged = withLogoCopy(mergePatch(found.profile, patch) as Loose, patch);
     const changed = changedSections(found.profile, merged);
     if (changed.length === 0) return { noop: true };
     const checked = validateProfile(merged);
@@ -188,7 +225,7 @@ function plan(found: Found, version: number | null, patch: Loose): Plan {
 }
 
 const unchanged = (found: Found): PatchOutcome => ({
-    profile: found.profile, version: found.version, stored: found.version !== null, activationMissing: activationMissing(found.profile), changed: [],
+    profile: found.profile, version: found.version, stored: found.version !== null, activationMissing: activationMissing(found.profile), changed: [], logoChange: null,
 });
 
 /** Who is writing a patch, and what the write records and does besides (see the top of the file). */
@@ -214,23 +251,26 @@ export interface PatchActor {
  */
 export async function patchProfile(creatorId: string, body: unknown, actor: PatchActor): Promise<PatchOutcome> {
     if (!isObj(body)) throw badRequest('Send { "version": …, "patch": { … } }.');
-    const { version, patch, confirm_remove_owner_rule: confirmRemoval } = body;
+    const { version, patch: patchBody, confirm_remove_owner_rule: confirmRemoval } = body;
     if (version === undefined) {
         throw badRequest('version is required: send the version GET /api/profile returned, or null when it returned no stored profile.');
     }
     if (version !== null && !(typeof version === 'number' && Number.isInteger(version) && version >= 1)) {
         throw badRequest('version must be the whole number GET /api/profile returned, or null when it returned no stored profile.');
     }
-    if (!isObj(patch) || Object.keys(patch).length === 0) {
+    if (!isObj(patchBody) || Object.keys(patchBody).length === 0) {
         throw badRequest('patch must be an object with the fields to change, e.g. { "identity": { "niche": "…" } }.');
     }
-    if (nestedTooDeep(patch)) throw badRequest(`patch is nested too deeply: a profile has no field more than ${MAX_PATCH_DEPTH} levels down.`);
+    if (nestedTooDeep(patchBody)) throw badRequest(`patch is nested too deeply: a profile has no field more than ${MAX_PATCH_DEPTH} levels down.`);
 
     if (confirmRemoval !== undefined && typeof confirmRemoval !== 'boolean') throw badRequest('confirm_remove_owner_rule must be true or false.');
     const confirmed = confirmRemoval === true;
 
     // Without the lock: everything that refuses, or that has nothing to write, is decided here.
     const early = await loadProfile(creatorId, pool);
+    // A logo the patch sets is re-read from its file before anything is merged (it runs on the pool, so before the transaction). Only a
+    // logo that differs from the stored one is read, and only on a version that can still be saved: a stale one is refused by `plan`.
+    const patch = await withCheckedLogo(creatorId, patchBody, early, version);
     const first = plan(early, version, patch);
     if (first.noop) return unchanged(early);
     // The owner's rule, before the lock and before a connection is held: only a patch that takes the rule away asks who the owner is.
@@ -240,7 +280,7 @@ export async function patchProfile(creatorId: string, body: unknown, actor: Patc
     // With it: the mutex first, then the profile (or, for a tenant with none, the legacy rows) read again, so the merge is
     // of what is there now and nothing can change it until the commit. `lockStoredProfile` rather than `loadProfile`: a
     // database without v33 must be the 503 here, and a failed read would abort the transaction.
-    type Done = { kind: 'unchanged'; found: Found } | { kind: 'saved'; saved: Awaited<ReturnType<typeof saveProfile>>; changed: string[] };
+    type Done = { kind: 'unchanged'; found: Found } | { kind: 'saved'; saved: Awaited<ReturnType<typeof saveProfile>>; changed: string[]; logoChange: PatchOutcome['logoChange'] };
     const done = await withTransaction<Done>(async (tx) => {
         await lockTenantSettings(tx, creatorId);
         const locked = await lockStoredProfile(creatorId, tx);
@@ -253,11 +293,28 @@ export async function patchProfile(creatorId: string, body: unknown, actor: Patc
         if (again.removesRule && !confirmed && !ownerChecked) throw versionConflict(found.version);
         const saved = await saveProfile(creatorId, again.profile, { expectVersion: version, source: actor.source ?? 'user', userId: actor.userId, startFromCaller: true }, tx);
         await actor.onSaved?.(tx, { changed: again.changed, version: saved.version });
-        return { kind: 'saved', saved, changed: again.changed };
+        return { kind: 'saved', saved, changed: again.changed, logoChange: logoChangeOf(found.profile, saved.profile) };
     }).finally(() => clearProfileCache(creatorId));
 
     if (done.kind === 'unchanged') return unchanged(done.found);
-    return { profile: done.saved.profile, version: done.saved.version, stored: true, activationMissing: activationMissing(done.saved.profile), changed: done.changed };
+    return { profile: done.saved.profile, version: done.saved.version, stored: true, activationMissing: activationMissing(done.saved.profile), changed: done.changed, logoChange: done.logoChange };
+}
+
+/**
+ * `patch`, with `brand.logos.main` replaced by what `checkLogoUpload` read from the file when the patch sets one that is not the stored one. The
+ * patch itself is not changed. Nothing is read for a patch with no logo, for a removal (`null`), for the logo already stored, or for a version
+ * that is not the stored one.
+ */
+async function withCheckedLogo(creatorId: string, patch: Loose, early: Found, version: number | null): Promise<Loose> {
+    const brand = patch.brand;
+    const logos = isObj(brand) ? brand.logos : undefined;
+    const main = isObj(logos) ? logos.main : undefined;
+    if (!isObj(main) || early.newerSchema || early.version !== version) return patch;
+    if (isDeepStrictEqual(main, early.profile.brand.logos?.main)) return patch;
+    const checked = await checkLogoUpload(creatorId, main);
+    const next = structuredClone(patch) as { brand: { logos: { main: unknown } } };
+    next.brand.logos.main = checked;
+    return next as unknown as Loose;
 }
 
 /** 409 `OWNER_RULE_LOCKED` when `creatorId` is the platform owner. A failed lookup refuses too (it throws): see the top of the file. */

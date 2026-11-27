@@ -7,14 +7,18 @@ import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { ExplainerDraft, ExplainerRow } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { brandColours, NO_BRAND } from '../brand/resolve.js';
 import { MacBrainRefused } from '../macBrain.js';
+import { defaultProfile } from '../profile/defaults.js';
 import { StudioError } from '../studio/common.js';
+import { getStudioSettings } from '../studio/settings.js';
 import { defaultInfographicConfig, type ExplainerTrack } from '../studio/settingsTypes.js';
 import {
     approveExplainer, approvePictures, BUSY_AFTER_SECONDS, BUSY_MAC_NOTE, createExplainer, deleteExplainer, editExplainer, explainerIdOf, filesOf, getExplainer, listExplainers,
     presentExplainer, renderExplainer, retryExplainer, revoiceExplainer, rewriteExplainer, startDraw,
 } from './explainers.js';
 import { ExplainerError } from './errors.js';
+import { renderPayload } from './payloads.js';
 import { writerSchema } from './prompt.js';
 import { CLOSING_QUESTION, EXPLAINER, JOB, SENTENCE, TENANT, validWriterOutput } from './testFixtures.js';
 import { BASE, explainerSettings, installWorld, type World } from './testDb.js';
@@ -1090,5 +1094,67 @@ describe('presentExplainer', () => {
         const row = { ...world.addExplainer({ status: 'drawing', job_id: JOB }), job_status: 'pending', job_progress: null, job_not_before: new Date('2026-10-26T00:05:00Z') };
         assert.deepEqual(presentExplainer(row, []).job, { status: 'pending', progress: null, not_before: new Date('2026-10-26T00:05:00Z') });
         assert.equal(presentExplainer({ ...row, job_status: null }, []).job, null, 'a job that is gone is no job');
+    });
+});
+
+// ─── The Brand Kit (docs: contract §4) ──────────────────────────────────────────────────────────
+
+describe('the render payload and the Brand Kit', () => {
+    const LOGO = { url: `${BASE}/api/uploads/${id(7)}`, width: 1200, height: 400, alpha: true, tone: 'dark' as const, colour: '#0E3B5C' };
+    const settingsAndRow = async () => {
+        world.settingsRow = explainerSettings({ characters: [KARIM], music: [TRACK], title_color: '#FFD43B' });
+        world.settingsRow.infographic = { ...defaultInfographicConfig(), name: { ar: 'سامي', en: 'Sam Lee' }, handle: '@samlee', site: 'samlee.example' };
+        const row = reviewExplainer({ language: 'en' });
+        return { row, scenes: world.sceneRows(), settings: await getStudioSettings(TENANT) };
+    };
+
+    it('NO_BRAND: today\'s brand, key for key and in order, and the setting\'s own title colour', async () => {
+        const { row, scenes, settings } = await settingsAndRow();
+        const p = renderPayload(row, scenes, settings, BASE, NO_BRAND);
+        assert.deepEqual(Object.keys(p.brand), ['name', 'handle', 'site']);
+        assert.equal(p.title_color, '#FFD43B');
+        assert.equal(JSON.stringify(p), JSON.stringify(renderPayload(row, scenes, settings, BASE, { logo: null, colours: null })));
+    });
+
+    it('a logo with the switch off: only brand.logo is added, last; the title colour does not move', async () => {
+        const { row, scenes, settings } = await settingsAndRow();
+        const plain = renderPayload(row, scenes, settings, BASE, NO_BRAND);
+        const p = renderPayload(row, scenes, settings, BASE, { logo: LOGO, colours: null });
+        assert.deepEqual(Object.keys(p.brand), ['name', 'handle', 'site', 'logo']);
+        assert.equal(JSON.stringify(p.brand.logo), JSON.stringify(LOGO));
+        assert.equal(p.title_color, '#FFD43B');
+        const { logo: _logo, ...rest } = p.brand;
+        assert.deepEqual({ ...p, brand: rest }, plain);
+    });
+
+    it('a logo with the switch on: the title colour is the brand\'s, and nothing else moves', async () => {
+        const { row, scenes, settings } = await settingsAndRow();
+        const plain = renderPayload(row, scenes, settings, BASE, NO_BRAND);
+        const colours = brandColours('#0E3B5C', '#F2A33A');
+        const p = renderPayload(row, scenes, settings, BASE, { logo: LOGO, colours });
+        assert.equal(p.title_color, '#F2A33A');
+        assert.deepEqual(Object.keys(p.brand), ['name', 'handle', 'site', 'logo']);
+        assert.deepEqual({ ...p, brand: plain.brand, title_color: plain.title_color }, plain);
+    });
+
+    it('the switch alone moves the title colour and adds no key', async () => {
+        const { row, scenes, settings } = await settingsAndRow();
+        const p = renderPayload(row, scenes, settings, BASE, { logo: null, colours: brandColours('#0E3B5C', '#F2A33A') });
+        assert.deepEqual(Object.keys(p.brand), ['name', 'handle', 'site']);
+        assert.equal(p.title_color, '#F2A33A');
+    });
+
+    it('approvePictures carries the tenant\'s stored logo into the queued job, last in brand', async () => {
+        world.settingsRow = explainerSettings({ characters: [KARIM], music: [TRACK], title_color: '#FFD43B' });
+        const profile = defaultProfile();
+        profile.brand.logo_url = LOGO.url;
+        profile.brand.logos = { main: { ...LOGO, added_at: '2026-12-01T09:30:00.000Z' } };
+        world.db.routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+        reviewExplainer({ language: 'en' });
+        await approvePictures(TENANT, EXPLAINER);
+        const p = world.jobsOf('explainer_render')[0]!.payload;
+        assert.deepEqual(Object.keys(p.brand).at(-1), 'logo');
+        assert.deepEqual(p.brand.logo, LOGO);
+        assert.equal(p.title_color, '#FFD43B', 'the switch is off');
     });
 });

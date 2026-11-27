@@ -135,6 +135,29 @@ export interface OfferSales {
     image_url: string;
 }
 
+export const LOGO_TONES = ['light', 'dark'] as const;
+export type LogoTone = (typeof LOGO_TONES)[number];
+
+/** One logo file. Set only through PATCH /api/profile, after `checkLogoUpload` re-read its bytes. */
+export interface LogoAsset {
+    /** https://<public base>/api/uploads/<uuid>: a PNG upload of this tenant. Canonicalised by the server. */
+    url: string;
+    /** Pixels, as the server read them from the file. */
+    width: number;
+    height: number;
+    /** Has transparent pixels. Measured in the browser; forced to false when the PNG cannot hold transparency. */
+    alpha: boolean;
+    /** 'light' when the relative luminance of `colour` is above 0.179 (it reads better on black), else 'dark'. */
+    tone: LogoTone;
+    /** The logo's main colour, #RRGGBB upper case (measured in the browser). */
+    colour: string;
+    /** ISO 8601 UTC, set by the server when the logo changes. */
+    added_at: string;
+}
+
+/** Phase 1 has one slot. Phase 2 adds on_dark, on_light, icon and mono. */
+export interface BrandLogos { main?: LogoAsset }
+
 export interface Offer {
     id: string;
     kind: OfferKind;
@@ -222,9 +245,14 @@ export interface CreatorProfile {
         primary: string;
         accent: string;
         font_display: StudioDisplayFont;
+        /** A copy of `logos.main.url`, or null without one. Kept for old readers (retention). Set by the server (`withLogoCopy`, patch.ts). */
         logo_url: string | null;
         portrait_url: string | null;
         theme: ProfileTheme;
+        /** Absent = no logo. Brand Kit phase 1: one slot. */
+        logos?: BrandLogos;
+        /** Absent = off: a stored profile from before the Brand Kit reads as off. `true` is written by `newTenantProfile` only. */
+        use_brand_colours?: boolean;
     };
     socials: {
         handle: string;

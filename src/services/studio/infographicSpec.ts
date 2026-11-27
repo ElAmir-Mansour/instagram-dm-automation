@@ -15,6 +15,7 @@
  */
 import type { RenderInfographicPayload } from '../../db/rows.js';
 import { withArticle } from '../profile/article.js';
+import type { RenderLogo } from '../brand/resolve.js';
 import type { ProfileContext } from '../profile/context.js';
 import type { ArabicRegister, Domain } from '../profile/types.js';
 import type { InfographicConfig, InfographicTheme } from './settingsTypes.js';
@@ -538,7 +539,7 @@ export function writeUserPrompt(req: WriteRequest): string {
 }
 
 /** The brand the worker draws with: the tenant's infographic settings, as the template's InfoBrand. */
-export function payloadBrand(cfg: InfographicConfig): RenderInfographicPayload['brand'] {
+export function payloadBrand(cfg: InfographicConfig, logo: RenderLogo | null = null): RenderInfographicPayload['brand'] {
     return {
         name: { ar: cfg.name.ar, en: cfg.name.en },
         site: cfg.site,
@@ -547,6 +548,8 @@ export function payloadBrand(cfg: InfographicConfig): RenderInfographicPayload['
         primary: cfg.primary,
         accent: cfg.accent,
         photo: cfg.photo_url,
+        // Brand Kit: last, and only with a logo, so a tenant without one has exactly today's object.
+        ...(logo ? { logo } : {}),
     };
 }
 

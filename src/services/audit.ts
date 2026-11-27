@@ -153,6 +153,8 @@ export const AUDIT_ACTIONS = {
     settingsMacBrainWrite: 'settings.mac_brain_write',
     /** The Creator Profile was changed by `PATCH /api/profile` (FLOWS.md §4.7). `detail.paths` names the sections that changed, never their values. */
     profileWrite: 'profile.write',
+    /** A logo was set or removed (Brand Kit). `detail`: `{ change: 'set' | 'removed', version, width?, height?, alpha? }`. Never the URL or the colour. */
+    brandLogoUpload: 'brand.logo_upload',
     /** An AI provider's API key was saved (after the provider accepted it) or removed, from Operations (P20c). `detail` names the provider, never the key. */
     settingsAiKeyWrite: 'settings.ai_key_write',
     /** AI providers, routes, prices or budgets changed (P20c). `detail` names what changed: providers, routes (provider/model/effort), models priced, budgets. */

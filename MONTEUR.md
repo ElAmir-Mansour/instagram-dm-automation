@@ -176,8 +176,10 @@ What the app does on apply:
 - Stores `words` and `duration`, and sets the status to `transcribed`. The drain sweep (§6) takes it from there.
 
 **`monteur_render`**
-`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction, style }, cover_at, edits: ClipEdit[], direction?: { cuts, doodles, freezes, transitions }, emphasis?: number[], behind?: [{ t, text }] }`
+`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction, style, logo?: { url, width, height, alpha, tone, colour } }, cover_at, edits: ClipEdit[], direction?: { cuts, doodles, freezes, transitions }, emphasis?: number[], behind?: [{ t, text }] }`
 → `{ video_url, tiktok_video_url: string | null, cover_url, duration, width: 1080, height: 1920 }`
+
+`brand.logo` (the Brand Kit, FLOWS.md §15) is appended last and only when the tenant has a logo; the worker draws it on the end card only, never on the cover frame. `brand.accent` is always the clip's own accent: with the tenant's "use my brand colours" switch on, NEW clips are given the brand's accent (`accentsFor`), and a re-render keeps what the clip had.
 
 `cta_tiktok` makes a second MP4 from the same cut, identical except for the CTA text (e.g. «الرابط في البايو»),
 because TikTok can't auto-DM, so its copy must not say "comment X". It's null when TikTok is off.

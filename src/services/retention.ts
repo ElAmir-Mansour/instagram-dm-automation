@@ -383,6 +383,9 @@ const MEDIA_CANDIDATES_BASE_SQL = MEDIA_CANDIDATES_HEAD_SQL + PUBLIC_ONLY_SQL + 
  * the profile is the only thing that names it, and for the logo, which no setting holds. It is the last guard,
  * so a database without the table can run the rest (`withProfileTable`).
  *
+ * The whole brand section is read as text (Brand Kit): the portrait, the logo (`logos.main.url`, and `logo_url`, its copy) and every URL a later
+ * phase adds to it are kept without this list having to name them.
+ *
  * The offers are read whole (`offers` as text), because an offer's `sales.image_url` (the cover the owner picked for the DM
  * bot, docs/DM_SALES_PLAN.md §5) sits in a list, and a file a profile names must outlive the sweep. A match on an upload's
  * id anywhere in the offers is a reason to keep it: it can only make the sweep delete fewer files.
@@ -396,8 +399,7 @@ const KEPT_BY_PROFILE_SQL = `
                        AND NOT EXISTS (
                            SELECT 1
                              FROM creator_profiles cp
-                            WHERE (COALESCE(cp.profile->'brand'->>'portrait_url', '') || ' ' || COALESCE(cp.profile->'brand'->>'logo_url', '')
-                                   || ' ' || COALESCE((cp.profile->'offers')::text, ''))
+                            WHERE (COALESCE((cp.profile->'brand')::text, '') || ' ' || COALESCE((cp.profile->'offers')::text, ''))
                                   LIKE '%' || m.id::text || '%'
                        )`;
 

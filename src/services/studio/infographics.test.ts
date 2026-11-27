@@ -7,11 +7,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
+import { brandColours, NO_BRAND } from '../brand/resolve.js';
 import { setAiCaller, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
 import { MacBrainTenantRefused } from '../aiProviders/route.js';
 import { BudgetRefused } from '../aiProviders/usage.js';
 import { AiError } from '../llm/errors.js';
 import { withProfileCache } from '../profile/cache.js';
+import { defaultProfile } from '../profile/defaults.js';
 import { profileReads } from '../profile/stampSupport.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { THINK_MODEL } from '../monteur/think.js';
@@ -20,7 +22,7 @@ import { legacyBase } from '../profile/legacy.js';
 import { StudioError } from './common.js';
 import {
     BUDGETS, captionIssues, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, primaryCaptionIssue, specProblems,
-    WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt, type InfographicSpec,
+    payloadBrand, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt, type InfographicSpec,
 } from './infographicSpec.js';
 import { answerToWritten, layerWriteSchema, writeInfographicOnServer } from './infographicWriter.js';
 import {
@@ -596,7 +598,7 @@ describe('a tenant’s infographic is written on the server, through the layer (
         assert.equal(call!.purpose, 'tenant_infographic');
         assert.equal(call!.creatorId, NEW_TENANT);
         // The Mac's `write`, for the same request: the owner's payload builder, with the same context.
-        const mac = renderPayload('x', { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost', language: 'ar' }, 'light', ELAMIR_SETTINGS, null, OWNER_CTX).write!;
+        const mac = renderPayload('x', { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost', language: 'ar' }, 'light', ELAMIR_SETTINGS, NO_BRAND, null, OWNER_CTX).write!;
         assert.equal(call!.system, mac.system, 'the same system prompt');
         assert.equal(call!.user, mac.user, 'the same user prompt');
         assert.ok('json' in call!.schema, 'WRITE_SCHEMA as plain JSON Schema');
@@ -896,19 +898,19 @@ describe('profile_version — createInfographic', () => {
 
     it('still creates the row and queues Claude, with null, when the context\'s read fails (the owner\'s tenant falls back)', async () => {
         const { reads, route } = profileReads({ [TENANT]: 7 });
-        reads.failFrom = 2; // the connection drops after getStudioSettings' own read: what the context reads next is what fails
+        reads.failFrom = 3; // the connection drops after getStudioSettings' own read and the Brand Kit's: what the context reads next is what fails
         db.routes.push(route);
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
-        assert.ok(reads.creators.length >= 2, 'the context did ask');
+        assert.ok(reads.creators.length >= 3, 'the context did ask');
         assert.equal(stamped(), null, 'unknown is not the version it was');
         assert.ok(jobPayload().write, 'and Claude was asked to write it');
     });
 
-    it('takes the stamp from the context its prompt is built from: the settings\' read and that one, and no read of its own', async () => {
+    it('takes the stamp from the context its prompt is built from: the settings\' read, the Brand Kit\'s and that one, and no read of its own', async () => {
         const { reads, route } = profileReads({ [TENANT]: 7 });
         db.routes.push(route);
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
-        assert.deepEqual(reads.creators, [TENANT, TENANT]);
+        assert.deepEqual(reads.creators, [TENANT, TENANT, TENANT]);
         assert.equal(stamped(), 7);
     });
 
@@ -944,7 +946,7 @@ describe('profile_version — a copy takes its source’s stamp, a rewrite resta
         const insert = db.ran(/^INSERT INTO infographics/)[0]!;
         assert.match(insert.sql, /\(creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version\) VALUES \(.*, \$9\)/);
         assert.equal(insert.params[8], 4);
-        assert.equal(reads.creators.length, 1, 'only the settings’ own read: a copy asks nothing of the profile');
+        assert.equal(reads.creators.length, 2, 'only the settings’ own read and the Brand Kit’s (no request cache here): a copy asks nothing of the profile for a context');
     });
 
     it('copyInfographic of a row with no stamp is unstamped, though the tenant has a profile now', async () => {
@@ -990,32 +992,32 @@ describe('profile_version — a copy takes its source’s stamp, a rewrite resta
     it('a rewrite whose context read fails is stamped null: unknown is not the old version (the owner\'s tenant falls back)', async () => {
         row.profile_version = 4;
         const { reads, route } = profileReads({ [TENANT]: 9 });
-        reads.failFrom = 2; // the connection drops after getStudioSettings' own read
+        reads.failFrom = 3; // the connection drops after getStudioSettings' own read and the Brand Kit's
         db.routes.push(route);
         await rerenderInfographic(TENANT, ID, { rewrite: true });
-        assert.ok(reads.creators.length >= 2, 'the context did ask');
+        assert.ok(reads.creators.length >= 3, 'the context did ask');
         assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, null]]);
         assert.ok(jobPayload().write, 'and Claude is still asked');
     });
 
-    it('a rewrite reads the context once, the settings\' read and that one, and restamps with its version', async () => {
+    it('a rewrite reads the context once, after the settings\' read and the Brand Kit\'s, and restamps with its version', async () => {
         const { reads, route } = profileReads({ [TENANT]: 9 });
         db.routes.push(route);
         await rerenderInfographic(TENANT, ID, { rewrite: true });
-        assert.deepEqual(reads.creators, [TENANT, TENANT]);
+        assert.deepEqual(reads.creators, [TENANT, TENANT, TENANT]);
         assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, 9]]);
         assert.equal(db.ran(/^BEGIN$/).length, 1);
     });
 
-    it('a plain re-render, an edit and a copy read no context: the settings\' own profile read is the only one', async () => {
+    it('a plain re-render, an edit and a copy read no context: only the settings\' own profile read and the Brand Kit\'s', async () => {
         const { reads, route } = profileReads({ [TENANT]: 9 });
         db.routes.push(route);
         await rerenderInfographic(TENANT, ID, { theme: 'light' });
-        assert.equal(reads.creators.length, 1, 'a re-render of the same spec');
+        assert.equal(reads.creators.length, 2, 'a re-render of the same spec: the settings\' read and the Brand Kit\'s');
         await copyInfographic(TENANT, ID, {});
-        assert.equal(reads.creators.length, 2, 'and a copy adds the settings\' read, nothing more');
+        assert.equal(reads.creators.length, 4, 'and a copy adds those two, nothing more');
         await updateInfographic(TENANT, ID, { spec: SPEC });
-        assert.equal(reads.creators.length, 3);
+        assert.equal(reads.creators.length, 6);
         assert.ok(!jobPayload().write);
     });
 
@@ -1024,7 +1026,7 @@ describe('profile_version — a copy takes its source’s stamp, a rewrite resta
         const { reads, route } = profileReads({ [TENANT]: 9 });
         db.routes.push(route);
         await rerenderInfographic(TENANT, ID, {});
-        assert.deepEqual(reads.creators, [TENANT, TENANT], 'the settings\' read, then the context\'s once the row was known to need it');
+        assert.deepEqual(reads.creators, [TENANT, TENANT, TENANT], 'the settings\' read and the Brand Kit\'s, then the context\'s once the row was known to need it');
         assert.equal(db.ran(/^BEGIN$/).length, 2);
         assert.equal(db.ran(/^ROLLBACK$/).length, 1, 'the attempt that found out');
         assert.equal(db.ran(/^COMMIT$/).length, 1);
@@ -1073,5 +1075,74 @@ describe('profile_version — the "both themes" copy, made when Claude’s answe
         row.profile_version = 4;
         await completeJob(TENANT, JOB, WRITTEN);
         assert.equal(reads.creators.length, 0);
+    });
+});
+
+describe('renderPayload and the Brand Kit (docs: contract §4)', () => {
+    const LOGO = { url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark' as const, colour: '#0E3B5C' };
+    const row = { topic: 'RAG vs CAG vs KAG', notes: null, language: 'ar' as const };
+    const spec = { columns: [] };
+
+    it('NO_BRAND is today\'s brand, key for key: no logo key at all', () => {
+        const out = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, NO_BRAND, spec);
+        assert.deepEqual(Object.keys(out.brand), ['name', 'site', 'handle', 'socials', 'primary', 'accent', 'photo']);
+        assert.equal(JSON.stringify(out).includes('"logo"'), false);
+        assert.equal(JSON.stringify(out), JSON.stringify(renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: null, colours: null }, spec)));
+        assert.equal(JSON.stringify(payloadBrand(ELAMIR_SETTINGS.infographic)), JSON.stringify(out.brand), 'payloadBrand with no logo is the one-argument call');
+    });
+
+    it('a logo: only brand.logo is added, last, in the six-key order', () => {
+        const plain = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, NO_BRAND, spec);
+        const out = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: LOGO, colours: null }, spec);
+        assert.deepEqual(Object.keys(out.brand), ['name', 'site', 'handle', 'socials', 'primary', 'accent', 'photo', 'logo']);
+        assert.equal(JSON.stringify(out.brand.logo), JSON.stringify(LOGO));
+        const { logo: _logo, ...rest } = out.brand;
+        assert.equal(JSON.stringify({ ...out, brand: rest }), JSON.stringify(plain));
+    });
+
+    it('the switch moves nothing in an infographic: logo + switch on is the same payload as logo + switch off', () => {
+        const off = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: LOGO, colours: null }, spec);
+        const on = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: LOGO, colours: brandColours('#0E3B5C', '#F2A33A') }, spec);
+        assert.equal(JSON.stringify(on), JSON.stringify(off));
+        const noLogo = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: null, colours: brandColours('#0E3B5C', '#F2A33A') }, spec);
+        assert.equal(JSON.stringify(noLogo), JSON.stringify(renderPayload('x', row, 'dark', ELAMIR_SETTINGS, NO_BRAND, spec)));
+    });
+
+    it('write mode carries the logo in the same brand, so a pair copied from the written job keeps it', () => {
+        const out = renderPayload('x', row, 'dark', ELAMIR_SETTINGS, { logo: LOGO, colours: null }, null, OWNER_CTX);
+        assert.deepEqual(out.brand.logo, LOGO);
+        assert.ok(out.write);
+    });
+});
+
+describe('every queue site carries the tenant\'s stored logo (docs: contract §4)', () => {
+    const LOGO = { url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark', colour: '#0E3B5C' };
+    const store = (): void => {
+        const profile = defaultProfile();
+        profile.brand.logo_url = LOGO.url;
+        profile.brand.logos = { main: { ...(LOGO as { tone: 'dark' } & typeof LOGO), added_at: '2026-12-01T09:30:00.000Z' } };
+        db.routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+    };
+    const lastBrand = () => JSON.parse(db.ran(/^INSERT INTO studio_jobs/).at(-1)!.params[2]).brand;
+
+    it('create (Mac), rewrite, a plain re-render, an edit and a copy', async () => {
+        store();
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG', language: 'ar' });
+        assert.deepEqual(lastBrand().logo, LOGO);
+        assert.equal(Object.keys(lastBrand()).at(-1), 'logo');
+        await rerenderInfographic(TENANT, ID, { theme: 'light' });
+        assert.deepEqual(lastBrand().logo, LOGO);
+        await updateInfographic(TENANT, ID, { spec: SPEC });
+        assert.deepEqual(lastBrand().logo, LOGO);
+        await copyInfographic(TENANT, ID, {});
+        assert.deepEqual(lastBrand().logo, LOGO);
+        await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.deepEqual(lastBrand().logo, LOGO);
+    });
+
+    it('with no stored profile no job has a logo key', async () => {
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG', language: 'ar' });
+        await copyInfographic(TENANT, ID, {});
+        for (const job of db.ran(/^INSERT INTO studio_jobs/)) assert.equal(JSON.stringify(JSON.parse(job.params[2]).brand).includes('logo'), false);
     });
 });

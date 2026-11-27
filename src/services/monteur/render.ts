@@ -8,6 +8,7 @@
  * palette colour not used by the tenant's latest reels, so neighbouring tiles in the grid differ.
  */
 import type { ClipDirection, ClipEdit, MonteurRenderPayload, StudioSettings, TranscriptWord } from '../../db/rows.js';
+import type { RenderBrand } from '../brand/resolve.js';
 import type { Exec } from '../studio/common.js';
 import { pickAccents } from '../studio/generate.js';
 import { humanTouchesOn } from './editor.js';
@@ -80,6 +81,8 @@ export function buildRenderPayload(input: {
     edits: readonly ClipEdit[];
     /** The clip's stored human touches (§6.2), on its clock; null or absent for none. */
     direction?: ClipDirection | null;
+    /** The Brand Kit (`loadRenderBrand`): the logo goes on the end card. Required, so a caller cannot forget it; `NO_BRAND` is today's payload. */
+    brand: RenderBrand;
 }): MonteurRenderPayload {
     const { settings } = input;
     return {
@@ -95,7 +98,11 @@ export function buildRenderPayload(input: {
         // Mac's time. YouTube takes this cut too — it has no comment-to-DM, so "link in bio" is its CTA.
         cta_tiktok: needsLinkInBioCut(settings.monteur.platforms) ? tiktokCtaLines(settings) : null,
         // The edits' look, read at every render: a re-render after a change of style takes the new one.
-        brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction, style: settings.monteur.style },
+        brand: {
+            accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction, style: settings.monteur.style,
+            // Last, and only with a logo. `accent` is always `input.accent`: the switch acts in `accentsFor`, so a re-render keeps its clip's.
+            ...(input.brand.logo ? { logo: input.brand.logo } : {}),
+        },
         cover_at: COVER_AT_S,
         edits: [...input.edits],
         // Read at every render, like the style: switched off, a re-render leaves them out. No plan
@@ -129,6 +136,8 @@ export async function clipAccent(exec: Exec, creatorId: string, clipId: string):
 }
 
 /** `k` accents for new clips, each avoiding the recent ones and the ones before it. */
-export async function accentsFor(exec: Exec, creatorId: string, settings: StudioSettings, k: number): Promise<string[]> {
+export async function accentsFor(exec: Exec, creatorId: string, settings: StudioSettings, k: number, brand: RenderBrand): Promise<string[]> {
+    // The "use my brand colours" switch: a new reel's accent is the brand's own (readable on the reel's ink). `clips.ts` asks `clipAccent` first, so a clip keeps its accent.
+    if (brand.colours) return Array<string>(k).fill(brand.colours.reelAccent);
     return pickAccents(k, settings.brand.palette, await recentReelAccents(exec, creatorId));
 }

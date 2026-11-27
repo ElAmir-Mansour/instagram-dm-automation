@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
+import { NO_BRAND, renderBrandOf } from '../brand/resolve.js';
 import { defaultGrowthSettings } from '../growth/settingsRow.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SERVED, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { contextFor } from './context.js';
@@ -95,9 +96,9 @@ describe('the entries are what the golden files hold', () => {
             [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir', OWNER_CAROUSEL], [ELAMIR_SEED_SERVED, 'seed', 'ar', 'elamir', OWNER_CAROUSEL],
             // The control is a tenant that is not the owner: its row holds no examples, so it is shown none.
             [ENGLISH_SETTINGS, 'english', 'en', 'control', contextFor(profileFromLegacy(ENGLISH_SETTINGS), 'carousel', null)],
-        ] as const) entries.push(...await studioSurface(settings, { lang, slug, set, carousel: wording }));
+        ] as const) entries.push(...await studioSurface(settings, { lang, slug, set, carousel: wording, brand: renderBrandOf(profileFromLegacy(settings)) }));
         entries.push(
-            ...infographicSurface(ELAMIR_SEED_SERVED, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
+            ...infographicSurface(ELAMIR_SEED_SERVED, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null), brand: renderBrandOf(OWNER_PROFILE) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
             ...dmInstructionSurface(ELAMIR_AGENT, OWNER_DM), ...dmContextSurface(OWNER_DM),
         );
         entries.push(...await growthSurface({ studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH }, { slug: 'elamir' }));
@@ -115,8 +116,8 @@ describe('the entries are what the golden files hold', () => {
 
     it('a name with no fixture suffix is the golden\'s name without it', async () => {
         const [named, bare] = [
-            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', slug: 'seed', carousel: OWNER_CAROUSEL }),
-            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL }),
+            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', slug: 'seed', carousel: OWNER_CAROUSEL, brand: NO_BRAND }),
+            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL, brand: NO_BRAND }),
         ];
         assert.deepEqual(bare.map((e) => `${e.name}.seed`), named.map((e) => e.name));
         assert.deepEqual(bare.map(entryText), named.map(entryText), 'the suffix is a name, not an input');
@@ -192,10 +193,11 @@ describe('the DM and comment wording is the profile\'s', () => {
         const entries = await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile });
         const failed = entries.filter((e) => e.error !== undefined).map((e) => e.name);
         assert.deepEqual(failed, [
-            'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok',
+            // The render payloads and the infographic's brand are built through the Brand Kit (`renderBrandOf` of the profile), so they need it too.
+            'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok', 'studio.carousel-render-payload',
             'monteur.pick-system', 'monteur.pick-user', 'monteur.copy-system', 'monteur.copy-clip-fallbacks',
-            'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
-            'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
+            'monteur.editor-system.human-on', 'monteur.editor-system.human-off', 'monteur.render-payload',
+            'infographic.render-payload.ar', 'infographic.render-payload.en', 'infographic.brand', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
             'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',
         ]);
         assert.ok(entries.some((e) => e.name === 'studio.catalog' && e.error === undefined), 'the Studio\'s builders that read no profile were built');
@@ -206,8 +208,8 @@ describe('a builder that throws is an entry that says so', () => {
     const broken = { ...ELAMIR_SEED_SERVED, cta: null } as unknown as typeof ELAMIR_SEED_SERVED;
 
     it('studioSurface: the builders that read what is missing carry the error, every other builder is built, and the order is kept', async () => {
-        const whole = await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL });
-        const entries = await studioSurface(broken, { lang: 'ar', carousel: OWNER_CAROUSEL });
+        const whole = await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL, brand: NO_BRAND });
+        const entries = await studioSurface(broken, { lang: 'ar', carousel: OWNER_CAROUSEL, brand: NO_BRAND });
         assert.deepEqual(entries.map((e) => e.name), whole.map((e) => e.name), 'the same entries in the same order');
         const failed = entries.filter((e) => e.error !== undefined);
         assert.ok(failed.some((e) => e.name === 'studio.dm'));
