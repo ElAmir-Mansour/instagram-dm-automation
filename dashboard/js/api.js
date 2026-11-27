@@ -492,6 +492,8 @@ const API = {
      * has it (`archived_at` set, or null). An archived post is not published by the sweep and is not counted as needing attention.
      */
     archiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
+    /** Re-queue a failed first comment (v61); with `platform` ('instagram' or 'facebook') just that one. Answers 202 `{ queued: [...] }`. */
+    retryFirstComment: (id, platform) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/first-comment/retry`, { method: 'POST', body: JSON.stringify(platform ? { platform } : {}) }),
     unarchiveScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/archive`, { method: 'DELETE' }),
     /**
      * Republish an existing queue row in place — claims it server-side (PENDING or FAILED

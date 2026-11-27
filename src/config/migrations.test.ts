@@ -1574,6 +1574,41 @@ describe('migration v60: Meta Muse perception (messages.perception, reel_analyse
     });
 });
 
+// ─── v61: the automatic first comment ──────────────────────────────────────────────────────────
+
+describe('migration v61: the first comment (scheduled_posts.first_comment, first_comment_status)', () => {
+    const FILE = 'migration_v61_first_comment.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v60, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v60_muse_perception.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement (the publish sweep scans scheduled_posts every minute)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i);
+    });
+
+    it('adds exactly two nullable columns to scheduled_posts, only if absent, with no default (a catalog-only change)', () => {
+        assert.deepEqual([...sql.matchAll(/ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS (\w+) (TEXT|JSONB)\b/g)].map((m) => [m[1], m[2]]), [['first_comment', 'TEXT'], ['first_comment_status', 'JSONB']]);
+        assert.equal((sql.match(/ALTER TABLE scheduled_posts\b/g) ?? []).length, 2, 'no other change to the table');
+        assert.doesNotMatch(sql, /\bDEFAULT\b|\bNOT NULL\b/i);
+    });
+
+    it('caps the comment at 2,200 characters in a CHECK, the net under the application\'s own 400', () => {
+        assert.match(sql, /CHECK \(first_comment IS NULL OR char_length\(first_comment\) <= 2200\)/);
+    });
+
+    it('changes no existing row, creates nothing else and removes nothing (the status is not platform_options, which is TikTok\'s)', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP\b|CONCURRENTLY|CREATE TABLE|CREATE (UNIQUE )?INDEX/i);
+        assert.doesNotMatch(sql, /\bplatform_options\b/);
+    });
+});
+
 // ─── The kind CHECK of the Mac's queue ─────────────────────────────────────────────────────────
 
 describe('studio_jobs_kind_check', () => {

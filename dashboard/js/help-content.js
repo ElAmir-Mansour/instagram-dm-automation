@@ -1236,6 +1236,38 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'first-comment',
+                    title: { ar: 'التعليق الأول', en: 'The first comment' },
+                    body: {
+                        ar: [
+                            'خانة **التعليق الأول** تحت النص في نافذة الجدولة. اكتب فيها المصادر أو رابطاً أو أي شيء تريده أول تعليق تحت منشورك، وينشره التطبيق بنفسه على إنستجرام وفيسبوك.',
+                            { ul: [
+                                'متى ينزل: بعد أن يُنشر المنشور فعلاً، وليس قبل ذلك. ريل ما زال إنستجرام يعالجه ينتظر، والتعليق ينتظر معه.',
+                                'أين: على إنستجرام وفيسبوك، كلٌّ بتعليقه. منشور على إحداهما فقط يأخذ تعليقاً على تلك المنصة. تيك توك ويوتيوب لا يأخذان تعليقاً أول.',
+                                'الطول: حتى 2200 حرف.',
+                                'لا يُنشر شيء للمنشورات القديمة: التعليق يخص المنشورات التي تكتبه فيها.',
+                            ] },
+                            'تحت المنشور في الطابور ترى حال التعليق على كل منصة: «بانتظار النشر»، أو «نُشر»، أو «تعذّر» مع سببه.',
+                            { warn: 'إن تعذّر التعليق فالمنشور نفسه لا يتأثر ويبقى **نُشر**. اضغط **أعد المحاولة** تحت المنشور بعد أن تقرأ السبب. ويضيف التطبيق التعليق مرة واحدة فقط ولا يكرر المحاولة تلقائياً إن انقطع الاتصال لحظة النشر، لأن ميتا قد تكون نشرته فعلاً؛ تحقق من المنشور قبل أن تعيد المحاولة.' },
+                            { note: 'ميتا لا تتيح للتطبيقات تثبيت التعليق. إن أردت تثبيته فثبّته بنفسك من تطبيق إنستجرام أو فيسبوك. وبعد أن يُنشر التعليق لا يمكن تعديله من هنا؛ احذفه من المنصة نفسها إن احتاج إلى تغيير.' },
+                            'في المقاطع التوضيحية يُملأ التعليق الأول تلقائياً بالمصادر التي كتبها الكاتب، وتراجعه قبل الجدولة.',
+                        ],
+                        en: [
+                            'The **First comment** box sits under the caption in the schedule window. Write the sources, a link, or anything you want as the first comment under your post, and the app posts it for you on Instagram and Facebook.',
+                            { ul: [
+                                'When it goes out: after the post is really live, never before. A reel Instagram is still processing waits, and the comment waits with it.',
+                                'Where: on Instagram and on Facebook, each with its own comment. A post for one of them gets the comment on that one. TikTok and YouTube posts take no first comment.',
+                                'Length: up to 2,200 characters.',
+                                'Nothing is posted for older posts: the comment belongs to the posts you write one for.',
+                            ] },
+                            'Under the post in the queue you see where the comment stands on each platform: “waiting to post”, “posted”, or “failed” with the reason.',
+                            { warn: 'If the comment fails, the post itself is not affected and stays **Published**. Read the reason, then press **Retry** under the post. The app posts a comment only once and never repeats it by itself when the connection drops at the moment of posting, because Meta may already have posted it: check the post before you retry.' },
+                            { note: 'Meta does not let an app pin a comment. To pin it, do it yourself in the Instagram or Facebook app. Once the comment is posted it can no longer be edited here; delete it on the platform if it needs to change.' },
+                            'For explainers, the first comment is filled in with the sources the writer produced, and you review it before scheduling.',
+                        ],
+                    },
+                },
+                {
                     id: 'statuses',
                     title: { ar: 'معنى الحالات', en: 'What each status means' },
                     body: {

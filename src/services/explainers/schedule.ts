@@ -134,6 +134,8 @@ export async function scheduleExplainer(creatorId: string, rawId: unknown, body:
         if (meta) {
             rows.push(await insertVideoPost(client, {
                 creatorId, platform: meta, caption: caption('meta', captions.meta), mediaUrl: render.vertical_url, coverUrl: render.cover_url, when: at, groupId, options: null,
+                // The sources the writer made (numbered, up to 1,500 characters), posted under the video once it is live (v61). Blank means none.
+                firstComment: row.draft?.first_comment ?? null,
             }));
         }
         if (youtube) {

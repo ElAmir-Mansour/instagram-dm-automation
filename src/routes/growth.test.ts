@@ -174,7 +174,7 @@ describe('POST and PUT /posts/scheduled — reach levers', () => {
         const res = await create({ platform: 'both', post_type: 'image', media_url: 'https://cdn/p.jpg', alt_text: 'A slide', collaborators: ['@Partner'] });
         assert.equal(res.statusCode, 201);
         const [insert] = writes(/^INSERT INTO scheduled_posts/);
-        assert.match(insert!.sql, /platform_options, meta_options\)/);
+        assert.match(insert!.sql, /platform_options, meta_options, first_comment\)/);
         assert.deepEqual(JSON.parse(insert!.params[10]), { alt_text: 'A slide', collaborators: ['partner'] });
     });
 
