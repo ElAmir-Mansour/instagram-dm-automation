@@ -1727,6 +1727,22 @@ newest 500 per tenant. One that is no longer public when public was asked for, o
 `error_log`, which Posts shows beside "Open on YouTube". Quota: an upload costs 1,600 of the day's 10,000 units and a thumbnail
 50, so about six Shorts a day.
 
+### 3.8 — The first comment (v61)
+
+A Meta row can carry `scheduled_posts.first_comment` (at most 2,200 characters; the sources of an explainer, a link, the keyword prompt). Once the post is live, a job posts it under the post on each platform that has an id. Code: `src/services/firstComment.ts`, `publishFirstComment` (`src/services/instagram.ts`), the job kind `post.first_comment` (`src/jobs/types.ts`, `src/jobs/handlers.ts`), the routes in `src/routes/api.ts`, and migration v61 (`src/config/migration_v61_first_comment.sql`: `first_comment`, `first_comment_status`).
+
+**The hops:**
+
+1. **Written** by `POST` / `PUT /api/posts/scheduled` (`validateFirstComment`: text, trimmed, at most 2,200, refused with 400 `FIRST_COMMENT_INVALID` for a TikTok or YouTube row; a PUT on a post whose comment is posted or in flight is 409 `FIRST_COMMENT_LOCKED`), or by `insertVideoPost` (`firstComment`), which `scheduleExplainer` fills from `draft.first_comment`. The TikTok and YouTube siblings never carry it. A row moved to TikTok or YouTube by an edit loses it.
+2. **Queued** at the end of `attemptPublish`, right after the `PUBLISHED` write and nowhere earlier: `queueFirstComments` writes `first_comment_status.<platform> = pending` and enqueues one `post.first_comment` job per platform that has an id (`commentTargets`), dedupe key `fc:<post id>:<platform>`. A reel Instagram is still processing throws `InstagramProcessingHeldError` before this line, so nothing is queued while the post is held; the sweep that finally publishes it queues both. A platform that already has an entry is left alone. `queueFirstComments` never throws: the post is public and stays `PUBLISHED`.
+3. **Run** by the drain (`runFirstCommentJob`). The claim is one UPDATE: `pending` to `sending`, only on a row that is `PUBLISHED` and belongs to the tenant. It reads `first_comment`, takes the id for the platform from `published_post_id` (`publishedPlatforms`), and posts `POST /{ig-media-id}/comments` or `POST /{post-id}/comments` with the Page token the publisher used, through `metaHttp` + `withRetry({ creates: true })`: only a rate limit or a connection that never went out is retried, never a timeout or a 5xx.
+4. **Recorded** per platform in `first_comment_status`: `posted` (with Meta's comment id) or `failed` (with the reason). The post's `status` is never written by this flow. The job returns normally for everything Meta can cause; only a database error throws.
+5. **Retry**: `POST /api/posts/scheduled/:id/first-comment/retry` (owner or operator) moves a `failed` platform back to `pending` with `attempt + 1` (a new dedupe key, `fc:<id>:<platform>:<attempt>`) and queues it; anything not failed is 409 `FIRST_COMMENT_NOT_FAILED`, a post not yet published 409 `FIRST_COMMENT_NOT_PUBLISHED`.
+
+**The one hole, closed on purpose:** if a run dies after `sending` was written and before the result was (a frozen invocation, then the queue's reaper re-runs the job), the second run finds `sending`, does NOT call Meta, and writes `failed` with "the comment may already be under the post". The owner checks the post and retries only if it is missing. It never posts twice by itself.
+
+Meta lets an app post a comment but not pin it. The dashboard repaints the queue on its own only for a row in flight, so a comment that is still `pending` shows its result on the next refresh.
+
 ---
 
 ## 4. Login → session → tenant
@@ -4452,6 +4468,9 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 3 | **a due post of an inactive tenant** (`creators.is_active = false`) — `splitDueByTenantActivity`, **`src/routes/api.ts:583`**, in `publishDuePosts` **`src/routes/api.ts:961-966`** | `cron.publish_held_inactive` (`warn`, the count and tenant ids) on every sweep | no: the row stays `PENDING` and goes out on the first sweep after the tenant is switched back on |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
+| 3 | **the first comment** — `runFirstCommentJob` finds the entry not `pending`, or the post not `PUBLISHED` | `first_comment.skipped` (`post_status`, `entry_status`) | no |
+| 3 | a first comment Meta refused, or whose earlier run died after calling Meta | `first_comment.failed` (`warn`, `meta_code`) / `first_comment.interrupted` (`warn`) | `first_comment_status.<platform>` = `failed` with the reason; the post stays `PUBLISHED`; Retry on the card |
+| 3 | the comment could not be queued — `queueFirstComments` | `first_comment.queue_failed` (`error`) | `failed` with "press Retry"; the post stays `PUBLISHED` |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |
 | 4 | `/auth/me`'s onboarding cannot be read (a database without v34, a failed query) — **`onboardingWizard.ts:198`** | `onboarding.brief_unreadable` (`warn`) | no (`onboarding: null`: the dashboard gates nothing) |
 | 4 | an autosave or Continue for a tenant that has finished, or has no onboarding row — **`onboardingWizard.ts:370`** | *(none)* | no (200, the state as it is) |

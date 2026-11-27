@@ -141,6 +141,8 @@ const PostsPage = {
     PREFS_KEY: 'posts:prefs',
     /** Instagram's caption limit, counted in UTF-16 units as Studio's counters count. */
     IG_CAPTION_MAX: 2200,
+    /** The first comment's limit (Instagram's, the stricter): the server checks it too. */
+    FIRST_COMMENT_MAX: 2200,
 
     destroy() {
         this._seq++;
@@ -1079,6 +1081,7 @@ const PostsPage = {
                 ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
                 ` : ''}
+                ${!isTikTok && post.platform !== 'youtube' ? this.renderFirstCommentStatus(post) : ''}
                 ${isPublished && post.platform === 'youtube' && /^YT:[\w-]+$/.test(post.published_post_id || '') ? html`
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="youtube" aria-hidden="true"></i>
@@ -3879,6 +3882,7 @@ const PostsPage = {
                 </div>
                 ${this.tiktokFields(true)}
                 ${this.captionField('')}
+                ${this.firstCommentField(null)}
                 ${this.tiktokTitleField()}
                 ${this.mediaFields({ post_type: prefs.type })}
                 ${this.scheduleFields(defaultTime, UI.toLocalInputValue(new Date()))}
@@ -3928,6 +3932,121 @@ const PostsPage = {
                           required>${value}</textarea>
             </div>
         `;
+    },
+
+    // ─── The first comment (v61) ─────────────────────────────────────────────
+    isMetaTarget(platform) { return platform === 'instagram' || platform === 'facebook' || platform === 'both'; },
+
+    /** Once a platform's comment is posted or being posted the text is a record of what is public: read-only here. Pure. */
+    firstCommentLocked(post) {
+        const status = post && post.first_comment_status && typeof post.first_comment_status === 'object' ? post.first_comment_status : {};
+        return ['instagram', 'facebook'].some((k) => status[k] && (status[k].status === 'posted' || status[k].status === 'sending'));
+    },
+
+    firstCommentCountMarkup(value) {
+        const n = String(value || '').length;
+        const max = this.FIRST_COMMENT_MAX;
+        return html`<span aria-hidden="true">${UI.ltr(`${UI.formatNumber(n)}/${UI.formatNumber(max)}`)}</span><span class="sr-only">${t('posts.firstComment.countSr', { n: UI.formatNumber(n), max: UI.formatNumber(max) })}</span>`;
+    },
+
+    /** The textarea under the caption: posted under the post by the first comment job once it is live. Hidden for a TikTok or YouTube post. */
+    firstCommentField(post) {
+        const value = String((post && post.first_comment) || '');
+        const locked = this.firstCommentLocked(post);
+        return html`
+            <div class="form-group" id="first-comment-group">
+                <div class="field-head">
+                    <label class="form-label" for="post-first-comment">${t('posts.firstComment.label')} <span class="label-optional">${t('common.optional')}</span></label>
+                    <span class="field-count" id="post-first-comment-count">${this.firstCommentCountMarkup(value)}</span>
+                </div>
+                <textarea class="field-textarea user-content" id="post-first-comment" name="first_comment" dir="auto" lang="ar" rows="3"
+                          placeholder="${t('posts.firstComment.placeholder')}" data-input="posts:firstCommentInput" data-guard-dirty
+                          aria-describedby="post-first-comment-hint" ${locked ? html.raw('disabled') : ''}>${value}</textarea>
+                <p class="form-hint" id="post-first-comment-hint">${locked ? t('posts.firstComment.locked') : t('posts.firstComment.hint')}</p>
+            </div>
+        `;
+    },
+
+    onFirstCommentInput() {
+        const count = document.getElementById('post-first-comment-count');
+        const field = document.getElementById('post-first-comment');
+        if (!count || !field) return;
+        const value = String(field.value || '');
+        count.innerHTML = esc(this.firstCommentCountMarkup(value));
+        count.classList.toggle('is-warning', value.length > this.FIRST_COMMENT_MAX);
+    },
+
+    /** Shown while Instagram or Facebook is a target. */
+    applyFirstCommentVisibility(platform) {
+        const group = document.getElementById('first-comment-group');
+        if (group) group.classList.toggle('hidden', !this.isMetaTarget(platform));
+    },
+
+    /** The first comment check in the submit chain's shape. @returns {{ message: string, field: string }|null} */
+    checkFirstComment(payload) {
+        if (typeof payload.first_comment !== 'string') return null;
+        const n = payload.first_comment.length;
+        if (n <= this.FIRST_COMMENT_MAX) return null;
+        return { message: t('posts.firstComment.tooLong', { max: UI.formatNumber(this.FIRST_COMMENT_MAX), n: UI.formatNumber(n) }), field: 'post-first-comment' };
+    },
+
+    /** The card's lines about the first comment: where each platform's stands, with the reason and a Retry when it failed. '' when there is none. */
+    renderFirstCommentStatus(post) {
+        const status = post && post.first_comment_status && typeof post.first_comment_status === 'object' ? post.first_comment_status : {};
+        const entries = ['instagram', 'facebook'].filter((k) => status[k] && typeof status[k] === 'object');
+        if (!entries.length) {
+            return post && post.first_comment && post.status === 'PENDING'
+                ? html`<p class="post-card-meta"><i data-lucide="message-circle" aria-hidden="true"></i><span>${t('posts.firstComment.willPost')}</span></p>`
+                : '';
+        }
+        return html`${entries.map((k) => {
+            const entry = status[k];
+            const platform = t(`posts.firstComment.platform.${k}`);
+            if (entry.status === 'failed') {
+                return html`
+                    <p class="post-card-meta post-card-meta--note" data-first-comment="${k}">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        <span class="text-warning" dir="auto">${t('posts.firstComment.status.failed', { platform, reason: entry.error || t('error.unexpected') })}</span>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'rotate-ccw', label: t('posts.firstComment.retry'),
+                            action: 'posts:retryFirstComment', data: { id: post.id, platform: k },
+                            focusKey: `post-first-comment-retry-${post.id}-${k}`,
+                        })}
+                    </p>`;
+            }
+            const icon = entry.status === 'posted' ? 'check-circle' : 'message-circle';
+            const cls = entry.status === 'posted' ? 'text-success' : '';
+            const key = ['posted', 'sending'].includes(entry.status) ? `posts.firstComment.status.${entry.status}` : 'posts.firstComment.status.pending';
+            return html`
+                <p class="post-card-meta post-card-meta--note" data-first-comment="${k}">
+                    <i data-lucide="${icon}" aria-hidden="true"></i>
+                    <span class="${cls ? html.raw(cls) : ''}">${t(key, { platform })}</span>
+                </p>`;
+        })}`;
+    },
+
+    _retryingComment: new Set(),
+
+    /** Retry a failed first comment: the server re-queues it (202); the card says "waiting" until the next refresh shows the result. */
+    async retryFirstComment(id, platform) {
+        const key = `${id}:${platform}`;
+        const post = this.posts.find((p) => String(p.id) === String(id));
+        if (!post || this._retryingComment.has(key)) return;
+        this._retryingComment.add(key);
+        try {
+            await API.retryFirstComment(id, platform);
+        } catch (err) {
+            const { sentence, next } = UI.errorText(err);
+            UI.toast(t('posts.firstComment.retryFailed', { reason: next ? `${sentence} ${next}` : sentence }), 'error');
+            return;
+        } finally {
+            this._retryingComment.delete(key);
+        }
+        const current = post.first_comment_status || {};
+        const previous = current[platform] || {};
+        post.first_comment_status = { ...current, [platform]: { status: 'pending', at: new Date().toISOString(), attempt: (previous.attempt || 0) + 1 } };
+        if (this.activeTab === 'scheduled') this.repaintQueue('posts-new');
+        UI.toast(t('posts.firstComment.retryQueued'));
     },
 
     /**
@@ -3984,6 +4103,7 @@ const PostsPage = {
                 </div>
                 ${this.tiktokFields(false)}
                 ${this.captionField(post.caption || '')}
+                ${this.firstCommentField(post)}
                 ${this.tiktokTitleField()}
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
@@ -4047,6 +4167,7 @@ const PostsPage = {
         const type = typeSelect.value;
         const isVideo = type === 'video';
         const isCarousel = type === 'carousel';
+        this.applyFirstCommentVisibility(platform);
 
         // One media field or the slide picker, never both. Facebook alone
         // supports text-only feed posts; a carousel's media is its slides.
@@ -4133,6 +4254,8 @@ const PostsPage = {
             media_url: (data.get('media_url') || '').toString().trim() || null,
             cover_url: postType === 'video' && platform !== 'tiktok' && coverUrl ? coverUrl : null,
         };
+        // The first comment goes with an Instagram or Facebook post only. A disabled field (its comment is already posted) is not in FormData (get gives null), so it is not sent.
+        if (data.get('first_comment') != null && this.isMetaTarget(platform)) payload.first_comment = String(data.get('first_comment')).trim() || null;
         // Only the create form has the switch; FormData omits an unchecked box.
         if (data.get('also_tiktok') === 'on' && platform !== 'tiktok' && this.typeAllowedOn(postType, 'tiktok')) {
             payload.also_tiktok = true;
@@ -4235,7 +4358,7 @@ const PostsPage = {
         // The caption against Instagram's limit; then a carousel: the right number of
         // slides, every one of them uploaded; then Direct Post: nothing leaves until
         // TikTok's rules are met.
-        const blocked = this.checkCaption(payload) || this.attachSlides(payload)
+        const blocked = this.checkCaption(payload) || this.checkFirstComment(payload) || this.attachSlides(payload)
             || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
@@ -4311,7 +4434,7 @@ const PostsPage = {
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
-        const blocked = this.checkCaption(payload) || this.attachSlides(payload)
+        const blocked = this.checkCaption(payload) || this.checkFirstComment(payload) || this.attachSlides(payload)
             || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
@@ -4769,6 +4892,8 @@ UI.registerActions('posts', {
     retryTikTokCreator: () => PostsPage.loadTikTokCreator(true),
     tiktokTitle: (el) => PostsPage.onTikTokTitle(el),
     captionInput: (el) => PostsPage.onCaptionInput(el),
+    firstCommentInput: () => PostsPage.onFirstCommentInput(),
+    retryFirstComment: (el) => PostsPage.retryFirstComment(el.dataset.id, el.dataset.platform),
     pickSlides: (el) => PostsPage.pickSlides(el),
     moveSlide: (el) => PostsPage.moveSlide(el.dataset.picker, el.dataset.slide, Number(el.dataset.dir)),
     removeSlide: (el) => PostsPage.removeSlide(el.dataset.picker, el.dataset.slide),

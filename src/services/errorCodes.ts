@@ -72,6 +72,10 @@ export const ERROR_CODES = {
     TIKTOK_OPTIONS_INVALID: { status: [400], meaning: 'The TikTok choices (privacy, interactions, disclosure) are incomplete or not allowed yet.' },
     TIKTOK_NEEDS_VIDEO: { status: [400], meaning: 'A TikTok video post with no video attached.' },
     POST_LOCKED: { status: [409], meaning: 'Editing a post that is already with TikTok (in the inbox, or being published).', params: ['status'] },
+    FIRST_COMMENT_INVALID: { status: [400], meaning: 'A first comment that is not text, is over 2,200 characters, or is set on a TikTok or YouTube post.' },
+    FIRST_COMMENT_LOCKED: { status: [409], meaning: 'Editing the first comment of a post whose comment is already posted or being posted.' },
+    FIRST_COMMENT_NOT_PUBLISHED: { status: [409], meaning: 'Retrying a first comment on a post that is not published yet (the comment goes out once it is).' },
+    FIRST_COMMENT_NOT_FAILED: { status: [409], meaning: 'Retrying a first comment that has not failed (posted, waiting or in flight).' },
     POST_NOT_PUBLISHABLE: { status: [409], meaning: 'Publish now on a post that is not pending or failed.', params: ['status'] },
 
     // ─── Uploads ────────────────────────────────────────────────────────────────────────────────────────

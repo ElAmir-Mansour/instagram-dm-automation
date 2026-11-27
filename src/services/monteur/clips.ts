@@ -360,18 +360,21 @@ export function localDay(instant: number, timeZone: string): string {
 export async function insertVideoPost(exec: Exec, row: {
     creatorId: string; platform: 'both' | 'instagram' | 'facebook' | 'tiktok' | 'youtube'; caption: string; mediaUrl: string;
     coverUrl: string | null; when: Date; groupId: string; options: TikTokPostOptions | YouTubePostOptions | null;
+    /** v61. Posted under the post once it is live; written for an Instagram/Facebook row only. */
+    firstComment?: string | null;
 }): Promise<ScheduledPostRow> {
     // The column list and order of POST /posts/scheduled's insert, so the two cannot drift.
     const { rows } = await exec.query<ScheduledPostRow>(
         `INSERT INTO scheduled_posts
-             (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options)
-         VALUES ($1, $2, 'video', $3, $4, NULL, $5, 'PENDING', $6, $7, $8::jsonb, NULL) RETURNING *`,
+             (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options, first_comment)
+         VALUES ($1, $2, 'video', $3, $4, NULL, $5, 'PENDING', $6, $7, $8::jsonb, NULL, $9) RETURNING *`,
         [
             row.creatorId, row.platform, row.caption, row.mediaUrl, row.when,
             // A cover image is Instagram's and Facebook's, and YouTube's thumbnail; TikTok picks its own.
             row.platform === 'tiktok' ? null : row.coverUrl,
             row.groupId,
             row.options ? JSON.stringify(row.options) : null,
+            row.platform === 'tiktok' || row.platform === 'youtube' ? null : (row.firstComment?.trim() || null),
         ]
     );
     if (!rows[0]) throw new Error('scheduled_posts insert returned no row.');

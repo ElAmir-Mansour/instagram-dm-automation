@@ -123,11 +123,12 @@ describe('approveClip — the rows', () => {
 
         const [meta, tiktok] = inserts();
         assert.equal(inserts().length, 2);
-        assert.match(meta!.sql, /VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL\)/);
+        assert.match(meta!.sql, /VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL, \$9\)/);
         assert.deepEqual(meta!.params.slice(0, 4), [TENANT, 'both', COPY.caption, up(VIDEO)]);
         assert.equal((meta!.params[4] as Date).toISOString(), '2026-10-01T16:00:00.000Z');
         assert.equal(meta!.params[5], up(COVER));
         assert.equal(meta!.params[7], null, 'the Meta row carries no TikTok options');
+        assert.equal(meta!.params[8], null, 'the Monteur writes no first comment (a reel has no sources field)');
 
         assert.deepEqual(tiktok!.params.slice(0, 4), [TENANT, 'tiktok', COPY.tiktok_caption, up(TT_VIDEO)], 'TikTok’s cut, whose CTA says link in bio');
         assert.equal(tiktok!.params[5], null, 'TikTok picks its own cover');
