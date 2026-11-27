@@ -622,6 +622,30 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'connect-button',
+                    title: { ar: 'زر الربط لشركة', en: 'The connect button, for a company' },
+                    body: {
+                        ar: [
+                            'إن أُنشئت مساحة عملك من مدير حسابك، فقد اختار لها إحدى طريقتين للربط بميتا:',
+                            { dl: [
+                                ['تربطها أنت بنفسك', 'يظهر في **الإعدادات** زر **اربط إنستجرام وفيسبوك**، ويضغطه مدير صفحتك على فيسبوك. وقبل ذلك يجب أن يُضاف هذا الشخص مختبِراً (Tester) في تطبيق ميتا، فيقبل الدعوة على فيسبوك.'],
+                                ['يربطها مدير حسابك', 'لا يظهر الزر، لأن مدير الحساب يلصق رمز الصفحة نيابةً عنك. اطلب منه ذلك.'],
+                            ] },
+                            { note: 'لا يظهر الزر في مساحة عمل مدير المنصة نفسه: ربطه يتم برمز الصفحة دائماً.' },
+                            'بعد الربط، علّق على منشورك تعليقاً تجريبياً بكلمة مفتاحية. وصوله يعني أن ميتا تُرسل أحداث صفحتك إلينا.',
+                        ],
+                        en: [
+                            'If your workspace was made by your account manager, they chose one of two ways for it to connect to Meta:',
+                            { dl: [
+                                ['You connect it yourself', 'A **Connect Instagram and Facebook** button shows in **Settings**, and your Facebook Page admin presses it. Before that, this person must be added as a Tester on the Meta app and accept the invitation on Facebook.'],
+                                ['Your account manager connects it', 'There is no button, because the account manager pastes the Page token for you. Ask them to.'],
+                            ] },
+                            { note: 'The button never shows in the platform administrator’s own workspace: it is always connected with a Page token.' },
+                            'Once connected, comment on your own post with a keyword as a test. If it arrives, Meta is sending your Page’s events to us.',
+                        ],
+                    },
+                },
+                {
                     id: 'token-health',
                     title: { ar: 'صحة رمز الوصول', en: 'Token health' },
                     body: {
@@ -7127,6 +7151,169 @@ const HelpContent = {
                                 ['Which AI does it use?', 'Mostly Google’s Gemini, for DMs, carousels and indexing. DM replies, the Monteur and infographics have other options, depending on your workspace: [[ai-usage#where]].'],
                                 ['Can it make things up?', 'Carousels are written only from the lesson notes and your product **Facts**, and the assistant from your instructions and knowledge base. Still, always review before you post.'],
                                 ['Is there a usage limit?', 'Yes, Google’s limits on your key: [[ai-usage#quotas]].'],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        {
+            slug: 'workspaces',
+            group: 'start',
+            icon: 'building-2',
+            title: { ar: 'مساحات العمل ووحداتها', en: 'Workspaces and their modules' },
+            summary: {
+                ar: 'كيف تنشئ مساحة عمل لشركة، وما الوحدات التي تحصل عليها، وكيف يتصل ميتا بها، وكيف تغيّر ذلك لاحقاً.',
+                en: 'How to make a workspace for a company, which modules it gets, how Meta connects to it, and how to change that later.',
+            },
+            related: ['connect-meta', 'getting-started', 'onboarding'],
+            sections: [
+                {
+                    id: 'create',
+                    title: { ar: 'إنشاء مساحة عمل', en: 'Making a workspace' },
+                    body: {
+                        ar: [
+                            'من **التشغيل** ← **مساحات العمل** اضغط **مساحة عمل جديدة**. تتألف النافذة من ثلاث خطوات: من، ثم ماذا، ثم ميتا.',
+                            { ol: [
+                                'اكتب اسم مساحة العمل ولغتها، وإن شئت حساب إنستجرام وموقعها والبريد الإلكتروني للمالك. فإن كتبت البريد لم يعمل رابط الدعوة إلا لهذا العنوان.',
+                                'اختر الوحدات: نوعاً جاهزاً أو وحدات تحددها واحدة واحدة.',
+                                'اختر كيف يتصل ميتا، ثم اضغط **أنشئ واحصل على الرابط**.',
+                            ] },
+                            'ثم يظهر رابط الدعوة، وتحته ما بقي لك من خطوات لهذه المساحة. أرسل الرابط إلى المالك.',
+                        ],
+                        en: [
+                            'From **Operations** → **Workspaces**, press **New workspace**. The dialog has three steps: who, then what, then Meta.',
+                            { ol: [
+                                'Enter the workspace’s name and language, and if you like its Instagram handle, its site and the owner’s email. With the email, the invite link works only for that address.',
+                                'Choose the modules: a ready-made kind, or modules picked one by one.',
+                                'Choose how Meta connects, then press **Create and get the link**.',
+                            ] },
+                            'The invite link then appears, and under it what is still left for you to do for this workspace. Send the link to the owner.',
+                        ],
+                    },
+                },
+                {
+                    id: 'modules',
+                    title: { ar: 'الوحدات', en: 'Modules' },
+                    body: {
+                        ar: [
+                            'الوحدات (Modules) هي أجزاء المنتج التي تملكها مساحة العمل: الرسائل، والردود التلقائية، ومساعد الرسائل، والجدولة، والنتائج، والنمو، والاستوديو، والإعلانات، وتيك توك، ويوتيوب، وواتساب، ورؤية ميتا. ما لا تملكه المساحة لا تراه في القوائم ولا في المساعدة، ويرفضه الخادم.',
+                            { ul: [
+                                'بعض الوحدات تحتاج إلى غيرها: مساعد الرسائل وواتساب يحتاجان إلى الرسائل، وتيك توك ويوتيوب يحتاجان إلى الجدولة، ورؤية ميتا تحتاج إلى مساعد الرسائل. فإذا فعّلت وحدة فُعّل معها ما تحتاج إليه، وإذا عطّلت وحدة عُطّل ما يعتمد عليها.',
+                                'تتطلب الإعلانات سقفاً: أقصى ميزانية يومية وسقفاً شهرياً، كلاهما مطلوب. ولا تستطيع مساحة العمل أن تضع حدوداً أعلى منهما.',
+                                'قاعدة المعرفة غير متاحة بعد. والشروحات المصوّرة لمساحة عمل مشرف المنصة وحدها في الوقت الحالي.',
+                            ] },
+                        ],
+                        en: [
+                            'Modules are the parts of the product a workspace has: the Inbox, keyword replies, the DM assistant, the Scheduler, Results, Growth, the Studio, Ads, TikTok, YouTube, WhatsApp and Meta vision. What a workspace does not have is not in its menus or its Help, and the server refuses it.',
+                            { ul: [
+                                'Some modules need others: the DM assistant and WhatsApp need the Inbox, TikTok and YouTube need the Scheduler, and Meta vision needs the DM assistant. Switching a module on switches on what it needs, and switching one off switches off what depends on it.',
+                                'Ads need a ceiling: a maximum daily budget and a monthly cap, both required. The workspace can never set limits above them.',
+                                'The knowledge base is not available yet. Explainers are for the platform administrator’s own workspace only, for now.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'presets',
+                    title: { ar: 'الأنواع الجاهزة', en: 'The ready-made kinds' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['صندوق رسائل لشركة', 'الرسائل والردود التلقائية ومساعد الرسائل والجدولة والنتائج. وهو الاختيار الأول.'],
+                                ['استوديو لصانع محتوى', 'كل ما سبق مع النمو والاستوديو وتيك توك ويوتيوب وواتساب ورؤية ميتا، من دون الإعلانات.'],
+                                ['مخصّص', 'يظهر تلقائياً إذا غيّرت أي خانة. اختر ما يلزم وحده.'],
+                            ] },
+                            'تغيير أي خانة ينقل النوع إلى «مخصّص» إلا إذا طابقت الخانات نوعاً جاهزاً تماماً.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Company inbox', 'The Inbox, keyword replies, the DM assistant, the Scheduler and Results. This is the first choice.'],
+                                ['Creator studio', 'All of that, plus Growth, the Studio, TikTok, YouTube, WhatsApp and Meta vision, without Ads.'],
+                                ['Custom', 'Chosen for you as soon as you change any box. Pick only what is needed.'],
+                            ] },
+                            'Changing any box moves the kind to Custom, unless the boxes match a ready-made kind exactly.',
+                        ],
+                    },
+                },
+                {
+                    id: 'meta',
+                    title: { ar: 'كيف يتصل ميتا', en: 'How Meta connects' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['يربطونه بأنفسهم (موصى به)', 'يضغط مدير صفحتهم زر الربط في **الإعدادات**. تجهّز له الأمر مرة واحدة: [[workspaces#tester]].'],
+                                ['نربطه نحن لهم', 'لا يظهر الزر عندهم. تلصق أنت رمز الصفحة في تبويب «متقدم» من صفحة مساحة العمل.'],
+                            ] },
+                            { note: 'الاختيار يخص مساحة العمل كلها. ويمكن تغييره لاحقاً من بطاقة الوحدات في صفحتها.' },
+                        ],
+                        en: [
+                            { dl: [
+                                ['They connect it themselves (recommended)', 'Their Page admin presses the connect button in **Settings**. You prepare this once: [[workspaces#tester]].'],
+                                ['We connect it for them', 'They see no button. You paste the Page token on the Advanced tab of the workspace’s page.'],
+                            ] },
+                            { note: 'The choice belongs to the whole workspace, and can be changed later from the Modules card on its page.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'tester',
+                    title: { ar: 'إضافة مختبِر (Tester)', en: 'Adding a Tester' },
+                    body: {
+                        ar: [
+                            'ما دام تطبيق ميتا لم يُوثَّق بعد، يجب أن يكون من يربط الصفحة صاحب دور على التطبيق:',
+                            { ol: [
+                                'احصل من الشخص على رابط ملفه الشخصي في فيسبوك.',
+                                'في لوحة مطوّري ميتا افتح التطبيق ← أدوار التطبيق ← الأدوار ← إضافة أشخاص ← مختبِر، والصق الرابط.',
+                                'يقبل الشخص الطلب على فيسبوك. وقد يحتاج أولاً إلى تسجيل نفسه مطوّراً لدى ميتا: لم يتأكد ذلك بعد.',
+                                'يضغط زر الربط في **الإعدادات**، ثم يجرّب تعليقاً على منشوره.',
+                            ] },
+                            { warn: 'لم يتأكد بعد أن أحداث صفحة يربطها مختبِر تصل إلينا. فإن لم يصل التعليق التجريبي، اختر «نربطه نحن لهم» والصق رمز الصفحة.' },
+                        ],
+                        en: [
+                            'Until Meta’s app is verified, the person who connects the Page must have a role on the app:',
+                            { ol: [
+                                'Get the link to their Facebook profile from the person.',
+                                'In Meta’s developer dashboard open the app → App roles → Roles → Add people → Tester, and paste the link.',
+                                'The person accepts the request on Facebook. They may first need to register as a Meta developer: that is not confirmed yet.',
+                                'They press the connect button in **Settings**, then try a comment on their post.',
+                            ] },
+                            { warn: 'It is not yet confirmed that events from a Page connected by a Tester reach us. If the test comment does not arrive, choose “We connect it for them” and paste the Page token.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'change',
+                    title: { ar: 'تغيير الوحدات لاحقاً', en: 'Changing modules later' },
+                    body: {
+                        ar: [
+                            'افتح صفحة مساحة العمل من **مساحات العمل**، فتجد بطاقة الوحدات أسفل الصحة. غيّر الخانات ثم اضغط **احفظ الوحدات**. لا يُفعَّل الزر إلا إذا تغيّر شيء.',
+                            { note: 'قد تستمر نسخة أخرى من الخادم في الإجابة بالحال القديمة نحو 30 ثانية بعد الحفظ.' },
+                            'أما مساحة عملك الخاصة فتُعرض للقراءة فقط: كل الوحدات فيها مفعّلة ولا يمكن تضييقها.',
+                        ],
+                        en: [
+                            'Open the workspace’s page from **Workspaces**, and you will find the Modules card under the health section. Change the boxes, then press **Save modules**. The button is enabled only when something changed.',
+                            { note: 'Another server instance may keep answering the old way for about 30 seconds after you save.' },
+                            'Your own workspace is shown read-only: everything is on and it cannot be narrowed.',
+                        ],
+                    },
+                },
+                {
+                    id: 'off',
+                    title: { ar: 'ماذا يحدث حين تُعطَّل وحدة؟', en: 'What happens when a module is switched off' },
+                    body: {
+                        ar: [
+                            { ul: [
+                                'تختفي من القائمة الجانبية ومن الشرائط والإعدادات والمساعدة، ويرفض الخادم طلباتها.',
+                                'لا يُحذف شيء: تعود بكل ما فيها حين تُفعَّل من جديد.',
+                                'لا يتوقف العمل في الخلفية: منشور مجدول سلفاً ما زال يُنشر. وتعطيل وحدة يناسب مساحة عمل لم تستخدمها.',
+                            ] },
+                        ],
+                        en: [
+                            { ul: [
+                                'It disappears from the sidebar, the tab strips, Settings and Help, and the server refuses its requests.',
+                                'Nothing is deleted: it comes back with everything in it when switched on again.',
+                                'Work in the background does not stop: a post already scheduled still goes out. Switching a module off suits a workspace that never used it.',
                             ] },
                         ],
                     },

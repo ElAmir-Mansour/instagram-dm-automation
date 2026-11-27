@@ -3070,6 +3070,25 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     background: var(--surface-glass);
 }
 .member-item-off { opacity: var(--opacity-off); }
+
+/* The modules picker (admin_common.js `Admin.modulesPicker`): the New workspace dialog's step 2 and the tenant's Modules card. */
+.modules-picker { display: grid; gap: var(--space-4); }
+.modules-group { display: grid; gap: var(--space-2); }
+.modules-row { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.modules-row--locked { opacity: var(--opacity-off); }
+.modules-check { display: flex; align-items: center; gap: var(--space-3); min-block-size: var(--tap-target); cursor: pointer; }
+.modules-name { font-weight: 600; color: var(--text-strong); }
+.modules-what, .modules-needs { margin: 0; }
+.modules-needs-label { color: var(--text-muted); }
+.modules-ceiling { display: grid; gap: var(--space-2); padding-inline-start: var(--space-4); border-inline-start: 2px solid var(--border-subtle); }
+.modules-ceiling[hidden], .create-step[hidden] { display: none; }
+.modules-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.modules-owner-line { margin: 0; color: var(--text-strong); }
+.create-steps { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0 0 var(--space-4); padding: 0; list-style: none; color: var(--text-muted); }
+.create-step-label[aria-current='step'] { color: var(--text-strong); font-weight: 600; }
+.create-step-n { display: inline-grid; place-items: center; inline-size: 1.5em; block-size: 1.5em; border-radius: 50%; border: 1px solid var(--border-strong); }
+.create-step-label[aria-current='step'] .create-step-n { background: var(--accent-soft); border-color: var(--accent); }
+.create-review { margin: var(--space-3) 0 0; color: var(--text-strong); }
 .member-email { font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; min-width: 0; }
 .member-tags { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .user-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }

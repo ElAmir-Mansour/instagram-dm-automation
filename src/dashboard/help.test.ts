@@ -168,7 +168,7 @@ const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').repla
 
 const REQUIRED = [
     'getting-started', 'onboarding', 'team', 'connect-meta', 'campaigns', 'dm-assistant', 'inbox', 'go-live', 'notifications', 'scheduling', 'growth', 'seo', 'tiktok', 'youtube', 'whatsapp', 'ads',
-    'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'brand', 'media-storage', 'ai-usage', 'troubleshooting', 'faq',
+    'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'brand', 'media-storage', 'ai-usage', 'troubleshooting', 'faq', 'workspaces',
 ];
 
 const ARABIC = /[\u0600-\u06FF]/g;

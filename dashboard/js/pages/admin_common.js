@@ -361,6 +361,209 @@ const Admin = {
         }
         return (err && err.message) || t(fallbackKey || 'common.error');
     },
+
+    // ─── Modules (U3, contract §3.2): the picker the New workspace dialog and the tenant's Modules card share ───
+    /**
+     * The modules by group, in the order the picker draws them. `Shell.MODULES` (shell.js) and `MODULE_IDS` (src/services/modules.ts) are the same list
+     * (workspaceCreate.test.ts compares them): a module added there needs a row here.
+     */
+    MODULE_GROUPS: Object.freeze([
+        { key: 'core', ids: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'] },
+        { key: 'more', ids: ['growth', 'whatsapp', 'muse', 'knowledge'] },
+        { key: 'content', ids: ['studio', 'explainers'] },
+        { key: 'channels', ids: ['tiktok', 'youtube'] },
+        { key: 'ads', ids: ['ads'] },
+    ]),
+    /** What each module needs switched on first (the server refuses 400 MODULE_NEEDS otherwise). */
+    MODULE_REQUIRES: Object.freeze({
+        dm_assistant: ['inbox'], explainers: ['studio'], tiktok: ['scheduler'], youtube: ['scheduler'], whatsapp: ['inbox'], muse: ['dm_assistant'],
+    }),
+    /** Never switchable here: the knowledge base is not built yet, and Explainers are the platform owner's own workspace's. */
+    MODULE_LOCKED: Object.freeze({ knowledge: 'modules.knowledge.needs', explainers: 'modules.explainers.needs' }),
+    /** §1.1's two preset columns (`ads`, `explainers` and `knowledge` are in neither). */
+    MODULE_PRESETS: Object.freeze({
+        company: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'],
+        creator: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results', 'growth', 'studio', 'tiktok', 'youtube', 'whatsapp', 'muse'],
+    }),
+    /** The name of each module on screen: the sidebar's own words where it has one. */
+    MODULE_LABELS: Object.freeze({
+        inbox: 'nav.inbox', keyword_replies: 'nav.campaigns', dm_assistant: 'nav.ai_settings', scheduler: 'nav.posts', results: 'nav.analytics',
+        growth: 'nav.growth', studio: 'nav.studio', explainers: 'studio.tabs.explainers', ads: 'nav.ads',
+        tiktok: 'modules.tiktok', youtube: 'modules.youtube', whatsapp: 'modules.whatsapp', muse: 'modules.muse', knowledge: 'modules.knowledge',
+    }),
+
+    /** Every module id the picker draws, in group order. */
+    moduleIds() {
+        return Admin.MODULE_GROUPS.flatMap((g) => g.ids);
+    },
+
+    /**
+     * `on` after ticking or unticking one module, with its dependencies kept: ticking a module ticks what it needs (and what that needs), and
+     * unticking one unticks everything that needs it (and what needs those). Pure; locked modules are never ticked. Returns a new array in picker order.
+     */
+    moduleToggle(on, id, checked) {
+        const set = new Set(on || []);
+        const needs = (m) => Admin.MODULE_REQUIRES[m] || [];
+        if (checked) {
+            if (Admin.MODULE_LOCKED[id]) return Admin.moduleIds().filter((m) => set.has(m));
+            const queue = [id];
+            while (queue.length) {
+                const m = queue.pop();
+                if (Admin.MODULE_LOCKED[m] || set.has(m)) continue;
+                set.add(m);
+                needs(m).forEach((n) => queue.push(n));
+            }
+        } else {
+            const queue = [id];
+            while (queue.length) {
+                const m = queue.pop();
+                if (!set.delete(m)) continue;
+                Admin.moduleIds().filter((other) => needs(other).includes(m)).forEach((other) => queue.push(other));
+            }
+        }
+        return Admin.moduleIds().filter((m) => set.has(m));
+    },
+
+    /** `company`, `creator` or `custom`: which preset the ticked modules are exactly (Ads and Explainers are never part of one). */
+    modulePresetOf(on) {
+        const key = [...(on || [])].sort().join(',');
+        for (const name of ['company', 'creator']) if ([...Admin.MODULE_PRESETS[name]].sort().join(',') === key) return name;
+        return 'custom';
+    },
+
+    /** The ads ceiling as typed, or null when it is not one: both above 0, the daily one not above the monthly one. Pure. */
+    moduleCeiling(daily, monthly) {
+        const num = (v) => { const n = typeof v === 'number' ? v : Number(String(v === undefined || v === null ? '' : v).trim()); return String(v === undefined || v === null ? '' : v).trim() === '' || !Number.isFinite(n) || n <= 0 ? null : n; };
+        const d = num(daily);
+        const m = num(monthly);
+        return d !== null && m !== null && d <= m ? { maxDailyBudget: d, monthlyCap: m } : null;
+    },
+
+    /**
+     * What a selection may not be sent with, or '' when it may: Ads on with no valid ceiling (the server answers 409 CEILING_REQUIRED, and a stored ceiling
+     * counts there; the card passes `hasCeiling`). Pure.
+     */
+    moduleProblem(selection, hasCeiling) {
+        if (!selection || !selection.on || !selection.on.includes('ads')) return '';
+        return selection.adsCeiling || hasCeiling ? '' : 'ceiling';
+    },
+
+    /**
+     * The picker's markup: the preset (radios), the modules by group (checkboxes) each with what it is and what it needs, and the ads ceiling (two
+     * numbers, shown only while Ads is ticked, and required then). `options`: `{ on, owner, ceiling, idPrefix, withPreset }`. For the platform owner's own
+     * workspace it is one read-only line and the chips, with no input at all. Every change goes to `data-change="<options.change>"` (the page's action).
+     */
+    modulesPicker(options) {
+        const o = options || {};
+        const prefix = o.idPrefix || 'modules';
+        const on = Array.isArray(o.on) ? o.on : [];
+        if (o.owner) {
+            return html`<div class="modules-picker modules-picker--owner" id="${prefix}-picker">
+                <p class="modules-owner-line">${t('tenantModules.owner')}</p>
+                <ul class="modules-chips" role="list">${Admin.moduleIds().filter((id) => on.includes(id)).map((id) => html`<li class="chip" role="listitem">${t(Admin.MODULE_LABELS[id])}</li>`)}</ul>
+            </div>`;
+        }
+        const change = o.change || 'admin:modulesChanged';
+        const preset = Admin.modulePresetOf(on.filter((id) => id !== 'ads'));
+        const presetRow = (name) => html`<label class="welcome-choice">
+            <input class="welcome-choice-input" type="radio" name="preset" value="${name}" data-change="${change}" ${preset === name ? html.raw('checked') : ''}>
+            <span class="welcome-choice-body"><strong>${t(`tenants.create.preset.${name}`)}</strong><span class="form-hint">${t(`tenants.create.preset.${name}.hint`)}</span></span>
+        </label>`;
+        const moduleRow = (id) => {
+            const locked = Boolean(Admin.MODULE_LOCKED[id]);
+            const checked = !locked && on.includes(id);
+            return html`<div class="modules-row${locked ? ' modules-row--locked' : ''}">
+                <label class="modules-check" for="${prefix}-${id}">
+                    <input type="checkbox" id="${prefix}-${id}" name="module" value="${id}" data-change="${change}" ${checked ? html.raw('checked') : ''} ${locked ? html.raw('disabled') : ''}>
+                    <span class="modules-name">${t(Admin.MODULE_LABELS[id])}</span>
+                </label>
+                <p class="form-hint modules-what">${t(`modules.${id}.what`)}</p>
+                <p class="form-hint modules-needs"><span class="modules-needs-label">${t('tenants.create.needsLabel')}:</span> ${t(`modules.${id}.needs`)}</p>
+            </div>`;
+        };
+        const ceiling = o.ceiling || {};
+        const adsOn = on.includes('ads');
+        return html`<div class="modules-picker" id="${prefix}-picker">
+            ${o.withPreset === false ? '' : html`<fieldset class="fieldset-plain modules-presets">
+                <legend class="form-label">${t('tenants.create.presetLegend')}</legend>
+                <div class="welcome-choices">${['company', 'creator', 'custom'].map(presetRow)}</div>
+            </fieldset>`}
+            ${Admin.MODULE_GROUPS.map((g) => html`<fieldset class="fieldset-plain modules-group" data-group="${g.key}">
+                <legend class="form-label">${t(`tenants.create.group.${g.key}`)}</legend>
+                ${g.ids.map(moduleRow)}
+                ${g.key === 'ads' ? html`<div class="modules-ceiling" id="${prefix}-ceiling" ${adsOn ? '' : html.raw('hidden')}>
+                    <p class="form-label">${t('tenants.create.adsCeiling')}</p>
+                    <div class="row gap-3 row--wrap">
+                        <div class="form-group">
+                            <label class="form-label" for="${prefix}-daily">${t('tenants.create.adsDaily')}</label>
+                            <input class="field" id="${prefix}-daily" name="ads_daily" type="number" inputmode="decimal" min="0" step="any" dir="ltr"
+                                   value="${ceiling.maxDailyBudget === undefined || ceiling.maxDailyBudget === null ? '' : ceiling.maxDailyBudget}" data-change="${change}" ${adsOn ? html.raw('required') : ''}>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="${prefix}-monthly">${t('tenants.create.adsMonthly')}</label>
+                            <input class="field" id="${prefix}-monthly" name="ads_monthly" type="number" inputmode="decimal" min="0" step="any" dir="ltr"
+                                   value="${ceiling.monthlyCap === undefined || ceiling.monthlyCap === null ? '' : ceiling.monthlyCap}" data-change="${change}" ${adsOn ? html.raw('required') : ''}>
+                        </div>
+                    </div>
+                    <p class="form-hint">${t('tenants.create.adsHint')}</p>
+                </div>` : ''}
+            </fieldset>`)}
+        </div>`;
+    },
+
+    /** The form's modules as the server takes them: `{ preset, on, adsCeiling }` (`adsCeiling` null unless Ads is on and the two numbers are a ceiling). */
+    readModulesPicker(form) {
+        const all = (selector) => Array.from((form && form.querySelectorAll && form.querySelectorAll(selector)) || []);
+        const on = all('input[name="module"]').filter((el) => el.checked && !el.disabled).map((el) => el.value);
+        const ordered = Admin.moduleIds().filter((id) => on.includes(id));
+        const picked = all('input[name="preset"]').find((el) => el.checked);
+        const field = (name) => all(`input[name="${name}"]`)[0];
+        const daily = field('ads_daily');
+        const monthly = field('ads_monthly');
+        return {
+            preset: picked ? picked.value : Admin.modulePresetOf(ordered.filter((id) => id !== 'ads')),
+            on: ordered,
+            adsCeiling: ordered.includes('ads') ? Admin.moduleCeiling(daily && daily.value, monthly && monthly.value) : null,
+        };
+    },
+
+    /**
+     * The picker's live behaviour, for any `data-change` that came from it: a preset fills the boxes (Custom leaves them), a box ticks what it needs and
+     * unticks what needs it and moves the preset to what the boxes now are (Custom when no preset is exactly them), and the ceiling shows, and is required,
+     * only while Ads is ticked. Writes to the form's own inputs; the page's handler then reads them back.
+     */
+    modulesChanged(el) {
+        const form = el && (el.form || (el.closest && el.closest('form')));
+        if (!form || !form.querySelectorAll) return;
+        const boxes = Array.from(form.querySelectorAll('input[name="module"]'));
+        const radios = Array.from(form.querySelectorAll('input[name="preset"]'));
+        const current = boxes.filter((b) => b.checked && !b.disabled).map((b) => b.value);
+        let next = current;
+        if (el.name === 'preset') {
+            if (el.value === 'custom') return Admin.modulesSync(form, current, 'custom');
+            next = Admin.MODULE_PRESETS[el.value] ? [...Admin.MODULE_PRESETS[el.value]] : current;
+            // A preset never carries Ads: whatever Ads was stays as it was.
+            if (current.includes('ads')) next = [...next, 'ads'];
+            return Admin.modulesSync(form, next, el.value);
+        }
+        if (el.name === 'module') {
+            // `el.checked` is already the new state: start from what it was before, so unticking finds the module to remove and what needs it.
+            const before = el.checked ? current.filter((id) => id !== el.value) : [...new Set([...current, el.value])];
+            next = Admin.moduleToggle(before, el.value, Boolean(el.checked));
+        }
+        return Admin.modulesSync(form, next, null);
+    },
+
+    /** Draw `on` into the form: the boxes, the preset radio, and the ceiling's visibility and `required`. */
+    modulesSync(form, on, forcePreset) {
+        const boxes = Array.from(form.querySelectorAll('input[name="module"]'));
+        for (const b of boxes) if (!b.disabled) b.checked = on.includes(b.value);
+        const preset = forcePreset || Admin.modulePresetOf(on.filter((id) => id !== 'ads'));
+        for (const r of Array.from(form.querySelectorAll('input[name="preset"]'))) r.checked = r.value === preset;
+        const adsOn = on.includes('ads');
+        for (const box of Array.from(form.querySelectorAll('.modules-ceiling'))) box.hidden = !adsOn;
+        for (const name of ['ads_daily', 'ads_monthly']) for (const input of Array.from(form.querySelectorAll(`input[name="${name}"]`))) input.required = adsOn;
+    },
 };
 
 UI.registerActions('admin', {
