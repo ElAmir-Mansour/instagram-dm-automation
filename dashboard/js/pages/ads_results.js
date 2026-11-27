@@ -81,7 +81,12 @@ const AdsResultsPage = {
     },
 
     skeleton() {
-        return html`${Motion.statsGrid(4)}${Motion.chartGrid(2)}${Motion.busy()}`;
+        return html`${this.tabsMarkup()}${Motion.statsGrid(4)}${Motion.chartGrid(2)}${Motion.busy()}`;
+    },
+
+    /** The Ads tab bar with Results marked current: in every state (loading and failed too), so the strip never shows no current tab. */
+    tabsMarkup() {
+        return typeof AdsTabs === 'undefined' ? '' : AdsTabs.markup('results');
     },
 
     /** A calendar day `n` days before today, as YYYY-MM-DD. The server cuts the stored rows by the ad account's days. */
@@ -127,6 +132,7 @@ const AdsResultsPage = {
                     title: t('adsResults.loadFailed'),
                     message: (err && err.message) || t('error.unexpected'),
                     hint: t('admin.loadFailedHint'),
+                    before: this.tabsMarkup(),
                 }, () => this.load());
             }
             return false;
@@ -274,7 +280,7 @@ const AdsResultsPage = {
     // ─── Markup ──────────────────────────────────────────────────────────────
 
     markup() {
-        const tabs = typeof AdsTabs === 'undefined' || this.view === 'forbidden' || this.view === 'disabled' ? '' : AdsTabs.markup('results');
+        const tabs = this.view === 'forbidden' || this.view === 'disabled' ? '' : this.tabsMarkup();
         const ready = this.view === 'ready';
         const synced = ready && this.data ? this.data.syncedAt : null;
         const updated = ready ? (synced ? t('ads.camp.updated', { time: `⁦${UI.formatDateTime(synced)}⁩` }) : t('ads.camp.neverSynced')) : '';

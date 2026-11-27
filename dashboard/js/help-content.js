@@ -4069,7 +4069,7 @@ const HelpContent = {
                                 'من الاستوديو ← **الإعدادات** ← **العمّال**: اكتب اسماً في **عامل جديد** (مثلاً «ماك الاستوديو») واضغط **أنشئ عاملاً**. انسخ الرمز الحين لأنه ما يظهر مرة ثانية، واضغط **نسخته**.',
                                 'في مجلد العامل، انسخ ملف المثال وعبّه: `cp studio.config.example.json studio.config.json`. اكتب فيه رابط التطبيق (`appUrl`)، والرمز (`token`)، ومفتاح Gemini (`geminiApiKey`)، ومجلد الكورس (`courseRoot`)، واسم العامل (`name`).',
                                 'ثبّته عشان يشتغل لحاله كل ما تسجّل دخولك للماك، بالأمر اللي تحت.',
-                                'ارجع للاستوديو، وخلال ثوانٍ تشوف **العامل متصل**.',
+                                'ارجع للاستوديو، وخلال ثوانٍ تقول الشارة في الأعلى «الماك متصل».',
                             ] },
                             { code: 'scripts/install-studio-worker.sh', caption: 'التثبيت والتشغيل (ويشتغل مع كل تسجيل دخول)' },
                             'أوامر تحتاجها بعدين، تكتبها في الطرفية (Terminal) من داخل مجلد العامل:',
@@ -4087,7 +4087,7 @@ const HelpContent = {
                                 'In the Studio, open **Settings** → **Workers**: type a name under **New worker** (such as “Studio Mac”) and press **Create worker**. Copy the token now, because it is never shown again, then press **I’ve copied it**.',
                                 'In the worker folder, copy the example config and fill it in: `cp studio.config.example.json studio.config.json`. Set the app address (`appUrl`), the token (`token`), your Gemini key (`geminiApiKey`), the course folder (`courseRoot`) and the worker’s name (`name`).',
                                 'Install it so it starts on its own whenever you log in to the Mac, with the command below.',
-                                'Back in the Studio, within seconds you’ll see **Worker online**.',
+                                'Back in the Studio, within seconds the chip at the top says “Mac online”.',
                             ] },
                             { code: 'scripts/install-studio-worker.sh', caption: 'Install and start (it then starts at every login)' },
                             'Commands you’ll want later, typed in Terminal from inside the worker folder:',
@@ -4106,18 +4106,20 @@ const HelpContent = {
                     title: { ar: 'متصل أو غير متصل', en: 'Online and offline' },
                     body: {
                         ar: [
+                            'شارة واحدة تظهر في أعلى كل أقسام الاستوديو (الكاروسيل والمونتور والإنفوجرافيك والشروحات) وفي «اقتراحات الذكاء الاصطناعي» في الإعلانات. لها ثلاث حالات:',
                             { dl: [
-                                ['العامل متصل', 'تواصل مع الاستوديو خلال آخر 90 ثانية. كل شي يمشي.'],
-                                ['العامل غير متصل', 'ما تواصل من أكثر من 90 ثانية، وتحتها **آخر ظهور** يقول لك متى كانت آخر مرة.'],
-                                ['لم يتصل بعد', 'أنشأت العامل بس ما اشتغل ولا مرة. تأكد من الرمز في ملف الإعدادات.'],
+                                ['● الماك متصل · Claude مسجّل الدخول', 'تواصل العامل مع الاستوديو خلال آخر 90 ثانية، وClaude على الماك يجيب. يظهر بعدها عدد الأعمال التي بالانتظار. كل شيء يعمل.'],
+                                ['▲ Claude على الماك غير مسجّل الدخول', 'العامل متصل لكن Claude الذي يكتب عنه طلب تسجيل الدخول من جديد، فلا يكتب الاستوديو شيئاً. شغّل `claude /login` على الماك (التفاصيل في «تنبيه: Claude على الماك مسجَّل الخروج» أدناه).'],
+                                ['○ الماك نائم منذ ٣ س · مهمتان تنتظران', 'لم يتواصل العامل منذ أكثر من 90 ثانية، ويقول لك الرقم منذ متى. أيقظ الماك فتكمل الأعمال وحدها. وإن لم يتصل أبداً فالشارة تقول «الماك لم يتصل بعد»: تأكد من الرمز في ملف الإعدادات.'],
                             ] },
                             'وهو غير متصل تقدر تكتب كاروسيل عادي، لأن الكتابة تصير على الخادم. اللي ينتظره: الفحص والفهرسة ورسم الشرائح، وتشوف عددها في **بالانتظار**. ولما يرجع، يكمّلها لحاله. وزر **تحقّق مرة أخرى** يفحص الحالة الحين.',
                         ],
                         en: [
+                            'One chip sits at the top of every Studio section (Carousels, Monteur, Infographics, Explainers) and on Ads → AI proposals. It has three states:',
                             { dl: [
-                                ['Worker online', 'It checked in with the Studio within the last 90 seconds. All good.'],
-                                ['Worker offline', 'Nothing from it for more than 90 seconds. **Last seen** underneath says when it last checked in.'],
-                                ['Never connected', 'The worker exists but has never run. Check the token in its config file.'],
+                                ['● Mac online · Claude signed in', 'The worker checked in within the last 90 seconds and Claude on the Mac answers. The number after it is how many jobs wait. All good.'],
+                                ['▲ Claude on the Mac is signed out', 'The worker is online, but the Claude program it writes with asked to be signed in again, so the Studio can write nothing. Run `claude /login` on the Mac (details under “Alarm: Claude on the Mac is signed out” below).'],
+                                ['○ Mac asleep since 3h · 2 jobs wait', 'Nothing from the worker for more than 90 seconds; the number says for how long. Wake the Mac and the jobs carry on by themselves. If it never connected, the chip says “Mac not connected yet”: check the token in its config file.'],
                             ] },
                             'While it is offline you can still write carousels, because writing happens on the server. What waits for it is scanning, indexing and drawing the slides, counted under **Waiting**. When it is back, it picks them up on its own. **Check again** refreshes the status right away.',
                         ],
@@ -4129,7 +4131,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'لما ينام الماك (أو تسكّر غطاء اللابتوب)، العامل ينام معه، وبعد 90 ثانية يطلع **العامل غير متصل**. المهام تنتظر في الطابور وما يضيع شي.',
+                                'لما ينام الماك (أو تسكّر غطاء اللابتوب)، العامل ينام معه، وبعد 90 ثانية تقول الشارة «الماك نائم منذ …». المهام تنتظر في الطابور وما يضيع شي.',
                                 'ولما يصحى الجهاز، يكمّل لحاله بدون ما تسوي شي.',
                                 'لو نام في نص مهمة، وما وصل منها خبر 15 دقيقة، الاستوديو يرجّعها للطابور ويعطيها للعامل من جديد. المهمة الوحدة تنعطى 3 مرات كحد أقصى، وبعدها تفشل مع رسالة توجّهك للسجل.',
                             ] },
@@ -4137,7 +4139,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ul: [
-                                'When the Mac sleeps (or you close the laptop lid), the worker sleeps with it, and after 90 seconds the Studio shows **Worker offline**. Jobs wait in the queue; nothing is lost.',
+                                'When the Mac sleeps (or you close the laptop lid), the worker sleeps with it, and after 90 seconds the chip says “Mac asleep since …”. Jobs wait in the queue; nothing is lost.',
                                 'When the computer wakes, the worker carries on by itself.',
                                 'If it fell asleep in the middle of a job and the job has not reported in for 15 minutes, the Studio puts it back in the queue and hands it out again. A job is handed out 3 times at most, then it fails with a message pointing you to the log.',
                             ] },
@@ -4150,7 +4152,7 @@ const HelpContent = {
                     title: { ar: 'تنبيه: Claude على الماك مسجَّل الخروج', en: 'Alarm: Claude on the Mac is signed out' },
                     body: {
                         ar: [
-                            'ظهر لك في «اليوم» وفي رأس الاستوديو أن «Claude على جهاز الماك مسجَّل الخروج». معناها أن العامل شغّال وعلى الإنترنت، لكن برنامج Claude اللي يكتب عنه طلب منك تسجيل الدخول من جديد (يحصل لما تنتهي الجلسة). لهذا ما يقدر الاستوديو يكتب شي: لا اختيار المقاطع ولا الكابشن ولا الإنفوجرافيك ولا اقتراحات الإعلانات.',
+                            'ظهر لك في «اليوم» وفي شارة الماك أعلى الاستوديو أن «Claude على جهاز الماك مسجَّل الخروج». معناها أن العامل شغّال وعلى الإنترنت، لكن برنامج Claude اللي يكتب عنه طلب منك تسجيل الدخول من جديد (يحصل لما تنتهي الجلسة). لهذا ما يقدر الاستوديو يكتب شي: لا اختيار المقاطع ولا الكابشن ولا الإنفوجرافيك ولا اقتراحات الإعلانات.',
                             { ul: [
                                 'المونتور ينتظر ولا يغيّر النموذج. ما ينتقل إلى Gemini أو أي نموذج ثاني، ولا يحرق محاولاته: فيديوهاتك تبقى في مكانها لين يرجع Claude.',
                                 'أول إجابة ناجحة من Claude تشيل التنبيه وحدها، وترجّع الأعمال اللي وقفت بسبب الدخول (الإنفوجرافيك والاقتراحات والشروحات اللي فشلت قبل أقل من 3 أيام).',
@@ -4166,7 +4168,7 @@ const HelpContent = {
                             { note: 'التطبيق يسأل Claude سؤالاً صغيراً كل نصف ساعة وهو مسجَّل الخروج، فيعرف وحده أنك دخلت. ما تحتاج تضغط شي.' },
                         ],
                         en: [
-                            'Today and the Studio header say “Claude on the Mac is signed out”. That means the worker is running and online, but the Claude program it writes with asked to be signed in again (it happens when the session expires). So the Studio can write nothing: no clip picks, captions, infographics or ad drafts.',
+                            'Today and the Mac chip at the top of the Studio say “Claude on the Mac is signed out”. That means the worker is running and online, but the Claude program it writes with asked to be signed in again (it happens when the session expires). So the Studio can write nothing: no clip picks, captions, infographics or ad drafts.',
                             { ul: [
                                 'The Monteur waits; it never switches models. It does not fall back to Gemini or any other model, and it does not burn its tries: your videos stay where they are until Claude is back.',
                                 'The first answer Claude gives clears the alarm by itself, and puts back the work the sign-in stopped (infographics, proposals and explainers that failed in the last 3 days).',

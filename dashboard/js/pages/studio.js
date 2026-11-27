@@ -788,7 +788,7 @@ const StudioPage = {
         const showTikTok = tiktok.audited === true || (Number(tiktok.queued) || 0) > 0;
         return html`
             <div class="studio-status-grid">
-                ${this.workerMarkup(s.worker || {}, s.jobs || {})}
+                ${this.workerMarkup(s.worker || {}, s.jobs || {}, s.claude || null)}
                 ${this.libraryMarkup(s.lessons || {})}
                 ${showTikTok ? this.tiktokQueueMarkup(tiktok) : ''}
             </div>
@@ -798,29 +798,19 @@ const StudioPage = {
         `;
     },
 
-    workerMarkup(worker, jobs) {
+    /** The Mac chip (`UI.workerChip`, the one every Studio format and the Ads proposals share), what is running, and, while the Mac is away, how to bring it back. */
+    workerMarkup(worker, jobs, claude) {
         const online = worker.online === true;
-        const seen = worker.lastSeen ? UI.relativeAge(worker.lastSeen) : null;
         const pending = Number(jobs.pending) || 0;
         const claimed = Number(jobs.claimed) || 0;
         return html`
             <div class="studio-status-item${online ? '' : html.raw(' is-wide')}">
                 <p class="studio-status-head">
-                    <span class="health-pill ${online ? html.raw('health-fresh') : html.raw('health-off')}" id="studio-worker-pill">
-                        <span class="health-dot" aria-hidden="true"></span>
-                        ${online ? t('studio.worker.online') : t('studio.worker.offline')}
-                    </span>
-                    ${UI.helpLink('worker', t('help.link.worker'), { iconOnly: true, className: 'studio-worker-help' })}
+                    ${UI.workerChip({ worker, jobs, claude }, { id: 'studio-worker-pill' })}
                     ${worker.name ? html`<span class="text-meta" dir="auto">${worker.name}</span>` : ''}
-                    <span class="text-meta" title="${seen ? seen.title : ''}">
-                        ${seen ? t('studio.worker.lastSeen', { when: seen.text }) : t('studio.worker.neverSeen')}
-                    </span>
                 </p>
                 ${pending || claimed ? html`
-                    <p class="text-meta">
-                        ${t('studio.jobs.summary', { pending: UI.formatNumber(pending), claimed: UI.formatNumber(claimed) })}
-                        ${!online && pending ? html`<span class="text-warning"> · ${t('studio.jobs.waitingForMac')}</span>` : ''}
-                    </p>
+                    <p class="text-meta">${t('studio.jobs.summary', { pending: UI.formatNumber(pending), claimed: UI.formatNumber(claimed) })}</p>
                 ` : ''}
                 ${online ? '' : this.workerHelpMarkup(worker)}
             </div>

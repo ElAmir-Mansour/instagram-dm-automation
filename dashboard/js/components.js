@@ -501,6 +501,57 @@ const UI = {
         return html`<a class="${cls}" href="${href}"${o.newTab ? html.raw(' target="_blank" rel="noopener"') : ''}${o.iconOnly ? html` aria-label="${name}" title="${text}"` : ''}><i data-lucide="circle-help" aria-hidden="true"></i>${o.iconOnly ? '' : html`<span>${text}</span>`}${o.newTab && !o.iconOnly ? html`<span class="sr-only"> ${t('help.link.newTab')}</span>` : ''}</a>`;
     },
 
+    /**
+     * The one Mac chip (research CP-S2): what the Studio's formats and the Ads proposals depend on, in one line, with the state the old
+     * "Worker online" pill could not show: the Mac is up but Claude on it is signed out. Three states, in this order of precedence:
+     *
+     *   ○ asleep   no worker call for 90 s (or never): "Mac asleep since 3h · 2 jobs wait". A flag read while the Mac is away is likely stale
+     *              and nothing can be fixed until it wakes, so this one wins.
+     *   ▲ signed out   the Mac is up and `claude.signedOutAt` is set: "Claude on the Mac is signed out: run claude /login on the Mac".
+     *   ● online   "Mac online · Claude signed in · 0 waiting". Said only when the server says the Mac does this tenant's Claude work
+     *              (`claude.applies === true`) and that it is signed in; otherwise the Claude part is left out: it would claim something nobody checked.
+     *
+     * Takes what GET /api/studio/status gives: `{ worker: {online, lastSeen}, jobs: {pending}, claude: {applies, signedOutAt} }`.
+     * `id` lets a page repaint its own chip; `data-state` is `online` | `signed_out` | `asleep`.
+     */
+    workerChip(data, opts) {
+        const d = data || {};
+        const o = opts || {};
+        const worker = d.worker || {};
+        const claude = d.claude || {};
+        const waiting = Number((d.jobs || {}).pending) || 0;
+        const n = UI.formatNumber(waiting);
+        let state; let glyph; let tone; let text; let help = 'worker';
+        if (worker.online !== true) {
+            state = 'asleep'; glyph = '○'; tone = 'health-off';
+            if (!worker.lastSeen) {
+                text = waiting ? t('workerChip.neverJobs', { n }) : t('workerChip.never');
+            } else {
+                const since = UI._elapsed(worker.lastSeen);
+                text = waiting ? t('workerChip.asleepJobs', { since, count: waiting, n }) : t('workerChip.asleep', { since });
+            }
+        } else if (claude.signedOutAt) {
+            state = 'signed_out'; glyph = '▲'; tone = 'health-stale'; help = 'worker#claude-signed-out';
+            text = t('workerChip.signedOut', { cmd: '\u2066claude /login\u2069' });
+        } else {
+            state = 'online'; glyph = '●'; tone = 'health-fresh';
+            text = claude.applies === true ? t('workerChip.online', { n }) : t('workerChip.onlineNoClaude', { n });
+        }
+        const seen = worker.lastSeen ? UI.relativeAge(worker.lastSeen) : null;
+        return html`<span class="worker-chip-wrap"><span class="health-pill worker-chip ${tone}" id="${o.id || 'worker-chip'}" data-state="${state}" role="status"${seen ? html` title="${t('studio.worker.lastSeen', { when: seen.text })}"` : ''}><span class="worker-chip-glyph" aria-hidden="true">${glyph}</span><span dir="auto">${text}</span></span>${UI.helpLink(help, t('help.link.worker'), { iconOnly: true, className: 'worker-chip-help' })}</span>`;
+    },
+
+    /** How long ago, as a bare duration ("3h", "12m"): the words before it are the caller's ("asleep since"). */
+    _elapsed(value) {
+        const ms = UI._date(value);
+        if (!ms) return t('common.never');
+        const diff = Math.max(0, Date.now() - ms.getTime());
+        const minute = 60000;
+        if (diff < 60 * minute) return t('common.minutes', { n: UI.formatNumber(Math.max(1, Math.floor(diff / minute))) });
+        if (diff < 24 * 60 * minute) return t('common.hours', { n: UI.formatNumber(Math.floor(diff / (60 * minute))) });
+        return t('common.days', { n: UI.formatNumber(Math.floor(diff / (24 * 60 * minute))) });
+    },
+
     formatNumber(value) {
         const n = Number(value);
         if (!Number.isFinite(n)) return '—';
@@ -666,15 +717,49 @@ const UI = {
     revealActiveTabs(root) {
         try {
             const scope = root && root.querySelectorAll ? root : document;
-            scope.querySelectorAll('nav.segmented').forEach((strip) => {
-                if (strip.scrollWidth <= strip.clientWidth) return;
-                const tab = strip.querySelector('[aria-current="page"]');
-                if (!tab) return;
-                const a = strip.getBoundingClientRect();
-                const b = tab.getBoundingClientRect();
-                strip.scrollLeft += (b.left + b.width / 2) - (a.left + a.width / 2);
-            });
+            scope.querySelectorAll('nav.segmented').forEach((strip) => UI.revealStrip(strip));
         } catch { /* a scroll position is a nicety */ }
+    },
+
+    /** One strip: its current tab to the middle of its visible box. A strip that fits, or has no current tab, is left alone. */
+    revealStrip(strip) {
+        try {
+            if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+            const tab = strip.querySelector('[aria-current="page"]');
+            if (!tab) return;
+            const a = strip.getBoundingClientRect();
+            const b = tab.getBoundingClientRect();
+            strip.scrollLeft += (b.left + b.width / 2) - (a.left + a.width / 2);
+        } catch { /* a scroll position is a nicety */ }
+    },
+
+    /**
+     * Reveals the current tab of every `.segmented` strip the moment a render puts one in the page, whatever drew it (`UI.icons` is not
+     * called by every render: #/ads_create and #/ads_tests painted a strip with its tab out of view at 375 px). Only a strip that was not
+     * there before is moved, once, so a later repaint elsewhere never takes the strip away from a thumb that has scrolled it.
+     */
+    watchTabStrips(root) {
+        try {
+            const host = root || document.getElementById('page-container');
+            if (!host || typeof MutationObserver === 'undefined') return null;
+            const seen = new WeakSet();
+            const fresh = [];
+            const collect = (node) => {
+                if (!node || node.nodeType !== 1) return;
+                const strips = [];
+                if (node.matches && node.matches('nav.segmented')) strips.push(node);
+                if (node.querySelectorAll) node.querySelectorAll('nav.segmented').forEach((s) => strips.push(s));
+                strips.forEach((s) => { if (!seen.has(s)) { seen.add(s); fresh.push(s); } });
+            };
+            const flush = () => { fresh.splice(0).forEach((s) => UI.revealStrip(s)); };
+            const observer = new MutationObserver((records) => {
+                records.forEach((r) => r.addedNodes.forEach(collect));
+                if (fresh.length) requestAnimationFrame(flush);
+            });
+            observer.observe(host, { childList: true, subtree: true });
+            collect(host);
+            return observer;
+        } catch { return null; }
     },
 
     // ─── Toast ───────────────────────────────────────────────────────────────

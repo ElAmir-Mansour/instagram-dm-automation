@@ -189,7 +189,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.05',
+    ASSET_VERSION: '13.20',
 
     _modules: Object.create(null),
 
@@ -316,6 +316,7 @@ const App = {
     init() {
         I18N.init();
         I18N.applyStatic();
+        UI.watchTabStrips();
         this.renderLanguageToggle();
         this.setBaseTitle(this.appTitle());
         // The shell's static description is the Arabic one; a reload on a language switch is what lets this follow the language.

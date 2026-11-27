@@ -693,7 +693,7 @@ describe('Help Center — contextual links', () => {
         ]);
         const pages = s.run<Json>('({ StudioPage, SettingsPage, CampaignsPage, PostsPage })');
         const pill = pages.StudioPage.workerMarkup({ online: false, lastSeen: null }, {}).toString();
-        assert.match(pill, /id="studio-worker-pill"[\s\S]*?<a class="help-link help-link--icon studio-worker-help" href="#\/help\/worker" aria-label="ما هو العامل؟"/);
+        assert.match(pill, /id="studio-worker-pill"[\s\S]*?<a class="help-link help-link--icon worker-chip-help" href="#\/help\/worker" aria-label="ما هو العامل؟"/);
         const library = pages.StudioPage.libraryMarkup({ total: 3, indexed: 1 }).toString();
         assert.ok(library.includes('href="#/help/library"'));
         const more = pages.StudioPage.moreOptionsMarkup('lesson', pages.StudioPage.prefs()).toString();

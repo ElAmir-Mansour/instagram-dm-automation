@@ -1533,12 +1533,13 @@ describe('Explainers: what the server decides', () => {
         assert.ok(text(ar.P.picApproveMarkup()).includes('بعض المشاهد بلا صورة بعد (2).'));
     });
 
-    it('whether the Mac is there comes with the explainer: the detail asks nothing else, and the list still reads the status', async () => {
+    it('whether the Mac is there comes with the explainer: the detail reads the status only for the chip, and the list reads it for the worker too', async () => {
         const detail = world({ lang: 'en', hash: `#/explainers?id=${ID}`, api: {
             getExplainer: async () => explainer({ status: 'writing', worker: { online: false, lastSeen: null, name: 'Mac' }, job: { status: 'pending', progress: null, not_before: null } }),
         } });
         await detail.P.render();
-        assert.equal(called(detail, 'getStudioStatus').length, 0, 'the explainer’s own answer says it');
+        // The explainer's own answer says whether the Mac is there; the status read adds only what the Mac chip also shows (the queue, Claude's sign-in).
+        assert.equal(called(detail, 'getStudioStatus').length, 1, 'once, for the chip');
         assert.equal(detail.P.worker.online, false);
         assert.ok(text(detail.container.innerHTML).includes(detail.t('explainers.worker.offline')), 'and the notice that nothing moves is drawn');
         // An answer that carries no worker (an action's) leaves what was known.
