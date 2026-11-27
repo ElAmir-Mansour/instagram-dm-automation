@@ -138,6 +138,15 @@ const PostsPage = {
     /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
     _doneOpen: false,
     /**
+     * How much of a long list is drawn (QA-01, DW-S3): the queue held 326 cards, 231 `<video>` and 275 `<img>`. Upcoming draws the next
+     * `UPCOMING_DAYS` days, Done and Archived the first `PAGE_STEP`; "Show more" adds `PAGE_STEP` at a time. `_extra` is what the owner has
+     * asked for beyond that, per group, kept across repaints (the 15 s poll) and reset on a tenant switch. The group's chip still counts all.
+     */
+    UPCOMING_DAYS: 14,
+    UPCOMING_MIN: 5,
+    PAGE_STEP: 30,
+    _extra: { upcoming: 0, done: 0, archived: 0 },
+    /**
      * Which part of the queue is showing: 'active' (Upcoming, Needs attention, Done) or 'archived' (what the owner put away). Kept across
      * repaints and refreshes; a tenant switch starts on 'active'. Archived rows are never in the first.
      */
@@ -170,6 +179,7 @@ const PostsPage = {
     /** Tenant switch: queue, live grid and error panels are all tenant-scoped. */
     resetTenantState() {
         this.posts = [];
+        this._extra = { upcoming: 0, done: 0, archived: 0 };
         this.livePosts = [];
         this.liveLoaded = false;
         this.liveLoading = false;
@@ -443,6 +453,7 @@ const PostsPage = {
         const focus = UI.captureFocus(host);
         host.innerHTML = esc(this.renderScheduledQueue());
         UI.icons(host);
+        this.hydratePosters(host);
         UI.revealClipped(host);
         UI.restoreFocus(focus, fallbackKey);
         this.wireErrorHost(host);
@@ -510,6 +521,7 @@ const PostsPage = {
         `);
 
         UI.icons(container);
+        this.hydratePosters(container);
         UI.revealClipped(container);
         // Switching tabs used to throw the operator out of the control they
         // were using, because the whole toolbar is rebuilt with the content.
@@ -750,15 +762,71 @@ const PostsPage = {
         return { icon: 'calendar-clock', label: t('posts.group.upcoming') };
     },
 
+    /**
+     * How many POSTS a group holds, the unit Today counts in (`COALESCE(group_id, id)` in src/services/attention.ts, QA-03): an Instagram +
+     * Facebook row and its TikTok sibling share a `group_id` and are one post, though they are two cards. A TikTok draft waiting in the
+     * inbox is standalone and counts once per row, as Today's own draft counter does.
+     */
+    postCount(list) {
+        const keys = new Set();
+        for (const post of Array.isArray(list) ? list : []) {
+            const own = post.status === 'IN_INBOX' || !post.group_id;
+            keys.add(own ? `row:${post.id}` : `group:${post.group_id}`);
+        }
+        return keys.size;
+    },
+
+    /**
+     * The part of a group that is drawn now: `{ shown, later }`. Upcoming (sorted soonest first) draws the posts due within `UPCOMING_DAYS` (at least the nearest `UPCOMING_MIN`)
+     * plus what the owner has revealed; Done and Archived draw the first `PAGE_STEP` plus what was revealed. Needs you is never cut: it is
+     * the work. `later` is how many are still not drawn. Pure; `now` is the clock.
+     */
+    windowGroup(key, list, now) {
+        const all = Array.isArray(list) ? list : [];
+        if (key === 'attention') return { shown: all, later: 0 };
+        const extra = Math.max(0, Number(this._extra && this._extra[key]) || 0);
+        let base;
+        if (key === 'upcoming') {
+            const limit = (typeof now === 'number' ? now : Date.now()) + this.UPCOMING_DAYS * 24 * 60 * 60 * 1000;
+            base = 0;
+            while (base < all.length && new Date(all[base].scheduled_time).getTime() <= limit) base++;
+            // A fortnight with nothing in it still draws the nearest few, rather than a group with a button and no card.
+            base = Math.max(base, this.UPCOMING_MIN);
+        } else {
+            base = this.PAGE_STEP;
+        }
+        const count = Math.min(all.length, base + extra);
+        return { shown: all.slice(0, count), later: all.length - count };
+    },
+
+    /** "Show 30 later" / "Show 30 more": reveal the next step of a group, and repaint it. */
+    showMore(key) {
+        if (!Object.prototype.hasOwnProperty.call(this._extra, key)) return;
+        this._extra[key] += this.PAGE_STEP;
+        if (this.activeTab === 'scheduled') this.repaintQueue('posts-new');
+    },
+
     renderQueueGroup(key, list) {
         if (!list || !list.length) return '';
         const meta = this.queueGroupMeta(key);
         const titleId = `posts-group-${key}-title`;
-        const cards = html`<div class="card-grid">${list.map((post) => this.renderScheduledCard(post))}</div>`;
+        const part = this.windowGroup(key, list, Date.now());
+        const more = part.later > 0 ? html`
+            <div class="queue-group-more">
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'chevron-down', focusKey: `posts-more-${key}`,
+                    label: t(key === 'upcoming' ? 'posts.showLater' : 'posts.showMore', { n: UI.formatNumber(Math.min(this.PAGE_STEP, part.later)) }),
+                    action: 'posts:showMore', data: { key },
+                })}
+                <span class="text-meta">${t('posts.drawnOf', { shown: UI.formatNumber(part.shown.length), total: UI.formatNumber(list.length) })}</span>
+            </div>` : '';
+        const cards = html`<div class="card-grid">${part.shown.map((post) => this.renderScheduledCard(post))}</div>${more}`;
+        // Needs you counts POSTS (a group of rows is one); the cards stay one per row. The other groups count rows, as their cards do.
+        const count = key === 'attention' ? this.postCount(list) : list.length;
         const title = html`
             <i data-lucide="${meta.icon}" aria-hidden="true"></i>
             <span>${meta.label}</span>
-            <span class="chip">${UI.formatNumber(list.length)}</span>
+            <span class="chip">${UI.formatNumber(count)}</span>
         `;
         if (key === 'done') {
             // Folded by default: what already went out is the record, not the work.
@@ -1009,6 +1077,40 @@ const PostsPage = {
         return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
     },
 
+    /** Did the server say this URL's upload no longer exists (`media_missing_urls`, QA-01)? */
+    urlIsMissing(post, url) {
+        return !!(url && post && Array.isArray(post.media_missing_urls) && post.media_missing_urls.includes(url));
+    },
+
+    /** What a card shows in place of media the retention sweep has deleted: no `<video>`, no `<img>`, so no request that can only answer 404. */
+    renderMediaGone() {
+        return html`
+            <div class="post-media-frame post-media-frame--gone" role="img" aria-label="${t('posts.mediaGone')}">
+                <i data-lucide="image-off" aria-hidden="true"></i>
+                <span>${t('posts.mediaGone')}</span>
+            </div>
+        `;
+    },
+
+    /**
+     * Give each queue video its poster when it nears the screen. `data-poster` holds it until then, because a `poster` attribute is fetched
+     * at page load however far down the card is. Without IntersectionObserver (an old browser, the test harness) it is set at once.
+     */
+    hydratePosters(root) {
+        const videos = root && typeof root.querySelectorAll === 'function' ? Array.from(root.querySelectorAll('video[data-poster]')) : [];
+        if (!videos.length) return;
+        const give = (v) => { v.setAttribute('poster', v.getAttribute('data-poster')); v.removeAttribute('data-poster'); };
+        if (typeof IntersectionObserver !== 'function') { videos.forEach(give); return; }
+        const watcher = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                watcher.unobserve(entry.target);
+                give(entry.target);
+            }
+        }, { rootMargin: '400px 0px' });
+        videos.forEach((v) => watcher.observe(v));
+    },
+
     renderScheduledCard(post) {
         const isPending = post.status === 'PENDING';
         const isFailed = post.status === 'FAILED';
@@ -1081,15 +1183,17 @@ const PostsPage = {
                             </span>`}
                 </div>
 
-                ${slides.length ? this.renderSlideStrip(slides) : ''}
-                ${!slides.length && mediaUrl ? html`
+                ${slides.length ? this.renderSlideStrip(slides, post.media_missing_urls) : ''}
+                ${!slides.length && mediaUrl ? (post.media_missing ? this.renderMediaGone() : html`
                     <div class="post-media-frame">
                         ${isVideo
-                            ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted controls preload="none"
+                            // No `poster=` yet: a poster is fetched at once, whatever `preload` says, so it waits in `data-poster` until the card is
+                            // near the screen (`hydratePosters`). A cover the server says is gone is not asked for at all.
+                            ? html`<video src="${mediaUrl}" ${coverUrl && !this.urlIsMissing(post, post.cover_url) ? html`data-poster="${coverUrl}"` : ''} muted controls preload="none"
                                           aria-label="${t('posts.mediaPreview')}"></video>`
-                            : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`}
+                            : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}" loading="lazy" decoding="async">`}
                     </div>
-                ` : ''}
+                `) : ''}
 
                 ${isVideo && !isTikTok ? html`
                     <p class="post-card-meta">
@@ -1285,12 +1389,18 @@ const PostsPage = {
      * A carousel on its card: the first four slides and a "+N" for the rest. Consistent
      * cell size whatever the count, so two cards side by side compare at a glance.
      */
-    renderSlideStrip(urls) {
+    renderSlideStrip(urls, missing) {
         const shown = urls.slice(0, 4);
         const more = urls.length - shown.length;
+        const gone = new Set(Array.isArray(missing) ? missing : []);
         return html`
             <ol class="post-slides" aria-label="${t('posts.carousel.label')}">
-                ${shown.map((url, i) => html`
+                ${shown.map((url, i) => gone.has(url) ? html`
+                    <li class="post-slide post-slide-gone" title="${t('posts.mediaGone')}">
+                        <i data-lucide="image-off" aria-hidden="true"></i>
+                        <span class="sr-only">${t('posts.carousel.slide', { n: i + 1 })}: ${t('posts.mediaGone')}</span>
+                    </li>
+                ` : html`
                     <li class="post-slide">
                         <img src="${url}" alt="${t('posts.carousel.slide', { n: i + 1 })}" loading="lazy" decoding="async">
                     </li>
@@ -4958,6 +5068,7 @@ UI.registerActions('posts', {
     boostRefresh: (el) => PostsPage.boostRefresh(el),
     boostDelete: (el) => PostsPage.boostDelete(el.dataset.boost),
     setQueueView: (el) => PostsPage.setQueueView(el.dataset.key),
+    showMore: (el) => PostsPage.showMore(el.dataset.key),
     dismissPublishError: () => { PostsPage.publishError = null; PostsPage.renderLayout(); },
     handlePlatformChange: () => PostsPage.applyPlatformMatrix(),
     handleTypeChange: () => PostsPage.applyTypeMatrix(),
