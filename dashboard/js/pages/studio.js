@@ -1724,7 +1724,7 @@ const StudioPage = {
                         <i data-lucide="info" aria-hidden="true"></i>
                         <div class="stack gap-2">
                             <span>${lesson.status === 'indexing' ? t('studio.lessons.indexingNote') : t('studio.lessons.notIndexedNote')}</span>
-                            ${lesson.error ? html`<span class="text-danger" dir="auto">${this.failureSentence(lesson.error)}</span>${UI.errorDetails(UI.failureError(lesson.error))}` : ''}
+                            ${lesson.error ? html`<span class="text-danger" dir="auto">${this.failureSentence(lesson.error)}</span>${UI.failureDetails(lesson.error)}` : ''}
                             ${lesson.status !== 'indexing' && lesson.id ? html`<div>${UI.button({
                                 variant: 'secondary', size: 'sm', icon: 'scan-text', label: t('studio.lessons.indexOne'),
                                 action: 'studio:indexLesson', data: { id: lesson.id },
@@ -1854,17 +1854,18 @@ const StudioPage = {
 
     /** A stored failure's sentence: the text itself when it is readable, a plain sentence when it is technical (its text goes behind Details). */
     failureSentence(text) {
-        return UI.errorText(UI.failureError(text)).sentence;
+        return UI.failureParts(text).sentence;
     },
 
     /**
-     * A stored failure as the error a strip draws. A technical one is its coded sentence with the text behind Details; a readable one keeps
-     * its wrapper sentence (`wrapperKey`, with `{message}`), as it has always been shown.
+     * A stored failure as the error a strip draws: a coded error (`failure.<CODE>` or `errors.<CODE>`) whose sentence is in the interface
+     * language and whose raw text is behind Details. `wrapperKey` is no longer used (it wrapped the server's English into the sentence).
      */
     failureEntry(wrapperKey, raw) {
-        const failure = UI.failureError(raw);
-        if (failure.code) return failure;
-        return { message: t(wrapperKey, { message: failure.message || t('error.unexpected') }) };
+        // A text the translator names, or the technical text `failureError` coded, says its own sentence. Anything else is no longer
+        // wrapped around the server's English: it is the generic "this step did not finish", the text behind Details.
+        const code = UI.failureCode(raw) || UI.failureError(raw).code || 'STUDIO_STEP_FAILED';
+        return { code, message: String(raw || '') };
     },
 
     newErrorMarkup() {
@@ -2524,7 +2525,7 @@ const StudioPage = {
                         </p>
                     ` : ''}
                     ${busy ? html`<p class="draft-card-stage"><span class="spinner spinner-sm" aria-hidden="true"></span> ${this.draftStageText(draft)}</p>` : ''}
-                    ${draft.status === 'failed' && draft.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(draft.error))}</div>` : ''}
+                    ${draft.status === 'failed' && draft.error ? html`<div class="post-card-error">${UI.failure({ message: draft.error, at: draft.updated_at })}</div>` : ''}
                     ${draft.status === 'scheduled' || draft.status === 'generating' ? '' : html`
                         <!-- A scheduled draft is the record of what was posted: the server refuses to delete it.
                              One still being written has nothing to delete yet; its card says so. -->
@@ -2922,7 +2923,7 @@ const StudioPage = {
                 ${d.input && d.input.idea ? html`<span class="text-meta" dir="auto">${t('studio.plan.idea', { idea: d.input.idea })}</span>` : ''}
             </p>
             ${d.status === 'failed' ? html`
-                ${UI.errorBox(UI.failureError(d.error), 'studio-draft-error')}
+                ${UI.failureBox({ message: d.error, at: d.updated_at }, 'studio-draft-error')}
                 ${canRender ? html`<p class="form-hint">${t('studio.editor.failedHint')}</p>` : ''}
                 ${canRender ? html`<div class="row row--wrap gap-2 mbs-4">${UI.button({
                     variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('studio.editor.renderAgain'),

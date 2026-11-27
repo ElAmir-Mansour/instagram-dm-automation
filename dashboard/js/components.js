@@ -1435,8 +1435,10 @@ const UI = {
         let next = '';
         if (code) {
             const params = UI._errorParams(err.params);
-            const key = `errors.${code}`;
-            const said = t(key, params);
+            // `errors.<CODE>` is a code the server registers; `failure.<CODE>` is one this dashboard names itself (`FAILURE_PATTERNS`).
+            let key = `errors.${code}`;
+            let said = t(key, params);
+            if (said === key) { key = `failure.${code}`; said = t(key, params); }
             if (said !== key) {
                 sentence = said;
                 const nextKey = `${key}.next`;
@@ -1541,6 +1543,173 @@ const UI = {
         if (UI.STORAGE_TOO_LARGE_TEXT.test(raw)) return { code: 'STORAGE_FILE_TOO_LARGE', message: raw };
         if (UI.TECHNICAL_TEXT.test(raw)) return { code: 'STUDIO_STEP_FAILED', message: raw };
         return { message: raw };
+    },
+
+    // ─── The failure translator ──────────────────────────────────────────────
+    /**
+     * What each failure text the server STORES or SENDS (`error_log`, `error`, `last_error`, a worker's answer) is, in order: the first
+     * pattern that matches names the failure, and `failure.<CODE>` / `failure.<CODE>.next` (or, for the three that already have a server
+     * code, `errors.<CODE>`) are its sentence and its one next step in both languages. Built from the texts production holds (2026-11-28:
+     * studio_jobs, monteur_sources, scheduled_posts, interactions, ads_proposals) and the strings the server writes
+     * (`pickRoute` in aiProviders/route.ts). A text matches by its WORDS, never by an id or a number in it.
+     *
+     * A client-side table, not server codes: the same text is written by a worker on the Mac, by Gemini, by Meta and by the pipeline, and
+     * old rows keep the old text for good. A new failure text gets a line here + a test; one that is missed shows the generic sentence
+     * with the text behind Details, which is wrong only in being less helpful.
+     */
+    FAILURE_PATTERNS: Object.freeze([
+        [/payload too large|exceeded the maximum allowed size|"statusCode"\s*:\s*"?413\b|\bHTTP\s*413\b/i, 'STORAGE_FILE_TOO_LARGE'],
+        // Claude on the Mac signed out: whole sign-in messages, so a script ABOUT oauth that failed is not taken for one (writing.ts SIGN_IN_FAILURES).
+        [/failed to authenticate|oauth (?:session|token) (?:has )?expired|\bnot logged in\b|please run \/login|invalid api key\s*[·\-–—]\s*please run|\bauthentication_error\b/i, 'MAC_SIGNED_OUT'],
+        [/hit your (?:weekly |daily |hourly |5-hour )?limit|usage limit reached|claude usage limit/i, 'CLAUDE_LIMIT'],
+        [/no answer within \d+ minutes?\b/i, 'MAC_NO_ANSWER'],
+        [/claude didn['’]t answer within \d+ min/i, 'CLAUDE_TIMEOUT'],
+        [/whisper(?:\.cpp)? timed out/i, 'TRANSCRIBE_TIMEOUT'],
+        [/whisper(?:\.cpp)? made no transcription/i, 'TRANSCRIBE_EMPTY'],
+        [/rated all \d+ moment(?:s|\(s\))? it proposed below the bar/i, 'NO_STRONG_MOMENT'],
+        [/would cut mid-sentence/i, 'CLIP_CUT_MID_SENTENCE'],
+        [/tiktok post init|direct posts only work when your tiktok account is (?:set to )?private/i, 'TIKTOK_PRIVATE_ONLY'],
+        [/error validating access token|session has expired|access token (?:has )?(?:expired|been invalidated)|the user has not authorized application/i, 'META_TOKEN_EXPIRED'],
+        [/^held: waiting for tiktok to approve/i, 'TIKTOK_HELD_APPROVAL'],
+        [/^replaced:/i, 'REPLACED_ON_PURPOSE'],
+        [/^uploaded to youtube as private/i, 'YOUTUBE_PRIVATE_UPLOAD'],
+        [/^uploaded to youtube as unlisted|youtube now shows this short as/i, 'YOUTUBE_NOT_PUBLIC'],
+        [/^thumbnail not set|youtube thumbnail:/i, 'YOUTUBE_THUMBNAIL'],
+        // The AI provider routes (route.ts): said before a key is read, so they reach Operations as `resolved.error.message`.
+        [/contributor-mode model/i, 'AI_ROUTE_CONTRIBUTOR'],
+        [/which has no model|has no model: name one/i, 'AI_ROUTE_NO_MODEL'],
+        [/^the route for .+ uses .+ which .+(?:fix the key|choose another provider)/i, 'AI_ROUTE_PROVIDER_PROBLEM'],
+        [/^the route for .+ uses |\bmay answer only\b|not on the list of providers that may answer|\bit cannot be used for\b/i, 'AI_ROUTE_NOT_ALLOWED'],
+        [/^no ai provider is ready/i, 'AI_NO_PROVIDER_READY'],
+        [/(?:model|gemini)[\s\S]{0,80}no longer available|models\/gemini[^\s]* is not found/i, 'GEMINI_MODEL_GONE'],
+        [/exceeded your current quota|quota exceeded|gemini[^.]*\b429\b/i, 'GEMINI_QUOTA'],
+        [/\bENOSPC\b|no space left on device/i, 'MAC_DISK_FULL'],
+        [/out of memory|\bENOMEM\b/i, 'MAC_OUT_OF_MEMORY'],
+        [/high demand|internal error encountered|model is overloaded|\b503\b[^.]*gemini|gemini[^.]*\b503\b/i, 'GEMINI_BUSY'],
+        [/gemini request failed[^.]*invalid argument|request contains an invalid argument/i, 'AI_REQUEST_REFUSED'],
+    ]),
+
+    /** Meta's own wording for an error nothing above names: `(#100) …`, `… (Code: -1)`. The common codes are `explainMetaError`'s, tried first. */
+    META_GENERIC_TEXT: /\(#-?\d+\)|\(Code:?\s*-?\d+\)|\bCode:?\s*-?\d+\b|graph api/i,
+
+    /**
+     * The code of a failure text, or '' when nothing in `FAILURE_PATTERNS` names it. Text only: a Meta error that `explainMetaError` can
+     * say is handled by `failureParts`, after these.
+     */
+    failureCode(text) {
+        const raw = typeof text === 'string' ? text.trim() : '';
+        if (!raw) return '';
+        for (const [pattern, code] of UI.FAILURE_PATTERNS) if (pattern.test(raw)) return code;
+        return '';
+    },
+
+    /** The longest raw text Details keeps: a worker's whole log is not a detail (the end of it is cut, with "…"). */
+    FAILURE_DETAILS_MAX: 1500,
+
+    /**
+     * Any failure as the pieces a screen draws: `{ code, sentence, next, details, at, translated }`.
+     *
+     * `input` is a raw text (an `error_log`), an `Error`, or `{ code?, message?, at?, status?, params? }`. In order:
+     *   1. a server code the catalogue knows (`errors.<CODE>`) says its sentence (what `errorText` does);
+     *   2. a failure text `FAILURE_PATTERNS` names, or a Meta error `explainMetaError` can say, or Meta's own wording, says its own;
+     *   3. anything else is the GENERIC sentence ("Something went wrong — details below"). The server's English is NEVER the sentence, in
+     *      either language: it is `details`, escaped by whoever draws it, with the code and HTTP status after it.
+     * `at` (a date, an ISO string or a number) says when it happened, or null. `translated` is false only for the generic sentence.
+     */
+    failureParts(input) {
+        const own = input && typeof input === 'object' ? input : null;
+        const code = own && typeof own.code === 'string' ? own.code : '';
+        let raw = '';
+        if (typeof input === 'string') raw = input;
+        else if (own && typeof own.message === 'string') raw = own.message;
+        raw = raw.trim();
+        const date = own ? UI._date(own.at) : null;
+        const at = date ? date.toISOString() : null;
+        const done = (found, sentence, next, extra) => {
+            const details = [];
+            if (raw && (!found || raw !== sentence)) details.push(raw.length > UI.FAILURE_DETAILS_MAX ? `${raw.slice(0, UI.FAILURE_DETAILS_MAX)}…` : raw);
+            if (extra) details.push(extra);
+            return { code: found || '', sentence, next, details: details.join('\n'), at, translated: !!found };
+        };
+        // 1. the server's own code.
+        if (code && t(`errors.${code}`) !== `errors.${code}`) {
+            const said = UI.errorText({ code, message: raw, params: own.params, status: own.status });
+            return { code, sentence: said.sentence, next: said.next, details: said.details, at, translated: true };
+        }
+        // 2. a text we know.
+        const named = UI.failureCode(raw);
+        if (named) {
+            const space = t(`errors.${named}`) !== `errors.${named}` ? 'errors' : 'failure';
+            return done(named, t(`${space}.${named}`), t(`${space}.${named}.next`) === `${space}.${named}.next` ? '' : t(`${space}.${named}.next`), '');
+        }
+        const meta = UI.explainMetaError(raw);
+        if (meta) return done('META', meta, '', '');
+        if (UI.META_GENERIC_TEXT.test(raw)) return done('META_GENERIC', t('failure.META_GENERIC'), t('failure.META_GENERIC.next'), '');
+        // 3. generic. The code a server sent that this catalogue does not know goes behind Details with the text.
+        const extra = code ? (own.status ? `${code} (HTTP ${own.status})` : code) : '';
+        return done('', t('failure.generic'), t('failure.generic.next'), extra);
+    },
+
+    /** "Happened 12 Nov 2026 · 16 days ago" (+ a hint when it is old), or '' without a date. `at` as `failureParts` reads it. */
+    failureWhen(at) {
+        const d = UI._date(at);
+        if (!d) return '';
+        const age = UI.relativeAge(d);
+        const when = `${UI.formatDay(d)} · ${age.text}`;
+        const old = Date.now() - d.getTime() > 14 * 24 * 60 * 60 * 1000;
+        return t(old ? 'failure.whenOld' : 'failure.when', { when });
+    },
+
+    /**
+     * THE failure, as markup: the sentence, the one next step, WHEN it happened (when `at` is known: an old failure beside a working
+     * state reads as a contradiction without it), and the raw text behind a native "Details" disclosure. Every value goes through the
+     * escaping `html` tag; `dir="auto"` lets the server's English sit left to right inside an Arabic page. Never prints the raw text as the
+     * main line. `opts.next === false` leaves the next step out (a line that already has its own button).
+     */
+    failure(input, opts) {
+        const parts = UI.failureParts(input);
+        const showNext = !(opts && opts.next === false);
+        const when = UI.failureWhen(parts.at);
+        return html`<div class="error-text failure-text" data-failure="${parts.code || 'generic'}">
+            <strong class="error-sentence" dir="auto">${parts.sentence}</strong>
+            ${showNext && parts.next ? html`<span class="error-next" dir="auto">${parts.next}</span>` : ''}
+            ${when ? html`<span class="failure-when" dir="auto"><time datetime="${parts.at}">${when}</time></span>` : ''}
+            ${parts.details ? html`<details class="error-details">
+                <summary>${t('error.details')}</summary>
+                <p class="error-details-text" dir="auto">${parts.details}</p>
+            </details>` : ''}
+        </div>`;
+    },
+
+    /** The folded Details of a failure on their own, for a line its caller has already worded (`failureParts(...).sentence` inside a sentence). '' when nothing is behind it. */
+    failureDetails(input) {
+        const { details } = UI.failureParts(input);
+        return details ? html`<details class="error-details">
+            <summary>${t('error.details')}</summary>
+            <p class="error-details-text" dir="auto">${details}</p>
+        </details>` : '';
+    },
+
+    /** The sentence and its next step as one line, for a toast or a cell that has no room for a disclosure. Never the raw text. */
+    failureLine(input) {
+        const { sentence, next } = UI.failureParts(input);
+        return next ? `${sentence} ${next}` : sentence;
+    },
+
+    /** The failure as an alert strip (`errorBox`'s box) around `failure`. */
+    failureBox(input, id) {
+        const stripId = id || `error-box-${++UI._previewSeq}`;
+        return html`<div class="inline-error" role="alert" id="${stripId}">
+            <i data-lucide="alert-circle" aria-hidden="true"></i>
+            ${UI.failure(input)}
+        </div>`;
+    },
+
+    /** The words for a TikTok permission (`video.list` → "Read the list of your videos"), or "Another permission". The raw scope is for a title, never the label. */
+    tiktokScopeLabel(scope) {
+        const key = `scope.tiktok.${String(scope || '').replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`;
+        const said = t(key);
+        return said === key ? t('scope.tiktok.other') : said;
     },
 
     // ─── Status pills ───────────────────────────────────────────────────────

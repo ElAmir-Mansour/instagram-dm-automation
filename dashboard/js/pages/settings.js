@@ -988,7 +988,7 @@ const SettingsPage = {
                     </div>
                     ${tokenState === 'not_connected' ? this.notConnectedNote(canAdmin) : ''}
                     ${tokenState === 'unknown' ? this.tokenUnknownNote() : ''}
-                    ${tokenReason ? html`<div class="mbe-4">${UI.errorStrip(t('settings.tokenProblem'), tokenReason)}</div>` : ''}
+                    ${tokenReason ? html`<div class="mbe-4">${UI.errorStrip(t('settings.tokenProblem'), UI.failure({ message: tokenReason }))}</div>` : ''}
                     <p class="form-hint mbe-4">${UI.helpLink('connect-meta#token-health', t('help.link.tokenHealth'), { newTab: true })}</p>
 
                     ${expiresAt ? html`
@@ -1905,7 +1905,7 @@ const SettingsPage = {
                 ${c.scopes && c.scopes.length ? html`
                     <div class="mbe-4">
                         <p class="form-label">${t('settings.permissions')}</p>
-                        <div class="scope-list">${c.scopes.map((sc) => html`<span class="chip">${UI.ltr(sc)}</span>`)}</div>
+                        <div class="scope-list">${c.scopes.map((sc) => html`<span class="chip" title="${sc}">${UI.tiktokScopeLabel(sc)}</span>`)}</div>
                     </div>
                 ` : ''}
                 ${canAdminister ? html`

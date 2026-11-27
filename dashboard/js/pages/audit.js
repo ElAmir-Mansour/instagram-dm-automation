@@ -188,12 +188,10 @@ const AuditPage = {
                 <td>${entry.actor ? UI.ltr(entry.actor) : html`<span class="text-meta">${t('audit.actorUnknown')}</span>`}</td>
                 <td>${this.actionBadge(entry.action)}</td>
                 <td class="cell-id">${this.targetCell(entry)}</td>
-                <!-- .audit-detail clips with overflow:hidden/ellipsis and the
-                     title tooltip that carries the rest is mouse-only. The full
-                     string is already in the DOM, so the cell is also made
-                     focusable when genuinely clipped — measured after paint by
-                     revealClipped() — mirroring activity.js's error column. -->
-                <td class="audit-detail" dir="auto" title="${detail}" data-clip-focus>${detail || html`<span class="text-meta">—</span>`}</td>
+                <!-- .audit-detail WRAPS (pre-wrap, anywhere): the raw JSON used to
+                     be clipped at 320 px with a mouse-only tooltip for the rest
+                     (QA-13). It stays raw: this is the admin's page. -->
+                <td class="audit-detail" dir="auto">${detail || html`<span class="text-meta">—</span>`}</td>
             </tr>
         `;
     },

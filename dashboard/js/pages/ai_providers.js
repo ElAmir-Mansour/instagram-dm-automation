@@ -854,7 +854,7 @@ const AiProviders = {
         const resolved = live ? live.resolved : row.resolved;
         if (!resolved) return '';
         if (resolved.error) {
-            return html`<span class="text-warning" dir="auto">${t('ops.ai.now.error', { code: resolved.error.kind })} ${resolved.error.message || ''}</span>`;
+            return html`<span class="text-warning">${UI.failure({ message: resolved.error.message || '', code: resolved.error.kind === 'no_provider' ? '' : resolved.error.kind })}</span>`;
         }
         const provider = this.ai && this.ai.providers.find((p) => p.id === resolved.provider);
         return html`${t('ops.ai.now.uses')} <strong dir="auto">${provider ? provider.label : resolved.provider}</strong> ${UI.ltr(resolved.model)}

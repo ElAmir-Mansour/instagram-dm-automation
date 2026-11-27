@@ -318,16 +318,11 @@ const ActivityPage = {
                                     <td dir="auto">${i.trigger_keyword || '—'}</td>
                                     <td class="cell-id truncate">${i.post_id ? UI.ltr(i.post_id) : '—'}</td>
                                     <td>${UI.outcomePill(i)}</td>
-                                    <!-- The error is clipped by .truncate and the title
-                                         tooltip that carried the rest of it is reachable
-                                         only with a pointer. The full string is already in
-                                         the DOM, so the cell is also made focusable and a
-                                         screen reader can read it — but only when it is
-                                         genuinely cut off, which revealClipped() measures
-                                         after paint, so a clean page gains no tab stops.
-                                         The tooltip stays for mouse users. -->
-                                    <td class="cell-error truncate" title="${i.error_log || ''}"
-                                        dir="auto" data-clip-focus>${this.explainError(i.error_log) || i.error_log || '—'}</td>
+                                    <!-- The error is the translator's sentence (UI.failure: the common
+                                         Meta codes and the pipeline's own refusals), WRAPPED, not cut: it
+                                         used to be clipped at 220 px and the reason went with the clip
+                                         (QA-17). Meta's own English is behind "Details". -->
+                                    <td class="cell-error cell-error--wrap">${i.error_log ? UI.failure(i.error_log, { next: false }) : '—'}</td>
                                     <td class="nowrap">${UI.formatDate(i.timestamp)}</td>
                                 </tr>
                             `)}
@@ -351,7 +346,7 @@ const ActivityPage = {
                                 ${UI.outcomePill(i)}
                             </div>
                             <p class="text-meta" dir="auto">${t('table.keyword')}: ${i.trigger_keyword || '—'}</p>
-                            ${i.error_log ? html`<p class="text-meta${UI.outcomeOf(i) === 'actionable' ? html.raw(' text-danger') : ''}" dir="auto" title="${i.error_log}">${this.explainError(i.error_log) || i.error_log}</p>` : ''}
+                            ${i.error_log ? html`<div class="text-meta${UI.outcomeOf(i) === 'actionable' ? html.raw(' text-danger') : ''}">${UI.failure(i.error_log, { next: false })}</div>` : ''}
                             <p class="text-meta">${UI.formatDate(i.timestamp)}</p>
                         </article>
                     `)}

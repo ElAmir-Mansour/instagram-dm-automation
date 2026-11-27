@@ -791,7 +791,7 @@ const MonteurPage = {
                 </p>
                 <p class="text-meta" id="mt-next-run">${next}</p>
                 <p class="text-meta${v.last_scan && v.last_scan.error ? html.raw(' text-warning') : ''}" id="mt-last-run" dir="auto"${last ? html` title="${last.title}"` : ''}>${this.lastRunText(last)}</p>
-                ${v.last_scan && v.last_scan.error ? UI.errorDetails(UI.failureError(v.last_scan.error)) : ''}
+                ${v.last_scan && v.last_scan.error ? UI.failureDetails(v.last_scan.error) : ''}
                 ${scanning ? html`
                     <p class="draft-card-stage" id="mt-scan-state">
                         <span class="spinner spinner-sm" aria-hidden="true"></span>
@@ -1247,7 +1247,7 @@ const MonteurPage = {
                 </div>
                 ${this.scoresMarkup(clip)}
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
-                ${clip.error ? html`<p class="form-hint text-warning" id="mt-clip-${id}-refused" dir="auto">${t('monteur.clip.autoRefused', { error: this.failureSentence(clip.error) })}</p>${UI.errorDetails(UI.failureError(clip.error))}` : ''}
+                ${clip.error ? html`<p class="form-hint text-warning" id="mt-clip-${id}-refused" dir="auto">${t('monteur.clip.autoRefused', { error: this.failureSentence(clip.error) })}</p>${UI.failureDetails(clip.error)}` : ''}
                 ${clip.topic ? html`<p class="text-meta monteur-topic"><span>${t('monteur.clip.topic')}</span> <span dir="auto">${clip.topic}</span></p>` : ''}
                 ${this.tiktokCut(clip) ? html`
                     <p class="monteur-tt-line">
@@ -1456,7 +1456,7 @@ const MonteurPage = {
                 </div>
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
                 ${failed ? html`
-                    ${clip.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(clip.error))}</div>` : ''}
+                    ${clip.error ? html`<div class="post-card-error">${UI.failure({ message: clip.error, at: clip.updated_at })}</div>` : ''}
                     <div class="row row--wrap gap-2">
                         ${UI.button({
                             variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'),
@@ -1540,8 +1540,8 @@ const MonteurPage = {
                 <p class="monteur-source-name" dir="auto"${source.path ? html` title="${source.path}"` : ''}>${name}</p>
                 ${meta.length ? html`<p class="text-meta">${meta.map((part, i) => html`${i ? ' · ' : ''}${part}`)}</p>` : ''}
                 ${source.status === 'no_clips' ? html`<p class="form-hint">${t('monteur.source.noClipsNote')}</p>` : ''}
-                ${source.status === 'no_clips' && source.error ? html`<p class="text-meta" dir="auto">${this.failureSentence(source.error)}</p>${UI.errorDetails(UI.failureError(source.error))}` : ''}
-                ${source.status === 'failed' && source.error ? html`<div class="post-card-error">${UI.errorHtml(UI.failureError(source.error))}</div>` : ''}
+                ${source.status === 'no_clips' && source.error ? html`<p class="text-meta" dir="auto">${this.failureSentence(source.error)}</p>${UI.failureDetails(source.error)}` : ''}
+                ${source.status === 'failed' && source.error ? html`<div class="post-card-error">${UI.failure({ message: source.error, at: source.updated_at })}</div>` : ''}
             </div>
             ${this.statusPill('source', source.status)}
             ${source.status === 'failed' ? UI.button({
@@ -2537,7 +2537,7 @@ const MonteurPage = {
 
     /** A stored failure's sentence: the text itself when it is readable, a plain sentence when it is technical (its text goes behind Details). */
     failureSentence(text) {
-        return UI.errorText(UI.failureError(text)).sentence;
+        return UI.failureParts(text).sentence;
     },
 
     /** Put a ClipView from the server into the view, replacing the old one. */
@@ -2791,7 +2791,7 @@ const MonteurPage = {
         if (!l) return '';
         const lr = l.last_run && typeof l.last_run === 'object' ? l.last_run : null;
         const error = lr ? (lr.status === 'failed' ? lr.error : '') : (l.status === 'failed' ? l.error : '');
-        return error ? UI.errorDetails(UI.failureError(error)) : '';
+        return error ? UI.failureDetails(error) : '';
     },
 
     lessonsMarkup() {

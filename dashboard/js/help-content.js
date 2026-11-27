@@ -6468,6 +6468,34 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'failures',
+                    title: { ar: 'حين يفشل شيء', en: 'When something fails' },
+                    body: {
+                        ar: [
+                            'كل فشل يظهر في الشاشة بثلاثة أجزاء: جملة تقول ما حدث بلغتك، وخطوة واحدة تفعلها، وسطر «حدث في …» يذكر تاريخه حين يكون معروفًا. أما النص التقني كما كتبه الخادم أو ميتا أو جوجل فمطويّ تحت «التفاصيل»: افتحه حين تحتاج إليه، أو انسخه لمن يساعدك.',
+                            { qa: [
+                                ['الفشل قديم ولا أعرف هل ما زال قائمًا', 'انظر إلى سطر «حدث في …». فشلٌ عمره أسابيع بجوار حالة تعمل الآن غالبًا ما أُصلح؛ جرّب العمل مرة أخرى قبل أن تعالج شيئًا.'],
+                                ['Claude على الماك مسجَّل الخروج', 'سجّل الدخول إلى Claude من جديد على الماك. الأعمال المنتظرة تستأنف من تلقاء نفسها، ولا حاجة إلى إعادة تشغيلها واحدًا واحدًا.'],
+                                ['نفدت حصة Claude أو Gemini', 'انتظر حتى تتجدد الحصة، وموعد التجدد في «التفاصيل» حين يذكره المزوّد، ثم أعد المحاولة.'],
+                                ['تيك توك: النشر المباشر من حساب خاص فقط', 'إلى أن يعتمد تيك توك التطبيق، اجعل الحساب خاصًا أو أرسل المنشور مسودةً إلى صندوق الوارد: [[tiktok]].'],
+                                ['تعذّر تحويل الكلام إلى نص', 'جرّب فيديو أقصر، أو أعد المحاولة حين لا يكون الماك مشغولًا. وإن لم يكن في الفيديو كلام واضح فلن يجد النظام لحظة يقتطعها.'],
+                                ['رفضت ميتا الطلب', 'الأخطاء الشائعة (الرمز المنتهي، الصلاحية الناقصة، الردّ الخاص المكرر) لها جملة تشرحها. وما عداها يظهر بجملة عامة، فافتح «التفاصيل» لمعرفة ما قالته ميتا.'],
+                            ] },
+                        ],
+                        en: [
+                            'Every failure on screen has three parts: a sentence that says what happened in your language, one step to take, and a “Happened …” line with its date when it is known. The technical text as the server, Meta or Google wrote it is folded behind Details: open it when you need it, or copy it for whoever is helping.',
+                            { qa: [
+                                ['The failure is old and I can’t tell if it still applies', 'Look at the “Happened …” line. A weeks-old failure beside something that works now has most likely been fixed; try the action again before you fix anything.'],
+                                ['Claude on the Mac is signed out', 'Sign in to Claude again on the Mac. The work that was waiting resumes by itself; you do not have to restart it one by one.'],
+                                ['Claude’s or Gemini’s allowance is used up', 'Wait for it to reset (the time is under Details when the provider gives one), then try again.'],
+                                ['TikTok: direct posts only from a private account', 'Until TikTok approves the app, make the account private or send the post as an inbox draft: [[tiktok]].'],
+                                ['Turning the speech into text failed', 'Try a shorter video, or try again when the Mac is not busy. If the video has no clear speech, the system has no moment to cut.'],
+                                ['Meta refused the request', 'The common errors (an expired token, a missing permission, a second private reply) have a sentence that explains them. Anything else shows a general sentence: open Details to read what Meta said.'],
+                            ] },
+                        ],
+                    },
+                },
+                {
                     id: 'indexing',
                     title: { ar: 'الفحص والفهرسة', en: 'Scanning and indexing' },
                     body: {
