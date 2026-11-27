@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
 import { TENANT_SETTING_PREFIXES, tenantSettingKey } from '../appSettings.js';
+import { invalidateModulesCache } from '../modules.js';
 import {
     capabilityOn, MUSE_ALL_SENDERS, MUSE_DAILY_USD_DEFAULT, MUSE_DAILY_USD_MAX, museSettingsOff, parseAllowSenders, parseDailyUsd, parseMuseSwitches,
     readMuseSettings, senderAllowed,
@@ -17,6 +18,7 @@ let logged: { level: string; event: string; [k: string]: unknown }[] = [];
 let restoreSink = (): void => undefined;
 
 beforeEach(() => {
+    invalidateModulesCache();
     logged = [];
     const previous = setLogSink((level, line) => { logged.push({ level, ...JSON.parse(line) }); });
     restoreSink = () => { setLogSink(previous); };
@@ -31,6 +33,8 @@ afterEach(() => {
 function stubSettings(store: Record<string, string>): { asked: string[] } {
     const asked: string[] = [];
     (pool as any).query = async (text: string, params: unknown[] = []) => {
+        // Who the platform owner is: the modules read asks (U3). Nobody here, so every workspace is an ordinary one.
+        if (/SELECT id FROM creators ORDER BY created_at, id LIMIT 1/.test(text)) return { rows: [], rowCount: 0 };
         if (!/SELECT value, is_secret FROM app_settings WHERE key = \$1/.test(text)) throw new Error(`unexpected SQL ${text}`);
         const key = String(params[0]);
         asked.push(key);
@@ -177,7 +181,27 @@ describe('readMuseSettings', () => {
         assert.deepEqual(await readMuseSettings(TENANT), {
             switches: { dm_media: true, voice: true, memory: false }, allowSenders: ['17841400000000001'], dailyUsd: 10,
         });
-        assert.deepEqual([...asked].sort(), [`muse.allow_senders.${TENANT}`, `muse.daily_usd.${TENANT}`, `muse.switches.${TENANT}`]);
+        // The three of its own, plus the workspace's modules document (one read: Muse is a document module): nothing of another workspace's.
+        assert.deepEqual([...asked].sort(), [`muse.allow_senders.${TENANT}`, `muse.daily_usd.${TENANT}`, `muse.switches.${TENANT}`, `tenant.modules.${TENANT}`]);
+    });
+
+    it('is `museSettingsOff()` for a workspace without the muse module, even with the switches stored on (U3)', async () => {
+        const switchesOn = {
+            [`muse.switches.${TENANT}`]: '{"dm_media":true,"voice":true,"memory":true}',
+            [`muse.allow_senders.${TENANT}`]: '["*"]',
+            [`muse.daily_usd.${TENANT}`]: '10',
+        };
+        // A company workspace: no `muse` in its document.
+        stubSettings({ ...switchesOn, [`tenant.modules.${TENANT}`]: JSON.stringify({ v: 1, on: ['inbox', 'dm_assistant'], preset: 'custom', metaConnect: 'self' }) });
+        assert.deepEqual(await readMuseSettings(TENANT), museSettingsOff());
+        // `muse` listed but `dm_assistant` (what it requires) is not: off too.
+        invalidateModulesCache();
+        stubSettings({ ...switchesOn, [`tenant.modules.${TENANT}`]: JSON.stringify({ v: 1, on: ['inbox', 'muse'], preset: 'custom', metaConnect: 'self' }) });
+        assert.deepEqual(await readMuseSettings(TENANT), museSettingsOff());
+        // With the module on, the stored switches are read as they always were.
+        invalidateModulesCache();
+        stubSettings({ ...switchesOn, [`tenant.modules.${TENANT}`]: JSON.stringify({ v: 1, on: ['inbox', 'dm_assistant', 'muse'], preset: 'custom', metaConnect: 'self' }) });
+        assert.deepEqual(await readMuseSettings(TENANT), { switches: { dm_media: true, voice: true, memory: true }, allowSenders: ['*'], dailyUsd: 10 });
     });
 
     it('builds its keys from the prefixes the settings table lists', async () => {

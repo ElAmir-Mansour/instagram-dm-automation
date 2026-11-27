@@ -95,7 +95,7 @@ const SettingsPage = {
      *   id      the address (`?card=meta`, and `?s=meta`) and `data-settings-card`
      *   who     'all' | 'owner' (the workspace owner: `App.canAdminister()`) | 'admin' (the platform admin: `App.isAdmin()`) | 'user' (a person with
      *           an account of their own: `App.canChangeOwnPassword()`)
-     *   module  the workspace module that draws it (`App.hasModule`, fail-open: absent means on)
+     *   module  the workspace module that draws it (`App.hasModule`, fail-open: no module list means on)
      *   dom     the element a deep link scrolls to; the card's own `<section id>` when `inner`, else the wrapper this page draws
      *   focus   the control a row's Connect / Reconnect puts focus on, when the card has one
      *   platform  deployment-wide: it carries the «لكل المساحات» badge
@@ -129,7 +129,7 @@ const SettingsPage = {
         Object.freeze({ id: 'onboarding', group: 'platform', who: 'admin', dom: 'settings-onboarding', platform: true }),
     ]),
 
-    /** Is the workspace's module on? Fail-open until the shell can answer (a session with no `modules`, a page before PR B's `App.hasModule`): every module is on. */
+    /** Is the workspace's module on? `App.hasModule` (the shell's) is fail-open itself; the `typeof` only keeps a page drawn where `App` is a bare stand-in. */
     moduleOn(id) {
         return !id || typeof App.hasModule !== 'function' || App.hasModule(id);
     },

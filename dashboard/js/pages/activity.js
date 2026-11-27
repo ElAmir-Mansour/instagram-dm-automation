@@ -183,7 +183,8 @@ const ActivityPage = {
         try {
             [result, campaigns] = await Promise.all([
                 API.getInteractions(params),
-                API.getCampaigns(),
+                // Without Keyword replies there are no campaigns to name: asking would be refused, and one refusal would fail the whole Log.
+                typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule('keyword_replies') ? API.getCampaigns() : Promise.resolve([]),
             ]);
         } catch (err) {
             if (!live()) return;

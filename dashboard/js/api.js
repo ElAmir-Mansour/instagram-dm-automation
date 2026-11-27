@@ -143,6 +143,12 @@ const API = {
                 }
                 err.message = t('profileAsk.refused');
             }
+            // The workspace lost a module (an admin switched it off) while this page was open: the shell re-reads the session and, if the page
+            // on screen is gone, says so and goes Today. `ADS_DISABLED` and `EXPLAINERS_DISABLED` are the same answer from the older switches.
+            if (res.status === 404 && typeof App !== 'undefined' && App && typeof App.moduleWentOff === 'function') {
+                const off = read.code === 'MODULE_OFF' ? (err.params && err.params.module) : (read.code === 'ADS_DISABLED' ? 'ads' : (read.code === 'EXPLAINERS_DISABLED' ? 'explainers' : null));
+                if (off) Promise.resolve(App.moduleWentOff(off)).catch(() => {});
+            }
             throw err;
         }
 

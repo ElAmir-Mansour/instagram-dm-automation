@@ -429,7 +429,7 @@ const AiSettingsPage = {
 
     // ─── Instagram ice breakers (the workspace owner's): moved here from Settings (U3, SA-10) ───────────────
 
-    /** Is the workspace's module on? Fail-open where the shell cannot answer (a page before the session has loaded, a test harness): every module is on. */
+    /** Is the workspace's module on? `App.hasModule` (the shell's) is fail-open itself; the `typeof` only keeps a page drawn where `App` is a bare stand-in. */
     moduleOn(id) {
         return typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule(id);
     },

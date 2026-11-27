@@ -51,6 +51,7 @@ import {
 } from '../services/autoArchive.js';
 import { checkMacAlarms } from '../services/studio/macHealth.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { MODULE_API_PREFIXES, readModules, refuseOffPlatforms, requireModule, type ModulesView } from '../services/modules.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
 import { queryOne } from '../db/query.js';
@@ -1661,6 +1662,17 @@ router.get('/auth/me', async (req, res) => {
         // when it cannot be read, and the dashboard then gates nothing: failing open never locks anybody out.
         const onboarding = tenantId ? await describeOnboardingBrief(tenantId, { sessionRole: session.role, tenantRole }) : null;
 
+        // Which modules this workspace has, for the shell (U3). Null when there is no workspace, and null when it cannot be read: a client that
+        // finds no `modules` array treats the workspace as everything on, so a failed read never takes a screen away.
+        let modules: ModulesView | null = null;
+        if (tenantId) {
+            try {
+                modules = await readModules(tenantId);
+            } catch (err) {
+                log('warn', 'modules.read_failed', { ...describeError(err) });
+            }
+        }
+
         res.json({
             userId: session.userId,
             role: session.role,
@@ -1668,6 +1680,8 @@ router.get('/auth/me', async (req, res) => {
             tenantRole,
             tenants,
             onboarding,
+            modules: modules ? modules.on : null,
+            workspace: modules ? { owner: modules.owner, metaConnect: modules.metaConnect } : null,
         });
     } catch (err) {
         log('error', 'api.session_identity_failed', describeError(err));
@@ -1736,12 +1750,8 @@ router.post('/auth/password', async (req, res) => {
         // than 404ing: on this deployment it is the *only* kind of session that exists, so
         // "not found" would read as a bug in the endpoint.
         if (!session.userId) {
-            res.status(400).json({
-                code: 'NO_USER_ACCOUNT',
-                error: 'This session was created with the shared dashboard password, which is not a user '
-                    + 'account and has no password to change here. Rotate DASHBOARD_PASSWORD in the '
-                    + 'environment, or create a user account and sign in with it.',
-            });
+            sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'This session was created with the shared dashboard password, which is not a user account '
+                + 'and has no password to change here. Rotate DASHBOARD_PASSWORD in the environment, or create a user account and sign in with it.');
             return;
         }
 
@@ -1839,6 +1849,16 @@ router.use('/account', accountRouter);
 // silent fallback is the bug this whole layer exists to remove — which is why it is safe to
 // call inline inside a query.
 router.use(resolveTenant);
+
+// ─── Modules (U3, src/services/modules.ts) ──────────────────────────────────────────────────────────────
+// What a workspace has decides which routes answer: one `router.use(prefix, guard)` per row of MODULE_API_PREFIXES, right below `resolveTenant` so the
+// workspace is the session's own, and above every router and route a module owns. An off module answers 404 `MODULE_OFF { module }`. `/ads` and
+// `/studio/explainers` keep their own gates (ADS_DISABLED, EXPLAINERS_DISABLED). Background work is not gated.
+for (const row of MODULE_API_PREFIXES) {
+    router.use(row.prefix, requireModule(row.module, { exceptGet: row.exceptGet, exceptPrefix: row.exceptPrefix }));
+}
+// A post for TikTok or YouTube names its platform in the body, which a path prefix cannot see.
+router.use('/posts/scheduled', refuseOffPlatforms);
 
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);

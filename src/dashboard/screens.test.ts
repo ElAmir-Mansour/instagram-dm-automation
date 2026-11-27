@@ -309,6 +309,7 @@ function load(): Loaded {
         'dashboard/js/attention.js',
         'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
+        'dashboard/js/shell.js',
         'dashboard/js/charts.js',
         'dashboard/js/pages/posts.js',
         'dashboard/js/pages/activity.js',
@@ -2260,6 +2261,7 @@ function loadStudio(hash: Record<string, string> = {}, storage: FakeStorage = fa
         'dashboard/js/components.js',
         'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
+        'dashboard/js/shell.js',
         'dashboard/js/pages/studio.js',
     ]) {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });

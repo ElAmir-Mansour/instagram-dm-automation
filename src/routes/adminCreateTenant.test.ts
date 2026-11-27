@@ -28,7 +28,8 @@ import { defaultProfile, newTenantProfile } from '../services/profile/defaults.j
 import { entryText, NEUTRAL_TURN, tenantSurface } from '../services/profile/promptSurface.js';
 import { NO_WOMEN_LINE } from '../services/monteur/editor.js';
 import { loadStoredProfile } from '../services/profile/store.js';
-import { installProfileDb, OWNER, type ProfileDb, seededState, type State, studioRow, USER, OWNER_STUDIO } from '../services/profile/testDb.js';
+import { installProfileDb, OWNER, type ProfileDb, seededState, setPlatformOwner, type State, studioRow, USER, OWNER_STUDIO } from '../services/profile/testDb.js';
+import { invalidateModulesCache } from '../services/modules.js';
 import { assertNoOwnerMarkers, throughJsonb } from '../services/profile/testSupport.js';
 import { REQUIRED_SCOPES } from '../services/tokenHealth.js';
 import { getStudioSettings } from '../services/studio/settings.js';
@@ -80,6 +81,9 @@ after(() => {
 beforeEach(() => {
     state = seededState();
     db = installProfileDb(state);
+    // Who the platform owner is: the first creator ever made. A tenant made by name is a SECOND one, so it takes modules (U3).
+    setPlatformOwner(db, OWNER);
+    invalidateModulesCache();
     settings = {};
     creators = new Map();
     onboarding = new Map();
@@ -94,10 +98,10 @@ beforeEach(() => {
     restoreSink = () => setLogSink(previous);
 
     // What the route writes besides the profile tables: rolled back with the transaction, as the database would.
-    let snapshot: { creators: typeof creators; onboarding: typeof onboarding } | null = null;
+    let snapshot: { creators: typeof creators; onboarding: typeof onboarding; settings: typeof settings } | null = null;
     db.onStatement = (flat) => {
-        if (flat === 'BEGIN') snapshot = { creators: structuredClone(creators), onboarding: structuredClone(onboarding) };
-        else if (flat === 'ROLLBACK' && snapshot) { creators = snapshot.creators; onboarding = snapshot.onboarding; snapshot = null; }
+        if (flat === 'BEGIN') snapshot = { creators: structuredClone(creators), onboarding: structuredClone(onboarding), settings: structuredClone(settings) };
+        else if (flat === 'ROLLBACK' && snapshot) { creators = snapshot.creators; onboarding = snapshot.onboarding; settings = snapshot.settings; snapshot = null; }
         else if (flat === 'COMMIT') snapshot = null;
     };
     db.routes.push(
@@ -126,6 +130,9 @@ beforeEach(() => {
             return { rows: [] };
         }],
         [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, ([key]) => (settings[key] === undefined ? { rows: [] } : { rows: [{ value: settings[key], is_secret: false }] })],
+        // The modules document, the ads switch and the ceiling a workspace is made with (`setSetting`, through the creation transaction).
+        [/^INSERT INTO app_settings \(key, value, is_secret, updated_at, updated_by\) VALUES /, ([key, value]) => { settings[key] = value; return { rows: [], rowCount: 1 }; }],
+        [/^DELETE FROM app_settings WHERE key = \$1$/, ([key]) => { const had = key in settings; delete settings[key]; return { rows: [], rowCount: had ? 1 : 0 }; }],
         [/^SELECT email FROM users WHERE id = \$1$/, () => ({ rows: [{ email: 'operator@example.com' }] })],
         [/^INSERT INTO audit_log /, ([, , action, , targetId, detail]) => {
             audits.push({ action, targetId, detail: JSON.parse(detail) });
@@ -158,6 +165,8 @@ describe('creating a tenant by name', () => {
             id: NEW, name: 'متجر نور', instagram_page_id: null, facebook_page_id: null, instagram_username: 'nour.shop', website_url: 'https://nour.example/',
             is_active: true, token_status: 'unknown', created_at: new Date('2026-10-14T10:00:00Z'),
             language: 'ar', meta_connected: false, profile: { version: 1 }, onboarding: { status: 'invited' },
+            // No `modules` in the body: the company preset, and the workspace connects its own Meta (U3, contract §1.4).
+            modules: { on: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'], owner: false, stored: true, preset: 'company', metaConnect: 'self' },
             // The invite link is made best-effort after the tenant is stored (src/routes/invites.test.ts covers it). This file's
             // stand-in has no `invites` table, so the tenant is made without one, and that is not an error.
             invite: null,
@@ -295,6 +304,7 @@ describe('creating a tenant by name', () => {
         assert.deepEqual(row.detail, {
             name: 'Nour', instagram_page_id: null, facebook_page_id: null, credential_replaced: false, credential_type: null, missing_scopes: [],
             created_by_name: true, language: 'ar', profile_version: 1, instagram_username: 'nour', website_url: null,
+            modules: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'], preset: 'company', meta_connect: 'self',
         });
     });
 
@@ -311,9 +321,10 @@ describe('creating a tenant by name', () => {
 
     it('does not change who the platform owner is: the first creator ever made stays first (tenant #2 is never the Mac\'s)', async () => {
         await create({ name: 'Nour' });
-        // The route never asks which creator is the owner, and never writes the Mac-brain list.
+        // The route never writes the Mac-brain list, and the only settings row it writes is the new workspace's own modules document (U3).
         assert.deepEqual(db.ran(/studio\.mac_brain_tenants/), []);
-        assert.deepEqual(db.statements.filter((s) => /app_settings/.test(s.sql) && /^(INSERT|UPDATE|DELETE)/.test(s.sql)), []);
+        const writes = db.statements.filter((s) => /app_settings/.test(s.sql) && /^(INSERT|UPDATE|DELETE)/.test(s.sql));
+        assert.deepEqual(writes.map((w) => w.params[0]), [`tenant.modules.${NEW}`, `ads.enabled.${NEW}`], 'its modules document, and the ads switch cleared (off)');
     });
 });
 

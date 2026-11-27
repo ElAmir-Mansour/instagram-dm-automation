@@ -256,12 +256,15 @@ const PostsPage = {
         // The Published feed is not asked for here (see `liveLoaded`): the queue is drawn as soon as it answers.
         this.liveLoaded = false;
         this.liveLoading = false;
+        // A workspace without TikTok or Ads is not asked about them: the server would only refuse (404 MODULE_OFF), which the shell
+        // reads as "a module went off". No `modules` in the session (an older server) means every module is on, so nothing changes there.
+        const has = (id) => typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule(id);
         const [scheduled, tiktok, studio] = await Promise.allSettled([
             API.getScheduledPosts(),
-            API.getTikTokConnection(),
+            has('tiktok') ? API.getTikTokConnection() : Promise.resolve(null),
             API.getStudioSettings(),
             // Never rejects: no Boost is the answer to every failure.
-            this.loadAds(),
+            has('ads') ? this.loadAds() : Promise.resolve(),
         ]);
         if (!alive()) return;
         gate.done();
@@ -569,6 +572,7 @@ const PostsPage = {
                     </button>
                 </div>
                 <p class="publish-error-message" dir="auto">${this.publishError.message}</p>
+                ${this.publishError.raw ? UI.failureDetails(this.publishError.raw) : ''}
                 <p class="publish-error-hint">${t('posts.publishFailedHint')}</p>
             </div>
         `;
@@ -1226,9 +1230,9 @@ const PostsPage = {
                 ` : ''}
 
                 ${isFailed && !parked ? html`
-                    <p class="post-card-error" dir="auto">
-                        <strong>${t('posts.errorLabel')}</strong> ${post.error_log || t('error.unexpected')}
-                    </p>
+                    <div class="post-card-error" dir="auto">
+                        <strong>${t('posts.errorLabel')}</strong> ${UI.failure(post.error_log || '')}
+                    </div>
                 ` : ''}
 
                 ${isPending && post.error_log && !parked ? html`
@@ -1239,16 +1243,18 @@ const PostsPage = {
                          warning, not an error. -->
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="alert-triangle" aria-hidden="true"></i>
-                        <span class="text-warning" dir="auto">${post.error_log}</span>
+                        <span class="text-warning" dir="auto">${UI.failureLine(post.error_log)}</span>
                     </p>
+                    ${UI.failureDetails(post.error_log)}
                 ` : ''}
 
                 ${parked && (isFailed || (isPending && post.error_log)) ? html`
                     <!-- What it said when the owner put it away, kept where he can read it, in the neutral tone: it needs nothing now. -->
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="info" aria-hidden="true"></i>
-                        <span dir="auto">${post.error_log || t('error.unexpected')}</span>
+                        <span dir="auto">${UI.failureLine(post.error_log || '')}</span>
                     </p>
+                    ${UI.failureDetails(post.error_log || '')}
                 ` : ''}
 
                 ${isTikTok && isProcessing ? html`
@@ -1269,8 +1275,9 @@ const PostsPage = {
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="youtube" aria-hidden="true"></i>
                         <a href="https://www.youtube.com/shorts/${post.published_post_id.slice(3)}" target="_blank" rel="noopener noreferrer">${t('posts.youtube.open')}</a>
-                        ${post.error_log ? html`<span class="form-hint" dir="auto">${post.error_log}</span>` : ''}
+                        ${post.error_log ? html`<span class="form-hint" dir="auto">${UI.failureLine(post.error_log)}</span>` : ''}
                     </p>
+                    ${post.error_log ? UI.failureDetails(post.error_log) : ''}
                 ` : ''}
                 ${isPublished && isTikTok && (isDirect || !post.published_post_id) ? html`
                     <!-- TikTok returns a post id only for public posts that have
@@ -2092,24 +2099,30 @@ const PostsPage = {
             `;
         }
         if (info.status === 'error') {
-            return this.tiktokCreatorError((info.error && info.error.message) || t('error.unexpected'));
+            return this.tiktokCreatorError(info.error || '');
         }
         const data = info.data || {};
         // The live answer can disagree with the page-load summary (the mode was
         // switched in Settings since). Inbox it is, then: no options, the old panel.
         if (data.postMode !== 'direct') return this.tiktokInboxBody();
-        if (!data.creator) return this.tiktokCreatorError(t('posts.tiktok.direct.noCreator'));
+        if (!data.creator) return this.tiktokCreatorError(t('posts.tiktok.direct.noCreator'), true);
         return this.tiktokDirectForm(this.tiktokView());
     },
 
-    /** A 409 (not connected) or 502 (TikTok refused), with a way to ask again. */
-    tiktokCreatorError(message) {
+    /**
+     * A 409 (not connected) or 502 (TikTok refused), with a way to ask again. `failure` is the error as the API gave it (an Error, or its
+     * text): the sentence is the translator's and the server's own words sit behind Details. `ours` marks a sentence this page already wrote.
+     */
+    tiktokCreatorError(failure, ours) {
+        const parts = ours ? null : UI.failureParts(failure);
+        const message = ours ? failure : (parts.next ? `${parts.sentence} ${parts.next}` : parts.sentence);
         return html`
             <div class="inline-error" role="alert">
                 <i data-lucide="alert-circle" aria-hidden="true"></i>
                 <div>
                     <strong dir="auto">${t('posts.tiktok.direct.loadFailed', { message })}</strong>
                     <span class="inline-error-hint">${t('posts.tiktok.direct.loadFailedHint')}</span>
+                    ${ours ? '' : UI.failureDetails(failure)}
                 </div>
             </div>
             <div>
@@ -2929,7 +2942,7 @@ const PostsPage = {
         } catch (err) {
             if (!current()) return;
             slide.status = 'failed';
-            slide.error = (err && err.message) || t('error.unexpected');
+            slide.error = this.errorLine(err, true);
             const batch = this._slideBatch && this._slideBatch[which];
             if (batch) batch.failed.push(slide.error);
         } finally {
@@ -3888,7 +3901,7 @@ const PostsPage = {
                 ` : ''}
                 ${metrics.length ? html`<p class="post-card-meta boost-metrics">${metrics}</p>` : ''}
                 ${b.status === 'paused' ? html`<p class="form-hint">${t('boost.pausedNote')}</p>` : ''}
-                ${b.error ? html`<p class="post-card-error" dir="auto"><strong>${t('posts.errorLabel')}</strong> ${b.error}</p>` : ''}
+                ${b.error ? html`<div class="post-card-error" dir="auto"><strong>${t('posts.errorLabel')}</strong> ${UI.failure(b.error)}</div>` : ''}
                 <div class="boost-actions">
                     ${b.status === 'paused' ? UI.button({
                         variant: 'primary', size: 'sm', icon: 'play', label: t('boost.activate'),
@@ -4199,13 +4212,14 @@ const PostsPage = {
                 return html`
                     <p class="post-card-meta post-card-meta--note" data-first-comment="${k}">
                         <i data-lucide="alert-triangle" aria-hidden="true"></i>
-                        <span class="text-warning" dir="auto">${t('posts.firstComment.status.failed', { platform, reason: entry.error || t('error.unexpected') })}</span>
+                        <span class="text-warning" dir="auto">${t('posts.firstComment.status.failed', { platform, reason: UI.failureLine(entry.error || '') })}</span>
                         ${UI.button({
                             variant: 'secondary', size: 'sm', icon: 'rotate-ccw', label: t('posts.firstComment.retry'),
                             action: 'posts:retryFirstComment', data: { id: post.id, platform: k },
                             focusKey: `post-first-comment-retry-${post.id}-${k}`,
                         })}
-                    </p>`;
+                    </p>
+                    ${UI.failureDetails(entry.error || '')}`;
             }
             const icon = entry.status === 'posted' ? 'check-circle' : 'message-circle';
             const cls = entry.status === 'posted' ? 'text-success' : '';
@@ -4486,14 +4500,34 @@ const PostsPage = {
      * shapes are treated as a failure here.
      */
     publishFailure(result, err) {
-        if (err) {
-            const fromBody = err.body && (err.body.error || err.body.error_log);
-            return fromBody || err.message || t('error.unexpected');
-        }
+        if (err) return this.errorLine(err);
         if (result && result.status === 'FAILED') {
-            return result.error || result.error_log || t('error.unexpected');
+            const raw = result.error || result.error_log || '';
+            return raw ? UI.failureLine(raw) : t('error.unexpected');
         }
         return null;
+    },
+
+    /**
+     * What the server said was wrong, untranslated: the text `publishFailure` keeps behind Details. '' when the failure was this page's own
+     * (a network drop, an expired session) or said nothing.
+     */
+    publishFailureRaw(result, err) {
+        if (err) return (err.body && (err.body.error || err.body.error_log)) || (err.code ? err.message || '' : '');
+        return (result && result.status === 'FAILED' && (result.error || result.error_log)) || '';
+    },
+
+    /**
+     * An API error as ONE line in the interface language (U3 follows #332: the server's English is never the sentence). A coded error or one
+     * whose body names a problem goes through the failure translator; a message this dashboard wrote itself (no network, signed out) stays as it
+     * is. `hover` is for a tooltip, which has no Details to open: an untranslated failure then keeps the server's words after the generic sentence.
+     */
+    errorLine(err, hover) {
+        const fromBody = err && err.body && (err.body.error || err.body.error_log);
+        if (!err || !(fromBody || err.code)) return (err && err.message) || t('error.unexpected');
+        const parts = UI.failureParts({ code: err.code, params: err.params, status: err.status, message: fromBody || err.message || '' });
+        if (hover && !parts.translated && parts.details) return `${parts.sentence} ${parts.details}`;
+        return parts.next ? `${parts.sentence} ${parts.next}` : parts.sentence;
     },
 
     /**
@@ -4506,7 +4540,7 @@ const PostsPage = {
      * and then had to hunt for which of six fields it was about, and a sighted
      * keyboard user had to scroll up to find out.
      */
-    showFormError(message, fieldId, hint) {
+    showFormError(message, fieldId, hint, raw) {
         const host = document.getElementById('post-form-error');
         if (!host) return;
         const stripId = 'post-form-error-strip';
@@ -4515,7 +4549,8 @@ const PostsPage = {
         // `hint` overrides the default, which describes a failed publish — not
         // true of a check that stopped the post before anything was sent.
         const note = hint === undefined ? t('posts.publishFailedHint') : hint;
-        host.innerHTML = esc(UI.errorStrip(message, note, stripId));
+        // `raw`: what the server said, behind Details under the strip (the strip itself is the translated sentence).
+        host.innerHTML = esc(UI.errorStrip(message, note, stripId)) + (raw ? esc(UI.failureDetails(raw)) : '');
         UI.icons(host);
 
         const field = fieldId ? document.getElementById(fieldId) : null;
@@ -4575,8 +4610,8 @@ const PostsPage = {
             if (failure) {
                 // "Published successfully!" on a failed publish was the single most
                 // misleading message in this UI. Keep the modal open, show the real error.
-                this.publishError = { message: failure };
-                this.showFormError(failure);
+                this.publishError = { message: failure, raw: this.publishFailureRaw(result, null) };
+                this.showFormError(failure, null, undefined, this.publishFailureRaw(result, null));
                 restore();
                 await this.render();
                 return;
@@ -4589,7 +4624,7 @@ const PostsPage = {
             const tiktokMode = sentMode === 'direct' || (!sentMode && this.tiktokRowMode(tiktokRow) === 'direct') ? 'direct' : 'inbox';
             if (publishNow && tiktokRow && tiktokRow.status === 'FAILED') {
                 // The Instagram/Facebook half went out; say plainly that TikTok did not.
-                UI.toast(t('posts.tiktok.failedToast', { message: tiktokRow.error_log || t('error.unexpected') }), 'error');
+                UI.toast(t('posts.tiktok.failedToast', { message: UI.failureLine(tiktokRow.error_log || '') }), 'error');
             } else if (publishNow && tiktokRow) {
                 UI.toast(this.tiktokOutcomeText(tiktokRow.status, tiktokMode, photo));
             } else if (!publishNow && sentMode === 'direct') {
@@ -4606,10 +4641,10 @@ const PostsPage = {
             UI.closeModal();
         } catch (err) {
             const failure = this.publishFailure(null, err);
-            if (publishNow) this.publishError = { message: failure };
+            if (publishNow) this.publishError = { message: failure, raw: this.publishFailureRaw(null, err) };
             // A failed *schedule* created nothing, so the "still queued as failed"
             // hint is only true on the publish-now path.
-            this.showFormError(failure, null, publishNow ? undefined : t('posts.saveFailedHint'));
+            this.showFormError(failure, null, publishNow ? undefined : t('posts.saveFailedHint'), this.publishFailureRaw(null, err));
             restore();
             if (publishNow) await this.render();
         }
@@ -4700,7 +4735,7 @@ const PostsPage = {
 
             const failure = this.publishFailure(result, null);
             if (failure) {
-                this.publishError = { message: failure };
+                this.publishError = { message: failure, raw: this.publishFailureRaw(result, null) };
                 UI.toast(t('posts.publishFailedToast'), 'error');
                 await this.render();
                 return;
@@ -4712,7 +4747,7 @@ const PostsPage = {
                 : t('posts.publishedOk'));
             await this.render();
         } catch (err) {
-            this.publishError = { message: this.publishFailure(null, err) };
+            this.publishError = { message: this.publishFailure(null, err), raw: this.publishFailureRaw(null, err) };
             UI.toast(t('posts.publishFailedToast'), 'error');
             await this.render();
         }

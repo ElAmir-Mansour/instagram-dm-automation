@@ -75,10 +75,10 @@ function shell(lang: 'ar' | 'en' = 'en') {
 
 describe('the strip above the Studio', () => {
     for (const lang of ['en', 'ar'] as const) {
-        it(`shows each item’s sentence and its one action on a Studio screen, in ${lang}`, () => {
+        it(`shows each item’s sentence and its one action on the Studio’s first tab, in ${lang}`, () => {
             const { h, App, host } = shell(lang);
             App._studioAttention = summary([SIGNED_OUT, OFFLINE, REELS]);
-            App.currentPage = 'monteur';
+            App.currentPage = 'studio';
             App.renderStudioAlarm();
             assert.equal(host.hidden, false);
             assert.ok(host.innerHTML.includes(h.t('attention.mac_signed_out')), 'the sentence');
@@ -102,6 +102,30 @@ describe('the strip above the Studio', () => {
             assert.notEqual(ar.t(key), key, `${key} in Arabic`);
             assert.notEqual(ar.t(key), en.t(key), `${key} is translated`);
         }
+    });
+
+    it('is ONE line on the other Studio tabs: how many, and a link to the first tab (QA-12: it repeated on all five)', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            for (const [page, hash] of [['monteur', '#/monteur'], ['infographics', '#/infographics'], ['explainers', '#/explainers'], ['studio', '#/studio?tab=settings']] as const) {
+                const { h, App, host } = shell(lang);
+                h.location.hash = hash;
+                App._studioAttention = summary([SIGNED_OUT, OFFLINE, REELS]);
+                App.currentPage = page;
+                App.renderStudioAlarm();
+                assert.equal(host.hidden, false, `${page} ${hash}`);
+                assert.equal((host.innerHTML.match(/<li /g) ?? []).length, 1, `${page}: one line`);
+                assert.ok(host.innerHTML.includes(h.t('nav.studioNeeds', { n: '3' })), `${page}: says how many`);
+                assert.ok(host.innerHTML.includes('href="#/studio"'), `${page}: links to the first tab`);
+                assert.ok(!host.innerHTML.includes(h.t('attention.mac_signed_out')), `${page}: not the sentences`);
+                assert.ok(host.innerHTML.includes('role="alert"'), 'a danger is still announced');
+            }
+        }
+        const { h, App, host } = shell();
+        h.location.hash = '#/studio';
+        App._studioAttention = summary([SIGNED_OUT]);
+        App.currentPage = 'studio';
+        App.renderStudioAlarm();
+        assert.ok(host.innerHTML.includes(h.t('attention.mac_signed_out')), 'the first tab keeps the whole list');
     });
 
     it('is not drawn on a screen that is not the Studio’s, and is removed there', () => {

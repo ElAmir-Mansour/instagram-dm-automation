@@ -8,7 +8,7 @@
  * i18n-split.test.ts all grew a slightly different one. This is the reusable one, for the suites that follow it.
  *
  * `loadDashboard()` evaluates, in a fresh `node:vm` context and in the order index.html loads them:
- *   i18n.js, the catalogue for `lang` (i18n.ar.js | i18n.en.js), components.js, attention.js, motion.js,
+ *   i18n.js, the catalogue for `lang` (i18n.ar.js | i18n.en.js), components.js, attention.js, motion.js, shell.js,
  *   then app.js when `app: true`, then whatever else `files` names (a page module, admin_common.js ...).
  * What it hands back is the context plus the things a test needs to look at and drive: the fake document, the elements by id, the
  * window's and the document's listeners, every scroll, every replaceState, every announcement, every native confirm.
@@ -250,7 +250,7 @@ export function loadDashboard(options: LoadOptions = {}): Dashboard {
 
     const files = [
         'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`,
-        'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/motion.js',
+        'dashboard/js/components.js', 'dashboard/js/attention.js', 'dashboard/js/motion.js', 'dashboard/js/shell.js',
         ...(options.app ? ['dashboard/js/app.js'] : []),
         ...(options.files ?? []),
     ];

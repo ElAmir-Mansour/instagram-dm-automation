@@ -14,6 +14,7 @@ import { Router } from 'express';
 import { queryOne } from '../db/query.js';
 import { createSession, describeSessionLifetime } from '../middleware/auth.js';
 import type { UserRow } from '../db/rows.js';
+import { sendError } from '../services/errorCodes.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -23,11 +24,7 @@ accountRouter.post('/sign-out-everywhere', async (req, res) => {
     try {
         const session = req.session!;
         if (!session.userId) {
-            // until PR A: sendError(res, 400, 'NO_USER_ACCOUNT', …) once the code is registered; the flat body is what /auth/password sends today.
-            res.status(400).json({
-                code: 'NO_USER_ACCOUNT',
-                error: 'This session was created with the shared dashboard password, which is not a user account, so there is nothing to sign out of everywhere.',
-            });
+            sendError(res, 400, 'NO_USER_ACCOUNT', {}, 'This session was created with the shared dashboard password, which is not a user account, so there is nothing to sign out of everywhere.');
             return;
         }
         const updated = await queryOne<Pick<UserRow, 'token_version'>>(

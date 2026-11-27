@@ -22,53 +22,18 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { getPublicBaseUrl } from '../services/appSettings.js';
-import {
-    buildInviteUrl, createInvite, InviteError, listInvites, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
-    type AdminInvite, type CreatedInvite,
-} from '../services/invites.js';
+import { sendError } from '../services/errorCodes.js';
+import { inviteAuditDetail, issueInvite, requestOrigin, shareable, answerInviteFailure } from '../services/inviteIssue.js';
+import { InviteError, listInvites, regenerateInvite, revokeInvite, tenantLanguage } from '../services/invites.js';
 import { recordEvent } from '../services/onboardingEvents.js';
-import { getOnboardingSettings, isInviteLang, isInviteRole, type InviteLang, type OnboardingSettings } from '../services/onboardingSettings.js';
+import { getOnboardingSettings, isInviteLang, isInviteRole, type InviteLang } from '../services/onboardingSettings.js';
 import { assertResettable, changeRole, listMembers, removeMember, TeamError } from '../services/team.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
-import { describeError, log } from '../utils/log.js';
 
 export const teamRouter = Router();
 
 /** Every route is the workspace owner's: see the top of the file. */
 teamRouter.use(requireTenantRole('owner'));
-
-// ─── Stand-ins until PR A (src/services/inviteIssue.ts, errorCodes.ts, audit.ts) ────────────────────────────────────────────────────
-// until PR A: `issueInvite`, `shareable`, `answerInviteFailure`, `requestOrigin` and `inviteAuditDetail` are private to routes/admin.ts today. PR A
-// moves them, unchanged, to services/inviteIssue.ts (with `opts.actor`); then this block is deleted and the imports come from there. The team
-// codes below go to ERROR_CODES (and errors.<CODE> in both dictionaries) with A's U3 codes; until then they are sent flat, as the routes
-// without a registry entry always were, and the Team screen words them itself (`settings.team.err.<CODE>`).
-
-const AUDIT_MEMBERSHIP_ROLE_CHANGE = 'membership.role_change'; // until PR A: AUDIT_ACTIONS.membershipRoleChange
-
-function requestOrigin(req: Request): string | null {
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]!.trim();
-    const host = req.headers.host;
-    return host ? `${proto}://${host}` : null;
-}
-
-interface ShareableInvite extends AdminInvite { url: string; whatsapp_text: string; lang: InviteLang }
-
-function shareable(created: CreatedInvite & { tenantName: string | null }, base: string, lang: InviteLang, settings: OnboardingSettings): ShareableInvite {
-    const url = buildInviteUrl(base, created.token, lang);
-    return { ...created.invite, url, lang, ...shareFor(settings, created.tenantName, url, lang, created.invite.purpose) };
-}
-
-function inviteAuditDetail(invite: AdminInvite, extra: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-        tenant_id: invite.creator_id, purpose: invite.purpose, membership_role: invite.role, email: invite.email,
-        for_user_id: invite.user_id, expires_at: invite.expires_at, ...extra,
-    };
-}
-
-async function audit(req: Request, action: string, targetType: string, targetId: string, detail: Record<string, unknown>): Promise<void> {
-    const actor = await actorFromSession(req.session);
-    await writeAudit(actor, { action, targetType, targetId, detail });
-}
 
 /** The public address a link is built on, resolved BEFORE anything is written: a deployment that cannot build one never leaves an invite nobody can be given. */
 async function linkBase(req: Request): Promise<string> {
@@ -77,9 +42,14 @@ async function linkBase(req: Request): Promise<string> {
     return base;
 }
 
-/** `{ error, message, code }`: the flat envelope (errorCodes.ts), for the refusals PR A registers. */
-function refuse(res: Response, status: number, code: string, message: string): void {
-    res.status(status).json({ error: message, message, code, params: {} });
+async function audit(req: Request, action: string, targetType: string, targetId: string, detail: Record<string, unknown>): Promise<void> {
+    const actor = await actorFromSession(req.session);
+    await writeAudit(actor, { action, targetType, targetId, detail });
+}
+
+/** A team refusal through the registry (`ERROR_CODES`, with its `errors.<CODE>` strings in both dictionaries). */
+function refuse(res: Response, status: number, code: TeamError['code'], message: string): void {
+    sendError(res, status, code, {}, message);
 }
 
 function answerFailure(res: Response, err: unknown, event: string, message: string): void {
@@ -87,12 +57,7 @@ function answerFailure(res: Response, err: unknown, event: string, message: stri
         refuse(res, err.status, err.code, err.message);
         return;
     }
-    if (err instanceof InviteError) {
-        res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
-        return;
-    }
-    log('error', event, describeError(err));
-    res.status(500).json({ error: message });
+    answerInviteFailure(res, err, event, message);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,16 +95,10 @@ teamRouter.post('/invites', async (req, res) => {
             res.status(400).json({ error: 'lang must be "ar" or "en".' });
             return;
         }
-        const settings = await getOnboardingSettings();
-        const base = await linkBase(req);
-        const created = await createInvite({
-            creatorId, purpose: 'join', role: body.role, email: typeof body.email === 'string' ? body.email : null,
-            createdBy: req.session?.userId ?? null,
-        }, settings);
-        const language = lang.lang ?? await tenantLanguage(creatorId);
-        await audit(req, AUDIT_ACTIONS.inviteCreate, 'invite', created.invite.id, inviteAuditDetail(created.invite, { language, via: 'team' }));
-        await recordEvent({ creatorId, userId: req.session?.userId ?? null, actor: 'tenant' }, 'invite_created');
-        res.status(201).json({ invite: shareable(created, base, language, settings) });
+        const invite = await issueInvite(req, {
+            creatorId, role: body.role, email: typeof body.email === 'string' ? body.email : null, lang: lang.lang ?? await tenantLanguage(creatorId),
+        }, { via: 'team' }, { actor: 'tenant' });
+        res.status(201).json({ invite });
     } catch (err) {
         answerFailure(res, err, 'team.invite_create_failed', 'Failed to create the invite.');
     }
@@ -202,7 +161,7 @@ teamRouter.patch('/members/:userId', async (req, res) => {
         }
         const change = await changeRole(creatorId, userId, (req.body ?? {}).role);
         if (change.from !== change.to) {
-            await audit(req, AUDIT_MEMBERSHIP_ROLE_CHANGE, 'membership', `${userId}:${creatorId}`, {
+            await audit(req, AUDIT_ACTIONS.membershipRoleChange, 'membership', `${userId}:${creatorId}`, {
                 user_id: userId, creator_id: creatorId, from: change.from, to: change.to, via: 'team',
             });
         }
@@ -245,12 +204,10 @@ teamRouter.post('/members/:userId/reset-link', async (req, res) => {
         }
         // Members of THIS workspace only, and never the account manager (createInvite refuses an admin too: this says which refusal it is).
         await assertResettable(creatorId, userId);
-        const settings = await getOnboardingSettings();
-        const base = await linkBase(req);
-        const created = await createInvite({ creatorId, purpose: 'reset', userId, createdBy: req.session?.userId ?? null }, settings);
-        const language = lang.lang ?? await tenantLanguage(creatorId);
-        await audit(req, AUDIT_ACTIONS.inviteCreate, 'invite', created.invite.id, inviteAuditDetail(created.invite, { language, via: 'team' }));
-        res.status(201).json({ invite: shareable(created, base, language, settings) });
+        const invite = await issueInvite(req, {
+            creatorId, purpose: 'reset', userId, lang: lang.lang ?? await tenantLanguage(creatorId),
+        }, { via: 'team' }, { actor: 'tenant' });
+        res.status(201).json({ invite });
     } catch (err) {
         answerFailure(res, err, 'team.reset_link_failed', 'Failed to create the reset link.');
     }

@@ -82,6 +82,7 @@ function load(lang: 'ar' | 'en' = 'en', withCard = true): Loaded {
         App: {
             currentTheme: () => 'auto', navigate: noop, session: { tenantId: 't1' }, hashParam: () => '',
             canOperate: () => true, canAdminister: () => owner, isAdmin: () => true,
+            hasModule: () => true,
             // The DM assistant page asks for the module the way Settings used to; a page whose script never arrived gets null.
             loadPageModule: async (name: string) => (name === 'ice_breakers' && withCard ? vm.runInContext('IceBreakersCard', ctx) : null),
         },
@@ -269,10 +270,10 @@ describe('the ice breakers card: what it shows', () => {
     it('the Meta vision card is drawn only with the muse module, and the ice breakers only with the DM assistant module (U3)', () => {
         const s = load();
         const shell = (modules: string[] | null): string => {
-            vm.runInContext(`App.hasModule = ${modules === null ? 'undefined' : `(id) => ${JSON.stringify(modules)}.includes(id)`};`, (s.Ai as Json).__ctx ?? s.ctx);
+            vm.runInContext(`App.hasModule = ${modules === null ? '() => true' : `(id) => ${JSON.stringify(modules)}.includes(id)`};`, (s.Ai as Json).__ctx ?? s.ctx);
             return String(s.Ai.shell());
         };
-        assert.ok(shell(null).includes('id="muse-card"') && shell(null).includes('id="iceb-host"'), 'a session with no modules: everything (fail-open)');
+        assert.ok(shell(null).includes('id="muse-card"') && shell(null).includes('id="iceb-host"'), 'a session with no module list: App.hasModule answers every one on (fail-open)');
         const without = shell(['inbox', 'dm_assistant']);
         assert.equal(without.includes('id="muse-card"'), false, 'no muse: no Meta vision card');
         assert.ok(without.includes('id="iceb-host"'));

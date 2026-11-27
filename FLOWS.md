@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Sixteen flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Seventeen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 Walked elsewhere, not here: the Monteur's pipeline (`MONTEUR.md`), the daily growth sync (`GROWTH.md`), data-subject
@@ -39,7 +39,8 @@ bug it was written to fix.
 [13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule) ·
 [14. Video memory: a published reel → watched once → the library](#14-video-memory-a-published-reel--watched-once--the-library) ·
 [15. Brand: a logo → checked → on every Studio output](#15-brand-a-logo--checked--on-every-studio-output) ·
-[16. Today: what needs you → a card → cleared](#16-today-what-needs-you--a-card--cleared)
+[16. Today: what needs you → a card → cleared](#16-today-what-needs-you--a-card--cleared) ·
+[17. Modules: a workspace's modules → every screen and route asks](#17-modules-a-workspaces-modules--every-screen-and-route-asks)
 
 ---
 
@@ -3303,7 +3304,9 @@ which would cut off every other tenant the same person connected. Audit `meta.di
 `GET` / `POST /api/meta/app-settings`, platform admin only (anyone else gets 404). `meta.login_enabled` (`'true'`, **default off**) and
 `meta.login_config_id` (digits; `META_LOGIN_CONFIG_ID` is the fallback) live in `app_settings`; the app id and secret stay in
 `META_APP_ID` / `META_APP_SECRET`. `GET` reports what to register in Meta's dashboard (`redirectUri`) and what the dialog asks for.
-Each save is one `settings.meta_login_write` audit row naming the fields. The dashboard's two fields for them are in the Connections
+Each save is one `settings.meta_login_write` audit row naming the fields. **Connect needs the platform switch AND the workspace's own choice** (U3):
+`loginAvailability(creatorId)` is `meta.login_enabled` and `readModules(creatorId).metaConnect === 'self'`, so the owner's workspace (`operator`, whatever any
+document says) never offers Connect or Reconnect with the switch on; the callback asks without a workspace and trusts its state ([§17](#17-modules-a-workspaces-modules--every-screen-and-route-asks)). The dashboard's two fields for them are in the Connections
 card ([8.7](#87--the-dashboard-the-connections-card-the-page-picker-and-w4-p28)).
 
 ### 8.7 — The dashboard: the Connections card, the Page picker and W4 (P28)
@@ -4595,6 +4598,40 @@ U2 (2026-11). One list of "what needs the owner", built once on the server, draw
    `HANDLE_EXPIRED_THREADS_SQL` marks handled the threads of step 2 whose wait began that long ago. One audit row per tenant with something (`cleanup.auto_archive`, actor
    `system:auto-archive`, counts only). Nothing is deleted; a new message from the customer clears `handled_at` by itself.
 
+## 17. Modules: a workspace's modules → every screen and route asks
+
+U3 (2026-11; the contract is a local note, not in the repo). A workspace is a company's inbox, a creator's whole studio, or something between: which parts of the product it
+has is one small document, and the server, `/auth/me` and the dashboard's shell all read it. Nothing is deleted when a module is off: it is hidden and refused.
+
+1. **Choosing.** The platform admin picks the modules when making a workspace (`POST /api/admin/tenants` takes `modules` and `owner_email`, `src/routes/admin.ts`) or later on its page
+   (`PUT /api/admin/tenants/:id/modules`; `GET` reads fresh). `planModules` (`src/services/modules.ts`) is pure: it expands a preset, refuses an unknown module
+   (400 `MODULE_UNKNOWN`), the knowledge base (400 `MODULE_NOT_AVAILABLE`), a module without its requirement (400 `MODULE_NEEDS`, the module and what it needs), Explainers for anyone
+   but the owner (409 `EXPLAINERS_OWNER_ONLY`), Ads with no ceiling (409 `CEILING_REQUIRED`), and the platform owner's own workspace outright (409 `OWNER_ALL_MODULES`). It runs BEFORE the
+   creation transaction opens, so a refusal creates nothing; a bad `owner_email` is 400 `BAD_EMAIL` at the same point. The first creator ever made is the owner and takes no modules.
+2. **Storing.** `saveModules` writes in ONE transaction (`withTransaction`, or the creation's own): `tenant.modules.<t>` (`{ v: 1, on, preset, metaConnect }`), then for Ads the ceiling
+   (`ads.ceiling.<t>`, when given) and the switch (`ads.enabled.<t>`, removed when Ads is off). It never writes `explainers`: that stays the owner-only switch on Settings → Platform
+   (`setExplainersEnabled`). `ads` and `explainers` are therefore **views** of the switches they always were, never of the document. The cache entry is dropped. One audit row:
+   `tenant.modules_changed` (before and after, the Connect mode before and after, the preset); creating audits the same facts on `tenant.create`.
+3. **Reading.** `readModules(t)` starts from the document, or from every module that predates this (**no document is everything on, and so is a document that cannot be read**, which logs
+   `modules.doc_unreadable`), adds `ads` / `explainers` from their switches, forces everything on for the platform owner's workspace whatever a document says, and drops any module
+   whose requirement is off until nothing changes. An id it does not know is dropped and logged (`modules.doc_unknown_id`); a document never grants `ads`, `explainers` or the knowledge base.
+   Answers are cached per instance for `MODULES_CACHE_MS` (30 s): **another warm instance answers the old way for up to 30 s after a change**. The cheap read (`readDocModules`,
+   one statement for a workspace with no document) is what the gate, the attention summary, the profile's next actions and Muse use.
+4. **The gate.** `requireModule(id)` is mounted once per row of `MODULE_API_PREFIXES`, directly below `resolveTenant` in `src/routes/api.ts`, so the workspace is the session's own. An
+   off module answers 404 `MODULE_OFF { module }`. Open on purpose: `/posts/live`, `GET /studio/settings` (the Scheduler reads the time zone from it), `/studio/explainers*` (its own
+   `EXPLAINERS_DISABLED`), `/ads` (its own `ADS_DISABLED`), and every route no module owns (stats, interactions, uploads, the profile, Meta, onboarding, attention, tenant health).
+   `refuseOffPlatforms` reads the body of a post: `platform: 'tiktok'` or `also_tiktok` with TikTok off, or `platform: 'youtube'` with YouTube off, is 404 `MODULE_OFF` for that module.
+   **Background work is not gated** (the drain, the publisher, the sweeps, the webhooks): a TikTok row already scheduled still publishes. The exception is Muse: `readMuseSettings`
+   answers `museSettingsOff()` without the `muse` module, and every reader, the daily reel library included, goes through it.
+5. **What else asks.** `buildAttention(facts, modules)` leaves out the items of a module that is off (handoff and waiting: inbox; posts: scheduler; TikTok draft: tiktok; reel review and
+   the two Mac items: studio; a broken TikTok, YouTube or WhatsApp connection: that module; a broken Meta connection is everyone's) and zeroes its nav count. `nextBestActions`
+   offers only the actions of modules the workspace has (the meter does not move). `GET /api/auth/me` carries `modules` (the ids that are on) and `workspace` (`{ owner, metaConnect }`),
+   both null with no workspace or when the read fails: a client that finds no `modules` array treats the workspace as everything on. The dashboard's `Shell` (PR B) then hides the
+   screen, and a 404 `MODULE_OFF` seen mid-session sends it to Today after one refresh of the session.
+6. **Connect with Facebook** is the platform switch AND the workspace's `metaConnect: 'self'` ([§8.6](#86--the-operators-settings)); the wizard's W4 `connect` flag is the same pair (`readWizardFlags(creatorId)`).
+7. **Making a link.** `issueInvite` (`src/services/inviteIssue.ts`, moved out of `admin.ts` unchanged) is what the admin's invite routes, creating a workspace by name, and (PR C) the owner's Team
+   routes use; `opts.actor` (`'admin'` by default, `'tenant'`) is only the actor of the funnel's `invite_created` event, and a reset link writes none.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -4790,5 +4827,11 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 15 | `use_brand_colours` absent (every profile that predates the Brand Kit, the owner's included) | *(none)* | — |
 | 15 | a non-https logo is dropped by the handler | `brand: logo dropped` on the Mac | — |
 | 16 | the daily clean-up finds nothing, or a tenant switched it off (`cleanup.auto_archive.<tenant>` `enabled: false`), or one tenant's statement fails — `runAutoArchiveSweep` | `cron.auto_archive` (only when it put something away or a tenant failed), `cron.auto_archive_tenant` (`posts`, `threads`, `days`), `cron.auto_archive_tenant_failed` | an `audit_log` row `cleanup.auto_archive` per tenant that had something; none for a quiet day |
+| 17 | **a module is off**: a request for one of its routes — `requireModule`, **`src/services/modules.ts`** | *(none: 404 `MODULE_OFF { module }`)* | no; the dashboard sends the person to Today after refreshing its session. Open on purpose: `/posts/live`, `GET /studio/settings`, `/ads`, `/studio/explainers*` |
+| 17 | **a modules document that cannot be read** (not JSON, not `v: 1`, no `on` list) — `readModules` | `modules.doc_unreadable` (`warn`) | no: the workspace reads as everything on (legacy), so nobody loses a screen |
+| 17 | a module id in a document this build does not know — `parseModulesDoc` | `modules.doc_unknown_id` (`warn`, `module`) | no: that id is dropped, the rest of the document is read |
+| 17 | a post for TikTok or YouTube from a workspace without that module — `refuseOffPlatforms` | *(none: 404 `MODULE_OFF`)* | no |
+| 17 | a switch-off on another warm instance, up to 30 s after the change — the 30 s cache (`MODULES_CACHE_MS`) | *(none)* | the module still answers there until its entry expires |
+| 17 | the platform owner's workspace is asked to narrow — `saveModules` | *(none: 409 `OWNER_ALL_MODULES`)* | no |
 
 `RUNBOOK.md` works these backwards from the symptom.

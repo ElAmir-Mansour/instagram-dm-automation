@@ -228,13 +228,16 @@ function fail(res: Response, err: unknown, event: string, fallback: string): voi
 
 metaRouter.get('/connection', async (req, res) => {
     try {
-        const [connection, availability] = await Promise.all([getMetaConnection(getTenantId(req)), loginAvailability()]);
+        const tenantId = getTenantId(req);
+        const [connection, availability] = await Promise.all([getMetaConnection(tenantId), loginAvailability(tenantId)]);
         if (!connection) {
             res.status(404).json({ error: 'Not found.' });
             return;
         }
         res.json({
+            // The platform switch AND this workspace's own choice (U3): an owner whose workspace is `operator` never sees Connect or Reconnect.
             enabled: availability.enabled,
+            connectMode: availability.connectMode,
             appConfigured: Boolean(availability.app),
             redirectUriConfigured: Boolean(availability.redirectUri),
             usesConfiguration: Boolean(availability.configId),
@@ -276,7 +279,7 @@ metaRouter.post('/connect', canAdminister, async (req, res) => {
         const returnTo: OAuthReturnTo = body.returnTo ?? 'settings';
         const reconnect = body.reconnect === true;
 
-        const availability = await loginAvailability();
+        const availability = await loginAvailability(getTenantId(req));
         if (!availability.enabled) {
             res.status(409).json({ error: 'Connecting with Facebook is not switched on yet.', code: 'META_LOGIN_DISABLED' });
             return;
