@@ -238,7 +238,23 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         assert.ok(markup.includes(s.t('overview.asOf', { time: s.UI.formatTime(at) })), 'as of HH:MM');
         assert.ok(markup.includes('data-action="overview:refresh"'));
         assert.match(markup, /data-target="inbox" data-query="filter=waiting"/);
-        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: '5h' })));
+        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: '5h', count: 1 })));
+    });
+
+    it('the waiting card says "it" for one conversation and "them" for several, in both languages', () => {
+        const body = (lang: 'ar' | 'en', n: number): string => {
+            const s = load(lang);
+            const O = s.pages.Overview;
+            const rows = Array.from({ length: n }, () => ({ is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(3600 * 1000) }));
+            const alerts = O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [{ timestamp: new Date().toISOString() }] }), ok({}), ok([]), ok({ data: rows }), ok(week()));
+            const card = alerts.find((x: Json) => x.target === 'inbox');
+            return String(card.body);
+        };
+        assert.match(body('en', 1), /answered it yet\. It has waited/);
+        assert.match(body('en', 3), /answered them yet\. The oldest has waited/);
+        assert.match(body('ar', 1), /^لم يردّ عليها أحد بعد\. وهي تنتظر/);
+        assert.match(body('ar', 2), /عليهما.*أقدمهما/);
+        assert.match(body('ar', 5), /أقدمها تنتظر/);
     });
 
     it('a FAILED row in the recent table carries its reason as a second line', () => {

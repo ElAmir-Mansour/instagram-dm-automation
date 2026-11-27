@@ -891,7 +891,7 @@ const OverviewPage = {
                 alerts.push({
                     level: 'warning', icon: 'message-square-dot',
                     title: t('overview.alert.waitingHumans', { count: waiting.length }),
-                    body: age ? t('overview.alert.waitingOldest', { age }) : t('overview.alert.waitingHumansBody'),
+                    body: age ? t('overview.alert.waitingOldest', { age, count: waiting.length }) : t('overview.alert.waitingHumansBody'),
                     action: t('overview.openInbox'), target: 'inbox', query: this.waitingQuery(waiting),
                 });
             }

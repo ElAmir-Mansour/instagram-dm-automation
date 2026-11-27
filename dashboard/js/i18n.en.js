@@ -487,6 +487,7 @@
     'overview.refresh': 'Refresh',
     'overview.attentionCount_one': '1 thing needs attention',
     'overview.attentionCount_other': '{count} things need attention',
+    'overview.alert.waitingOldest_one': 'Nobody has answered it yet. It has waited {age}.',
     'overview.alert.waitingOldest': 'Nobody has answered them yet. The oldest has waited {age}.',
     'overview.alert.failedTodayMore': 'More than {n} DMs failed today',
     'overview.growth.title': 'Content this week',
