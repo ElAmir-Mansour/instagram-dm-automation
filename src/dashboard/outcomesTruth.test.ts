@@ -245,11 +245,11 @@ describe('Overview — "failed" is what needs the owner', () => {
         const h = load();
         // 40 delivered, 60 skipped on purpose, none that needs the owner: the old rate was 40% and fired the red alert.
         const rows = sevenDays([day('2026-10-13', { delivered: 40, sent: 40, by_design: 60, failed: 60 })]);
-        const alerts = h.O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok(rows));
+        const alerts = h.O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok(rows));
         assert.equal(alerts.some((a: Json) => a.icon === 'trending-down'), false, 'no low-success alert');
         // And it still fires for a week that really went badly: 10 delivered, 40 that need the owner.
         const bad = sevenDays([day('2026-10-13', { delivered: 10, sent: 10, actionable: 40, failed: 40 })]);
-        const fired = h.O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok(bad));
+        const fired = h.O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok(bad));
         const low = fired.find((a: Json) => a.icon === 'trending-down');
         assert.ok(low, 'a real failing week is still red');
         assert.ok(low.title.includes('20%'), '10 ÷ (10 + 40)');
@@ -260,7 +260,7 @@ describe('Overview — "failed" is what needs the owner', () => {
         const now = new Date().toISOString();
         const alerts = h.O.buildAlerts({ activeCampaigns: 1 },
             ok({ data: [{ timestamp: now, outcome: 'actionable' }, { timestamp: now, outcome: 'by_design' }, { timestamp: now }], pagination: { total: 3 } }),
-            ok({ status: 'valid' }), ok([]), ok({ data: [] }), failed('x'));
+            ok({ status: 'valid' }), failed('x'));
         const failedToday = alerts.find((a: Json) => a.icon === 'send-horizontal');
         assert.ok(failedToday);
         assert.equal(failedToday.title, h.t('overview.alert.failedToday', { count: 2 }), 'the by-design row is not counted; a legacy row with no outcome still is');

@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Fourteen flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Fifteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 Walked elsewhere, not here: the Monteur's pipeline (`MONTEUR.md`), the daily growth sync (`GROWTH.md`), data-subject
@@ -37,7 +37,8 @@ bug it was written to fix.
 [11. Ads: the money rule and the guard](#11-ads-the-money-rule-and-the-guard) ·
 [12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3) ·
 [13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule) ·
-[14. Video memory: a published reel → watched once → the library](#14-video-memory-a-published-reel--watched-once--the-library)
+[14. Video memory: a published reel → watched once → the library](#14-video-memory-a-published-reel--watched-once--the-library) ·
+[15. Today: what needs you → a card → cleared](#15-today-what-needs-you--a-card--cleared)
 
 ---
 
@@ -4476,6 +4477,31 @@ The Meta vision card (**`dashboard/js/pages/ai_settings.js`**, Settings → DM a
 - **Details** (`museToggleReel`): `GET …/library/:id`, loaded each time it is opened: what it is about, what is said (line breaks kept), what is on screen, the moments as the m:ss the assistant says, the topics, the first 3 seconds and its hook score, a suggested caption, the best cover frame, and which model watched it and what that cost. Every part only when there is something in it. Only a watched reel has them.
 - **Everything a model wrote is text, never markup**: a summary or a narration that holds tags is shown as characters (`muse.lib` tests draw tags and check none is a tag).
 
+## 15. Today: what needs you → a card → cleared
+
+U2 (2026-11). One list of "what needs the owner", built once on the server, drawn by Today, counted by the nav badges and cleared where it shows.
+
+1. **The summary.** `GET /api/attention` (`src/routes/api.ts`, `getAttention` in `src/services/attention.ts`) answers `heartbeat`, `items` and `counts`. Every statement is
+   an aggregate over a column; nothing calls Meta, TikTok or Google; one failed read fails the whole answer (a half-answer would read as "all clear").
+2. **Threads.** `THREADS_ATTENTION_SQL` groups `THREADS_NEEDING_PERSON_SQL` (handed over with no operator reply since, or the bot off with the customer's
+   message last; never a handled thread). It yields `handoff` and `thread_waiting` items, and for each the threads whose window has CLOSED (the customer's
+   last inbound message more than `THREAD_WINDOW_HOURS` ago) as `detail.closed.ids`. `counts.inbox` is their sum: the number on the Inbox badge.
+3. **Posts.** `POSTS_ATTENTION_SQL` counts FAILED and overdue-PENDING posts, not archived, a post on several platforms once (`group_id`). `FAILED_POSTS_DETAIL_SQL`
+   reads the failed rows themselves; `bucketFailed` groups them per post, splits them at `POST_FAILED_OLD_DAYS` (14) by scheduled time (a post dated in the future is
+   recent), and `failureReason` names why from the `error_log` (`replaced`, `tiktok_private`, `token`, `media`, `other`). Recent failures are the red `post_failed`
+   item, older ones the quiet `post_failed_old`; each carries `detail.reasons` and `detail.ids` (every row, so Archive takes all platforms of a post).
+   `counts.scheduler` still counts both. The tenant page's "N failed" is the same rule (`posts_failed_open` in `TENANT_HEALTH_SQL`), no longer a 7-day figure.
+4. **The screen.** `OverviewPage.render` (`dashboard/js/pages/overview.js`) reads the summary once (no scheduled-post list, no conversation list). `attentionAlerts` turns each item
+   into one card with one verb and the server's own link (`#/inbox?filter=todo`, `#/posts?filter=needs-you`, the Studio's); handed-over and waiting threads are one card.
+   `heartbeatParts` draws the line above them from `heartbeat`. `paintBriefing` renders the region.
+5. **Clearing.** `OverviewPage.clear` (button `overview:clear`, shown only to `App.canOperate()`): "Archive these" = `POST /api/posts/scheduled/:id/archive` per row;
+   "Mark handled" = `POST /api/conversations/:id/handled` per thread. Both act first and offer ONE `UI.undoToast`; Undo is the matching `DELETE` for exactly the rows that
+   succeeded, then the summary is read again (`refreshAttention`) and the briefing, the waiting tile and the Inbox badge follow.
+6. **The 30-day sweep.** The daily cron (`GET /api/cron/publish`) calls `runAutoArchiveSweep` (`src/services/autoArchive.ts`): per tenant that has not switched it off
+   (`cleanup.auto_archive.<tenant>`, ON at 30 days when unset; Settings → Messages & alerts), `ARCHIVE_OLD_FAILED_POSTS_SQL` archives FAILED posts older than the days and
+   `HANDLE_EXPIRED_THREADS_SQL` marks handled the threads of step 2 whose wait began that long ago. One audit row per tenant with something (`cleanup.auto_archive`, actor
+   `system:auto-archive`, counts only). Nothing is deleted; a new message from the customer clears `handled_at` by itself.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -4667,5 +4693,6 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 14 | Baseten failed and Meta's hosted model took the reel — `analyse` | `muse.reel_index_fallback` (`warn`), then `muse.reel_indexed` (`fell_back: true`) | yes: `ok` with `model` = the hosted model |
 | 14 | the daily call breaks — `GET /api/cron/publish` | `cron.muse_reels_failed` | no; nothing else in the cron is affected |
 | 14 | a `memory`-on tenant whose Instagram does not answer when the reels are listed — `queueReels` | `muse.reel_list_failed` (`warn`) | no; tried again at the next daily run |
+| 15 | the daily clean-up finds nothing, or a tenant switched it off (`cleanup.auto_archive.<tenant>` `enabled: false`), or one tenant's statement fails — `runAutoArchiveSweep` | `cron.auto_archive` (only when it put something away or a tenant failed), `cron.auto_archive_tenant` (`posts`, `threads`, `days`), `cron.auto_archive_tenant_failed` | an `audit_log` row `cleanup.auto_archive` per tenant that had something; none for a quiet day |
 
 `RUNBOOK.md` works these backwards from the symptom.

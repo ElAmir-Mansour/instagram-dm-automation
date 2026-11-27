@@ -19,6 +19,14 @@
  *
  * Everything is assembled from endpoints that already exist.
  *
+ * ─── One "needs you", and clearing it here (U2) ─────────────────────────────
+ * The briefing's list of what needs the owner is NOT worked out on this page any more: it is `GET /api/attention` (src/services/attention.ts), the
+ * same answer the Inbox and Scheduler badges count. Today used to download every scheduled post (344 rows, 93 KB) just to count the failures and
+ * 100 conversations to count who waits, and so disagreed with the tenant page (failed posts: 4 here, 2 there) and with the badge (waiting: 2 here, 1
+ * there). Now: a heartbeat line on top (last comment, last DM, are events arriving, is the Mac worker online), then one card per item with one verb
+ * and the server's own link; a failed-posts card lists why each failed and can "Archive these", a conversation past Meta's 24 h window can be "Marked
+ * handled", both with one Undo and no question, and neither is shown to a viewer. FLOWS.md §15 walks it.
+ *
  * ─── Why this page renders in pieces ────────────────────────────────────────
  * The requests go out on load in the same tick, deliberately, because the
  * briefing needs six answers. It used to `await Promise.allSettled` on all of
@@ -241,10 +249,10 @@ const OverviewPage = {
         const healthP = this._settle(API.getTenantHealth());
         // What in the Studio needs the owner (src/services/attention.ts): Claude signed out on the Mac, the worker offline, TikTok drafts, clips to review.
         // Columns only on the server, no call to Meta. A failed read adds nothing here: the Studio's own strip and nav badge ask again.
+        // It is also the whole "needs you" list (U2, DW-T2): failed and overdue posts, waiting and handed-over conversations, connections, the Studio's
+        // four, and the heartbeat. Today used to build the first two itself from every scheduled post (344 rows, 93 KB, just to count failures) and 100
+        // conversations, and read a different count from the tenant page and the nav badge. One answer, one truth.
         const attentionP = this._settle(API.getAttention());
-        const postsP = this._settle(API.getScheduledPosts());
-        // 100, the route's cap: the default of 20 undercounted who is waiting.
-        const threadsP = this._settle(API.getConversations({ limit: 100 }));
         const dailyP = this._settle(API.getDailyStats(7));
         const growth = this.canSeeGrowth();
         const growthP = growth ? this._settle(API.getGrowthOverview(this.GROWTH_DAYS)) : null;
@@ -270,23 +278,23 @@ const OverviewPage = {
         });
 
         // ── Today's tiles, then the 7-day strip ─────────────────────────────
-        Promise.all([statsP, dailyP, threadsP]).then(([statsRes, dailyRes, threadsRes]) => {
+        Promise.all([statsP, dailyP, attentionP]).then(([statsRes, dailyRes, attentionRes]) => {
             if (!live() || statsRes.status !== 'fulfilled') return;
+            this._statsInputs = { statsRes, dailyRes };
             const statsHost = this.region('stats');
             if (statsHost) {
-                statsHost.innerHTML = esc(this.renderStats(statsRes.value || {}, dailyRes, threadsRes));
+                statsHost.innerHTML = esc(this.renderStats(statsRes.value || {}, dailyRes, attentionRes));
                 UI.icons(statsHost);
             }
             this.renderCharts(dailyRes);
         });
 
-        // SH3: the count on the Inbox nav item, from this screen too. The same rule the Inbox applies to the same threads
-        // (`Attention.needsHuman`), so the badge is one number on every screen and not a different one on each.
-        threadsP.then((threadsRes) => {
-            if (!live() || threadsRes.status !== 'fulfilled') return;
-            if (typeof App !== 'undefined' && typeof App.setInboxWaiting === 'function') {
-                App.setInboxWaiting(this.needsHumanThreads(threadsRes).length);
-            }
+        // SH3: the count on the Inbox nav item, from this screen too: the server's own `counts.inbox`, the number the To do list holds, so the badge is
+        // one number on every screen and not a different one on each.
+        attentionP.then((attentionRes) => {
+            if (!live()) return;
+            const inbox = this.attentionCount(attentionRes, 'inbox');
+            if (inbox !== null && typeof App !== 'undefined' && typeof App.setInboxWaiting === 'function') App.setInboxWaiting(inbox);
         });
 
         // ── The content region ──────────────────────────────────────────────
@@ -306,21 +314,18 @@ const OverviewPage = {
             this.fillRecent(recentRes);
         });
 
-        // ── The briefing, once its six sources have answered ────────────────
+        // ── The briefing, once its sources have answered ────────────────────
         // dailyP joins the wait here too: buildAlerts() reads it for the
         // trailing 7-day rate, and it was already being fetched in the same
         // tick for the chart, so this adds no extra round trip.
-        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP, healthP, attentionP]).then(
-            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes]) => {
+        Promise.all([statsP, failedP, tokenP, dailyP, metaP, healthP, attentionP]).then(
+            ([statsRes, failedRes, tokenRes, dailyRes, metaRes, healthRes, attentionRes]) => {
                 if (!live()) return;
                 const host = this.region('briefing');
                 if (!host || statsRes.status !== 'fulfilled') return;
-                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes));
-                // Refresh lives inside the region it rewrites; keep focus on it.
-                const focus = UI.captureFocus(host);
-                host.innerHTML = esc(this.renderBriefing(alerts, new Date()));
-                UI.icons(host);
-                UI.restoreFocus(focus);
+                // Kept so a clear (Archive, Mark handled, or their Undo) can read the attention summary again and repaint this region alone.
+                this._briefingInputs = { statsRes, failedRes, tokenRes, dailyRes, metaRes, healthRes };
+                const alerts = this.paintBriefing(host, attentionRes);
 
                 // The briefing is the last region to settle, so the live region
                 // that announced "loading" has nothing left to say.
@@ -542,49 +547,96 @@ const OverviewPage = {
 
     // ─── Shared readings ─────────────────────────────────────────────────────
 
-    /** The threads a settled `/conversations` read holds, or []: the one place this page opens the response. */
-    threadsOf(threadsRes) {
-        if (!threadsRes || threadsRes.status !== 'fulfilled' || !threadsRes.value) return [];
-        return Array.isArray(threadsRes.value.data) ? threadsRes.value.data : [];
+    /** The attention summary a settled `GET /api/attention` holds, or null (rejected, absent, or not a summary): the one place this page opens the response. */
+    attentionOf(res) {
+        if (!res || res.status !== 'fulfilled' || !res.value || !Array.isArray(res.value.items)) return null;
+        return res.value;
     },
+
+    /** One of the summary's nav counts (`inbox`, `studio`, `scheduler`) as a whole number, or null when the summary did not say. */
+    attentionCount(res, name) {
+        const summary = this.attentionOf(res);
+        const n = summary && summary.counts ? Math.floor(Number(summary.counts[name])) : NaN;
+        return Number.isFinite(n) && n >= 0 ? n : null;
+    },
+
+    /** The conversations that need a person, as the server counts them: handed over, or waiting for a reply (`counts.inbox`), and how long the oldest has waited. */
+    waitingFact(res) {
+        const summary = this.attentionOf(res);
+        const count = this.attentionCount(res, 'inbox');
+        if (!summary || count === null) return null;
+        const dates = summary.items
+            .filter((item) => item && (item.type === 'handoff' || item.type === 'thread_waiting') && item.oldestAt)
+            .map((item) => Date.parse(item.oldestAt))
+            .filter((ms) => Number.isFinite(ms));
+        return { count, oldestAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null };
+    },
+
+    // ─── Durations, in words ─────────────────────────────────────────────────
 
     /**
-     * Threads a person has to act on (`Attention.needsHuman`): waiting, or handed over, and not marked handled since the customer last wrote.
-     * The one list the nav badge, the Inbox and this screen's "waiting" card and tile all count (UX U1, DW-T1: Today used `Attention.isWaiting`
-     * alone, so a thread marked handled was still "waiting" here, 191 days on, while the badge said 1). Oldest wait first.
+     * How long ago `iso` was, as a plural-aware phrase WITHOUT "ago": "12 days", «12 يومًا», «يومين». The dictionaries' short forms («12 ي») are for
+     * tables; a sentence needs a word. null for a missing or invalid date. A moment in the future reads as no time at all (one minute).
      */
-    needsHumanThreads(threadsRes) {
-        const since = (thread) => {
-            const ms = Attention.lastInboundMs(thread);
-            return ms === null ? (Date.parse(thread.last_message_at) || 0) : ms;
-        };
-        return this.threadsOf(threadsRes)
-            .filter((thread) => Attention.needsHuman(thread))
-            .sort((a, b) => since(a) - since(b));
+    spanWords(iso) {
+        const at = iso ? new Date(iso).getTime() : NaN;
+        if (!Number.isFinite(at)) return null;
+        const ms = Math.max(0, Date.now() - at);
+        const minute = 60000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+        if (ms < hour) return t('overview.age.minutes', { count: Math.max(1, Math.floor(ms / minute)) });
+        if (ms < day) return t('overview.age.hours', { count: Math.floor(ms / hour) });
+        return t('overview.age.days', { count: Math.floor(ms / day) });
     },
 
-    /** How long the oldest of `threads` (from `needsHumanThreads`) has waited, as words, or null. */
-    oldestWait(threads) {
-        if (!threads.length) return null;
-        const ms = Attention.lastInboundMs(threads[0]);
-        return this.waitAge(ms === null ? threads[0].last_message_at : new Date(ms).toISOString());
-    },
+    // ─── The heartbeat ───────────────────────────────────────────────────────
 
-    /** The same list under its old name: every caller that said "waiting" now gets what needs a person. */
-    waitingThreads(threadsRes) {
-        return this.needsHumanThreads(threadsRes);
-    },
+    /** Events from Meta count as "arriving" when the newest is under this old: a quiet day is normal, a quiet week is not. */
+    EVENTS_FRESH_MS: 24 * 60 * 60 * 1000,
 
     /**
-     * Where the "waiting" card goes (a hash query for `app:navigate`): ONE thread opens that thread (`c=<id>`); several open the Inbox filter
-     * that holds exactly them, "Needs reply" or "Needs you", and a mix of the two opens the whole list, so the card never links to a screen
-     * that shows fewer than it counted.
+     * The one line that answers "is it working?" before "what is wrong?" (U2, DW-T2; research T-d): when the last comment and the last DM came in, whether
+     * events from Meta are arriving at all, and whether the Mac worker is online. Everything is the server's (`heartbeat` of `GET /api/attention`: columns
+     * only, no call to Meta). `[]` for a summary without one. The worker is left out for a tenant that never registered one: there is no Mac to be offline.
+     * Each part is `{ key, level: 'ok' | 'warn' | 'info', icon, text }`; the level is for colour and the icon and words carry the same meaning.
      */
-    waitingQuery(threads) {
-        if (threads.length === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(threads[0].id || ''))) return `c=${encodeURIComponent(String(threads[0].id).toLowerCase())}`;
-        if (threads.every((thread) => !Attention.isHandoff(thread))) return 'filter=waiting';
-        if (threads.every((thread) => Attention.isHandoff(thread) && !Attention.isWaiting(thread))) return 'filter=needs_you';
-        return '';
+    heartbeatParts(res) {
+        const summary = this.attentionOf(res);
+        const beat = summary && summary.heartbeat && typeof summary.heartbeat === 'object' ? summary.heartbeat : null;
+        if (!beat) return [];
+        const parts = [];
+        const comment = this.spanWords(beat.lastCommentAt);
+        parts.push({ key: 'comments', level: 'info', icon: 'message-circle',
+            text: comment ? t('overview.heartbeat.comment', { age: comment }) : t('overview.heartbeat.noComment') });
+        const dm = this.spanWords(beat.lastDmAt);
+        parts.push({ key: 'dms', level: 'info', icon: 'send-horizontal',
+            text: dm ? t('overview.heartbeat.dm', { age: dm }) : t('overview.heartbeat.noDm') });
+        const eventAt = beat.lastWebhookAt ? Date.parse(beat.lastWebhookAt) : NaN;
+        if (Number.isFinite(eventAt) && Date.now() - eventAt < this.EVENTS_FRESH_MS) {
+            parts.push({ key: 'events', level: 'ok', icon: 'activity', text: t('overview.heartbeat.eventsOk') });
+        } else {
+            const quiet = this.spanWords(beat.lastWebhookAt);
+            parts.push({ key: 'events', level: 'warn', icon: 'activity',
+                text: quiet ? t('overview.heartbeat.eventsQuiet', { age: quiet }) : t('overview.heartbeat.eventsNone') });
+        }
+        const worker = beat.worker && typeof beat.worker === 'object' ? beat.worker : null;
+        if (worker && worker.lastSeenAt) {
+            parts.push(worker.online
+                ? { key: 'worker', level: 'ok', icon: 'laptop', text: t('overview.heartbeat.workerOnline') }
+                : { key: 'worker', level: 'warn', icon: 'laptop', text: t('overview.heartbeat.workerOffline', { age: this.spanWords(worker.lastSeenAt) || '' }) });
+        }
+        return parts;
+    },
+
+    renderHeartbeat(res) {
+        const parts = this.heartbeatParts(res);
+        if (!parts.length) return '';
+        return html`
+            <ul class="heartbeat" aria-label="${t('overview.heartbeat.label')}">
+                ${parts.map((part) => html`<li class="heartbeat-item heartbeat-${html.raw(part.level)}" data-heartbeat="${part.key}"><i data-lucide="${part.icon}" aria-hidden="true"></i><span>${part.text}</span></li>`)}
+            </ul>
+        `;
     },
 
     /**
@@ -614,19 +666,6 @@ const OverviewPage = {
             if (row && 'assistant_replies' in row) out.assistant = (out.assistant || 0) + (Number(row.assistant_replies) || 0);
         });
         return out;
-    },
-
-    /** "3h" / "2d" — how long the oldest customer has been waiting, as a duration. */
-    waitAge(iso) {
-        const at = iso ? new Date(iso).getTime() : NaN;
-        if (!Number.isFinite(at)) return null;
-        const ms = Math.max(0, Date.now() - at);
-        const minute = 60000;
-        const hour = 60 * minute;
-        const day = 24 * hour;
-        if (ms < hour) return t('common.minutes', { n: UI.formatNumber(Math.max(1, Math.floor(ms / minute))) });
-        if (ms < day) return t('common.hours', { n: UI.formatNumber(Math.floor(ms / hour)) });
-        return t('common.days', { n: UI.formatNumber(Math.floor(ms / day)) });
     },
 
     /**
@@ -659,11 +698,12 @@ const OverviewPage = {
     // ─── Briefing ────────────────────────────────────────────────────────────
 
     /**
-     * Turn six API answers into a list of things that are actually wrong.
+     * Turn the API answers into a list of things that are actually wrong. What needs the owner in the app's own queues (posts, conversations, the Studio)
+     * is not worked out here: it is `GET /api/attention`'s items (U2, DW-T2), which every other screen counts the same way.
      * Pushed in the order the checks run; `sortAlerts()` then puts what is
      * broken before what is late before what is merely worth knowing.
      */
-    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes) {
+    buildAlerts(stats, failedRes, tokenRes, dailyRes, metaRes, healthRes, attentionRes) {
         const alerts = [];
         const startOfToday = this.localMidnight();
 
@@ -761,19 +801,19 @@ const OverviewPage = {
             });
         }
 
-        // 1e. The Studio's alarms (research USE-1, USE-4): Claude on the Mac signed out (the Monteur is waiting, and a stall of 12 days once went unnoticed), the
-        //     worker offline with work waiting, TikTok videos left in the inbox, clips waiting for review. From `GET /api/attention`, which reads columns only; a
-        //     failed read, or a server that does not have these items, adds nothing. Each is one alert with the server's sentence and ONE action.
-        const studioItems = attentionRes && attentionRes.status === 'fulfilled' && typeof Attention !== 'undefined' ? Attention.studioItems(attentionRes.value) : [];
-        const studioIcon = { mac_signed_out: 'key-round', worker_offline: 'laptop', tiktok_draft: 'music-2', reel_review: 'scissors' };
-        studioItems.forEach((item) => {
+        // 1e. What the server says needs the owner (`GET /api/attention`, columns only, no call to Meta): waiting and handed-over conversations, failed and
+        //     overdue posts, a TikTok or YouTube connection that stopped working, and the Studio's alarms (research USE-1, USE-4). Each is ONE alert with one
+        //     verb and a link that lands on exactly those items; a failed post, or a thread past Meta's 24 h window, can be cleared from the card. A read that
+        //     failed says so (it is NOT a quiet screen); a server that does not send it (an older one, a test) says nothing.
+        if (attentionRes && attentionRes.status === 'rejected') {
             alerts.push({
-                level: Attention.studioLevel(item), icon: studioIcon[item.type] || 'info',
-                title: t(item.sentence.key, Attention.studioParams(item, (n) => UI.formatNumber(n))),
-                body: t(`${item.sentence.key}.body`),
-                action: t(item.action.verb), href: item.action.href,
+                level: 'warning', icon: 'help-circle', key: 'unknown',
+                title: t('overview.alert.attentionUnknown'),
+                body: t('overview.alert.attentionUnknownBody'),
+                action: t('overview.openInbox'), target: 'inbox',
             });
-        });
+        }
+        this.attentionAlerts(attentionRes, { tokenAlertShown: alerts.some((a) => a.icon === 'key-round' || a.icon === 'clock-alert') }).forEach((alert) => alerts.push(alert));
 
         // 2. DMs that failed today. Asked for with `since` = local midnight
         //    (O9), so every row is today's; the client-side date check stays as
@@ -835,75 +875,6 @@ const OverviewPage = {
             });
         }
 
-        // 4. The publishing queue.
-        if (postsRes.status === 'fulfilled' && Array.isArray(postsRes.value)) {
-            // A post the owner archived is parked on purpose, so it is never a failure or a stuck post here: this is the "gone from
-            // Today" half of Archive (UX US1, FR-003). `archived_at` is on every row of GET /posts/scheduled (v45).
-            const posts = postsRes.value.filter((p) => !(p && p.archived_at));
-            // Overdue by more than the sweep can explain. The Heroku worker polls
-            // every 60s and a video container can take ~75s, so a row two minutes
-            // past its time is on its way, not stuck; fifteen minutes is stuck.
-            // (Mirrors posts.js FREQUENT_SWEEP_LAG_MS ×3; the constant lives in a
-            // lazily loaded module, so it is restated here.)
-            const now = Date.now();
-            const overdue = posts.filter((p) => (
-                p.status === 'PENDING' && p.scheduled_time
-                // A held row (Instagram still processing the reel, TikTok's daily limit) is
-                // late on purpose and says so on its own card; it is not a stuck post.
-                && !UI.heldReason(p)
-                && new Date(p.scheduled_time).getTime() < now - this.OVERDUE_GRACE_MS
-            )).length;
-            const failed = posts.filter((p) => p.status === 'FAILED').length;
-
-            if (failed > 0) {
-                alerts.push({
-                    level: 'danger', icon: 'image-off',
-                    title: t('overview.alert.failedPosts', { count: failed }),
-                    body: t('overview.alert.failedPostsBody'),
-                    action: t('overview.openPosts'), target: 'posts',
-                });
-            }
-            if (overdue > 0) {
-                alerts.push({
-                    level: 'warning', icon: 'calendar-clock',
-                    title: t('overview.alert.overduePosts', { count: overdue }),
-                    body: t('overview.alert.overduePostsBody'),
-                    action: t('overview.openPosts'), target: 'posts',
-                });
-            }
-        } else if (postsRes.status === 'rejected') {
-            alerts.push({
-                level: 'warning', icon: 'help-circle',
-                title: t('overview.alert.postsUnknown'),
-                body: t('overview.alert.postsUnknownBody'),
-                action: t('overview.openPosts'), target: 'posts',
-            });
-        }
-
-        // 5. Conversations where the AI is off and the customer spoke last —
-        //    nobody is going to answer these unless a human does. The link
-        //    opens the inbox already filtered to them (O10), and the body says
-        //    how long the oldest has waited.
-        if (threadsRes.status === 'fulfilled' && threadsRes.value) {
-            const waiting = this.needsHumanThreads(threadsRes);
-            if (waiting.length > 0) {
-                const age = this.oldestWait(waiting);
-                alerts.push({
-                    level: 'warning', icon: 'message-square-dot',
-                    title: t('overview.alert.waitingHumans', { count: waiting.length }),
-                    body: age ? t('overview.alert.waitingOldest', { age }) : t('overview.alert.waitingHumansBody'),
-                    action: t('overview.openInbox'), target: 'inbox', query: this.waitingQuery(waiting),
-                });
-            }
-        } else if (threadsRes.status === 'rejected') {
-            alerts.push({
-                level: 'warning', icon: 'help-circle',
-                title: t('overview.alert.threadsUnknown'),
-                body: t('overview.alert.threadsUnknownBody'),
-                action: t('overview.openInbox'), target: 'inbox',
-            });
-        }
-
         // 6. Nothing is armed at all.
         if (Number(stats.activeCampaigns) === 0) {
             alerts.push({
@@ -915,6 +886,210 @@ const OverviewPage = {
         }
 
         return alerts;
+    },
+
+    // ─── The server's items as alerts, and clearing them (U2, DW-T2 / DW-T3) ──────
+
+    /** The item types this page turns into alerts, besides the Studio's four. */
+    ATTENTION_TYPES: ['handoff', 'thread_waiting', 'post_failed', 'post_failed_old', 'post_overdue', 'connection_broken'],
+
+    /** The failure reasons the dictionaries name (`overview.failed.reason.*`); anything else the server might one day send reads as `other`. */
+    FAILURE_REASONS: ['replaced', 'tiktok_private', 'token', 'media', 'other'],
+
+    /** Archive and Mark handled change the owner's data, so they are the operator's (the routes answer 403 to a viewer): a viewer is not shown them. */
+    canClear() {
+        return typeof App === 'undefined' || typeof App.canOperate !== 'function' || App.canOperate();
+    },
+
+    /**
+     * How old a failed post is, as the reason line says it: "35 days ago", or "dated 1 Jan 2027" for one whose time is still ahead (a placeholder, a reel
+     * replaced before its slot), which has no age. '' for no date.
+     */
+    failureAge(iso) {
+        const at = iso ? Date.parse(iso) : NaN;
+        if (!Number.isFinite(at)) return '';
+        if (at > Date.now()) return t('overview.failed.dated', { date: UI.formatDate(iso) });
+        const span = this.spanWords(iso);
+        return span ? t('overview.failed.ago', { age: span }) : '';
+    },
+
+    /** One line per reason a post failed: "2 TikTok direct posts need a private TikTok account · 35 days ago". The server counts posts (one per group), so these add up to the card. */
+    failureLines(item) {
+        const reasons = item && item.detail && Array.isArray(item.detail.reasons) ? item.detail.reasons : [];
+        return reasons.map((r) => {
+            const reason = this.FAILURE_REASONS.indexOf(r && r.reason) === -1 ? 'other' : r.reason;
+            const count = Math.max(1, Math.floor(Number(r && r.count)) || 1);
+            const age = this.failureAge(r && r.oldestAt);
+            return age ? t('overview.failed.line', { what: t(`overview.failed.reason.${reason}`, { count }), age }) : t(`overview.failed.reason.${reason}`, { count });
+        });
+    },
+
+    /** The ids an item carries for one kind of clearing, as plain strings, unique and bounded. */
+    detailIds(list) {
+        return [...new Set((Array.isArray(list) ? list : []).filter((id) => typeof id === 'string' && /^[0-9a-f-]{8,64}$/i.test(id)))].slice(0, 100);
+    },
+
+    /**
+     * The alerts the attention summary holds: each is `{ key, level, icon, title, body, action, href, reasons?, clear? }`, in the server's order (it sorts by
+     * severity, then the longest wait). Handed-over and waiting conversations are ONE card (one To do list, one link). `clear` is what the card can do
+     * about itself: archive these failed posts, or mark these conversations handled; absent for a viewer, and when there is nothing to clear.
+     * `opts.tokenAlertShown`: the access token already has its own card, so a stored "Meta connection broken" is not said a second time.
+     */
+    attentionAlerts(res, opts) {
+        const summary = this.attentionOf(res);
+        if (!summary) return [];
+        const canClear = this.canClear();
+        const tokenShown = !!(opts && opts.tokenAlertShown);
+        const wanted = this.ATTENTION_TYPES.concat(Attention.STUDIO_TYPES);
+        const items = Attention.itemsOfType(summary, wanted);
+        const studioIcon = { mac_signed_out: 'key-round', worker_offline: 'laptop', tiktok_draft: 'music-2', reel_review: 'scissors' };
+        const out = [];
+        let threadsDone = false;
+        const params = (item) => Attention.studioParams(item, (n) => UI.formatNumber(n));
+
+        items.forEach((item) => {
+            const verb = t(item.action.verb);
+            const count = Math.max(1, Math.floor(Number(item.count)) || 1);
+
+            if (item.type === 'handoff' || item.type === 'thread_waiting') {
+                if (threadsDone) return;
+                threadsDone = true;
+                const group = items.filter((i) => i.type === 'handoff' || i.type === 'thread_waiting');
+                const total = group.reduce((n, i) => n + (Math.max(0, Math.floor(Number(i.count)) || 0)), 0);
+                const dates = group.map((i) => Date.parse(i.oldestAt)).filter((ms) => Number.isFinite(ms));
+                const age = dates.length ? this.spanWords(new Date(Math.min(...dates)).toISOString()) : null;
+                const closed = group.map((i) => (i.detail && i.detail.closed) || null).filter(Boolean);
+                const ids = this.detailIds([].concat(...closed.map((c) => c.ids)));
+                const alert = {
+                    key: 'waiting', level: 'warning', icon: 'message-square-dot',
+                    title: t('overview.alert.waitingHumans', { count: total }),
+                    body: age ? t('overview.alert.waitingOldest', { age }) : t('overview.alert.waitingHumansBody'),
+                    action: verb, href: item.action.href,
+                };
+                if (canClear && ids.length) {
+                    alert.clear = { kind: 'handled', ids, count: ids.length, icon: 'check', button: t('inbox.handled.mark'), line: t('overview.waiting.closedLine', { count: ids.length }) };
+                }
+                out.push(alert);
+                return;
+            }
+
+            if (item.type === 'post_failed' || item.type === 'post_failed_old') {
+                const old = item.type === 'post_failed_old';
+                const ids = this.detailIds(item.detail && item.detail.ids);
+                const alert = {
+                    key: item.type, level: old ? 'info' : 'danger', icon: old ? 'archive' : 'image-off',
+                    title: old ? t('overview.alert.failedOld', { count, days: Number(item.sentence.params && item.sentence.params.days) || 14 }) : t('overview.alert.failedPosts', { count }),
+                    body: old ? t('overview.alert.failedOldBody') : t('overview.alert.failedPostsBody'),
+                    action: verb, href: item.action.href, reasons: this.failureLines(item),
+                };
+                if (canClear && ids.length) alert.clear = { kind: 'archive', ids, count, icon: 'eye-off', button: t('overview.failed.archive', { count }) };
+                out.push(alert);
+                return;
+            }
+
+            if (item.type === 'post_overdue') {
+                out.push({
+                    key: 'post_overdue', level: 'warning', icon: 'calendar-clock',
+                    title: t('overview.alert.overduePosts', { count }), body: t('overview.alert.overduePostsBody'),
+                    action: verb, href: item.action.href,
+                });
+                return;
+            }
+
+            if (item.type === 'connection_broken') {
+                const platform = item.sentence.params && item.sentence.params.platform;
+                // Facebook and Instagram have the token cards above; TikTok and YouTube have nothing else on this screen.
+                if (platform === 'meta' && tokenShown) return;
+                const label = { tiktok: t('common.tiktok'), youtube: t('common.youtube'), meta: t('common.both') }[platform];
+                if (!label) return;
+                out.push({
+                    key: `connection_${platform}`, level: 'danger', icon: 'plug-zap',
+                    title: t('overview.alert.connectionBroken', { platform: label }), body: t('overview.alert.connectionBrokenBody'),
+                    action: verb, href: item.action.href,
+                });
+                return;
+            }
+
+            // The Studio's four: the server's own sentence, and its `.body`.
+            out.push({
+                key: item.type, level: Attention.studioLevel(item), icon: studioIcon[item.type] || 'info',
+                title: t(item.sentence.key, params(item)), body: t(`${item.sentence.key}.body`),
+                action: verb, href: item.action.href,
+            });
+        });
+        return out;
+    },
+
+    /**
+     * Paint the briefing region from the inputs it was last built with and this attention answer. Used on load and again after a clear, so the card
+     * disappears (or shrinks) at once. Returns the alerts, for the announcement.
+     */
+    paintBriefing(host, attentionRes) {
+        const input = this._briefingInputs;
+        if (!host || !input) return [];
+        const alerts = this.sortAlerts(this.buildAlerts(input.statsRes.value || {}, input.failedRes, input.tokenRes, input.dailyRes, input.metaRes, input.healthRes, attentionRes));
+        this._clears = {};
+        alerts.forEach((alert) => { if (alert.clear) this._clears[alert.key] = alert.clear; });
+        // Refresh lives inside the region it rewrites; keep focus on it.
+        const focus = UI.captureFocus(host);
+        host.innerHTML = esc(this.renderBriefing(alerts, new Date(), attentionRes));
+        UI.icons(host);
+        UI.restoreFocus(focus);
+        return alerts;
+    },
+
+    /** Read the attention summary again after a clear and repaint what depends on it: the briefing, the waiting tile and the Inbox badge. */
+    async refreshAttention() {
+        const seq = this._seq;
+        const res = await this._settle(API.getAttention());
+        if (seq !== this._seq) return;
+        const host = this.region('briefing');
+        if (host && this._briefingInputs) this.paintBriefing(host, res);
+        const stats = this.region('stats');
+        const input = this._statsInputs;
+        if (stats && input) {
+            stats.innerHTML = esc(this.renderStats(input.statsRes.value || {}, input.dailyRes, res));
+            UI.icons(stats);
+        }
+        const inbox = this.attentionCount(res, 'inbox');
+        if (inbox !== null && typeof App !== 'undefined' && typeof App.setInboxWaiting === 'function') App.setInboxWaiting(inbox);
+    },
+
+    /** Clear one card: "Archive these" or "Mark handled". Done at once, with ONE Undo toast and no question (the plan: undo, not confirm). */
+    async clear(el) {
+        const key = el && el.dataset ? el.dataset.key : '';
+        const clear = this._clears && this._clears[key];
+        if (!clear || !this.canClear()) return;
+        const restore = typeof UI.actionBusy === 'function' ? UI.actionBusy(el) : () => {};
+        if (!restore) return; // already in flight
+        const archive = clear.kind === 'archive';
+        const doIt = (id) => (archive ? API.archiveScheduledPost(id) : API.markConversationHandled(id));
+        const undoIt = (id) => (archive ? API.unarchiveScheduledPost(id) : API.unmarkConversationHandled(id));
+        try {
+            const results = await Promise.allSettled(clear.ids.map(doIt));
+            const done = clear.ids.filter((id, i) => results[i].status === 'fulfilled');
+            const failures = clear.ids.length - done.length;
+            if (done.length === 0) {
+                const reason = results.find((r) => r.status === 'rejected');
+                UI.toast(reason && reason.reason ? UI.errorText(reason.reason).sentence : t('overview.clear.failed'), 'error');
+                return;
+            }
+            // Nothing is asked first, so the way back is real: Undo restores exactly the rows that were just cleared, and says so if one cannot be.
+            UI.undoToast(t(archive ? 'overview.failed.archived' : 'overview.waiting.handled', { count: failures ? done.length : clear.count }), {
+                onUndo: async () => {
+                    const back = await Promise.allSettled(done.map(undoIt));
+                    await this.refreshAttention();
+                    if (back.some((r) => r.status === 'rejected')) throw new Error(t('overview.clear.undoFailed'));
+                    Motion.announce(t(archive ? 'posts.unarchived.done' : 'inbox.handled.reopened'));
+                },
+            });
+            if (failures) UI.toast(t('overview.clear.someFailed', { count: failures }), 'error');
+            await this.refreshAttention();
+        } catch (err) {
+            UI.toast(UI.errorText(err).sentence, 'error');
+        } finally {
+            if (typeof restore === 'function') restore();
+        }
     },
 
     /**
@@ -931,7 +1106,7 @@ const OverviewPage = {
             .map((x) => x.a);
     },
 
-    renderBriefing(alerts, at) {
+    renderBriefing(alerts, at, attentionRes) {
         const count = alerts.length;
         return html`
             <section class="briefing" aria-labelledby="briefing-heading">
@@ -944,6 +1119,7 @@ const OverviewPage = {
                         action: 'overview:refresh', id: 'overview-refresh',
                     })}
                 </div>
+                ${this.renderHeartbeat(attentionRes)}
                 ${count === 0 ? html`
                     <div class="alert-card alert-success">
                         <span class="alert-icon"><i data-lucide="check-circle" aria-hidden="true"></i></span>
@@ -960,6 +1136,16 @@ const OverviewPage = {
                                 <div>
                                     <h3>${a.title}</h3>
                                     <p>${a.body}</p>
+                                    ${a.reasons && a.reasons.length ? html`<ul class="alert-reasons">${a.reasons.map((line) => html`<li>${line}</li>`)}</ul>` : ''}
+                                    ${a.clear ? html`
+                                        <div class="alert-clear">
+                                            ${a.clear.line ? html`<p class="alert-clear-line">${a.clear.line}</p>` : ''}
+                                            ${UI.button({
+                                                variant: 'secondary', size: 'sm', icon: a.clear.icon, label: a.clear.button,
+                                                action: 'overview:clear', data: { key: a.key },
+                                            })}
+                                        </div>
+                                    ` : ''}
                                     ${a.target ? html`<button type="button" class="alert-link" data-action="app:navigate" data-target="${a.target}"${a.query ? html` data-query="${a.query}"` : ''}>
                                         ${a.action}
                                         <i data-lucide="arrow-right" aria-hidden="true"></i>
@@ -1149,7 +1335,7 @@ const OverviewPage = {
      * "Failed" is what needs the owner (`actionable`): a DM skipped on purpose
      * is not a failure, so it is named under the number and is not red in it.
      */
-    renderStats(stats, dailyRes, threadsRes) {
+    renderStats(stats, dailyRes, attentionRes) {
         const daily = dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value) ? dailyRes.value : null;
         const today = daily && daily.length ? this.dayOutcomes(daily[daily.length - 1]) : null;
         const sentToday = today ? today.delivered : null;
@@ -1160,9 +1346,11 @@ const OverviewPage = {
         const weekByDesign = week ? week.byDesign : 0;
         const dailyReason = t('overview.alert.trendUnknown');
 
-        const threadsOk = threadsRes && threadsRes.status === 'fulfilled';
-        const waiting = this.needsHumanThreads(threadsRes);
-        const oldest = this.oldestWait(waiting);
+        // The same count as the nav badge and the To do list (the server's `counts.inbox`), never a count of its own.
+        const waitingFact = this.waitingFact(attentionRes);
+        const threadsOk = waitingFact !== null;
+        const waiting = { length: threadsOk ? waitingFact.count : 0 };
+        const oldest = threadsOk ? this.spanWords(waitingFact.oldestAt) : null;
         let waitingSub = t('overview.stat.waitingUnknown');
         if (threadsOk) waitingSub = waiting.length ? (oldest ? t('overview.stat.waitingOldest', { age: oldest }) : '') : t('overview.stat.waitingNone');
 
@@ -1298,6 +1486,7 @@ const OverviewPage = {
 
 UI.registerActions('overview', {
     refresh: () => OverviewPage.render(),
+    clear: (el) => OverviewPage.clear(el),
     ask: (el) => OverviewPage.askProfile(el),
     wizard: () => OverviewPage.openWizard(),
 });

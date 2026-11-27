@@ -761,6 +761,8 @@ router.get('/tenants', async (_req, res) => {
                     (SELECT COUNT(*)::int FROM scheduled_posts s
                       WHERE s.creator_id = c.id AND s.status = 'FAILED'
                         AND s.scheduled_time > NOW() - INTERVAL '7 days') AS failed_7d,
+                    (SELECT COUNT(DISTINCT COALESCE(s.group_id, s.id))::int FROM scheduled_posts s
+                      WHERE s.creator_id = c.id AND s.status = 'FAILED' AND s.archived_at IS NULL) AS failed_open,
                     COALESCE((SELECT r.count FROM rate_limit_counters r
                                WHERE r.creator_id = c.id AND r.bucket = 'dm'
                                  AND r.window_start = date_trunc('hour', NOW())), 0)::int AS dm_this_hour

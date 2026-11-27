@@ -179,6 +179,10 @@ export const AUDIT_ACTIONS = {
     dmConversationHandled: 'dm.conversation_handled',
     /** The owner took "Mark handled" back: the thread is in his To do again if it still needs a person. */
     dmConversationUnhandled: 'dm.conversation_unhandled',
+    /** The owner changed the automatic clean-up of old failed posts and expired hand-offs (U2, Settings → Messages & alerts). `detail` holds whether it is on and after how many days. */
+    settingsAutoArchiveWrite: 'settings.auto_archive_write',
+    /** The daily sweep put away failed posts and expired hand-offs older than the tenant's limit (actor `system:auto-archive`). `detail` holds the counts and the limit, never a name or a message. */
+    cleanupAutoArchive: 'cleanup.auto_archive',
     /** The A/B wording experiment of the DM sales turn was saved from AI settings (S14). `detail` holds whether it is running, the variants' ids and weights and the length of their texts, never the texts. */
     dmVariantsWrite: 'dm.variants_write',
     /** A tenant's WhatsApp number was connected (v50). `detail` names the ids and the scopes granted, never the token. */

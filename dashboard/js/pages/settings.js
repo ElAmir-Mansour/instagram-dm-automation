@@ -93,6 +93,7 @@ const SettingsPage = {
         Object.freeze({ id: 'whatsapp', group: 'connections', who: 'all', dom: 'wa-card', inner: true, focus: 'wa-waba' }),
         Object.freeze({ id: 'ads', group: 'connections', who: 'owner', dom: 'settings-ads' }),
         Object.freeze({ id: 'iceb', group: 'messages', who: 'owner', dom: 'iceb-card', inner: true }),
+        Object.freeze({ id: 'cleanup', group: 'messages', who: 'owner', dom: 'settings-cleanup' }),
         Object.freeze({ id: 'alerts', group: 'messages', who: 'admin', dom: 'settings-notify', platform: true }),
         Object.freeze({ id: 'appearance', group: 'appearance', who: 'all', dom: 'settings-appearance', focus: 'settings-lang' }),
         Object.freeze({ id: 'token', group: 'advanced', who: 'admin', dom: 'settings-token' }),
@@ -229,7 +230,7 @@ const SettingsPage = {
             // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev, mon] = await Promise.allSettled([
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev, mon, aa] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
@@ -262,6 +263,7 @@ const SettingsPage = {
             App.isAdmin() ? API.getAdminExplainers() : Promise.resolve(null),
             App.isAdmin() ? API.getMetaWebhooks() : Promise.resolve(null),
             App.isAdmin() ? API.getMonitoringSettings() : Promise.resolve(null),
+            App.canAdminister() ? API.getAutoArchive() : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
@@ -293,6 +295,7 @@ const SettingsPage = {
         if (ex.status === 'fulfilled') ctx.explainers = ex.value; else ctx.explainersError = ex.reason;
         if (mev.status === 'fulfilled') ctx.metaEvents = mev.value; else ctx.metaEventsError = mev.reason;
         if (mon.status === 'fulfilled') ctx.monitoring = mon.value; else ctx.monitoringError = mon.reason;
+        if (aa.status === 'fulfilled') ctx.autoArchive = aa.value; else ctx.autoArchiveError = aa.reason;
         return ctx;
     },
 
@@ -391,6 +394,7 @@ const SettingsPage = {
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
             case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError, { accounts: ctx.adsAccounts, failed: ctx.adsAccountsFailed }, this.metaConnectable(ctx));
             case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
+            case 'cleanup': return this.cleanupSection(ctx.autoArchive, ctx.autoArchiveError);
             case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
             case 'appearance': return this.appearanceSection();
             case 'token': return this.accessTokenSection(ctx);
@@ -2818,6 +2822,90 @@ const SettingsPage = {
         }
     },
 
+    // ─── Clean-up (owner): the 30-day auto-archive (U2, src/services/autoArchive.ts) ──────────────────────────────
+
+    cleanupSection(setting, error) {
+        const title = t('settings.cleanup.title');
+        if (error) {
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${title}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.cleanup.loadFailed', { message: error.message })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        if (!setting) return '';
+        const min = Number(setting.minDays) || 7;
+        const max = Number(setting.maxDays) || 365;
+        return html`
+            <section class="section">
+                <h2 class="section-title">${title}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.cleanup.intro')}</p>
+                    <div id="cleanup-error"></div>
+                    <form id="cleanup-form" data-submit="settings:saveAutoArchive" novalidate>
+                        <div class="form-group">
+                            <label class="check-row" for="cleanup-enabled">
+                                <input type="checkbox" id="cleanup-enabled" name="enabled" ${setting.enabled ? html.raw('checked') : ''}>
+                                <span class="check-label">${t('settings.cleanup.enabled')}</span>
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="cleanup-days">${t('settings.cleanup.days')}</label>
+                            <input class="field" id="cleanup-days" name="days" type="number" inputmode="numeric" dir="ltr"
+                                   min="${min}" max="${max}" step="1" value="${Number(setting.days) || 30}" aria-describedby="cleanup-days-hint">
+                            <p class="form-hint" id="cleanup-days-hint">${t('settings.cleanup.daysHint', { min: UI.formatNumber(min), max: UI.formatNumber(max), def: UI.formatNumber(Number(setting.defaultDays) || 30) })}</p>
+                        </div>
+                        <div class="form-actions">
+                            ${UI.button({ variant: 'primary', size: 'sm', type: 'submit', icon: 'save', label: t('settings.cleanup.save'), id: 'cleanup-submit' })}
+                        </div>
+                    </form>
+                </div>
+            </section>
+        `;
+    },
+
+    async saveAutoArchive(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const host = document.getElementById('cleanup-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+        const days = Number((data.get('days') || '').toString().trim());
+        const input = document.getElementById('cleanup-days');
+        const min = input && Number(input.min) ? Number(input.min) : 7;
+        const max = input && Number(input.max) ? Number(input.max) : 365;
+        // Checked here first so the answer is in the page's language and on the field; the server checks again and has the last word.
+        if (!Number.isInteger(days) || days < min || days > max) {
+            const message = t('settings.cleanup.invalidDays', { min: UI.formatNumber(min), max: UI.formatNumber(max) });
+            if (host) {
+                const stripId = 'cleanup-error-strip';
+                host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+                UI.icons(host);
+                if (input) UI.markInvalid(input, stripId);
+            } else UI.toast(message, 'error');
+            return;
+        }
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveAutoArchive({ enabled: data.get('enabled') === 'on', days });
+            UI.toast(t('settings.cleanup.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(UI.errorText(err).sentence, 'error');
+        }
+    },
+
     // ─── Monitoring (platform admin): the dead-man ping URL ───────────────────────────────────────────────
 
     monitoringSection(monitoring, error) {
@@ -4679,6 +4767,7 @@ UI.registerActions('settings', {
     previewDirectPost: (el) => SettingsPage.previewDirectPost(el),
     previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
     saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
+    saveAutoArchive: (el, e) => SettingsPage.saveAutoArchive(el, e),
     saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
     saveMonitoring: (el, e) => SettingsPage.saveMonitoring(el, e),
     removeMonitoringPing: (el) => SettingsPage.removeMonitoringPing(el),

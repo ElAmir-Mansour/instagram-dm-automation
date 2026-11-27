@@ -155,6 +155,32 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'today',
+                    title: { ar: 'شاشة «اليوم»: ما يحتاج إليك', en: 'Today: what needs you' },
+                    body: {
+                        ar: [
+                            'تبدأ شاشة **اليوم** بسطر واحد يجيب عن سؤال «هل يعمل كل شيء؟»: آخر تعليق وصل، وآخر رسالة خاصة، وهل تصل الأحداث من ميتا، وهل عامل الماك متصل. بعده تأتي البطاقات، وكل بطاقة فعل واحد ورابط يفتح هذه العناصر بالذات.',
+                            'القائمة كلها يبنيها الخادم، فهي الرقم نفسه الذي تراه على شارة «الرسائل» وعلى «الجدولة». لا تحسب الشاشة شيئًا بنفسها.',
+                            { dl: [
+                                ['منشورات فشل نشرها', 'تحت البطاقة سطر لكل سبب مع عدده وعمره: قاعدة تيك توك، أو منشور استبدلته عمدًا، أو مشكلة في الوسائط. «أرشِف هذه» تضعها في «المؤرشفة» بضغطة واحدة ومعها «تراجع».'],
+                                ['فشل قديم', 'الفشل الذي مضى عليه أكثر من 14 يومًا يصير سطرًا هادئًا بعدد فقط، لا بطاقة حمراء. يبقى محسوبًا في الجدولة حتى تؤرشفه.'],
+                                ['محادثات تنتظرك', 'إن كانت نافذة ميتا (24 ساعة) قد أُغلقت على بعضها فلا يستطيع ردٌّ أن يصل إليها. «تم التعامل» تخرجها من قائمتك، وتعود وحدها إن كتب صاحبها مجددًا.'],
+                            ] },
+                            { tip: 'لا تسأل الشاشة «هل أنت متأكد؟»: كل إجراء يمكن التراجع عنه من الإشعار الذي يظهر بعده، والمشاهد لا يرى هذه الأزرار أصلًا.' },
+                        ],
+                        en: [
+                            '**Today** opens with one line that answers “is it working?”: the last comment that came in, the last DM, whether events are arriving from Meta, and whether the Mac worker is online. The cards come after it, each with one verb and a link that opens exactly those items.',
+                            'The whole list is built by the server, so it is the same number the **Inbox** badge and the **Scheduler** show. The screen counts nothing of its own.',
+                            { dl: [
+                                ['Posts that failed', 'Under the card there is one line per reason with its count and age: a TikTok rule, a post you replaced on purpose, a media problem. **Archive these** puts them under Archived in one tap, with an **Undo**.'],
+                                ['Older failures', 'A failure more than 14 days old becomes one quiet line with a number, not a red card. It stays counted in the Scheduler until you archive it.'],
+                                ['Conversations waiting for you', 'When Meta’s 24-hour window has closed on some of them, a reply can no longer reach them. **Mark handled** takes them off your list, and they come back by themselves if the person writes again.'],
+                            ] },
+                            { tip: 'Today never asks “are you sure?”: every action can be taken back from the notice that appears after it, and a viewer is not shown these buttons at all.' },
+                        ],
+                    },
+                },
+                {
                     id: 'roles',
                     title: { ar: 'مين يقدر يسوّي وش؟', en: 'Who can do what' },
                     body: {
@@ -1277,7 +1303,7 @@ const HelpContent = {
                                 ['بالانتظار', 'مجدول وينتظر موعده.'],
                                 ['جارٍ النشر', 'قاعد ينرسل الحين لميتا أو تيك توك.'],
                                 ['نُشر', 'نزل خلاص.'],
-                                ['فشلت', 'ما انحذف شي: المنشور باقي في الطابور ومعه سبب الفشل. أصلح الوسائط أو النص وأعد النشر.'],
+                                ['فشلت', 'ما انحذف شي: المنشور باقي في الطابور ومعه سبب الفشل. أصلح الوسائط أو النص وأعد النشر، أو أرشفه إن لم تعد تريده (انظر [[scheduling#clear-failed]]).'],
                                 ['تيك توك يعالج الفيديو', 'تيك توك استلمه ويجهّزه، وعادة ياخذ أقل من دقيقة.'],
                                 ['في صندوق تيك توك', 'وصل مسودّاتك في تيك توك، وباقي تنشره أنت من التطبيق.'],
                             ] },
@@ -1288,10 +1314,32 @@ const HelpContent = {
                                 ['Pending', 'Scheduled and waiting for its time.'],
                                 ['Publishing', 'Being sent to Meta or TikTok right now.'],
                                 ['Published', 'Live.'],
-                                ['Failed', 'Nothing was deleted: the post is still in the queue with the reason it failed. Fix the media or caption and publish again.'],
+                                ['Failed', 'Nothing was deleted: the post is still in the queue with the reason it failed. Fix the media or caption and publish again, or archive it if you no longer want it (see [[scheduling#clear-failed]]).'],
                                 ['TikTok is processing', 'TikTok has it and is preparing it, which usually takes under a minute.'],
                                 ['In your TikTok inbox', 'It reached your TikTok drafts, and you post it from the app.'],
                             ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'clear-failed',
+                    title: { ar: 'تنظيف المنشورات الفاشلة والقديمة', en: 'Clearing failed and old posts' },
+                    body: {
+                        ar: [
+                            'المنشور الفاشل يبقى في الطابور ومعه سبب فشله، ويظل محسوبًا على شارة «الجدولة» وفي شاشة «اليوم» حتى تتصرف فيه. للتصرف طريقان:',
+                            { ul: [
+                                '**أرشفة**: من بطاقة المنشور، أو من شاشة «اليوم» لعدة منشورات معًا. لا يُنشر المنشور بعد ذلك ولا يُحسب ضمن ما يحتاج إليك، ويبقى تحت **المؤرشفة** في الجدولة، ومنها تستعيده بزر **إلغاء الأرشفة** كما كان تمامًا.',
+                                'من تلقاء النظام: يؤرشف يوميًا ما فشل منذ أكثر من 30 يومًا. لا يحذف شيئًا، ويسجّل ذلك في سجل التدقيق. تغيّر المدة أو توقفه من **الإعدادات** ← **الرسائل والتنبيهات** ← **تنظيف العناصر القديمة تلقائيًا**.',
+                            ] },
+                            'المحادثات القديمة التي احتاجت إليك ولم يُتعامل معها بعد 30 يومًا تُميَّز بالطريقة نفسها بأنه تم التعامل معها، وتعود إلى قائمتك إن كتب صاحبها مجددًا.',
+                        ],
+                        en: [
+                            'A failed post stays in the queue with the reason it failed, and stays counted on the **Scheduler** badge and on **Today** until you deal with it. There are two ways:',
+                            { ul: [
+                                '**Archive:** from the post’s card, or from **Today** for several at once. The post is not published after that and no longer counts as needing you. It stays under **Archived** in the Scheduler, and **Unarchive** puts it back exactly as it was.',
+                                'By itself: once a day the system archives what failed more than 30 days ago. It deletes nothing, and records it in the audit log. Change the days, or switch it off, in **Settings** → **Messages & alerts** → **Clear old items automatically**.',
+                            ] },
+                            'Conversations that needed you and were never handled after 30 days are marked handled the same way, and come back to your list if the person writes again.',
                         ],
                     },
                 },

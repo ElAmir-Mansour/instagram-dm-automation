@@ -122,6 +122,12 @@ export interface TenantHealth {
     queue: TenantQueue;
     postsPending: number;
     postsFailed7d: number;
+    /**
+     * Failed posts that still need the owner: not archived, a post on several platforms counted once. The SAME rule as the attention summary
+     * (`attention.ts` `POSTS_ATTENTION_SQL`) and so the number Today and the Scheduler show. `postsFailed7d` above is a different question
+     * (failed with a time in the last 7 days, archived or not, every platform row) and read 2 where Today read 4 (U2).
+     */
+    postsFailed: number;
 }
 
 /** A tenant's health plus the identity a cross-tenant table needs to label the row. */
@@ -154,6 +160,7 @@ interface HealthDbRow {
     jobs_oldest_pending_at: Date | null;
     posts_pending: number;
     posts_failed_7d: number;
+    posts_failed_open?: number | null;
 }
 
 /**
@@ -173,7 +180,7 @@ interface HealthDbRow {
  * acceptable because completed rows are pruned weekly (`DONE_JOB_RETENTION_DAYS`) and the
  * table holds hours of work, not history.
  */
-const TENANT_HEALTH_SQL = `
+export const TENANT_HEALTH_SQL = `
     SELECT
         c.id,
         c.name,
@@ -207,7 +214,8 @@ const TENANT_HEALTH_SQL = `
         q.jobs_failed,
         q.jobs_oldest_pending_at,
         p.posts_pending,
-        p.posts_failed_7d
+        p.posts_failed_7d,
+        p.posts_failed_open
     FROM creators c
     LEFT JOIN LATERAL (
         SELECT
@@ -226,7 +234,8 @@ const TENANT_HEALTH_SQL = `
         SELECT
             COUNT(*) FILTER (WHERE s.status = 'PENDING')::int AS posts_pending,
             COUNT(*) FILTER (WHERE s.status = 'FAILED'
-                               AND s.scheduled_time > NOW() - INTERVAL '7 days')::int AS posts_failed_7d
+                               AND s.scheduled_time > NOW() - INTERVAL '7 days')::int AS posts_failed_7d,
+            COUNT(DISTINCT COALESCE(s.group_id, s.id)) FILTER (WHERE s.status = 'FAILED' AND s.archived_at IS NULL)::int AS posts_failed_open
           FROM scheduled_posts s
          WHERE s.creator_id = c.id
     ) p ON TRUE
@@ -262,6 +271,7 @@ function toTenantHealthRow(row: HealthDbRow): TenantHealthRow {
         },
         postsPending: row.posts_pending ?? 0,
         postsFailed7d: row.posts_failed_7d ?? 0,
+        postsFailed: row.posts_failed_open ?? 0,
     };
 }
 

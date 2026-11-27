@@ -29,7 +29,6 @@ const waiting = (over: Json = {}): Json => ({
 });
 
 const { Attention } = loadDashboard();
-const plain = (value: unknown): Json => JSON.parse(JSON.stringify(value));
 
 describe('Attention.isWaiting', () => {
     it('is a thread with the AI off whose last message is the customer\'s', () => {
@@ -295,7 +294,7 @@ describe('Attention is the only copy', () => {
         }
     });
 
-    it('is what the Overview and the Inbox both count with: one number for the nav badge on every screen', () => {
+    it('is what the Inbox counts with, and the Overview takes the SERVER\'s count of the same rule (U2): one number for the nav badge on every screen', () => {
         const h = loadDashboard({ files: ['dashboard/js/pages/overview.js', 'dashboard/js/pages/inbox.js'] });
         const threads = [
             waiting({ id: 'a' }),
@@ -308,36 +307,25 @@ describe('Attention is the only copy', () => {
         const expected = threads.filter((x) => h.Attention.needsHuman(x)).map((x) => x.id);
         assert.deepEqual(expected, ['a', 'b', 'c']);
 
-        const Overview = h.run('OverviewPage');
         const Inbox = h.run('InboxPage');
         const badge: number[] = [];
         h.ctx.App = { setInboxWaiting: (n: number) => { badge.push(n); }, hashParam: () => '' };
-
-        Overview.needsHumanThreads({ status: 'fulfilled', value: { data: threads } });
         Inbox.threads = threads;
         Inbox.reportWaiting();
         assert.deepEqual(badge, [3], 'the Inbox reports the shared count');
-        assert.deepEqual(
-            Overview.needsHumanThreads({ status: 'fulfilled', value: { data: threads } }).map((x: Json) => x.id),
-            expected,
-            'and the Overview counts the same threads',
-        );
+
+        const Overview = h.run('OverviewPage');
+        const res = { status: 'fulfilled', value: { items: [], counts: { inbox: 3, studio: 0, scheduler: 0 } } };
+        assert.equal(Overview.attentionCount(res, 'inbox'), 3, 'the Overview reports the server\'s count of the same threads');
+        assert.equal(Overview.attentionCount({ status: 'rejected', reason: new Error('x') }, 'inbox'), null, 'a failed read is "unknown", never 0');
+        assert.equal(Overview.attentionCount(null, 'inbox'), null);
     });
 
-    it('counts the Overview\'s "waiting" with the same predicate as the badge (handed over included, handled left out), oldest first', () => {
+    it('the Overview keeps no copy of the predicate any more: it does not read the conversations to count them', () => {
         const h = loadDashboard({ files: ['dashboard/js/pages/overview.js'] });
         const Overview = h.run('OverviewPage');
-        const rows = [
-            waiting({ id: 'new', last_message_at: ago(HOUR), last_inbound_message_at: ago(HOUR) }),
-            waiting({ id: 'old', last_message_at: ago(9 * HOUR), last_inbound_message_at: ago(9 * HOUR) }),
-            handed({ id: 'handoff', last_inbound_message_at: ago(5 * HOUR) }),
-            waiting({ id: 'done', last_message_at: ago(30 * HOUR), last_inbound_message_at: ago(30 * HOUR), handled_at: ago(HOUR) }),
-        ];
-        const got = Overview.waitingThreads({ status: 'fulfilled', value: { data: rows } }).map((x: Json) => x.id);
-        assert.deepEqual(got, ['old', 'handoff', 'new']);
-        // Arrays made inside the page's vm context have that context's Array.prototype: compare what they hold, not their realm.
-        assert.deepEqual(plain(Overview.waitingThreads({ status: 'rejected', reason: new Error('x') })), []);
-        assert.deepEqual(plain(Overview.waitingThreads(null)), []);
-        assert.deepEqual(plain(Overview.waitingThreads({ status: 'fulfilled', value: { data: null } })), []);
+        for (const name of ['needsHumanThreads', 'waitingThreads', 'waitingQuery', 'oldestWait', 'threadsOf']) {
+            assert.equal(typeof Overview[name], 'undefined', name);
+        }
     });
 });
