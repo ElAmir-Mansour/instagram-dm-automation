@@ -4,13 +4,13 @@ import path from 'path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'url';
 
-import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
 import { logSignatureRejection, verifyMetaSignature } from './utils/signature.js';
 import { enqueueWebhookBody, isAcceptedWebhookObject, processWebhookBody } from './webhook/router.js';
 import { acknowledgeThenRun } from './webhook/ack.js';
 import { verifyTokenCandidates } from './services/webhookVerifyToken.js';
 import { drainInline } from './jobs/drain.js';
+import { healthResponse } from './services/monitoring.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import { profileCacheScope } from './services/profile/cache.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
@@ -299,22 +299,11 @@ app.get('/google9fa1db13cbba5ece.html', (_req, res) => {
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 
+// Unauthenticated and non-sensitive on purpose: an external uptime monitor reads it (RUNBOOK "Monitoring"). 503 when the database does not answer or
+// the queue is stuck (src/services/monitoring.ts). Reveals ages and booleans only.
 app.get('/health', async (_req, res) => {
-    try {
-        const dbResult = await pool.query('SELECT NOW() as time');
-        res.json({
-            status: 'ok',
-            database: 'connected',
-            serverTime: new Date().toISOString(),
-            dbTime: dbResult.rows[0]?.time,
-        });
-    } catch {
-        res.status(500).json({
-            status: 'error',
-            database: 'disconnected',
-            serverTime: new Date().toISOString(),
-        });
-    }
+    const { status, body } = await healthResponse();
+    res.status(status).json(body);
 });
 
 // ─── Webhook Verification (Meta Handshake) ──────────────────────────────────

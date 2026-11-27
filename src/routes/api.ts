@@ -64,6 +64,7 @@ import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
 import { drainWorker } from '../jobs/drain.js';
+import { describeMonitoringSettings, recordDrainHeartbeat, saveMonitoringPingUrl, startDeadManPing } from '../services/monitoring.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
 import { mediaClient } from '../utils/mediaClient.js';
@@ -391,6 +392,9 @@ router.get('/jobs/drain', async (req, res) => {
     if (!requireCronSecret(req, res, '/api/jobs/drain')) return;
     const startedAt = Date.now();
 
+    // The heartbeat an external monitor reads through /health (src/services/monitoring.ts): one cheap write at most a minute, never throws.
+    await recordDrainHeartbeat();
+
     // The queue drain and the publish sweep are independent, and are kept independent
     // deliberately: they fail for unrelated reasons (Gemini vs Meta publishing), and one
     // throwing must not discard what the other already did. So each is caught on its own and
@@ -496,6 +500,9 @@ router.get('/jobs/drain', async (req, res) => {
     await checkR2Warnings();
 
     const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError, { result: monteur, error: monteurError });
+    // The dead-man ping, after a good run only: started under waitUntil, never awaited, never throws (at most once every 5 minutes, and only when
+    // the platform admin saved a URL). A drain that failed outright sends none, so the check goes late and the owner is emailed.
+    if (status === 200) startDeadManPing();
     res.status(status).json(status === 200 ? { ...body, tiktok } : body);
 });
 
@@ -5056,6 +5063,40 @@ router.post('/settings/notify', requirePlatformAdmin, canAdminister, async (req,
     } catch (err) {
         log('error', 'api.notify_settings_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the alert settings.' });
+    }
+});
+
+// ─── Monitoring (platform admin) ─────────────────────────────────────────────────────────────
+// `GET/POST /settings/monitoring`: the dead-man ping URL (a free Healthchecks.io check, say) the drain GETs after a good run, at most every 5 minutes
+// (src/services/monitoring.ts). The URL is a secret (it carries the check's id): encrypted at rest, `{ set, last4 }` is all any answer says of it.
+// Platform admins only, the same 404 for everyone else.
+
+router.get('/settings/monitoring', requirePlatformAdmin, async (_req, res) => {
+    try {
+        res.json(await describeMonitoringSettings());
+    } catch (err) {
+        log('error', 'api.monitoring_settings_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the monitoring settings.' });
+    }
+});
+
+router.post('/settings/monitoring', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const pingUrl = req.body?.pingUrl;
+        if (typeof pingUrl !== 'string') {
+            res.status(400).json({ error: 'pingUrl must be a string (empty removes it).', field: 'pingUrl' });
+            return;
+        }
+        if (!(await saveMonitoringPingUrl(pingUrl, req.session?.userId ?? null))) {
+            res.status(400).json({ error: 'The ping URL must be a full https:// address.', field: 'pingUrl' });
+            return;
+        }
+        // That it changed, never its value: the URL is a secret.
+        log('info', 'api.monitoring_settings_written', { user_id: req.session?.userId ?? null, changed: ['ping_url'], removed: pingUrl.trim() === '' });
+        res.json(await describeMonitoringSettings());
+    } catch (err) {
+        log('error', 'api.monitoring_settings_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the monitoring settings.' });
     }
 });
 

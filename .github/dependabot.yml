@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Security updates are switched on in the repository settings (Code security -> Dependabot security updates);
+  # they open their own PRs apart from the weekly grouped ones below.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(ci)"

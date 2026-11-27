@@ -1408,6 +1408,20 @@
     'settings.site.invalid.whatsappNumber': 'رقم واتساب غير صالح. اكتبه بالصيغة الدولية بلا +، مثل 9665XXXXXXXX.',
     'settings.site.invalid.contactEmail': 'هذا لا يبدو عنوان بريد صحيحاً.',
     'settings.site.invalid.eidCouponsExpire': 'اختر تاريخاً صحيحاً لآخر يوم للكوبونات.',
+    'settings.monitoring.title': 'المراقبة',
+    'settings.monitoring.intro': 'تخلّي خدمة مجانية من خارج التطبيق تنبّهك لو توقّف أوتوريبلاي نفسه، وهذا شي تنبيهاته الداخلية ما تقدر تسويه. بعد كل تشغيل سليم للطابور (كل دقيقتين تقريباً) يفتح التطبيق العنوان المحفوظ هنا، مرة كل 5 دقائق على الأكثر. أنشئ فحصاً مجانياً في Healthchecks.io بفترة 10 دقائق ومهلة 10 دقائق، والصق عنوان الـ ping هنا، وسيرسل لك بريداً لو انقطعت النبضات.',
+    'settings.monitoring.loadFailed': 'تعذّرت قراءة إعدادات المراقبة: {message}',
+    'settings.monitoring.pingUrl': 'رابط فحص التوقف (ping)',
+    'settings.monitoring.pingUrlSaved': 'يوجد عنوان محفوظ وينتهي بـ {last4}. الصق عنواناً جديداً لاستبداله، أو اتركه فارغاً للإبقاء عليه.',
+    'settings.monitoring.pingUrlSavedShort': 'يوجد عنوان محفوظ. الصق عنواناً جديداً لاستبداله، أو اتركه فارغاً للإبقاء عليه.',
+    'settings.monitoring.pingUrlNone': 'لا يوجد عنوان محفوظ، فلا يُرسل أي ping.',
+    'settings.monitoring.hint': 'العنوان محفوظ مشفّراً ولا يظهر مرة أخرى. مراقبة /health من خدمة خارجية تُضبط خارج التطبيق: راجع قسم المراقبة في دليل التشغيل.',
+    'settings.monitoring.save': 'احفظ المراقبة',
+    'settings.monitoring.remove': 'احذف رابط الـ ping',
+    'settings.monitoring.saved': 'تم حفظ إعدادات المراقبة.',
+    'settings.monitoring.removed': 'تم حذف رابط الـ ping.',
+    'settings.monitoring.invalid.pingUrl': 'هذا ليس عنواناً كاملاً يبدأ بـ https://.',
+
 
     // ─── TikTok ─────────────────────────────────────────────────────────
     'settings.tiktok.title': 'تيك توك',

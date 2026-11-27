@@ -936,6 +936,10 @@ const API = {
      * the one test email the server sent with it (same shape as `testNotifyEmail`).
      */
     saveNotifySettings: (data) => API.request('/settings/notify', { method: 'POST', body: JSON.stringify(data) }),
+    /** Monitoring (platform admin): `{ pingUrl: { set, last4 }, pingEverySeconds }`. The ping URL is a secret and is never sent back. */
+    getMonitoringSettings: () => API.request('/settings/monitoring'),
+    /** `{ pingUrl }`; '' removes it. A 400 carries `field` on `err.body`. */
+    saveMonitoringSettings: (data) => API.request('/settings/monitoring', { method: 'POST', body: JSON.stringify(data) }),
     /** Sends the test message with what is saved. `{ ok: true }`, or `{ ok: false, reason: 'not_configured' | 'rejected' | 'unreachable', status, description }`. */
     testNotify: (lang) => API.request('/settings/notify/test', { method: 'POST', body: JSON.stringify({ lang }) }),
     /** The same for the email address (Resend), with what is saved. `{ ok: true }`, or `{ ok: false, reason: 'not_configured' | 'rejected' | 'unreachable', status, description }`. */

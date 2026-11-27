@@ -6255,6 +6255,26 @@ const HelpContent = {
                         ],
                     },
                 },
+                {
+                    id: 'monitoring',
+                    title: { ar: 'تنبيهك لو توقّف التطبيق نفسه', en: 'Being told when the app itself stops' },
+                    body: {
+                        ar: [
+                            'تنبيهات التطبيق تصلك من داخله، فلو توقّف الخادم أو قاعدة البيانات أو عامل الطابور ما يوصلك شي. عشان كذا يوجد فحصان من الخارج، ومجانيان:',
+                            { ul: [
+                                'العنوان `/health` يردّ 200 طالما قاعدة البيانات تردّ والطابور يتحرك، و503 لو عمل الطابور واقف: أقدم مهمة مستحقة صارت أكبر من 10 دقائق ولا يوجد تشغيل للطابور منذ 5 دقائق. ضع عليه فاحصاً مجانياً مثل UptimeRobot أو Better Stack. لا يكشف أي اسم أو رقم تعريف أو عدد.',
+                                'في **الإعدادات** ← **المنصة** ← **المراقبة** تحفظ **رابط فحص التوقف (ping)** من خدمة مثل Healthchecks.io. بعد كل تشغيل سليم للطابور يفتحه التطبيق (مرة كل 5 دقائق على الأكثر)، فلو انقطعت النبضات أرسلت لك الخدمة بريداً. هذه البطاقة لمسؤول المنصة، والرابط يُحفظ مشفّراً ولا يظهر مرة أخرى.',
+                            ] },
+                        ],
+                        en: [
+                            'AutoReply’s own alerts are sent from inside the app, so if the server, the database or the queue worker stops, nothing reaches you. Two free checks from outside cover that:',
+                            { ul: [
+                                'The address `/health` answers 200 while the database answers and the queue is moving, and 503 when the queue is stuck: the oldest due job has waited more than 10 minutes and nothing has drained the queue for 5. Put a free monitor such as UptimeRobot or Better Stack on it. It reveals no name, id or count.',
+                                'In **Settings** → **Platform** → **Monitoring** you save a **Dead-man ping URL** from a service like Healthchecks.io. After every good queue run the app opens it (at most once every 5 minutes), so when the pings stop the service emails you. The card is for the platform administrator, and the address is kept encrypted and never shown again.',
+                            ] },
+                        ],
+                    },
+                },
             ],
         },
         // ─── 14. FAQ ─────────────────────────────────────────────────────────

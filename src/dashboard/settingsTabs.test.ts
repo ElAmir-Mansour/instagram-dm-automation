@@ -120,10 +120,10 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
         assert.deepEqual(where('messages'), ['iceb', 'alerts']);
         assert.deepEqual(where('appearance'), ['appearance']);
         assert.deepEqual(where('advanced'), ['token', 'webhook', 'account']);
-        assert.deepEqual(where('platform'), ['meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding']);
+        assert.deepEqual(where('platform'), ['meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding']);
         const owner = load('en', 'owner').Settings;
         const ownerCards = Array.from<Json>(owner.visibleGroups()).flatMap((g) => Array.from<Json>(owner.visibleCards(g.id)).map((c) => c.id));
-        for (const developer of ['token', 'webhook', 'account', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'onboarding', 'alerts']) {
+        for (const developer of ['token', 'webhook', 'account', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding', 'alerts']) {
             assert.equal(ownerCards.includes(developer), false, `a tenant owner never sees ${developer}`);
         }
         assert.ok(ownerCards.includes('iceb'), 'the owner keeps their ice breakers');
@@ -232,9 +232,9 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         assert.equal(html.includes('data-settings-card="meta-app"'), false);
         assert.equal(html.includes('data-settings-card="meta-events"'), false, 'and neither has where Meta sends the events');
         assert.ok(html.includes('data-settings-card="tiktok-app"') && html.includes('data-settings-card="youtube-app"'));
-        // Handoff alerts, the TikTok and YouTube apps, Explainers (its read failed here, and says so), storage, the public site, onboarding: seven
-        // cards, seven badges, and none for the missing one.
-        assert.equal((html.match(/class="settings-scope"/g) ?? []).length, 7);
+        // Handoff alerts, the TikTok and YouTube apps, Explainers (its read failed here, and says so), storage, the public site, monitoring, onboarding:
+        // eight cards, eight badges, and none for the missing one.
+        assert.equal((html.match(/class="settings-scope"/g) ?? []).length, 8);
     });
 
     it('a tenant owner never gets the developer cards or the Platform tab in the page at all, not even hidden', async () => {
