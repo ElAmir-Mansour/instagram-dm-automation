@@ -92,7 +92,9 @@ describe('the card', () => {
         const r = load();
         const markup = card(r, post({ first_comment_status: { instagram: entry('failed', { error: 'Permission denied' }), facebook: entry('posted', { id: 'c1' }) } }));
         const said = text(markup);
-        assert.ok(said.includes('First comment failed on Instagram: Permission denied'), said);
+        // The reason is the failure translator's sentence (U3 wired posts.js to it); what Meta said is behind Details.
+        assert.ok(said.includes('First comment failed on Instagram: Something went wrong'), said);
+        assert.match(markup, /<details class="error-details">[\s\S]*Permission denied/);
         assert.ok(said.includes('The post itself is live'), said);
         assert.ok(said.includes('First comment posted on Facebook.'), said);
         assert.match(markup, /data-action="posts:retryFirstComment"[^>]*data-id="p1"[^>]*data-platform="instagram"|data-platform="instagram"[^>]*data-action="posts:retryFirstComment"/);

@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { contrastRatio, hexToRgb, toHex } from '../services/onboarding/colour.js';
-import { loadDashboard, settle, type Json } from './_harness.js';
+import { FakeEl, loadDashboard, settle, type Json } from './_harness.js';
 
 const IMAGE = 'dashboard/js/pages/brand_image.js';
 const PAGE = 'dashboard/js/pages/brand.js';
@@ -840,19 +840,22 @@ describe('Brand: the route, the menu and the words', () => {
     });
 
     it('is in the Content group after Studio, hidden until applyChrome shows it, with the icon already in the subset', () => {
-        const item = /<li class="hidden" data-operator-only><a href="#\/brand" class="nav-item" data-page="brand">\s*<i data-lucide="award" aria-hidden="true"><\/i>\s*<span data-i18n="nav.brand">هويتك<\/span>\s*<\/a><\/li>/;
+        const item = /<li class="hidden"><a href="#\/brand" class="nav-item" data-page="brand">\s*<i data-lucide="award" aria-hidden="true"><\/i>\s*<span data-i18n="nav.brand">هويتك<\/span>\s*<\/a><\/li>/;
         assert.match(INDEX, item);
         assert.ok(INDEX.indexOf('data-page="studio"') < INDEX.indexOf('data-page="brand"') && INDEX.indexOf('data-page="brand"') < INDEX.indexOf('data-page="posts"'));
         assert.match(readFileSync('dashboard/js/icons.js', 'utf8'), /award/);
     });
 
-    it('applyChrome hides the item from a viewer and shows it to an operator and an owner', () => {
+    it('applyChrome hides the item from a viewer and shows it to an operator and an owner (through the shell registry, Shell.PAGES)', () => {
         for (const [role, hidden] of [['viewer', true], ['operator', false], ['owner', false]] as const) {
             const h = loadDashboard({ app: true });
             const operatorOnly = h.el('brand-nav');
             operatorOnly.classes.add('hidden');
             const owner = h.el('ads-nav');
-            h.document.querySelectorAll = (selector: string): Json[] => (selector === '[data-operator-only]' ? [operatorOnly] : selector === '[data-owner-only]' ? [owner] : []);
+            // The registry reads `.nav-item[data-page]` and toggles `hidden` on each item's <li>.
+            const link = (page: string, li: FakeEl): Json => ({ getAttribute: (n: string) => (n === 'data-page' ? page : null), parentElement: Object.assign(li, { tagName: 'LI' }) });
+            const items = [link('brand', operatorOnly), link('ads', owner)];
+            h.document.querySelectorAll = (selector: string): Json[] => (selector === '.nav-item[data-page]' ? items : []);
             h.App.session = { available: true, role: 'member', userId: 'u1', email: 'a@b.test', tenantId: 't1', tenantRole: role, tenants: [{ id: 't1' }], onboarding: null };
             h.App.applyChrome();
             assert.equal(operatorOnly.classes.has('hidden'), hidden, role);

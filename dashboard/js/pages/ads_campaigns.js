@@ -25,33 +25,14 @@
  * `AdsTabs` (the Overview | Campaigns | Results | Create bar) lives here and is shared with `ads.js`, `ads_results.js` and `ads_create.js`, which load this module for it.
  */
 const AdsTabs = {
-    TABS: Object.freeze([
-        Object.freeze({ key: 'overview', href: '#/ads', icon: 'layout-dashboard', label: 'ads.tabs.overview' }),
-        Object.freeze({ key: 'campaigns', href: '#/ads_campaigns', icon: 'megaphone', label: 'ads.tabs.campaigns' }),
-        Object.freeze({ key: 'results', href: '#/ads_results', icon: 'bar-chart-3', label: 'ads.tabs.results' }),
-        Object.freeze({ key: 'proposals', href: '#/ads_proposals', icon: 'sparkles', label: 'ads.tabs.proposals' }),
-        Object.freeze({ key: 'audiences', href: '#/ads_audiences', icon: 'users', label: 'ads.tabs.audiences' }),
-        Object.freeze({ key: 'rules', href: '#/ads_rules', icon: 'list-checks', label: 'ads.tabs.rules' }),
-        // A10: lead forms and leads, locked until a legal sign-off. The tab is always there; the page says when it is locked.
-        Object.freeze({ key: 'leads', href: '#/ads_leads', icon: 'clipboard-list', label: 'ads.tabs.leads' }),
-        // A12: split tests, two versions of an ad or two audiences.
-        Object.freeze({ key: 'tests', href: '#/ads_tests', icon: 'split', label: 'ads.tabs.tests' }),
-        // A5: the full builder. Owners only on the server; the tab is shown to whoever sees the Ads area, and Create explains a refusal.
-        Object.freeze({ key: 'create', href: '#/ads_create', icon: 'plus', label: 'ads.tabs.create' }),
-    ]),
+    /** The nine tabs live in the one registry (`Shell.AREAS.ads`); this is the same list, so no Ads page changes. */
+    TABS: Shell.AREAS.ads.tabs,
 
-    /** The tab bar, with `active` ('overview' | 'campaigns' | 'results' | 'create') marked as the current page. Plain links: a tab is a place, so it has an address. */
+    /** The tab bar, with `active` ('overview' | 'campaigns' | 'results' | 'create' ...) marked as the current page. Plain links: a tab is a place, so it has an address. */
     markup(active) {
-        const tab = (item) => html`
-            <a class="btn btn-sm btn-ghost" href="${item.href}" ${item.key === active ? html.raw('aria-current="page"') : ''}>
-                <i data-lucide="${item.icon}" aria-hidden="true"></i> ${t(item.label)}
-            </a>
-        `;
         return html`
             <div class="page-toolbar ads-tabs" id="ads-tabs">
-                <nav class="segmented studio-seg ads-tabs-seg" aria-label="${t('ads.tabs.label')}">
-                    ${this.TABS.map(tab)}
-                </nav>
+                ${Shell.areaNav('ads', active)}
             </div>
         `;
     },

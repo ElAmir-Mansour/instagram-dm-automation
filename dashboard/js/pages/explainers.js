@@ -612,23 +612,11 @@ const ExplainersPage = {
     },
 
     // ─── Chrome: the Studio's tab bar and this page's own views ──────────────
-    /** The Studio's tab bar with Explainers current (studio.js, monteur.js and infographics.js list the same links), and this page's views. */
+    /** The Studio's tab bar with Explainers current (`Shell.AREAS.studio`, the one registry), and this page's views. */
     toolbarMarkup(active) {
-        const tab = (key, href, icon, label) => html`
-            <a class="btn btn-sm btn-ghost" href="${href}"
-               ${key === 'explainers' ? html.raw('aria-current="page"') : ''}>
-                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
-            </a>
-        `;
         return html`
             <div class="page-toolbar studio-toolbar">
-                <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
-                    ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
-                    ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
-                    ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
-                    ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
-                    ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
-                </nav>
+                ${Shell.areaNav('studio', 'explainers')}
             </div>
             <div class="ex-views">${UI.tabs([
                 { key: 'videos', label: t('explainers.views.videos'), href: '#/explainers' },

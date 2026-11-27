@@ -1708,6 +1708,10 @@
     'attention.verb.reply': 'Reply',
     'attention.verb.reconnect': 'Reconnect',
     'nav.studioNeeds': '{n} items in the Studio need you',
+    'shell.moduleOff': 'That page isn’t part of this workspace.',
+    'shell.moduleOffNow': 'That page was just switched off for this workspace, so you’re back on Today.',
+    'shell.helpNotInWorkspace': 'That article is about something this workspace doesn’t have. Here are the ones it does.',
+    'shell.studioAlarmOpen': 'See them',
     'studio.alarm.label': 'Studio alerts',
 
     'posts.tiktok.delivery.legend': 'How should this reach TikTok?',
