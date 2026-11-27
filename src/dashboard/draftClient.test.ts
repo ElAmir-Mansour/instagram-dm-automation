@@ -644,6 +644,8 @@ describe('the Tenants screen starts the draft right after creating a tenant (D6)
                 captureFocus: () => null, restoreFocus: () => undefined, registerActions: () => undefined,
             },
             App: { refreshSession: async () => undefined, go: () => undefined, DEFAULT_PAGE: 'overview', loadPageModule: async () => null },
+            // The dialog's modules (U3): not what this suite is about, so one company-sized answer and nothing to refuse.
+            Admin: { readModulesPicker: () => ({ preset: 'company', on: ['inbox'], adsCeiling: null }), moduleProblem: () => '' },
             API: {
                 createAdminTenant: async () => created,
                 request: (path: string, init: { method?: string; body?: string }) => {
@@ -659,7 +661,7 @@ describe('the Tenants screen starts the draft right after creating a tenant (D6)
         vm.runInContext(readFileSync('dashboard/js/pages/tenants.js', 'utf8'), sandbox, { filename: 'tenants.js' });
         const page = vm.runInContext('TenantsPage', sandbox) as { handleCreate(form: unknown, event: unknown): Promise<void>; render: () => void };
         page.render = () => undefined;
-        const submit = (values: Record<string, string>, dataset: Record<string, string> = {}) => page.handleCreate({ values, dataset }, { preventDefault: () => undefined });
+        const submit = (values: Record<string, string>, dataset: Record<string, string> = {}) => page.handleCreate({ values, dataset: { step: '3', ...dataset } }, { preventDefault: () => undefined });
         return { submit, requests, closed };
     }
 

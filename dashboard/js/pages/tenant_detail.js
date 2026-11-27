@@ -150,6 +150,10 @@ const TenantDetailPage = {
             </section>
 
             ${this.renderHealth(row)}
+            <section class="section" id="tenant-modules" aria-labelledby="tenant-modules-title">
+                <h2 class="section-title" id="tenant-modules-title">${t('tenantModules.title')}</h2>
+                <div class="surface pad-5" id="tenant-modules-body">${Motion.busy()}</div>
+            </section>
             ${this.renderMembers(row)}
             ${this.renderConnection(row)}
             ${this.renderProfile(row)}
@@ -162,6 +166,7 @@ const TenantDetailPage = {
         UI.icons(container);
         Admin.applyMeters(container);
         this.mountInvites(name);
+        this.mountModules();
         this.mountLegal();
         // Nothing said the page's own data had landed — see CLAUDE.md's WCAG
         // 4.1.3 note on the other admin list pages. No natural count here
@@ -177,6 +182,113 @@ const TenantDetailPage = {
         const card = await App.loadPageModule('invite_card');
         if (!card || !host.isConnected) return;
         card.mountList(host, { tenantId: this.tenantId, tenantName: name });
+    },
+
+    // ─── Modules (U3, contract §3.3): what this workspace has, and how its Meta connects ───
+
+    /** What the card last read (or saved): `{ on, owner, preset, metaConnect, adsCeiling }`. */
+    modulesView: null,
+    /** The form as it was drawn, serialised: Save is enabled only while the form differs from it. */
+    modulesInitial: '',
+
+    /** Read the modules after the page has painted, like `mountLegal`: the page does not wait on them and a failure takes nothing else down. */
+    async mountModules() {
+        const host = document.getElementById('tenant-modules-body');
+        if (!host) return;
+        try {
+            const view = await API.getAdminTenantModules(this.tenantId);
+            if (!host.isConnected) return;
+            this.paintModules(view);
+        } catch (err) {
+            if (!host.isConnected) return;
+            host.innerHTML = html`<div class="inline-error" role="alert"><i data-lucide="alert-circle" aria-hidden="true"></i>${UI.errorHtml ? UI.errorHtml(err) : t('tenantModules.loadFailed')}</div>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="tenantDetail:mountModules">${t('common.retry')}</button>`;
+            UI.icons(host);
+        }
+    },
+
+    paintModules(view) {
+        const host = document.getElementById('tenant-modules-body');
+        if (!host) return;
+        this.modulesView = view;
+        // The owner's own workspace has everything and cannot be narrowed: one line and the chips, no input at all.
+        if (view.owner) {
+            host.innerHTML = Admin.modulesPicker({ on: view.on, owner: true });
+            return;
+        }
+        const connect = view.metaConnect === 'self' ? 'self' : 'operator';
+        host.innerHTML = html`<form id="tenant-modules-form" data-submit="tenantDetail:saveModules" novalidate>
+            <p class="form-hint">${t('tenantModules.intro')}</p>
+            ${Admin.modulesPicker({ on: view.on, owner: false, ceiling: view.adsCeiling, idPrefix: 'tm', change: 'tenantDetail:modulesChanged' })}
+            <fieldset class="fieldset-plain modules-meta">
+                <legend class="form-label">${t('tenantModules.meta')}</legend>
+                <div class="welcome-choices">
+                    <label class="welcome-choice">
+                        <input class="welcome-choice-input" type="radio" name="meta_connect" value="self" data-change="tenantDetail:modulesChanged" ${connect === 'self' ? html.raw('checked') : ''}>
+                        <span class="welcome-choice-body"><strong>${t('tenants.create.meta.self')}</strong><span class="form-hint">${t('tenants.create.meta.selfHint')}</span></span>
+                    </label>
+                    <label class="welcome-choice">
+                        <input class="welcome-choice-input" type="radio" name="meta_connect" value="operator" data-change="tenantDetail:modulesChanged" ${connect === 'operator' ? html.raw('checked') : ''}>
+                        <span class="welcome-choice-body"><strong>${t('tenants.create.meta.operator')}</strong><span class="form-hint">${t('tenants.create.meta.operatorHint')}</span></span>
+                    </label>
+                </div>
+            </fieldset>
+            <div id="tenant-modules-error" aria-live="polite"></div>
+            <div class="row gap-3 row--wrap">
+                <button type="submit" class="btn btn-primary" id="tenant-modules-save" disabled>${t('tenantModules.save')}</button>
+            </div>
+        </form>`;
+        UI.icons(host);
+        const form = document.getElementById('tenant-modules-form');
+        if (form) this.modulesInitial = this.modulesKey(form);
+    },
+
+    /** The form as one string: the modules, the ceiling as typed and the Meta choice. */
+    modulesKey(form) {
+        const picked = Admin.readModulesPicker(form);
+        const field = (name) => { const el = form.querySelector(`input[name="${name}"]`); return el && el.value ? String(el.value).trim() : ''; };
+        const connect = form.querySelector('input[name="meta_connect"]:checked');
+        return JSON.stringify([picked.on, picked.on.includes('ads') ? [field('ads_daily'), field('ads_monthly')] : null, connect ? connect.value : '']);
+    },
+
+    /** Save is for a form that differs from what was drawn. */
+    refreshModulesSave(form) {
+        const save = form && form.querySelector ? form.querySelector('#tenant-modules-save') : null;
+        if (save) save.disabled = this.modulesKey(form) === this.modulesInitial;
+    },
+
+    async saveModules(form, event) {
+        if (event && event.preventDefault) event.preventDefault();
+        const view = this.modulesView || {};
+        if (view.owner) return;
+        const picked = Admin.readModulesPicker(form);
+        const connect = form.querySelector('input[name="meta_connect"]:checked');
+        const errorHost = form.querySelector('#tenant-modules-error');
+        const show = (markup) => { if (errorHost) errorHost.innerHTML = markup; };
+        // Ads need a ceiling: one typed here, or the one already stored. Checked before the server is asked.
+        if (Admin.moduleProblem(picked, Boolean(view.adsCeiling))) {
+            show(html`<div class="inline-error" role="alert"><i data-lucide="alert-circle" aria-hidden="true"></i><span>${t('tenantModules.ceilingRequired')}</span></div>`);
+            const daily = form.querySelector('input[name="ads_daily"]');
+            if (daily && daily.focus) daily.focus();
+            return;
+        }
+        show('');
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            const body = { preset: picked.preset, on: picked.on, metaConnect: connect && connect.value === 'self' ? 'self' : 'operator' };
+            if (picked.adsCeiling) body.adsCeiling = picked.adsCeiling;
+            const saved = await API.saveAdminTenantModules(this.tenantId, body);
+            UI.toast(t('tenantModules.saved'));
+            this.paintModules(saved);
+        } catch (err) {
+            restore();
+            // The server's refusal in the person's words (`errors.<CODE>`), next to the field. A missing ceiling points at Client ads, where it can also be set.
+            const hint = err && err.code === 'CEILING_REQUIRED'
+                ? html`<p class="form-hint">${t('tenantModules.ceilingHint')} <a href="#/admin_ads">${t('tenantModules.ceilingLink')}</a></p>` : '';
+            show(html`<div class="inline-error" role="alert"><i data-lucide="alert-circle" aria-hidden="true"></i><span>${UI.errorLine(err)}</span></div>${hint}`);
+            UI.icons(form);
+        }
     },
 
     // ─── Legal sign-off (Ads A8): unlocks customer-list audiences (and lead ads, A10) for this tenant ───
@@ -749,6 +861,12 @@ UI.registerActions('tenantDetail', {
     recheckToken: (el) => Admin.report(TenantDetailPage.recheckToken(el)),
     switchInto: () => Admin.report(TenantDetailPage.switchInto()),
     resetLink: (el) => Admin.report(TenantDetailPage.resetLink(el)),
+    mountModules: () => Admin.report(TenantDetailPage.mountModules()),
+    modulesChanged: (el) => {
+        Admin.modulesChanged(el);
+        TenantDetailPage.refreshModulesSave(el.form || (el.closest && el.closest('form')));
+    },
+    saveModules: (el, e) => Admin.report(TenantDetailPage.saveModules(el, e)),
     recordLegal: (el, e) => Admin.report(TenantDetailPage.recordLegal(el, e)),
     revokeLegal: (el) => TenantDetailPage.revokeLegal(el.dataset.id),
 });

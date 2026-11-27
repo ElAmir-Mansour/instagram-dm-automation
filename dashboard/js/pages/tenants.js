@@ -315,16 +315,47 @@ const TenantsPage = {
      */
     showCreateModal(firstRun) {
         const isFirstRun = firstRun === true;
+        if (!isFirstRun) return this.showWorkspaceDialog();
         UI.showModal(html`
-            ${this.modalHeader(isFirstRun ? t('tenants.firstRunTitle') : t('tenants.createTitle'))}
-            <form id="tenant-create-form" data-submit="tenants:handleCreate" data-first-run="${isFirstRun ? 'true' : ''}">
+            ${this.modalHeader(t('tenants.firstRunTitle'))}
+            <form id="tenant-create-form" data-submit="tenants:handleCreate" data-first-run="true">
                 <div class="form-group">
                     <label class="form-label" for="tenant-name">${t('tenants.name')}</label>
                     <input class="field" id="tenant-name" name="name" dir="auto"
                            placeholder="${t('tenants.namePlaceholder')}" required>
                     <p class="form-hint">${t('tenants.nameHint')}</p>
                 </div>
-                ${isFirstRun ? this.credentialFields(true) : html`
+                ${this.credentialFields(true)}
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
+                </div>
+            </form>
+        `);
+    },
+
+    // ─── The New workspace dialog (U3, contract §3.2): 1 Who · 2 What · 3 Meta, one step shown at a time ───
+
+    /** The steps in order: the fieldset each one is, and the word that heads it. */
+    CREATE_STEPS: Object.freeze(['who', 'what', 'meta']),
+    /** Whether the platform has a Telegram bot saved (from Settings → Platform → Alerts), or null when it could not be read: decides the last to-do. */
+    botSet: null,
+
+    showWorkspaceDialog() {
+        const on = Admin.MODULE_PRESETS.company;
+        UI.showModal(html`
+            ${this.modalHeader(t('tenants.createTitle'))}
+            <form id="tenant-create-form" data-submit="tenants:handleCreate" data-first-run="" data-step="1" novalidate>
+                <ol class="create-steps" aria-label="${t('tenants.create.steps')}">
+                    ${this.CREATE_STEPS.map((key, i) => html`<li class="create-step-label" data-step-label="${i + 1}" ${i === 0 ? html.raw('aria-current="step"') : ''}><span class="create-step-n">${i + 1}</span> ${t(`tenants.create.step.${key}`)}</li>`)}
+                </ol>
+                <fieldset class="fieldset-plain create-step" data-step="1">
+                    <legend class="sr-only">${t('tenants.create.step.who')}</legend>
+                    <div class="form-group">
+                        <label class="form-label" for="tenant-name">${t('tenants.name')}</label>
+                        <input class="field" id="tenant-name" name="name" dir="auto" placeholder="${t('tenants.namePlaceholder')}" required>
+                        <p class="form-hint">${t('tenants.nameHint')}</p>
+                    </div>
                     <div class="form-group">
                         <label class="form-label" for="tenant-lang">${t('tenants.lang')}</label>
                         <select class="select" id="tenant-lang" name="lang">
@@ -334,19 +365,18 @@ const TenantsPage = {
                         <p class="form-hint">${t('tenants.langHint')}</p>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="tenant-handle">
-                            ${t('tenants.igHandle')} <span class="label-optional">${t('common.optional')}</span>
-                        </label>
-                        <input class="field" id="tenant-handle" name="instagram_username" dir="ltr"
-                               autocomplete="off" spellcheck="false" placeholder="@username">
+                        <label class="form-label" for="tenant-handle">${t('tenants.igHandle')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <input class="field" id="tenant-handle" name="instagram_username" dir="ltr" autocomplete="off" spellcheck="false" placeholder="@username">
                         <p class="form-hint">${t('tenants.igHandleHint')}</p>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="tenant-site">
-                            ${t('tenants.website')} <span class="label-optional">${t('common.optional')}</span>
-                        </label>
-                        <input class="field" id="tenant-site" name="website" type="text" inputmode="url" dir="ltr"
-                               autocomplete="off" spellcheck="false" placeholder="example.com">
+                        <label class="form-label" for="tenant-site">${t('tenants.website')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <input class="field" id="tenant-site" name="website" type="text" inputmode="url" dir="ltr" autocomplete="off" spellcheck="false" placeholder="example.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tenant-owner-email">${t('tenants.create.ownerEmail')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <input class="field" id="tenant-owner-email" name="owner_email" type="email" dir="ltr" autocomplete="off" spellcheck="false" placeholder="name@company.com">
+                        <p class="form-hint">${t('tenants.create.ownerEmailHint')}</p>
                     </div>
                     <p class="form-hint">${t('tenants.byNameNote')}</p>
                     <details class="tenant-more">
@@ -354,13 +384,134 @@ const TenantsPage = {
                         <p class="form-hint">${t('tenants.advancedHint')}</p>
                         ${this.credentialFields(false)}
                     </details>
-                `}
+                </fieldset>
+                <fieldset class="fieldset-plain create-step" data-step="2" hidden>
+                    <legend class="form-label">${t('tenants.create.whatTitle')}</legend>
+                    <p class="form-hint">${t('tenants.create.modulesIntro')}</p>
+                    ${Admin.modulesPicker({ on, owner: false, idPrefix: 'create-mod', change: 'tenants:modulesChanged' })}
+                    <p class="form-hint" id="tenant-create-ai" hidden></p>
+                </fieldset>
+                <fieldset class="fieldset-plain create-step" data-step="3" hidden>
+                    <legend class="form-label">${t('tenants.create.metaTitle')}</legend>
+                    <div class="welcome-choices">
+                        <label class="welcome-choice">
+                            <input class="welcome-choice-input" type="radio" name="meta_connect" value="self" data-change="tenants:reviewChanged" checked>
+                            <span class="welcome-choice-body"><strong>${t('tenants.create.meta.self')}</strong><span class="form-hint">${t('tenants.create.meta.selfHint')}
+                                ${UI.helpLink('workspaces#tester', t('tenants.create.testerLink'))}</span></span>
+                        </label>
+                        <label class="welcome-choice">
+                            <input class="welcome-choice-input" type="radio" name="meta_connect" value="operator" data-change="tenants:reviewChanged">
+                            <span class="welcome-choice-body"><strong>${t('tenants.create.meta.operator')}</strong><span class="form-hint">${t('tenants.create.meta.operatorHint')}</span></span>
+                        </label>
+                    </div>
+                    <p class="create-review" id="tenant-create-review" aria-live="polite"></p>
+                </fieldset>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
+                    <button type="button" class="btn btn-secondary" id="tenant-create-back" data-action="tenants:wizardBack" hidden>${t('common.back')}</button>
+                    <button type="button" class="btn btn-primary" id="tenant-create-next" data-action="tenants:wizardNext">${t('tenants.create.next')}</button>
+                    <button type="submit" class="btn btn-primary" id="tenant-create-submit" hidden><i data-lucide="plus" aria-hidden="true"></i> ${t('tenants.create.submit')}</button>
                 </div>
             </form>
         `);
+        this.loadCreateContext();
+    },
+
+    /** The two facts the dialog shows about the PLATFORM, read once and never needed: the per-workspace AI caps (step 2) and whether a Telegram bot is saved (the last to-do). */
+    async loadCreateContext() {
+        this.botSet = null;
+        try {
+            const ai = await API.getAdminAi();
+            const line = document.getElementById('tenant-create-ai');
+            const budgets = (ai && ai.budgets) || {};
+            const money = (n) => (typeof n === 'number' && Number.isFinite(n) ? `$${n}` : t('tenants.create.aiNoLimit'));
+            if (line && line.isConnected) {
+                line.textContent = t('tenants.create.aiCaps', { daily: money(budgets.tenantDailyUsd), monthly: money(budgets.tenantMonthlyUsd) });
+                line.hidden = false;
+            }
+        } catch (_err) { /* the line stays hidden: it is information, not a control */ }
+        try {
+            const notify = await API.getNotifySettings();
+            const token = notify && notify.telegram && notify.telegram.botToken;
+            this.botSet = token ? Boolean(token.set) : null;
+        } catch (_err) { this.botSet = null; }
+    },
+
+    /** The dialog's current step, 1 to 3. */
+    stepOf(form) {
+        const n = Number(form && form.dataset && form.dataset.step);
+        return n >= 1 && n <= 3 ? n : 1;
+    },
+
+    /** Show step `n`: its fieldset, the label with `aria-current`, and which of Back / Next / Create the footer offers. */
+    showStep(form, n) {
+        form.dataset.step = String(n);
+        for (const fs of Array.from(form.querySelectorAll('fieldset[data-step]'))) fs.hidden = Number(fs.dataset.step) !== n;
+        for (const li of Array.from(form.querySelectorAll('[data-step-label]'))) {
+            if (Number(li.dataset.stepLabel) === n) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+        }
+        const set = (id, hidden) => { const el = form.querySelector(`#${id}`); if (el) el.hidden = hidden; };
+        set('tenant-create-back', n === 1);
+        set('tenant-create-next', n === 3);
+        // Create is offered only on the last step.
+        set('tenant-create-submit', n !== 3);
+        if (n === 3) this.paintReview(form);
+        const first = form.querySelector(`fieldset[data-step="${n}"] input:not([type="radio"]):not([type="checkbox"]):not([disabled]), fieldset[data-step="${n}"] input[type="radio"]:checked`);
+        if (first && first.focus) first.focus();
+    },
+
+    /** Why step `n` cannot be left yet (a sentence key), or '' when it can. */
+    stepProblem(form, n) {
+        const value = (name) => { const el = form.querySelector(`[name="${name}"]`); return el && el.value ? String(el.value).trim() : ''; };
+        if (n === 1) {
+            if (!value('name')) return 'tenants.create.nameFirst';
+            const email = value('owner_email');
+            if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'tenants.create.ownerEmailBad';
+        }
+        if (n === 2 && Admin.moduleProblem(Admin.readModulesPicker(form), false)) return 'tenantModules.ceilingRequired';
+        return '';
+    },
+
+    wizardNext(form) {
+        if (!form) return;
+        const n = this.stepOf(form);
+        if (n >= 3) return;
+        const problem = this.stepProblem(form, n);
+        if (problem) { UI.toast(t(problem), 'error'); return; }
+        this.showStep(form, n + 1);
+    },
+
+    wizardBack(form) {
+        if (!form) return;
+        const n = this.stepOf(form);
+        if (n > 1) this.showStep(form, n - 1);
+    },
+
+    /** The review line under the Meta choice: language, what kind of workspace, and who connects Meta. */
+    paintReview(form) {
+        const line = form.querySelector('#tenant-create-review');
+        if (!line) return;
+        const picked = Admin.readModulesPicker(form);
+        const preset = Admin.modulePresetOf(picked.on.filter((id) => id !== 'ads'));
+        const kind = preset !== 'custom' && !picked.on.includes('ads') ? t(`tenants.create.preset.${preset}`) : t('tenants.create.reviewCustom', { n: picked.on.length });
+        const lang = form.querySelector('[name="lang"]');
+        const connect = form.querySelector('input[name="meta_connect"]:checked');
+        line.textContent = t('tenants.create.review', {
+            lang: t(`tenants.lang.${lang && lang.value === 'en' ? 'en' : 'ar'}`),
+            kind,
+            meta: t(connect && connect.value === 'operator' ? 'tenants.create.reviewOperator' : 'tenants.create.reviewSelf'),
+        });
+    },
+
+    /** The to-do list that goes under the link (`InviteCard` `context.todo`), as i18n keys, in the contract's order. */
+    todoFor(payload, botSet) {
+        const todo = [];
+        const modules = payload.modules || {};
+        if (modules.metaConnect === 'self') todo.push('tenants.todo.tester');
+        if ((modules.on || []).includes('whatsapp')) todo.push('tenants.todo.whatsappCall');
+        if (payload.instagram_username || payload.website) todo.push('tenants.todo.draft');
+        if (botSet === false) todo.push('tenants.todo.telegramBot');
+        return todo;
     },
 
     async handleCreate(form, event) {
@@ -368,6 +519,8 @@ const TenantsPage = {
         const data = new FormData(form);
         const firstRun = form.dataset.firstRun === 'true';
         const text = (key) => (data.get(key) || '').toString().trim();
+        // The dialog is three steps: Enter on the first two goes forward instead of creating anything.
+        if (!firstRun && this.stepOf(form) < 3) { this.wizardNext(form); return; }
         const payload = { name: text('name') };
         if (!payload.name) return;
 
@@ -392,6 +545,13 @@ const TenantsPage = {
             payload.lang = text('lang') === 'en' ? 'en' : 'ar';
             if (text('instagram_username')) payload.instagram_username = text('instagram_username');
             if (text('website')) payload.website = text('website');
+            if (text('owner_email')) payload.owner_email = text('owner_email');
+            // A workspace made WITH a Meta connection is the operator's own: the server takes no modules for it.
+            if (!anyId && !credentials.page_access_token) {
+                const picked = Admin.readModulesPicker(form);
+                if (Admin.moduleProblem(picked, false)) { UI.toast(t('tenantModules.ceilingRequired'), 'error'); return; }
+                payload.modules = { preset: picked.preset, on: picked.on, metaConnect: text('meta_connect') === 'operator' ? 'operator' : 'self', adsCeiling: picked.adsCeiling };
+            }
         }
 
         const restore = UI.formBusy(form, t('common.saving'));
@@ -417,6 +577,8 @@ const TenantsPage = {
                 if (card) {
                     card.showCreated(created.invite, {
                         tenantId: created.id, tenantName: created.name, lang: payload.lang, title: t('invites.createdTitle'),
+                        // What is still to do for this workspace (`InviteCard` draws it under the link when it knows how; one that does not ignores it).
+                        todo: this.todoFor(payload, this.botSet),
                         onChange: () => this.render(),
                     });
                     return;
@@ -600,6 +762,17 @@ UI.registerActions('tenants', {
     showCreateModal: () => TenantsPage.showCreateModal(false),
     showFirstRunCreateModal: () => TenantsPage.showCreateModal(true),
     handleCreate: (el, e) => reportTenantFailure(TenantsPage.handleCreate(el, e)),
+    wizardNext: (el) => TenantsPage.wizardNext(el.closest ? el.closest('form') : null),
+    wizardBack: (el) => TenantsPage.wizardBack(el.closest ? el.closest('form') : null),
+    modulesChanged: (el) => {
+        Admin.modulesChanged(el);
+        const form = el.form || (el.closest && el.closest('form'));
+        if (form && TenantsPage.stepOf(form) === 3) TenantsPage.paintReview(form);
+    },
+    reviewChanged: (el) => {
+        const form = el.form || (el.closest && el.closest('form'));
+        if (form) TenantsPage.paintReview(form);
+    },
     showRenameModal: (el) => TenantsPage.showRenameModal(el.dataset.id),
     handleRename: (el, e) => reportTenantFailure(TenantsPage.handleRename(el, e)),
     toggleActive: (el) => reportTenantFailure(TenantsPage.toggleActive(el)),

@@ -217,6 +217,10 @@ const API = {
     // not deployed yet) — callers hide the UI rather than surfacing an error.
     getAdminTenants: () => API.request('/admin/tenants'),
     createAdminTenant: (data) => API.request('/admin/tenants', { method: 'POST', body: JSON.stringify(data) }),
+    /** U3: which modules a workspace has → `{ tenantId, on, owner, stored, preset, metaConnect, adsCeiling }`, read fresh. */
+    getAdminTenantModules: (tenantId) => API.request(`/admin/tenants/${encodeURIComponent(tenantId)}/modules`),
+    /** `{ preset?, on?, metaConnect?, adsCeiling? }` → the same shape. 409 `OWNER_ALL_MODULES` for the platform owner's own workspace. */
+    saveAdminTenantModules: (tenantId, input) => API.request(`/admin/tenants/${encodeURIComponent(tenantId)}/modules`, { method: 'PUT', body: JSON.stringify(input) }),
     /** Ads A8: a tenant's legal sign-offs (revoked ones too) → `{ signoffs }`. */
     getAdminLegalSignoffs: (tenantId) => API.request(`/admin/ads/tenants/${encodeURIComponent(tenantId)}/legal-signoff`),
     /** `{ scope: 'customer_lists' | 'lead_ads', countries: ['EG', ...], note }` → `{ signoff }`. */
