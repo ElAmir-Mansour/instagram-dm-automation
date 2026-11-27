@@ -211,6 +211,17 @@
       src/services/ads/notify.ts, which renders only the ad account, amounts and
       Meta's status, and it stays true. The new paragraph says the two differ.
 
+  STAFF TELEGRAM NOTICES — ADDED 2026-11-28 (U3, PR D: section 3's "needs a person" paragraph, section 4's chat-id line, section 5's Telegram line).
+  What the code must keep true (src/services/notifyPeople.ts, src/services/telegramLink.ts):
+    · a member of a workspace gets the same alert ONLY after they linked their own Telegram chat to the platform's bot themselves: telegramLink.ts
+      `startLink` mints a single-use, 10-minute code, and `confirmLink` links only the private chat whose first message is `/start <code>`;
+    · it goes only to active, non-admin members whom the workspace's owner chose (notify.routing.<workspace>; with nothing chosen, its owners and
+      operators), and not to a person who paused it: notifyPeople.ts `notifyPeople`; the owner's own alerts are unchanged;
+    · what is kept per person is the Telegram chat id and the first name Telegram gave (app_settings user.notify.<user id>); unlinking or the
+      account being removed from every workspace ends the alerts, and `unlink` deletes both;
+    · the text is the same buildNoticeText() the owner gets (same excerpt, same link rules), through the same bot, plain text, previews off;
+    · nothing of the alert is stored, and no chat id or token is ever logged or returned (telegramLink.ts, notify.ts scrub()).
+
   MEDIA STORAGE ON CLOUDFLARE R2 — ADDED 2026-11-06 (src/services/r2Storage.ts). Section 5's Supabase and Cloudflare R2 entries claim:
     · uploaded media (post images and videos, and a customer's WhatsApp files) are kept in Supabase Storage or in Cloudflare R2, whichever the platform
       owner chose for new uploads (storage.backend); a file stays where it was written;
@@ -1846,7 +1857,9 @@
                     رسالتك (عطل تقني)، وكذلك في وضع المبيعات حين يحوّل المساعد محادثتك إلى شخص (كأن تطلب التحدّث إلى شخص
                     أو استرجاع مالك أو تشتكي)، أو حين يرسل إليك الرابط بعد أن سألت عن الشراء أو عن السعر أو عن مناسبته لك.
                     ولا يحدث ذلك إلا في المحادثات مع حسابه هو، وإلا إن فعّل التنبيهات. والتنبيه رسالة على تيليجرام و/أو بريد
-                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). <strong>يُذكر فيه اسم المستخدم الخاص بك،
+                    إلكتروني يُرسَل عبر <bdi lang="en" dir="ltr">Resend</bdi> (القسم 5). وفي مساحة العمل التي لها فريق، قد تصل
+                    الرسالة نفسها على تيليجرام إلى العاملين فيها الذين ربطوا محادثتهم الخاصة بحسابنا المرسِل على تيليجرام بأنفسهم، وبحسب ما اختاره
+                    مالك مساحة العمل. <strong>يُذكر فيه اسم المستخدم الخاص بك،
                     أو آخر أربعة أحرف من معرّف حسابك إن لم يكن لدينا اسم مستخدم لك، وما يصل إلى 200 حرف من آخر رسالة
                     كتبتَها</strong>، وتُستبدَل الروابط فيها بـ«<bdi lang="en" dir="ltr">[link]</bdi>». ويُذكر فيه أيضاً سبب
                     الحاجة إلى شخص، والوقت الباقي من نافذة الردّ لدى ميتا، ورابط إلى المحادثة في لوحة التحكم. وهذه التنبيهات
@@ -1895,6 +1908,10 @@
 
                 <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
                 <ul>
+                    <li>
+                        <strong>ربط تيليجرام لدى أحد العاملين:</strong> نحتفظ لكل شخص بمعرّف محادثته على تيليجرام وبالاسم الأول الذي
+                        أعطاه إياه تيليجرام، ما دام الربط قائماً. وإلغاء الربط يحذفهما في الحال.
+                    </li>
                     <li>
                         <strong>الحدث الأصلي الوارد من ميتا:</strong> يُمحى بعد أن يتجاوز عمره
                         30 يوماً. تعمل عملية التنظيف مرة واحدة يومياً، فقد يصل العمر الفعلي إلى
@@ -2041,7 +2058,7 @@
                     </li>
                     <li>
                         <strong>تيليجرام</strong> (<bdi lang="en" dir="ltr">Telegram</bdi>) — يوصل التنبيهات نفسها رسائلَ إلى محادثة
-                        تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة.
+                        تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة، وإلى محادثة كل عامل في مساحة العمل ربطها بحسابنا المرسِل بنفسه.
                         <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيليجرام</a>.
                     </li>
                 </ul>
@@ -2736,7 +2753,8 @@
                     for a refund or complained) or has just sent you the link after you asked to buy, asked the price or
                     asked whether it suits you. This happens only for conversations with his own account, and only if he
                     has switched the alerts on. The alert is a Telegram message and/or an email sent through Resend
-                    (section 5). <strong>It names you by your username, or, if we have none, by the last four characters
+                    (section 5). In a workspace that has a team, the same message may also reach, on Telegram, the staff of that
+                    workspace who linked their own Telegram chat to our Telegram sender account themselves, as the workspace's owner chose. <strong>It names you by your username, or, if we have none, by the last four characters
                     of your account ID, and quotes up to 200 characters of the last message you wrote</strong>, with any
                     link in it replaced by “[link]”. It also says why a person is needed, how long Meta's reply window
                     has left, and links to the conversation in the dashboard. These alerts are not the ads alerts in
@@ -2788,6 +2806,10 @@
 
                 <h2 id="retention-en">4. How long it is kept</h2>
                 <ul>
+                    <li>
+                        <strong>A staff member's Telegram link:</strong> for each person we keep the id of their Telegram chat and the
+                        first name Telegram gave us, for as long as the link exists. Unlinking deletes both at once.
+                    </li>
                     <li>
                         <strong>The verbatim event from Meta:</strong> erased once it is more
                         than 30 days old. The sweep runs once a day, so in practice the age can
@@ -2948,7 +2970,7 @@
                     </li>
                     <li>
                         <strong>Telegram</strong> — delivers the same alerts as Telegram messages, to the chat set in
-                        Settings, when they are switched on.
+                        Settings, when they are switched on, and to the chat of each staff member who linked their own to our Telegram sender account.
                         <a href="https://telegram.org/privacy" target="_blank" rel="noopener noreferrer">Telegram's privacy policy</a>.
                     </li>
                 </ul>

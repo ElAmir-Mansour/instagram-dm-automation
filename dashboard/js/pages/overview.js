@@ -48,6 +48,13 @@
  * come, or is not what was expected, the region stays empty. A tenant that predates profiles (the owner) is measured only on what
  * his setup can hold, so a finished card for him is one line.
  *
+ * ─── Get the workspace live (U3, SA-12) ────────────────────────────────────
+ * For the OWNER of a company workspace, above everything: a short checklist (`GET /api/golive`, `src/services/goLive.ts`) of what is left before it
+ * works for real, one button each, with Hide (and Undo) and, once the test comment has arrived, one "you're live" line for three days. The server
+ * answers `{ show: false }` for the platform owner's own workspace, for a workspace made before the wizard, for everyone but the owner and once it
+ * is hidden: this page draws nothing then. While the card shows, the profile card is not drawn (one to-do card, not two). An operator or a viewer
+ * sees instead, once per browser, a short orientation card (their role in plain words, where to choose how they are told, the inbox).
+ *
  * ─── A screen left open all day ─────────────────────────────────────────────
  * The briefing says when it was computed ("as of 14:05") and has a Refresh.
  * Coming back to the tab after more than `STALE_MS` re-renders it in place:
@@ -134,6 +141,24 @@ const OverviewPage = {
     },
 
     /**
+     * Is this module part of the workspace? `App.hasModule` (the shell's registry). Fails open when it cannot be asked (no `App`, or a session with no
+     * module list), so a screen that cannot ask shows everything, as it always did.
+     */
+    hasModule(id) {
+        if (typeof App === 'undefined' || typeof App.hasModule !== 'function') return true;
+        try {
+            return App.hasModule(id) !== false;
+        } catch (_) {
+            return true;
+        }
+    },
+
+    /** The growth strip: an operator's, and only for a workspace that has the Growth module. */
+    showsGrowth() {
+        return this.canSeeGrowth() && this.hasModule('growth');
+    },
+
+    /**
      * The frame. `App.navigate` paints this inside the view transition, and
      * `render()` fills the `[data-region]` hosts in place rather than
      * replacing the container — which is why the regions can land in any
@@ -141,9 +166,10 @@ const OverviewPage = {
      */
     skeleton() {
         return html`
+            <div data-region="golive"></div>
             <div data-region="profile"></div>
             <div data-region="briefing">${this.briefingSkeleton()}</div>
-            <div data-region="growth">${this.canSeeGrowth() ? this.growthSkeleton() : ''}</div>
+            <div data-region="growth">${this.showsGrowth() ? this.growthSkeleton() : ''}</div>
             <div data-region="stats">${Motion.statsGrid(4)}</div>
             <div data-region="charts">${this.chartSkeleton()}</div>
             <div data-region="recent">
@@ -254,15 +280,25 @@ const OverviewPage = {
         // conversations, and read a different count from the tenant page and the nav badge. One answer, one truth.
         const attentionP = this._settle(API.getAttention());
         const dailyP = this._settle(API.getDailyStats(7));
-        const growth = this.canSeeGrowth();
+        const operator = this.canSeeGrowth();
+        const growth = this.showsGrowth();
         const growthP = growth ? this._settle(API.getGrowthOverview(this.GROWTH_DAYS)) : null;
         const viewsP = growth ? this._settle(API.getGrowthOverview(this.VIEWS_DAYS)) : null;
+        // The go-live checklist (U3): the owner's, and only for a company workspace. It is asked before the profile card because it replaces it.
+        this._goLiveShown = false;
+        this.fillOrientation();
+        const goLiveP = this.askGoLive();
         // The profile card: for an operator or an owner (a viewer's answer is a 403 and the region stays empty).
-        if (growth) {
-            this._settle(API.getProfileProgress()).then((progressRes) => {
+        if (operator) {
+            this._settle(API.getProfileProgress()).then(async (progressRes) => {
+                // One to-do card, not two: when the checklist shows, the profile card waits for its answer and stays out.
+                await goLiveP;
                 if (live()) this.fillProfile(progressRes);
             });
         }
+        goLiveP.then((goLiveRes) => {
+            if (live()) this.fillGoLive(goLiveRes);
+        });
         const goalsP = growth ? this._settle(API.getGrowthSettings()) : null;
 
         // ── The fatal one ───────────────────────────────────────────────────
@@ -349,10 +385,10 @@ const OverviewPage = {
                     <!-- A real heading, so the table is reachable from a
                          heading list rather than being an unnamed region. -->
                     <h2 class="table-title">${t('overview.recent')}</h2>
-                    ${UI.button({
+                    ${this.hasModule('results') ? UI.button({
                         variant: 'secondary', size: 'sm', label: t('common.viewAll'),
                         action: 'app:navigate', data: { target: 'activity' },
-                    })}
+                    }) : ''}
                 </div>
                 <div class="table-wrapper">
                     <table class="data-table">
@@ -369,7 +405,7 @@ const OverviewPage = {
                                     <td dir="auto">${i.trigger_keyword || '—'}</td>
                                     <td>
                                         ${UI.outcomePill(i)}
-                                        ${i.status === 'FAILED' && i.error_log ? html`<span class="cell-note" dir="auto">${i.error_log}</span>` : ''}
+                                        ${i.status === 'FAILED' && i.error_log ? UI.failure({ message: i.error_log, at: i.updated_at }, { next: false }) : ''}
                                     </td>
                                     <td class="nowrap">${UI.formatDate(i.timestamp)}</td>
                                 </tr>
@@ -424,6 +460,209 @@ const OverviewPage = {
         });
     },
 
+    // ─── Get the workspace live (U3, SA-12) ──────────────────────────────────
+
+    /** The checklist's answer, settled, or a resolved null when this session cannot have one (not the owner) or the client cannot ask. */
+    askGoLive() {
+        const owner = typeof App === 'undefined' || typeof App.canAdminister !== 'function' || App.canAdminister();
+        if (!owner || typeof API.getGoLive !== 'function') return Promise.resolve(null);
+        // `#/overview?golive=show` (from Help): bring a hidden checklist back before reading it.
+        const reopen = typeof App !== 'undefined' && typeof App.hashParam === 'function' && App.hashParam('golive') === 'show' && typeof API.undismissGoLive === 'function';
+        const first = reopen ? this._settle(API.undismissGoLive()) : Promise.resolve(null);
+        return first.then(() => this._settle(API.getGoLive()));
+    },
+
+    /** The items the card knows how to word (`golive.item.<id>`), and the optional ones. A name from a response never reaches the page unchecked. */
+    GOLIVE_IDS: ['profile', 'meta', 'test_comment', 'first_reply_on', 'assistant_tested', 'team', 'alerts_chosen'],
+    GOLIVE_OPTIONAL: ['whatsapp', 'youtube'],
+
+    /** Fills the region from a settled `getGoLive()`. Anything but a well-formed `show: true` leaves it empty, and never hurts the page. */
+    fillGoLive(res) {
+        const host = this.region('golive');
+        if (!host) return;
+        const value = res && res.status === 'fulfilled' ? res.value : null;
+        if (!value || value.show !== true || !Array.isArray(value.items)) {
+            this._goLiveShown = false;
+            this._goLive = null;
+            return;
+        }
+        this._goLiveShown = true;
+        this._goLive = value;
+        host.innerHTML = esc(this.renderGoLive(value));
+        UI.icons(host);
+        // One to-do card, not two: the profile card may have landed first.
+        const profile = this.region('profile');
+        if (profile) profile.innerHTML = '';
+    },
+
+    /** The workspace's name for the title, or '' when the session does not carry it. */
+    workspaceName() {
+        const tenant = typeof App !== 'undefined' && typeof App.currentTenant === 'function' ? App.currentTenant() : null;
+        const name = tenant && typeof tenant.name === 'string' ? tenant.name.trim() : '';
+        return name.slice(0, 80);
+    },
+
+    /** Where an item's button goes: a dashboard hash (`#/settings?s=team`) as the page and its query, or null when it is not a screen of this dashboard. */
+    goLiveTarget(href) {
+        if (typeof href !== 'string') return null;
+        const m = /^#\/([a-z_]+)(?:\?([A-Za-z0-9_=&%.-]*))?$/.exec(href);
+        if (!m) return null;
+        return this.isOpenablePage(m[1]) ? { target: m[1], query: m[2] || '' } : null;
+    },
+
+    renderGoLiveItem(item) {
+        const done = item.done === true;
+        const id = item.id;
+        let action = '';
+        if (!done) {
+            if (id === 'profile') {
+                // Only the platform admin opens a workspace's setup from here (as the profile card does); the tenant is sent there by the gate.
+                if (typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin()) {
+                    action = html`<button type="button" class="btn btn-secondary btn-sm" data-action="overview:wizard">${t('golive.do.profile')}</button>`;
+                }
+            } else if (id === 'test_comment') {
+                action = UI.helpLink('go-live#test-comment', t('golive.do.test_comment'));
+            } else {
+                const to = this.goLiveTarget(item.href);
+                if (to) {
+                    action = html`<button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="${to.target}"${to.query ? html` data-query="${to.query}"` : ''}>${t(`golive.do.${id}`)}</button>`;
+                }
+            }
+        }
+        const handle = item.detail && typeof item.detail.handle === 'string' ? item.detail.handle : '';
+        const why = `golive.item.${id}.why`;
+        return html`
+            <li class="golive-item${done ? ' golive-item--done' : ''}" data-item="${id}" data-done="${done ? 'true' : 'false'}">
+                <span class="golive-mark" aria-hidden="true">${done ? '✓' : '○'}</span>
+                <div class="golive-item-body">
+                    <span class="golive-item-title">${t(`golive.item.${id}`)}</span>
+                    <span class="sr-only">${t(done ? 'golive.done' : 'golive.todo')}</span>
+                    ${handle ? html`<span class="golive-detail" dir="ltr">@${handle}</span>` : ''}
+                    ${!done && t(why) !== why ? html`<span class="golive-why">${t(why)}</span>` : ''}
+                </div>
+                ${action}
+            </li>
+        `;
+    },
+
+    renderGoLive(v) {
+        const items = v.items.filter((i) => i && typeof i.id === 'string' && this.GOLIVE_IDS.indexOf(i.id) !== -1);
+        if (v.live === true) {
+            return html`
+                <section class="golive-card golive-card--live surface" aria-label="${t('golive.live')}">
+                    <span class="alert-icon golive-live-icon"><i data-lucide="check-circle" aria-hidden="true"></i></span>
+                    <p class="golive-live-line"><strong>${t('golive.live')}</strong> ${t('golive.liveBody')}</p>
+                </section>
+            `;
+        }
+        const total = Number.isFinite(Number(v.total)) ? Number(v.total) : items.length;
+        const done = Number.isFinite(Number(v.done)) ? Number(v.done) : items.filter((i) => i.done).length;
+        const name = this.workspaceName();
+        const counts = { done: UI.formatNumber(done), total: UI.formatNumber(total) };
+        const title = name ? t('golive.title', Object.assign({ name }, counts)) : t('golive.titleNoName', counts);
+        const optional = (Array.isArray(v.optional) ? v.optional : []).filter((o) => o && this.GOLIVE_OPTIONAL.indexOf(o.id) !== -1 && o.done !== true);
+        return html`
+            <section class="golive-card surface" aria-labelledby="golive-title">
+                <div class="golive-head">
+                    <h2 class="golive-title" id="golive-title" dir="auto">${title}</h2>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="overview:hideGoLive">${t('golive.hide')}</button>
+                </div>
+                <progress class="studio-meter golive-meter" max="${Math.max(1, total)}" value="${Math.min(done, Math.max(1, total))}" aria-label="${title}"></progress>
+                <ul class="golive-items">${items.map((i) => this.renderGoLiveItem(i))}</ul>
+                ${optional.length > 0 ? html`
+                    <p class="golive-optional">${t('golive.optional')}
+                        ${optional.map((o) => {
+                            const to = this.goLiveTarget(o.href);
+                            return to
+                                ? html` <button type="button" class="btn btn-ghost btn-sm" data-action="app:navigate" data-target="${to.target}"${to.query ? html` data-query="${to.query}"` : ''}>${t(`golive.optional.${o.id}`)}</button>`
+                                : '';
+                        })}
+                    </p>` : ''}
+                <p class="form-hint golive-help">${UI.helpLink('go-live', t('golive.help'))}</p>
+            </section>
+        `;
+    },
+
+    /** Hide the checklist, with an Undo: the request is sent at once, and Undo asks for it back. */
+    async hideGoLive(el) {
+        const restore = typeof UI.actionBusy === 'function' ? UI.actionBusy(el) : () => {};
+        if (!restore) return;
+        try {
+            await API.dismissGoLive();
+            const host = this.region('golive');
+            if (host) host.innerHTML = '';
+            this._goLiveShown = false;
+            UI.undoToast(t('golive.hidden'), {
+                onUndo: async () => {
+                    await API.undismissGoLive();
+                    this.fillGoLive(await this._settle(API.getGoLive()));
+                },
+            });
+        } catch (err) {
+            UI.toast(UI.errorText(err).sentence, 'error');
+        } finally {
+            if (typeof restore === 'function') restore();
+        }
+    },
+
+    // ─── The staff orientation card (U3) ────────────────────────────────────
+
+    /** The browser-local key that says this person saw the card: per workspace, and per person ("shared" for the shared password). */
+    orientationKey() {
+        const s = typeof App !== 'undefined' ? App.session : null;
+        if (!s || !s.tenantId) return null;
+        return `orientation_seen:${s.tenantId}:${s.userId || 'shared'}`;
+    },
+
+    /** An operator or a viewer, and not the platform admin: the people the card is for. */
+    orientationRole() {
+        if (typeof App === 'undefined' || !App.session || App.session.role === 'platform_admin' || typeof App.tenantRole !== 'function') return null;
+        const role = App.tenantRole();
+        return role === 'operator' || role === 'viewer' ? role : null;
+    },
+
+    orientationSeen() {
+        const key = this.orientationKey();
+        if (!key) return true;
+        try {
+            return window.localStorage.getItem(key) === '1';
+        } catch (_) {
+            // Storage blocked: show it, once per visit, rather than never.
+            return false;
+        }
+    },
+
+    /** Draws the card into the checklist's region for a staff member who has not seen it. The checklist is the owner's, so the two never meet. */
+    fillOrientation() {
+        const host = this.region('golive');
+        if (!host) return;
+        const role = this.orientationRole();
+        if (!role || this.orientationSeen()) return;
+        host.innerHTML = esc(html`
+            <section class="orientation-card surface" aria-labelledby="orientation-title">
+                <div class="golive-head">
+                    <h2 class="golive-title" id="orientation-title">${t('orientation.title')}</h2>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="overview:closeOrientation" aria-label="${t('orientation.close')}"><i data-lucide="x" aria-hidden="true"></i></button>
+                </div>
+                <p><strong>${t('roles.yours')}: ${t(`roles.${role}`)}.</strong> ${t(`roles.${role}.what`)}</p>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-primary btn-sm" data-action="app:navigate" data-target="settings" data-query="s=notifications">${t('orientation.choose')}</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="inbox">${t('orientation.inbox')}</button>
+                </div>
+            </section>
+        `);
+        UI.icons(host);
+    },
+
+    closeOrientation() {
+        const key = this.orientationKey();
+        if (key) {
+            try { window.localStorage.setItem(key, '1'); } catch (_) { /* seen for this visit only */ }
+        }
+        const host = this.region('golive');
+        if (host) host.innerHTML = '';
+    },
+
     // ─── The profile card (P30) ──────────────────────────────────────────────
 
     /** The lucide icon of each action, by id: names the icon subset already carries. */
@@ -442,6 +681,10 @@ const OverviewPage = {
     fillProfile(progressRes) {
         const host = this.region('profile');
         if (!host) return;
+        if (this._goLiveShown) {
+            host.innerHTML = '';
+            return;
+        }
         const value = progressRes && progressRes.status === 'fulfilled' ? progressRes.value : null;
         if (!value || typeof value !== 'object' || !Number.isFinite(Number(value.percent))) {
             host.innerHTML = '';
@@ -491,7 +734,12 @@ const OverviewPage = {
     isOpenablePage(target) {
         if (typeof target !== 'string' || typeof App === 'undefined' || !App.pages) return false;
         const entry = Object.prototype.hasOwnProperty.call(App.pages, target) ? App.pages[target] : null;
-        return !!entry && entry.routable !== false && !entry.adminOnly;
+        if (!entry || entry.routable === false || entry.adminOnly) return false;
+        // U3: a screen of a module this workspace does not have is not offered (the shell's registry, when it is on the page).
+        if (typeof Shell !== 'undefined' && Shell && typeof Shell.canSee === 'function' && typeof App.shellContext === 'function') {
+            try { return Shell.canSee(target, App.shellContext()) !== false; } catch (_) { return true; }
+        }
+        return true;
     },
 
     renderProfileAction(action, canEdit) {
@@ -1542,4 +1790,6 @@ UI.registerActions('overview', {
     clear: (el) => OverviewPage.clear(el),
     ask: (el) => OverviewPage.askProfile(el),
     wizard: () => OverviewPage.openWizard(),
+    hideGoLive: (el) => { OverviewPage.hideGoLive(el).catch((err) => console.warn('Hiding the checklist failed:', err)); },
+    closeOrientation: () => OverviewPage.closeOrientation(),
 });

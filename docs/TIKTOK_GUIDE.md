@@ -633,7 +633,7 @@ browser's address bar; the phone, with TikTok open on the profile.
 |---|---|---|
 | 1 | `https://msg-response-auto.vercel.app/` in the browser | the address bar — this is "the domain" |
 | 2 | Log in to `/dashboard` | the workspace name — and the tenant switcher, if the demo login belongs to more than one workspace |
-| 3 | Settings → Connections → TikTok → **Connect TikTok** | the section before connecting |
+| 3 | Settings → Channels → TikTok → **Connect TikTok** | the section before connecting |
 | 4 | TikTok's authorisation page | the app name "AutoReply Pro" and the scopes; log in and authorise |
 | 5 | Back on Settings | "TikTok connected.", the **Connected** pill, the account name, the three **Permissions** chips |
 | 6 | Posts Scheduler → new post → Platform **TikTok**, Type **Video**, upload, write a caption | the upload finishing |

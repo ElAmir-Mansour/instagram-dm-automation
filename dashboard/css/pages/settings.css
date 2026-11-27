@@ -168,3 +168,35 @@ details[open] > summary .settings-health-more [data-lucide] { transform: rotate(
     color: var(--danger-text);
 }
 .settings-danger-title [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
+
+/* ─── Scope notes and Team (U3) ──────────────────────────────────────────────
+   A tab that mixes scopes (Notifications: "You", "This workspace") says which above each card, in words, quietly. Team is a list of people:
+   who, when they came in, and what can be done, wrapping on a phone with every button still a tap target. */
+.settings-scope-note {
+    margin: 0 0 var(--space-2);
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+}
+.team-count { color: var(--text-muted); font-weight: var(--fw-regular); }
+.team-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.team-member {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'main actions' 'meta actions';
+    column-gap: var(--space-4);
+    row-gap: var(--space-1);
+    align-items: center;
+    padding-block: var(--space-3);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.team-member:last-child { border-block-end: 0; }
+.team-member-main { grid-area: main; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-inline-size: 0; }
+.team-member-email { overflow-wrap: anywhere; color: var(--text-strong); }
+.team-member-meta { grid-area: meta; margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.team-member-actions { grid-area: actions; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.team-role-select { min-inline-size: 8rem; }
+@media (max-width: 640px) {
+    .team-member { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'main' 'meta' 'actions'; }
+    .team-member-actions { justify-content: flex-start; }
+}

@@ -59,3 +59,22 @@
 .alert-card .alert-reasons li + li { margin-block-start: var(--space-1); }
 .alert-card .alert-clear { margin-block: var(--space-1) var(--space-2); }
 .alert-card .alert-clear-line { margin-block: 0 var(--space-2); }
+
+/* Get the workspace live (U3, SA-12): the owner's checklist above the briefing, and the staff orientation card in the same place. One row per item:
+   a mark (✓ or ○, so done is a shape and not only a colour), what it is, and one button. The row wraps on a phone: the button drops under the words. */
+.golive-card, .orientation-card { display: grid; gap: var(--space-3); padding: var(--space-4); margin-block-end: var(--space-5); }
+.golive-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); }
+.golive-title { font-size: var(--fs-400); margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
+.golive-meter { inline-size: 100%; }
+.golive-items { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.golive-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-block-size: 44px; }
+.golive-mark { flex: none; inline-size: 24px; text-align: center; font-weight: var(--fw-bold); color: var(--text-muted); }
+.golive-item--done .golive-mark { color: var(--success-text); }
+.golive-item-body { display: grid; flex: 1 1 14rem; min-inline-size: 0; }
+.golive-item-title { font-weight: var(--fw-semibold); color: var(--text-strong); }
+.golive-item--done .golive-item-title { font-weight: var(--fw-regular); color: var(--text-muted); }
+.golive-detail, .golive-why { font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; }
+.golive-optional, .golive-help { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.golive-card--live { display: flex; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
+.golive-live-line { margin: 0; }
+.orientation-card p { margin: 0; }

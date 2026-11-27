@@ -32,9 +32,11 @@ export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * What a state is for, stored in `oauth_states.platform`: a state minted for one purpose cannot be spent for another.
- * `meta_pick` is not a platform: it is the second half of the Meta flow, the Pages waiting for a choice.
+ * `meta_pick` is not a platform: it is the second half of the Meta flow, the Pages waiting for a choice. `telegram` is not an OAuth flow at all:
+ * it is the one-time code a person sends to the platform's bot to link their own chat (`telegramLink.ts`); it uses the table for the
+ * single-use, short-lived, tenant- and user-bound row, and nothing else of it (no cookie, no return address, no payload).
  */
-export type OAuthPurpose = 'tiktok' | 'youtube' | 'meta' | 'meta_pick';
+export type OAuthPurpose = 'tiktok' | 'youtube' | 'meta' | 'meta_pick' | 'telegram';
 
 /** Where the callback sends the browser back to. The dashboard's router reads the outcome from the hash query of either. */
 export type OAuthReturnTo = 'settings' | 'welcome';
@@ -152,6 +154,21 @@ export async function consumeOAuthState(nonce: string, purpose: OAuthPurpose): P
         [nonce, purpose]
     );
     return row ? toConsumed(row) : null;
+}
+
+/**
+ * Is this state still waiting for ITS person: minted for this purpose, for this tenant and this user, not spent, not expired? A read that
+ * spends nothing, for the Telegram link, whose code is "spent" only when the person's message is found (`consumeOAuthState`).
+ */
+export async function isOAuthStateLive(nonce: string, purpose: OAuthPurpose, creatorId: string, userId: string | null): Promise<boolean> {
+    if (!NONCE_PATTERN.test(nonce)) return false;
+    const row = await queryOne<{ ok: number }>(
+        `SELECT 1 AS ok FROM oauth_states
+          WHERE nonce = $1 AND platform = $2 AND creator_id = $3 AND user_id IS NOT DISTINCT FROM $4::uuid
+            AND used_at IS NULL AND expires_at > NOW()`,
+        [nonce, purpose, creatorId, userId]
+    );
+    return row !== null;
 }
 
 /**

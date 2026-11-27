@@ -1,8 +1,8 @@
 /**
- * Settings → Instagram ice breakers and persistent menu (docs/DM_SALES_PLAN.md S13): the owner's buttons for a new chat, as an editor,
- * and the one button that puts them on Instagram.
+ * Instagram ice breakers and persistent menu (docs/DM_SALES_PLAN.md S13): the owner's buttons for a new chat, as an editor,
+ * and the one button that puts them on Instagram. It lives on the DM assistant page since U3 (it was a Settings card).
  *
- * Not a route. The Settings page loads this module on first use (`App.loadPageModule('ice_breakers')`, like `meta_connect`) and calls
+ * Not a route. The DM assistant page loads this module on first use (`App.loadPageModule('ice_breakers')`, like `meta_connect`) and calls
  * `section()`; every later change repaints the card's own element, never the whole page, so a half-typed question survives it.
  *
  * Three separate things, never blurred:

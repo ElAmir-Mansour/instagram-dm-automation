@@ -207,6 +207,79 @@ export async function sendTelegramMessage(to: { token: string; chatId: string },
     }
 }
 
+/** What `getMe` and `getUpdates` answer with when they fail: the same reduction as `SendResult`, never an error object. */
+export type TelegramCallFailure = { ok: false; reason: 'rejected' | 'unreachable'; status: number | null; description: string };
+
+/** One failed call as a scrubbed status and description (see the top of the file: the token is in the URL of every call). */
+function reduceFailure(err: unknown, token: string): TelegramCallFailure {
+    const e = err as { response?: { status?: unknown; data?: { description?: unknown } }; code?: unknown };
+    const status = typeof e?.response?.status === 'number' ? e.response.status : null;
+    if (status !== null) {
+        return { ok: false, reason: 'rejected', status, description: describe(e.response?.data?.description, token) || `HTTP ${status}` };
+    }
+    return { ok: false, reason: 'unreachable', status: null, description: typeof e?.code === 'string' ? e.code.slice(0, 40) : 'network error' };
+}
+
+/**
+ * The bot's own username (`getMe`), for the link a person opens (`https://t.me/<username>?start=<code>`). NEVER throws and never returns an
+ * error object: a failure is a status and a scrubbed description.
+ */
+export async function telegramGetMe(token: string): Promise<{ ok: true; username: string } | TelegramCallFailure> {
+    try {
+        const response = await telegramHttp.get(`/bot${token}/getMe`);
+        const data = response?.data;
+        if (data && data.ok === false) {
+            return { ok: false, reason: 'rejected', status: Number(data.error_code) || null, description: describe(data.description, token) };
+        }
+        const username = data?.result?.username;
+        if (typeof username !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{2,63}$/.test(username)) {
+            return { ok: false, reason: 'rejected', status: null, description: 'the bot has no username' };
+        }
+        return { ok: true, username };
+    } catch (err) {
+        return reduceFailure(err, token);
+    }
+}
+
+/** The slice of a Telegram `message` that linking reads. Everything else is dropped here, so nothing else can reach a log or an answer. */
+export interface TelegramInboundMessage {
+    chatId: string;
+    chatType: string;
+    text: string;
+    firstName: string;
+}
+
+/**
+ * The bot's pending messages (`getUpdates`), for linking a person's chat. **No `offset`, on purpose**: an offset confirms every update
+ * before it, so one person's `/start` would acknowledge (and lose) everybody else's still waiting to be read. The updates stay for
+ * Telegram's own 24 h and are read again by the next call. Only `message` updates are asked for; at most 100 come back. This fails with a
+ * 409 for as long as the bot has a webhook set (RUNBOOK): linking is for a bot without one.
+ */
+export async function telegramGetUpdates(token: string): Promise<{ ok: true; messages: TelegramInboundMessage[] } | TelegramCallFailure> {
+    try {
+        const response = await telegramHttp.get(`/bot${token}/getUpdates`, { params: { allowed_updates: JSON.stringify(['message']), limit: 100 } });
+        const data = response?.data;
+        if (data && data.ok === false) {
+            return { ok: false, reason: 'rejected', status: Number(data.error_code) || null, description: describe(data.description, token) };
+        }
+        const result: unknown[] = Array.isArray(data?.result) ? data.result : [];
+        const messages: TelegramInboundMessage[] = [];
+        for (const update of result) {
+            const m = (update as { message?: { text?: unknown; chat?: { id?: unknown; type?: unknown }; from?: { first_name?: unknown } } })?.message;
+            if (!m || typeof m.text !== 'string' || m.chat?.id === undefined || m.chat?.id === null) continue;
+            messages.push({
+                chatId: String(m.chat.id),
+                chatType: typeof m.chat.type === 'string' ? m.chat.type : '',
+                text: m.text,
+                firstName: typeof m.from?.first_name === 'string' ? m.from.first_name : '',
+            });
+        }
+        return { ok: true, messages };
+    } catch (err) {
+        return reduceFailure(err, token);
+    }
+}
+
 function describe(description: unknown, token: string): string {
     return typeof description === 'string' ? scrub(description, token).replace(/\s+/g, ' ').trim().slice(0, 200) : '';
 }

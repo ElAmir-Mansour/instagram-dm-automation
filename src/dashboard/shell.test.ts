@@ -164,12 +164,13 @@ describe('shell: with every module on, the menu is what it was (I3)', () => {
         assert.deepEqual(plain(Shell.phoneSlots(ctx(null, 'owner'))), ['overview', 'inbox', 'posts', 'studio', 'more']);
     });
 
-    it('lists 28 Help articles and today’s popular ones, for the platform admin on an all-on workspace', () => {
+    it('lists 31 Help articles and today’s popular ones, for the platform admin on an all-on workspace', () => {
         const h = loadDashboard({ app: true, files: ['dashboard/js/help-content.js', 'dashboard/js/pages/help.js'] });
         h.App.session = { available: true, role: 'platform_admin', userId: 'u', tenantId: 't', tenantRole: 'owner', tenants: [{ id: 't' }], onboarding: null, modules: ALL };
         const Help = h.run<Json>('HelpPage');
-        assert.equal(Help.articles().length, 28);
-        assert.equal(Help.allArticles().length, 28);
+        // 27 plus U3's `team`, `go-live` and `notifications` (no module: every workspace sees them) and `workspaces` (platform admin only).
+        assert.equal(Help.articles().length, 31);
+        assert.equal(Help.allArticles().length, 31);
         const popular = [...String(Help.welcomeMarkup()).matchAll(/class="help-card" href="#\/help\/([a-z-]+)"/g)].map((m) => m[1]);
         assert.deepEqual(popular, plain(h.run<Json>('HelpContent').popular));
     });
@@ -263,13 +264,13 @@ describe('shell: Help follows the modules', () => {
         const shown = Help.articles().map((a: Json) => a.slug);
         const all = Help.allArticles().map((a: Json) => a.slug);
         assert.deepEqual(plain(all.filter((s: string) => !shown.includes(s)).sort()), [...OFF_FOR_COMPANY, 'media-storage', 'workspaces'].sort());
-        assert.equal(shown.length, 28 - 18);
+        assert.equal(shown.length, 31 - 18);
     });
 
     it('shows the platform’s articles to the admin even on a company workspace', () => {
         const { Help } = help(COMPANY, true);
         assert.ok(Help.articles().some((a: Json) => a.slug === 'media-storage'));
-        assert.equal(Help.articles().length, 28 - 16);
+        assert.equal(Help.articles().length, 31 - 16);
     });
 
     it('tops the front page up to four from the fallback when a company has fewer than four popular ones', () => {

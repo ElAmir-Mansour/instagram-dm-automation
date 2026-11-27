@@ -13,14 +13,47 @@
  * Copy link, and Send on WhatsApp: `https://wa.me/?text=…` with the message the server wrote (the operator's own template
  * from Settings → Onboarding, or the built-in one in the link's language). There is no email: this product sends none.
  *
+ * ─── Two scopes (U3) ────────────────────────────────────────────────────────
+ * `context.scope` is `'admin'` (the default: the platform admin's routes for a tenant, as before) or `'team'` (the workspace owner's
+ * own `/api/team` routes: the tenant is the session's, so there is no `tenantId`). The scope picks the endpoints (`api(scope)`), whether the
+ * form offers "same as the default" roles (the admin) or defaults to Operator (the team), and which Help article the link points to.
+ * `context.todo` is a list of i18n keys, drawn as a checklist under the link (what the person who made it still has to do).
+ *
  * ─── Escaping ───────────────────────────────────────────────────────────────
  * The tenant's name, an invite's address and the link itself come from the server or from the operator, and go through
  * `html` like everything else; the WhatsApp URL goes through `safeUrl`. The markup functions are pure, so a test can feed
  * a payload into each.
  */
 const InviteCard = {
-    /** What the open dialog shows: `{ invite, tenantId, tenantName, lang, title, onChange }`. */
+    /** What the open dialog shows: `{ invite, tenantId, tenantName, lang, title, onChange, scope, todo }`. */
     current: null,
+
+    /** The scope of the open dialog, or of the list it was opened from: `'team'` or (the default) `'admin'`. */
+    scope(state) {
+        const own = state && state.scope;
+        const from = own || (this.current && this.current.scope) || (this.listContext && this.listContext.scope);
+        return from === 'team' ? 'team' : 'admin';
+    },
+
+    /** The calls each scope makes. The admin's take a tenant; the team's never do (the session's workspace is the tenant). */
+    api(scope) {
+        if (scope === 'team') {
+            return {
+                create: (state, body) => API.createTeamInvite(Object.assign({ role: 'operator' }, body)),
+                regenerate: (id, body) => API.regenerateTeamInvite(id, body),
+                revoke: (id) => API.revokeTeamInvite(id),
+                reset: (state, member, body) => API.createResetLink(member.userId, body),
+                list: () => API.getTeam(),
+            };
+        }
+        return {
+            create: (state, body) => API.createTenantInvite(state.tenantId, body),
+            regenerate: (id, body) => API.regenerateInvite(id, body),
+            revoke: (id) => API.revokeInvite(id),
+            reset: (state, member, body) => API.createTenantInvite(state.tenantId, Object.assign({ purpose: 'reset', user_id: member.userId }, body)),
+            list: (state) => API.getTenantInvites(state.tenantId),
+        };
+    },
 
     // ─── Markup (pure) ───────────────────────────────────────────────────────
 
@@ -88,12 +121,29 @@ const InviteCard = {
                 ${isReset ? '' : Admin.field(t('invites.joinsAs'), Admin.roleChip(invite.role))}
                 ${Admin.field(t('invites.expires'), UI.formatDay(invite.expires_at))}
             </dl>
-            <p class="form-hint">${t('invites.shownOnce')} ${UI.helpLink('onboarding#invite', t('help.link.onboardingInvite'), { newTab: true })}</p>
+            ${this.todoView(state.todo)}
+            <p class="form-hint">${t('invites.shownOnce')} ${this.scope(state) === 'team'
+                ? UI.helpLink('team#invite', t('settings.team.helpInvite'), { newTab: true })
+                : UI.helpLink('onboarding#invite', t('help.link.onboardingInvite'), { newTab: true })}</p>
             <div class="modal-actions invite-card-footer">
                 ${UI.button({ variant: 'danger', icon: 'ban', label: t('invites.revoke'), action: 'inviteCard:revoke', data: { id: invite.id } })}
                 ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('invites.regenerate'), action: 'inviteCard:regenerate', data: { id: invite.id } })}
                 ${UI.button({ variant: 'primary', label: t('invites.done'), action: 'inviteCard:done' })}
             </div>
+        `;
+    },
+
+    /** What the person who made the link still has to do, as a checklist of i18n keys (empty: nothing is drawn). */
+    todoView(todo) {
+        const keys = Array.isArray(todo) ? todo.filter((key) => typeof key === 'string' && key) : [];
+        if (keys.length === 0) return '';
+        return html`
+            <section class="invite-card-todo" aria-labelledby="invite-card-todo-title">
+                <h3 class="subsection-title" id="invite-card-todo-title">${t('settings.team.todoTitle')}</h3>
+                <ul class="invite-card-todo-list">
+                    ${keys.map((key) => html`<li dir="auto">${t(key)}</li>`)}
+                </ul>
+            </section>
         `;
     },
 
@@ -115,9 +165,10 @@ const InviteCard = {
                     <div class="form-group">
                         <label class="form-label" for="invite-create-role">${t('invites.role')}</label>
                         <select class="select" id="invite-create-role" name="role">
-                            <option value="" selected>${t('invites.roleDefault')}</option>
-                            ${Admin.TENANT_ROLES.map((role) => html`<option value="${role}">${t(`roles.${role}`)}</option>`)}
+                            ${this.scope(state) === 'team' ? '' : html`<option value="" selected>${t('invites.roleDefault')}</option>`}
+                            ${Admin.TENANT_ROLES.map((role) => html`<option value="${role}" ${this.scope(state) === 'team' && role === 'operator' ? html.raw('selected') : ''}>${t(`roles.${role}`)}</option>`)}
                         </select>
+                        ${this.scope(state) === 'team' ? html`<p class="form-hint" id="invite-create-role-what">${t('settings.team.roleWhat')}</p>` : ''}
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="invite-create-lang">${t('invites.lang')}</label>
@@ -199,7 +250,7 @@ const InviteCard = {
     /** A reset link for one member: nothing changes until they use it, so it is made at once. */
     async openReset(context, member) {
         try {
-            const result = await API.createTenantInvite(context.tenantId, Object.assign({ purpose: 'reset', user_id: member.userId }, context.lang ? { lang: context.lang } : {}));
+            const result = await this.api(this.scope(context)).reset(context, member, context.lang ? { lang: context.lang } : {});
             this.showCreated(result.invite, Object.assign({}, context, { changed: true }));
         } catch (err) {
             UI.toast(this.describe(err), 'error');
@@ -211,6 +262,8 @@ const InviteCard = {
         const code = err && err.body && err.body.code;
         const known = ['TENANT_INACTIVE', 'USER_IS_ADMIN', 'NOT_A_MEMBER', 'USER_DISABLED', 'BAD_EMAIL', 'INVITE_USED', 'PUBLIC_URL_UNKNOWN'];
         if (known.includes(code)) return t(`invites.err.${code}`);
+        // The Team routes' own refusals (U3), worded by the Team screen.
+        if (['LAST_OWNER', 'MEMBER_IS_ADMIN', 'MEMBER_NOT_FOUND', 'ROLE_INVALID', 'NO_USER_ACCOUNT'].includes(code)) return t(`settings.team.err.${code}`);
         return (err && err.message) || t('invites.err.generic');
     },
 
@@ -229,7 +282,7 @@ const InviteCard = {
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         try {
-            const result = await API.createTenantInvite(this.current.tenantId, body);
+            const result = await this.api(this.scope()).create(this.current, body);
             this.showCreated(result.invite, Object.assign({}, this.current, { lang, changed: true }));
         } catch (err) {
             restore();
@@ -243,7 +296,7 @@ const InviteCard = {
         const restore = UI.actionBusy(button);
         if (!restore) return;
         try {
-            const result = await API.regenerateInvite(id, lang ? { lang } : {});
+            const result = await this.api(this.scope()).regenerate(id, lang ? { lang } : {});
             // From a list the dialog has no context of its own: the tenant is the page that is open.
             const context = this.current || this.listContext || {};
             this.showCreated(result.invite, Object.assign({}, context, { lang, changed: true, title: t('invites.regeneratedTitle') }));
@@ -264,7 +317,7 @@ const InviteCard = {
             confirmLabel: t('invites.revoke'),
             confirmIcon: 'ban',
             onConfirm: async () => {
-                await API.revokeInvite(id || (invite && invite.id));
+                await this.api(this.scope()).revoke(id || (invite && invite.id));
                 UI.toast(t('invites.revoked'), 'success');
                 // The confirm dialog closes itself when this resolves; what is left is telling the opener.
                 this.settle(true, false);

@@ -336,6 +336,18 @@ const API = {
         method: 'POST', body: JSON.stringify({ currentPassword, newPassword }),
     }),
 
+    // Sign out everywhere (U3): every other session of this account ends; the answer carries the token that keeps THIS one.
+    signOutEverywhere: () => API.request('/account/sign-out-everywhere', { method: 'POST' }),
+
+    // Team (U3): the workspace owner's people. `createTeamInvite` and `createResetLink` answer with the link ONCE, in `invite.url`.
+    getTeam: () => API.request('/team'),
+    createTeamInvite: (data) => API.request('/team/invites', { method: 'POST', body: JSON.stringify(data) }),
+    regenerateTeamInvite: (id, data) => API.request(`/team/invites/${encodeURIComponent(id)}/regenerate`, { method: 'POST', body: JSON.stringify(data || {}) }),
+    revokeTeamInvite: (id) => API.request(`/team/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    changeTeamRole: (userId, role) => API.request(`/team/members/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+    removeTeamMember: (userId) => API.request(`/team/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    createResetLink: (userId, data) => API.request(`/team/members/${encodeURIComponent(userId)}/reset-link`, { method: 'POST', body: JSON.stringify(data || {}) }),
+
     // Job queue
     getAdminJobs: (params = {}) => {
         const query = new URLSearchParams(
@@ -589,6 +601,17 @@ const API = {
     getStudioStatus: () => API.request('/studio/status'),
     /** What needs the owner, from columns only (src/services/attention.ts): the Studio's items and `counts.studio` are read from it. */
     getAttention: () => API.request('/attention'),
+    // U3 (notify_card.js, overview.js): how each person is told, and the owner's go-live checklist.
+    getNotifyMe: () => API.request('/notify/me'),
+    startTelegramLink: () => API.request('/notify/telegram/link', { method: 'POST' }),
+    confirmTelegramLink: (code) => API.request('/notify/telegram/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+    setNotifyPaused: (paused) => API.request('/notify/me', { method: 'PATCH', body: JSON.stringify({ paused: paused === true }) }),
+    unlinkTelegram: () => API.request('/notify/telegram', { method: 'DELETE' }),
+    getNotifyRouting: () => API.request('/notify/routing'),
+    saveNotifyRouting: (routing) => API.request('/notify/routing', { method: 'PUT', body: JSON.stringify(routing) }),
+    getGoLive: () => API.request('/golive'),
+    dismissGoLive: () => API.request('/golive/dismiss', { method: 'POST' }),
+    undismissGoLive: () => API.request('/golive/dismiss', { method: 'DELETE' }),
     getStudioLessons: () => API.request('/studio/lessons'),
     getStudioLesson: (id) => API.request(`/studio/lessons/${encodeURIComponent(id)}`),
     scanStudioLibrary: () => API.request('/studio/scan', { method: 'POST' }),

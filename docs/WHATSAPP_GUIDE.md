@@ -105,7 +105,7 @@ Snags met on 2026-10-19:
 
 ## 2. Connect the number in the dashboard
 
-Dashboard → **Settings → Connections** → the WhatsApp card (owner only):
+Dashboard → **Settings → Channels** → the WhatsApp card (owner only):
 
 1. **WhatsApp Business Account ID** and **Phone number ID** from §1.2.
 2. **Access token**: paste the system-user token (a password field; it is never shown again, never returned by the API).
@@ -136,7 +136,7 @@ Connect errors and what they mean:
 
 ## 3. The first test (agent still off)
 
-1. Settings → Connections → WhatsApp card → **Who the assistant answers: Test senders only**, and add **your own phone** in international digits without `+`
+1. Settings → Channels → WhatsApp card → **Who the assistant answers: Test senders only**, and add **your own phone** in international digits without `+`
    (e.g. `9665XXXXXXXX` or `2010XXXXXXXX`). The list also accepts WhatsApp user ids (`EG.…`) shown on a thread.
 2. From that phone, message the test number.
 3. **Expected**: the conversation appears in the **Inbox** within seconds, with your name and text; **no reply arrives**

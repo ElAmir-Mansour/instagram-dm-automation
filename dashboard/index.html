@@ -189,21 +189,21 @@
                 <div class="login-logo">
                     <div class="login-mark"><svg viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect class="mark-tile" width="256" height="256" rx="64"/><path class="mark-glyph" d="M72 56H136V152H40V120H104V88H72ZM168 56H200V178.51L158.51 220H113.25L168 165.25Z"/></svg></div>
                     <h1 class="login-title" data-i18n="login.title">أوتوريبلاي برو</h1>
-                    <p class="login-subtitle" data-i18n="login.subtitle" data-i18n-kw="login.subtitleKw">استوديو <span class="kw">نموّ</span> لصنّاع المحتوى العرب</p>
+                    <p class="login-subtitle" data-i18n="login.subtitle" data-i18n-kw="login.subtitleKw">الردود والمنشورات و<span class="kw">المحادثات</span> في مكان واحد</p>
                 </div>
                 <form id="login-form" class="login-form">
-                    <!-- Optional. Hidden by default so the shared-password path —
-                         still the operator's only way in — stays a one-field form. -->
-                    <div id="login-email-group" class="form-group hidden">
+                    <!-- The form opens on email (U3). App.applyLoginMode hides this group, and drops `required`, for the shared platform
+                         password, which stays the one-field form it always was; `login_mode` in localStorage remembers the choice. -->
+                    <div id="login-email-group" class="form-group">
                         <label class="form-label" for="login-email" data-i18n="login.email">البريد الإلكتروني</label>
                         <div class="input-affix">
                             <i data-lucide="mail" aria-hidden="true"></i>
-                            <input class="field" type="email" id="login-email" autocomplete="username"
+                            <input class="field" type="email" id="login-email" autocomplete="username" required
                                    data-i18n-attr="placeholder:login.emailPlaceholder" placeholder="you@example.com">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="login-password" data-i18n="login.password">كلمة مرور اللوحة</label>
+                        <label class="form-label" for="login-password" id="login-password-label" data-i18n="login.password">كلمة المرور</label>
                         <div class="input-affix">
                             <i data-lucide="lock" aria-hidden="true"></i>
                             <input class="field" type="password" id="login-password" autocomplete="current-password" required
@@ -222,10 +222,13 @@
                         <span data-i18n="login.submit">تسجيل الدخول</span>
                     </button>
                     <p id="login-error" class="login-error hidden" role="alert"></p>
-                    <button type="button" id="login-email-toggle" class="login-alt-link"
-                            data-action="app:revealEmailField" data-i18n="login.useAccount">الدخول بحساب بريد إلكتروني</button>
+                    <p class="login-forgot" data-i18n="login.forgot">نسيت كلمة المرور؟ اطلب رابط إعادة التعيين من مالك مساحة العمل.</p>
+                    <!-- One link, the one that is not the current form: this one is for the shared platform password (shown with the email field)... -->
                     <button type="button" class="login-alt-link login-use-password"
-                            data-action="app:useSharedPassword" data-i18n="login.usePassword">استخدام كلمة مرور اللوحة بدلًا من ذلك</button>
+                            data-action="app:useSharedPassword" data-i18n="login.platformSignIn">الدخول بكلمة مرور المنصة</button>
+                    <!-- ...and this one is the way back to email (shown with the platform form). -->
+                    <button type="button" id="login-email-toggle" class="login-alt-link hidden"
+                            data-action="app:revealEmailField" data-i18n="login.useAccount">الدخول ببريدك الإلكتروني</button>
                 </form>
             </div>
         </div>
@@ -419,6 +422,12 @@
                         <span class="sr-only" data-i18n="nav.account.signedInAs">تسجيل الدخول باسم</span>
                         <span class="nav-identity-text" id="nav-identity-text"></span>
                     </p>
+                    <!-- Your settings (U3): the You tab of Settings. Every session has one (language and theme at least). Not an <a data-page>, so the
+                         sidebar's page links stay what they were. -->
+                    <button id="you-btn" type="button" class="nav-item" data-action="app:openYourSettings">
+                        <i data-lucide="settings" aria-hidden="true"></i>
+                        <span data-i18n="nav.account.yourSettings">إعداداتك</span>
+                    </button>
                     <!-- Your own password. Hidden for the shared-password path, which has no user identity for POST /api/auth/password
                          to change. It lives here, not on the admin-only Users page, because an ORDINARY user is exactly who needs it. -->
                     <button id="password-btn" type="button" class="nav-item hidden" data-user-only

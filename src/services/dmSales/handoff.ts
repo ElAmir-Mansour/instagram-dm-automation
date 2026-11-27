@@ -27,8 +27,11 @@
  * learn what buying costs, or whether it fits them). They are for the owner to follow up personally, they do not pause the bot, and
  * they are switched off on their own, per channel (`notify.telegram_hot_leads`: on unless turned off; `notify.email_hot_leads`: off unless turned on).
  *
- * **Alerts are the platform owner's.** The chat is configured once, for the deployment (`app_settings`). Until a tenant can have a
- * channel of its own, a customer of any other tenant is never sent to it: that tenant gets the inbox flag and the badge only.
+ * **The deployment's channels are the platform owner's.** The chat is configured once, for the deployment (`app_settings`). A customer of any
+ * other tenant is never sent to it. What another workspace has instead (U3, `notifyPeople.ts`): each of its people can link THEIR OWN Telegram
+ * chat to the platform's bot, and its owner chooses who covers handoffs and hot leads. `notifyOwner` runs both at once: the platform owner's
+ * alert (`notifyPlatformOwner`, exactly as it was) and the workspace's people (`notifyPeople`, which reads nothing until the platform has a
+ * bot token). A tenant nobody linked gets the inbox flag and the badge only, as before.
  *
  * **Rate limited per conversation**, in Postgres (`rate_limit_counters`, the same table the send quotas use), so the number holds
  * across serverless instances: at most 3 handoff alerts and 1 hot-lead alert for one conversation in an hour.
@@ -41,6 +44,7 @@ import {
     buildNoticeText, inboxLink, sendTelegramMessage, telegramReady, windowRemainingMs, type NoticeInput, type NoticeKind, type NoticeLang,
 } from '../notify.js';
 import { emailReady, readNotifyChannels, redactAddresses, sendEmailNotice } from '../notifyEmail.js';
+import { notifyPeople } from '../notifyPeople.js';
 import { getPlatformOwnerId } from '../tenant.js';
 import type { TurnDecision } from './flow.js';
 import type { HandoffReason, Intent } from './types.js';
@@ -116,18 +120,93 @@ interface ConversationFacts {
 /** The alert's language: the profile's own when it is Arabic, English otherwise. */
 export const noticeLang = (code: string): NoticeLang => (code === 'ar' ? 'ar' : 'en');
 
+/** The bucket one conversation's alerts to the workspace's people are counted in: apart from the owner's, so neither spends the other's allowance. */
+const peopleBucket = (plan: NoticePlan, conversationId: string): string =>
+    plan.kind === 'handoff' ? `notify_people:${conversationId}` : `notify_people_hot:${conversationId}`;
+
 /**
- * Tell the owner. NEVER throws, whatever fails: see the top of the file. Order of the checks is cheapest first and the one that spends
- * the conversation's hourly allowance last, so a turn that cannot alert (alerts off, someone else's tenant) spends nothing.
+ * Tell whoever should know. NEVER throws, whatever fails: see the top of the file. The deployment's channels are read ONCE and shared: the
+ * platform owner's own alert (`notifyPlatformOwner`) and the workspace's people (`notifyPeople`) run side by side, neither waiting for the
+ * other, and the notice's words are built once for both. `'sent'` when either sent; otherwise what the platform owner's alert says, so with
+ * nobody linked the outcomes are exactly what they were.
  */
 export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
     const plan = req.plan;
     if (!plan) return 'off';
     const logBase = { conversation_id: req.conversationId, kind: plan.kind, reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead' };
     try {
-        // Both channels' settings, in one round trip. A channel takes this alert when it is on and complete, and, for a hot lead, when its
+        const channels = await readNotifyChannels();
+        const noticeOf = once(() => loadNotice(req, plan, logBase));
+        const [platform, people] = await Promise.all([
+            notifyPlatformOwner(req, plan, channels, noticeOf, logBase),
+            notifyPeople({
+                creatorId: req.creatorId,
+                kind: plan.kind,
+                bucket: peopleBucket(plan, req.conversationId),
+                limit: plan.kind === 'handoff' ? HANDOFF_ALERTS_PER_HOUR : HOT_LEAD_ALERTS_PER_HOUR,
+                telegram: channels.telegram,
+                notice: noticeOf,
+                logBase,
+            }),
+        ]);
+        return platform === 'sent' || people === 'sent' ? 'sent' : platform;
+    } catch (err) {
+        log('warn', 'dm.handoff_notify_error', { ...logBase, ...describeError(err) });
+        return 'error';
+    }
+}
+
+/** A value computed at most once, on the first ask: the notice is built by whichever of the two paths needs it first. */
+function once<T>(make: () => Promise<T>): () => Promise<T> {
+    let pending: Promise<T> | null = null;
+    return () => (pending ??= make());
+}
+
+/** The notice for a conversation: who, why, what they last wrote, the window and the link. Null when the conversation is gone. */
+async function loadNotice(req: NoticeRequest, plan: NonNullable<NoticeRequest['plan']>, logBase: Record<string, unknown>): Promise<NoticeInput | null> {
+    const facts = await queryOne<ConversationFacts>(
+        `SELECT c.username, c.instagram_user_id, c.platform, c.profile_name, c.wa_username,
+                (SELECT text FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_text,
+                (SELECT created_at FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_at
+           FROM conversations c
+          WHERE c.id = $1 AND c.creator_id = $2`,
+        [req.conversationId, req.creatorId]
+    );
+    if (!facts) {
+        log('warn', 'dm.handoff_notify_no_conversation', logBase);
+        return null;
+    }
+    const kind: NoticeKind = plan.kind;
+    return {
+        kind,
+        reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead',
+        lang: noticeLang(req.language),
+        // A WhatsApp thread has no Instagram username: its contact is the profile name they gave, else the WhatsApp username, else the last digits of the id.
+        username: facts.platform === 'whatsapp' ? facts.profile_name ?? facts.wa_username : facts.username,
+        platform: facts.platform,
+        senderId: facts.instagram_user_id,
+        lastMessage: facts.last_inbound_text ?? '',
+        windowMs: windowRemainingMs(facts.last_inbound_at, req.now ?? new Date()),
+        link: inboxLink(await getPublicBaseUrl(null), req.conversationId),
+    };
+}
+
+/**
+ * The platform owner's own alert, as it has always been: his Telegram chat and/or his email, for his own workspace only. The order of the
+ * checks is cheapest first and the one that spends the conversation's hourly allowance last, so a turn that cannot alert (alerts off,
+ * someone else's tenant) spends nothing.
+ */
+async function notifyPlatformOwner(
+    req: NoticeRequest,
+    plan: NonNullable<NoticeRequest['plan']>,
+    channels: Awaited<ReturnType<typeof readNotifyChannels>>,
+    noticeOf: () => Promise<NoticeInput | null>,
+    logBase: Record<string, unknown>
+): Promise<NoticeOutcome> {
+    try {
+        // Both channels' settings, read once by the caller. A channel takes this alert when it is on and complete, and, for a hot lead, when its
         // own hot-lead switch is on.
-        const { telegram: telegramSettings, email: emailSettings } = await readNotifyChannels();
+        const { telegram: telegramSettings, email: emailSettings } = channels;
         const hot = plan.kind === 'hot_lead';
         const telegramOn = telegramReady(telegramSettings) ? telegramSettings : null;
         const emailOn = emailReady(emailSettings) ? emailSettings : null;
@@ -154,32 +233,8 @@ export async function notifyOwner(req: NoticeRequest): Promise<NoticeOutcome> {
             log('warn', 'dm.handoff_notify_limiter_failed', { ...logBase, ...describeError(err) });
         }
 
-        const facts = await queryOne<ConversationFacts>(
-            `SELECT c.username, c.instagram_user_id, c.platform, c.profile_name, c.wa_username,
-                    (SELECT text FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_text,
-                    (SELECT created_at FROM messages WHERE conversation_id = c.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound_at
-               FROM conversations c
-              WHERE c.id = $1 AND c.creator_id = $2`,
-            [req.conversationId, req.creatorId]
-        );
-        if (!facts) {
-            log('warn', 'dm.handoff_notify_no_conversation', logBase);
-            return 'error';
-        }
-
-        const kind: NoticeKind = plan.kind;
-        const notice: NoticeInput = {
-            kind,
-            reason: plan.kind === 'handoff' ? plan.reason : 'hot_lead',
-            lang: noticeLang(req.language),
-            // A WhatsApp thread has no Instagram username: its contact is the profile name they gave, else the WhatsApp username, else the last digits of the id.
-            username: facts.platform === 'whatsapp' ? facts.profile_name ?? facts.wa_username : facts.username,
-            platform: facts.platform,
-            senderId: facts.instagram_user_id,
-            lastMessage: facts.last_inbound_text ?? '',
-            windowMs: windowRemainingMs(facts.last_inbound_at, req.now ?? new Date()),
-            link: inboxLink(await getPublicBaseUrl(null), req.conversationId),
-        };
+        const notice = await noticeOf();
+        if (!notice) return 'error';
 
         // Each channel is tried on its own and at the same time (a Telegram that hangs for its 5 s must not hold up the email, nor a
         // refusal of one cost the other its alert). `settle` makes a channel that THROWS (it should not: both senders never do) a failed

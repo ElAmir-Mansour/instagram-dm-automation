@@ -1,0 +1,22 @@
+/*
+ * The notices cards on Settings → Notifications (U3, SA-11): the person's own Telegram, and the owner's routing table.
+ *
+ * Loaded by App.loadPageModule next to dashboard/js/pages/notify_card.js, with the same ?v=, because the page's entry in App.pages
+ * declares `css: true`. Logical properties only, so the cards read the same in Arabic and English; targets are 44 px; nothing scrolls
+ * the page sideways (the table scrolls inside its own wrapper).
+ */
+.notify-card { display: grid; gap: var(--space-3); }
+.notify-always { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--success-text); font-weight: var(--fw-semibold); }
+.notify-always [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex: none; }
+.notify-channel { display: grid; gap: var(--space-2); padding-block-start: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.notify-channel .form-label { margin: 0; }
+.notify-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0; }
+.notify-waiting p { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); }
+.notify-covers { margin: 0; }
+
+/* The routing table: a person's row names them and their role; the two boxes are the whole control. */
+.notify-routing-table th[scope="row"] { text-align: start; font-weight: var(--fw-semibold); }
+.notify-routing-table th[scope="row"] .form-hint { display: block; font-weight: var(--fw-regular); }
+.notify-routing-table td { text-align: center; }
+.notify-box { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 44px; min-block-size: 44px; cursor: pointer; }
+.notify-box input { inline-size: 20px; block-size: 20px; }
