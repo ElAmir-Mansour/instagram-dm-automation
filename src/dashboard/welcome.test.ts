@@ -109,7 +109,7 @@ function load(options: { lang?: 'ar' | 'en'; hash?: string; userAgent?: string; 
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const file of [
-        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/welcome_proof.js', 'dashboard/js/app.js',
+        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/shell.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/welcome_proof.js', 'dashboard/js/app.js',
     ]) {
         vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
     }

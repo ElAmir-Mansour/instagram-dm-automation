@@ -1871,6 +1871,10 @@
     'attention.verb.reply': 'رُدّ',
     'attention.verb.reconnect': 'أعد الربط',
     'nav.studioNeeds': 'عناصر في الاستوديو بحاجة إليك: {n}',
+    'shell.moduleOff': 'هذه الصفحة ليست ضمن مساحة العمل هذه.',
+    'shell.moduleOffNow': 'أُوقفت هذه الصفحة الآن في مساحة العمل هذه، فعدتَ إلى صفحة اليوم.',
+    'shell.helpNotInWorkspace': 'هذه المقالة عن ميزة ليست في مساحة العمل هذه. هذه المقالات المتاحة لك.',
+    'shell.studioAlarmOpen': 'اعرضها',
     'studio.alarm.label': 'تنبيهات الاستوديو',
 
     'posts.tiktok.delivery.legend': 'كيف يصل هذا المنشور إلى تيك توك؟',

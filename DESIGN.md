@@ -376,6 +376,11 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
   page. Its dot is `--danger` and means "the platform has a problem"; it is hidden at zero.
 - A count beside an item (people waiting) is `--accent` with `--text-on-accent`: work to do is not a failure. Red is
   for what broke.
+- Which items, tabs and Help articles a session sees is ONE table, `Shell` (`dashboard/js/shell.js`): a page's module and
+  minimum role (`Shell.PAGES`), the Studio and Ads tab strips (`Shell.AREAS`, drawn by `Shell.areaNav`, the same
+  `nav.segmented` markup `UI.watchTabStrips` reads) and Help's module map. A module a workspace has not got is not
+  there, rather than there and refused; a group whose items are all hidden is hidden too. No `modules` in the session
+  means everything is on. Never write `data-owner-only` or a tab strip by hand: add a row.
 
 ### Nav, public
 - Sticky `.topbar`: `--surface-raised` with `blur(var(--blur-chrome))`. This is the only blur on public pages.
