@@ -2613,6 +2613,24 @@ so the row is inert.
 
 ---
 
+### 5.9 — The drain's heartbeat, the dead-man ping and `GET /health`
+
+Alerts fire from inside the app, so a dead Vercel, database or worker tells nobody. Three small pieces let something OUTSIDE see it
+(**`src/services/monitoring.ts`**, RUNBOOK §18):
+
+1. **Heartbeat.** `GET /api/jobs/drain` calls `recordDrainHeartbeat` right after the secret check: one `INSERT … ON CONFLICT DO UPDATE … WHERE updated_at <
+   NOW() - 60 s` into `app_settings` `ops.drain_heartbeat`. The row's `updated_at` IS the last drain time. The throttle is in the statement (two instances
+   cannot both write) and an instance-local clock skips even the round trip inside a minute. Never throws.
+2. **Dead-man ping.** After a drain whose response is 200, `startDeadManPing` hands `pingDeadMan` to `waitUntil` and moves on. `pingDeadMan` reads
+   `monitoring.ping_url` (encrypted; Settings → Platform → Monitoring): none → returns `skipped_no_url`, no request. Otherwise it claims `ops.ping_last` with
+   the same conditional upsert (5 minutes), and only the winner GETs the URL (5 s timeout). Any failure is `failed`, logged without the URL; the drain is
+   never delayed or failed by it. A drain that ends in 500 sends no ping, so the check goes late and the service emails the owner.
+3. **`GET /health`** (`src/index.ts`, `healthResponse`): two statements. One reads the oldest DUE pending job (`run_after <= NOW()`, the partial index) and the
+   heartbeat row's age; one asks which platforms had an event queued in the last 24 h (`jobs.tenant_key` against `creators.instagram_page_id`,
+   `facebook_page_id` and the WhatsApp connection). Answers `ok`, `db`, `queue_oldest_pending_s`, `drain_last_s`, `webhook_fresh` (booleans), nothing that names
+   a tenant. **503** when the database does not answer, or when the oldest due job is older than 600 s AND the drain is older than 300 s (or never recorded):
+   `isQueueStuck`. `webhook_fresh` never moves the status.
+
 ## 6. TikTok post → inbox → published
 
 A video is scheduled for TikTok, alone or beside a Meta post. At the scheduled time it is
@@ -4506,6 +4524,7 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 4 | a draft or invite event that could not be written — **`onboardingEvents.ts:92`** | `onboarding.event_failed` (`warn`) | no (the draft or the link still worked) |
 | 4 | the daily sweep forgets old events, long-expired invites and a draft's fetched text — **`onboardingRetention.ts:81`** | `retention.onboarding_pruned` (`info`) | rows deleted, or `sources` set to NULL; the draft row stays |
 | 5 | budget spent — **`runner.ts:202`**, **`:224`** | `job.drain_complete` (`budgetExhausted: true`); `job.released` when a batch had jobs left | jobs never claimed stay `pending`; the batch's unreached jobs go back to `pending` with their attempt given back, unless the reaper has already freed one and another drain claimed it (that claim is left alone). If the write fails: `job.release_failed`, and they wait for the 300 s reaper |
+| 5 | no dead-man ping URL saved, or the claim lost to another run, or a drain that ended 500 — `pingDeadMan`, `src/routes/api.ts` `/jobs/drain` | `health.ping_failed` only when the GET itself failed | no (`ops.ping_last` is claimed only when a ping is due) |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |

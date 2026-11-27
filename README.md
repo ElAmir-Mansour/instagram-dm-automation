@@ -227,7 +227,7 @@ Mounts are in `src/index.ts` and `src/routes/api.ts`. [`FLOWS.md`](FLOWS.md) wal
 | Mount | File | Who may call it | For |
 |---|---|---|---|
 | `/webhook` | `src/index.ts`, `src/webhook/` | Meta: verify token on `GET`, HMAC signature on `POST` | Comment, message and WhatsApp events go to the job queue |
-| `/health`, `/r/:code` | `src/index.ts`, `src/routes/links.ts` | Anyone | Liveness and database check. Tracked links: redirect and count the click |
+| `/health`, `/r/:code` | `src/index.ts`, `src/routes/links.ts` | Anyone | Liveness, database and stuck-queue check (503 when stuck; monitors read it). Tracked links: redirect and count the click |
 | `/`, `/privacy`, `/terms`, `/data-deletion`, `/pricing`, `/eid`, `/robots.txt`, `/sitemap.xml` | `src/index.ts`, `src/routes/seo.ts`, `public/` | Anyone | The public site and legal pages |
 | `/dashboard` | `dashboard/` | Static files. Its API calls need a session | The dashboard |
 | `/api/auth/login`, `/api/uploads/:id`, `/api/interactions/export` | `src/routes/api.ts` | Anyone. Login is throttled per IP. The CSV needs a one-time link | Password login. Stored media for Meta and TikTok to fetch. The CSV download |

@@ -1257,6 +1257,20 @@
     'settings.site.invalid.whatsappNumber': 'That WhatsApp number is not valid. Use international format without +, e.g. 9665XXXXXXXX.',
     'settings.site.invalid.contactEmail': 'That does not look like an email address.',
     'settings.site.invalid.eidCouponsExpire': "Pick a valid date for the coupons' last day.",
+    'settings.monitoring.title': 'Monitoring',
+    'settings.monitoring.intro': 'Lets a free outside service tell you when AutoReply itself stops, which its own alerts cannot do. After every good drain run (about every two minutes) the app opens the address you save here, at most once every 5 minutes. Make a free check at Healthchecks.io with a period of 10 minutes and a grace of 10 minutes, paste its ping address here, and it emails you when the pings stop.',
+    'settings.monitoring.loadFailed': 'Could not read the monitoring settings: {message}',
+    'settings.monitoring.pingUrl': 'Dead-man ping URL',
+    'settings.monitoring.pingUrlSaved': 'An address is saved, ending in {last4}. Paste a new one to replace it, or leave this blank to keep it.',
+    'settings.monitoring.pingUrlSavedShort': 'An address is saved. Paste a new one to replace it, or leave this blank to keep it.',
+    'settings.monitoring.pingUrlNone': 'No address is saved, so nothing is pinged.',
+    'settings.monitoring.hint': 'The address is kept encrypted and is never shown again. The uptime monitor on /health is set up outside the app: see the Monitoring section of the runbook.',
+    'settings.monitoring.save': 'Save monitoring',
+    'settings.monitoring.remove': 'Remove the ping URL',
+    'settings.monitoring.saved': 'Monitoring settings saved.',
+    'settings.monitoring.removed': 'The ping URL was removed.',
+    'settings.monitoring.invalid.pingUrl': 'That is not a full https:// address.',
+
 
     // ─── TikTok ─────────────────────────────────────────────────────────
     'settings.tiktok.title': 'TikTok',
