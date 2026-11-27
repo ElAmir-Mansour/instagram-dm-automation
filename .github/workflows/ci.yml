@@ -111,6 +111,12 @@ jobs:
       - name: Check voice
         run: npm run check:voice
 
+      # The Arabic Help is Modern Standard Arabic (UX plan U5, SA-08), not the Gulf dialect it was written in: a dialect word
+      # («وش», «اللي», «عشان», «شلون», «مو»...) added to an Arabic Help string fails here. A word that has to be quoted is a reasoned
+      # entry in scripts/check-register.mjs that fails when stale.
+      - name: Check register
+        run: npm run check:register
+
       # The docs cite code as `path` and `path:line`, and link each other. Nothing else notices a cited file that was renamed or
       # deleted, a line number past the end of its file, or a public doc linking a file that is not in this repo (local notes,
       # specs): those are dead on GitHub. Line numbers that merely drifted are not failures; `npm run docs:reanchor` moves them

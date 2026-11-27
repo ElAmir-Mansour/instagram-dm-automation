@@ -2033,7 +2033,7 @@ describe('Explainers: the words', () => {
         assert.ok(en.includes('**Sound effects only** uses the project’s own whoosh at each cut and a public-domain (CC0) pop from Kenney when a label appears, and needs no licence from you'));
         assert.equal(en.includes('free (CC0) set'), false);
         assert.ok(ar.includes('وصوت «بوب» (pop) من Kenney في الملكية العامة (CC0) حين تظهر تسمية، ولا تحتاج إلى ترخيص منك'));
-        assert.ok(ar.includes('صوت «ووش» (whoosh) من إنتاج المشروع نفسه عند كل قطع'));
+        assert.ok(ar.includes('صوت «وووش» (whoosh) من إنتاج المشروع نفسه عند كل قطع'));
         assert.equal(ar.includes('مجموعة مجانية (CC0)'), false);
         // The words of the interface say the same: the working panel and the approval dialog name Gemini, and none puts the reading on the Mac.
         for (const lang of ['en', 'ar'] as const) {
