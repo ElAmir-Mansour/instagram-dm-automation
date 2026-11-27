@@ -111,6 +111,9 @@ import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
 import { iceBreakersRouter } from './iceBreakers.js';
+import { notifyRouter } from './notify.js';
+import { goLiveRouter } from './goLive.js';
+import { activationTap } from '../services/activation.js';
 import { museLibraryRouter } from './museLibrary.js';
 import { queueNewReelsForMemoryTenants } from '../services/perception/reelLibrary.js';
 import { adsRouter } from './ads.js';
@@ -1867,6 +1870,13 @@ router.use('/onboarding', onboardingRouter);
 // Its paths (`/draft`, `/draft/advance`) are not the wizard's (`/`, `/steps/:step`, `/complete`). The backstop sweep of the same name is above
 // requireAuth, with the other routes a scheduler calls.
 router.use('/onboarding', onboardingDraftsRouter);
+
+// U3 (docs/specs/007-company-shell §6, §7). `activationTap` watches two successful requests below it (the first assistant test, a member's first reply) and writes
+// an onboarding event AFTER the response; it never delays or fails them. `/notify` is how each person chooses to be told (their own routes need only a membership; the
+// routing is the owner's). `/golive` is the owner's setup checklist, `{ show: false }` for everyone else.
+router.use(activationTap);
+router.use('/notify', notifyRouter);
+router.use('/golive', goLiveRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //

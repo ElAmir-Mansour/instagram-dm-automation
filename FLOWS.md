@@ -1037,6 +1037,19 @@ Behind the same switches and allow-list as §2.6h. **Why it exists:** the sales 
 
 **A failure never costs the turn**: a gate that throws is `senses.failed` and the turn goes on without the line. A line that was told logs `senses.told` (`senses`: `voice`, `dm_media` or both).
 
+### 2.6k — A handoff → the people who cover it (U3)
+
+Before U3 an alert reached ONE chat: the platform owner's (`notify.telegram_*`), and only for his own workspace. A company's staff had the Inbox badge and Today. Now each person links THEIR OWN Telegram chat to the platform's sender, and the workspace's owner chooses who covers what. The platform owner's own alert (§2.6, `notifyOwner`'s callers: `turn.ts`, `failureHandoff.ts`, `whatsappAnswer.ts`) is unchanged.
+
+1. **One entry, two paths.** `notifyOwner` (`src/services/dmSales/handoff.ts`) keeps its name, its callers and its outcomes. It reads the platform's channels ONCE (`readNotifyChannels`), builds the notice once (`loadNotice`, shared by both paths: one conversation lookup), and runs `notifyPlatformOwner` (the old body, byte for byte: Telegram and/or email, the owner's workspace only, `notify:<conv>` allowance) and `notifyPeople` side by side. The answer is `'sent'` when either sent, else the platform path's own outcome, so with nobody linked every outcome is what it was.
+2. **No sender, no reads.** `notifyPeople` (`src/services/notifyPeople.ts`) returns `'none'` before it touches the database when the platform has no bot token (`notify.telegram_bot_token`): zero statements, which keeps the pinned DM timelines in `messaging.test.ts`. Production had no bot token on 2026-10-22: until the owner makes one with @BotFather (Settings → Platform → Alerts) NO staff notice goes out, and the card says "Not set up on this platform yet".
+3. **Who.** `readTeamNotify`, one statement: the workspace's active members who are not platform admins, each with their `user.notify.<userId>` row, plus `notify.routing.<tenantId>`. `coveredBy` picks them: with no routing row every OWNER and OPERATOR covers both kinds; with one, the listed ids that are still members (a person who left, or was deactivated, is skipped). `recipientChats` keeps those linked and not paused, one per chat.
+4. **The platform chat is never told twice.** In the platform owner's own workspace a chat equal to `notify.telegram_chat_id` is dropped.
+5. **One allowance per conversation**, apart from the owner's: `notify_people:<conv>` (`HANDOFF_ALERTS_PER_HOUR`) or `notify_people_hot:<conv>` (`HOT_LEAD_ALERTS_PER_HOUR`), spent after we know somebody would be written to, so a workspace nobody linked spends none. A limiter that cannot be read lets the notice through.
+6. **The same words.** `buildNoticeText` (`src/services/notify.ts`), through `sendTelegramMessage`: plain text, previews off, the same excerpt and link rules. Everyone is sent to in parallel; a person who blocked the sender costs the others nothing. Logs carry counts only (`notify.people_sent` `{count, kind}`, `notify.people_failed` `{count}`); never a chat id or the token.
+
+**Linking** (`src/services/telegramLink.ts`, routes in `src/routes/notify.ts`): `startLink` mints a single-use, 10-minute code (`oauth_states`, purpose `telegram`, bound to the tenant and the user) and answers `https://t.me/<bot username>?start=<code>`. The person presses Start; the dashboard calls `confirm` every 3 s for 2 min; `confirmLink` checks the code is still live for THIS tenant and user, asks Telegram for the pending messages (`telegramGetUpdates`: **no `offset`**, so one person's `/start` never acknowledges everybody else's), finds a PRIVATE chat whose message is exactly `/start <code>`, spends the code in one statement, and keeps the chat id and the first name. **Never give the bot a webhook**: `getUpdates` fails with a 409 for as long as it has one. Unlinking deletes both.
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:658`** — `generateAiResponse(conversationId, dmPromptText(dm),
@@ -4552,6 +4565,18 @@ U2 (2026-11). One list of "what needs the owner", built once on the server, draw
    `HANDLE_EXPIRED_THREADS_SQL` marks handled the threads of step 2 whose wait began that long ago. One audit row per tenant with something (`cleanup.auto_archive`, actor
    `system:auto-archive`, counts only). Nothing is deleted; a new message from the customer clears `handled_at` by itself.
 
+### 16.1 Go live: the checklist and the activation events (U3)
+
+A workspace made for a company arrives with an empty Today. For its OWNER, `GET /api/golive` (`src/routes/goLive.ts`, `readGoLive` in `src/services/goLive.ts`) answers the short list of what is left, drawn by `OverviewPage.fillGoLive` above everything.
+
+1. **When it shows.** `show: false` (and only that) for the platform owner's workspace (`getPlatformOwnerId`), a workspace with no `onboarding` row (legacy), any session that is not the workspace's owner, a checklist the owner hid, and one that went live more than three days ago (`shouldShow`). The state is `golive.<tenant>`: `{dismissedAt, liveAt, seen}`.
+2. **Items, from facts.** `readFactsRow` reads, in one statement, what each item is done by: `onboarding.status = 'completed'`, a Meta token that is not `invalid`, an active unarchived campaign, an `assistant_tested` event, two non-admin members (or a `join` invite made after the first), a routing row or a linked Telegram. `test_comment` is `readCommentCheck` (the webhook's own queue row, `src/services/metaCommentCheck.ts`) or the stored `seen.test_comment`, because jobs are pruned. An item of a module that is off is not shown (`evaluateItems`); WhatsApp and YouTube are optional and never count.
+3. **Live.** Every required item shown is done (`isLive`). The first read that finds it so, or finds the test comment arrived, writes `liveAt` / `seen.test_comment` once (set-once) and records the `golive_live` event.
+4. **The profile card steps aside.** While the checklist shows, Today does not draw the profile card: its `profile` item is the same to-do.
+5. **Activation events.** `assistant_tested` and `staff_first_reply` are written by `activationTap` (`src/services/activation.ts`), middleware mounted once in `src/routes/api.ts`: after the response, and only for a 2xx, the first `POST /settings/ai/test` of the workspace and each person's first `POST /conversations/:id/messages` (never a platform admin's, never the shared-password session's). `recordOnce` is one `INSERT … WHERE NOT EXISTS`; it never throws and never delays the request. `golive_dismissed` is written by `POST /api/golive/dismiss`.
+6. **The activation block** of the answer is derived, never stored: the accepted invite (`onboarding_events`), the first SENT interaction and the first assistant reply (`MIN(...)`), the assistant test, and how many people made a first reply.
+7. **Staff.** An operator or a viewer sees no checklist; they get a one-time orientation card (`OverviewPage.fillOrientation`, seen-flag in `localStorage` `orientation_seen:<tenant>:<user|shared>`).
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -4747,5 +4772,8 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 15 | `use_brand_colours` absent (every profile that predates the Brand Kit, the owner's included) | *(none)* | — |
 | 15 | a non-https logo is dropped by the handler | `brand: logo dropped` on the Mac | — |
 | 16 | the daily clean-up finds nothing, or a tenant switched it off (`cleanup.auto_archive.<tenant>` `enabled: false`), or one tenant's statement fails — `runAutoArchiveSweep` | `cron.auto_archive` (only when it put something away or a tenant failed), `cron.auto_archive_tenant` (`posts`, `threads`, `days`), `cron.auto_archive_tenant_failed` | an `audit_log` row `cleanup.auto_archive` per tenant that had something; none for a quiet day |
+| 2 | **a staff member gets no Telegram notice**: the platform has no bot token (nothing is read, nothing sent), they never linked, they paused it, the owner's routing leaves them out, or they are a platform admin — `notifyPeople`, `coveredBy`, `recipientChats` | `notify.people_sent` / `notify.people_failed` (counts only); *(none)* when nobody is to be told | no: the Inbox badge and Today still show it |
+| 2 | **linking never completes**: the code expired (10 min) or was spent, the bot has a webhook (`getUpdates` answers 409), or the person pressed Start in a group — `confirmLink` | `notify.telegram_link_poll_failed` (`status`), the answer `410 TELEGRAM_LINK_EXPIRED` | the code row in `oauth_states`; nothing is kept until a private `/start <code>` is found |
+| 16 | the go-live card never shows: the platform owner's workspace, no `onboarding` row, not the owner, hidden, or live over 3 days — `readGoLive` | *(none)*: the answer is `{ show: false }` | no |
 
 `RUNBOOK.md` works these backwards from the symptom.

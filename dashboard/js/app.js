@@ -180,6 +180,8 @@ const App = {
         // The Instagram ice breakers and persistent menu editor (DM plan S13) on Settings: the owner's questions, Save, and the one Publish button. Loaded by Settings on
         // first use (for the tenant's owner only). It holds no state of its own across renders: Settings hands it the server's answer every time it draws the card.
         ice_breakers: { src: 'ice_breakers', page: () => IceBreakersCard, routable: false },
+        // How each person is told when a customer needs them (U3, SA-11): their own Telegram (Link / Pause / Unlink) and the owner's routing table. Settings → Notifications loads it on first use and hands it a host element for each card (`mountMine`, `mountRouting`); `canLeave()` guards the unsaved routing.
+        notify_card: { src: 'notify_card', page: () => NotifyCard, routable: false, css: true },
         // The Brand page's logo preparation (trim, measure, remove the background, PNG): pure pixel functions and the plate rule, loaded by Brand on first use.
         brand_image: { src: 'brand_image', page: () => BrandImage, routable: false },
         // The ad builder's quick mode (A4): the dialog Posts' Boost button opens, with the post chosen. Loaded by Posts on first use; if it cannot be, Posts opens the older Boost form.
@@ -194,7 +196,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.13',
+    ASSET_VERSION: '13.24',
 
     _modules: Object.create(null),
 

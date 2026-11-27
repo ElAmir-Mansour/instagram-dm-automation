@@ -579,6 +579,17 @@ const API = {
     getStudioStatus: () => API.request('/studio/status'),
     /** What needs the owner, from columns only (src/services/attention.ts): the Studio's items and `counts.studio` are read from it. */
     getAttention: () => API.request('/attention'),
+    // U3 (notify_card.js, overview.js): how each person is told, and the owner's go-live checklist.
+    getNotifyMe: () => API.request('/notify/me'),
+    startTelegramLink: () => API.request('/notify/telegram/link', { method: 'POST' }),
+    confirmTelegramLink: (code) => API.request('/notify/telegram/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+    setNotifyPaused: (paused) => API.request('/notify/me', { method: 'PATCH', body: JSON.stringify({ paused: paused === true }) }),
+    unlinkTelegram: () => API.request('/notify/telegram', { method: 'DELETE' }),
+    getNotifyRouting: () => API.request('/notify/routing'),
+    saveNotifyRouting: (routing) => API.request('/notify/routing', { method: 'PUT', body: JSON.stringify(routing) }),
+    getGoLive: () => API.request('/golive'),
+    dismissGoLive: () => API.request('/golive/dismiss', { method: 'POST' }),
+    undismissGoLive: () => API.request('/golive/dismiss', { method: 'DELETE' }),
     getStudioLessons: () => API.request('/studio/lessons'),
     getStudioLesson: (id) => API.request(`/studio/lessons/${encodeURIComponent(id)}`),
     scanStudioLibrary: () => API.request('/studio/scan', { method: 'POST' }),

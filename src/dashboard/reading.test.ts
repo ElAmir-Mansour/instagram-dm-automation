@@ -254,14 +254,16 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         assert.match(body('ar', 5), /أقدمها تنتظر/);
     });
 
-    it('a FAILED row in the recent table carries its reason as a second line', () => {
+    it('a FAILED row in the recent table carries its reason as a sentence, with the raw text behind Details (U3: UI.failure, not the Graph text)', () => {
         const s = load();
         const markup = String(s.pages.Overview.renderRecent([
             { status: 'FAILED', error_log: '(#10) Outside the allowed window', trigger_keyword: 'x', timestamp: ago(1000) },
             { status: 'SENT', error_log: 'stale', trigger_keyword: 'y', timestamp: ago(1000) },
         ]));
-        assert.match(markup, /<span class="cell-note" dir="auto">\(#10\) Outside the allowed window<\/span>/);
-        assert.equal((markup.match(/cell-note/g) || []).length, 1, 'only on a failure');
+        assert.equal((markup.match(/data-failure=/g) || []).length, 1, 'only on a failure');
+        assert.doesNotMatch(markup, /cell-note/, 'the raw text is no longer the main line');
+        assert.ok(markup.indexOf('Outside the allowed window') > markup.indexOf('<details'), 'it is inside Details');
+        assert.doesNotMatch(markup, /stale/);
     });
 
     it('re-reads on return to the tab only after five minutes, and feeds the nav count', async () => {

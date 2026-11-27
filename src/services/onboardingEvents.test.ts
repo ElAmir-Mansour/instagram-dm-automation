@@ -41,10 +41,11 @@ const ctx: EventContext = { creatorId: NEWCOMER, userId: NEW_OWNER_USER, actor: 
 const WORD = /^[a-z0-9_]{1,32}$/;
 
 describe('the list', () => {
-    it('is the twelve events the funnel is read from, and each has a props entry', () => {
+    it('is the twelve events the funnel is read from, then the four of go-live and activation (U3), and each has a props entry', () => {
         assert.deepEqual([...ONBOARDING_EVENTS], [
             'invite_created', 'invite_opened', 'invite_accepted', 'step_viewed', 'step_completed', 'step_skipped',
             'draft_started', 'draft_ready', 'draft_failed', 'proof_verdict', 'proof_regenerated', 'wizard_completed',
+            'assistant_tested', 'staff_first_reply', 'golive_live', 'golive_dismissed',
         ]);
         for (const event of ONBOARDING_EVENTS) assert.ok(EVENT_PROPS[event], event);
         assert.equal(Object.keys(EVENT_PROPS).length, ONBOARDING_EVENTS.length);
