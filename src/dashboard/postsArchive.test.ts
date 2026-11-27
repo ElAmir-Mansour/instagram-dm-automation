@@ -106,12 +106,12 @@ describe('a PENDING post more than 15 minutes past its time is overdue (PO-11)',
         assert.doesNotMatch(markup, MINUTES_PROMISE);
     });
 
-    it('says it in Arabic, in the product\'s words, with the catalogue\'s own short unit for how late', () => {
+    it('says it in Arabic, in the product\'s words, with the plural form of how late (QA sweep 2026-11-28: «3 ساعات», not «3 س»)', () => {
         const r = load('ar');
         const markup = card(r, post({ scheduled_time: at(-(3 * HOUR) - MIN) }));
         const said = text(markup);
         assert.ok(said.includes('تأخر موعده'), said);
-        assert.ok(said.includes('تأخر 3 س. لم يُنشر في الفحص الأخير.'), said);
+        assert.ok(said.includes('تأخر 3 ساعات. لم يُنشر في الفحص الأخير.'), said);
         assert.ok(said.includes('انشر الآن'), said);
         assert.doesNotMatch(said, MINUTES_PROMISE);
     });
