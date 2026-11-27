@@ -98,6 +98,9 @@ const TenantDetailPage = {
         const isActive = Admin.pick(row, 'is_active', 'isActive') !== false;
         const currentId = App.session && App.session.tenantId;
         const isCurrent = id && currentId && String(id) === String(currentId);
+        // `GET /api/admin/tenants/:id` nests the numbers: `counts: { campaigns, scheduledPosts, conversations, … }` and `health: { lastWebhookAt, … }`
+        // (src/routes/admin.ts, getTenantCounts / getTenantHealth). The page read top-level keys, so a healthy workspace read "Never" and "—".
+        const counts = this.countsOf(row);
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
@@ -139,9 +142,9 @@ const TenantDetailPage = {
                     <dl class="ops-facts">
                         ${Admin.field(t('tenantDetail.tenantId'), UI.ltr(id))}
                         ${Admin.field(t('tenantDetail.created'), this.dayOrDash(Admin.pick(row, 'created_at', 'createdAt')))}
-                        ${Admin.field(t('tenantDetail.campaigns'), Admin.count(Admin.num(row, 'campaignCount', 'campaign_count', 'campaigns')))}
-                        ${Admin.field(t('tenantDetail.scheduled'), Admin.count(Admin.num(row, 'scheduledPostCount', 'scheduled_post_count', 'scheduled_posts')))}
-                        ${Admin.field(t('tenantDetail.conversations'), Admin.count(Admin.num(row, 'conversationCount', 'conversation_count', 'conversations')))}
+                        ${Admin.field(t('tenantDetail.campaigns'), Admin.count(Admin.num(counts, 'campaigns', 'campaignCount', 'campaign_count')))}
+                        ${Admin.field(t('tenantDetail.scheduled'), Admin.count(Admin.num(counts, 'scheduledPosts', 'scheduledPostCount', 'scheduled_post_count', 'scheduled_posts')))}
+                        ${Admin.field(t('tenantDetail.conversations'), Admin.count(Admin.num(counts, 'conversations', 'conversationCount', 'conversation_count')))}
                     </dl>
                 </div>
             </section>
@@ -290,16 +293,39 @@ const TenantDetailPage = {
         }
     },
 
+    /**
+     * The one expiry that matters, with the days left: amber at 14 or fewer, red at 3 or fewer or once it has passed, the same rule as the
+     * connections list (Settings `EXPIRY`, via `Admin.expiryTone`).
+     */
+    dataAccessValue(value) {
+        const at = new Date(value);
+        if (Number.isNaN(at.getTime())) return html`—`;
+        const days = Math.ceil((at.getTime() - Date.now()) / 86400000);
+        const tone = Admin.expiryTone(days);
+        return html`<span class="${tone}">${UI.formatDay(at)} (${days > 0 ? t('settings.daysLeft', { count: days }) : t('settings.expired')})</span>`;
+    },
+
     dayOrDash(value) {
         return value ? UI.formatDay(value) : html`—`;
     },
 
-    renderHealth(row) {
+    /** The tenant's counts: the API's `counts` object, or the row itself for an older answer that put them at the top. */
+    countsOf(row) {
+        return row && row.counts && typeof row.counts === 'object' ? row.counts : (row || {});
+    },
+
+    /** The row with its `health` object laid over it: the health numbers win, and the top-level token columns still answer when `health` does not. */
+    healthOf(row) {
+        return row && row.health && typeof row.health === 'object' ? Object.assign({}, row, row.health) : (row || {});
+    },
+
+    renderHealth(source) {
+        const row = this.healthOf(source);
         const tokenStatus = Admin.pick(row, 'tokenStatus', 'token_status');
         const tokenCheckedAt = Admin.pick(row, 'tokenLastCheckedAt', 'token_last_checked_at');
         const tokenErr = Admin.pick(row, 'tokenError', 'token_error');
         const expiresAt = Admin.pick(row, 'tokenExpiresAt', 'token_expires_at');
-        const dataAccessAt = Admin.pick(row, 'dataAccessExpiresAt', 'data_access_expires_at');
+        const dataAccessAt = Admin.pick(row, 'dataAccessExpiresAt', 'data_access_expires_at', 'token_data_access_expires_at');
         const webhookAt = Admin.pick(row, 'lastWebhookAt', 'last_webhook_at');
         const commentAt = Admin.pick(row, 'lastCommentAt', 'last_comment_at');
         const dmAt = Admin.pick(row, 'lastInboundDmAt', 'last_inbound_dm_at');
@@ -351,7 +377,7 @@ const TenantDetailPage = {
                             }</span>
                         `)}
                         ${Admin.field(t('ops.expires'), expiresAt ? UI.formatDay(expiresAt) : t('settings.expiresNever'))}
-                        ${dataAccessAt ? Admin.field(t('ops.dataAccess'), UI.formatDay(dataAccessAt)) : ''}
+                        ${dataAccessAt ? Admin.field(t('ops.dataAccess'), this.dataAccessValue(dataAccessAt)) : ''}
                     </dl>
                 </div>
             </section>

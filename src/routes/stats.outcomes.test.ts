@@ -12,10 +12,11 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { createDownloadToken } from '../middleware/auth.js';
 import { pool } from '../config/db.js';
 import { OUTCOMES } from '../services/outcomes.js';
 import { setLogSink } from '../utils/log.js';
-import apiRouter, { campaignStatsLimit, CAMPAIGN_STATS_DEFAULT_LIMIT, CAMPAIGN_STATS_MAX_LIMIT } from './api.js';
+import apiRouter, { exportScopeFor, campaignStatsLimit, CAMPAIGN_STATS_DEFAULT_LIMIT, CAMPAIGN_STATS_MAX_LIMIT } from './api.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 
@@ -402,5 +403,43 @@ describe('GET /interactions — outcome on every row, and ?outcome=', () => {
         const { sent } = await call('/interactions', { query: { outcome: "x' OR 1=1 --" } }, answerRows([]));
         for (const q of sent) assert.ok(!/CASE i\.status/.test(q.sql));
         assert.deepEqual(sent[0]!.params, [TENANT]);
+    });
+});
+
+// ─── UX U1, DW-R1: the Log's CSV export filters by outcome too ────────────────────────────────
+describe('GET /interactions/export — ?outcome=', () => {
+    /** Run the download handler with a freshly minted single-use token, and the env the token is signed with. */
+    async function exportWith(query: Record<string, unknown>) {
+        const saved = { pw: process.env.DASHBOARD_PASSWORD, secret: process.env.META_APP_SECRET };
+        process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+        process.env.META_APP_SECRET = 'meta-app-secret';
+        const sent: Sent[] = [];
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => { sent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params }); return { rows: [], rowCount: 0 }; };
+        const res = { statusCode: 200, status(c: number) { this.statusCode = c; return this; }, json() { return this; }, send() { return this; }, setHeader() { return this; } };
+        try {
+            const dl = `${TENANT}~${createDownloadToken(exportScopeFor(TENANT))}`;
+            await handlerFor('get', '/interactions/export')({ query: { dl, ...query }, params: {}, body: {}, headers: {} }, res, () => {});
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+            if (saved.pw === undefined) delete process.env.DASHBOARD_PASSWORD; else process.env.DASHBOARD_PASSWORD = saved.pw;
+            if (saved.secret === undefined) delete process.env.META_APP_SECRET; else process.env.META_APP_SECRET = saved.secret;
+        }
+        return { res, sent };
+    }
+
+    it('exports exactly the rows the Log counted for that outcome: the same bound, same SQL as GET /interactions', async () => {
+        const { res, sent } = await exportWith({ outcome: 'by_design' });
+        assert.equal(res.statusCode, 200);
+        assert.match(sent[0]!.sql, /AND CASE i\.status WHEN 'SENT' THEN 'delivered' .* END = \$2/);
+        assert.deepEqual(sent[0]!.params, [TENANT, 'by_design']);
+    });
+
+    it('ignores an outcome it does not know, and without one filters nothing', async () => {
+        const junk = await exportWith({ outcome: "x' OR 1=1 --" });
+        assert.ok(!/CASE i\.status/.test(junk.sent[0]!.sql));
+        assert.deepEqual(junk.sent[0]!.params, [TENANT]);
+        const none = await exportWith({});
+        assert.deepEqual(none.sent[0]!.params, [TENANT]);
     });
 });

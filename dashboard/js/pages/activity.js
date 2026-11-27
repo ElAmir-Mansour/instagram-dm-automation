@@ -9,7 +9,7 @@
  */
 const ActivityPage = {
     currentPage: 1,
-    currentStatus: '',
+    currentOutcome: '',
     currentSearch: '',
     currentPlatform: '',
     currentCampaignId: '',
@@ -46,13 +46,13 @@ const ActivityPage = {
      * "filtered" means.
      */
     hasFilters() {
-        return !!(this.currentStatus || this.currentSearch || this.currentPlatform || this.currentCampaignId);
+        return !!(this.currentOutcome || this.currentSearch || this.currentPlatform || this.currentCampaignId);
     },
 
     /** Drop every filter and go back to page one. */
     clearFilters() {
         if (!this.hasFilters()) return;
-        this.currentStatus = '';
+        this.currentOutcome = '';
         this.currentSearch = '';
         this.currentPlatform = '';
         this.currentCampaignId = '';
@@ -67,19 +67,26 @@ const ActivityPage = {
      */
     resetTenantState() {
         this.currentPage = 1;
-        this.currentStatus = '';
+        this.currentOutcome = '';
         this.currentSearch = '';
         this.currentPlatform = '';
         this.currentCampaignId = '';
     },
 
-    /** The statuses and platforms a deep link may ask for — anything else is ignored. */
-    LINK_STATUSES: ['SENT', 'FAILED', 'PENDING'],
+    /**
+     * What became of the DM (src/services/outcomes.ts), in the order the filter lists them: the five words the pill on every row, Today and
+     * Results use, so this screen never says "Failed" for a row the others call "By design" (UX U1, DW-R1).
+     */
+    OUTCOMES: ['delivered', 'actionable', 'by_design', 'pending', 'blocked'],
+    /** An old link's `status=` read as the outcome that means the same: a failed row is only a problem when it needs the owner. */
+    LEGACY_STATUS_OUTCOME: { SENT: 'delivered', FAILED: 'actionable', PENDING: 'pending' },
+
+    /** The platforms a deep link may ask for — anything else is ignored. */
     LINK_PLATFORMS: ['instagram', 'facebook'],
 
     /**
      * V3: a deep link into the log. Analytics links `#/activity?campaign=<id>`,
-     * a campaign card's failed count links `?campaign=<id>&status=FAILED`. The
+     * a campaign card's failed count links `?campaign=<id>&outcome=actionable`. The
      * link describes a whole view, so the filters it does not name are cleared
      * rather than inherited from ten minutes ago. The parameters are stripped
      * once read (the same `history.replaceState` settings.js uses), so a reload
@@ -90,10 +97,11 @@ const ActivityPage = {
     seedFromHash() {
         const campaign = App.hashParam('campaign') || App.hashParam('campaign_id');
         const status = String(App.hashParam('status') || '').toUpperCase();
+        const outcome = String(App.hashParam('outcome') || '').toLowerCase();
         const platform = String(App.hashParam('platform') || '').toLowerCase();
-        if (!campaign && !status && !platform) return false;
+        if (!campaign && !status && !outcome && !platform) return false;
         this.currentCampaignId = campaign || '';
-        this.currentStatus = this.LINK_STATUSES.includes(status) ? status : '';
+        this.currentOutcome = this.OUTCOMES.includes(outcome) ? outcome : (this.LEGACY_STATUS_OUTCOME[status] || '');
         this.currentPlatform = this.LINK_PLATFORMS.includes(platform) ? platform : '';
         this.currentSearch = '';
         this.currentPage = 1;
@@ -165,7 +173,7 @@ const ActivityPage = {
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
         const params = { page: this.currentPage, limit: 15 };
-        if (this.currentStatus) params.status = this.currentStatus;
+        if (this.currentOutcome) params.outcome = this.currentOutcome;
         if (this.currentSearch) params.search = this.currentSearch;
         if (this.currentPlatform) params.platform = this.currentPlatform;
         if (this.currentCampaignId) params.campaign_id = this.currentCampaignId;
@@ -253,10 +261,8 @@ const ActivityPage = {
 
                         <label class="sr-only" for="activity-filter">${t('activity.statusFilter')}</label>
                         <select class="select" id="activity-filter" data-change="activity:handleFilter">
-                            <option value="" ${!this.currentStatus ? html.raw('selected') : ''}>${t('activity.allStatuses')}</option>
-                            <option value="SENT" ${this.currentStatus === 'SENT' ? html.raw('selected') : ''}>${t('common.sent')}</option>
-                            <option value="FAILED" ${this.currentStatus === 'FAILED' ? html.raw('selected') : ''}>${t('common.failed')}</option>
-                            <option value="PENDING" ${this.currentStatus === 'PENDING' ? html.raw('selected') : ''}>${t('common.pending')}</option>
+                            <option value="" ${!this.currentOutcome ? html.raw('selected') : ''}>${t('activity.allStatuses')}</option>
+                            ${this.OUTCOMES.map((o) => html`<option value="${o}" ${this.currentOutcome === o ? html.raw('selected') : ''}>${t(`status.outcome.${o}`)}</option>`)}
                         </select>
                         ${UI.helpLink('troubleshooting#dms', t('help.link.troubleshootDms'), { newTab: true })}
                     </div>
@@ -311,7 +317,7 @@ const ActivityPage = {
                                     <td>${UI.userCell(i)}</td>
                                     <td dir="auto">${i.trigger_keyword || '—'}</td>
                                     <td class="cell-id truncate">${i.post_id ? UI.ltr(i.post_id) : '—'}</td>
-                                    <td><span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span></td>
+                                    <td>${UI.outcomePill(i)}</td>
                                     <!-- The error is clipped by .truncate and the title
                                          tooltip that carried the rest of it is reachable
                                          only with a pointer. The full string is already in
@@ -342,10 +348,10 @@ const ActivityPage = {
                         <article class="log-card" aria-labelledby="log-card-head-${idx}">
                             <div class="log-card-head" id="log-card-head-${idx}">
                                 <span>${UI.userCell(i)}</span>
-                                <span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span>
+                                ${UI.outcomePill(i)}
                             </div>
                             <p class="text-meta" dir="auto">${t('table.keyword')}: ${i.trigger_keyword || '—'}</p>
-                            ${i.error_log ? html`<p class="text-meta text-danger" dir="auto" title="${i.error_log}">${this.explainError(i.error_log) || i.error_log}</p>` : ''}
+                            ${i.error_log ? html`<p class="text-meta${UI.outcomeOf(i) === 'actionable' ? html.raw(' text-danger') : ''}" dir="auto" title="${i.error_log}">${this.explainError(i.error_log) || i.error_log}</p>` : ''}
                             <p class="text-meta">${UI.formatDate(i.timestamp)}</p>
                         </article>
                     `)}
@@ -419,7 +425,7 @@ const ActivityPage = {
     },
 
     handleFilter(value) {
-        this.currentStatus = value;
+        this.currentOutcome = this.OUTCOMES.includes(value) ? value : '';
         this.currentPage = 1;
         this.loadData();
     },
@@ -446,7 +452,7 @@ const ActivityPage = {
         if (!restore) return;
         try {
             const params = {};
-            if (this.currentStatus) params.status = this.currentStatus;
+            if (this.currentOutcome) params.outcome = this.currentOutcome;
             if (this.currentSearch) params.search = this.currentSearch;
             if (this.currentPlatform) params.platform = this.currentPlatform;
             if (this.currentCampaignId) params.campaign_id = this.currentCampaignId;

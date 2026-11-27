@@ -161,7 +161,7 @@ interface SettingsApi {
 }
 
 interface ActivityApi {
-    currentStatus: string;
+    currentOutcome: string;
     currentSearch: string;
     currentPlatform: string;
     currentCampaignId: string;
@@ -609,7 +609,7 @@ describe('ActivityPage.hasFilters — "nothing happened" vs "you filtered it out
     it('is true for any one of the four filters on its own', () => {
         // Each is an independent way to empty the table, and missing one means
         // that case renders the wrong empty state with no way out.
-        for (const field of ['currentStatus', 'currentSearch', 'currentPlatform', 'currentCampaignId'] as const) {
+        for (const field of ['currentOutcome', 'currentSearch', 'currentPlatform', 'currentCampaignId'] as const) {
             const { Activity } = load();
             Activity[field] = 'x';
             assert.equal(Activity.hasFilters(), true, `${field} alone must count as filtered`);
@@ -624,7 +624,7 @@ describe('ActivityPage.hasFilters — "nothing happened" vs "you filtered it out
 
     it('clearFilters drops all four and returns to page one', () => {
         const { Activity, loads } = load();
-        Activity.currentStatus = 'FAILED';
+        Activity.currentOutcome = 'actionable';
         Activity.currentSearch = 'sara';
         Activity.currentPlatform = 'instagram';
         Activity.currentCampaignId = '7';

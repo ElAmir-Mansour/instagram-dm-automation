@@ -139,18 +139,60 @@ const MetaConnect = {
         return html`<span class="text-meta">${t('meta.webhook.byOperator')}</span>`;
     },
 
-    /** What is connected, as the definition list of the card. */
-    facts(c) {
-        const instagram = c.instagramUsername
-            ? this.handle(c.instagramUsername)
-            : (c.instagramId ? UI.ltr(c.instagramId) : t('meta.fact.noInstagram'));
-        const page = c.pageName ? html`<span dir="auto">${c.pageName}</span>` : (c.pageId ? UI.ltr(c.pageId) : '—');
+    /**
+     * The one status line of the card (UX U1, SA-04): the state, then the names the API returns: "● Connected · Page: Nour Shop · @nourshop".
+     * A name or handle the server does not have (a connection made with a pasted token stores neither) is left out, never replaced by its
+     * 15- or 17-digit id: the ids are behind "Copy ids".
+     */
+    statusLine(c, needs) {
+        const part = (content) => html`<span class="meta-statusline-part">${content}</span>`;
+        return html`
+            <p class="meta-statusline" id="meta-statusline">
+                <span class="health-pill ${needs ? html.raw('health-stale') : html.raw('health-fresh')}">
+                    <i data-lucide="${needs ? 'alert-triangle' : 'check-circle'}" aria-hidden="true"></i>
+                    ${needs ? t('meta.status.attention') : t('meta.status.ok')}
+                </span>
+                ${c.pageName ? part(html`${t('meta.fact.page')}: <bdi dir="auto">${c.pageName}</bdi>`) : ''}
+                ${c.instagramUsername ? part(this.handle(c.instagramUsername)) : ''}
+            </p>
+        `;
+    },
+
+    /** The ids, for whoever has to paste them somewhere (Meta's dashboard, a support request): one button, nothing printed. */
+    idsButton(c) {
+        const lines = [
+            c.pageId ? `${t('meta.fact.page')}: ${c.pageId}` : '',
+            c.instagramId ? `${t('meta.fact.instagram')}: ${c.instagramId}` : '',
+        ].filter(Boolean);
+        if (lines.length === 0) return '';
+        return UI.button({
+            variant: 'ghost', size: 'sm', icon: 'copy', label: t('meta.copyIds'), id: 'meta-copy-ids',
+            action: 'app:copyValue', data: { copy: lines.join('\n') },
+        });
+    },
+
+    /**
+     * Whether events are arriving, from the workspace's own health (`GET /api/health/tenant`: the newest comment, message or delivery),
+     * not from how the connection was made. Without a health answer it falls back to the subscription state, as before.
+     */
+    arrivingValue(c, health) {
+        const at = health && (health.lastWebhookAt || health.last_webhook_at);
+        // A connection made with Facebook whose Page is not subscribed is a fault whatever the history says.
+        if (c.via === 'login' && !c.webhookSubscribed) return this.webhookPill(c);
+        if (health && at && !Number.isNaN(new Date(at).getTime())) {
+            return html`<span class="health-pill health-fresh"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('meta.arriving.yes', { age: UI.relativeAge(at).text })}</span>`;
+        }
+        if (health) return html`<span class="text-meta">${t('meta.arriving.none')}</span>`;
+        return this.webhookPill(c);
+    },
+
+    /** What is connected, as the definition list of the card. `opts.health`: the workspace's health answer, when there is one. */
+    facts(c, opts) {
+        const o = opts || {};
         return html`
             <dl class="ops-facts mbe-4">
-                ${Admin.field(t('meta.fact.page'), page)}
-                ${Admin.field(t('meta.fact.instagram'), instagram)}
                 ${Admin.field(t('meta.fact.connectedAt'), c.connectedAt ? UI.formatDay(c.connectedAt) : t('meta.fact.connectedAtUnknown'))}
-                ${Admin.field(t('meta.fact.webhook'), this.webhookPill(c))}
+                ${Admin.field(t('meta.fact.webhook'), this.arrivingValue(c, o.health))}
                 ${Admin.field(t('meta.fact.via'), c.via === 'login' ? t('meta.via.login') : t('meta.via.token'))}
             </dl>
             ${c.via === 'login' && !c.webhookSubscribed ? html`<p class="form-hint text-warning mbe-4">${t('meta.webhook.offHint')}</p>` : ''}
@@ -201,29 +243,23 @@ const MetaConnect = {
         }
 
         const needs = state === 'attention';
-        const name = c.pageName
-            ? html`<strong dir="auto">${c.pageName}</strong>`
-            : html`<strong>${t('meta.connectedTitle')}</strong>`;
         return html`
             <div class="row row--start gap-3 mbe-4">
                 <span class="stat-icon shrink-0"><i data-lucide="instagram" aria-hidden="true"></i></span>
-                <div class="stack gap-1">
-                    ${name}
-                    <span class="health-pill ${needs ? html.raw('health-stale') : html.raw('health-fresh')}">
-                        <i data-lucide="${needs ? 'alert-triangle' : 'check-circle'}" aria-hidden="true"></i>
-                        ${needs ? t('meta.status.attention') : t('meta.status.ok')}
-                    </span>
-                </div>
+                ${this.statusLine(c, needs)}
             </div>
             ${needs ? this.attentionNote(c) : ''}
-            ${this.facts(c)}
+            ${this.facts(c, { health: o.health })}
             ${owner ? html`
-                ${start ? html`
-                    <div class="row row--wrap gap-2">
-                        ${this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' })}
-                    </div>
-                ` : ''}
-                ${c.via === 'token' ? html`<p class="form-hint mbs-3">${t('meta.tokenNote')}</p>` : ''}
+                <div class="row row--wrap gap-2">
+                    ${start ? this.connectButton(resp, { returnTo: 'settings', variant: needs ? 'primary' : 'secondary', size: 'sm' }) : ''}
+                    ${this.idsButton(c)}
+                </div>
+                <!-- The token lives on the Advanced tab, and only a platform admin sees it there: nobody else is told to look for it. -->
+                ${c.via === 'token' && o.isAdmin ? html`
+                    <p class="form-hint mbs-3">${t('meta.tokenNote')}
+                        ${UI.button({ variant: 'ghost', size: 'sm', label: t('meta.tokenNoteOpen'), action: 'settings:openCard', data: { card: 'token' }, id: 'meta-open-token' })}
+                    </p>` : ''}
                 ${!start && needs ? html`<p class="form-hint mbs-3">${t('meta.reconnectOff')}</p>` : ''}
                 ${c.via === 'login' ? html`
                     <div class="settings-danger">
@@ -324,7 +360,7 @@ const MetaConnect = {
                 ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
             `;
         } else {
-            body = this.settingsBody(ctx.meta, { canAdminister: ctx.canAdminister });
+            body = this.settingsBody(ctx.meta, { canAdminister: ctx.canAdminister, health: ctx.health, isAdmin: ctx.operator });
         }
         return html`
             <section class="section" id="settings-meta">

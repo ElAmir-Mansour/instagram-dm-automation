@@ -48,8 +48,10 @@ const AnalyticsPage = {
     // ─── A1: the window ──────────────────────────────────────────────────────
     /** The windows on offer, as stored and as sent; 'all' sends no `days`. */
     RANGES: Object.freeze(['7', '28', '90', 'all']),
-    /** All time: what the routes answered before they took a window. */
-    DEFAULT_RANGE: 'all',
+    /** 28 days, as Growth opens (UX U1, DW-R2): all time was pulled down for good by one old paused test campaign (74% against 100% for the month). */
+    DEFAULT_RANGE: '28',
+    /** The day strip's length when the window is "All": the strip is a recent shape, so it says "last 30 days" itself rather than borrowing a window it does not draw. */
+    STRIP_ALL_DAYS: 30,
     RANGE_KEY: 'analytics:range',
     /** The failure-reasons panel (A5) is always the last 30 days. */
     FAILURE_DAYS: 30,
@@ -76,6 +78,11 @@ const AnalyticsPage = {
     daysText(n) {
         const count = Number(n) || 0;
         return t('analytics.days', { count, n: UI.formatNumber(count) });
+    },
+
+    /** The days the strip draws: the chosen window, or the last 30 when the window is all time. */
+    stripDays(range) {
+        return this.rangeDays(range) || this.STRIP_ALL_DAYS;
     },
 
     /** The window a tile or panel names: "آخر 28 يوماً" / "Last 28 days", or "All time". */
@@ -213,7 +220,7 @@ const AnalyticsPage = {
          */
         const [statsRes, dailyRes, campaignRes, failuresRes] = await Promise.all([
             this._settle(API.getStats(days)),
-            this._settle(API.getDailyStats(30)),
+            this._settle(API.getDailyStats(this.stripDays(this.range))),
             this._settle(API.getCampaignStats(days)),
             this._settle(API.getFailureReasons(this.FAILURE_DAYS)),
         ]);
@@ -295,7 +302,7 @@ const AnalyticsPage = {
                      user had no way to move between the four panels. Real
                      headings, same classes. -->
                 <div class="chart-card surface">
-                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chart30')}</h2></div>
+                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartDays', { days: this.daysText(this.stripDays(this.range)) })}</h2></div>
                     <!-- Filled below: the summary and the strip when the series
                          arrived, an error panel with its own Retry when it did
                          not. An empty strip and a failed fetch are not the same
@@ -352,7 +359,7 @@ const AnalyticsPage = {
                     <h2 class="chart-card-title">${t('analytics.failures.title', { days: this.daysText(this.FAILURE_DAYS) })}</h2>
                     ${UI.button({
                         variant: 'secondary', size: 'sm', label: t('analytics.failures.open'),
-                        action: 'app:navigate', data: { target: 'activity', query: 'status=FAILED' },
+                        action: 'app:navigate', data: { target: 'activity', query: 'outcome=actionable' },
                         id: 'analytics-failures-open',
                     })}
                 </div>
@@ -478,7 +485,7 @@ const AnalyticsPage = {
      * The success rate is the page's one definition (delivered ÷ (delivered +
      * needs you)), the same as the tile above, and "—" before anything was attempted.
      */
-    summary30(daily) {
+    summary30(daily, days = this.STRIP_ALL_DAYS) {
         const rows = Array.isArray(daily) ? daily : [];
         const legacy = { sent: 'sent', failed: 'failed' };
         let delivered = 0;
@@ -508,7 +515,8 @@ const AnalyticsPage = {
             }
         }
         const attempted = delivered + actionable;
-        return t('analytics.summary30', {
+        return t('analytics.summaryDays', {
+            days: this.daysText(days),
             sent: UI.formatNumber(delivered),
             failed: UI.formatNumber(actionable),
             byDesign: UI.formatNumber(byDesign),
@@ -523,18 +531,18 @@ const AnalyticsPage = {
         if (dailyRes.status === 'rejected') {
             const err = dailyRes.reason || new Error(t('error.unexpected'));
             UI.renderError(host, {
-                title: t('analytics.trendErrorTitle'),
+                title: t('analytics.trendErrorTitle', { days: this.daysText(this.stripDays(this.range)) }),
                 message: err.message || t('error.unexpected'),
                 hint: err.isNetworkError ? t('error.network') : '',
             }, () => this.retryPanel('strip'));
             return;
         }
         const daily = Array.isArray(dailyRes.value) ? dailyRes.value : [];
-        const summary = this.summary30(daily);
+        const summary = this.summary30(daily, this.stripDays(this.range));
         host.innerHTML = esc(html`
             ${summary ? html`<p class="chart-summary" id="analytics-summary">${summary}</p>` : ''}
             ${Charts.dayStrip(daily, Object.assign({
-                label: t('analytics.chart30'),
+                label: t('analytics.chartDays', { days: this.daysText(this.stripDays(this.range)) }),
                 emptyMessage: t('analytics.noData'),
                 dayHeader: t('common.day'),
             }, this.stripOptions(daily)))}
@@ -762,7 +770,7 @@ const AnalyticsPage = {
         const host = document.getElementById(this.PANEL_HOSTS[panel] || this.PANEL_HOSTS.campaigns);
         if (host) host.innerHTML = esc(html`<div class="chart-skel" aria-hidden="true"><span class="skel skel-block"></span></div>${Motion.busy()}`);
         let request;
-        if (panel === 'strip') request = API.getDailyStats(30);
+        if (panel === 'strip') request = API.getDailyStats(this.stripDays(this.range));
         else if (panel === 'failures') request = API.getFailureReasons(this.FAILURE_DAYS);
         else request = API.getCampaignStats(this.rangeDays(this.range));
         return this._settle(request).then((res) => {

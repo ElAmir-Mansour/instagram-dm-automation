@@ -329,7 +329,7 @@ const CampaignsPage = {
             return html`
                 <button type="button" class="campaign-stat campaign-stat-link"
                         data-action="app:navigate" data-target="activity"
-                        data-query="${new URLSearchParams({ campaign: String(c.id), status: 'FAILED' }).toString()}"
+                        data-query="${new URLSearchParams({ campaign: String(c.id), outcome: 'actionable' }).toString()}"
                         title="${t('campaigns.openFailed')}">
                     <span class="dot bad" aria-hidden="true"></span> ${label}
                     <span class="sr-only">${t('campaigns.openFailed')}</span>
