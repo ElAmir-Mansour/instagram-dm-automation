@@ -4741,7 +4741,7 @@ const HelpContent = {
                                 'من 12 إلى 30 **لقطة**.',
                             ] },
                             'يُكتب الكاروسيل من هذه الملاحظات، ولهذا لا يمكنك اختيار إلا الدروس المفهرسة. والملاحظات هي التي تمنع الذكاء الاصطناعي من اختراع ميزات أو أرقام لم تقلها.',
-                            'ابدأ الفهرسة بـ**فهرس الناقص** (كل ما لم يُفهرس)، أو **فهرس الباقي**، أو لدرس واحد: افتحه واضغط **فهرس هذا الدرس**.',
+                            'ابدأ الفهرسة بـ**افهرس الدروس التي لم تُفهرس بعد** (كل ما لم يُفهرس)، أو **افهرس الدروس المتبقية**، أو لدرس واحد: افتحه واضغط **فهرس هذا الدرس**.',
                             { dl: [
                                 ['مفهرس', 'جاهز لتختاره.'],
                                 ['قيد الفهرسة…', 'العامل يعمل عليه الآن.'],
@@ -4759,7 +4759,7 @@ const HelpContent = {
                                 '12 to 30 **moments**.',
                             ] },
                             'Carousels are written from these notes, which is why only indexed lessons can be picked. The notes are also what stops the AI inventing features or numbers you never mentioned.',
-                            'Start indexing with **Index missing** (everything not indexed yet), **Index the rest**, or for one lesson: open it and press **Index this lesson**.',
+                            'Start indexing with **Index the lessons not indexed yet** (everything not indexed yet), or **Index the remaining lessons**, or for one lesson: open it and press **Index this lesson**.',
                             { dl: [
                                 ['Indexed', 'Ready to pick.'],
                                 ['Indexing…', 'The worker is on it now.'],

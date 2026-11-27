@@ -2655,13 +2655,15 @@ const UI = {
             })}</div>`;
         }
 
-        return html`<nav class="ui-tabs ui-tabs--link"${label} data-keydown="ui:tabsKey">${list.map((it) => {
+        // `o.tablist`: the tabs switch panels of this same page (Settings), so they are announced as tabs, not as navigation links.
+        const tl = o.tablist === true;
+        return html`<nav class="ui-tabs ui-tabs--link"${tl ? html.raw(' role="tablist"') : ''}${label} data-keydown="ui:tabsKey">${list.map((it) => {
             const raw = it.href !== undefined
                 ? it.href
                 : (o.route ? `${o.route}${o.param ? `?${o.param}=${encodeURIComponent(String(it.key))}` : ''}` : '');
             const href = UI._href(raw);
             if (!href) return '';
-            return html`<a class="ui-tab" data-ui-tab href="${href}"${current(it) ? html.raw(' aria-current="page"') : ''}>${inner(it)}</a>`;
+            return html`<a class="ui-tab" data-ui-tab href="${href}"${tl ? html.raw(` role="tab" aria-selected="${current(it) ? 'true' : 'false'}"`) : ''}${current(it) ? html.raw(' aria-current="page"') : ''}>${inner(it)}</a>`;
         })}</nav>`;
     },
 

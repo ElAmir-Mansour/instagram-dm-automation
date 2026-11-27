@@ -905,7 +905,10 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     scrollbar-width: none;
 }
 .segmented::-webkit-scrollbar { display: none; }
-.segmented .btn { box-shadow: none; border: none; flex-shrink: 0; }
+/* A pill keeps its label on ONE line (QA-10: Studio and Ads pills were 58-72px tall on a phone); a strip that is too narrow scrolls inside itself. */
+.segmented .btn { box-shadow: none; border: none; flex-shrink: 0; white-space: nowrap; }
+/* A toolbar button too: «استورد من CSV» took two lines (60px) at 375px. The row wraps between buttons, never inside one. */
+.toolbar-actions .btn, .page-toolbar .btn { white-space: nowrap; }
 /* The pressed segment is a solid tile lifted off the sunken track, whatever
    `.btn-*` variant the page happened to emit: (0,3,0) outranks `.btn-primary`
    and `.btn-ghost`, and sits after their `:hover`/`:active` rules of equal
@@ -3305,8 +3308,8 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     .menu-button { grid-area: menu; }
     .header-start > div { grid-area: title; min-inline-size: 0; }
     .header-end { grid-area: end; justify-self: end; max-inline-size: 100%; }
-    /* The title wraps; the subtitle is the secondary line and keeps to one, so a sticky bar stays a fraction of a small screen. */
-    .page-subtitle { -webkit-line-clamp: 1; line-clamp: 1; }
+    /* The title wraps; the subtitle is the secondary line and keeps to two (QA-11: one line cut Studio's and Reels' mid-sentence). */
+    .page-subtitle { -webkit-line-clamp: 2; line-clamp: 2; }
 
     /* The workspace becomes one 44px circle holding its initial; the native <select> is stretched over it, invisible, so a tap
        still opens the real list (full names) and the label, keyboard and screen-reader behaviour are the select's own.
@@ -3617,7 +3620,7 @@ html[lang='en'] .page-toolbar-count {
 .chart-line-x > span.is-last { justify-content: flex-end; }
 @media (max-width: 560px) {
     .chart-line-y, .chart-line-svg { block-size: 132px; }
-    .chart-line-x > span.is-minor { visibility: hidden; }
+    .chart-line-x > span.is-minor, .chart-strip-day.is-minor { visibility: hidden; }
 }
 
 /* Compared magnitudes (Charts.compareBars): a label, a thin bar that grows from the reading edge, and the value in text ink. One hue;

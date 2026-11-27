@@ -217,9 +217,16 @@ const Charts = {
         // Thin the labels once there are more than 8 days rather than cramming
         // one under every cell — see the class comment above.
         const labelStep = Math.max(1, Math.ceil(ordered.length / 8));
+        // The label of the last day wins over a step label right next to it (28 and 29 of 30 printed over each other), and on a phone
+        // (`.chart-strip-day.is-minor`, hidden under 560px) every other date goes: "28 Nov" is ~44px, a slot of 30 days is ~11px.
+        const lastAt = ordered.length - 1;
+        const stepAt = (i) => i % labelStep === 0 && lastAt - i >= Math.ceil(labelStep / 2);
         const labels = ordered.map((d, i) => {
-            const show = i % labelStep === 0 || i === ordered.length - 1;
-            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted);">${show ? Charts.dayLabel(d.day) : ''}</span>`;
+            const show = stepAt(i) || i === lastAt;
+            let rank = 0;
+            for (let j = 0; j < i; j++) if (stepAt(j)) rank++;
+            const minor = show && ordered.length > 7 && i !== lastAt && rank % 2 === 1;
+            return html`<span class="chart-strip-day${minor ? ' is-minor' : ''}" style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted);">${show ? Charts.dayLabel(d.day) : ''}</span>`;
         });
 
         return html`

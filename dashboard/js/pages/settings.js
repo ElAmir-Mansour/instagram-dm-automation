@@ -464,7 +464,7 @@ const SettingsPage = {
             // The dot is drawn hidden on every tab; `syncDirtyDots` shows it on a tab that holds unsaved edits. Its words are for a screen reader.
             label: html`${t(`settings.group.${group.id}`)}${group.platform ? html` <span class="badge badge-neutral settings-tab-badge">${t('settings.scope.platform')}</span>` : ''}<span class="settings-tab-dot" data-settings-dot="${group.id}" role="img" aria-label="${t('settings.tab.unsaved')}" hidden></span>`,
         }));
-        return UI.tabs(items, { mode: 'link', current: active, label: t('settings.nav.label') });
+        return UI.tabs(items, { mode: 'link', current: active, label: t('settings.nav.label'), tablist: true });
     },
 
     /**
@@ -495,6 +495,7 @@ const SettingsPage = {
         container.querySelectorAll('.settings-tabbar a.ui-tab').forEach((link, i) => {
             if (ids[i] === view.group) link.setAttribute('aria-current', 'page');
             else link.removeAttribute('aria-current');
+            link.setAttribute('aria-selected', ids[i] === view.group ? 'true' : 'false');
         });
         if (view.card) {
             this.revealCard(view.card);
@@ -1399,7 +1400,7 @@ const SettingsPage = {
         return html`
             <section class="section">
                 <div class="row row--between row--wrap gap-3 mbe-3">
-                    <h2 class="section-title">${t('settings.team.title')} <span class="team-count">· ${t('settings.team.count', { count: members.length })}</span></h2>
+                    <h2 class="section-title">${t('settings.team.title')} <span class="team-count">· ${members.length === 0 ? t('settings.team.countNone') : t('settings.team.count', { count: members.length })}</span></h2>
                     ${UI.button({ variant: 'primary', size: 'sm', icon: 'user-plus', label: t('settings.team.invite'), action: 'settings:teamInvite', id: 'team-invite-btn' })}
                 </div>
                 <div class="settings-card surface">
