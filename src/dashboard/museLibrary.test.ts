@@ -942,13 +942,13 @@ describe('video library: the Help section it links to', () => {
 
     it('says the same in Arabic, in the Help Center\'s own voice', () => {
         const body = textOf('ar');
-        assert.match(body, /ريلزك أنت المنشورة بس، وهي عامة/);
-        assert.match(body, /ما نحتفظ به/);
+        assert.match(body, /ريلزك أنت المنشورة فقط، وهي عامة/);
+        assert.match(body, /لا نحتفظ به/);
         assert.match(body, /Baseten/);
         assert.match(body, /من 0:13/);
-        assert.match(body, /ما في فيديو عن الموضوع هذا لسا، بدون أي رابط/);
-        assert.match(body, /ما يرسل أبداً رابطاً مو في مكتبتك/);
-        assert.match(body, /نحو 40 ثانية ونحو 0\.02 دولار للريل، يعني نحو 1\.50 دولار لسبعين ريل/);
+        assert.match(body, /لا يوجد فيديو عن هذا الموضوع بعد، بدون أي رابط/);
+        assert.match(body, /ولا يرسل أبداً رابطاً ليس في مكتبتك/);
+        assert.match(body, /نحو 40 ثانية ونحو 0\.02 دولار للريل، أي نحو 1\.50 دولار لسبعين ريل/);
         assert.match(body, /الأكبر من 35 ميغابايت/);
         assert.match(body, /تذكّر: فيديو من مكتبتك/);
     });

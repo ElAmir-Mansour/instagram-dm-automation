@@ -19,6 +19,7 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:voice": "node scripts/check-voice.mjs",
+    "check:register": "node scripts/check-register.mjs",
     "check:glossary": "node scripts/check-glossary.mjs",
     "check:docs": "node scripts/check-doc-refs.mjs",
     "docs:reanchor": "node scripts/check-doc-refs.mjs --reanchor",
