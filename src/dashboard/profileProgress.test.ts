@@ -408,7 +408,7 @@ describe('ProfileAsk: the sheet', () => {
         const { ProfileAsk, toasts, calls } = load({ role: 'operator' });
         assert.equal(await ProfileAsk.require(['presenter'], {}), false);
         assert.deepEqual(toasts.map((t) => t.type), ['error']);
-        assert.match(toasts[0]!.message, /Only the account owner can fill this in/);
+        assert.match(toasts[0]!.message, /Only the workspace owner can fill this in/);
         assert.equal(calls.length, 0);
     });
 
@@ -607,7 +607,7 @@ describe('the Operations funnel card', () => {
 
     it('says so when nobody has been invited, when it is loading, and when it could not be loaded, with a Retry', () => {
         const L = load();
-        assert.match(paint(L, {}, { data: { ...FUNNEL, cohort: 0 } }), /No tenant has been invited in this period yet/);
+        assert.match(paint(L, {}, { data: { ...FUNNEL, cohort: 0 } }), /No workspace has been invited in this period yet/);
         assert.match(paint(L, {}, { data: null, loading: true }), /Loading/);
         const failed = paint(L, {}, { data: null, failed: true });
         assert.match(failed, /The funnel could not be loaded/);

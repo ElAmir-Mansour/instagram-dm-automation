@@ -23,7 +23,7 @@ import type { MonteurThinkPayload, StudioJobKind } from '../../db/rows.js';
 import { pool } from '../../config/db.js';
 import { describeError, log } from '../../utils/log.js';
 import { APP_SETTING_KEYS, getSetting, setSetting, type AppSettingKey } from '../appSettings.js';
-import { isMacBrainJob } from '../macBrain.js';
+import { isMacBrainAllowed, isMacBrainJob } from '../macBrain.js';
 import { effectiveTo, emailReady, readNotifyChannels, sendEmail } from '../notifyEmail.js';
 import { sendTelegramMessage, telegramReady } from '../notify.js';
 import { getPlatformOwnerId } from '../tenant.js';
@@ -69,6 +69,26 @@ export async function claudeSignedOutAt(): Promise<string | null> {
 
 export async function isClaudeSignedOut(): Promise<boolean> {
     return (await claudeSignedOutAt()) !== null;
+}
+
+/**
+ * What the dashboard's Mac chip needs to know about Claude (research CP-S2): whether this tenant's Claude work runs on the Mac at all
+ * (`applies`: the flag is the platform's, and a tenant whose Claude work is not on the Mac must not be told to sign in on a computer it does not
+ * have), and since when Claude has been signed out. Best effort: a failed read says nothing about Claude (`applies: false`) rather than "signed in".
+ */
+export interface ClaudeStatusView {
+    applies: boolean;
+    signedOutAt: string | null;
+}
+
+export async function claudeStatusFor(creatorId: string): Promise<ClaudeStatusView> {
+    try {
+        if (!(await isMacBrainAllowed(creatorId))) return { applies: false, signedOutAt: null };
+        return { applies: true, signedOutAt: await claudeSignedOutAt() };
+    } catch (err) {
+        log('warn', 'mac.claude_status_failed', describeError(err));
+        return { applies: false, signedOutAt: null };
+    }
 }
 
 /** Set the flag unless it is already set (the first failure's time is kept). True when this call set it. */

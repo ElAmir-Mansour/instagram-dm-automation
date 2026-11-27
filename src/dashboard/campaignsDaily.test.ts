@@ -47,7 +47,7 @@ describe('a new keyword reply starts as Whole word (DW-K3)', () => {
         const markup = modals[0]!;
         assert.match(markup, /<option value="word"\s+selected/);
         assert.doesNotMatch(markup, /<option value="substring"\s+selected/);
-        assert.match(markup, /Whole-word matching: the campaign fires only when/, 'and the explanation under it is the whole-word one');
+        assert.match(markup, /Whole-word matching: the keyword reply fires only when/, 'and the explanation under it is the whole-word one');
     });
 
     it('sends match_mode "word" with a create, explicitly', async () => {

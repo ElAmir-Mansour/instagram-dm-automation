@@ -58,6 +58,8 @@ const InfographicsPage = {
         this.items = [];
         this.listError = null;
         this.worker = null;
+        this.jobs = null;
+        this.claude = null;
         this.brand = null;
         this.settingsLoaded = false;
         this.editing = null;
@@ -101,6 +103,7 @@ const InfographicsPage = {
             if (s && s.schedule && s.schedule.timezone) UI.setZone(s.schedule.timezone);
         }
         this.worker = status.status === 'fulfilled' && status.value && status.value.worker ? status.value.worker : null;
+        this.acceptMac(status);
         container.innerHTML = esc(html`
             ${this.toolbarMarkup()}
             <div id="ig-worker">${this.workerMarkup()}</div>
@@ -156,6 +159,7 @@ const InfographicsPage = {
         if (!this.alive(seq)) return;
         this.acceptList(list);
         if (status.status === 'fulfilled' && status.value && status.value.worker) this.worker = status.value.worker;
+        this.acceptMac(status);
         this.paintList();
         this.schedulePoll(seq);
     },
@@ -195,8 +199,21 @@ const InfographicsPage = {
         `;
     },
 
-    /** Only when it matters: something is waiting and the Mac isn't there to do it. */
+    /** What the Mac chip also needs from the status read: the queue and whether Claude on the Mac is signed in. */
+    acceptMac(status) {
+        if (status.status !== 'fulfilled' || !status.value) return;
+        this.jobs = status.value.jobs || null;
+        this.claude = status.value.claude || null;
+    },
+
+    /** The Mac chip (`UI.workerChip`), then, only when it matters, what the Mac being away means here. */
     workerMarkup() {
+        if (!this.worker) return '';
+        return html`<div class="studio-mac">${UI.workerChip({ worker: this.worker, jobs: this.jobs, claude: this.claude }, { id: 'ig-worker-chip' })}</div>${this.workerNoticeMarkup()}`;
+    },
+
+    /** Only when it matters: something is waiting and the Mac isn't there to do it. */
+    workerNoticeMarkup() {
         const waiting = this.items.some((i) => this.open(i));
         if (!waiting || !this.worker || this.worker.online) return '';
         return html`<div class="ig-notice" role="status">

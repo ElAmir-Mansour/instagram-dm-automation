@@ -11,7 +11,7 @@ import { ThinkSignedOut, ThinkWaiting, MAX_THINK_TRIES, THINK_FAILED, nextThinkS
 import { emailHttp } from '../notifyEmail.js';
 import { APP_SETTING_KEYS } from '../appSettings.js';
 import {
-    alertOnce, checkMacAlarms, clearClaudeSignedOut, isClaudeSignedOut, isSignInFailure, macAlertText, markClaudeSignedOut, noteMacJobDone,
+    alertOnce, checkMacAlarms, claudeStatusFor, clearClaudeSignedOut, isClaudeSignedOut, isSignInFailure, macAlertText, markClaudeSignedOut, noteMacJobDone,
     noteMacJobFailed, probeClaudeSignIn, requeueSignInBlocked, REQUEUE_LIMIT, REQUEUE_MAX_AGE_DAYS, SIGNED_OUT_MESSAGE, SIGNED_OUT_PROBE_MINUTES,
     type RequeueDeps,
 } from './macHealth.js';
@@ -152,6 +152,33 @@ describe('the flag mac.claude_signed_out_at', () => {
         w.db.routes.unshift([/app_settings/, () => { throw new Error('db down'); }]);
         await noteMacJobFailed('monteur_think', {}, SIGNED_OUT_ERRORS[0]);
         await noteMacJobDone('monteur_think', {}, noDeps());
+    });
+});
+
+describe('claudeStatusFor: what the dashboard\'s Mac chip reads (CP-S2)', () => {
+    let w: ReturnType<typeof world>;
+    beforeEach(() => { w = world(); });
+    afterEach(() => w.db.restore());
+
+    it('says Claude is signed in (no time) for the owner while the flag is not set', async () => {
+        assert.deepEqual(await claudeStatusFor(OWNER), { applies: true, signedOutAt: null });
+    });
+
+    it('carries the time of the first sign-in failure while the flag is set, and drops it once Claude works again', async () => {
+        await markClaudeSignedOut(new Date('2026-11-28T08:00:00Z'));
+        assert.deepEqual(await claudeStatusFor(OWNER), { applies: true, signedOutAt: '2026-11-28T08:00:00.000Z' });
+        await noteMacJobDone('monteur_think', {}, noDeps());
+        assert.deepEqual(await claudeStatusFor(OWNER), { applies: true, signedOutAt: null });
+    });
+
+    it('tells a tenant the Mac does not work for nothing about it: the flag is the platform\'s', async () => {
+        await markClaudeSignedOut();
+        assert.deepEqual(await claudeStatusFor('22222222-2222-4222-8222-222222222222'), { applies: false, signedOutAt: null });
+    });
+
+    it('says nothing about Claude when the read fails, never "signed in"', async () => {
+        w.db.routes.unshift([/app_settings/, () => { throw new Error('db down'); }]);
+        assert.deepEqual(await claudeStatusFor(OWNER), { applies: false, signedOutAt: null });
     });
 });
 

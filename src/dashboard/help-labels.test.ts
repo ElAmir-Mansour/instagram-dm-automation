@@ -92,7 +92,6 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'Start': 'a control in Telegram',
     },
     en: {
-        'An AI agent for DMs': 'feature name leading a list item',
         'Post scheduling': 'feature name leading a list item',
         'Carousel Studio': 'feature name leading a list item',
         'professional': 'emphasis: the Instagram account type',

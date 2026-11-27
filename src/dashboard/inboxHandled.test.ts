@@ -99,8 +99,8 @@ describe('Inbox: every badge about the assistant is the EFFECTIVE state (IN-02)'
         const thread = answered();
         show(r, [thread], { ...ON, is_active: false });
         const row = text(r.Inbox.threadRow(thread));
-        assert.ok(row.includes('الردّ الآلي متوقف'), row);
-        assert.ok(!row.includes('الردّ الآلي يعمل'), row);
+        assert.ok(row.includes('المساعد متوقف'), row);
+        assert.ok(!row.includes('المساعد يعمل'), row);
     });
 
     it('says nothing about the assistant on a row it is answering as usual (U2: only what is not the default is drawn)', () => {
@@ -319,8 +319,8 @@ describe('Inbox: the strip above the list', () => {
             kinds.set(name, text(host.innerHTML));
         }
         assert.equal(new Set(kinds.values()).size, 4);
-        assert.ok(kinds.get('off')!.includes('الردّ الآلي متوقف في كل المحادثات'));
-        assert.ok(kinds.get('notSetUp')!.includes('لم يُعَدّ الردّ الآلي بعد'));
+        assert.ok(kinds.get('off')!.includes('المساعد متوقف في كل المحادثات'));
+        assert.ok(kinds.get('notSetUp')!.includes('لم يُعَدّ المساعد بعد'));
         for (const sentence of kinds.values()) assert.ok(!/[A-Za-z]{4,}/.test(sentence), `no English in the Arabic strip: ${sentence}`);
     });
 
@@ -633,7 +633,7 @@ describe('Inbox: once Meta\'s 24 h window has closed, the composer offers "Repli
         show(r, [thread]);
         const offer = text(r.Inbox.windowOfferMarkup(thread));
         assert.ok(offer.includes('انتهت مهلة الردّ'));
-        assert.ok(offer.includes('رددتُ في إنستغرام: تمّ التعامل'));
+        assert.ok(offer.includes('رددتُ في إنستجرام: تمّ التعامل'));
     });
 
     it('offers nothing while the window is open (the owner can just reply), or once the thread is handled, or when nobody has to answer it, or when the customer has not written', () => {

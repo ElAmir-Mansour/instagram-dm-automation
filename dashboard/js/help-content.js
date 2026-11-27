@@ -81,7 +81,7 @@ const HelpContent = {
                             'AutoReply Pro answers your audience on Instagram and Facebook for you, and publishes your content on time, even while you are busy or asleep. It works on your real account through Meta’s own API: no tricks, no browser extensions.',
                             { ul: [
                                 '**Keyword replies:** someone comments a word you choose (say, “price”), gets a private DM with your link, and sees a public reply under their comment if you want one.',
-                                '**An AI agent for DMs:** messages that land in your inbox are answered by an agent that knows your product and writes in your voice. You can pause it in any conversation.',
+                                '**DM assistant:** messages that land in your inbox are answered by an assistant that knows your product and writes in your voice. You can pause it in any conversation.',
                                 '**Post scheduling:** images, videos, reels and carousels, to Instagram and Facebook together, and to TikTok too once it is connected.',
                                 '**Carousel Studio:** turns your recorded lessons into ready carousel posts, with the caption, the keyword and the DM written for you.',
                             ] },
@@ -96,9 +96,9 @@ const HelpContent = {
                             'عشر دقائق تكفي ليبدأ الحساب العمل عنك. امضِ فيها بالترتيب:',
                             { ol: [
                                 'افتح **الإعدادات** وتأكد أن قسم **رمز الوصول** مكتوب فيه **صالح**. وإن رأيت تنبيه **صلاحيات ميتا ناقصة**، فالحل في [[connect-meta#token-health]].',
-                                'اذهب إلى **الردود التلقائية** واضغط **حملة جديدة**: اكتب الكلمة المفتاحية، ونص الرسالة الخاصة، ورداً علنياً قصيراً. وقبل أن تختار الكلمة اقرأ [[campaigns#matching|كيف تعمل المطابقة]].',
-                                'جرّبها بنفسك: من حساب آخر علّق بالكلمة على أحد منشوراتك، وخلال ثوانٍ تصلك الرسالة في الخاص. وكل ما جرى تجده في **سجل النشاط**.',
-                                'افتح **مساعد الرسائل**، فعّل **تشغيل الردّ الآلي**، واكتب في **الشخصية والتعليمات** من هو المساعد وكيف يتكلم. جرّبه في **اختبار الوكيل** قبل أن يردّ على أي عميل.',
+                                'اذهب إلى **الردود التلقائية** واضغط **ردّ تلقائي جديد**: اكتب الكلمة المفتاحية، ونص الرسالة الخاصة، ورداً علنياً قصيراً. وقبل أن تختار الكلمة اقرأ [[campaigns#matching|كيف تعمل المطابقة]].',
+                                'جرّبها بنفسك: من حساب آخر علّق بالكلمة على أحد منشوراتك، وخلال ثوانٍ تصلك الرسالة في الخاص. وكل ما جرى تجده في **السجل**.',
+                                'افتح **مساعد الرسائل**، فعّل **تشغيل الردّ الآلي**، واكتب في **الشخصية والتعليمات** من هو المساعد وكيف يتكلم. جرّبه في **اختبار المساعد** قبل أن يردّ على أي عميل.',
                                 'من **الجدولة** اضغط **جدوِل منشوراً** وجرّب منشوراً بسيطاً. التفاصيل في [[scheduling]].',
                                 'اختياري: اربط تيك توك من **الإعدادات** ← **اربط تيك توك**، واقرأ [[tiktok]] قبل أول منشور.',
                                 'اختياري: إذا كان عندك كورس أو دروس مصوّرة، جهّز **الاستوديو**. البداية من [[studio]].',
@@ -109,9 +109,9 @@ const HelpContent = {
                             'Ten minutes is enough to get the account working for you. Go through these in order:',
                             { ol: [
                                 'Open **Settings** and check that the **Access token** section says **Valid**. If you see **Missing Meta permissions**, the fix is in [[connect-meta#token-health]].',
-                                'Go to **Keyword replies** and press **New campaign**: enter a keyword, the DM text and a short public reply. Before you pick the keyword, read [[campaigns#matching|how matching works]].',
-                                'Test it yourself: from another account, comment the keyword on one of your posts. The DM arrives within seconds, and everything that happened shows up in the **Activity Log**.',
-                                'Open **DM assistant**, switch on **Turn on auto-replies**, and describe in **Voice and instructions** who the agent is and how it talks. Try it in the **Agent sandbox** before it answers a real customer.',
+                                'Go to **Keyword replies** and press **New keyword reply**: enter a keyword, the DM text and a short public reply. Before you pick the keyword, read [[campaigns#matching|how matching works]].',
+                                'Test it yourself: from another account, comment the keyword on one of your posts. The DM arrives within seconds, and everything that happened shows up in the **Log**.',
+                                'Open **DM assistant**, switch on **Turn on auto-replies**, and describe in **Voice and instructions** who the assistant is and how it talks. Try it in the **Assistant sandbox** before it answers a real customer.',
                                 'In the **Scheduler**, press **Schedule a post** and try a simple one. The details are in [[scheduling]].',
                                 'Optional: connect TikTok from **Settings** → **Connect TikTok**, and read [[tiktok]] before your first post.',
                                 'Optional: if you have a course or recorded lessons, set up the **Studio**. Start with [[studio]].',
@@ -134,7 +134,7 @@ const HelpContent = {
                                 ['مساعد الرسائل', 'شخصية المساعد، ومعلوماته، والنموذج، ومكان تجربته.'],
                                 ['التحليلات', 'أداء الأتمتة بالأرقام.'],
                                 ['النمو والتسويق', 'أرقام محتواك، وخطة مدرب النمو، وأدوات السيو.'],
-                                ['سجل النشاط', 'كل تعليق ورسالة وحالتها، لحظة بلحظة.'],
+                                ['السجل', 'كل تعليق ورسالة وحالتها، لحظة بلحظة.'],
                                 ['الإعدادات', 'رمز الوصول، ورمز التحقق، وتيك توك، والمظهر واللغة.'],
                                 ['المساعدة', 'هنا: كل الشروحات، بالعربية والإنجليزية.'],
                             ] },
@@ -142,14 +142,14 @@ const HelpContent = {
                         en: [
                             { dl: [
                                 ['Overview', 'Today at a glance, and anything that needs your attention.'],
-                                ['Campaigns', 'Keywords, their DMs and their public replies.'],
+                                ['Keyword replies', 'Keywords, their DMs and their public replies.'],
                                 ['Posts Scheduler', 'The queue of scheduled posts, and what is already live on your accounts.'],
                                 ['Studio', 'Carousels made from your lessons, from the idea to the schedule.'],
                                 ['DM Inbox', 'Your customer conversations. Each one opens at its newest message, and older messages load as you scroll up. You can reply yourself, and a manual reply pauses the AI in that conversation.'],
-                                ['AI Settings', 'The agent’s voice, what it knows, the model, and a sandbox to try it.'],
+                                ['AI Settings', 'The assistant’s voice, what it knows, the model, and a sandbox to try it.'],
                                 ['Analytics', 'How the automation is performing, in numbers.'],
                                 ['Growth', 'How your content performs, the Growth Coach’s plan, and the SEO tools.'],
-                                ['Activity Log', 'Every comment and message and what happened to it, as it happens.'],
+                                ['Log', 'Every comment and message and what happened to it, as it happens.'],
                                 ['Settings', 'The access token, the webhook verify token, TikTok, appearance and language.'],
                                 ['Help', 'You are here: every guide, in Arabic and English.'],
                             ] },
@@ -199,8 +199,8 @@ const HelpContent = {
                             'An account has three roles. When yours limits you, its badge appears at the top of the page, so you know why a button refuses:',
                             { dl: [
                                 ['Owner', 'Everything, including the Meta connection itself (the page access token and the webhook verify token) and connecting TikTok.'],
-                                ['Operator', 'Campaigns, scheduled posts, the inbox and the AI agent, without touching the Meta tokens.'],
-                                ['Viewer', 'Read only: stats, campaigns, posts and messages, with no changes.'],
+                                ['Operator', 'Keyword replies, scheduled posts, the inbox and the AI assistant, without touching the Meta tokens.'],
+                                ['Viewer', 'Read only: stats, keyword replies, posts and messages, with no changes.'],
                             ] },
                             'You can switch the dashboard between Arabic and English with the button at the top of the page, or in **Settings** → **Appearance & language**.',
                         ],
@@ -230,18 +230,18 @@ const HelpContent = {
                             { dl: [
                                 ['الرابط', 'صفحة ترحّب بك في مساحتك وتطلب كلمة مرور: [[onboarding#invite]].'],
                                 ['الإعداد', 'شاشات قصيرة: عنك، وأسلوبك، وهويتك، وحساباتك، وعيّنات ردود: [[onboarding#steps]].'],
-                                ['لوحتك', 'ينتهي الإعداد بزر **إلى لوحتي**. وقبل ذلك يُرجَع مالك الحساب إلى الإعداد من كل صفحة أخرى.'],
+                                ['لوحتك', 'ينتهي الإعداد بزر **إلى لوحتي**. وقبل ذلك يُرجَع مالك مساحة العمل إلى الإعداد من كل صفحة أخرى.'],
                             ] },
-                            { note: 'يُتمّ الإعداد مالك الحساب وحده. وإن ظهرت لك رسالة «إتمام الإعداد لمالك الحساب وحده» فاطلب من المالك أن يفتحه، ويمكنك استخدام اللوحة في الأثناء.' },
+                            { note: 'يُتمّ الإعداد مالك مساحة العمل وحده. وإن ظهرت لك رسالة «إتمام الإعداد لمالك مساحة العمل وحده» فاطلب من المالك أن يفتحه، ويمكنك استخدام اللوحة في الأثناء.' },
                         ],
                         en: [
                             'A new workspace starts with a link. The person who runs the platform makes your workspace and sends you the link, usually on WhatsApp. You open it and choose a password, and a short setup asks about you and your voice. When the setup ends, your dashboard opens.',
                             { dl: [
                                 ['The link', 'A page that welcomes you to your workspace and asks for a password: [[onboarding#invite]].'],
                                 ['The setup', 'A few short screens: about you, your voice, your look, your accounts and some sample replies: [[onboarding#steps]].'],
-                                ['Your dashboard', 'The setup ends with **Go to my dashboard**. Until then the account owner is sent back to the setup from every other page.'],
+                                ['Your dashboard', 'The setup ends with **Go to my dashboard**. Until then the workspace owner is sent back to the setup from every other page.'],
                             ] },
-                            { note: 'Only the account owner can finish the setup. If you see “Only the account owner can finish the setup”, ask the owner to open it: you can use the dashboard in the meantime.' },
+                            { note: 'Only the workspace owner can finish the setup. If you see “Only the workspace owner can finish the setup”, ask the owner to open it: you can use the dashboard in the meantime.' },
                         ],
                     },
                 },
@@ -256,7 +256,7 @@ const HelpContent = {
                                 '**اختر كلمة مرور** من 12 حرفاً على الأقل. و**اقترح لي كلمة مرور** تملأ لك كلمة قوية: احفظها في مدير كلمات المرور قبل أن تتابع.',
                                 'علامة، مفعّلة من البداية، تبقيك مسجّلاً للدخول عدداً من الأيام (30 ما لم يحدد مسؤول المنصة غيرها).',
                             ] },
-                            'اضغط **افتح مساحتي**. يُنشأ حسابك، وتدخل، ويفتح لك الإعداد.',
+                            'اضغط **افتح مساحة عملي**. يُنشأ حسابك، وتدخل، ويفتح لك الإعداد.',
                             { dl: [
                                 ['الرابط يعمل مرة واحدة', 'وتنتهي صلاحيته بعد 7 أيام ما لم يحدد مسؤول المنصة وقتاً آخر. والرابط الذي استُخدم، أو حلّ محله رابط أحدث، أو أُلغي، أو انتهى، يقول «هذا الرابط لم يعد صالحًا»: اطلب رابطاً جديداً ممن أرسله، أو سجّل الدخول إن كنت قد عيّنت كلمة مرور من قبل.'],
                                 ['هل لديك حساب أصلاً؟', 'اضغط **لدي حساب بالفعل**، وسجّل الدخول، وتعرض عليك الصفحة إضافة المساحة الجديدة إلى حسابك.'],
@@ -316,11 +316,11 @@ const HelpContent = {
                     title: { ar: '«عبّئها عني»', en: 'Fill it for me' },
                     body: {
                         ar: [
-                            'في أول شاشة، **عبّئها عني** يقرأ صفحاتك العامة ويقترح عليك الإجابات، فتكتب أقل. اكتب اسم حسابك في **حسابك على إنستغرام** وعنوان موقعك في **موقعك**، واضغط **عبّئها عني**.',
+                            'في أول شاشة، **عبّئها عني** يقرأ صفحاتك العامة ويقترح عليك الإجابات، فتكتب أقل. اكتب اسم حسابك في **حسابك على إنستجرام** وعنوان موقعك في **موقعك**، واضغط **عبّئها عني**.',
                             { ul: [
                                 'يقرأ ما هو عام فقط: ملفك في إنستجرام (النبذة وبعض منشوراتك)، وموقعك (صفحته الرئيسية وبعض الصفحات التي تشير إليها قائمته)، وقناتك على يوتيوب إذا كانت متصلة بالمساحة. ولا ينشر ولا يغيّر أي شيء.',
                                 'يستغرق لحظات: يقرأ («نقرأ حساباتك…») ثم يكتب («نكتب الاقتراحات…»). وإن تعثّر يعيد المحاولة من تلقاء نفسه. ولا يلزمك الانتظار: **ابدأ دون انتظار** يطوي اللوحة في سطر وتبقى لك الاستمارة، وتظهر الاقتراحات عندما تجهز.',
-                                'عندما يجهز، يعرض **هذا ما وجدناه** اقتراحاً تحت كل خانة فارغة، ومن أين جاء («من نبذتك على إنستغرام»، أو «من أحد منشوراتك»، أو «من موقعك»، أو «من قناتك على يوتيوب»). اضغط **استخدم هذا** ليدخل النموذج، أو **ليس هذا** ليُترك. والاقتراح الذي عليه «راجع هذا الاقتراح قبل استخدامه» وضعه المدقق للمراجعة: اقرأه مرتين.',
+                                'عندما يجهز، يعرض **هذا ما وجدناه** اقتراحاً تحت كل خانة فارغة، ومن أين جاء («من نبذتك على إنستجرام»، أو «من أحد منشوراتك»، أو «من موقعك»، أو «من قناتك على يوتيوب»). اضغط **استخدم هذا** ليدخل النموذج، أو **ليس هذا** ليُترك. والاقتراح الذي عليه «راجع هذا الاقتراح قبل استخدامه» وضعه المدقق للمراجعة: اقرأه مرتين.',
                                 'لا يكتب فوق شيء كتبته أنت، ولا يُحفظ شيء حتى تضغط **التالي**.',
                                 'يمكنك طلب الاقتراحات 5 مرات في اليوم. بعدها يقول «طلبت اقتراحات كثيرة اليوم»: عبّئ النموذج بنفسك، أو جرّب غداً.',
                                 'وإن لم يكن الذكاء الاصطناعي مفعّلاً في المنصة، يقول إنه سيملأ هذا لاحقاً ويعرض ما وجده من دونه (المعرّف والموقع والألوان).',
@@ -390,7 +390,7 @@ const HelpContent = {
                             'Judge each one: **Sounds like me**, or **Not quite**. With “Not quite”, pick what is off (**Too formal**, **Too long**, **Wrong information** or **I’ll edit it myself**) and the app writes it again. Or type your own version in **Your version** and press **Save my version**.',
                             { ul: [
                                 'Each sample can be written again up to 3 times, and samples can be written 3 times a day.',
-                                'What you approve or edit becomes an example of your voice, which the writers use from then on, and the comment sample also becomes your first campaign (the next section).',
+                                'What you approve or edit becomes an example of your voice, which the writers use from then on, and the comment sample also becomes your first keyword reply (the next section).',
                                 'These are samples only: nothing is posted and nothing is sent to anyone.',
                                 'If the platform has no AI key, the step says “Samples need an AI key”, and you can carry on: everything else works.',
                             ] },
@@ -419,10 +419,10 @@ const HelpContent = {
                                 ['Ready', 'Your name, offer, voice and look are saved.'],
                                 ['Comment replies', 'They switch on when Instagram is connected. You can connect it at any time in Settings.'],
                                 ['Sample replies in your voice', 'What you approved guides what is written for you. If you skipped them, everything still starts from your profile.'],
-                                ['Your first comment campaign', 'It is written and switched off. Turn it on in **Keyword replies** once Instagram is connected.'],
+                                ['Your first comment keyword reply', 'It is written and switched off. Turn it on in **Keyword replies** once Instagram is connected.'],
                                 ['Content rules', 'The rules that apply to what is written for you. They start from the default for new accounts, and you can untick one that does not suit you with **Change**.'],
                             ] },
-                            'Press **Go to my dashboard**. The first campaign is made once, when the setup ends, from your approved sample (or from the standard wording with your offer’s name and link), and only if there is an offer, a keyword and a message to send. It is made switched off because nobody real may be messaged until you turn it on.',
+                            'Press **Go to my dashboard**. The first keyword reply is made once, when the setup ends, from your approved sample (or from the standard wording with your offer’s name and link), and only if there is an offer, a keyword and a message to send. It is made switched off because nobody real may be messaged until you turn it on.',
                             { tip: 'Try it from a second account before you turn it on: comment its keyword on one of your posts: [[campaigns#how]].' },
                         ],
                     },
@@ -572,10 +572,10 @@ const HelpContent = {
                         en: [
                             { ol: [
                                 'The **Access token** reads **Valid**, with no missing-permissions warning.',
-                                'From another account, comment the keyword of an active campaign and check the DM arrives.',
-                                'Open **Results**, then **Log**: every comment that matched a campaign is listed with what became of its DM (Delivered, Needs you, By design, Waiting, DMs closed).',
+                                'From another account, comment the keyword of an active keyword reply and check the DM arrives.',
+                                'Open **Results**, then **Log**: every comment that matched a keyword reply is listed with what became of its DM (Delivered, Needs you, By design, Waiting, DMs closed).',
                             ] },
-                            { note: 'A comment that matches no campaign is not recorded at all, so its absence from the log does not mean the connection is broken. Check the keyword first.' },
+                            { note: 'A comment that matches no keyword reply is not recorded at all, so its absence from the log does not mean the connection is broken. Check the keyword first.' },
                         ],
                     },
                 },
@@ -585,7 +585,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             'كل نوع من الأحداث في ميتا (إنستجرام، صفحة فيسبوك، واتساب) له عنوان واحد يصل إليه، وهذا إعداد لتطبيق ميتا كله، لا لحسابك وحدك. فإن كان مشروع آخر يستخدم التطبيق نفسه ووجّه نوعاً منها إلى موقعه، تذهب كل أحداث ذلك النوع إلى هناك، ولا يسمع AutoReply شيئاً.',
-                            { warn: 'كلمة **مربوط** لا تكفي دليلاً. يبقى رمز الوصول صالحاً، ويبقى الربط يعمل، ولا يظهر أي خطأ، لكن الأحداث لا تصل. وزر **اختبر التحقق** في **متقدم** يسأل جهة AutoReply وحدها، ولا يخبرك أين تذهب الأحداث.' },
+                            { warn: 'كلمة **متصل** لا تكفي دليلاً. يبقى رمز الوصول صالحاً، ويبقى الربط يعمل، ولا يظهر أي خطأ، لكن الأحداث لا تصل. وزر **اختبر التحقق** في **متقدم** يسأل جهة AutoReply وحدها، ولا يخبرك أين تذهب الأحداث.' },
                             { h: 'ماذا تعرض البطاقة' },
                             'افتح **الإعدادات** ← **المنصة** ← **إلى أين ترسل ميتا أحداثك**. البطاقة لمدير المنصة وحده، وتقرأ ميتا لحظة فتحها. فيها صف لكل نوع، وكل صف يقول أين يذهب هذا النوع:',
                             { dl: [
@@ -655,12 +655,12 @@ const HelpContent = {
                 },
             ],
         },
-        // ─── 3. Keyword campaigns and auto-DMs ───────────────────────────────
+        // ─── 3. Keyword replies and auto-DMs ───────────────────────────────
         {
             slug: 'campaigns',
             group: 'meta',
             icon: 'megaphone',
-            title: { ar: 'الردود التلقائية بالكلمات المفتاحية والرسائل الخاصة', en: 'Keyword campaigns and auto-DMs' },
+            title: { ar: 'الردود التلقائية بالكلمات المفتاحية والرسائل الخاصة', en: 'Keyword replies and auto-DMs' },
             summary: {
                 ar: 'كيف تُطابَق الكلمة، والرد العلني، وكيف تكتب رسالة خاصة تأتي بنتيجة.',
                 en: 'How keywords are matched, the public reply, and how to write a DM that gets results.',
@@ -669,7 +669,7 @@ const HelpContent = {
             sections: [
                 {
                     id: 'how',
-                    title: { ar: 'كيف يعمل الرد التلقائي؟', en: 'How a campaign works' },
+                    title: { ar: 'كيف يعمل الرد التلقائي؟', en: 'How a keyword reply works' },
                     body: {
                         ar: [
                             { ol: [
@@ -678,18 +678,18 @@ const HelpContent = {
                                 'إذا وجدها، يرسل له **قالب الرسالة الخاصة** رداً خاصاً على تعليقه.',
                                 'ويردّ على التعليق علناً بواحد من ردودك، إذا كتبت **الردّ العلني على التعليق**.',
                             ] },
-                            'أنشئ رداً تلقائياً من **الردود التلقائية** ← **حملة جديدة**، أو أضف عدة ردود مرة واحدة من **استورد من CSV**. ويمكنك إيقاف أي رد دون حذفه من مفتاح **تفعيل الحملة**.',
+                            'أنشئ رداً تلقائياً من **الردود التلقائية** ← **ردّ تلقائي جديد**، أو أضف عدة ردود مرة واحدة من **استورد من CSV**. ويمكنك إيقاف أي رد دون حذفه من مفتاح **تفعيل الردّ التلقائي**.',
                             '**معرّف المنشور المستهدف** اختياري: إذا حددته (أو اخترته من **اختر منشوراً**)، يعمل الرد على تعليقات هذا المنشور فقط. وإذا تركته فارغاً، يعمل على كل منشوراتك.',
                         ],
                         en: [
                             { ol: [
                                 'Someone comments on your post on Instagram or Facebook.',
-                                'AutoReply Pro looks through your active campaigns for a keyword that appears in the comment.',
+                                'AutoReply Pro looks through your active keyword replies for a keyword that appears in the comment.',
                                 'When one matches, it sends them your **DM template** as a private reply to that comment.',
                                 'It also answers the comment in public with one of your replies, if you filled in **Public comment reply**.',
                             ] },
-                            'Create one from **Keyword replies** → **New campaign**, or add several at once with **Import CSV**. The **Campaign active** switch pauses a campaign without deleting it.',
-                            '**Target post ID** is optional. Set it (or choose one with **Pick a post**) and the campaign only answers comments under that post; leave it empty and it works on all your posts.',
+                            'Create one from **Keyword replies** → **New keyword reply**, or add several at once with **Import CSV**. The **Keyword reply active** switch pauses a keyword reply without deleting it.',
+                            '**Target post ID** is optional. Set it (or choose one with **Pick a post**) and the keyword reply only answers comments under that post; leave it empty and it works on all your posts.',
                         ],
                     },
                 },
@@ -718,8 +718,8 @@ const HelpContent = {
                                 'Upper and lower case letters are the same.',
                             ] },
                             'So «دورة» and «دوره» are one word, and so are «أريد» and «اريد».',
-                            '**Whole word only** (new keyword replies start here): the campaign fires only when your keyword stands on its own, not inside a longer word, so «تم» no longer fires on «تمام». It is precise but strict: «كورس» does not match «الكورس», so the editor offers “Also add: الكورس” to add the other form in one tap. It never suggests plurals, because Arabic broken plurals follow no rule that is always right: add the forms your followers actually type.',
-                            '**Anywhere in the comment:** the campaign fires when your keyword appears anywhere in the comment, even inside a longer word, so «كورس» matches both «الكورس» and «كورسك». New keyword replies do not start here, but you can pick it under “Match mode”. Existing keyword replies keep the mode they have.',
+                            '**Whole word only** (new keyword replies start here): the keyword reply fires only when your keyword stands on its own, not inside a longer word, so «تم» no longer fires on «تمام». It is precise but strict: «كورس» does not match «الكورس», so the editor offers “Also add: الكورس” to add the other form in one tap. It never suggests plurals, because Arabic broken plurals follow no rule that is always right: add the forms your followers actually type.',
+                            '**Anywhere in the comment:** the keyword reply fires when your keyword appears anywhere in the comment, even inside a longer word, so «كورس» matches both «الكورس» and «كورسك». New keyword replies do not start here, but you can pick it under “Match mode”. Existing keyword replies keep the mode they have.',
                         ],
                     },
                 },
@@ -743,9 +743,9 @@ const HelpContent = {
                             { ul: [
                                 'Pick a longer, clearer keyword: «كورس» beats «تم», and “course link” beats “link”.',
                                 'Or use a two-word phrase, which rarely matches by accident.',
-                                'Watch the **How keywords are matched** box while you type: it shows real words your keyword would also fire on, and warns you when it is too short, listed twice, or overlaps another campaign’s keyword.',
+                                'Watch the **How keywords are matched** box while you type: it shows real words your keyword would also fire on, and warns you when it is too short, listed twice, or overlaps another keyword reply’s keyword.',
                             ] },
-                            { warn: 'When one campaign’s keyword sits inside another’s (say «كورس» and «كورسات»), a single comment can fire both campaigns and you cannot tell which DM arrived. Give every campaign its own distinct keyword.' },
+                            { warn: 'When one keyword reply’s keyword sits inside another’s (say «كورس» and «كورسات»), a single comment can fire both keyword replies and you cannot tell which DM arrived. Give every keyword reply its own distinct keyword.' },
                         ],
                     },
                 },
@@ -806,15 +806,15 @@ const HelpContent = {
                         ar: [
                             { ul: [
                                 'رسالة واحدة لكل شخص كل 24 ساعة، حتى لو علّق بالكلمة خمس مرات.',
-                                'حد أقصى 180 رسالة في الساعة لكل حساب، تحت سقف ميتا بهامش أمان. إن انتشر منشورك، يُسجَّل الزائد في **سجل النشاط** بحالة **مقصود** مع السبب.',
+                                'حد أقصى 180 رسالة في الساعة لكل حساب، تحت سقف ميتا بهامش أمان. إن انتشر منشورك، يُسجَّل الزائد في **السجل** بحالة **مقصود** مع السبب.',
                                 'تعليقاتك أنت على منشوراتك لا تشغّل الردود التلقائية، لكي لا يرد النظام على نفسه.',
                             ] },
                         ],
                         en: [
                             { ul: [
                                 'One DM per person every 24 hours, even if they comment the keyword five times.',
-                                'At most 180 DMs an hour per account, safely under Meta’s own ceiling. If a post goes viral, the overflow is recorded in the **Activity Log** as **By design**, with the reason.',
-                                'Your own comments on your own posts never trigger a campaign, so the system doesn’t answer itself.',
+                                'At most 180 DMs an hour per account, safely under Meta’s own ceiling. If a post goes viral, the overflow is recorded in the **Log** as **By design**, with the reason.',
+                                'Your own comments on your own posts never trigger a keyword reply, so the system doesn’t answer itself.',
                             ] },
                         ],
                     },
@@ -847,7 +847,7 @@ const HelpContent = {
                             ] },
                         ],
                         en: [
-                            'The DM assistant answers the direct messages people send you on Instagram and Messenger. Campaigns ([[campaigns]]) work on comments; the assistant works on a message the person started themselves.',
+                            'The DM assistant answers the direct messages people send you on Instagram and Messenger. Keyword replies ([[campaigns]]) work on comments; the assistant works on a message the person started themselves.',
                             { dl: [
                                 ['Who writes the reply', 'An AI model. It reads the last 8 messages of the conversation (12 for sales replies) and writes from what you put in your instructions and knowledge base: [[dm-assistant#voice]].'],
                                 ['What the follower sees', 'In the first reply of a conversation, and again once the last one is more than 7 days old, a short line in front of the reply saying it is an automated reply from the AI assistant.'],
@@ -864,7 +864,7 @@ const HelpContent = {
                         ar: [
                             'افتح **مساعد الرسائل**، وفعّل **تشغيل الردّ الآلي**، واكتب **الشخصية والتعليمات**، ثم اضغط **احفظ التغييرات**. لا يردّ المساعد على أحد قبل أول حفظ، ولا ما دام المفتاح مطفأً. والمساحة التي ينشئها لك مسؤول المنصة تبدأ ومساعدها مطفأ، وله شخصية مبدئية جاهزة تعدّلها.',
                             { dl: [
-                                ['**بضعة تفاصيل أولًا**', 'في مساحة جاءت من رابط دعوة ([[onboarding]]) تظهر هذه النافذة حال تشغيلك المساعد، وتسألك **متى يسلّمك الوكيل المحادثة؟** و**ما يقوله عند التسليم**. اكتبهما واضغط **احفظ وتابع**. ولا تسألك عن شيء حفظته من قبل. وإن كنت مشغّلاً لا مالكاً يظهر لك تنبيه بأن صاحب الحساب وحده يستطيع أن يملأها.'],
+                                ['**بضعة تفاصيل أولًا**', 'في مساحة جاءت من رابط دعوة ([[onboarding]]) تظهر هذه النافذة حال تشغيلك المساعد، وتسألك **متى يسلّمك المساعد المحادثة؟** و**ما يقوله عند التسليم**. اكتبهما واضغط **احفظ وتابع**. ولا تسألك عن شيء حفظته من قبل. وإن كنت مشغّلاً لا مالكاً يظهر لك تنبيه بأن مالك مساحة العمل وحده يستطيع أن يملأها.'],
                                 ['من يستطيع التغيير؟', 'المالك والمشغّل يغيّران ويجرّبان. ودور «مُطّلع» يقرأ الإعدادات فقط: الصناديق مقفلة والأزرار معطّلة.'],
                                 ['**تغييرات غير محفوظة**', 'تظهر بجانب **احفظ التغييرات** ما دام هناك شيء لم يُحفظ، وتسألك الصفحة قبل أن تغادرها.'],
                             ] },
@@ -872,7 +872,7 @@ const HelpContent = {
                         en: [
                             'Open **DM assistant**, switch on **Turn on auto-replies**, write **Voice and instructions**, and press **Save changes**. The assistant answers nobody before the first save, or while the switch is off. A workspace the platform administrator creates for you starts with the assistant switched off and a starter persona ready for you to edit.',
                             { dl: [
-                                ['**A few details first**', 'In a workspace that came from an invite link ([[onboarding]]) this window appears the first time you switch the assistant on. It asks **When should the agent hand a chat to you?** and **What it says when it hands over**. Fill both in and press **Save and continue**. It never asks again about something you saved. If you are an Operator rather than the owner, you get a notice that only the account owner can fill it in.'],
+                                ['**A few details first**', 'In a workspace that came from an invite link ([[onboarding]]) this window appears the first time you switch the assistant on. It asks **When should the assistant hand a chat to you?** and **What it says when it hands over**. Fill both in and press **Save and continue**. It never asks again about something you saved. If you are an Operator rather than the owner, you get a notice that only the workspace owner can fill it in.'],
                                 ['Who can change it', 'Owners and Operators can change the settings and run tests. A Viewer can read them: the boxes are locked and the buttons are off.'],
                                 ['**Unsaved changes**', 'Shown next to **Save changes** while anything is unsaved, and the page asks before you leave it.'],
                             ] },
@@ -890,16 +890,16 @@ const HelpContent = {
                                 ['**قاعدة المعرفة والأسئلة الشائعة**', 'الروابط وأسماء المنتجات والأسعار وإجابات الأسئلة المتكررة.'],
                             ] },
                             'يأتي الرد نصاً عادياً، أو أزرار سريعة (عنوان الزر 20 حرفاً على الأكثر)، أو بطاقات (عنوان البطاقة 80 حرفاً). وإذا طلب أحد عروضك أو طرق التواصل معك، يُطلب من المساعد أن يعرضها بأزرار أو بطاقات بدل سرد الروابط.',
-                            { tip: 'التعليمات وقاعدة المعرفة نفسها تُرسل إلى النموذج مهما كان **محرّك الردّ**، وفي ردود المبيعات أيضاً. جرّب كل تعديل في **اختبار الوكيل** قبل أن تحفظ: [[dm-assistant#sandbox]].' },
+                            { tip: 'التعليمات وقاعدة المعرفة نفسها تُرسل إلى النموذج مهما كان **محرّك الردّ**، وفي ردود المبيعات أيضاً. جرّب كل تعديل في **اختبار المساعد** قبل أن تحفظ: [[dm-assistant#sandbox]].' },
                         ],
                         en: [
                             'Two boxes you write in, and the assistant reads both before every reply:',
                             { dl: [
-                                ['**Voice and instructions**', 'Who the agent is, how it speaks and what it must stick to. It cannot be saved empty, and next to it you see **Arabic recommended**.'],
+                                ['**Voice and instructions**', 'Who the assistant is, how it speaks and what it must stick to. It cannot be saved empty, and next to it you see **Arabic recommended**.'],
                                 ['**Knowledge base and FAQs**', 'Links, product names, pricing and answers to the questions people keep asking.'],
                             ] },
                             'A reply comes as plain text, as quick-reply buttons (a button title is at most 20 characters) or as cards (a card title is at most 80). When someone asks for your offers or how to reach you, the assistant is told to present them as buttons or cards instead of listing links.',
-                            { tip: 'The same instructions and knowledge base go to the model whichever **Reply engine** is chosen, and for sales replies too. Try each change in the **Agent sandbox** before you save: [[dm-assistant#sandbox]].' },
+                            { tip: 'The same instructions and knowledge base go to the model whichever **Reply engine** is chosen, and for sales replies too. Try each change in the **Assistant sandbox** before you save: [[dm-assistant#sandbox]].' },
                         ],
                     },
                 },
@@ -913,7 +913,7 @@ const HelpContent = {
                                 ['**Gemini (الحالي)**', 'الطريقة المعتادة، بنموذج Gemini الذي تختاره في **النموذج**. و**درجة الإبداع** من 0 (ثابت ومتوقع) إلى 1 (متنوّع).'],
                                 ['**مزوّدو الذكاء الاصطناعي**', 'يكتب الرد مزوّد أعدّه مسؤول المنصة في **التشغيل** ← **مزوّدو الذكاء الاصطناعي**، في مسار «الردّ على الرسائل الخاصة»، وحدوده وميزانيته من هناك. وعندها يخصّ **النموذج** و**درجة الإبداع** الرجوع إلى Gemini فقط.'],
                             ] },
-                            'إن اخترت المزوّدين يظهر **الرجوع إلى Gemini**، وهو مفعّل من الأصل: إن فشل المزوّد (لا يوجد مفتاح، أو انقطاع، أو انتهت المهلة، أو انتهت الميزانية) يجيب Gemini مرة واحدة بدله. وإن أوقفته، أو فشل Gemini أيضاً، يصل الشخص سطر واحد يقول إن رسالته أصبحت عند شخص يتابعها (سطر التسليم الذي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز إن لم تكتب)، وتظهر المحادثة **بانتظارك** في **الرسائل**، ويبقى المساعد يعمل لرسالته القادمة.',
+                            'إن اخترت المزوّدين يظهر **الرجوع إلى Gemini**، وهو مفعّل من الأصل: إن فشل المزوّد (لا يوجد مفتاح، أو انقطاع، أو انتهت المهلة، أو انتهت الميزانية) يجيب Gemini مرة واحدة بدله. وإن أوقفته، أو فشل Gemini أيضاً، يصل الشخص سطر واحد يقول إن رسالته أصبحت عند شخص يتابعها (سطر التسليم الذي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز إن لم تكتب)، وتظهر المحادثة **بحاجة إليك** في **الرسائل**، ويبقى المساعد يعمل لرسالته القادمة.',
                             { note: 'حدود Gemini، وخصوصية الخطة المجانية، شرحها في [[ai-usage]].' },
                         ],
                         en: [
@@ -943,7 +943,7 @@ const HelpContent = {
                             ] },
                         ],
                         en: [
-                            'Try the assistant before it answers anyone: type a message as a follower would and read the reply. The test runs what is on the page now, even before you save: the text of **Voice and instructions** and the knowledge base, **Model** and **Temperature**, **Reply engine** and **Fall back to Gemini**. It is the **Agent sandbox**.',
+                            'Try the assistant before it answers anyone: type a message as a follower would and read the reply. The test runs what is on the page now, even before you save: the text of **Voice and instructions** and the knowledge base, **Model** and **Temperature**, **Reply engine** and **Fall back to Gemini**. It is the **Assistant sandbox**.',
                             { ul: [
                                 'It sends nothing to Instagram and changes none of your saved settings.',
                                 'It works even while **Turn on auto-replies** is off.',
@@ -971,12 +971,12 @@ const HelpContent = {
                             { dl: [
                                 ['الرابط', 'النموذج لا يكتب روابط. يضيف الخادم رابط العرض بنفسه بعد النص: رابط تتبّع على عنوان منصتك يحوّل إلى صفحة عرضك ويعدّ الضغطات.'],
                                 ['السعر', 'لا يذكر سعراً إلا لعرض له سعر مكتوب مع تاريخ **السعر ساري حتى** لم يمضِ، وإلا يقول إن السعر الحالي في الصفحة. وأي خصم أو كوبون أو «مجاني» أو رقم ليس في بياناتك لا يُقال: يُحذف الرد ويُسأل النموذج مرة أخرى، وإن أعاد المخالفة يتحوّل الرد إلى سطر آمن وتتسلّم أنت المحادثة.'],
-                                ['متى تتحوّل إليك', 'طلب استرجاع أو شكوى (يُقرآن قبل أن يراهما النموذج)، أو طلب التحدث مع شخص، أو سؤال لا يُجاب من دون اختراع رقم. تظهر المحادثة **بانتظارك**، ويستلم الشخص سطر التسليم (الذي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز إن لم تكتب)، ويتوقف المساعد فيها حتى تعيده من مفتاح المحادثة في **الرسائل**.'],
+                                ['متى تتحوّل إليك', 'طلب استرجاع أو شكوى (يُقرآن قبل أن يراهما النموذج)، أو طلب التحدث مع شخص، أو سؤال لا يُجاب من دون اختراع رقم. تظهر المحادثة **بحاجة إليك**، ويستلم الشخص سطر التسليم (الذي كتبته في **ما يقوله عند التسليم**، أو سطر جاهز إن لم تكتب)، ويتوقف المساعد فيها حتى تعيده من مفتاح المحادثة في **الرسائل**.'],
                                 ['من يطلب التوقف', 'مثل «لا تراسلني»: يُقال له مرة واحدة ثم يسكت المساعد، ولا يرشّح له شيئاً إلا إذا قال هو إنه يريد الشراء.'],
                                 ['الإهانة', 'ترد عليها جملة هادئة واحدة، والثانية توقف المساعد في تلك المحادثة.'],
                                 ['حلقة ردود', 'إذا وصلت ردود المساعد على محادثة واحدة 15 رداً في ساعة، يوقف نفسه ويحوّلها لك.'],
                             ] },
-                            { note: 'التنبيه على تيليجرام أو البريد عند التسليم يضبطه مسؤول المنصة، ويشمل اليوم محادثات حساب مالك المنصة نفسه. في أي مساحة أخرى الإشارة هي **بانتظارك** في **الرسائل**. وعروضك وتفاصيل البيع في ملف مساحتك: يستطيع مسؤول المنصة أن يعبّئها لك من **افتح الملف** في صفحة مساحتك.' },
+                            { note: 'التنبيه على تيليجرام أو البريد عند التسليم يضبطه مسؤول المنصة، ويشمل اليوم محادثات حساب مالك المنصة نفسه. في أي مساحة أخرى الإشارة هي **بحاجة إليك** في **الرسائل**. وعروضك وتفاصيل البيع في ملف مساحتك: يستطيع مسؤول المنصة أن يعبّئها لك من **افتح الملف** في صفحة مساحتك.' },
                             'وتتابع النتيجة في **قمع المبيعات** أعلى **الرسائل**: كم محادثة وصلت إلى كل خطوة.',
                         ],
                         en: [
@@ -1070,7 +1070,7 @@ const HelpContent = {
                     title: { ar: 'أسئلة البداية في إنستجرام', en: 'Instagram ice breakers' },
                     body: {
                         ar: [
-                            'أسئلة البداية أزرار تظهر للشخص عندما يفتح محادثة جديدة معك في إنستجرام: يضغط على سؤال، فيصلك كرسالة منه ويجيب عنها المساعد. ويمكنك أن تضيف معها قائمة ثابتة تبقى في المحادثة. تجدها في **الإعدادات** ← **الرسائل والتنبيهات** ← **أسئلة البداية في إنستجرام**، ولمالك الحساب وحده، وبعد ربط إنستجرام: [[connect-meta]].',
+                            'أسئلة البداية أزرار تظهر للشخص عندما يفتح محادثة جديدة معك في إنستجرام: يضغط على سؤال، فيصلك كرسالة منه ويجيب عنها المساعد. ويمكنك أن تضيف معها قائمة ثابتة تبقى في المحادثة. تجدها في **الإعدادات** ← **الرسائل والتنبيهات** ← **أسئلة البداية في إنستجرام**، ولمالك مساحة العمل وحده، وبعد ربط إنستجرام: [[connect-meta]].',
                             { ol: [
                                 'اكتب حتى 4 أسئلة، وطول كل سؤال 80 حرفاً على الأكثر. ليست لديك أفكار؟ اضغط **استخدم الأسئلة المقترحة**. وتضيف سؤالاً بـ **أضف سؤالاً**.',
                                 'لكل سؤال اختر **ما الذي يسأل عنه** ليعرف المساعد كيف يجيب: **ما الذي يتضمنه**، **لمن يناسب**، **السعر**، **يطلب الرابط**، **دعم أو مشكلة**، **التحدث مع شخص**، أو **شيء آخر**.',
@@ -1087,7 +1087,7 @@ const HelpContent = {
                             { note: 'إنستجرام يعرضها في تطبيق الجوال لا على الكمبيوتر، والمحادثات المفتوحة قد تحتاج إلى تحديث الصندوق حتى يظهر التغيير. ويسمح بـ 10 تغييرات للملف كل 10 دقائق.' },
                         ],
                         en: [
-                            'Ice breakers are buttons a person sees when they open a new chat with you on Instagram: they tap a question, it reaches you as their message, and the assistant answers it. You can add a persistent menu that stays in the chat. Find them in **Settings** → **Messages & alerts** → **Instagram ice breakers**, for the account owner only, once Instagram is connected: [[connect-meta]].',
+                            'Ice breakers are buttons a person sees when they open a new chat with you on Instagram: they tap a question, it reaches you as their message, and the assistant answers it. You can add a persistent menu that stays in the chat. Find them in **Settings** → **Messages & alerts** → **Instagram ice breakers**, for the workspace owner only, once Instagram is connected: [[connect-meta]].',
                             { ol: [
                                 'Write up to 4 questions, each at most 80 characters. No ideas? Press **Use the suggested questions**. Add one with **Add a question**.',
                                 'For each question pick **What it asks**, so the assistant knows how to answer: **What is included**, **Who it is for**, **The price**, **Asks for the link**, **Support or a problem**, **Talk to a person**, or **Something else**.',
@@ -1112,7 +1112,7 @@ const HelpContent = {
                         ar: [
                             { dl: [
                                 ['المساعد لا يردّ على أحد', ['تأكد أن **تشغيل الردّ الآلي** مفعّل، وأنك ضغطت **احفظ التغييرات** مرة واحدة على الأقل.', 'وتأكد أن المحادثة نفسها ليست موقوفة: **الردّ الآلي متوقف** في **الرسائل**. أي ردّ منك بيدك يوقفه فيها، وتسليم المحادثة لك يوقفه كذلك.', 'وتأكد من ربط إنستجرام وفيسبوك: [[connect-meta]]. وإن انتهت حصة Gemini: [[ai-usage#quotas]].']],
-                                ['استلم الشخص سطراً يقول إن رسالته عند شخص يتابعها', ['لم يستطع المساعد كتابة ردّ: فشل المزوّد ولم يكن هناك رجوع إلى Gemini، أو فشل Gemini أيضاً. تظهر المحادثة **بانتظارك** في **الرسائل**.', 'ردّ عليها بيدك. ويبقى المساعد يعمل لرسالته القادمة.']],
+                                ['استلم الشخص سطراً يقول إن رسالته عند شخص يتابعها', ['لم يستطع المساعد كتابة ردّ: فشل المزوّد ولم يكن هناك رجوع إلى Gemini، أو فشل Gemini أيضاً. تظهر المحادثة **بحاجة إليك** في **الرسائل**.', 'ردّ عليها بيدك. ويبقى المساعد يعمل لرسالته القادمة.']],
                                 ['مساعد المبيعات لا يردّ على حسابي التجريبي', 'تأكد أن **ردود المبيعات** على **تجريبية (المرسلون أدناه فقط)** أو **مفعّلة (للجميع)**، وأن المعرّف مكتوب في **مرسلو الاختبار** كما هو، أرقاماً فقط. ويجب أن يكون الحساب قد راسلك من قبل ليظهر له محادثة وترى معرّفه: [[dm-assistant#sales]].'],
                                 ['لا يذكر السعر', 'يجب أن يكون السعر مكتوباً في العرض مع تاريخ **السعر ساري حتى** لم يمضِ، وإلا يقول إن السعر الحالي في الصفحة: [[dm-assistant#sales]].'],
                                 ['صورة أو ملاحظة صوتية لم يُردّ عليها', 'هذا هو المتوقع: يرسل سطراً ثابتاً يطلب السؤال مكتوباً، والملصق لا يردّ عليه: [[dm-assistant#what]].'],
@@ -1122,7 +1122,7 @@ const HelpContent = {
                         ],
                         en: [
                             { dl: [
-                                ['The agent is not answering anyone', ['Check that **Turn on auto-replies** is on and that you pressed **Save changes** at least once.', 'Check that the conversation itself is not paused: **AI paused** in the **Inbox**. A manual reply from you pauses it there, and so does handing the conversation to you.', 'Check that Instagram and Facebook are connected: [[connect-meta]]. And if your Gemini quota ran out: [[ai-usage#quotas]].']],
+                                ['The assistant is not answering anyone', ['Check that **Turn on auto-replies** is on and that you pressed **Save changes** at least once.', 'Check that the conversation itself is not paused: **AI paused** in the **Inbox**. A manual reply from you pauses it there, and so does handing the conversation to you.', 'Check that Instagram and Facebook are connected: [[connect-meta]]. And if your Gemini quota ran out: [[ai-usage#quotas]].']],
                                 ['The person got a line saying a person has their message', ['The assistant could not write a reply: the provider failed and there was no fall back to Gemini, or Gemini failed too. The conversation shows **Needs you** in the **Inbox**.', 'Answer it by hand. The assistant stays on for their next message.']],
                                 ['The sales assistant does not answer my test account', 'Check that **Sales replies** is on **Test (only the senders below)** or **On (everyone)**, and that the ID is in **Test senders** exactly as it is, numbers only. The account must have messaged you before, so a conversation exists and you can see its ID: [[dm-assistant#sales]].'],
                                 ['It never states the price', 'The price has to be written on the offer, with a date in **The price is valid until** that has not passed; otherwise it says the current price is on the page: [[dm-assistant#sales]].'],
@@ -1180,7 +1180,7 @@ const HelpContent = {
                         ar: [
                             'كل صف يعرض أهمّ شيء عنه فقط، بهذا الترتيب:',
                             { ol: [
-                                '**بانتظارك**: سلّمها المساعد إليك، مع السبب والوقت المتبقي للردّ.',
+                                '**بحاجة إليك**: سلّمها المساعد إليك، مع السبب والوقت المتبقي للردّ.',
                                 '**بحاجة إلى ردّ**: الردّ الآلي متوقف والعميل كتب آخراً، مع الوقت المتبقي.',
                                 '**ساخنة**: لا ينتظر ردّاً الآن لكنه يستحق نظرك.',
                                 '**تمّ التعامل**: وضعتَ عليها العلامة ولم يكتب العميل بعدها.',
@@ -1785,7 +1785,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ol: [
-                                'افتح **الإعدادات** ← قسم **تيك توك** واضغط **اربط تيك توك**. (الزر يظهر لمالك الحساب فقط.)',
+                                'افتح **الإعدادات** ← قسم **تيك توك** واضغط **اربط تيك توك**. (الزر يظهر لمالك مساحة العمل فقط.)',
                                 'يفتح لك تيك توك: سجّل دخولك بالحساب الذي تريد النشر عليه، ووافق على الصلاحيات.',
                                 'ترجع إلى الإعدادات وترى اسم الحساب وبجانبه **متصل**، وتحته **طريقة النشر** الحالية.',
                             ] },
@@ -1797,7 +1797,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ol: [
-                                'Open **Settings**, go to the **TikTok** section and press **Connect TikTok**. (Only the account owner sees this button.)',
+                                'Open **Settings**, go to the **TikTok** section and press **Connect TikTok**. (Only the workspace owner sees this button.)',
                                 'TikTok opens: sign in with the account you want to post to, and approve the permissions.',
                                 'Back in Settings you’ll see the account name marked **Connected**, and the current **Posting mode** under it.',
                             ] },
@@ -1869,7 +1869,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'المنشورات التي يجهّزها لك الاستوديو، أي الكاروسيل والريلز من تبويب **المونتير**، تُنشر **عامة تلقائياً**: يضبطها التطبيق على **الجميع**، ولا تحتاج إلى جعل حسابك خاصاً.',
+                                'المنشورات التي يجهّزها لك الاستوديو، أي الكاروسيل والريلز من تبويب **الريلز**، تُنشر **عامة تلقائياً**: يضبطها التطبيق على **الجميع**، ولا تحتاج إلى جعل حسابك خاصاً.',
                                 'أما المنشور الذي تنشئه بنفسك من **الجدولة** فيبدأ بلا خصوصية مختارة، ولا يُنشر عاماً من تلقاء نفسه. تحت **إعدادات منشور تيك توك** اختر **من يمكنه مشاهدة هذا الفيديو** (أو **من يمكنه مشاهدة هذا المنشور** للصور): **الجميع** يجعله عاماً، و**المتابِعون** و**الأصدقاء (المتابَعون المتبادَلون)** و**أنا فقط** تحصره في ناس أقل. ولا يمكنك جدولة المنشور حتى تختار.',
                                 'في الاستوديو يظهر خيار **النشر على تيك توك في الموعد نفسه**، فيُنشر مع منشور إنستجرام دون دفعة يدوية.',
                                 'وزر **انشر منشورات الكاروسيل المنتظرة على تيك توك** يختفي، لأنه لم يعد له داعٍ.',
@@ -1877,7 +1877,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ul: [
-                                'Posts the Studio makes for you, its carousels and the reels from its **Monteur** tab, go up **public automatically**: the app sets them to **Everyone**, and your account no longer has to be private.',
+                                'Posts the Studio makes for you, its carousels and the reels from its **Reels** tab, go up **public automatically**: the app sets them to **Everyone**, and your account no longer has to be private.',
                                 'A post you make yourself in the **Scheduler** starts with nothing chosen, so it is not public by itself. Under **TikTok post settings**, pick **Who can see this video** (**Who can see this post** for photos): **Everyone** makes it public, while **Followers**, **Friends (followers you follow back)** and **Only me** keep it narrower. The post can’t be scheduled until you pick one.',
                                 'The Studio offers **Post to TikTok at the same time**, so TikTok goes out with the Instagram post, with no manual batch.',
                                 'The **Post queued TikTok carousels** button disappears, because nothing needs it any more.',
@@ -1922,7 +1922,7 @@ const HelpContent = {
                             { warn: 'تأكد أن الرابط موجود فعلاً في البايو. لا يتيح تيك توك خانة **الموقع الإلكتروني** في الملف الشخصي لكل الحسابات: عادةً لحسابات الأعمال، أو للحسابات التي تجاوزت عدداً من المتابعين (غالباً 1000)، ويختلف الشرط من بلد إلى آخر. افتح **تعديل الملف الشخصي** في تيك توك وتأكد أن الخانة موجودة عندك قبل أن تنشر.' },
                         ],
                         en: [
-                            'TikTok doesn’t allow automatic DMs to commenters, so keyword campaigns can’t run there. That is why TikTok captions point people to the link in your bio:',
+                            'TikTok doesn’t allow automatic DMs to commenters, so keyword replies can’t run there. That is why TikTok captions point people to the link in your bio:',
                             { ul: [
                                 'The Studio adds the **TikTok caption line** from its settings to every description, such as “Link in my bio”.',
                                 'The last slide of the TikTok version says the same.',
@@ -1977,15 +1977,15 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ol: [
-                                'يحفظ مسؤول المنصة عميل Google أولاً ([[youtube#operator]]). وقبل ذلك تقول البطاقة «يوتيوب ما تجهّز بعد. اطلب من مسؤول المنصة يضيف عميل Google OAuth.»',
+                                'يحفظ مسؤول المنصة عميل Google أولاً ([[youtube#operator]]). وقبل ذلك تقول البطاقة «يوتيوب غير جاهز بعد. اطلب من مسؤول المنصة إضافة عميل Google OAuth.»',
                                 'مالك المساحة يفتح **الإعدادات** ← **الاتصالات** ← **يوتيوب** ويضغط **اربط يوتيوب**. الزر يظهر للمالك فقط.',
                                 'تنفتح Google: اختر الحساب الذي فيه القناة، وعلّم على المربعين اللذين تطلبهما: إدارة فيديوهات يوتيوب (من أجل الرفع)، وعرض اسم القناة وصورتها.',
-                                'ترجع إلى الإعدادات وترى اسم القناة وصورتها وبجانبهما **مربوط**.',
+                                'ترجع إلى الإعدادات وترى اسم القناة وصورتها وبجانبهما **متصل**.',
                             ] },
                             { ul: [
                                 'حتى تتحقق Google من التطبيق، تقول صفحة الدخول «Google hasn’t verified this app»: اختر Advanced ثم Go to AutoReply Pro.',
                                 'القناة الواحدة تُربط بمساحة واحدة فقط: لتنقلها اضغط **افصل يوتيوب** في المساحة الأولى. ويجب أن يكون لحساب Google قناة يوتيوب: وإن لم يكن له، أنشئ قناة على youtube.com أولاً.',
-                                'إن ظهرت لك «ما انعطى إذن الرفع — أعد الربط وعلّم على «إدارة فيديوهات يوتيوب».»، اضغط **إعادة الربط** وعلّم على المربعين.',
+                                'إن ظهرت لك «لم يُمنح إذن الرفع — أعد الربط وعلّم على «إدارة فيديوهات يوتيوب».»، اضغط **إعادة الربط** وعلّم على المربعين.',
                             ] },
                         ],
                         en: [
@@ -2037,7 +2037,7 @@ const HelpContent = {
                             'كون الرفع خاصاً أو عاماً مفتاح واحد لكل المنصة:',
                             { ul: [
                                 '**ارفع الـ Shorts عامة** (في **الإعدادات** ← **المنصة** ← بطاقة تطبيق يوتيوب، ولمسؤول المنصة فقط). متوقف، وهذا الوضع الافتراضي: كل رفع خاص. ومفعّل: الرفع يطلب أن يكون عاماً.',
-                                'بطاقة يوتيوب في إعداداتك تخبرك بأيهما: «الـ Shorts ترفع خاصة.» أو «الـ Shorts ترفع عامة.»',
+                                'بطاقة يوتيوب في إعداداتك تخبرك بأيهما: «تُرفع الـ Shorts خاصة.» أو «تُرفع الـ Shorts عامة.»',
                                 'وحتى مع تفعيله، قد يجعل يوتيوب رفعات تطبيق لم يراجعه خاصة. ينجح الرفع، ويقول لك منشوره بجانب **افتح على يوتيوب**: «YouTube kept this upload private — make it public in YouTube Studio.» وتجعله عاماً من YouTube Studio.',
                                 'ومع إيقافه يحمل المنشور بعد رفعه ملاحظة تبدأ بـ«Uploaded to YouTube as private».',
                             ] },
@@ -2064,7 +2064,7 @@ const HelpContent = {
                                 'وتقول إن يوتيوب لم يعد لديه الفيديو (حُذف أو أُزيل)، أو يعرض الرفع مرفوضاً أو فاشلاً.',
                             ] },
                             'وإن كان **ارفع الـ Shorts عامة** متوقفاً فالخاص هو المطلوب، فلا تظهر ملاحظة إلا للفيديو المحذوف أو المُزال أو المرفوض أو الفاشل.',
-                            'وبطاقة يوتيوب في الإعدادات تلخّصها في سطر: كل الـ Shorts كما رُفعت، أو كم منها لم يعد عاماً («شوفها في المنشورات»)، أو، قبل أول فحص، أن ظهورها يُفحص مرة كل يوم.',
+                            'وبطاقة يوتيوب في الإعدادات تلخّصها في سطر: كل الـ Shorts كما رُفعت، أو كم منها لم يعد عاماً («انظر إليها في المنشورات»)، أو، قبل أول فحص، أن ظهورها يُفحص مرة كل يوم.',
                         ],
                         en: [
                             'Once a day the app asks YouTube about the Shorts it has published (up to the 500 newest in your workspace). A Short that is no longer as it should be gets a note on its post in the **Scheduler**, beside **Open on YouTube**. The note starts with “Visibility check” and the date, and it is written in English:',
@@ -2103,7 +2103,7 @@ const HelpContent = {
                             { ul: [
                                 'قد يموت الربط: أزلتَ التطبيق من myaccount.google.com/permissions، أو رفضت Google الدخول المحفوظ (سُحب الوصول أو انتهى). تقول البطاقة **يحتاج إعادة ربط** ومعها آخر مشكلة. اضغط **إعادة الربط** (للمالك فقط).',
                                 'وعندما يعرف التطبيق أن Google رفضت الدخول (عند الرفع التالي أو الفحص اليومي)، يحذف في الحال الرموز المحفوظة واسم القناة وصورتها، لأن سياسات يوتيوب تطلب حذف بيانات من سُحب وصوله. ويبقى معرّف القناة لتطلب البطاقة إعادة الربط.',
-                                'ومع بقاء تطبيق Google في وضع Testing، يدوم الدخول 7 أيام فقط، وتنبّهك البطاقة بالتاريخ: «تطبيق Google لسا في وضع Testing، فهذا الربط يوقف يوم …». انشر التطبيق في Google Cloud (Audience ← Publish app) ثم أعد الربط. وبعد النشر لا ينتهي الدخول من تلقاء نفسه: يموت إن سحبت الوصول، أو بعد ستة أشهر دون استخدام.',
+                                'ومع بقاء تطبيق Google في وضع Testing، يدوم الدخول 7 أيام فقط، وتنبّهك البطاقة بالتاريخ: «تطبيق Google ما زال في وضع Testing، فهذا الربط يتوقف يوم …». انشر التطبيق في Google Cloud (Audience ← Publish app) ثم أعد الربط. وبعد النشر لا ينتهي الدخول من تلقاء نفسه: يموت إن سحبت الوصول، أو بعد ستة أشهر دون استخدام.',
                                 '**افصل يوتيوب** (للمالك، في آخر البطاقة) يسحب وصول التطبيق من Google ويحذف الربط المحفوظ. وتبقى الـ Shorts التي على قناتك.',
                             ] },
                         ],
@@ -2138,11 +2138,11 @@ const HelpContent = {
                         ar: [
                             { qa: [
                                 ['البطاقة تقول إن يوتيوب لم يُجهَّز بعد', 'يجب أن يحفظ مسؤول المنصة عميل Google أولاً: [[youtube#operator]].'],
-                                ['الربط انتهى بـ«رابط الربط انتهى أو بدأ من متصفح ثاني»', 'ابدأ الربط من جديد من المتصفح نفسه، وأكمله خلال 10 دقائق.'],
+                                ['الربط انتهى بـ«انتهى رابط الربط أو بدأ من متصفح آخر»', 'ابدأ الربط من جديد من المتصفح نفسه، وأكمله خلال 10 دقائق.'],
                                 ['«قناة يوتيوب هذه متصلة بمساحة عمل أخرى»', 'افصلها من تلك المساحة أولاً، ثم اربطها هنا.'],
-                                ['«حساب Google هذا ما عنده قناة يوتيوب»', 'أنشئ قناة على youtube.com ثم اربط.'],
-                                ['«Google ما أعطى أذونات يوتيوب»', 'اربط مرة أخرى وعلّم على المربعين.'],
-                                ['«رابط إعادة التوجيه غير مسجّل»، أو «Google رفض Client ID أو السر»', 'هذا لمسؤول المنصة: راجع عميل Google في **الإعدادات** ← **المنصة**، وسجّل الرابط الذي تعرضه البطاقة.'],
+                                ['«حساب Google هذا ليس لديه قناة يوتيوب»', 'أنشئ قناة على youtube.com ثم اربط.'],
+                                ['«لم يمنح Google أذونات يوتيوب»', 'اربط مرة أخرى وعلّم على المربعين.'],
+                                ['«رابط إعادة التوجيه غير مسجّل»، أو «رفض Google قيمة Client ID أو السر»', 'هذا لمسؤول المنصة: راجع عميل Google في **الإعدادات** ← **المنصة**، وسجّل الرابط الذي تعرضه البطاقة.'],
                                 ['نُشر الـ Short لكنه خاص', 'اقرأ [[youtube#public]].'],
                                 ['المنشور يقول إن الصورة المصغّرة لم تُضبط («Thumbnail not set»)', 'نُشر الـ Short، لكن يوتيوب لم يسمح بالصورة المصغّرة المخصصة: تحتاج إلى قناة موثّقة عند يوتيوب. اضبطها من YouTube Studio.'],
                                 ['المنشور فشل بسبب الحصة أو حد الرفع أو تقييد الطلبات', 'اقرأ [[youtube#quota]].'],
@@ -2172,8 +2172,8 @@ const HelpContent = {
             icon: 'message-circle',
             title: { ar: 'واتساب: تجهيز ميتا والربط والتكلفة', en: 'WhatsApp: Meta setup, connecting and costs' },
             summary: {
-                ar: 'خطوات ميتا لمرة واحدة، وربط الرقم باللوحة، وتجربته على جوالك قبل أن يردّ على أي عميل، وروابط الحملات وأسئلة البداية، وكم يكلّف بعد الألف ردّ المجانية.',
-                en: 'The one-time Meta steps, connecting the number here, testing it on your own phone before it answers a customer, campaign links and ice breakers, and what it costs past the first 1,000 free replies.',
+                ar: 'خطوات ميتا لمرة واحدة، وربط الرقم باللوحة، وتجربته على جوالك قبل أن يردّ على أي عميل، والروابط ورموز QR وأسئلة البداية، وكم يكلّف بعد الألف ردّ المجانية.',
+                en: 'The one-time Meta steps, connecting the number here, testing it on your own phone before it answers a customer, links and ice breakers, and what it costs past the first 1,000 free replies.',
             },
             related: ['connect-meta', 'troubleshooting', 'faq'],
             sections: [
@@ -2249,7 +2249,7 @@ const HelpContent = {
                                 'الصق الرمز الدائم في **رمز الوصول**. الحقل مخفي، ويُمسح من الصفحة لحظة ضغط الزر، ولا يظهر لك بعد ذلك ولا لأحد.',
                                 'اضغط **اربط الرقم**. اللوحة تفحص الرمز مع ميتا، وتشترك في أحداث الحساب، وتحفظ الرمز مشفّراً.',
                             ] },
-                            { note: 'الزر يظهر لمالك الحساب فقط. أما بقية الأعضاء فيرون الحالة دون أن يغيّروا شيئاً.' },
+                            { note: 'الزر يظهر لمالك مساحة العمل فقط. أما بقية الأعضاء فيرون الحالة دون أن يغيّروا شيئاً.' },
                             'وبعد الربط ترى في القسم:',
                             { dl: [
                                 ['متصل', 'الربط يعمل. وإذا رأيت **يحتاج إعادة ربط** فقد رفضت ميتا الرمز المخزَّن: أصدر رمزاً جديداً والصقه في نموذج **أعد الربط**.'],
@@ -2269,7 +2269,7 @@ const HelpContent = {
                                 'Paste the permanent token into **Access token**. The field is hidden, it is emptied the moment you press the button, and it never comes back to you or to anyone.',
                                 'Press **Connect number**. The dashboard checks the token with Meta, subscribes to the account’s events, and stores the token encrypted.',
                             ] },
-                            { note: 'The button is shown to the account owner only. Other members see the status and can’t change anything.' },
+                            { note: 'The button is shown to the workspace owner only. Other members see the status and can’t change anything.' },
                             'After connecting, the section shows:',
                             { dl: [
                                 ['Connected', 'The connection works. If you see **Needs reconnecting**, Meta refused the stored token: issue a new one and paste it into the **Reconnect** form.'],
@@ -2313,12 +2313,12 @@ const HelpContent = {
                 },
                 {
                     id: 'links',
-                    title: { ar: 'روابط الحملات ورموز QR', en: 'Campaign links and QR codes' },
+                    title: { ar: 'الروابط ورموز QR', en: 'Links and QR codes' },
                     body: {
                         ar: [
                             'الرابط القصير ورمز QR يفتحان محادثة واتساب مع رقمك مباشرة، ويجد العميل رسالتك الأولى مكتوبة وجاهزة للإرسال. ضع الرابط في سيرة حسابك، أو اطبع الرمز على ملصق، أو استخدمهما في إعلان. وأنشئ رابطاً لكل مكان، لتعرف أي مكان يجلب لك محادثات:',
                             { ol: [
-                                'افتح **الإعدادات** وانزل لقسم **واتساب**، ثم لقسم **روابط الحملات ورموز QR**.',
+                                'افتح **الإعدادات** وانزل لقسم **واتساب**، ثم لقسم **الروابط ورموز QR**.',
                                 'اكتب في **اسم الرابط** اسماً لك أنت، مثل «سيرة إنستجرام». العميل لا يراه.',
                                 'اكتب في **الرسالة الأولى** الجملة التي يبدأ بها العميل المحادثة، حتى 120 حرفاً.',
                                 'اضغط **أنشئ الرابط**. يظهر الرابط ورمز QR في القائمة أدناه.',
@@ -2335,7 +2335,7 @@ const HelpContent = {
                         en: [
                             'The short link and the QR code open a WhatsApp chat with your number directly, and the customer finds your first message typed and ready to send. Put the link in your bio, print the code on a poster, or use either in an ad. Make one link for each place, and you can see which place brings you chats:',
                             { ol: [
-                                'Open **Settings** and scroll to the **WhatsApp** section, then to **Campaign links and QR codes**.',
+                                'Open **Settings** and scroll to the **WhatsApp** section, then to **Links and QR codes**.',
                                 'In **Link name**, write a name for yourself, like “Instagram bio”. The customer never sees it.',
                                 'In **First message**, write the sentence the customer starts the chat with, up to 120 characters.',
                                 'Press **Create link**. The link and its QR code appear in the list below.',
@@ -2362,7 +2362,7 @@ const HelpContent = {
                                 'اكتب سؤالاً في كل خانة **السؤال**: حتى 80 حرفاً، وبلا إيموجي. اترك الخانات الزائدة فارغة.',
                                 'اضغط **احفظ الأسئلة**. بعد الحفظ تقرأ اللوحة ما عند ميتا وتعرضه، فإن اختلف عمّا كتبته نبّهتك.',
                             ] },
-                            { note: 'يخفي واتساب هذه الأسئلة عمّن يفتح المحادثة من رابط فيه رسالة جاهزة، وكل رابط تنشئه من **روابط الحملات ورموز QR** فيه رسالة جاهزة. فتظهر الأسئلة لمن يبدأ المحادثة من رقمك مباشرة. هذه قاعدة ميتا، لا إعداد عندنا.' },
+                            { note: 'يخفي واتساب هذه الأسئلة عمّن يفتح المحادثة من رابط فيه رسالة جاهزة، وكل رابط تنشئه من **الروابط ورموز QR** فيه رسالة جاهزة. فتظهر الأسئلة لمن يبدأ المحادثة من رقمك مباشرة. هذه قاعدة ميتا، لا إعداد عندنا.' },
                             { tip: 'اكتب الأسئلة كما يسأل العميل فعلاً، مثل «كم السعر؟» أو «ما المنتجات؟»، لأن الضغطة تصل المساعد نصاً عادياً.' },
                         ],
                         en: [
@@ -2372,7 +2372,7 @@ const HelpContent = {
                                 'Write one question in each **Question** field: up to 80 characters, with no emoji. Leave the extra fields empty.',
                                 'Press **Save ice breakers**. After saving, the dashboard reads what Meta holds and shows it, and warns you if it differs from what you wrote.',
                             ] },
-                            { note: 'WhatsApp hides ice breakers from anyone who opens the chat from a link with a prefilled message, and every link you make in **Campaign links and QR codes** has one. So the questions show for people who start a chat from your number directly. That is Meta’s rule, not a setting of ours.' },
+                            { note: 'WhatsApp hides ice breakers from anyone who opens the chat from a link with a prefilled message, and every link you make in **Links and QR codes** has one. So the questions show for people who start a chat from your number directly. That is Meta’s rule, not a setting of ours.' },
                             { tip: 'Write the questions the way a customer really asks, like “How much is it?” or “What do you sell?”, because a tap reaches the assistant as plain text.' },
                         ],
                     },
@@ -2444,7 +2444,7 @@ const HelpContent = {
                                     ['«الرمز صالح لكنه لا يحمل الصلاحيتين المطلوبتين»', 'أصدره من جديد وفعّل `whatsapp_business_messaging` و`whatsapp_business_management`.'],
                                     ['«لا يستطيع هذا الرمز قراءة رقم الهاتف»', 'راجع **معرّف رقم الهاتف**، وتأكد أن مستخدم النظام يملك حساب واتساب هذا.'],
                                     ['«لم تؤكد ميتا اشتراك التطبيق في أحداث حساب واتساب للأعمال هذا»', 'راجع **معرّف حساب واتساب للأعمال**.'],
-                                    ['«هذا الرقم مربوط بمساحة عمل أخرى»', 'افصله من هناك أولاً.'],
+                                    ['«هذا الرقم متصل بمساحة عمل أخرى»', 'افصله من هناك أولاً.'],
                                     ['«تعذّر الوصول إلى ميتا، ولم يُحفظ شيء»', 'مشكلة مؤقتة عند ميتا. أعد المحاولة بعد قليل.'],
                                 ] }]],
                             ] },
@@ -2513,7 +2513,7 @@ const HelpContent = {
                             { tip: 'لا حاجة إلى زر «اتصال عبر فيسبوك» لتعمل الإعلانات. هو خيار إضافي للمالك، ورمزه ينتهي بعد نحو 60 يوماً. أما رمز مستخدم النظام فلا ينتهي، ولهذا نوصي به.' },
                         ],
                         en: [
-                            'Ads in AutoReply Pro run on an access token that belongs to you, from the Meta business that owns the ad account. The token is made from a “system user”, a technical account inside Meta Business that is not tied to a person and does not stop working when someone changes a password. The steps are the same for the owner and for every client who manages their own account here.',
+                            'Ads in AutoReply Pro run on an access token that belongs to you, from the Meta business that owns the ad account. The token is made from a “system user”, a technical account inside Meta Business that is not tied to a person and does not stop working when someone changes a password. The steps are the same for the owner and for every workspace that manages its own account here.',
                             { ol: [
                                 'Open **Business Settings** in Meta, then **Users**, then **System users**.',
                                 'Press **Add**, type a name (for example “AutoReply”), choose the **Admin** or **Employee** role, and create it.',
@@ -2532,7 +2532,7 @@ const HelpContent = {
                                 ['`pages_manage_ads`', 'Use the Page inside ads.'],
                             ] },
                             'To find the ad account ID: open Ads Manager and look at the address of the page. The number after `act=` is the ID. Or open **Business Settings**, then **Accounts**, then **Ad accounts**, where the ID sits under each account’s name.',
-                            { warn: 'The token is like a password: whoever holds it can spend from your ad account. Never send it in a chat, an email or a screenshot, and never hand it to anyone. Each client pastes it themselves into their own dashboard, and AutoReply stores it encrypted and never shows it again after saving.' },
+                            { warn: 'The token is like a password: whoever holds it can spend from your ad account. Never send it in a chat, an email or a screenshot, and never hand it to anyone. Each workspace owner pastes it themselves into their own dashboard, and AutoReply stores it encrypted and never shows it again after saving.' },
                             { tip: 'Ads do not need the “Connect with Facebook” button. That is an optional extra for the owner, and its token expires after about 60 days. A system-user token does not expire, which is why we recommend it.' },
                         ],
                     },
@@ -2845,7 +2845,7 @@ const HelpContent = {
                                 'Fix whatever the check blocks. If warnings remain, read them and tick **I have read the warnings**. Then press **Create paused**.',
                                 'The ad is created paused and nothing is spent. Open **Ads** and press **Activate** when you are ready. Meta usually reviews the ad within 24 hours.',
                             ] },
-                            { warn: 'The form checks the assistant for each destination you chose. If it is off, nobody answers the people who message you from the ad. If the WhatsApp agent is in test mode, only the test numbers get an answer. If sales in your DMs are in test mode, the assistant answers everyone but sells only to your testers. If the destination is not connected, there is no answer either. Switch the assistant on before you activate the ad: [[whatsapp#connect]] for WhatsApp, and the message assistant’s settings for Instagram and Messenger.' },
+                            { warn: 'The form checks the assistant for each destination you chose. If it is off, nobody answers the people who message you from the ad. If the WhatsApp assistant is in test mode, only the test numbers get an answer. If sales in your DMs are in test mode, the assistant answers everyone but sells only to your testers. If the destination is not connected, there is no answer either. Switch the assistant on before you activate the ad: [[whatsapp#connect]] for WhatsApp, and the message assistant’s settings for Instagram and Messenger.' },
                             { note: 'In **Review**, Meta checks the ad itself without creating anything. If it refuses something, its reason shows there and nothing is created.' },
                             { tip: 'The same assistant rules answer chats that come from the ad, and each chat is counted for the ad it started from, so you can see which ad brings more messages.' },
                         ],
@@ -3495,7 +3495,7 @@ const HelpContent = {
                 },
                 {
                     id: 'for-clients',
-                    title: { ar: 'لعملاء الخدمة المُدارة', en: 'For managed clients' },
+                    title: { ar: 'لعملاء الخدمة المُدارة', en: 'For managed workspaces' },
                     body: {
                         ar: [
                             'إذا كان حسابك مُداراً من أوتوريبلاي برو، فإعلانات ميتا تعمل بحسابك الإعلاني أنت، وبوسيلة الدفع التي تخصك أنت، ولا يمرّ إنفاقك عبر أوتوريبلاي برو. التهيئة تستغرق نحو عشرين دقيقة، وتُنجَز مرة واحدة.',
@@ -3798,7 +3798,7 @@ const HelpContent = {
                             { h: 'Deletion when the person asks' },
                             'If someone asks for their data to be deleted, search the data-erasure tool by the email or phone number they typed in the form: their answers are counted, and the whole record is deleted.',
                             { h: 'Consent and contact' },
-                            'AutoReply never contacts a lead by itself and never hands one to the messaging or WhatsApp agent. The "Agreed to be contacted" column shows who said yes to the consent question. In Egypt direct electronic marketing needs its own licence and a consent register; in Saudi Arabia every message must say who you are and offer a way to unsubscribe.',
+                            'AutoReply never contacts a lead by itself and never hands one to the messaging or WhatsApp assistant. The "Agreed to be contacted" column shows who said yes to the consent question. In Egypt direct electronic marketing needs its own licence and a consent register; in Saudi Arabia every message must say who you are and offer a way to unsubscribe.',
                             { warn: 'What the app does does not replace your own obligations: the licence in Egypt, the consent register, answering deletion requests, and notifying the authority within 72 hours of any breach.' },
                         ],
                     },
@@ -4119,7 +4119,7 @@ const HelpContent = {
                                 'من الاستوديو ← **الإعدادات** ← **العمّال**: اكتب اسماً في **عامل جديد** (مثلاً «ماك الاستوديو») واضغط **أنشئ عاملاً**. انسخ الرمز الآن لأنه لا يظهر مرة أخرى، واضغط **نسخته**.',
                                 'في مجلد العامل، انسخ ملف المثال واملأه: `cp studio.config.example.json studio.config.json`. اكتب فيه رابط التطبيق (`appUrl`)، والرمز (`token`)، ومفتاح Gemini (`geminiApiKey`)، ومجلد الكورس (`courseRoot`)، واسم العامل (`name`).',
                                 'ثبّته ليعمل وحده كلما سجّلت دخولك إلى الماك، بالأمر الموجود أدناه.',
-                                'ارجع إلى الاستوديو، وخلال ثوانٍ سترى **العامل متصل**.',
+                                'ارجع إلى الاستوديو، وخلال ثوانٍ تقول الشارة في الأعلى «الماك متصل».',
                             ] },
                             { code: 'scripts/install-studio-worker.sh', caption: 'التثبيت والتشغيل (ويعمل مع كل تسجيل دخول)' },
                             'أوامر ستحتاجها لاحقاً، تكتبها في الطرفية (Terminal) من داخل مجلد العامل:',
@@ -4137,7 +4137,7 @@ const HelpContent = {
                                 'In the Studio, open **Settings** → **Workers**: type a name under **New worker** (such as “Studio Mac”) and press **Create worker**. Copy the token now, because it is never shown again, then press **I’ve copied it**.',
                                 'In the worker folder, copy the example config and fill it in: `cp studio.config.example.json studio.config.json`. Set the app address (`appUrl`), the token (`token`), your Gemini key (`geminiApiKey`), the course folder (`courseRoot`) and the worker’s name (`name`).',
                                 'Install it so it starts on its own whenever you log in to the Mac, with the command below.',
-                                'Back in the Studio, within seconds you’ll see **Worker online**.',
+                                'Back in the Studio, within seconds the chip at the top says “Mac online”.',
                             ] },
                             { code: 'scripts/install-studio-worker.sh', caption: 'Install and start (it then starts at every login)' },
                             'Commands you’ll want later, typed in Terminal from inside the worker folder:',
@@ -4156,18 +4156,20 @@ const HelpContent = {
                     title: { ar: 'متصل أو غير متصل', en: 'Online and offline' },
                     body: {
                         ar: [
+                            'شارة واحدة تظهر في أعلى كل أقسام الاستوديو (الكاروسيل والمونتور والإنفوجرافيك والشروحات) وفي «اقتراحات الذكاء الاصطناعي» في الإعلانات. لها ثلاث حالات:',
                             { dl: [
-                                ['العامل متصل', 'تواصل مع الاستوديو خلال آخر 90 ثانية. كل شيء يعمل.'],
-                                ['العامل غير متصل', 'لم يتواصل منذ أكثر من 90 ثانية، وتحته **آخر ظهور** يخبرك متى كانت آخر مرة.'],
-                                ['لم يتصل بعد', 'أنشأت العامل لكنه لم يعمل ولو مرة. تأكد من الرمز في ملف الإعدادات.'],
+                                ['● الماك متصل · Claude مسجّل الدخول', 'تواصل العامل مع الاستوديو خلال آخر 90 ثانية، وClaude على الماك يجيب. يظهر بعدها عدد الأعمال التي بالانتظار. كل شيء يعمل.'],
+                                ['▲ Claude على الماك غير مسجّل الدخول', 'العامل متصل لكن Claude الذي يكتب عنه طلب تسجيل الدخول من جديد، فلا يكتب الاستوديو شيئاً. شغّل `claude /login` على الماك (التفاصيل في «تنبيه: Claude على الماك مسجَّل الخروج» أدناه).'],
+                                ['○ الماك نائم منذ ٣ س · مهمتان تنتظران', 'لم يتواصل العامل منذ أكثر من 90 ثانية، ويقول لك الرقم منذ متى. أيقظ الماك فتكمل الأعمال وحدها. وإن لم يتصل أبداً فالشارة تقول «الماك لم يتصل بعد»: تأكد من الرمز في ملف الإعدادات.'],
                             ] },
                             'وهو غير متصل يمكنك كتابة كاروسيل عادي، لأن الكتابة تجري على الخادم. وما ينتظره: الفحص والفهرسة ورسم الشرائح، وترى عددها في **بالانتظار**. وحين يعود يكمّلها وحده. وزر **تحقّق مرة أخرى** يفحص الحالة الآن.',
                         ],
                         en: [
+                            'One chip sits at the top of every Studio section (Carousels, Monteur, Infographics, Explainers) and on Ads → AI proposals. It has three states:',
                             { dl: [
-                                ['Worker online', 'It checked in with the Studio within the last 90 seconds. All good.'],
-                                ['Worker offline', 'Nothing from it for more than 90 seconds. **Last seen** underneath says when it last checked in.'],
-                                ['Never connected', 'The worker exists but has never run. Check the token in its config file.'],
+                                ['● Mac online · Claude signed in', 'The worker checked in within the last 90 seconds and Claude on the Mac answers. The number after it is how many jobs wait. All good.'],
+                                ['▲ Claude on the Mac is signed out', 'The worker is online, but the Claude program it writes with asked to be signed in again, so the Studio can write nothing. Run `claude /login` on the Mac (details under “Alarm: Claude on the Mac is signed out” below).'],
+                                ['○ Mac asleep since 3h · 2 jobs wait', 'Nothing from the worker for more than 90 seconds; the number says for how long. Wake the Mac and the jobs carry on by themselves. If it never connected, the chip says “Mac not connected yet”: check the token in its config file.'],
                             ] },
                             'While it is offline you can still write carousels, because writing happens on the server. What waits for it is scanning, indexing and drawing the slides, counted under **Waiting**. When it is back, it picks them up on its own. **Check again** refreshes the status right away.',
                         ],
@@ -4179,7 +4181,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'حين ينام الماك (أو تغلق غطاء اللابتوب)، ينام العامل معه، وبعد 90 ثانية يظهر **العامل غير متصل**. تنتظر المهام في الطابور ولا يضيع شيء.',
+                                'حين ينام الماك (أو تغلق غطاء اللابتوب)، ينام العامل معه، وبعد 90 ثانية تقول الشارة «الماك نائم منذ …». تنتظر المهام في الطابور ولا يضيع شيء.',
                                 'وحين يستيقظ الجهاز، يكمّل وحده دون أن تفعل شيئاً.',
                                 'لو نام في منتصف مهمة، ولم يصل عنها خبر 15 دقيقة، يعيدها الاستوديو إلى الطابور ويسندها إلى العامل من جديد. تُسنَد المهمة الواحدة 3 مرات كحد أقصى، وبعدها تفشل مع رسالة توجّهك إلى السجل.',
                             ] },
@@ -4187,7 +4189,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ul: [
-                                'When the Mac sleeps (or you close the laptop lid), the worker sleeps with it, and after 90 seconds the Studio shows **Worker offline**. Jobs wait in the queue; nothing is lost.',
+                                'When the Mac sleeps (or you close the laptop lid), the worker sleeps with it, and after 90 seconds the chip says “Mac asleep since …”. Jobs wait in the queue; nothing is lost.',
                                 'When the computer wakes, the worker carries on by itself.',
                                 'If it fell asleep in the middle of a job and the job has not reported in for 15 minutes, the Studio puts it back in the queue and hands it out again. A job is handed out 3 times at most, then it fails with a message pointing you to the log.',
                             ] },
@@ -4200,7 +4202,7 @@ const HelpContent = {
                     title: { ar: 'تنبيه: Claude على الماك مسجَّل الخروج', en: 'Alarm: Claude on the Mac is signed out' },
                     body: {
                         ar: [
-                            'ظهر لك في «اليوم» وفي رأس الاستوديو أن «Claude على جهاز الماك مسجَّل الخروج». ومعنى ذلك أن العامل يعمل ومتصل بالإنترنت، لكن برنامج Claude الذي يكتب نيابة عنه طلب منك تسجيل الدخول من جديد (يحدث عند انتهاء الجلسة). لذلك لا يستطيع الاستوديو الكتابة: لا اختيار المقاطع ولا الكابشن ولا الإنفوجرافيك ولا اقتراحات الإعلانات.',
+                            'ظهر لك في «اليوم» وفي شارة الماك أعلى الاستوديو أن «Claude على جهاز الماك مسجَّل الخروج». ومعنى ذلك أن العامل يعمل ومتصل بالإنترنت، لكن برنامج Claude الذي يكتب نيابة عنه طلب منك تسجيل الدخول من جديد (يحدث عند انتهاء الجلسة). لذلك لا يستطيع الاستوديو الكتابة: لا اختيار المقاطع ولا الكابشن ولا الإنفوجرافيك ولا اقتراحات الإعلانات.',
                             { ul: [
                                 'الريلز تنتظر ولا تغيّر النموذج. لا تنتقل إلى Gemini أو أي نموذج آخر، ولا تهدر محاولاتها: تبقى فيديوهاتك في مكانها حتى يعود Claude.',
                                 'أول إجابة ناجحة من Claude تزيل التنبيه وحدها، وتعيد الأعمال التي توقفت بسبب الدخول (الإنفوجرافيك والاقتراحات والشروحات التي فشلت قبل أقل من 3 أيام).',
@@ -4216,7 +4218,7 @@ const HelpContent = {
                             { note: 'يسأل التطبيق Claude سؤالاً صغيراً كل نصف ساعة وهو مسجَّل الخروج، فيعرف وحده أنك دخلت. لا تحتاج إلى الضغط على شيء.' },
                         ],
                         en: [
-                            'Today and the Studio header say “Claude on the Mac is signed out”. That means the worker is running and online, but the Claude program it writes with asked to be signed in again (it happens when the session expires). So the Studio can write nothing: no clip picks, captions, infographics or ad drafts.',
+                            'Today and the Mac chip at the top of the Studio say “Claude on the Mac is signed out”. That means the worker is running and online, but the Claude program it writes with asked to be signed in again (it happens when the session expires). So the Studio can write nothing: no clip picks, captions, infographics or ad drafts.',
                             { ul: [
                                 'The Monteur waits; it never switches models. It does not fall back to Gemini or any other model, and it does not burn its tries: your videos stay where they are until Claude is back.',
                                 'The first answer Claude gives clears the alarm by itself, and puts back the work the sign-in stopped (infographics, proposals and explainers that failed in the last 3 days).',
@@ -4480,7 +4482,7 @@ const HelpContent = {
                                 ['Focus', 'With lessons only: tell it what to concentrate on, such as “only the part about reports”.'],
                                 ['Angle', 'The shape of the post: **Tips**, **Step by step**, **Common mistakes**, **Before and after**, **Prompt template**, **Course overview**, or **Let the AI choose**.'],
                                 ['Slides', '6 to 10. The first is the cover and the last is the call to action.'],
-                                ['Keyword', 'One word people comment to get the DM. Leave it empty and one is suggested that doesn’t clash with your active campaigns. Avoid short words: [[campaigns#pitfall]].'],
+                                ['Keyword', 'One word people comment to get the DM. Leave it empty and one is suggested that doesn’t clash with your active keyword replies. Avoid short words: [[campaigns#pitfall]].'],
                                 ['Accent colour', 'The colour of the highlighted words. **From my palette** picks one of your colours, avoiding the ones used recently; or pick a colour yourself, or type it as `#RRGGBB`.'],
                             ] },
                             'Your choices are remembered on this device for the next carousel.',
@@ -4664,7 +4666,7 @@ const HelpContent = {
                         en: [
                             { ul: [
                                 'A carousel post for Instagram and Facebook together is added to the **Scheduler**, with the drawn slides and the Instagram caption. Its statuses are in [[scheduling#statuses]].',
-                                'A keyword campaign is created, unless an active campaign already answers that keyword.',
+                                'A keyword reply is created, unless an active keyword reply already answers that keyword.',
                                 'The draft becomes **Scheduled** and editing closes. To change it, delete the post from the **Scheduler**.',
                                 '**Open in Posts** takes you to the post.',
                             ] },
@@ -4974,7 +4976,7 @@ const HelpContent = {
                     title: { ar: 'أول مرة: التجهيز', en: 'The first time: set it up' },
                     body: {
                         ar: [
-                            'عندما تفتح **الاستوديو** ← **المونتير** تنفتح الصفحة على **جهّز المونتير**: ثلاث خطوات تُحفظ معاً بزر **احفظ وابدأ**، ولا يُحفظ شيء قبل أن تضغطه.',
+                            'عندما تفتح **الاستوديو** ← **الريلز** تنفتح الصفحة على **جهّز الريلز**: ثلاث خطوات تُحفظ معاً بزر **احفظ وابدأ**، ولا يُحفظ شيء قبل أن تضغطه.',
                             { ol: [
                                 '**اختر مصدر الفيديوهات:** **مجلدي** (فيديوهات جديدة تضعها في مجلد على جهازك الماك) أو **مكتبة الكورس** (الدروس التالية من مكتبة الاستوديو بالترتيب، وكل درس يُستخدم مرة واحدة). ومع **مجلدي** اختر المجلد أيضاً: [[monteur#folder]].',
                                 '**اختر الأوقات:** **وقت التشغيل** وهو وقت التشغيل اليومي، و**أوقات النشر** وتصل لأربعة أوقات في اليوم.',
@@ -4984,7 +4986,7 @@ const HelpContent = {
                             { note: 'إن لم يعرف ملفك بعد من يظهر في الفيديو، يفتح لك تفعيل الريلز ورقة قصيرة عنوانها «بضعة تفاصيل أولًا»: عبّئها ويكتمل التفعيل. ولو ردّت الصفحة بـ«أكمل ملفك قبل تشغيل هذا» فأساسيات إعدادك ناقصة، أكملها أولاً: [[onboarding#steps]].' },
                         ],
                         en: [
-                            'The first time you open **Studio** → **Monteur**, the page opens as **Set up the Monteur**: three steps, saved together with **Save and start**. Nothing is saved until you press it.',
+                            'The first time you open **Studio** → **Reels**, the page opens as **Set up Reels**: three steps, saved together with **Save and start**. Nothing is saved until you press it.',
                             { ol: [
                                 '**Choose where the videos come from:** **My folder** (new videos you drop into a folder on your Mac) or **The course library** (the next lessons of your Studio library, in order, each used once). With **My folder**, also choose the folder: [[monteur#folder]].',
                                 '**Choose the times:** **Run at**, the time of the daily run, and **Post at**, up to 4 posting times a day.',
@@ -5150,7 +5152,7 @@ const HelpContent = {
                                 ['TikTok', 'A post of its own, with the TikTok copy of the video and the **TikTok caption**. TikTok has to be connected or Approve is refused: connect it in Settings or take it off **Post to**: [[tiktok#connect]]. Until TikTok approves the app it goes up as “Only me”: [[tiktok#before-approval]].'],
                                 ['YouTube', 'A Short with the TikTok copy of the video, the reel’s title and the TikTok caption (with your product link under it, if you set one). A YouTube that is not connected does not stop the reel going to Instagram and Facebook: its post fails in the **Scheduler** and says why: [[youtube#disconnected]].'],
                             ] },
-                            'And the comment campaign: every reel with an Instagram or Facebook post needs a campaign that answers its keyword. If one of your active campaigns for all posts already answers it, that one is used. If not, Approve creates one, switched on, for the keyword (and its other spellings): it sends the DM written for the reel, with no public reply, and matches the keyword as a whole word. If the keyword would clash with one of your live keywords, Approve is refused and names it: change the keyword.',
+                            'And the comment keyword reply: every reel with an Instagram or Facebook post needs a keyword reply that answers its keyword. If one of your active keyword replies for all posts already answers it, that one is used. If not, Approve creates one, switched on, for the keyword (and its other spellings): it sends the DM written for the reel, with no public reply, and matches the keyword as a whole word. If the keyword would clash with one of your live keywords, Approve is refused and names it: change the keyword.',
                             { ul: [
                                 'After that, the reel’s posts are ordinary scheduled posts: edit, delete or publish them from the **Scheduler**. A scheduled reel cannot be edited from here.',
                                 'If you delete all of a reel’s posts before their time, the reel comes back to the **Review queue**.',
@@ -5171,7 +5173,7 @@ const HelpContent = {
                             ] },
                         ],
                         en: [
-                            'Under **When a reel is ready**, choose **I review it** (the default) or **Schedule it automatically**: the Monteur approves each reel itself as soon as it is drawn, with the next free posting time and the comment campaign, and the same checks as the **Approve** button.',
+                            'Under **When a reel is ready**, choose **I review it** (the default) or **Schedule it automatically**: the Monteur approves each reel itself as soon as it is drawn, with the next free posting time and the comment keyword reply, and the same checks as the **Approve** button.',
                             { ul: [
                                 'A reel it cannot schedule (no free day, a keyword that clashes, TikTok not ready) stays in the **Review queue** with the reason: “Not scheduled automatically”. It is tried again later, and you can edit it or approve it yourself.',
                                 'This setting is separate from **Run every day**: with the daily run off and automatic scheduling on, the reels that finish drawing are still scheduled.',
@@ -6225,7 +6227,7 @@ const HelpContent = {
                         en: [
                             'The product’s main AI is Google’s **Gemini**, used in three places:',
                             { dl: [
-                                ['DM replies', 'The AI agent answers DMs with the model you choose in **DM assistant** → **Model**.'],
+                                ['DM replies', 'The AI assistant answers DMs with the model you choose in **DM assistant** → **Model**.'],
                                 ['Writing carousels', '**Generate carousel**, **Rewrite with AI**, **Write it again** and **Plan my week**, all on the server.'],
                                 ['Indexing lessons', 'On the worker on your computer, with the Gemini key in its config file.'],
                             ] },
@@ -6241,7 +6243,7 @@ const HelpContent = {
                             'يستخدم الاستوديو نماذج غير نموذج الرسائل عن قصد، كي لا تستهلك كتابة كاروسيل الحصة التي يعتمد عليها ردّ على عميل. ولو انتهت حصة نموذج جرّب الاستوديو النموذج التالي من تلقاء نفسه.',
                         ],
                         en: [
-                            'The Studio deliberately uses different models from the DM agent, so a carousel you write never spends the quota a customer’s reply depends on. When one model’s quota runs out, it moves on to the next by itself.',
+                            'The Studio deliberately uses different models from the DM assistant, so a carousel you write never spends the quota a customer’s reply depends on. When one model’s quota runs out, it moves on to the next by itself.',
                         ],
                     },
                 },
@@ -6261,7 +6263,7 @@ const HelpContent = {
                             { ul: [
                                 'Google limits each key to a number of requests per minute and per day, for each model separately.',
                                 '**A free key has tight limits:** some models allow only about 20 requests a day. One carousel can take more than one request: the writing, plus up to two repair rounds when needed.',
-                                'When the quota runs out, Google answers with error 429: the Studio shows a message containing `HTTP 429`, or the agent stops answering DMs.',
+                                'When the quota runs out, Google answers with error 429: the Studio shows a message containing `HTTP 429`, or the assistant stops answering DMs.',
                                 'Daily quotas reset at midnight Pacific time, which is around 10 or 11 in the morning in Riyadh.',
                             ] },
                         ],
@@ -6366,7 +6368,7 @@ const HelpContent = {
                                 ['حدود', 'الريل الأكبر من 35 ميغابايت لا يُشاهَد، والقائمة تقول ذلك. وتُقرأ أحدث 300 منشور فقط. وتعمل في رسائل إنستجرام فقط، مثل بقية رؤية ميتا.'],
                             ] },
                             { tip: 'شغّل **ذاكرة الفيديو**، واضغط **احفظ رؤية ميتا**، ثم **افهرس ريلزي** وشاهد القائمة تمتلئ. بعدها اسأل من حسابك التجريبي «عندك فيديو عن …؟» واقرأ **الرسائل**: يظهر تحت الرد «تذكّر: فيديو من مكتبتك».' },
-                            'هي تتذكّر ما شاهدته فقط. فموضوع ليس في أي ريل من ريلزك يأخذ جواباً صادقاً «ما في فيديو عنه لسا»، ولا يُخمَّن. وإذا بلغ الحد اليومي لا يُشاهَد ريل جديد ولا يُقترح فيديو حتى اليوم التالي.',
+                            'هي تتذكّر ما شاهدته فقط. فموضوع ليس في أي ريل من ريلزك يأخذ جواباً صادقاً بأنه لا يوجد فيديو عنه بعد، ولا يُخمَّن. وإذا بلغ الحد اليومي لا يُشاهَد ريل جديد ولا يُقترح فيديو حتى اليوم التالي.',
                         ],
                         en: [
                             '**Video memory** lets the assistant answer “do you have a video about…?” with the right one of your reels and the second to watch from. Once you switch it on, Meta’s Muse Spark model watches each reel you published, once, and keeps notes on what it saw and heard: what is said, what is shown on screen (text, code, characters), the key moments with their seconds, and the topics. It is in beta and off until you switch it on, in **DM assistant** → **Meta vision**.',
@@ -6391,14 +6393,14 @@ const HelpContent = {
                             { ul: [
                                 'افهرس الدرس مرة واحدة. إعادة الفهرسة طلب جديد، فلا تعيدها إلا إذا فشلت.',
                                 'لتعديل شريحة واحدة استخدم **أعد الكتابة بالذكاء الاصطناعي** بدلاً من **اكتبه من جديد** للكاروسيل كله.',
-                                'كل رسالة تجريبية في **اختبار الوكيل** طلب حقيقي، فجرّب بأسئلة مدروسة.',
+                                'كل رسالة تجريبية في **اختبار المساعد** طلب حقيقي، فجرّب بأسئلة مدروسة.',
                             ] },
                         ],
                         en: [
                             { ul: [
                                 'Index each lesson once. Re-indexing is a new request, so only redo it when it failed.',
                                 'To fix one slide, use **Rewrite with AI** rather than **Write it again** for the whole carousel.',
-                                'Every test message in the **Agent sandbox** is a real request, so test with purpose.',
+                                'Every test message in the **Assistant sandbox** is a real request, so test with purpose.',
                             ] },
                         ],
                     },
@@ -6579,7 +6581,7 @@ const HelpContent = {
                                     'هل الرد التلقائي مرتبط بمنشور معيّن؟ يجب أن تعلّق على هذا المنشور.',
                                     '**رمز الوصول** مكتوب عليه **صالح**؟',
                                 ] }],
-                                ['**سجل النشاط** فارغ تماماً', 'التعليق الذي لا يطابق أي رد تلقائي لا يُسجَّل أصلاً. جرّب بكلمة رد تلقائي مفعّل.'],
+                                ['**السجل** فارغ تماماً', 'التعليق الذي لا يطابق أي رد تلقائي لا يُسجَّل أصلاً. جرّب بكلمة رد تلقائي مفعّل.'],
                                 ['أشخاص وصلتهم رسالة لم يطلبوها', 'كلمة قصيرة تطابق داخل كلمات أخرى: [[campaigns#pitfall]].'],
                                 ['الرسالة وصلت والرد العلني لم يظهر', 'يحتاج الرد على تعليقات فيسبوك إلى صلاحية `pages_manage_engagement`: [[connect-meta#token-health]].'],
                                 ['المساعد لا يرد على الرسائل', ['تأكد أن **تشغيل الردّ الآلي** مفعّل في **مساعد الرسائل**.', 'وتأكد أن الرد الآلي ليس موقوفاً في المحادثة (**الردّ الآلي متوقف** في **الرسائل**). أي رد يدوي منك يوقفه في تلك المحادثة.', 'ولو انتهت حصة Gemini: [[ai-usage#quotas]].']],
@@ -6589,17 +6591,17 @@ const HelpContent = {
                         en: [
                             { qa: [
                                 ['I commented the keyword and got no DM', { ul: [
-                                    'Is the campaign active?',
+                                    'Is the keyword reply active?',
                                     'Is the keyword really in the comment?',
-                                    'Did you comment from another account? Your own comments never trigger a campaign.',
+                                    'Did you comment from another account? Your own comments never trigger a keyword reply.',
                                     'Did you already get a DM in the last 24 hours? It is one per person every 24 hours.',
-                                    'Is the campaign tied to one post? Then comment on that post.',
+                                    'Is the keyword reply tied to one post? Then comment on that post.',
                                     'Does the **Access token** say **Valid**?',
                                 ] }],
-                                ['The **Activity Log** is completely empty', 'A comment that matches no campaign is not recorded at all. Test with the keyword of an active campaign.'],
+                                ['The **Log** is completely empty', 'A comment that matches no keyword reply is not recorded at all. Test with the keyword of an active keyword reply.'],
                                 ['People got a DM they never asked for', 'A short keyword is matching inside other words: [[campaigns#pitfall]].'],
                                 ['The DM arrived but the public reply didn’t', 'Replying to Facebook comments needs the `pages_manage_engagement` permission: [[connect-meta#token-health]].'],
-                                ['The AI agent isn’t answering DMs', ['Check **Turn on auto-replies** is on in **DM assistant**.', 'Check the AI isn’t paused in that conversation (**AI paused** in the **Inbox**). Any manual reply from you pauses it there.', 'And if your Gemini quota ran out: [[ai-usage#quotas]].']],
+                                ['The AI assistant isn’t answering DMs', ['Check **Turn on auto-replies** is on in **DM assistant**.', 'Check the AI isn’t paused in that conversation (**AI paused** in the **Inbox**). Any manual reply from you pauses it there.', 'And if your Gemini quota ran out: [[ai-usage#quotas]].']],
                                 ['Some DMs **Failed** with a note about a limit', 'The limits are 180 DMs an hour per account, and one DM per person every 24 hours.'],
                             ] },
                         ],
@@ -6648,14 +6650,14 @@ const HelpContent = {
                                 ['هل يجب أن أُبقي جهازي مفتوحاً؟', 'للردود التلقائية والرسائل والجدولة لا، كلها على الخادم وتعمل وجهازك مطفأ. الاستوديو فقط: الفهرسة والرسم يحتاجان إلى العامل على جهازك.'],
                                 ['هل يمكن أن يُنشر شيء دون موافقتي؟', 'لا. يُنشر المنشور حين تجدوله أنت، وتصدر الردود من ردودك التلقائية ومساعدك وتعليماتك.'],
                                 ['هل يعمل مع حساب إنستجرام شخصي؟', 'لا، يلزم حساب احترافي (أعمال أو صانع محتوى) متصل بصفحة فيسبوك: [[connect-meta#needs]].'],
-                                ['هل أستطيع إيقاف الرد الآلي لعميل معيّن؟', 'نعم. في **الرسائل** افتح المحادثة وأطفئ **الردّ الآلي في هذه المحادثة**. وأي رد يدوي منك يوقفه تلقائياً في تلك المحادثة.'],
+                                ['هل أستطيع إيقاف الرد الآلي لعميل معيّن؟', 'نعم. في **الرسائل** افتح المحادثة وأطفئ **المساعد في هذه المحادثة**. وأي رد يدوي منك يوقفه تلقائياً في تلك المحادثة.'],
                                 ['هل أستطيع تغيير لغة اللوحة؟', 'نعم، من الزر أعلى الصفحة، أو من **الإعدادات** ← **المظهر واللغة**.'],
                             ] },
                         ],
                         en: [
                             { qa: [
-                                ['Does my computer have to stay on?', 'Not for campaigns, DMs or scheduling: they all run on the server, even with your computer off. Only the Studio needs it: indexing and drawing slides need the worker on your computer.'],
-                                ['Can anything be posted without my approval?', 'No. A post goes out when you schedule it, and replies come from your own campaigns and your agent, following your instructions.'],
+                                ['Does my computer have to stay on?', 'Not for keyword replies, DMs or scheduling: they all run on the server, even with your computer off. Only the Studio needs it: indexing and drawing slides need the worker on your computer.'],
+                                ['Can anything be posted without my approval?', 'No. A post goes out when you schedule it, and replies come from your own keyword replies and your assistant, following your instructions.'],
                                 ['Does it work with a personal Instagram account?', 'No: you need a professional (Business or Creator) account connected to a Facebook Page. See [[connect-meta#needs]].'],
                                 ['Can I stop the AI for one customer?', 'Yes. In the **Inbox**, open the conversation and switch off **AI assistant for this conversation**. A manual reply from you pauses it there too.'],
                                 ['Can I change the dashboard’s language?', 'Yes, with the button at the top of the page, or in **Settings** → **Appearance & language**.'],
@@ -6725,7 +6727,7 @@ const HelpContent = {
                         en: [
                             { qa: [
                                 ['Which AI does it use?', 'Mostly Google’s Gemini, for DMs, carousels and indexing. DM replies, the Monteur and infographics have other options, depending on your workspace: [[ai-usage#where]].'],
-                                ['Can it make things up?', 'Carousels are written only from the lesson notes and your product **Facts**, and the agent from your instructions and knowledge base. Still, always review before you post.'],
+                                ['Can it make things up?', 'Carousels are written only from the lesson notes and your product **Facts**, and the assistant from your instructions and knowledge base. Still, always review before you post.'],
                                 ['Is there a usage limit?', 'Yes, Google’s limits on your key: [[ai-usage#quotas]].'],
                             ] },
                         ],
