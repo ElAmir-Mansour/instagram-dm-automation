@@ -315,6 +315,37 @@ export async function sendPublicReply(
 }
 
 /**
+ * The first comment under a post this app has just published (src/services/firstComment.ts): `POST /{ig-media-id}/comments` on Instagram, or
+ * `POST /{post-or-video-id}/comments` on Facebook, with the same Page token and the same Graph host the publish used. (A comment on someone else's
+ * comment is `sendPublicReply`.) Returns the new comment's id.
+ *
+ * It creates something public, so it follows the rule `sendPublicReply` follows: `creates: true`, and only a refusal that proves Meta did nothing (a
+ * rate limit, a connection that never went out) is retried. A timeout or a 5xx may come AFTER the comment was made, and a retry would put it under the
+ * post twice. Meta lets an app post a comment but not pin it.
+ *
+ * @see https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media/comments
+ * @see https://developers.facebook.com/docs/graph-api/reference/object/comments
+ */
+export async function publishFirstComment(
+    platform: 'instagram' | 'facebook',
+    objectId: string,
+    message: string,
+    accessToken: string
+): Promise<{ id: string | null }> {
+    const url = `${GRAPH_BASE}/${objectId}/comments`;
+    try {
+        const response = await withRetry(
+            () => metaHttp.post(url, { message }, { headers: { Authorization: `Bearer ${accessToken}` } }),
+            { label: `publishFirstComment[${platform}]`, creates: true }
+        );
+        const id = response.data?.id;
+        return { id: typeof id === 'string' && id ? id : null };
+    } catch (error: any) {
+        throw metaFailure('First Comment Failed', error);
+    }
+}
+
+/**
  * Sends a standard Direct Message (DM) to an Instagram User ID (IGSID).
  * Supports text, quick replies, and templates (carousels).
  *

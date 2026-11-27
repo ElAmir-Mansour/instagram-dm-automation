@@ -390,6 +390,17 @@ export type ScheduleStatus = 'PENDING' | 'PUBLISHING' | 'PROCESSING' | 'IN_INBOX
  */
 export type SchedulePostType = 'image' | 'video' | 'reel' | 'story' | 'feed' | 'carousel';
 
+/** One platform's first comment (v61). `sending` is the call in flight; `posted` carries Meta's comment id; `failed` carries the reason. */
+export interface FirstCommentEntry {
+    status: 'pending' | 'sending' | 'posted' | 'failed';
+    id?: string;
+    error?: string;
+    at: string;
+    /** 0 for the first try, one more for each Retry. Names the job's dedupe key. */
+    attempt: number;
+}
+export type FirstCommentStatus = { instagram?: FirstCommentEntry; facebook?: FirstCommentEntry };
+
 export interface ScheduledPostRow {
     id: string;
     creator_id: string | null;
@@ -426,6 +437,10 @@ export interface ScheduledPostRow {
      * (`src/services/attention.ts`), and `publishDuePosts` skips it (the reconcile sweeps still run on a row already in flight). Not a delete:
      * the row and its media stay.
      */
+    /** v61. The first comment to post under the post once it is live (Instagram, Facebook), at most 2,200 characters; NULL = none. */
+    first_comment: string | null;
+    /** v61. Where each platform's first comment stands. NULL = nothing was queued. Never changes `status`. See `FirstCommentStatus`. */
+    first_comment_status: FirstCommentStatus | null;
     archived_at: Timestamptz | null;
     created_at: Timestamptz;
 }

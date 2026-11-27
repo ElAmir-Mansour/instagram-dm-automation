@@ -18,6 +18,7 @@ import { redactOnFailure } from './redaction.js';
 import { isWhatsAppDmPayload, type JobHandlerRegistry } from './types.js';
 import { advanceProposal } from '../services/ads/proposals/service.js';
 import { runReelIndexJob } from '../services/perception/reelIndex.js';
+import { runFirstCommentJob } from '../services/firstComment.js';
 
 /**
  * Whether this is the attempt after which nothing else will run.
@@ -86,5 +87,10 @@ export const handlers: JobHandlerRegistry = {
     // outcome: a reel that is too large, a switch that is off, a day's cap that was reached. The payload is ids only, so there is nothing to redact.
     'muse.reel_index': async (payload, job) => {
         await runReelIndexJob(payload, { lastAttempt: isLastAttempt(job) });
+    },
+    // The first comment under a post that is live (v61). It records every outcome Meta can cause on the post's own row and returns; only a database error
+    // throws. It never changes the post's status, and a retry cannot post twice (the claim is a state change: see firstComment.ts).
+    'post.first_comment': async (payload) => {
+        await runFirstCommentJob(payload);
     },
 };

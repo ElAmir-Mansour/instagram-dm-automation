@@ -364,10 +364,10 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         }],
 
         // scheduled_posts: what `insertVideoPost` writes
-        [/^INSERT INTO scheduled_posts \(creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options\) VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL\) RETURNING \*$/, (p) => {
+        [/^INSERT INTO scheduled_posts \(creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options, first_comment\) VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL, \$9\) RETURNING \*$/, (p) => {
             const post = {
                 id: world.uuid(), creator_id: p[0], platform: p[1], post_type: 'video', caption: p[2], media_url: p[3], media_urls: null, scheduled_time: p[4], status: 'PENDING',
-                cover_url: p[5], group_id: p[6], platform_options: p[7] ? JSON.parse(p[7]) : null, meta_options: null,
+                cover_url: p[5], group_id: p[6], platform_options: p[7] ? JSON.parse(p[7]) : null, meta_options: null, first_comment: p[8], first_comment_status: null,
             };
             world.posts.push(post);
             return { rows: [post] };

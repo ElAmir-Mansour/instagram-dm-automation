@@ -16,7 +16,7 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead', 'muse.reel_index'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup', 'wa.event', 'ads.draft', 'ads.lead', 'muse.reel_index', 'post.first_comment'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
@@ -103,7 +103,18 @@ export interface ReelIndexPayload {
     igMediaId: string;
 }
 
+/** A `post.first_comment` job (src/services/firstComment.ts): ids only; the text and the token are read again when it runs. */
+export interface FirstCommentPayload {
+    postId: string;
+    creatorId: string;
+    platform: 'instagram' | 'facebook';
+    /** 0 for the first try; a Retry makes it one more, and names the dedupe key. */
+    attempt: number;
+}
+
 export interface JobPayloads {
+    /** The first comment under a post that is now live, one job per platform (src/services/firstComment.ts). Ids only; the text and the token are read again when it runs. */
+    'post.first_comment': FirstCommentPayload;
     /** One of the owner's own reels for the video memory. See `ReelIndexPayload`. */
     'muse.reel_index': ReelIndexPayload;
     'comment.process': {

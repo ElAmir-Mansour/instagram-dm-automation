@@ -67,6 +67,20 @@ describe('scheduleExplainer: what is posted where', () => {
         assert.equal(out.rows.length, 3);
     });
 
+    it('the writer\'s first comment (the sources) rides on the Instagram + Facebook row only, never on YouTube or TikTok (v61)', async () => {
+        ready();
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        assert.equal((byPlatform('both') as { first_comment?: string | null }).first_comment, 'c');
+        assert.equal((byPlatform('youtube') as { first_comment?: string | null }).first_comment, null);
+        assert.equal((byPlatform('tiktok') as { first_comment?: string | null }).first_comment, null);
+    });
+
+    it('a blank first comment is written as none', async () => {
+        ready({ draft: { writer: 'claude_mac', captions: { meta: 'META caption', youtube: { title: 'YT title', description: 'YT description' }, tiktok: 'TT caption' }, first_comment: '   ', replies: [], sources: OUT.sources, est_seconds: 72, warnings: [] } });
+        await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);
+        assert.equal((byPlatform('both') as { first_comment?: string | null }).first_comment, null);
+    });
+
     it('YouTube gets the HORIZONTAL video when the render is longer than three minutes, with no thumbnail of ours: the cover is a vertical frame', async () => {
         ready({ render: render({ duration: YOUTUBE_SHORT_MAX_SECONDS + 0.1 }) });
         await scheduleExplainer(TENANT, EXPLAINER, { when: 'now' }, NOW);

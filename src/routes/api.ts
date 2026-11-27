@@ -102,6 +102,7 @@ import { isMetaUnavailable, metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
+import { queueFirstComments, retryFirstComment, validateFirstComment, COMMENT_PLATFORMS, type CommentPlatform } from '../services/firstComment.js';
 import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptions } from '../services/metaOptions.js';
 import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
@@ -657,6 +658,9 @@ type PublishTarget = Pick<
     /** `IGC:<container id>` while Instagram is still processing an earlier attempt's video. */
     external_publish_id?: ScheduledPostRow['external_publish_id'];
     attempts?: ScheduledPostRow['attempts'];
+    /** v61. Posted under the post once it is live (`queueFirstComments`); absent or empty means none. */
+    first_comment?: ScheduledPostRow['first_comment'];
+    creator_id?: ScheduledPostRow['creator_id'];
 };
 
 /**
@@ -851,6 +855,10 @@ export async function attemptPublish(
              WHERE id = $2`,
             [formatPublishedIds(fbId, igId), post.id, droppedLeversNote(dropped)]
         );
+
+        // The post is public now, and only now: a held reel and a failure threw before this line. The first comment is queued for each platform that has an
+        // id, and it can never undo the PUBLISHED above (queueFirstComments does not throw; a comment that fails is a note on the card).
+        await queueFirstComments({ id: post.id, creator_id: creator.id ?? post.creator_id ?? null, platform: post.platform, first_comment: post.first_comment }, { fbId, igId });
 
         return { fbId, igId };
     } catch (err: any) {
@@ -3043,6 +3051,13 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             return;
         }
 
+        // The first comment (v61): checked now, like the media, for the row's own platform. It goes on the Meta row only, never the TikTok sibling.
+        const firstComment = validateFirstComment(req.body?.first_comment, platform);
+        if (!firstComment.ok) {
+            sendError(res, 400, 'FIRST_COMMENT_INVALID', firstComment.error);
+            return;
+        }
+
         const creatorId = getTenantId(req);
         const creator = await getTenant(creatorId, [
             'id', 'page_access_token', 'instagram_page_id', 'facebook_page_id'
@@ -3110,8 +3125,8 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                 const rowMedia = target === 'tiktok' && tiktokMedia ? tiktokMedia : media;
                 const inserted = await client.query(
                     `INSERT INTO scheduled_posts
-                         (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options)
-                     VALUES ($1, $2, $3, $4, $5, $6::text[], $7, 'PENDING', $8, $9, $10::jsonb, $11::jsonb) RETURNING *`,
+                         (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options, first_comment)
+                     VALUES ($1, $2, $3, $4, $5, $6::text[], $7, 'PENDING', $8, $9, $10::jsonb, $11::jsonb, $12) RETURNING *`,
                     [
                         creatorId, target, post_type, caption || null, rowMedia.mediaUrl, rowMedia.mediaUrls, when,
                         // A cover image is an Instagram/Facebook concept; TikTok picks its own.
@@ -3120,6 +3135,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                         target === 'tiktok' && tiktokOptions ? JSON.stringify(tiktokOptions) : null,
                         // Instagram's levers belong to the Meta row only, never its TikTok sibling.
                         target !== 'tiktok' && metaOptions.options ? JSON.stringify(metaOptions.options) : null,
+                        target !== 'tiktok' ? firstComment.value : null,
                     ]
                 );
                 rows.push(inserted.rows[0]);
@@ -3221,8 +3237,8 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // The guard has to run against the EFFECTIVE combination, not the body: every column
         // below is `COALESCE($n, column)`, so a PUT sending only `platform` still has a
         // post_type, and it is the one already on the row. Read it first.
-        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status' | 'media_url' | 'media_urls' | 'meta_options'>>(
-            'SELECT platform, post_type, status, media_url, media_urls, meta_options FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status' | 'media_url' | 'media_urls' | 'meta_options' | 'first_comment_status'>>(
+            'SELECT platform, post_type, status, media_url, media_urls, meta_options, first_comment_status FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
             [id, tenantId]
         );
         if (!current) {
@@ -3315,6 +3331,20 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             metaOptionsJson = checked.options ? JSON.stringify(checked.options) : null;
         }
 
+        // The first comment (v61), against the EFFECTIVE platform. Once a platform's comment is posted or in flight, the text is a record of what is public and
+        // is no longer editable; a failed one can be fixed here and retried. A row moved to TikTok or YouTube loses its comment: it has no such call.
+        const firstComment = validateFirstComment(req.body?.first_comment, effectivePlatform);
+        if (!firstComment.ok) {
+            sendError(res, 400, 'FIRST_COMMENT_INVALID', firstComment.error);
+            return;
+        }
+        if (firstComment.provided && COMMENT_PLATFORMS.some((p) => ['posted', 'sending'].includes(current.first_comment_status?.[p]?.status ?? ''))) {
+            sendError(res, 409, 'FIRST_COMMENT_LOCKED', 'The first comment is already posted (or being posted), so it can no longer be edited.');
+            return;
+        }
+        const commentTouched = firstComment.provided || !isMetaPlatform(effectivePlatform);
+        const commentValue = isMetaPlatform(effectivePlatform) ? firstComment.value : null;
+
         // cover_url was destructured and then dropped, so editing a reel silently kept its old
         // cover — which for a video fading up from black is the black frame 0.
         const result = await pool.query(
@@ -3328,6 +3358,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                  platform_options = COALESCE($9::jsonb, platform_options),
                  media_urls = CASE WHEN $10::boolean THEN $11::text[] ELSE media_urls END,
                  meta_options = CASE WHEN $12::boolean THEN $13::jsonb ELSE meta_options END,
+                 first_comment = CASE WHEN $14::boolean THEN $15::text ELSE first_comment END,
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
              WHERE id = $7 AND creator_id = $8 RETURNING *`,
             [
@@ -3336,6 +3367,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 // carousel must not keep a list that would be read as slides if it became one again.
                 mediaTouched, mediaUrlsParam,
                 metaTouched, metaOptionsJson,
+                commentTouched, commentValue,
             ]
         );
 
@@ -3429,6 +3461,39 @@ async function setPostArchived(req: Request, res: Response, archived: boolean): 
         res.status(500).json({ error: archived ? 'Failed to archive this post.' : 'Failed to unarchive this post.' });
     }
 }
+
+/**
+ * Retry a failed first comment (v61). Only a platform whose comment is `failed` is queued again (with `platform`, just that one); a comment that is posted, waiting
+ * or in flight is never queued twice. The post must be PUBLISHED. Operators and owners, scoped to the session's tenant. Answers 202 with the platforms queued.
+ */
+router.post('/posts/scheduled/:id/first-comment/retry', canOperate, async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        const raw = req.body?.platform;
+        if (raw !== undefined && !(COMMENT_PLATFORMS as readonly unknown[]).includes(raw)) {
+            sendError(res, 400, 'FIRST_COMMENT_INVALID', 'platform must be instagram or facebook.');
+            return;
+        }
+        const outcome = await retryFirstComment(getTenantId(req), id, raw as CommentPlatform | undefined);
+        if (!outcome.ok) {
+            if (outcome.code === 'NOT_FOUND') {
+                res.status(404).json({ error: outcome.message });
+                return;
+            }
+            sendError(res, 409, outcome.code === 'NOT_PUBLISHED' ? 'FIRST_COMMENT_NOT_PUBLISHED' : 'FIRST_COMMENT_NOT_FAILED', outcome.message);
+            return;
+        }
+        log('info', 'posts.first_comment_retry', { post_id: id, platforms: outcome.queued });
+        res.status(202).json({ queued: outcome.queued });
+    } catch (err) {
+        log('error', 'api.first_comment_retry_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to retry the first comment.' });
+    }
+});
 
 router.post('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, true));
 router.delete('/posts/scheduled/:id/archive', canOperate, (req, res) => setPostArchived(req, res, false));
