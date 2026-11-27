@@ -236,7 +236,8 @@ describe('icon subset — what the collector finds is what icons.js carries', ()
             // …and in the real source, the same rules reach the real cases.
             const real: Map<string, string> = build.collectIconNames();
             assert.match(real.get('globe') ?? '', /privacyIcon/, 'this.privacyIcon(level) in posts.js');
-            assert.match(real.get('award') ?? '', /emptyState\(\) argument 1/, 'Admin.emptyState(icon, …)');
+            // `award` is also the Brand menu item's own icon (index.html), which the collector meets first: either source proves the rule.
+            assert.match(real.get('award') ?? '', /emptyState\(\) argument 1|dashboard\/index\.html:\d+ \(data-lucide\)/, 'Admin.emptyState(icon, …), or the Brand menu item');
             assert.match(real.get('rocket') ?? '', /help-content\.js:\d+ \(icon\)/, 'an article icon');
             for (const word of ['video', 'ghost', 'short', 'examples', 'ai']) assert.equal(real.has(word), false, word);
         } finally {
