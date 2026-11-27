@@ -30,6 +30,8 @@ final table indexes every point where a flow can silently do nothing.
 | YouTube: "Needs reconnecting", the quota, a Short that is not public | §14 |
 | The Mac: Studio jobs wait or fail, Claude jobs, explainer pictures stopped | §15 (the Carousel Studio section has the worker commands) |
 | The DM bot: slow, silent, sales mode, the hand-off alert | §16 |
+| Setting up backups, or the database is gone and you must restore | §17 |
+| Being told when the app itself is down (uptime monitor, dead-man ping) | §18 |
 
 **Ground rule.** Two scripts are safe to run at any time and cannot write:
 `scripts/diagnose.mjs` and `scripts/watch.mjs` run every query in its own
@@ -2119,6 +2121,155 @@ failure)*, *refund request*, *complaint*, *asked for a person*, *abusive message
 was not sure how to answer*, and, for WhatsApp, *the 24-hour window had closed, so no reply could
 be sent*, *the free WhatsApp replies are used up and paid replies are switched off* or *the
 WhatsApp connection needs reconnecting*.
+
+---
+
+## 17. Backups
+
+Supabase's free plan has **no point-in-time recovery and no downloadable backups**, and a free project pauses after about a week without
+activity. Before 2026-11-27 the only copy of the database was the live one. Now:
+
+| | |
+|---|---|
+| What | `pg_dump --format=custom` of the `public` schema (the whole app: tenants, conversations, jobs, settings, ads, the migration ledger) |
+| When | nightly 02:17 UTC, `.github/workflows/backup.yml` (also **Run workflow** by hand) |
+| Protection | piped straight into `age`, so only the **encrypted** file ever exists; stored in a **private** R2 bucket (not the public media bucket) |
+| Kept | 14 daily (`daily/YYYY-MM-DD.dump.age`) + 8 weekly (`weekly/YYYY-Www.dump.age`, Sundays); older objects are pruned by the same job |
+| **RPO** | **24 hours**: a restore loses what happened since the last 02:17 UTC |
+| **RTO** | a few hours: a new database, one `pg_restore`, then repoint the app (below). The drill below measures the restore part |
+| Size | the database was 27 MB on 2026-11-27, so 22 copies stay far inside R2's free 10 GB |
+
+**Not in it:** the media files themselves (R2 / Supabase Storage keep those; the database holds only their rows), the Vercel and Heroku
+environment variables, and Supabase-managed schemas (`auth`, `storage`: the app uses neither for its own data). **Keep `TOKEN_ENCRYPTION_KEY`
+somewhere safe outside Vercel**: Meta, TikTok, YouTube and ad tokens are stored encrypted with it, so a restored database without that key
+holds tokens nobody can read and every connection has to be redone.
+
+### 17.1 Owner setup, once, in this order
+
+1. **A private R2 bucket and a token for it.** Cloudflare → R2 → *Create bucket*, e.g. `autoreply-backups` (do **not** enable the public
+   `r2.dev` address or a custom domain). *Manage API tokens* → create a token with **Object Read & Write**, scoped to **that bucket only**.
+   Note the Account ID, Access Key ID, Secret Access Key.
+2. **An age key pair, kept off the Mac's synced folders** (not iCloud Drive, Google Drive, Desktop or Documents, which sync):
+   ```bash
+   brew install age
+   mkdir -p ~/backup-keys && chmod 700 ~/backup-keys      # a folder that does not sync
+   age-keygen -o ~/backup-keys/autoreply-backup.key        # prints "Public key: age1..."
+   chmod 600 ~/backup-keys/autoreply-backup.key
+   ```
+   The line starting `age1` is the **public** key: it goes to GitHub. The file is the **private** key: keep two copies (a password manager's
+   secure note, and a USB stick). Lose it and every backup is unreadable; leak it and every backup is readable by whoever also gets the bucket.
+3. **A session-mode database URL.** Supabase → *Connect* → **Session pooler** (host `aws-0-<region>.pooler.supabase.com`, port **5432**, user
+   `postgres.<ref>`). **Not** the transaction pooler (port 6543, the app's `DATABASE_URL`): `pg_dump` needs a real session. Use the Session pooler
+   rather than the *Direct connection* (`db.<ref>.supabase.co`): on the free plan the direct host is IPv6 only and GitHub's hosted runners have no
+   IPv6, so the nightly job could not reach it (it works from a Mac or with Supabase's paid IPv4 add-on).
+4. **GitHub secrets** (repository → Settings → Secrets and variables → Actions): `BACKUP_DATABASE_URL`, `R2_BACKUP_ACCOUNT_ID`,
+   `R2_BACKUP_ACCESS_KEY_ID`, `R2_BACKUP_SECRET_ACCESS_KEY`, `R2_BACKUP_BUCKET`, and `BACKUP_AGE_RECIPIENT` (the `age1...` public key, as a
+   *variable* or a secret). With any of them missing the workflow does nothing and says so in a notice.
+5. **Run it once:** Actions → *Nightly encrypted backup* → *Run workflow*. Green with "Backup YYYY-MM-DD done."; then check the bucket shows
+   `daily/<today>.dump.age`. A red run names the cause (wrong URL, port 6543, bad key).
+6. **Run the drill into a scratch database** (§17.2). Until this has passed once, there is no backup, only a file.
+7. Put the free external monitor on `/health` and add the Healthchecks ping (§18).
+
+The pg_dump version must be at least the server's: production runs **PostgreSQL 17.6** (checked read-only on 2026-11-27) and the workflow installs
+client 17 (`PG_MAJOR` in the file). When Supabase upgrades the project, raise `PG_MAJOR` first or the nightly run fails with "server version
+mismatch" (the run goes red: that is the signal).
+
+### 17.2 The restore drill
+
+`scripts/backup-restore-drill.mjs` downloads the newest backup, decrypts it with your private key file, restores it into a **scratch** database and
+prints the migration ledger (entry count and newest file) and the row count of each main table. It needs `age`, `pg_restore` (client 17:
+`brew install postgresql@17`) and the aws CLI (`brew install awscli`).
+
+```bash
+# a second, empty Supabase project (free) works well as the scratch: use its Direct or Session URL
+export SCRATCH_DATABASE_URL='postgresql://postgres:<password>@db.<scratch-ref>.supabase.co:5432/postgres'
+export AGE_IDENTITY_FILE=~/backup-keys/autoreply-backup.key
+export R2_BACKUP_ACCOUNT_ID=... R2_BACKUP_ACCESS_KEY_ID=... R2_BACKUP_SECRET_ACCESS_KEY=... R2_BACKUP_BUCKET=...
+node scripts/backup-restore-drill.mjs                 # newest daily/ backup
+node scripts/backup-restore-drill.mjs --key weekly/2026-W48.dump.age
+node scripts/backup-restore-drill.mjs --file ./some.dump.age   # a local copy, no R2 needed
+```
+
+Healthy: `pg_restore finished with no errors that matter`, a ledger with the same number of entries as `npm run migrate:status` shows live, and
+row counts close to the live dashboard (the live one has moved on since 02:17 UTC). It **refuses** (exit 2, before downloading anything) if the
+scratch URL has the same host and database as `DATABASE_URL` or `BACKUP_DATABASE_URL`, contains the production project ref (or
+`PRODUCTION_PROJECT_REF`), when it cannot tell what production is, or when the scratch database already has tables. It never prints a URL, a key or a
+password. Do it again after any change to the backup workflow, and every few months.
+
+### 17.3 A real restore (the database is gone, damaged, or a migration ate data)
+
+1. **Stop the writing.** If the live database is still up but wrong, pause the Heroku worker (`heroku ps:scale worker=0 -a autoreply-pro-worker`)
+   and tell nobody to touch the dashboard; webhooks Meta sends meanwhile are retried by Meta for a while but not forever.
+2. **Before restoring over a live database, read-only export the erasure requests it knows:**
+   `SELECT created_at, detail FROM audit_log WHERE action = 'erasure.execute' ORDER BY created_at;` (use `scripts/lib/live.mjs` `connectReadOnly`).
+   A restore brings back people whose data was erased **after** the backup, and their audit rows vanish with the database, so this list is how you
+   delete them again (§7). Backups are the one place erased data survives, for at most about two months (the privacy page says so).
+3. **A new database.** A new Supabase project (or a fresh Postgres 17). Restore into it:
+   ```bash
+   age --decrypt --identity ~/backup-keys/autoreply-backup.key --output restore.dump daily/<date>.dump.age
+   pg_restore --no-owner --no-privileges --dbname '<direct URL of the new database>' restore.dump
+   ```
+   A single `schema "public" already exists` error is normal. Delete `restore.dump` afterwards (it is the plaintext).
+4. **Catch the schema up:** `npm run migrate:status` against the new URL, then `npm run migrate` for any migration newer than the backup.
+5. **Repoint:** `DATABASE_URL` in Vercel (Production), redeploy; update the `BACKUP_DATABASE_URL` GitHub secret. `TOKEN_ENCRYPTION_KEY` must be the
+   same value as before. Bring the worker back (`heroku ps:scale worker=1`).
+6. **Check:** `node scripts/diagnose.mjs`, `/health` returns 200 with a recent `drain_last_s`, the dashboard Today screen, then re-apply the erasure
+   list from step 2.
+
+A restore does not bring back anything Meta delivered between the backup and the outage: comments and DMs in that window were answered (or not)
+by the old database; the Inbox and Activity will not show them.
+
+### 17.4 Checking it is still running
+
+The workflow emails you when a run **fails** (GitHub's default for scheduled workflows you own). A run that never starts looks like a passing one,
+so check the bucket monthly: the newest `daily/` object should be under 36 hours old.
+`gh run list --workflow=backup.yml --limit 5` shows the last runs; a run that says "Backup skipped" means a secret is missing.
+
+---
+
+## 18. Monitoring
+
+Every alert the app sends is sent **from inside the app**, so a dead Vercel deployment, a paused database or a stopped Heroku worker tells nobody.
+Three small things sit outside it.
+
+**`GET /health`** (no login, no secrets, no ids, no tenant names, no counts):
+
+```json
+{ "ok": true, "db": true, "queue_oldest_pending_s": null, "drain_last_s": 41,
+  "webhook_fresh": { "instagram": true, "facebook": true, "whatsapp": false },
+  "status": "ok", "database": "connected", "serverTime": "2026-11-27T10:00:00.000Z" }
+```
+
+| Field | Meaning |
+|---|---|
+| `db` | the database answered |
+| `queue_oldest_pending_s` | how long the oldest job that is **due** has waited; `null` = nothing due |
+| `drain_last_s` | seconds since `GET /api/jobs/drain` last ran (the heartbeat `ops.drain_heartbeat`, written at most once a minute); `null` = never recorded |
+| `webhook_fresh` | per platform, `true` = an event was queued for an account connected here in the last 24 h. **Informational: a quiet account is normal, never alert on it.** It never changes the status |
+
+It answers **503** when the database does not answer, or when the queue is **stuck**: the oldest due job is older than **10 minutes** *and* no drain has
+run for **5 minutes** (a dead worker, a dead deployment). A slow queue with a live worker stays 200. `scripts/diagnose.mjs` reads `database` and
+`serverTime`, so those two fields stay.
+
+**The dead-man ping.** Settings → Platform → **Monitoring** holds a ping URL (platform admin; stored encrypted, never shown again). With one saved, every
+good drain run GETs it, at most once every 5 minutes, handed to `waitUntil` so a slow ping service never slows or fails a drain. Without one, nothing is sent.
+A service such as **Healthchecks.io** (free) then emails you when the pings **stop**, which catches what a URL check on Vercel cannot: a worker that is
+down while the site is up. Create a check with period **10 minutes** and grace **10 minutes**, and paste its ping address.
+
+**Setup, in order** (all free, none needs code):
+
+1. Make a free account at UptimeRobot (5-minute checks) or Better Stack. Add three monitors, with e-mail (and Telegram if you want) alerts:
+   - `https://msg-response-auto.vercel.app/health` — expect **200** (it is 503 when the queue is stuck, so this also watches the worker);
+   - `https://msg-response-auto.vercel.app/` — the landing page, expect **200**;
+   - `https://msg-response-auto.vercel.app/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x` — the Meta verify handshake with a
+     **wrong** token: expect **403**. Set the monitor's expected status to 403. Any other status (200, 5xx, timeout) means the route, the deployment or the
+     verify check is broken. (It confirms the route is alive; it does not test the real token.)
+2. Make the Healthchecks.io check above and paste its ping URL into Settings → Platform → **Monitoring**, then **Save monitoring**. Within 5 minutes the
+   check turns green.
+
+**When `/health` goes red:** read the JSON. `db: false` → Supabase (paused? `Settings → Database`, or the pooler, §5 EMAXCONN). `db: true` with a large
+`queue_oldest_pending_s` and `drain_last_s` high or `null` → nothing is draining: `heroku ps -a autoreply-pro-worker`, then §5.1. The other platforms'
+alerts keep working while the deployment is up; these only add the case where it is not.
 
 ---
 

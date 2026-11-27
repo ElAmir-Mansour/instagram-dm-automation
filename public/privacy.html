@@ -220,6 +220,18 @@
     · it stays inside Cloudflare's free tier by design (hard ceilings in code, src/services/r2Usage.ts), so nothing here is paid for.
   If any of these changes, change both languages here and the stamp.
 
+  ENCRYPTED BACKUPS — ADDED 2026-11-27 (.github/workflows/backup.yml, scripts/backup-restore-drill.mjs, RUNBOOK "Backups"). Section 4's backups
+  item and section 5's Cloudflare R2 entry claim:
+    · nightly, pg_dump of the `public` schema is piped into `age` and only the ENCRYPTED file is stored, in a PRIVATE R2 bucket that is not the
+      media bucket (R2_BACKUP_BUCKET); the plaintext exists only in memory on a GitHub Actions runner, which is discarded after the run;
+    · the private key that opens them is held by the owner only, never by GitHub, Cloudflare or Vercel;
+    · retention is 14 daily + 8 weekly copies (KEEP_DAILY / KEEP_WEEKLY in the workflow), the oldest weekly being about 8 weeks, hence "up to
+      about two months"; older objects are deleted by the same job;
+    · an erasure done in the app is NOT applied inside backups: it stays there until the copy expires, and a restore must re-apply the erasure
+      requests (RUNBOOK "Backups").
+  If any of these changes, change both languages here and the stamp. The R2 block above says R2 receives "only the uploaded files": that is the
+  media bucket; backups are the second, private bucket named here.
+
   META'S AI MODELS (MUSE) AND BASETEN — ADDED 2026-10-30, AHEAD OF THE CODE ON
   PURPOSE. Every block above describes code that is on main. This one does not:
   the code it describes arrives in the hackathon PRs (hackathon/p0-meta-provider:
@@ -484,7 +496,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.95">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.96">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1322,7 +1334,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة خصوصية <bdi lang="en" dir="ltr">AutoReply Pro</bdi></h1>
-                <p class="stamp">آخر تحديث: 6 نوفمبر 2026</p>
+                <p class="stamp">آخر تحديث: 27 نوفمبر 2026</p>
                 <p class="applies">تنطبق سياسة الخصوصية هذه على تطبيق <strong><bdi lang="en" dir="ltr">AutoReply Pro</bdi></strong>
                     («أوتوريبلاي برو»، «التطبيق»)، المتاح على <bdi lang="en" dir="ltr">https://msg-response-auto.vercel.app</bdi>،
                     وعلى تكامله مع إنستجرام وفيسبوك وتيك توك ويوتيوب.</p>
@@ -1955,6 +1967,13 @@
                         <strong>مكتبة الفيديوهات</strong> — ملاحظات عن الريلز التي نشرها صاحب الحساب نفسه: تبقى مع الحساب بلا مدة
                         انتهاء تلقائية. ولا تُحفَظ ملفات الفيديو.
                     </li>
+                    <li>
+                        <strong>النسخ الاحتياطية المشفّرة</strong> — كل ليلة تؤخذ نسخة من قاعدة البيانات كلها (وهي تحوي كل ما ورد في هذا
+                        القسم)، وتُشفَّر قبل تخزينها في حاوية خاصة منفصلة عن حاوية الوسائط. تُحفَظ 14 نسخة يومية و8 نسخ أسبوعية، فتبقى
+                        النسخة الواحدة حتى نحو شهرين ثم تُحذف. ولذلك فإن ما يُحذف من التطبيق، بما فيه ما تحذفه بطلب منك (القسم 6)، قد يبقى
+                        داخل نسخ احتياطية مشفّرة إلى أن تنتهي مدتها، ولا يُقرأ منها إلا لاستعادة التطبيق بعد عطل، وعند الاستعادة يُعاد تطبيق
+                        طلبات الحذف السابقة.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
@@ -2004,7 +2023,8 @@
                     <li>
                         <strong><bdi lang="en" dir="ltr">Cloudflare R2</bdi></strong> — مكان بديل اختياري لتخزين الوسائط المرفوعة نفسها بدلاً من
                         <bdi lang="en" dir="ltr">Supabase Storage</bdi>، يختاره صاحب المنصة من الإعدادات: حاوية خاصة لا تُعرض ملفاتها إلا عبر عنوان
-                        التطبيق نفسه، ولا يُرسل إليها غير الملفات المرفوعة.
+                        التطبيق نفسه، ولا يُرسل إليها غير الملفات المرفوعة. وتحتفظ <bdi lang="en" dir="ltr">Cloudflare R2</bdi> أيضاً، في حاوية خاصة
+                        ثانية، بالنسخ الاحتياطية الليلية المشفّرة للقاعدة (القسم 4)؛ لا تملك مفتاح فكّها.
                         <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Cloudflare</bdi></a>.
                     </li>
                     <li>
@@ -2168,7 +2188,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>AutoReply Pro Privacy Policy</h1>
-                <p class="stamp">Last updated: 6 November 2026</p>
+                <p class="stamp">Last updated: 27 November 2026</p>
                 <p class="applies">This Privacy Policy applies to <strong>AutoReply Pro</strong> (the “App”), available at
                     https://msg-response-auto.vercel.app, and to its integrations with Instagram, Facebook, TikTok and YouTube.</p>
 
@@ -2849,6 +2869,14 @@
                         <strong>The video library</strong> — the notes about the account owner's own published reels: kept with
                         the account, with no automatic expiry. The video files are not kept.
                     </li>
+                    <li>
+                        <strong>Encrypted backups</strong> — every night a copy of the whole database (which holds everything described in
+                        this section) is taken and encrypted before it is stored in a private bucket, separate from the media bucket.
+                        14 daily and 8 weekly copies are kept, so any one copy is kept for up to about two months and is then deleted.
+                        So what is deleted from the app, including what is deleted at your request (section 6), can remain inside
+                        encrypted backups until they expire. They are read only to restore the app after a failure, and a restore
+                        re-applies the earlier deletion requests.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
@@ -2901,7 +2929,8 @@
                     <li>
                         <strong>Cloudflare R2</strong> — an optional second place for those same uploaded media, instead of Supabase Storage,
                         chosen by the platform owner in Settings: a private bucket whose files are shown only through this app's own address,
-                        and which receives nothing but the uploaded files themselves.
+                        and which receives nothing but the uploaded files themselves. R2 also holds, in a second private bucket, the
+                        encrypted nightly backups of the database (section 4); it does not have the key that opens them.
                         <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's privacy policy</a>.
                     </li>
                     <li>
