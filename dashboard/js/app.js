@@ -294,6 +294,25 @@ const App = {
         return { page: this.DEFAULT_PAGE, tab: '' };
     },
 
+    /**
+     * `--header-height` is 76px, which the sticky Settings tabs and the Inbox height subtract. On a phone the top bar is two rows and its
+     * title may wrap, so it is taller and changes with the page: measure it there (a ResizeObserver), and leave the token alone on wider
+     * screens, where the bar is one row.
+     */
+    syncHeaderHeight() {
+        const header = document.querySelector('.page-header');
+        if (!header || typeof ResizeObserver !== 'function' || typeof window.matchMedia !== 'function') return;
+        const narrow = window.matchMedia('(max-width: 560px)');
+        const apply = () => {
+            const root = document.documentElement.style;
+            if (narrow.matches && header.offsetHeight > 0) root.setProperty('--header-height', `${Math.ceil(header.getBoundingClientRect().height)}px`);
+            else root.removeProperty('--header-height');
+        };
+        new ResizeObserver(apply).observe(header);
+        if (typeof narrow.addEventListener === 'function') narrow.addEventListener('change', apply);
+        apply();
+    },
+
     init() {
         I18N.init();
         I18N.applyStatic();
@@ -354,6 +373,8 @@ const App = {
 
         // Logout — tears the current page down first, so no poller survives it
         document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+
+        this.syncHeaderHeight();
 
         // Mobile menu — the sidebar becomes a fixed-position drawer at
         // ≤860px (see the `@media (max-width: 860px)` block in styles.css).
@@ -1505,8 +1526,13 @@ const App = {
         // a no-op, because switchTenant() returns early on an unchanged id.
         const orphaned = !tenants.some((tenant) => String(tenant.id) === String(currentId));
 
+        // At phone widths the pill is a circle showing this initial (CSS); the select, with its label, is still the control.
+        const current = tenants.find((tenant) => String(tenant.id) === String(currentId));
+        const initial = orphaned ? '?' : (Array.from(String((current && (current.name || current.id)) || '?').trim())[0] || '?').toUpperCase();
+        wrap.setAttribute('title', orphaned ? '' : String((current && (current.name || current.id)) || ''));
         wrap.innerHTML = esc(html`
             <i data-lucide="building-2" aria-hidden="true"></i>
+            <span class="chip-initial" aria-hidden="true">${initial}</span>
             <label class="sr-only" for="tenant-select">${t('app.tenant')}</label>
             <select id="tenant-select" data-change="app:switchTenantFromSelect">
                 ${orphaned ? html`

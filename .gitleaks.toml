@@ -1,0 +1,16 @@
+# gitleaks configuration (CI job "secrets" in .github/workflows/ci.yml).
+#
+# The job scans only the commits of a pull request or push, never the whole history: the public
+# history holds known leaked credentials that the owner is rotating (CLAUDE.md, "Known issues").
+# So no allowlist for those commits is needed here, and none should be added: an allowlist entry
+# would also hide the same secret if it came back in a new commit.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders and lockfile hashes, not credentials"
+paths = [
+  '''package-lock\\.json$''',
+  '''\\.env\\.example$''',
+]

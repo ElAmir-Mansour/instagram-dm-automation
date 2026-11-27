@@ -1,0 +1,60 @@
+name: Post-deploy smoke test
+
+# Vercel creates a GitHub deployment per deploy (environment "Production" or "Preview", creator vercel[bot]; checked
+# 2026-11-27). When a production deployment succeeds this hits the live site and opens an issue if anything is wrong.
+# Read-only: four GETs, nothing is written. The /health check reads only status/ok so other fields can change freely.
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: smoke-production
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE: https://msg-response-auto.vercel.app
+    steps:
+      - name: Smoke test
+        run: |
+          fail=0
+          # --retry covers a cold start and the moment before the alias moves; --retry-all-errors retries a 5xx too.
+          curl_ok() { curl -sS -o "$2" -w '%{http_code}' --max-time 20 --retry 4 --retry-delay 5 --retry-all-errors "$1" || echo 000; }
+
+          code=$(curl_ok "$BASE/health" health.json)
+          if [ "$code" = 200 ] && jq -e '.ok == true or .status == "ok"' health.json >/dev/null; then
+            echo "ok   /health 200"
+          else
+            echo "FAIL /health: HTTP $code"; fail=1
+          fi
+
+          # A wrong verify token must be refused: 200 here would mean the handshake accepts anything.
+          code=$(curl_ok "$BASE/webhook?hub.mode=subscribe&hub.verify_token=smoke-test-wrong-token&hub.challenge=1" /dev/null)
+          [ "$code" = 403 ] && echo "ok   /webhook wrong token 403" || { echo "FAIL /webhook wrong token: HTTP $code (want 403)"; fail=1; }
+
+          for path in / /dashboard; do
+            code=$(curl_ok "$BASE$path" /dev/null)
+            [ "$code" = 200 ] && echo "ok   $path 200" || { echo "FAIL $path: HTTP $code (want 200)"; fail=1; }
+          done
+          exit $fail
+
+      - name: Open an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.deployment.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Smoke test failed after production deploy ${SHA:0:7}" \
+            --body "The post-deploy smoke test failed for commit \`$SHA\`. Run: $RUN_URL
+
+          Checks: GET /health (200, status ok), GET /webhook with a wrong verify token (403), GET / (200), GET /dashboard (200). If this is real, roll back (RUNBOOK §9)."
