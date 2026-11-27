@@ -24,6 +24,12 @@ jobs:
 
       - run: npm ci
 
+      # Production dependencies only: a vulnerable dev tool never ships. Blocking since 2026-11-27, when the tree
+      # went from 10 findings (1 critical: proxy-addr via express) to 0. A new advisory can fail an unrelated PR;
+      # that is the point: bump the package (Dependabot opens the PR weekly), do not mute the step.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -111,3 +117,23 @@ jobs:
       # by git history (the docs audit of 2026-10-25 found 65% of FLOWS.md's anchors had moved).
       - name: Check doc references
         run: npm run check:docs
+
+  # Secret scan of the commits this PR or push adds, never the whole history. The public history holds credentials that are
+  # known and being rotated (CLAUDE.md, "Security - STILL UNRESOLVED"); history is not rewritten, so a full scan would fail
+  # forever. The action reads the commit range from the event (PR commits, or before..after of a push).
+  secrets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'

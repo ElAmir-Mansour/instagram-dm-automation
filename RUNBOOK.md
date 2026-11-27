@@ -388,6 +388,37 @@ A missing scope disables a path **silently**: `instagram_manage_messages` is DMs
 `instagram_content_publish` is scheduling, `pages_manage_engagement` is public replies
 (`scripts/diagnose.mjs:449-451`).
 
+### 3.4 Secrets inventory
+
+Names only, never values (`vercel env pull` returns every sensitive value as `[ENCRYPTED]`, so production's values cannot be read
+from a laptop). "Last rotation" is `unknown` unless somebody wrote a date down: when you rotate one, write the date here.
+Where "app_settings" is the place, the value is encrypted (AES-256-GCM under `TOKEN_ENCRYPTION_KEY`) and is changed from the dashboard
+with no deploy. Change a Vercel env var, then redeploy: a running function keeps the old value.
+
+| Secret (name) | Lives in | How to rotate | Last rotation |
+|---|---|---|---|
+| `DATABASE_URL` (Supabase pooler string, holds the DB password) | Vercel env, Heroku config is not used, local `.env` | Supabase dashboard → Database → reset password, copy the new pooler string into Vercel and `.env`, redeploy. It also sits in the public git history of removed `scratch/` files, so this is the first one to rotate | unknown (owner is rotating) |
+| `CRON_SECRET` | Vercel env, Heroku config (`autoreply-pro-worker`), GitHub secret (`drain.yml`), local `.env` only if you hit the cron routes | Generate a new one, set it in all three places in the same hour (Vercel + redeploy, `heroku config:set -a autoreply-pro-worker`, GitHub → Settings → Secrets). Until all three match, the drain answers 401 | 2026-09-22 |
+| `META_APP_SECRET` | Vercel env, local `.env` (`exchange-token.mjs`) | Meta App Dashboard → Settings → Basic → Reset. It also signs dashboard sessions (with `DASHBOARD_PASSWORD`), so every session ends, and webhook signatures fail until Vercel has the new value | unknown |
+| `INSTAGRAM_APP_SECRET` | Vercel env (vestigial since 2026-09-21: both objects sign with `META_APP_SECRET`, but the check still accepts it) | Instagram app settings in the App Dashboard; keep or unset | unknown |
+| `META_VERIFY_TOKEN` | Vercel env; the per-tenant copy is `creators.webhook_verify_token` (Settings, no redeploy) | Change it in Settings, then re-save the webhook subscription in Meta. An empty value breaks every subscription change | unknown |
+| `DASHBOARD_PASSWORD` | Vercel env | Set a new value in Vercel and redeploy. Sessions ending is expected (it is half of the session signing key) | unknown |
+| `TOKEN_ENCRYPTION_KEY` | Vercel env, local `.env` | **Not a plain rotation**: every encrypted value (Page tokens, app_settings secrets, ads tokens) would need decrypting with the old key and saving again with the new one. No script does it today; do not change it without that plan | unknown |
+| Meta Page access token (per tenant) | `creators.page_access_token`, encrypted | §3.3 | unknown |
+| Ads system-user token (per tenant, `ads.token.<tenant>`) | app_settings, encrypted | Business Settings → System users → generate, paste in Ads settings | unknown |
+| `GEMINI_API_KEY` | Vercel env fallback; app_settings (`gemini`) first | Google AI Studio → new key, save in AI settings. A new key may 404 on the 2.5 models (see CLAUDE.md before rotating) | unknown |
+| AI provider keys: Anthropic, OpenAI, OpenRouter, Groq, Meta (`META_MODEL_API_KEY`), Baseten (`BASETEN_API_KEY`), custom | app_settings (Operations → AI providers); `META_MODEL_API_KEY` and `BASETEN_API_KEY` also Vercel env (Secret) | Create the key at the provider, paste it in Operations → AI providers, then revoke the old one | unknown |
+| `TIKTOK_CLIENT_SECRET`, `TIKTOK_CLIENT_KEY` | app_settings first (Settings → TikTok app), Vercel env fallback | developers.tiktok.com → app → regenerate secret, paste in Settings | unknown |
+| YouTube OAuth client secret (`YOUTUBE_CLIENT_SECRET`) and `YOUTUBE_API_KEY` | app_settings first (Settings → YouTube app), Vercel env fallback | Google Cloud → Credentials, then paste in Settings | unknown |
+| Supabase service key (`SUPABASE_SERVICE_ROLE_KEY`, app setting `storage.supabase_service_key`) | app_settings; Vercel env fallback | Supabase → API keys → new `sb_secret_…`, paste in Settings → Media storage | unknown |
+| Cloudflare R2 secret access key (and its access key id) | app_settings (Settings → Media storage) | Cloudflare → R2 → API tokens → create, paste, delete the old token | unknown |
+| Notification keys: Telegram bot token, email (Resend) API key | app_settings (Settings, notifications card) | Create at the provider, paste in Settings | unknown |
+| OAuth refresh tokens (TikTok, YouTube, WhatsApp, Meta Connect) | the database, encrypted (`platform_connections`) | Not rotated by hand: the creator reconnects (TikTok yearly, §10) | per connection |
+| `HEROKU_API_KEY` | local shell only (used for the HTTPS push in `heroku-worker/README.md`) | `heroku authorizations:create`, revoke the old one | unknown |
+| `GITHUB_TOKEN` (Actions) | GitHub, per run | automatic | per run |
+
+Check what a rotation broke: `node scripts/diagnose.mjs`, then watch `webhook.signature_rejected` and `/api/jobs/drain` statuses in the logs.
+
 ---
 
 ## 4. "A post didn't publish."
