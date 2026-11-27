@@ -204,8 +204,8 @@ describe('Overview — recent activity rows show outcome pills (quickstart row 4
         assert.ok(cells[1]!.includes('badge-neutral') && !cells[1]!.includes('badge-danger'), 'by design: neutral');
         assert.ok(cells[2]!.includes('badge-danger'), 'actionable: red');
         assert.equal(count(markup, 'badge-danger'), 1, 'exactly one red pill in the table');
-        // The reason still sits under both FAILED rows: the owner can read why, and what to do is in the pill.
-        assert.equal(count(markup, 'class="cell-note"'), 2);
+        // The reason still sits under both FAILED rows, as a sentence with the raw text behind Details (U3: UI.failure): the owner can read why, and what to do is in the pill.
+        assert.equal(count(markup, 'data-failure='), 2);
     });
 
     it('every pill has a glyph and a word, so colour is never the only signal', () => {

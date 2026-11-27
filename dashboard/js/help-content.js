@@ -1333,6 +1333,246 @@ const HelpContent = {
                 },
             ],
         },
+        // ─── 3c. Get your workspace live (U3) ────────────────────────────────
+        {
+            slug: 'go-live',
+            group: 'start',
+            icon: 'list-checks',
+            title: { ar: 'أطلِق مساحة عملك', en: 'Get your workspace live' },
+            summary: {
+                ar: 'القائمة القصيرة التي تبيّن ما بقي قبل أن تعمل مساحة عملك فعلًا، ومعنى كل بند فيها، وكيف تجرّب وصول تعليق.',
+                en: 'The short list that says what is left before your workspace works for real, what each item means, and how to test that a comment reaches you.',
+            },
+            related: ['onboarding', 'connect-meta', 'notifications', 'inbox'],
+            sections: [
+                {
+                    id: 'checklist',
+                    title: { ar: 'القائمة في صفحة اليوم', en: 'The checklist on Today' },
+                    body: {
+                        ar: [
+                            'حين تكون مساحة عملك جديدة تفتح صفحة اليوم ببطاقة «أطلِق مساحة عملك» فوق كل شيء. تعدّ البطاقة ما تمّ وما بقي، ولكل بند زر واحد يوصلك إلى مكانه. يراها مالك مساحة العمل وحده.',
+                            { note: 'لا تظهر هذه القائمة في مساحة العمل التي تملكها المنصة نفسها، ولا في مساحة أُنشئت قبل وجود معالج الإعداد.' },
+                            'يُحسب كل بند من واقع بياناتك لا من نقرة: إن ظهرت علامة ✓ فالأمر حدث فعلًا. وما كانت وحدته مطفأة في مساحة عملك لا يظهر في القائمة أصلًا.',
+                        ],
+                        en: [
+                            'While your workspace is new, Today opens with a “Get your workspace live” card above everything else. It counts what is done and what is left, and each item has one button that takes you to the place. Only the workspace owner sees it.',
+                            { note: 'The list never shows on the platform owner’s own workspace, nor on a workspace made before the setup wizard existed.' },
+                            'Each item is worked out from your data, not from a click: a ✓ means the thing really happened. An item for a module that is off in your workspace is not on the list at all.',
+                        ],
+                    },
+                },
+                {
+                    id: 'items',
+                    title: { ar: 'البنود ومعناها', en: 'The items and what they mean' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['أكمل ملفك', 'يتمّ حين تُنهي معالج الإعداد. منه يكتب المساعد بأسلوبك.'],
+                                ['اربط إنستجرام وفيسبوك', 'يتمّ حين يكون للمساحة اتصال بميتا لم تُبطله ميتا. من دونه لا يصل شيء ولا يُرسل شيء.'],
+                                ['استقبل تعليقًا تجريبيًا', 'يتمّ حين يصل إلينا تعليق على حسابك بعد الاتصال. التفاصيل في القسم التالي.'],
+                                ['فعّل ردًّا تلقائيًا', 'يتمّ حين يكون عندك رد تلقائي واحد على الأقل مفعّل وغير مؤرشف.'],
+                                ['جرّب المساعد', 'يتمّ حين ترسل سؤالًا تجريبيًا من صفحة مساعد الرسائل فيردّ عليك.'],
+                                ['ادعُ فريقك', 'يتمّ حين ينضمّ إلى مساحة العمل شخص ثانٍ، أو حين تُنشئ دعوة بعد أول انضمام.'],
+                                ['اختر من يُبلَّغ', 'يتمّ حين تحدد من تصله التنبيهات، أو حين يربط أحد أعضاء الفريق تيليجرام: [[notifications]].'],
+                            ] },
+                            'وتظهر أحيانًا بنود اختيارية، مثل ربط واتساب أو يوتيوب، ولا تُحتسب في «تمّ كل شيء».',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Finish your profile', 'Done when you finish the setup wizard. The assistant writes in your voice from it.'],
+                                ['Connect Instagram and Facebook', 'Done when the workspace has a Meta connection that Meta has not invalidated. Without it nothing is received or sent.'],
+                                ['Receive a test comment', 'Done when a comment on your account reaches us after you connected. The next section has the details.'],
+                                ['Switch on a keyword reply', 'Done when at least one keyword reply is on and not archived.'],
+                                ['Try the assistant', 'Done when you send a sample question from the DM assistant page and it answers.'],
+                                ['Invite your team', 'Done when a second person has joined the workspace, or you made an invite after the first person joined.'],
+                                ['Choose who is told', 'Done when you choose who gets the notices, or a team member links Telegram: [[notifications]].'],
+                            ] },
+                            'Optional items, such as connecting WhatsApp or YouTube, sometimes appear too. They do not count toward “everything done”.',
+                        ],
+                    },
+                },
+                {
+                    id: 'test-comment',
+                    title: { ar: 'تجربة وصول تعليق', en: 'Testing that a comment reaches you' },
+                    body: {
+                        ar: [
+                            'هذه التجربة تثبت أن تعليقات إنستجرام تصل إلى مساحة عملك. هي تجربة للاستقبال، لا للردّ.',
+                            { ol: [
+                                'تأكّد أن إنستجرام وفيسبوك متصلان في الإعدادات ← القنوات.',
+                                'اطلب من شخص آخر أن يكتب أي كلمة تعليقًا على منشور حديث في حسابك. تعليقك أنت يصل أيضًا، لكنه لا يجرّب الردّ، لأن المساعد لا يردّ على تعليقات حسابك نفسه.',
+                                'انتظر بضع ثوانٍ ثم افتح صفحة اليوم من جديد.',
+                                'حين يصل التعليق يصير البند ✓ ويبقى كذلك، حتى بعد أن تُنظَّف سجلات التعليق القديمة.',
+                            ] },
+                            { tip: 'إن لم يتغيّر البند بعد خمس دقائق فاطلب من مدير حسابك أن يفحص اشتراكات ميتا. هذا الفحص هو الدليل الوحيد على أن الأحداث تصل فعلًا إلى مساحتك.' },
+                        ],
+                        en: [
+                            'This test proves that Instagram comments reach your workspace. It tests receiving, not replying.',
+                            { ol: [
+                                'Check that Instagram and Facebook show as connected in Settings → Channels.',
+                                'Ask someone else to write any word as a comment on a recent post of your account. Your own comment arrives too, but it does not test the reply, because the assistant does not answer comments from your own account.',
+                                'Wait a few seconds, then open Today again.',
+                                'When the comment arrives the item turns ✓ and stays that way, even after old comment records are cleaned up.',
+                            ] },
+                            { tip: 'If the item has not changed after five minutes, ask your account manager to check Meta’s subscriptions. This check is the only proof that events really reach your workspace.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'hide',
+                    title: { ar: 'إخفاء البطاقة وإعادتها', en: 'Hiding the card, and bringing it back' },
+                    body: {
+                        ar: [
+                            'اضغط **إخفاء** لتزيل البطاقة من صفحة اليوم. يمكنك التراجع خلال لحظات، ولا يُحذف شيء مما أنجزته.',
+                            'لإعادتها افتح صفحة اليوم بالعنوان المنتهي بـ `#/overview?golive=show`.',
+                        ],
+                        en: [
+                            'Press **Hide** to take the card off Today. You can undo it for a few seconds, and nothing you did is deleted.',
+                            'To bring it back, open Today with the address that ends in `#/overview?golive=show`.',
+                        ],
+                    },
+                },
+                {
+                    id: 'live',
+                    title: { ar: 'حين تصبح على الهواء', en: 'When you are live' },
+                    body: {
+                        ar: [
+                            'حين يتمّ كل بند مطلوب تتحوّل البطاقة إلى سطر واحد: «أنت الآن على الهواء». يبقى ثلاثة أيام ثم يختفي وحده.',
+                        ],
+                        en: [
+                            'When every required item is done the card becomes one line, “You’re live”. It stays for three days and then goes away by itself.',
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 3d. How you are told (U3) ───────────────────────────────────────
+        {
+            slug: 'notifications',
+            group: 'start',
+            icon: 'send',
+            title: { ar: 'كيف تُبلَّغ حين يكون عميل بحاجة إليك', en: 'How you’re told when a customer needs you' },
+            summary: {
+                ar: 'ما يصلك دائمًا، وكيف تربط تيليجرام بحسابك، ومن يُبلَّغ في مساحة العمل، والعملاء المتحمسون، وإيقاف التنبيهات مؤقتًا.',
+                en: 'What always reaches you, how to link Telegram to your own account, who is told in a workspace, hot leads, and pausing.',
+            },
+            related: ['inbox', 'dm-assistant', 'go-live', 'troubleshooting'],
+            sections: [
+                {
+                    id: 'in-app',
+                    title: { ar: 'ما يصلك دائمًا', en: 'What always reaches you' },
+                    body: {
+                        ar: [
+                            'شارة قائمة الرسائل وصفحة اليوم تعملان دائمًا ولا تحتاجان إلى أي إعداد. فيهما كل محادثة بحاجة إليك: [[inbox]].',
+                            'تيليجرام إضافة تصلك على هاتفك، فلا يفوتك عميل وأنت بعيد عن اللوحة.',
+                        ],
+                        en: [
+                            'The badge on the Inbox menu and Today always work and need no setup. They hold every conversation that needs you: [[inbox]].',
+                            'Telegram is an extra that reaches your phone, so a customer is not missed while you are away from the dashboard.',
+                        ],
+                    },
+                },
+                {
+                    id: 'telegram',
+                    title: { ar: 'ربط تيليجرام بحسابك', en: 'Linking Telegram to your own account' },
+                    body: {
+                        ar: [
+                            { ol: [
+                                'افتح الإعدادات ← التنبيهات.',
+                                'اضغط **اربط تيليجرام**.',
+                                'يُفتح تيليجرام: اضغط «ابدأ» (Start).',
+                                'تعود إلى اللوحة فتجد «مرتبط باسم …» باسمك الأول كما في تيليجرام، وتصلك رسالة تأكيد في محادثتك.',
+                            ] },
+                            'الرابط يعمل مرة واحدة ولمدة عشر دقائق. وإن لم يكن الاسم المعروض اسمك فاضغط **ألغِ الربط** وأعد المحاولة: قد يكون شخص آخر ضغط «ابدأ» قبلك.',
+                            { note: 'يلزم حساب خاص بك لتصلك الرسائل على تيليجرام. من دخل بكلمة المرور المشتركة لا حساب له، فلا يظهر له الزر.' },
+                        ],
+                        en: [
+                            { ol: [
+                                'Open Settings → Notifications.',
+                                'Press **Link Telegram**.',
+                                'Telegram opens: press Start.',
+                                'Back in the dashboard the card says “Linked as …” with your first name as Telegram has it, and a confirmation message arrives in your chat.',
+                            ] },
+                            'The link works once, for ten minutes. If the name shown is not yours, press **Unlink** and try again: someone else may have pressed Start before you.',
+                            { note: 'You need an account of your own to get messages on Telegram. Someone signed in with the shared password has no account, so the button does not appear for them.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'who',
+                    title: { ar: 'من يُبلَّغ في مساحة العمل', en: 'Who is told in a workspace' },
+                    body: {
+                        ar: [
+                            'مالك مساحة العمل يختار في الإعدادات ← التنبيهات من تصله رسالة حين تكون محادثة بحاجة إلى شخص. وإن لم يختر أحدًا فيُبلَّغ المالكون والمشغّلون.',
+                            'من لم يربط تيليجرام بعد يرى كل شيء في الرسائل وصفحة اليوم. ومن غادر المساحة أو أُوقف حسابه يُتخطّى تلقائيًا.',
+                            { note: 'تنبيهات المنصة نفسها إلى مديرها لا تتغيّر، ولا تصل مدير الحساب رسائل مساحات العمل الأخرى.' },
+                        ],
+                        en: [
+                            'The workspace owner chooses, in Settings → Notifications, who gets a message when a conversation needs a person. If nobody is chosen, the owners and operators are told.',
+                            'Someone who has not linked Telegram yet sees everything in the Inbox and on Today. Someone who left the workspace, or whose account was switched off, is skipped automatically.',
+                            { note: 'The platform’s own alerts to its administrator do not change, and the account manager does not receive other workspaces’ messages.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'hot-leads',
+                    title: { ar: 'العملاء المتحمسون', en: 'Hot leads' },
+                    body: {
+                        ar: [
+                            'العميل المتحمس هو من أرسل إليه المساعد الرابط بعد أن قال إنه يريد الشراء، أو سأل عن السعر، أو عن مناسبة المنتج له. لا يوقف المساعد محادثته، لكنه يستحق كلمة منك.',
+                            'له عمود خاص في جدول «من يُبلَّغ»، فيمكنك أن تبلّغ بهم شخصًا غير من تبلّغه بالمحادثات التي تحتاج إلى شخص.',
+                        ],
+                        en: [
+                            'A hot lead is someone the assistant just sent the link to after they said they want to buy, asked the price, or asked whether it suits them. The assistant does not pause their conversation, but they deserve a word from you.',
+                            'They have a column of their own in the “Who is told” table, so a different person can be told about them than about conversations that need a person.',
+                        ],
+                    },
+                },
+                {
+                    id: 'pause',
+                    title: { ar: 'الإيقاف المؤقت وإلغاء الربط', en: 'Pausing, and unlinking' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['أوقف مؤقتًا', 'تبقى مرتبطًا لكن لا تصلك رسائل تيليجرام. اضغط **استأنف** لتعود.'],
+                                ['ألغِ الربط', 'يُحذف معرّف محادثتك واسمك الأول من سجلاتنا في الحال، وتتوقف الرسائل.'],
+                            ] },
+                            'لا نحتفظ بنص التنبيه نفسه. ما نحتفظ به لكل شخص مرتبط هو معرّف المحادثة والاسم الأول فقط.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Pause', 'You stay linked but no Telegram messages reach you. Press **Resume** to come back.'],
+                                ['Unlink', 'Your chat id and first name are deleted from our records at once, and the messages stop.'],
+                            ] },
+                            'We do not keep the text of a notice. For each linked person we keep only the chat id and the first name.',
+                        ],
+                    },
+                },
+                {
+                    id: 'bot',
+                    title: { ar: 'لمدير المنصة: إعداد حساب الإرسال', en: 'For the platform administrator: setting up the sender' },
+                    body: {
+                        ar: [
+                            'بلا حساب إرسال على تيليجرام تبقى البطاقة تقول «لم يُعدّ هذا بعد على المنصة». ولإعداده، مجانًا:',
+                            { ol: [
+                                'في تيليجرام افتح @BotFather وأرسل `/newbot` واختر اسمًا ومعرّفًا.',
+                                'انسخ الرمز الذي يعطيك إياه، والصقه في الإعدادات ← المنصة ← التنبيهات.',
+                            ] },
+                            { warn: 'لا تضبط webhook على هذا الحساب أبدًا. الربط يقرأ رسائل الحساب بطلب `getUpdates`، وهو يفشل ما دام للحساب webhook.' },
+                            'البريد الإلكتروني يبقى لمالك المنصة وحده.',
+                        ],
+                        en: [
+                            'Without a Telegram sender the card keeps saying “Not set up on this platform yet”. To set it up, free of charge:',
+                            { ol: [
+                                'In Telegram open @BotFather, send `/newbot`, and choose a name and a username.',
+                                'Copy the token it gives you and paste it in Settings → Platform → Alerts.',
+                            ] },
+                            { warn: 'Never set a webhook on this account. Linking reads the account’s messages with `getUpdates`, which fails for as long as the account has a webhook.' },
+                            'Email stays with the platform owner alone.',
+                        ],
+                    },
+                },
+            ],
+        },
         // ─── 4. Scheduling posts and carousels ───────────────────────────────
         {
             slug: 'scheduling',

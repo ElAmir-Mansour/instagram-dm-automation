@@ -300,10 +300,10 @@ describe('/privacy and /data-deletion — the alerts the operator gets when a co
         }
         const en = words(services.en);
         assert.ok(en.includes('Resend — sends the alert emails, when they are switched on: the alerts about a conversation that needs a person, described in section 3, which carry your username (or the last four characters of your account ID) and up to 200 characters of your last message, and the ads alerts in section 1.'));
-        assert.ok(en.includes('Telegram — delivers the same alerts as Telegram messages, to the chat set in Settings, when they are switched on.'));
+        assert.ok(en.includes('Telegram — delivers the same alerts as Telegram messages, to the chat set in Settings, when they are switched on, and to the chat of each staff member who linked their own to our Telegram sender account.'));
         const ar = words(services.ar);
         assert.ok(ar.includes('Resend — يرسل رسائل التنبيه بالبريد الإلكتروني حين تكون مفعّلة: تنبيهات المحادثة التي تحتاج إلى شخص الموصوفة في القسم 3، وفيها اسم المستخدم الخاص بك (أو آخر أربعة أحرف من معرّف حسابك) وما يصل إلى 200 حرف من آخر رسالة كتبتَها، وتنبيهات الإعلانات الموصوفة في القسم 1.'));
-        assert.ok(ar.includes('تيليجرام (Telegram) — يوصل التنبيهات نفسها رسائلَ إلى محادثة تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة.'));
+        assert.ok(ar.includes('تيليجرام (Telegram) — يوصل التنبيهات نفسها رسائلَ إلى محادثة تيليجرام المحدّدة في الإعدادات، حين تكون مفعّلة، وإلى محادثة كل عامل في مساحة العمل ربطها بحسابنا المرسِل بنفسه.'));
         for (const latin of ['Resend', 'Telegram']) assert.ok(services.ar.includes(`<bdi lang="en" dir="ltr">${latin}</bdi>`), latin);
     });
 

@@ -2153,6 +2153,22 @@ was not sure how to answer*, and, for WhatsApp, *the 24-hour window had closed, 
 be sent*, *the free WhatsApp replies are used up and paid replies are switched off* or *the
 WhatsApp connection needs reconnecting*.
 
+### 16.5 A staff member gets no Telegram notice (U3)
+
+Staff of a workspace (not the platform owner) are told on Telegram only when they linked THEIR OWN chat to the platform's sender and the workspace's owner left them
+covered. `notifyOwner` runs `notifyPeople` (`src/services/notifyPeople.ts`) beside the owner's own alert; FLOWS.md §2.6k walks it. Check in this order:
+
+1. **Is there a sender?** Settings → Platform → **Alerts** → the bot token. **With no token nothing is sent to staff, and nothing is logged:** `notifyPeople` returns before it
+   reads anything, and the person's card says "Not set up on this platform yet". Make one with @BotFather (free) and paste its token.
+2. **Did they link?** Settings → Notifications → **Link Telegram**, then press Start in Telegram. The card then says "Linked as <first name>". A link works once and for 10 minutes.
+3. **Linking never finishes.** The dashboard asks Telegram for the sender's pending messages (`getUpdates`). That fails with a 409 (`notify.telegram_link_poll_failed`, `status: 409`)
+   **for as long as the sender has a webhook**: never set one on it. Pressing Start inside a group does not link: it has to be the private chat.
+4. **Are they covered, and not paused?** The owner's "Who is told" table (Settings → Notifications). With nothing chosen, owners and operators are told, a viewer is not. A paused
+   person, a deactivated account and a platform admin are skipped.
+5. **The logs:** `notify.people_sent` and `notify.people_failed` (counts, never a chat id or the token), `notify.people_rate_limited` (at most 3 hand-off and 1 hot-lead notice per
+   conversation per hour), `notify.people_limiter_failed`, `notify.people_error`.
+6. **Never** the owner's own alerts: those are unchanged (§16.4). Email stays the platform owner's alone.
+
 ---
 
 ## 17. Backups

@@ -21,6 +21,9 @@
  *   draft_started / draft_ready / draft_failed   `recordDraftEvent`: the draft state machine (P24) calls it
  *   proof_verdict / proof_regenerated   the proof samples (P25): a tenant's (or an admin's) verdict on a card, and a card written again
  *
+ *   assistant_tested / staff_first_reply   the first 2xx of `POST /settings/ai/test` / of a staff member's first reply   tenant   services/activation.ts `activationTap`
+ *   golive_live / golive_dismissed          the go-live checklist finished / was hidden                                  tenant   services/goLive.ts, routes/goLive.ts
+ *
  * A reset link is not onboarding and writes nothing here: the funnel counts people getting in, not people changing a password.
  */
 import { pool } from '../config/db.js';
@@ -32,6 +35,8 @@ export const ONBOARDING_EVENTS = [
     'draft_started', 'draft_ready', 'draft_failed',
     'proof_verdict', 'proof_regenerated',
     'wizard_completed',
+    // U3 (go-live and activation, WA-9): the first assistant test of a workspace, a staff member's first reply, the checklist finishing and being hidden.
+    'assistant_tested', 'staff_first_reply', 'golive_live', 'golive_dismissed',
 ] as const;
 export type OnboardingEvent = (typeof ONBOARDING_EVENTS)[number];
 
@@ -65,6 +70,10 @@ export const EVENT_PROPS: Readonly<Record<OnboardingEvent, Readonly<Record<strin
     proof_verdict: { kind: 'word', verdict: 'word', reason: 'word' },
     proof_regenerated: { kind: 'word', attempt: 'n' },
     wizard_completed: { by: 'word', total_ms: 'n' },
+    assistant_tested: {},
+    staff_first_reply: {},
+    golive_live: {},
+    golive_dismissed: {},
 });
 
 const WORD = /^[a-z0-9_]{1,32}$/;

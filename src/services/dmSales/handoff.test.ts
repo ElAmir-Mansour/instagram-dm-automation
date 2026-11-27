@@ -210,6 +210,8 @@ async function run(world: World = {}): Promise<Run> {
             return { rowCount: 1 };
         }],
         [/UPDATE conversations SET stage/, { rowCount: 1 }],
+        // U3: the workspace's people (`notifyPeople.ts`), read only when the platform has a bot token: here nobody has linked a chat.
+        [/FROM memberships m\s+JOIN users u/, { rows: [] }],
         [/SELECT c\.username, c\.instagram_user_id/, () => {
             if (world.factsError) throw new Error('connection terminated');
             return { rows: world.facts === null ? [] : [{ ...FACTS, last_inbound_text: text, ...world.facts }] };
