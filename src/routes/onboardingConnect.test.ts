@@ -27,6 +27,7 @@ import {
     describeOnboardingBrief, describeWizard, firstOpenStep, nextStepAfter, NO_FLAGS, readWizardFlags, resumeStep, saveStep, stepsFor,
     WIZARD_STEPS, type StepEntry,
 } from '../services/onboardingWizard.js';
+import { invalidateModulesCache } from '../services/modules.js';
 import { invalidateTenantCache, type TenantRole } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import { onboardingRouter } from './onboarding.js';
@@ -70,7 +71,12 @@ const ACTIVE_PATCH = {
     offers: [{ id: 'main', kind: 'product', name: 'Linen throw', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: true }],
 };
 
-const on = (): void => { world.settings.set(APP_SETTING_KEYS.metaLoginEnabled, 'true'); };
+/** The platform's switch on, AND the workspace connects itself (U3, contract §9): W4 needs both. */
+const on = (): void => {
+    world.settings.set(APP_SETTING_KEYS.metaLoginEnabled, 'true');
+    world.settings.set(`tenant.modules.${NEWCOMER}`, JSON.stringify({ v: 1, on: ['inbox'], preset: 'company', metaConnect: 'self' }));
+    invalidateModulesCache();
+};
 const row = () => world.onboarding.get(NEWCOMER)!;
 const done = { status: 'done' } as const satisfies StepEntry;
 const orderOf = (order: Array<{ id: string; enabled: boolean }>): string[] => order.filter((s) => s.enabled).map((s) => s.id);
@@ -78,6 +84,7 @@ const orderOf = (order: Array<{ id: string; enabled: boolean }>): string[] => or
 beforeEach(() => {
     resetProfileTableWarning();
     invalidateTenantCache();
+    invalidateModulesCache();
     const previous = setLogSink(() => undefined);
     restoreSink = () => setLogSink(previous);
     world = installOnboardingWorld();
@@ -137,19 +144,30 @@ describe('the registry with the flags applied', () => {
 
 describe('reading what the operator switched on', () => {
     it('is off by default and for anything but "true"', async () => {
-        assert.deepEqual(await readWizardFlags(), { connect: false });
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: false });
         for (const value of ['false', '', '1', 'yes', 'TRUE']) {
             world.settings.set(APP_SETTING_KEYS.metaLoginEnabled, value);
-            assert.deepEqual(await readWizardFlags(), { connect: false }, JSON.stringify(value));
+            assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: false }, JSON.stringify(value));
         }
         on();
-        assert.deepEqual(await readWizardFlags(), { connect: true });
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: true });
+    });
+
+    it('needs the workspace\'s own choice too: the platform switch alone, with no `metaConnect: "self"`, leaves W4 out (U3)', async () => {
+        world.settings.set(APP_SETTING_KEYS.metaLoginEnabled, 'true');
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: false }, 'no modules document: the operator connects it');
+        world.settings.set(`tenant.modules.${NEWCOMER}`, JSON.stringify({ v: 1, on: ['inbox'], preset: 'company', metaConnect: 'operator' }));
+        invalidateModulesCache();
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: false });
+        world.settings.set(`tenant.modules.${NEWCOMER}`, JSON.stringify({ v: 1, on: ['inbox'], preset: 'company', metaConnect: 'self' }));
+        invalidateModulesCache();
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: true });
     });
 
     it('fails CLOSED: a setting that cannot be read is "off", so the wizard is the one it always was', async () => {
         on();
         world.db.failOn = /app_settings/;
-        assert.deepEqual(await readWizardFlags(), { connect: false });
+        assert.deepEqual(await readWizardFlags(NEWCOMER), { connect: false });
         const { body } = await getState();
         assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'proof', 'done']);
     });
@@ -246,11 +264,13 @@ describe('with "Connect with Facebook" on', () => {
 
     it('reads the setting once for a write and not at all for an autosave of another step', async () => {
         const reads = () => world.db.statements.filter((s) => /app_settings/.test(s.sql)).length;
+        const switchReads = () => world.db.statements.filter((s) => /app_settings/.test(s.sql) && s.params[0] === APP_SETTING_KEYS.metaLoginEnabled).length;
         const before = reads();
         await saveStep(NEWCOMER, 'about', { values: { name: 'x' } }, { userId: NEW_OWNER_USER, by: 'tenant' });
         assert.equal(reads(), before, 'an autosave of W1 asks nobody anything');
         await saveStep(NEWCOMER, 'about', { status: 'done' }, { userId: NEW_OWNER_USER, by: 'tenant' });
-        assert.equal(reads(), before + 1, 'Continue needs to know where it leads next');
+        assert.equal(switchReads(), 1, 'Continue needs to know where it leads next: the platform switch is read once');
+        assert.equal(world.db.statements.filter((s) => /app_settings/.test(s.sql) && String(s.params[0]).startsWith('tenant.modules.')).length, 1, 'and so is the workspace\'s modules document');
     });
 });
 

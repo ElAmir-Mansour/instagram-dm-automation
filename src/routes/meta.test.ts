@@ -16,6 +16,7 @@ import { decryptSecret } from '../config/crypto.js';
 import { APP_SETTING_KEYS } from '../services/appSettings.js';
 import { FakeDb, FakeGraph, page } from '../services/metaLoginHarness.js';
 import { LOGIN_SCOPES, completeMetaConnection } from '../services/metaLogin.js';
+import { invalidateModulesCache } from '../services/modules.js';
 import { createOAuthState, readPick } from '../services/oauthState.js';
 import { requireAuth } from '../middleware/auth.js';
 import { resolveTenant } from '../services/tenant.js';
@@ -78,6 +79,9 @@ beforeEach(() => {
     graph = new FakeGraph().install();
     db.settings.set(APP_SETTING_KEYS.publicBaseUrl, BASE);
     db.settings.set(APP_SETTING_KEYS.metaLoginEnabled, 'true');
+    // A workspace connects its own Meta only when its modules say so (U3, contract §9); the fixture's does.
+    invalidateModulesCache();
+    db.settings.set(`tenant.modules.${TENANT}`, JSON.stringify({ v: 1, on: ['inbox'], preset: 'company', metaConnect: 'self' }));
     db.addCreator(TENANT, { name: 'New Tenant' });
     logs = [];
     const previous = setLogSink((_level, line) => { logs.push(line); });
@@ -742,6 +746,33 @@ describe('GET /api/meta/connection', () => {
         assert.equal(r.json.usesConfiguration, false);
         assert.equal(r.json.connection.connected, false);
         assert.equal(r.json.connection.via, null);
+    });
+
+    it('says how the workspace connects, and its own choice decides `enabled` with the platform switch on (U3)', async () => {
+        const self = await api('GET', '/connection', { session: OWNER_SESSION });
+        assert.equal(self.json.connectMode, 'self');
+        assert.equal(self.json.enabled, true);
+        db.settings.set(`tenant.modules.${TENANT}`, JSON.stringify({ v: 1, on: ['inbox'], preset: 'company', metaConnect: 'operator' }));
+        invalidateModulesCache();
+        const operator = await api('GET', '/connection', { session: OWNER_SESSION });
+        assert.equal(operator.json.connectMode, 'operator');
+        assert.equal(operator.json.enabled, false, 'the platform switch is on, and the card still offers no Connect');
+        const connect = await api('POST', '/connect', { session: OWNER_SESSION, body: {} });
+        assert.equal(connect.status, 409);
+        assert.equal(connect.json.code, 'META_LOGIN_DISABLED');
+    });
+
+    it('the platform owner\'s workspace (no document) reads `operator`, so the switch being on never shows him Connect', async () => {
+        db.settings.delete(`tenant.modules.${TENANT}`);
+        db.platformOwner = TENANT;
+        invalidateModulesCache();
+        const r = await api('GET', '/connection', { session: OWNER_SESSION });
+        assert.equal(r.status, 200);
+        assert.equal(r.json.enabled, false);
+        assert.equal(r.json.connectMode, 'operator');
+        // With the platform switch off it is as it always was.
+        db.settings.delete(APP_SETTING_KEYS.metaLoginEnabled);
+        assert.equal((await api('GET', '/connection', { session: OWNER_SESSION })).json.enabled, false);
     });
 
     it('never carries a token, for a connected tenant', async () => {

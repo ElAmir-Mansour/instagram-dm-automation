@@ -34,6 +34,7 @@ import { getMetaLoginSettings, getPublicBaseUrl } from './appSettings.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from './audit.js';
 import { metaHttp, metaErrorCode, metaErrorSubcode, withRetry } from './http.js';
 import { API_VERSION, GRAPH_BASE } from './instagram.js';
+import { readModules, type MetaConnectMode } from './modules.js';
 import { createOAuthState, type OAuthReturnTo } from './oauthState.js';
 import { getTenant, invalidateTenantCache } from './tenant.js';
 import { captureAdsAccess, forgetConnectedAdsAccess } from './adBoosts.js';
@@ -235,16 +236,35 @@ export function buildLoginUrl(input: { appId: string; redirectUri: string; state
 
 /** Whether the tenant may start the flow now, and with what: the checks `POST /connect` makes before it mints a state. */
 export interface LoginAvailability {
+    /** The platform switch AND, when a workspace was asked about, that workspace's `metaConnect: 'self'` (U3). */
     enabled: boolean;
     adsScopes: boolean;
     app: MetaApp | null;
     configId: string | null;
     redirectUri: string | null;
+    /** How the workspace asked about connects (`self` or `operator`), or null when no workspace was asked (the callback, which trusts its state). */
+    connectMode: MetaConnectMode | null;
 }
 
-export async function loginAvailability(): Promise<LoginAvailability> {
-    const [settings, redirectUri] = await Promise.all([getMetaLoginSettings(), metaRedirectUri()]);
-    return { enabled: settings.enabled, adsScopes: settings.adsScopesEnabled, app: readMetaApp(), configId: settings.configId, redirectUri };
+/**
+ * Whether Connect with Facebook may start. With a workspace (`creatorId`) it needs the platform switch AND the workspace's own choice, `metaConnect:
+ * 'self'` (U3, contract §9): the switch is platform-wide, and switching it on would otherwise show Connect or Reconnect in every workspace, the owner's
+ * included. The OAuth callback asks without a workspace: it trusts the state it consumed. A workspace whose modules cannot be read is `operator`
+ * (Connect hidden): failing closed is the side that cannot send somebody through a dialog the operator never meant to offer.
+ */
+export async function loginAvailability(creatorId?: string): Promise<LoginAvailability> {
+    const [settings, redirectUri, connectMode] = await Promise.all([
+        getMetaLoginSettings(),
+        metaRedirectUri(),
+        creatorId === undefined ? Promise.resolve(null) : readModules(creatorId).then((m) => m.metaConnect, (err: unknown): MetaConnectMode => {
+            log('warn', 'modules.read_failed', { ...describeError(err) });
+            return 'operator';
+        }),
+    ]);
+    return {
+        enabled: settings.enabled && (creatorId === undefined || connectMode === 'self'),
+        adsScopes: settings.adsScopesEnabled, app: readMetaApp(), configId: settings.configId, redirectUri, connectMode,
+    };
 }
 
 // ─── Graph: the exchange and the reads ──────────────────────────────────────────────────

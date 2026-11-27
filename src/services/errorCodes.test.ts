@@ -60,6 +60,27 @@ describe('the registry', () => {
         ]) assert.ok(isErrorCode(code), code);
     });
 
+    it('carries the fifteen U3 codes (modules, team, notices) with the statuses the contract gives them', () => {
+        const expected: Record<string, number> = {
+            MODULE_OFF: 404, MODULE_UNKNOWN: 400, MODULE_NOT_AVAILABLE: 400, MODULE_NEEDS: 400, OWNER_ALL_MODULES: 409, CEILING_REQUIRED: 409, LAST_OWNER: 409, MEMBER_IS_ADMIN: 409,
+            MEMBER_NOT_FOUND: 404, ROLE_INVALID: 400, NO_USER_ACCOUNT: 400, TELEGRAM_BOT_MISSING: 409, TELEGRAM_UNREACHABLE: 502, TELEGRAM_LINK_EXPIRED: 410, ROUTING_INVALID: 400,
+        };
+        for (const [code, status] of Object.entries(expected)) {
+            assert.ok(isErrorCode(code), code);
+            assert.deepEqual([...ERROR_CODES[code as ErrorCode].status], [status], code);
+        }
+        assert.deepEqual([...ERROR_CODES.MODULE_OFF.params], ['module']);
+        assert.deepEqual([...ERROR_CODES.MODULE_NEEDS.params], ['module', 'needs']);
+    });
+
+    it('sends MODULE_OFF as the contract\'s envelope: 404, the English sentence twice, the code, and the module', () => {
+        const { res, sent } = fakeRes();
+        sendError(res, 404, 'MODULE_OFF', { module: 'studio' }, 'This is not part of this workspace.');
+        assert.equal(sent.status, 404);
+        assert.deepEqual(sent.body, { error: 'This is not part of this workspace.', message: 'This is not part of this workspace.', code: 'MODULE_OFF', params: { module: 'studio' } });
+        assert.deepEqual(logs, []);
+    });
+
     it('does not carry WINDOW_CLOSED: no route refuses a reply for a closed window today, and a code nothing sends is not a code', () => {
         assert.equal(isErrorCode('WINDOW_CLOSED'), false);
     });
