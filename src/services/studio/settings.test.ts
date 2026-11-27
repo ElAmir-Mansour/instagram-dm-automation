@@ -10,7 +10,8 @@ import type { StudioSettings } from '../../db/rows.js';
 import { MAC_BRAIN_TENANT_MESSAGE, MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { StudioError } from './common.js';
-import { changedPaths, STUDIO_PROFILE_PATHS } from '../profile/views.js';
+import { changedPaths, STUDIO_PROFILE_PATHS, studioView } from '../profile/views.js';
+import { richProfile } from '../profile/testSupport.js';
 import {
     defaultStudioSettings, EXPLAINER_VOICES, getMonteurSettings, getStudioSettings, mergeSettings, overDefaults, seedApiBrain, settingsProblems,
     STUDIO_SETTINGS_SECTIONS, updateStudioSettings,
@@ -137,6 +138,31 @@ describe('settingsProblems — what a PUT is refused for', () => {
             schedule: { timezone: 'Europe/London', slots: ['08:30', '19:45'] },
             product: { name: 'A course', url: 'https://example.com/c', facts: ['10 lessons'] },
         }), []);
+    });
+});
+
+describe('schedule.tiktok_default — "Send to TikTok by default" (CP-S11)', () => {
+    it('is off for every tenant until they switch it on, and a row saved before it existed reads as off', () => {
+        assert.equal(defaultStudioSettings().schedule.tiktok_default, false);
+        const old = overDefaults({ schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'] } });
+        assert.equal(old.schedule.tiktok_default, false, 'missing from the row, so the default');
+        assert.equal(old.schedule.timezone, 'Asia/Riyadh');
+    });
+
+    it('is saved by a patch of its own, keeps the timezone and slots, and must be true or false', () => {
+        const problems: string[] = [];
+        const next = mergeSettings(defaultStudioSettings(), { schedule: { tiktok_default: true } }, problems);
+        assert.deepEqual([problems, settingsProblems(next), next.schedule.tiktok_default, next.schedule.timezone], [[], [], true, 'UTC']);
+        assert.ok(problemsFor({ schedule: { tiktok_default: 'yes' } }).some((p) => /schedule\.tiktok_default must be true or false/.test(p)));
+    });
+
+    it('is not profile-owned: a tenant with a stored profile keeps it through studioView, and changing it writes no profile version', () => {
+        assert.ok(!(STUDIO_PROFILE_PATHS as readonly string[]).some((path) => path.startsWith('schedule.') && path !== 'schedule.timezone'));
+        const stored = overDefaults({ schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'], tiktok_default: true } });
+        assert.equal(studioView(stored, richProfile()).schedule.tiktok_default, true, 'the reader shows the row\'s value, not a profile copy');
+        const before = studioView(overDefaults({}), richProfile());
+        const after = { ...before, schedule: { ...before.schedule, tiktok_default: true } };
+        assert.deepEqual(changedPaths(before, after, STUDIO_PROFILE_PATHS), [], 'so the save never goes through saveProfile, which would revert it');
     });
 });
 

@@ -882,7 +882,7 @@ export interface CtaConfig {
 }
 
 /** Local posting times (`HH:MM`) in an IANA timezone. */
-export interface ScheduleConfig { timezone: string; slots: string[] }
+export interface ScheduleConfig { timezone: string; slots: string[]; tiktok_default: boolean }
 
 /** The folder the worker scans. Null until the tenant sets it. */
 export interface LibraryConfig { root: string | null }

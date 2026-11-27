@@ -2814,16 +2814,16 @@ describe('StudioPage — Schedule', () => {
     const slotA = '2026-09-26T10:00:00.000Z';
     const slotB = '2026-09-26T18:00:00.000Z';
 
-    it('defaults to the first free slot and, while TikTok is unaudited, to queueing the TikTok post', async () => {
+    it('defaults to the first free slot and to NOT posting to TikTok (the queue is one click away while TikTok is unaudited)', async () => {
         const s = loadStudio();
         const panel = s.host('studio-schedule');
         await openEditor(s);
         s.Studio.destroy();
         const markup = panel.innerHTML;
         assert.ok(new RegExp(`<option value="${slotA}" selected>`).test(markup), 'the first slot');
-        assert.ok(/<input type="radio" name="tiktok" value="queue" checked>/.test(markup));
+        assert.ok(/<input type="radio" name="tiktok" value="none" checked>/.test(markup), 'nothing is sent to TikTok unless chosen');
+        assert.ok(/<input type="radio" name="tiktok" value="queue"\s*>/.test(markup) && !/value="queue" checked/.test(markup), 'the queue is offered, not chosen');
         assert.ok(!markup.includes('value="scheduled"'), 'no same-time TikTok post before the audit');
-        assert.ok(/<input type="radio" name="tiktok" value="none"/.test(markup));
         assert.ok(tagOf(markup, 'st-sched-campaign').includes('checked'), 'create_campaign follows the draft’s campaign');
     });
 
@@ -2992,7 +2992,7 @@ describe('StudioPage — Settings', () => {
         assert.equal(body.cta.tiktokLine, 'Link in bio');
         assert.equal(body.cta.slide.swipe, 'Swipe');
         assert.equal(body.cta.slide.igAsk, 'a', 'untouched words go back as they came');
-        assert.deepEqual(body.schedule, { timezone: 'Europe/London', slots: ['13:00', '18:30'] });
+        assert.deepEqual(body.schedule, { timezone: 'Europe/London', slots: ['13:00', '18:30'], tiktok_default: false }, 'the TikTok default goes back as it came');
         assert.deepEqual(body.library, { root: null }, 'an emptied folder is "not set"');
         assert.equal(s.toasts.at(-1)?.message, s.t('studio.settings.saved'));
     });
@@ -3439,6 +3439,51 @@ describe('StudioPage — scheduling says exactly what will happen', () => {
         assert.ok(markup.includes(s.t('studio.schedule.zoneHint', { city: 'Riyadh', zone: 'Asia/Riyadh' })), 'the zone is said, not assumed');
         s.I18N.lang = 'ar';
         assert.equal(S.zoneCity('Asia/Riyadh'), 'الرياض', 'in Arabic, the city in Arabic');
+    });
+});
+
+describe('StudioPage — TikTok defaults to "Don\'t post" (CP-S11)', () => {
+    const checkedRadio = (markup: string): string => (/<input type="radio" name="tiktok" value="(\w+)"\s+checked/.exec(markup) || [])[1] ?? '';
+
+    it('pre-selects "Don\'t post to TikTok" unless "Send to TikTok by default" is on, then the queue (or the same time once audited)', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        // The fixture's settings predate the field: off.
+        assert.equal(checkedRadio(String(S.scheduleMarkup())), 'none', 'a row without the field is off');
+        S.settings = studioSettings({ schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'], tiktok_default: false } });
+        assert.equal(checkedRadio(String(S.scheduleMarkup())), 'none');
+        assert.equal(S.scheduleChoice().tiktok, 'none', 'the summary reads the same default');
+        S.settings = studioSettings({ schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'], tiktok_default: true } });
+        assert.equal(checkedRadio(String(S.scheduleMarkup())), 'queue', 'on, not audited: the inbox queue');
+        assert.equal(S.scheduleChoice().tiktok, 'queue');
+        S.status = studioStatus({ tiktok: { audited: true, queued: 0 } });
+        assert.equal(checkedRadio(String(S.scheduleMarkup())), 'scheduled', 'on and audited: the same time');
+        s.Studio.destroy();
+    });
+
+    it('the Settings card offers it, off by default, and Save sends the boolean in the schedule section', async () => {
+        const s = loadStudio();
+        s.hash.tab = 'settings';
+        s.api.getStudioSettings = () => Promise.resolve({ settings: studioSettings() });
+        s.api.getStudioWorkers = () => Promise.resolve({ workers: [] });
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus());
+        await s.Studio.render();
+        const S = s.Studio as Json;
+        let page = s.dom.get('page-container')!.innerHTML;
+        const select = (/<select[^>]*data-path="schedule\.tiktok_default"[\s\S]*?<\/select>/.exec(page) || [''])[0];
+        assert.ok(select.includes('data-kind="bool"'), 'a yes/no select');
+        assert.ok(/<option value="false"\s+selected/.test(select) && !/<option value="true"\s+selected/.test(select), 'off is chosen');
+        assert.ok(page.includes(s.t('studio.settings.tiktokDefault')) && page.includes(s.t('studio.settings.tiktokDefaultOn')));
+        S.setting({ dataset: { path: 'schedule.tiktok_default', kind: 'bool' }, value: 'true' });
+        assert.equal(S.settingsWork.schedule.tiktok_default, true, 'a boolean, not the string "true"');
+        const sent: Json[] = [];
+        s.api.saveStudioSettings = (body: Json) => { sent.push(body); return Promise.resolve({ settings: { ...studioSettings(), ...body } }); };
+        await S.saveSettings(fakeForm({}), submitEvent);
+        page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.equal(((plainJson(sent[0]) as Json).schedule as Json).tiktok_default, true);
+        assert.ok(/<option value="true"\s+selected/.test((/<select[^>]*data-path="schedule\.tiktok_default"[\s\S]*?<\/select>/.exec(page) || [''])[0]), 'and the card shows it saved');
     });
 });
 

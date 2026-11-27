@@ -100,6 +100,15 @@ export async function nextCourseLessons(exec: Exec, creatorId: string, n: number
         .map((r) => r.video_path);
 }
 
+/**
+ * Course mode with no lesson left to take: the library is used up, so the daily run queues nothing and Run now answers 409
+ * (`scanFor` returns null for exactly this). The Monteur page says so instead of promising a next run.
+ */
+export async function courseExhausted(exec: Exec, creatorId: string, m: Pick<MonteurConfig, 'source'>): Promise<boolean> {
+    if (m.source !== 'course') return false;
+    return (await nextCourseLessons(exec, creatorId, 1)).length === 0;
+}
+
 /** The scan the settings ask for now, or null in course mode with no lesson left to take. */
 async function scanFor(exec: Exec, creatorId: string, m: MonteurConfig): Promise<MonteurScanPayload | null> {
     if (m.source !== 'course') return scanPayload(m, await knownKeys(exec, creatorId));

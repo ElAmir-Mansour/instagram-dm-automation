@@ -147,7 +147,7 @@ describe('only what is valid for the goal is offered', () => {
         const r = await ready();
         assert.match(r.page(), /id="adsc-goal-leads"[^>]*disabled/);
         field(r, 'goal', 'leads');
-        assert.equal(r.P.state.goal, 'traffic', 'a locked goal cannot be chosen');
+        assert.equal(r.P.state.goal, 'messages', 'a locked goal cannot be chosen: the goal stays what it was');
         field(r, 'goal', 'messages');
         field(r, 'name', 'x');
         r.act('next');
@@ -160,6 +160,7 @@ describe('only what is valid for the goal is offered', () => {
 
     it('traffic offers a tracked offer link by default, a free address with a warning, and a button', async () => {
         const r = await ready();
+        field(r, 'goal', 'traffic');
         r.P.state.step = 1;
         r.P.repaintStep();
         assert.match(r.step(), /id="adsc-linkMode-offer"[^>]*checked/);
@@ -213,7 +214,7 @@ describe('the Leads goal (A10): locked until a legal sign-off', () => {
         assert.match(r.page(), /id="adsc-leads-locked"/);
         assert.ok(r.page().includes('leads-and-privacy'));
         field(r, 'goal', 'leads');
-        assert.equal(r.P.state.goal, 'traffic');
+        assert.equal(r.P.state.goal, 'messages', 'a locked goal is not taken: it stays on the default');
     });
 
     it('unlocked: the goal opens, picks the active form, an upload, SIGN_UP and the sign-off\'s countries', async () => {
@@ -299,6 +300,32 @@ describe('the audience rules', () => {
     });
 });
 
+describe('beginner defaults (CP-A5, the goal only)', () => {
+    it('a fresh builder starts on Messages with an Instagram destination, not on "Visits to a link"', async () => {
+        const r = await ready();
+        assert.equal(r.P.state.goal, 'messages');
+        assert.deepEqual(plain(r.P.state.destinations), ['instagram']);
+        assert.match(r.page(), /id="adsc-goal-messages"[^>]*checked/, 'and the first step shows it chosen');
+        assert.doesNotMatch(r.page(), /id="adsc-goal-traffic"[^>]*checked/);
+        assert.equal(r.P.buildSpec(r.P.state).goal, 'messages');
+        assert.deepEqual(plain(r.P.buildSpec(r.P.state).destinations), ['instagram']);
+    });
+
+    it('a preset still wins (quick mode, an AI proposal), and a locked or unknown goal falls back to Messages', async () => {
+        const r = await ready();
+        assert.equal(r.P.fresh({ goal: 'traffic' }).goal, 'traffic');
+        assert.equal(r.P.fresh({ goal: 'reach' }).goal, 'reach');
+        assert.equal(r.P.fresh({ goal: 'leads' }).goal, 'messages', 'leads is locked here');
+        assert.equal(r.P.fresh({ goal: 'nonsense' }).goal, 'messages');
+    });
+
+    it('does not move the budget: it is still on the ad set, a total for the whole run', async () => {
+        const r = await ready();
+        assert.equal(r.P.state.home, 'adset');
+        assert.equal(r.P.state.kind, 'lifetime');
+    });
+});
+
 describe('the CampaignSpec', () => {
     it('carries the saved audiences the pickers chose (A8), and no exclusion under a special category', async () => {
         const r = await ready();
@@ -316,6 +343,7 @@ describe('the CampaignSpec', () => {
     it('is the contract\'s shape: a total budget carries its end, a schedule only with a total budget', async () => {
         const r = await ready();
         const st = r.P.state;
+        st.goal = 'traffic';
         Object.assign(st, { name: 'Go', amount: '25', scheduled: true, days: [5, 4], fromHour: '18', toHour: '23', countries: 'eg, sa', ageMin: '22', advantage: false, ageMax: '45' });
         st.placementMode = 'manual';
         st.placements.instagram = ['reels', 'story'];

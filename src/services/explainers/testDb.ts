@@ -208,7 +208,7 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
                 const scenes = world.sceneRows(e.id);
                 return {
                     id: e.id, status: e.status, title: e.title, topic: e.topic, language: e.language, length_tier: e.length_tier, est_seconds: e.draft?.est_seconds ?? null,
-                    updated_at: e.updated_at, thumb_url: scenes.find((s) => s.position === 0)?.picture?.url ?? null,
+                    updated_at: e.updated_at, schedule: e.schedule, thumb_url: scenes.find((s) => s.position === 0)?.picture?.url ?? null,
                     drawn: e.status === 'drawing' ? scenes.filter((s) => s.draw_status === 'done').length : null, total: e.status === 'drawing' ? scenes.length : null,
                 };
             }),
@@ -364,6 +364,10 @@ export function installWorld(opts: { tenant?: string; owner?: string | null } = 
         }],
 
         // scheduled_posts: what `insertVideoPost` writes
+        // scheduled_posts: whether an explainer's posts have gone out (`postedAtOf`)
+        [/^SELECT id, status, scheduled_time FROM scheduled_posts WHERE creator_id = \$1 AND id = ANY\(\$2::uuid\[\]\)$/, (p) => ({
+            rows: world.posts.filter((post) => post.creator_id === p[0] && p[1].includes(post.id)).map((post) => ({ id: post.id, status: post.status, scheduled_time: post.scheduled_time })),
+        })],
         [/^INSERT INTO scheduled_posts \(creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options, first_comment\) VALUES \(\$1, \$2, 'video', \$3, \$4, NULL, \$5, 'PENDING', \$6, \$7, \$8::jsonb, NULL, \$9\) RETURNING \*$/, (p) => {
             const post = {
                 id: world.uuid(), creator_id: p[0], platform: p[1], post_type: 'video', caption: p[2], media_url: p[3], media_urls: null, scheduled_time: p[4], status: 'PENDING',

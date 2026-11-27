@@ -97,7 +97,7 @@ export const STUDIO_SETTINGS = {
             swipe: 'اسحب',
         },
     },
-    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
+    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'], tiktok_default: false },
     library: { root: '/Users/elamir/Desktop/AI Course' },
     examples: null,
     // MONTEUR.md §1. Off until the folder is chosen from the dashboard; the daily run at 07:00 and

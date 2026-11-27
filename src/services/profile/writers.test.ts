@@ -307,7 +307,7 @@ describe('updateStudioSettings with a stored profile: what it does not own', () 
         assert.deepEqual(row.brand.palette, palette, 'brand.palette survived the mirror of the brand section');
         assert.equal(row.brand.direction, 'rtl');
         assert.equal(row.brand.name, 'Elamir Academy', 'and the owned field in the same section is the profile\'s');
-        assert.deepEqual(row.schedule, { timezone: 'Europe/London', slots: ['09:00'] });
+        assert.deepEqual(row.schedule, { timezone: 'Europe/London', slots: ['09:00'], tiktok_default: false });
         assert.deepEqual(row.infographic.platforms, ['facebook']);
         assert.equal(row.infographic.accent, '#AABBCC');
         assert.equal(row.monteur.reels_per_video, 4);

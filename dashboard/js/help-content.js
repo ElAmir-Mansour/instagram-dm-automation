@@ -2978,7 +2978,7 @@ const HelpContent = {
                         ar: [
                             'يرشدك المُنشئ في ثماني خطوات، وهي نفسها أيًّا كان الهدف. لا يعرض في كل خطوة إلا الخيارات التي تقبلها ميتا لهذا الهدف، ومع كل خيار جملة تشرحه.',
                             { ol: [
-                                '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. وهدف **العملاء المحتملون** في القائمة أيضًا، لكنه يظهر **مقفل** حتى يسجّل مدير المنصة اعتمادًا قانونيًا لمساحة عملك: [[ads#lead-ads]].',
+                                '**الهدف:** رسائل، أو وصول، أو تفاعل، أو زيارات لرابط. وهدف **العملاء المحتملون** في القائمة أيضًا، لكنه يظهر **مقفل** حتى يسجّل مدير المنصة اعتمادًا قانونيًا لمساحة عملك: [[ads#lead-ads]]. ويبدأ المُنشئ على **الرسائل** ووجهة إنستجرام، وهي حلقة المنتج نفسها: إعلان ثم رسالة ثم المساعد.',
                                 '**الوجهة:** أين تصل الرسائل (إنستجرام أو ماسنجر أو واتساب)، أو الرابط الذي تُفتح عليه الزيارات. رابط العرض يكون رابطًا متتبَّعًا افتراضيًا حتى تُحسب النقرات.',
                                 '**التصميم:** منشور منشور من قبل، أو صورة أو فيديو ترفعه من جهازك، ومعه نسخة عمودية 9:16 إن شئت.',
                                 '**النص:** النص الأساسي والعنوان وزر الدعوة إلى الإجراء.',
@@ -2993,7 +2993,7 @@ const HelpContent = {
                         en: [
                             'The builder takes you through eight steps, the same whatever the goal. Each step offers only the choices Meta accepts for that goal, each with a one-line explanation.',
                             { ol: [
-                                '**Goal:** messages, reach, engagement or traffic to a link. **Leads** is on the list too, but it shows **Locked** until the platform admin records a legal sign-off for your workspace: [[ads#lead-ads]].',
+                                '**Goal:** messages, reach, engagement or traffic to a link. **Leads** is on the list too, but it shows **Locked** until the platform admin records a legal sign-off for your workspace: [[ads#lead-ads]]. The builder starts on **Messages** with an Instagram destination, the product’s own loop: an ad, then a message, then the assistant.',
                                 '**Destination:** where messages arrive (Instagram, Messenger or WhatsApp), or the link the traffic opens. An offer link is a tracked link by default, so its clicks are counted.',
                                 '**Creative:** a post you already published, or an image or video uploaded from your computer, with an optional 9:16 version.',
                                 '**Text:** the primary text, the headline and the call-to-action button.',
@@ -4534,6 +4534,7 @@ const HelpContent = {
                     title: { ar: 'خيارات تيك توك', en: 'The TikTok choices' },
                     body: {
                         ar: [
+                            'يبدأ المربع على **بلا نشر على تيك توك** ما لم تفعّل **الإرسال إلى تيك توك افتراضياً** في إعدادات الاستوديو، وعندها يبدأ على الإرسال.',
                             { dl: [
                                 ['إضافة إلى طابور تيك توك', 'ما دام تيك توك ما اعتمد التطبيق: الكاروسيل ينتظر، وتنشره بعدين مع غيره بدفعة وحدة.'],
                                 ['النشر على تيك توك في الموعد نفسه', 'يظهر بعد ما يعتمد تيك توك التطبيق، وينزل مع منشور إنستجرام.'],
@@ -4541,6 +4542,7 @@ const HelpContent = {
                             ] },
                         ],
                         en: [
+                            'The dialog starts on **Don’t post to TikTok** unless you switch on **Send to TikTok by default** in the Studio settings; then it starts on sending.',
                             { dl: [
                                 ['Queue for TikTok', 'While TikTok hasn’t approved the app: the carousel waits, and you post it later in one batch with the others.'],
                                 ['Post to TikTok at the same time', 'Offered once TikTok has approved the app; it goes out with the Instagram post.'],
@@ -4723,12 +4725,14 @@ const HelpContent = {
                             { dl: [
                                 ['المنطقة الزمنية', 'المواعيد اليومية بتوقيت هذي المنطقة، مثل `Europe/London`.'],
                                 ['المواعيد اليومية', 'الأوقات اللي ينزل فيها منشور كل يوم، مثل 13:00 و21:00. **أضف موعداً** يضيف وقتاً، ولازم يبقى وقت واحد على الأقل. والجدولة تقترح عليك أقرب موعد فاضي، منشوراً واحداً لكل موعد.'],
+                                ['الإرسال إلى تيك توك افتراضياً', 'متوقف في البداية: يبدأ مربع الجدولة على «بلا نشر على تيك توك». فعّله إن كنت تريد أن يبدأ على الإرسال (الطابور، أو الموعد نفسه بعد اعتماد التطبيق). ويمكنك دائماً تغيير الاختيار لكل منشور.'],
                             ] },
                         ],
                         en: [
                             { dl: [
                                 ['Time zone', 'The daily slots are times in this zone, such as `Europe/London`.'],
                                 ['Daily slots', 'The times a post goes out each day, such as 13:00 and 21:00. **Add slot** adds one; at least one must stay. Scheduling offers you the next free slot, one post per slot.'],
+                                ['Send to TikTok by default', 'Off at first: the Schedule dialog starts on “Don’t post to TikTok”. Turn it on if you want it to start on sending (the queue, or the same time once the app is approved). You can always change the choice per post.'],
                             ] },
                         ],
                     },
@@ -4882,7 +4886,7 @@ const HelpContent = {
                                 ['**شغّله كل يوم**', 'مفعّل: يشتغل لحاله في **وقت التشغيل** بتوقيت مساحتك. ولو الماك نايم وقتها يشتغل أول ما يصحى. متوقف: ما في تشغيل يومي، و**شغّل الآن** يبقى شغّالاً.'],
                                 ['**شغّل الآن**', 'يقرأ المجلد من فوره، سواء كان التشغيل اليومي مفعّلاً أو لا. يحتاج مجلداً (أو دروساً باقية)، ويتعطّل الزر وفي تشغيل منتظر بالفعل.'],
                             ] },
-                            'الشريط تحت التبويبات يقول لك إن كان التشغيل اليومي مفعّلاً، ومتى التشغيل القادم، وايش لقى آخر تشغيل (مثل «فيديوهان جديدان»)، وإن كان العامل متصلاً. وقسم **الفيديوهات** (تحت قائمة المراجعة) يعرض كل فيديو ووين وصل:',
+                            'الشريط تحت التبويبات يقول لك إن كان التشغيل اليومي مفعّلاً، ومتى التشغيل القادم، وايش لقى آخر تشغيل (مثل «فيديوهان جديدان»)، وإن كان العامل متصلاً. وإذا كان المصدر **مكتبة الكورس** وصار لكل درس فيها ريلزه، تتحول حالة التشغيل إلى شارة برتقالية **لا جديد لقصّه** بدل «مفعّل»، لأن التشغيل اليومي لن يجد ما يقصّه: أضف فيديوهات، أو انتقل إلى مجلد. وقسم **الفيديوهات** (تحت قائمة المراجعة) يعرض كل فيديو ووين وصل:',
                             { dl: [
                                 ['تفريغ الكلام', 'العامل يسمع الفيديو ويكتب كلامه.'],
                                 ['بانتظار القص', 'الكلام جاهز وينتظر اختيار اللحظات.'],
@@ -4899,7 +4903,7 @@ const HelpContent = {
                                 ['**Run every day**', 'On: it runs by itself at **Run at**, in your workspace’s time zone. If the Mac is asleep then, it runs as soon as it wakes. Off: no daily run, and **Run now** still works.'],
                                 ['**Run now**', 'Reads the folder straight away, whether the daily run is on or not. It needs a folder (or lessons left), and the button is off while a run is already waiting.'],
                             ] },
-                            'The strip under the tabs says whether the daily run is on, when the next run is, what the last run found (such as “2 new videos”) and whether the worker is online. The **Videos** section (below the review queue) lists each video and where it has got to:',
+                            'The strip under the tabs says whether the daily run is on, when the next run is, what the last run found (such as “2 new videos”) and whether the worker is online. If the source is **The course library** and every lesson in it already has its reels, the daily-run status turns into an amber **Nothing new to cut** pill instead of “on”, because the daily run will find nothing to cut: add videos, or switch to a folder. The **Videos** section (below the review queue) lists each video and where it has got to:',
                             { dl: [
                                 ['Transcribing', 'The worker listens to the video and writes down what is said.'],
                                 ['Waiting to be cut', 'The words are ready and wait for the moments to be picked.'],
@@ -5550,7 +5554,7 @@ const HelpContent = {
                                 ['لينكدإن', 'ليس تلقائيًا: استخدم [[explainers#linkedin]].'],
                             ] },
                             'لكل منصة وصفها الخاص، وتعدّله في خطوة النص. وإن كان مقطع الموسيقى يشترط الإسناد أُضيف سطره إلى كل وصف تلقائيًا.',
-                            'بعد الجدولة تعرض الخطوة حالة كل منشور ورابطه حين يُنشر، وفي صفحة **الجدولة** تجد كل شيء.',
+                            'بعد الجدولة تعرض الخطوة حالة كل منشور ورابطه حين يُنشر، وفي صفحة **الجدولة** تجد كل شيء. وحين يُنشر كل منشور منها تصير الحالة **نُشر** مع التاريخ بدل **مجدول**.',
                             { note: 'تُسجَّل الجدولة على الملفات كما هي لحظة الضغط. إن عدّلت بعدها فجهّز فيديو جديدًا قبل الجدولة التالية.' },
                         ],
                         en: [
@@ -5562,7 +5566,7 @@ const HelpContent = {
                                 ['LinkedIn', 'Not automatic: use [[explainers#linkedin]].'],
                             ] },
                             'Each platform has its own caption, and you edit it in the script step. If the music track asks for credit, its line is added to every caption automatically.',
-                            'After scheduling, the step shows each post’s status and its link once it is published, and the **Scheduler** page holds everything.',
+                            'After scheduling, the step shows each post’s status and its link once it is published, and the **Scheduler** page holds everything. Once every one of its posts is published, the status reads **Posted** with the date instead of **Scheduled**.',
                             { note: 'Scheduling takes the files as they are when you press the button. If you edit afterwards, render again before you schedule again.' },
                         ],
                     },

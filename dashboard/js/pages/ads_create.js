@@ -100,7 +100,8 @@ const AdsCreatePage = {
         const st = {
             step: 0,
             name: p.name || '',
-            goal: p.goal && this.GOALS.includes(p.goal) && !this.goalLocked(p.goal) ? p.goal : 'traffic',
+            // Messages by default: the product's own loop (ad -> DM -> assistant -> hand-off), with Instagram as the destination below. "Visits to a link" is one tap away.
+            goal: p.goal && this.GOALS.includes(p.goal) && !this.goalLocked(p.goal) ? p.goal : 'messages',
             destinations: ['instagram'],
             optimization: '',
             link: { mode: 'offer', offerId: '', url: '' },

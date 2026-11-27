@@ -15,7 +15,7 @@ import { nextFreeSlots } from '../studio/slots.js';
 import { workerSummary } from '../studio/worker.js';
 import { log } from '../../utils/log.js';
 import { STALE_RUN_MS, THINKING_RUN } from './analyst.js';
-import { nextRunAt } from './daily.js';
+import { courseExhausted, nextRunAt } from './daily.js';
 import { RETIRE_SOURCE_THINKS_SQL, sourceThinkPattern } from './think.js';
 
 export const MAX_SOURCES_SHOWN = 30;
@@ -89,6 +89,11 @@ export interface MonteurView {
     timezone: string;
     /** ISO; null when the Monteur is off, or takes videos from a folder and has none. */
     next_run: string | null;
+    /**
+     * True in course mode when every lesson of the course library already has its reels (or the library is empty): the daily run then
+     * queues nothing, and `next_run` is a time at which nothing will happen. The page shows an amber "nothing new to cut" instead.
+     */
+    course_exhausted: boolean;
     /** The latest scan to finish; `error` is a failed one's message (a folder outside the allowed roots, say). */
     last_scan: { at: string; added: number; skipped: number; missing: boolean; error: string | null } | null;
     worker: { online: boolean; lastSeen: string | null; name: string | null };
@@ -248,7 +253,7 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
     const timezone = settings.schedule.timezone;
     // A scheduled reel whose posts are gone is back in review before the page is read.
     await releaseOrphanedClips(pool, creatorId);
-    const [lastScan, open, worker, slots, sources, clips, lessons, privacy] = await Promise.all([
+    const [lastScan, open, worker, slots, sources, clips, lessons, privacy, exhausted] = await Promise.all([
         pool.query<{ updated_at: Date; status: string; result: Record<string, unknown> | null; error: string | null }>(
             `SELECT updated_at, status, result, error FROM studio_jobs
               WHERE creator_id = $1 AND kind = 'monteur_scan' AND status IN ('done', 'failed')
@@ -280,6 +285,7 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
         ),
         lessonsView(creatorId, now),
         tiktokPrivacyNow(m),
+        courseExhausted(pool, creatorId, m),
     ]);
     const scan = lastScan.rows[0];
     const result = scan?.result ?? {};
@@ -289,6 +295,7 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
         timezone,
         // A course run needs no folder: its videos are the library's lessons.
         next_run: m.enabled && (m.source === 'course' || m.folder) ? new Date(nextRunAt(now, m.run_at, timezone)).toISOString() : null,
+        course_exhausted: exhausted,
         last_scan: scan
             ? {
                 at: toIso(scan.updated_at)!,

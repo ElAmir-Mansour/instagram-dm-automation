@@ -255,6 +255,32 @@ describe('getExplainer and listExplainers', () => {
         assert.equal((items[0] as unknown as Record<string, unknown>).draft, undefined, 'a summary, not the draft');
     });
 
+    it('says when it was posted once EVERY post of a scheduled explainer is published, in the view and in the list', async () => {
+        const post = (n: number, status: string, at: string) => world.posts.push({ id: id(n), creator_id: TENANT, platform: 'instagram', status, scheduled_time: at });
+        post(5, 'PUBLISHED', '2026-11-20T10:00:00.000Z');
+        post(6, 'PUBLISHED', '2026-11-20T10:05:00.000Z');
+        draftExplainer({ status: 'scheduled', schedule: { scheduled_time: '2026-11-20T10:00:00.000Z', group_id: id(7), row_ids: [id(5), id(6)] } });
+        assert.equal((await getExplainer(TENANT, EXPLAINER)).posted_at, '2026-11-20T10:05:00.000Z');
+        assert.equal((await listExplainers(TENANT)).find((i) => i.id === EXPLAINER)!.posted_at, '2026-11-20T10:05:00.000Z');
+        assert.equal((await listExplainers(TENANT))[0]!.status, 'scheduled', 'the state machine has no later step');
+    });
+
+    it('is not posted while one post is still to go or failed, or a post is gone, or the explainer is not scheduled', async () => {
+        world.posts.push({ id: id(5), creator_id: TENANT, platform: 'instagram', status: 'PUBLISHED', scheduled_time: '2026-11-20T10:00:00.000Z' });
+        world.posts.push({ id: id(6), creator_id: TENANT, platform: 'youtube', status: 'PENDING', scheduled_time: '2026-11-21T10:00:00.000Z' });
+        draftExplainer({ status: 'scheduled', schedule: { scheduled_time: '2026-11-20T10:00:00.000Z', group_id: id(7), row_ids: [id(5), id(6)] } });
+        assert.equal((await getExplainer(TENANT, EXPLAINER)).posted_at, null, 'one is pending');
+        world.posts[1]!.status = 'FAILED';
+        assert.equal((await getExplainer(TENANT, EXPLAINER)).posted_at, null, 'one failed');
+        world.posts[1]!.status = 'PUBLISHED';
+        assert.ok((await getExplainer(TENANT, EXPLAINER)).posted_at, 'both out');
+        world.posts.pop();
+        assert.equal((await getExplainer(TENANT, EXPLAINER)).posted_at, null, 'a post deleted from the Scheduler is not a posted one');
+        world.explainers.set(EXPLAINER, { ...world.explainer(), status: 'ready' });
+        world.posts.push({ id: id(6), creator_id: TENANT, platform: 'youtube', status: 'PUBLISHED', scheduled_time: '2026-11-21T10:00:00.000Z' });
+        assert.equal((await getExplainer(TENANT, EXPLAINER)).posted_at, null, 'only a scheduled explainer');
+    });
+
     it('reading a writing explainer whose Mac job has sat unclaimed for ten minutes hands the work to Gemini (the lazy check), and starts a run', async () => {
         const job = world.addJob({ id: JOB, kind: 'explainer_write', status: 'pending', payload: { explainer_id: EXPLAINER }, created_at: new Date(Date.now() - 11 * 60_000) });
         world.addExplainer({ status: 'writing', job_id: job.id, title: null, draft: null, draft_version: 0 });

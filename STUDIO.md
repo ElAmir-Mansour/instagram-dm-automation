@@ -327,7 +327,7 @@ type CtaConfig = {
     swipe: string;            // 'اسحب'
   };
 };
-type ScheduleConfig = { timezone: string; slots: string[] };      // 'Asia/Riyadh', ['13:00','21:00']
+type ScheduleConfig = { timezone: string; slots: string[]; tiktok_default: boolean };  // 'Asia/Riyadh', ['13:00','21:00'], false
 type LibraryConfig = { root: string | null };                     // folder the worker scans; null = not set
 type StudioSettings = { brand; voice; product; cta; schedule; library; examples: ExampleCarousel[] | null };
 ```
@@ -350,6 +350,7 @@ product). ElAmir's tenant gets today's exact values from a seed script run once 
   `cta.instagramAsk` with the keyword filled, and the TikTok caption contains `cta.tiktokLine`
   (not hardcoded «البايو»); Arabic-digit checks apply only when `voice.digits = 'arabic-indic'`.
 - **Slots**: `/slots` uses `schedule.timezone` + `schedule.slots`.
+- **TikTok default**: `schedule.tiktok_default` (default `false`) is what the carousel Schedule dialog pre-selects: "Don't post to TikTok", or, when on, the inbox queue (the same time once TikTok has audited the app). Not a profile-owned path (`STUDIO_PROFILE_PATHS` has only `schedule.timezone`), so it is stored in the row and a profile save never reverts it.
 - **Scan**: `scan_library` payload root = `library.root` (400 "set your library folder first" when null).
 - **Render**: `render_carousel` payload adds `brand: BrandKit`, `cta: CtaConfig['slide']`, `facts: string[]`.
   The templates read colors, fonts, signature, direction and every CTA word from these (a `BrandContext`

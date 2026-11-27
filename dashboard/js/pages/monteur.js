@@ -315,6 +315,8 @@ const MonteurPage = {
             settings: this.normalizeConfig(v.settings),
             timezone: typeof v.timezone === 'string' ? v.timezone : '',
             next_run: typeof v.next_run === 'string' && v.next_run ? v.next_run : null,
+            // Course mode with every lesson already cut: the daily run does nothing, so the strip must not promise a next run.
+            course_exhausted: v.course_exhausted === true,
             last_scan: lastScan.at ? lastScan : null,
             worker: {
                 online: worker.online === true,
@@ -616,9 +618,21 @@ const MonteurPage = {
         if (el && el.classList) el.classList.toggle('hidden', !!hidden);
     },
 
+    /**
+     * The header's subtitle follows the saved mode: "You approve each one" is true only in review mode. The shell writes the
+     * neutral `page.monteur.subtitle` first; this adds the sentence for the mode once the view is known.
+     */
+    paintSubtitle() {
+        const el = document.getElementById('page-subtitle');
+        if (!el || !this.view) return;
+        const mode = this.view.settings.mode === 'auto' ? 'auto' : 'review';
+        el.textContent = `${t('page.monteur.subtitle')} ${t(`monteur.subtitle.${mode}`)}`;
+    },
+
     paintPage() {
         const container = document.getElementById('page-container');
         if (!container) return;
+        this.paintSubtitle();
         const focus = UI.captureFocus(container);
         this._painted = {};
         this._folderMoved = false;
@@ -653,6 +667,7 @@ const MonteurPage = {
             this.paintPage();
             return;
         }
+        this.paintSubtitle();
         this.paintStatus();
         this.refreshQueue();
         this.refreshSources();
@@ -750,9 +765,12 @@ const MonteurPage = {
         const name = this.workerName();
         // The course library needs no folder: its videos are the lessons.
         const noFolder = s.source === 'folder' && !s.folder;
+        // On, from the course library, and nothing left in it: an amber "nothing new to cut", never a green "on" with a next run.
+        const exhausted = s.enabled && s.source === 'course' && v.course_exhausted === true;
         let next;
         if (noFolder) next = t('monteur.run.noFolder');
         else if (!s.enabled) next = t('monteur.run.offNote');
+        else if (exhausted) next = t('monteur.run.exhausted');
         else if (v.next_run) next = t('monteur.run.next', { when: this.zoneLabel(v.next_run) });
         else next = t('monteur.run.nextUnknown');
         const last = v.last_scan ? UI.relativeAge(v.last_scan.at) : null;
@@ -760,12 +778,15 @@ const MonteurPage = {
         let runTitle = '';
         if (noFolder) runTitle = t('monteur.run.nowNoFolder');
         else if (scanning) runTitle = t('monteur.run.queuedAlready');
+        else if (exhausted) runTitle = t('monteur.run.exhausted');
+        const pillClass = exhausted ? 'health-warn' : s.enabled ? 'health-fresh' : 'health-off';
+        const pillText = exhausted ? t('monteur.run.exhaustedPill') : s.enabled ? t('monteur.run.on') : t('monteur.run.off');
         return html`
             <div class="studio-status-item">
                 <p class="studio-status-head">
-                    <span class="health-pill ${s.enabled ? html.raw('health-fresh') : html.raw('health-off')}" id="mt-run-pill">
+                    <span class="health-pill ${html.raw(pillClass)}" id="mt-run-pill">
                         <span class="health-dot" aria-hidden="true"></span>
-                        ${s.enabled ? t('monteur.run.on') : t('monteur.run.off')}
+                        ${pillText}
                     </span>
                 </p>
                 <p class="text-meta" id="mt-next-run">${next}</p>
@@ -780,7 +801,7 @@ const MonteurPage = {
                 <div class="row row--wrap gap-2">
                     ${UI.button({
                         variant: 'secondary', size: 'sm', icon: 'play', label: t('monteur.run.now'),
-                        action: 'monteur:runNow', id: 'mt-run-now', disabled: noFolder || scanning, title: runTitle,
+                        action: 'monteur:runNow', id: 'mt-run-now', disabled: noFolder || scanning || exhausted, title: runTitle,
                     })}
                     ${UI.helpLink('monteur', t('help.link.monteur'))}
                 </div>

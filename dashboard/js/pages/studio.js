@@ -2679,6 +2679,17 @@ const StudioPage = {
         return !this.draft || this.draft.status === 'scheduled' || !this.work || !this.work.carousel;
     },
 
+    /**
+     * What the Schedule dialog pre-selects for TikTok: "Don't post to TikTok" unless the owner switched "Send to TikTok by default" on
+     * (Settings → Schedule, `schedule.tiktok_default`, off by default: the owner posts TikTok by hand). On, it is the inbox queue, or the same
+     * time once TikTok has audited the app. A page that has not read the settings yet pre-selects nothing to send.
+     */
+    tiktokDefaultChoice() {
+        const on = !!(this.settings && this.settings.schedule && this.settings.schedule.tiktok_default === true);
+        if (!on) return 'none';
+        return this.tiktokAudited() ? 'scheduled' : 'queue';
+    },
+
     tiktokAudited() {
         return !!(this.status && this.status.tiktok && this.status.tiktok.audited === true);
     },
@@ -3932,8 +3943,7 @@ const StudioPage = {
     /** The form's current choice, for the summary; the same reading Schedule itself makes. */
     scheduleChoice() {
         const form = document.getElementById('studio-schedule-form');
-        const audited = this.tiktokAudited();
-        const fallback = { when: this.defaultSlot() === 'custom' ? null : this.defaultSlot(), tiktok: audited ? 'scheduled' : 'queue', campaign: !!(this.work && this.work.campaign && this.work.campaign.create) };
+        const fallback = { when: this.defaultSlot() === 'custom' ? null : this.defaultSlot(), tiktok: this.tiktokDefaultChoice(), campaign: !!(this.work && this.work.campaign && this.work.campaign.create) };
         if (!form || typeof FormData === 'undefined' || typeof form.querySelector !== 'function') return fallback;
         const read = this.readSchedule(form);
         if (read.ok) return { when: read.body.scheduled_time, tiktok: read.body.tiktok, campaign: read.body.create_campaign };
@@ -3967,7 +3977,7 @@ const StudioPage = {
         const planned = this.plannedSlots[String(this.draftId)];
         const chosen = this.defaultSlot();
         const create = !!(this.work && this.work.campaign && this.work.campaign.create);
-        const tiktokDefault = audited ? 'scheduled' : 'queue';
+        const tiktokDefault = this.tiktokDefaultChoice();
         const zone = this.scheduleZone();
         const device = this.deviceZone();
         const radio = (value, label, hint) => html`
@@ -5428,7 +5438,7 @@ const StudioPage = {
                 dmTemplate: str(cta.dmTemplate, ''),
                 slide: slideWords,
             },
-            schedule: { ...schedule, timezone: str(schedule.timezone, 'UTC'), slots: list(schedule.slots) },
+            schedule: { ...schedule, timezone: str(schedule.timezone, 'UTC'), slots: list(schedule.slots), tiktok_default: schedule.tiktok_default === true },
             library: { ...library, root: typeof library.root === 'string' && library.root.trim() ? library.root : null },
         };
     },
@@ -5528,7 +5538,7 @@ const StudioPage = {
         const hintId = o.hint ? `${id}-hint` : '';
         const problems = this.settingProblems(o.path);
         const described = [hintId, problems.length ? `${id}-problems` : ''].filter(Boolean).join(' ');
-        const attrs = html` id="${id}" data-path="${o.path}"${described ? html` aria-describedby="${described}"` : ''}${problems.length ? html.raw(' aria-invalid="true"') : ''}`;
+        const attrs = html` id="${id}" data-path="${o.path}"${o.kind ? html` data-kind="${o.kind}"` : ''}${described ? html` aria-describedby="${described}"` : ''}${problems.length ? html.raw(' aria-invalid="true"') : ''}`;
         let control;
         if (o.options) {
             control = html`
@@ -5815,6 +5825,13 @@ const StudioPage = {
                 path: 'schedule.slots', type: 'time', label: t('studio.settings.slots'), itemLabel: t('studio.settings.slot'),
                 addLabel: t('studio.settings.addSlot'), hint: t('studio.settings.slotsHint'),
             })}
+            ${this.settingField({
+                path: 'schedule.tiktok_default', kind: 'bool', label: t('studio.settings.tiktokDefault'), hint: t('studio.settings.tiktokDefaultHint'),
+                options: [
+                    { value: 'false', label: t('studio.settings.tiktokDefaultOff') },
+                    { value: 'true', label: t('studio.settings.tiktokDefaultOn') },
+                ],
+            })}
         `;
     },
 
@@ -5869,6 +5886,8 @@ const StudioPage = {
             const hex = document.getElementById(el.dataset.hex || '');
             if (hex) hex.textContent = value;
         }
+        // A yes/no setting is a select of 'true' / 'false': the server wants the boolean.
+        if (el.dataset.kind === 'bool') value = value === 'true';
         // An emptied folder is "not set", which the server and the Scan button read as null.
         if (path === 'library.root') value = value.trim() ? value : null;
         this.setPath(this.settingsWork, path, value);

@@ -548,3 +548,38 @@ describe('no Studio page prints a server message as the sentence (T054 ratchet)'
         }
     });
 });
+
+// ─── New infographic: the language and theme come from the brand's own defaults (CP-S11) ────────────
+
+describe('New infographic preselects the language and theme of the infographic settings, not Arabic + both', () => {
+    /** The value of the `selected` option inside the `<select name=…>` of the form. */
+    const chosen = (markup: string, name: string): string => {
+        const select = (new RegExp(`<select[^>]*name="${name}"[^>]*>([\\s\\S]*?)</select>`).exec(markup) || [])[1] ?? '';
+        return (/<option value="(\w+)"\s+selected/.exec(select) || [])[1] ?? '';
+    };
+
+    for (const lang of ['en', 'ar'] as const) {
+        it(`English and light in the settings: the form starts on English and light (${lang} interface)`, () => {
+            const w = dialog(lang);
+            w.P.brand = w.P.normalizeBrand({ language: 'en', theme: 'light', platforms: ['instagram'] });
+            const form = String(w.P.newFormMarkup());
+            assert.equal(chosen(form, 'language'), 'en');
+            assert.equal(chosen(form, 'theme'), 'light', 'one theme, the brand’s default: not "both"');
+        });
+    }
+
+    it('Arabic and dark in the settings: Arabic and dark; settings not read yet: the page’s own defaults, still one theme', () => {
+        const w = dialog('en');
+        w.P.brand = w.P.normalizeBrand({ language: 'ar', theme: 'dark' });
+        assert.deepEqual([chosen(String(w.P.newFormMarkup()), 'language'), chosen(String(w.P.newFormMarkup()), 'theme')], ['ar', 'dark']);
+        w.P.brand = null;
+        assert.equal(chosen(String(w.P.newFormMarkup()), 'theme'), 'dark');
+    });
+
+    it('"Both themes" is still a choice, only no longer the starting one', () => {
+        const w = dialog('en');
+        const form = String(w.P.newFormMarkup());
+        assert.match(form, /<option value="both"\s*>/);
+        assert.notEqual(chosen(form, 'theme'), 'both');
+    });
+});

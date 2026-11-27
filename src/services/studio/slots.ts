@@ -47,7 +47,7 @@ export function zonedTimeToUtc(
 }
 
 /** Every slot instant after `fromMs`, for `days` local days starting with today, ascending. */
-export function candidateSlots(schedule: ScheduleConfig, fromMs: number, days: number): number[] {
+export function candidateSlots(schedule: Pick<ScheduleConfig, 'timezone' | 'slots'>, fromMs: number, days: number): number[] {
     const times = [...schedule.slots].sort().map((slot) => slot.split(':').map(Number) as [number, number]);
     const today = new Date(fromMs + zoneOffsetMs(fromMs, schedule.timezone));
     const out: number[] = [];
@@ -99,7 +99,7 @@ export const SLOT_HOLDING_ROWS = `(p.platform IN ('instagram', 'facebook', 'both
                 SELECT 1 FROM scheduled_posts m WHERE m.group_id = p.group_id AND m.platform IN ('instagram', 'facebook', 'both')))))`;
 
 export async function nextFreeSlots(
-    creatorId: string, schedule: ScheduleConfig, count: number, now: number = Date.now(), opts: SlotOptions = {}
+    creatorId: string, schedule: Pick<ScheduleConfig, 'timezone' | 'slots'>, count: number, now: number = Date.now(), opts: SlotOptions = {}
 ): Promise<string[]> {
     const until = now + (HORIZON_DAYS + 1) * DAY_MS;
     const exec = opts.exec ?? pool;
