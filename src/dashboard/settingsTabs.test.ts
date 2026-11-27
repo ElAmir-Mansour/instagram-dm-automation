@@ -1,5 +1,5 @@
 /**
- * Settings in tabs, with the connections health first (UX US10: audit SE-02, SE-04, SE-05, SE-08, SE-09, SE-13, SE-15, ST-02).
+ * Settings in tabs by job, with the channels' health first (UX US10: audit SE-02, SE-04, SE-05, SE-08, SE-09, SE-13, SE-15, ST-02; U3: SA-10, WA-3).
  *
  * The REAL `settings.js`, `meta_connect.js` and `app.js` in the shared `node:vm` harness, in both languages. There is no layout and no real
  * DOM here, so the parts that touch elements (unsaved edits, the carry-over of a card, the tab marks) are driven with small fake elements
@@ -105,31 +105,76 @@ const rowFor = (rows: Json[], id: string): Json => rows.find((row) => row.id ===
 
 // ─── The map ────────────────────────────────────────────────────────────────────────────────────
 
-describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
-    it('a platform admin has five tabs, in this order; a tenant owner three; a member two', () => {
+describe('Settings tabs: who sees which tab and which card (SE-05, U3)', () => {
+    /** The cards of a company workspace: no TikTok, YouTube, WhatsApp or Ads (the five modules of the company preset). */
+    const COMPANY = ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'];
+    const asCompany = (loaded: ReturnType<typeof load>) => { loaded.h.App.hasModule = (id: string) => COMPANY.includes(id); return loaded; };
+
+    it('a platform admin has six tabs, in this order; a workspace owner four; an operator and a viewer three', () => {
         const ids = (role: Role) => Array.from<Json>(load('en', role).Settings.visibleGroups()).map((g) => g.id);
-        assert.deepEqual(ids('admin'), ['connections', 'messages', 'appearance', 'advanced', 'platform']);
-        assert.deepEqual(ids('owner'), ['connections', 'messages', 'appearance']);
-        assert.deepEqual(ids('member'), ['connections', 'appearance'], 'a tab with no card for the viewer is not shown');
+        assert.deepEqual(ids('admin'), ['channels', 'team', 'notifications', 'you', 'advanced', 'platform']);
+        assert.deepEqual(ids('owner'), ['channels', 'team', 'notifications', 'you']);
+        assert.deepEqual(ids('member'), ['channels', 'notifications', 'you'], 'a tab with no card for the viewer is not shown');
     });
 
-    it('each card is in the tab the owner named, and the developer cards are the platform admin\'s alone', () => {
+    it('each card is in the tab the contract named (§4.3), and the developer cards are the platform admin\'s alone', () => {
         const { Settings } = load('en', 'admin');
+        Settings.moduleOn = () => true;
         const where = (group: string): string[] => Array.from<Json>(Settings.visibleCards(group)).map((c) => c.id);
-        assert.deepEqual(where('connections'), ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads']);
-        assert.deepEqual(where('messages'), ['iceb', 'cleanup', 'alerts']);
-        assert.deepEqual(where('appearance'), ['appearance']);
+        assert.deepEqual(where('channels'), ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads']);
+        assert.deepEqual(where('team'), ['team']);
+        assert.deepEqual(where('notifications'), ['notify-me', 'notify-routing', 'cleanup']);
+        assert.deepEqual(where('you'), ['appearance'], 'the sign-in card is for a person with an account of their own');
         assert.deepEqual(where('advanced'), ['token', 'webhook', 'account']);
-        assert.deepEqual(where('platform'), ['meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding']);
+        assert.deepEqual(where('platform'), ['alerts', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding']);
         const owner = load('en', 'owner').Settings;
         const ownerCards = Array.from<Json>(owner.visibleGroups()).flatMap((g) => Array.from<Json>(owner.visibleCards(g.id)).map((c) => c.id));
         for (const developer of ['token', 'webhook', 'account', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding', 'alerts']) {
-            assert.equal(ownerCards.includes(developer), false, `a tenant owner never sees ${developer}`);
+            assert.equal(ownerCards.includes(developer), false, `a workspace owner never sees ${developer}`);
         }
-        assert.ok(ownerCards.includes('iceb'), 'the owner keeps their ice breakers');
-        assert.ok(ownerCards.includes('cleanup'), 'and the 30-day clean-up (U2)');
+        assert.ok(ownerCards.includes('team'), 'the owner has the team');
+        assert.ok(ownerCards.includes('cleanup'), 'and the 30-day clean-up (U2), now under Notifications');
+        assert.equal(ownerCards.includes('iceb'), false, 'ice breakers moved to the DM assistant page');
         const member = load('en', 'member').Settings;
-        assert.equal(Array.from<Json>(member.visibleCards('messages')).length, 0, 'an operator has nothing in Messages, the clean-up included');
+        const memberCards = Array.from<Json>(member.visibleGroups()).flatMap((g) => Array.from<Json>(member.visibleCards(g.id)).map((c) => c.id));
+        assert.deepEqual(memberCards, ['meta', 'tiktok', 'youtube', 'whatsapp', 'notify-me', 'appearance'], 'an operator or a viewer: the channels\' status, how they are told, language and theme');
+    });
+
+    it('the owner\'s Settings cards are all still reachable: every card of the old Settings is in a tab an owner or an admin has (U3 mutation guard)', () => {
+        // The cards before U3, by id. Each must still be a card, in a tab the right person has, so moving the map cannot lose one.
+        const before = ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads', 'iceb', 'cleanup', 'alerts', 'appearance', 'token', 'webhook', 'account', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding'];
+        const admin = load('en', 'admin').Settings;
+        const reachable = new Set(Array.from<Json>(admin.visibleGroups()).flatMap((g) => Array.from<Json>(admin.visibleCards(g.id)).map((c) => c.id)));
+        const moved = Object.keys(plain(admin.MOVED_CARDS));
+        for (const id of before) assert.ok(reachable.has(id) || moved.includes(id), `${id} is still reachable (a card, or moved to another page)`);
+        // And the owner's: everything of the old Settings an owner had.
+        const owner = load('en', 'owner').Settings;
+        const ownerHas = new Set(Array.from<Json>(owner.visibleGroups()).flatMap((g) => Array.from<Json>(owner.visibleCards(g.id)).map((c) => c.id)));
+        for (const id of ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads', 'cleanup', 'appearance']) assert.ok(ownerHas.has(id), `the owner still has ${id}`);
+        assert.ok(moved.includes('iceb'), 'the owner\'s ice breakers moved to the DM assistant page');
+    });
+
+    it('a company workspace has no TikTok, YouTube, WhatsApp or Ads card, and no health row for them (I4)', async () => {
+        const api = { getTokenStatus: async () => VALID, getMetaConnection: async () => META, getTenantHealth: async () => null, getTeam: async () => ({ members: [], invites: [] }), getAutoArchive: async () => ({ enabled: true, days: 30, minDays: 7, maxDays: 365, defaultDays: 30 }) };
+        const company = asCompany(load('en', 'owner', { api }));
+        const cards = Array.from<Json>(company.Settings.visibleGroups()).flatMap((g) => Array.from<Json>(company.Settings.visibleCards(g.id)).map((c) => c.id));
+        for (const gone of ['tiktok', 'youtube', 'whatsapp', 'ads']) assert.equal(cards.includes(gone), false, `${gone} card is not in the map for this workspace`);
+        const ids = Array.from<Json>(company.Settings.connectionRows(ctxOf({ isAdmin: false }))).map((row) => row.id);
+        assert.deepEqual(ids, ['meta'], 'one row: Instagram & Facebook');
+        await company.Settings.render();
+        await settle();
+        const html = company.container.innerHTML;
+        for (const gone of ['tiktok', 'youtube', 'whatsapp', 'ads']) {
+            assert.equal(html.includes(`data-settings-card="${gone}"`), false, `${gone}: not on the page`);
+            assert.equal(html.includes(`data-row="${gone}"`), false, `${gone}: no row`);
+        }
+        assert.ok(html.includes('data-settings-card="meta"') && html.includes('data-row="meta"'));
+        // Not asked for either: a module that is off is not called (the server would answer 404 MODULE_OFF).
+        const asked: string[] = [];
+        const probe = asCompany(load('en', 'owner', { api: { ...api, getTikTokConnection: async () => { asked.push('tiktok'); return TIKTOK; }, getYouTubeConnection: async () => { asked.push('youtube'); return YOUTUBE; }, getWhatsAppConnection: async () => { asked.push('whatsapp'); return WHATSAPP; }, getAdsSettings: async () => { asked.push('ads'); return {}; } } }));
+        await probe.Settings.render();
+        await settle();
+        assert.deepEqual(asked, [], 'no request to a module that is off');
     });
 
     it('every card names its tab, is in exactly one, and the platform ones carry the all-workspaces badge', () => {
@@ -141,7 +186,8 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
         for (const card of cards) assert.ok(groups.has(card.group), `${card.id} is in a known tab`);
         for (const card of cards.filter((c) => c.group === 'platform')) assert.equal(card.platform, true, `${card.id} is badged`);
         assert.equal(Settings.GROUPS.find((g: Json) => g.id === 'platform').platform, true);
-        assert.equal(cards.find((c) => c.id === 'alerts')!.platform, true, 'handoff alerts are the deployment\'s, in Messages');
+        assert.equal(cards.find((c) => c.id === 'alerts')!.group, 'platform', 'the platform\'s own handoff alerts are the platform\'s now (U3)');
+        assert.equal(cards.find((c) => c.id === 'alerts')!.platform, true);
     });
 });
 
@@ -150,21 +196,46 @@ describe('Settings tabs: what an address asks for', () => {
 
     it('a tab by name, a card by name, and a card inside a tab', () => {
         assert.deepEqual(view('admin', { s: 'platform' }), { group: 'platform', card: '' });
-        assert.deepEqual(view('admin', { s: 'messages', card: 'alerts' }), { group: 'messages', card: 'alerts' });
+        assert.deepEqual(view('admin', { s: 'platform', card: 'alerts' }), { group: 'platform', card: 'alerts' });
         // `?s=` also takes a card (the form the alerts link with): it opens that card's tab.
-        assert.deepEqual(view('admin', { s: 'tiktok' }), { group: 'connections', card: 'tiktok' });
+        assert.deepEqual(view('admin', { s: 'tiktok' }), { group: 'channels', card: 'tiktok' });
         assert.deepEqual(view('admin', { s: 'storage' }), { group: 'platform', card: 'storage' });
         assert.deepEqual(view('admin', { card: 'webhook' }), { group: 'advanced', card: 'webhook' });
+        assert.deepEqual(view('owner', { s: 'team' }), { group: 'team', card: '' });
+    });
+
+    it('the old addresses still work: ?s=connections is Channels, ?s=messages Notifications, ?s=appearance You, ?s=iceb the DM assistant page', () => {
+        assert.deepEqual(view('owner', { s: 'connections' }), { group: 'channels', card: '' });
+        assert.deepEqual(view('owner', { s: 'messages' }), { group: 'notifications', card: '' });
+        assert.deepEqual(view('owner', { s: 'appearance' }), { group: 'you', card: '' });
+        assert.deepEqual(view('member', { s: 'connections' }), { group: 'channels', card: '' });
+        for (const params of [{ s: 'iceb' }, { card: 'iceb' }, { s: 'messages', card: 'iceb' }]) {
+            assert.equal(view('owner', params).redirect, '#/ai_settings?card=iceb', JSON.stringify(params));
+        }
+        assert.equal(view('owner', { s: 'meta' }).redirect, undefined, 'a card that did not move is not redirected');
+        assert.deepEqual(view('owner', { s: 'cleanup' }), { group: 'notifications', card: 'cleanup' }, 'card ids are unchanged, so ?s=<card> links from alerts still resolve');
+    });
+
+    it('an old address redirects the page itself: Settings replaces the address and goes to the DM assistant page, drawing nothing', async () => {
+        const { Settings, h, container } = load('en', 'owner', { hash: '#/settings?s=iceb' });
+        const navigated: string[] = [];
+        h.App.navigate = (page: string) => { navigated.push(page); };
+        await Settings.render();
+        assert.deepEqual(navigated, ['ai_settings']);
+        assert.equal(h.location.hash, '#/ai_settings?card=iceb', 'the address now names the new place, so Back does not return to a link that only redirects');
+        assert.equal(container.innerHTML.includes('data-settings-root'), false, 'and no Settings page was drawn');
     });
 
     it('no address, an unknown name, a name this viewer cannot see, and a card from another tab all land on a tab that exists', () => {
-        assert.deepEqual(view('owner', {}), { group: 'connections', card: '' });
-        assert.deepEqual(view('owner', { s: 'nonsense' }), { group: 'connections', card: '' });
-        assert.deepEqual(view('owner', { s: 'platform' }), { group: 'connections', card: '' }, 'a tenant is never taken to the platform tab');
-        assert.deepEqual(view('owner', { s: 'storage' }), { group: 'connections', card: '' }, 'nor to a card of it');
-        assert.deepEqual(view('owner', { s: 'messages', card: 'alerts' }), { group: 'messages', card: '' }, 'a card they cannot see is dropped, the tab stays');
-        assert.deepEqual(view('admin', { s: 'connections', card: 'alerts' }), { group: 'connections', card: '' }, 'a card from another tab is not scrolled to');
-        assert.deepEqual(view('admin', { s: '__proto__', card: 'constructor' }), { group: 'connections', card: '' });
+        assert.deepEqual(view('owner', {}), { group: 'channels', card: '' });
+        assert.deepEqual(view('owner', { s: 'nonsense' }), { group: 'channels', card: '' });
+        assert.deepEqual(view('owner', { s: 'platform' }), { group: 'channels', card: '' }, 'a workspace is never taken to the platform tab');
+        assert.deepEqual(view('owner', { s: 'storage' }), { group: 'channels', card: '' }, 'nor to a card of it');
+        assert.deepEqual(view('member', { s: 'team' }), { group: 'channels', card: '' }, 'an operator or a viewer has no Team tab');
+        assert.deepEqual(view('owner', { s: 'notifications', card: 'alerts' }), { group: 'notifications', card: '' }, 'a card they cannot see is dropped, the tab stays');
+        assert.deepEqual(view('admin', { s: 'channels', card: 'alerts' }), { group: 'channels', card: '' }, 'a card from another tab is not scrolled to');
+        assert.deepEqual(view('admin', { s: '__proto__', card: 'constructor' }), { group: 'channels', card: '' });
+        assert.deepEqual(view('admin', { s: 'constructor' }), { group: 'channels', card: '' });
     });
 });
 
@@ -175,16 +246,17 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         getTokenStatus: async () => VALID, getMetaConnection: async () => META, getTikTokConnection: async () => TIKTOK,
         getYouTubeConnection: async () => YOUTUBE, getWhatsAppConnection: async () => WHATSAPP, getMediaStorage: async () => MEDIA,
         getNotifySettings: async () => NOTIFY, getSiteSettings: async () => SITE, getMetaAppSettings: async () => META_APP,
+        getTeam: async () => ({ members: [], invites: [] }), getAutoArchive: async () => ({ enabled: true, days: 30, minDays: 7, maxDays: 365, defaultDays: 30 }),
     };
 
     for (const lang of ['ar', 'en'] as const) {
-        it(`opens on Connections by default, with every other tab present and hidden (${lang})`, async () => {
+        it(`opens on Channels by default, with every other tab present and hidden (${lang})`, async () => {
             const { Settings, container, t } = load(lang, 'admin', { api });
             await Settings.render();
             await settle();
             const found = panels(container.innerHTML);
-            assert.deepEqual(found.map((p) => p.id), ['connections', 'messages', 'appearance', 'advanced', 'platform']);
-            assert.deepEqual(found.filter((p) => !p.hidden).map((p) => p.id), ['connections'], 'exactly one panel is open');
+            assert.deepEqual(found.map((p) => p.id), ['channels', 'team', 'notifications', 'you', 'advanced', 'platform']);
+            assert.deepEqual(found.filter((p) => !p.hidden).map((p) => p.id), ['channels'], 'exactly one panel is open');
             assert.ok(text(container.innerHTML).includes(t('settings.group.platform')));
             // Hidden, not left out: the platform panel still holds its cards, so what is typed in one tab survives a switch to another.
             assert.ok(found.find((p) => p.id === 'platform')!.html.includes('data-settings-card="storage"'));
@@ -200,7 +272,7 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
             const bar = /<nav class="ui-tabs ui-tabs--link"[\s\S]*?<\/nav>/.exec(container.innerHTML)![0];
             assert.equal((bar.match(/aria-current="page"/g) ?? []).length, 1, 'one tab is current');
             assert.match(bar, /href="#\/settings\?s=platform"[^>]*aria-current="page"/);
-            for (const id of ['connections', 'messages', 'appearance', 'advanced', 'platform']) assert.ok(bar.includes(`href="#/settings?s=${id}"`), `${id} is a link, so Back and a reload keep it`);
+            for (const id of ['channels', 'team', 'notifications', 'you', 'advanced', 'platform']) assert.ok(bar.includes(`href="#/settings?s=${id}"`), `${id} is a link, so Back and a reload keep it`);
             assert.ok(bar.includes(`aria-label="${t('settings.nav.label')}"`));
             assert.equal(h.App.hashParams().s, 'platform');
         });
@@ -239,11 +311,11 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
     });
 
     it('a tenant owner never gets the developer cards or the Platform tab in the page at all, not even hidden', async () => {
-        const { Settings, container } = load('en', 'owner', { api: { ...api, getIceBreakers: async () => ({}) } });
+        const { Settings, container } = load('en', 'owner', { api });
         await Settings.render();
         await settle();
         const html = container.innerHTML;
-        assert.deepEqual(panels(html).map((p) => p.id), ['connections', 'messages', 'appearance']);
+        assert.deepEqual(panels(html).map((p) => p.id), ['channels', 'team', 'notifications', 'you']);
         for (const id of ['token', 'webhook', 'account', 'storage', 'site', 'onboarding', 'meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'alerts']) {
             assert.equal(html.includes(`data-settings-card="${id}"`), false, id);
         }
@@ -251,20 +323,26 @@ describe('Settings tabs: one panel open, the others hidden (not left out)', () =
         assert.equal(html.includes('webhook-token-form'), false, 'no verify token');
     });
 
-    it('the Connections tab opens with the summary, then the warning about missing permissions, then the cards', async () => {
+    it('the Channels tab opens with the summary, then the warning about missing permissions, then the cards', async () => {
         const { Settings, container } = load('en', 'admin', { api: { ...api, getTokenStatus: async () => ({ ...VALID, scopes: ['pages_messaging'] }) } });
         await Settings.render();
         await settle();
-        const connections = panels(container.innerHTML).find((p) => p.id === 'connections')!.html;
+        const connections = panels(container.innerHTML).find((p) => p.id === 'channels')!.html;
         const at = (needle: string): number => connections.indexOf(needle);
         assert.ok(at('id="settings-summary"') > 0 && at('warning-card') > at('id="settings-summary"') && at('data-settings-card="meta"') > at('warning-card'), 'summary, warning, cards');
     });
 
-    it('the page subtitle names what the page holds now (SE-15), in both languages', () => {
+    it('the page subtitle names what the page holds now (SE-15, U3), in both languages: the owner\'s names the team, anyone else\'s names no role', () => {
         for (const lang of ['ar', 'en'] as const) {
-            const { t } = load(lang, 'owner');
-            const names = lang === 'ar' ? ['الاتصالات', 'التنبيهات', 'المظهر', 'التخزين'] : ['Connections', 'alerts', 'appearance', 'storage'];
+            const { t, h } = load(lang, 'owner');
+            const names = lang === 'ar' ? ['قنواتك', 'فريقك', 'تنبيهاتك', 'حسابك'] : ['channels', 'team', 'notifications', 'account'];
             for (const name of names) assert.ok(t('page.settings.subtitle').includes(name), `${lang} names ${name}`);
+            assert.equal(h.App.subtitle('settings'), t('page.settings.subtitle'), 'the owner and the admin read the full sentence');
+            const member = load(lang, 'member');
+            member.h.App.canAdminister = () => false;
+            assert.equal(member.h.App.subtitle('settings'), t('page.settings.subtitleMember'));
+            assert.equal(t('page.settings.subtitleMember').includes(lang === 'ar' ? 'فريقك' : 'team'), false, 'it does not promise a team');
+            assert.equal(member.h.App.subtitle('help'), t('page.help.subtitle'), 'only Settings has two sentences');
         }
     });
 
@@ -642,10 +720,10 @@ describe('Settings: leaving with unsaved edits', () => {
         const container = h.el('page-container') as Json;
         const fields = [field({ value: 'x' })];
         container.querySelectorAll = (selector: string) => (selector === '[data-settings-card]' ? [card('storage', fields)] : []);
-        const dots = ['connections', 'messages', 'appearance', 'advanced', 'platform'].map((id) => ({ dataset: { settingsDot: id }, hidden: true }));
+        const dots = ['channels', 'team', 'notifications', 'you', 'advanced', 'platform'].map((id) => ({ dataset: { settingsDot: id }, hidden: true }));
         h.document.querySelectorAll = (selector: string) => (selector === '[data-settings-dot]' ? dots : []);
         Settings.syncDirtyDots();
-        assert.deepEqual(dots.map((d) => d.hidden), [true, true, true, true, false], 'the platform tab holds the storage card');
+        assert.deepEqual(dots.map((d) => d.hidden), [true, true, true, true, true, false], 'the platform tab holds the storage card');
         fields[0]!.value = '';
         Settings.syncDirtyDots();
         assert.ok(dots.every((d) => d.hidden), 'cleared');
@@ -656,7 +734,7 @@ describe('Settings: leaving with unsaved edits', () => {
         await Settings.render();
         await settle();
         const dots = container.innerHTML.match(/<span class="settings-tab-dot"[^>]*>/g) ?? [];
-        assert.equal(dots.length, 5);
+        assert.equal(dots.length, 6);
         for (const dot of dots) {
             assert.match(dot, /role="img"/);
             assert.ok(dot.includes(`aria-label="${t('settings.tab.unsaved')}"`));
@@ -838,7 +916,7 @@ describe('Settings: opening a card from anywhere', () => {
         await settle();
         assert.equal(Settings._view.group, 'advanced');
         Settings.goConnect();
-        assert.equal(h.location.hash, '#/settings?s=connections&card=meta');
+        assert.equal(h.location.hash, '#/settings?s=channels&card=meta');
     });
 
     it('a collapsed provider-app card is opened when it is the target', () => {
@@ -857,13 +935,13 @@ describe('Settings: opening a card from anywhere', () => {
         await Settings.render();
         await settle();
         const before = container.innerHTML;
-        const panelEls = ['connections', 'messages', 'appearance', 'advanced', 'platform'].map((id) => ({ dataset: { group: id }, hidden: id !== 'connections' }));
+        const panelEls = ['channels', 'team', 'notifications', 'you', 'advanced', 'platform'].map((id) => ({ dataset: { group: id }, hidden: id !== 'connections' }));
         const links = panelEls.map(() => ({ marks: new Set<string>(), setAttribute(n: string) { this.marks.add(n); }, removeAttribute(n: string) { this.marks.delete(n); } }));
         container.querySelectorAll = (selector: string) => (selector === '.settings-panel' ? panelEls : selector === '.settings-tabbar a.ui-tab' ? links : []);
         h.location.hash = '#/settings?s=advanced';
         Settings.onHashChange();
-        assert.deepEqual(panelEls.map((p) => p.hidden), [true, true, true, false, true]);
-        assert.deepEqual(links.map((l) => l.marks.has('aria-current')), [false, false, false, true, false]);
+        assert.deepEqual(panelEls.map((p) => p.hidden), [true, true, true, true, false, true]);
+        assert.deepEqual(links.map((l) => l.marks.has('aria-current')), [false, false, false, false, true, false]);
         assert.equal(container.innerHTML, before, 'nothing was drawn again');
         assert.ok(h.announcements.includes(h.t('settings.group.advanced')), 'a screen reader is told which tab opened');
     });
@@ -990,7 +1068,7 @@ describe('Settings: the stylesheet and its registration', () => {
     it('every string this page adds exists in both languages (the dictionaries are checked whole by check:i18n)', () => {
         const ar = loadDashboard({ lang: 'ar' }).t;
         const en = loadDashboard({ lang: 'en' }).t;
-        const keys = ['settings.nav.label', 'settings.group.connections', 'settings.group.messages', 'settings.group.appearance', 'settings.group.advanced', 'settings.group.platform',
+        const keys = ['settings.nav.label', 'settings.group.channels', 'settings.group.team', 'settings.group.notifications', 'settings.group.you', 'settings.group.advanced', 'settings.group.platform',
             'settings.scope.platform', 'settings.tab.unsaved', 'settings.platform.lead', 'settings.dangerZone', 'settings.health.title', 'settings.health.allFine', 'settings.health.unknown'];
         for (const key of keys) {
             assert.notEqual(ar(key), key, `ar ${key}`);
@@ -998,8 +1076,9 @@ describe('Settings: the stylesheet and its registration', () => {
             assert.notEqual(ar(key), en(key), `${key} is translated, not copied`);
         }
         assert.equal(ar('settings.health.allFine'), 'كل الاتصالات تعمل');
-        assert.equal(ar('settings.group.connections'), 'الاتصالات');
-        assert.equal(ar('settings.group.messages'), 'الرسائل والتنبيهات');
+        assert.deepEqual(['channels', 'team', 'notifications', 'you'].map((id) => ar(`settings.group.${id}`)), ['القنوات', 'الفريق', 'التنبيهات', 'حسابك']);
+        assert.deepEqual(['channels', 'team', 'notifications', 'you'].map((id) => en(`settings.group.${id}`)), ['Channels', 'Team', 'Notifications', 'You']);
+        for (const gone of ['connections', 'messages', 'appearance']) assert.equal(ar(`settings.group.${gone}`), `settings.group.${gone}`, `${gone} is not a tab any more`);
         assert.equal(ar('settings.group.platform'), 'المنصة');
         assert.equal(ar('settings.scope.platform'), 'لكل مساحات العمل');
     });

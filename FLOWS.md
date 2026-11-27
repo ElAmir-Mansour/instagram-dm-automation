@@ -1772,6 +1772,11 @@ This is **per lambda instance** and therefore a speed bump, not a guarantee: Ver
 warm instances as it likes and each starts the `Map` empty, so an attacker spreading attempts
 across instances multiplies the limit by however many are running (**`src/routes/api.ts:86-93`**).
 
+**The form opens on email (U3, SA-06).** The dashboard's sign-in no longer opens on the shared password: `App.showLogin` calls `App.applyLoginMode`, which
+shows the email field (and makes it `required`) unless `localStorage` `login_mode` is `platform`. "Sign in with the platform password" (`app:useSharedPassword`)
+hides the email field and sends the body the shared path always sent (`{ password }`); the way back is `app:revealEmailField`. Both write `login_mode`, so the owner
+who signs in with the shared password clicks it once. A browser that will not store it opens on email. The server is unchanged: an empty email is still Path B.
+
 ### 4.2 — Path A: email + password
 
 Taken only when an email is actually supplied (**`src/routes/api.ts:215`**).
@@ -2355,6 +2360,44 @@ A module that did not load is a step that says the samples are unavailable; the 
 whether they were reviewed and whether a first campaign was made.
 
 **The brand section** (`brand.logos`, `brand.use_brand_colours`) is changed by the same `PATCH /api/profile` and read back into every Studio payload: [15](#15-brand-a-logo--checked--on-every-studio-output) walks it.
+
+### 4.12 — Team: an owner invites, changes a role, removes (U3, CO-2)
+
+**Who and where.** `src/routes/team.ts` (`teamRouter`, mounted `router.use('/team', teamRouter)` right after `/profile`, below `resolveTenant`) is the
+workspace **owner's** on every route, reads included (`requireTenantRole('owner')`: an operator or a viewer is a 403 before anything is read; a platform admin
+acting in the workspace is an owner of it). The tenant is `getTenantId(req)` and nothing else: no body field and no path names a workspace (invariant I6). The
+screen is Settings → Team (`SettingsPage.teamSection` in `dashboard/js/pages/settings.js`, card `team`, shown to `who: 'owner'`).
+
+**The rules are `src/services/team.ts`**, decided in one transaction so no route has to remember them:
+
+1. `changeRole` and `removeMember` run inside `withTransaction`, which first reads the workspace's memberships `FOR UPDATE` (`lockMembers`). Two owners removing
+   each other at once cannot both pass: the second one finds the first one's write.
+2. A target who is not a member of THIS workspace is a 404 `MEMBER_NOT_FOUND`. A platform admin (`users.role = 'platform_admin'`) is read-only here (409
+   `MEMBER_IS_ADMIN`, shown as "Account manager"). A role outside `TENANT_ROLES` is a 400 `ROLE_INVALID`.
+3. **The last owner stays.** Demoting or removing an owner is a 409 `LAST_OWNER` unless another owner of the workspace's own remains (`keepsAnOwner`). Owners are
+   counted the way `resolveTenant` reads a stored role (`normalizeTenantRole`: a legacy or unknown value is an owner), and a platform admin is not counted: an admin
+   reaches every workspace with no membership, so a workspace whose only "owner" is the account manager has nobody of its own.
+4. **A removal is immediate and needs no `token_version` bump.** `resolveTenant` re-reads the membership on every request, so the person's next request to this
+   workspace is a 404, and their other workspaces (and their sessions) are untouched. Removing yourself is allowed when you are not the last owner; the answer says
+   `you: true`, and the dashboard then calls `App.refreshSession()` and `switchTenant` to another workspace, or signs out when there is none (`afterLeaving`).
+
+**Invites and reset links** reuse `services/invites.ts`: `POST /api/team/invites` makes a `join` link, `POST /members/:userId/reset-link` a `reset` one (`createInvite`
+refuses an admin and a non-member; `assertResettable` says which). Regenerate and revoke pass `scope: { creatorId }` to `regenerateInvite` / `revokeInvite`, which add
+`AND creator_id = $2`, so another workspace's invite id is a 404, never a quiet success. The link is in the one answer that made it (`invite.url`, in the URL
+fragment) and nowhere else: not in `GET /api/team`, an audit row or a log line. `recordEvent(…, 'invite_created')` uses actor `tenant`.
+
+**Audit** (`via: 'team'`): `invite.create`, `invite.regenerate`, `invite.revoke`, `membership.role_change { user_id, creator_id, from, to }` (written only when the
+role changed) and `membership.revoke { user_id, creator_id, membership_role }`. Sign out everywhere (`POST /api/account/sign-out-everywhere`,
+`src/routes/account.ts`, mounted above `resolveTenant`) bumps `users.token_version`, answers a fresh token like `/auth/password` does, and audits
+`user.sessions_revoke { self_service: true }`; the shared password has no account (400 `NO_USER_ACCOUNT`, never a 401).
+
+**On screen.** The invite card (`dashboard/js/pages/invite_card.js`) has two scopes: `context.scope` `'admin'` (the platform admin's routes for a tenant, as
+before) or `'team'` (these routes, no tenant in a call), and `context.todo`, a list of i18n keys drawn as a checklist under the link. A role picker applies when picked
+and offers Undo; Remove asks first (`UI.confirm`, a verb on the button). The Notifications tab beside it mounts `NotifyCard` when `notify_card.js` exists and says
+"You are told in the Inbox and on Today" when it does not; the You tab holds Change password and Sign out everywhere.
+
+**Where it does nothing without saying so.** A link made while `app.public_base_url` is unset and the request has no host: `PUBLIC_URL_UNKNOWN` (500), before any row
+is written. A stale picker (another owner already changed the role) just shows the server's answer after the repaint.
 
 ---
 
@@ -4551,7 +4594,7 @@ U2 (2026-11). One list of "what needs the owner", built once on the server, draw
    "Mark handled" = `POST /api/conversations/:id/handled` per thread. Both act first and offer ONE `UI.undoToast`; Undo is the matching `DELETE` for exactly the rows that
    succeeded, then the summary is read again (`refreshAttention`) and the briefing, the waiting tile and the Inbox badge follow.
 6. **The 30-day sweep.** The daily cron (`GET /api/cron/publish`) calls `runAutoArchiveSweep` (`src/services/autoArchive.ts`): per tenant that has not switched it off
-   (`cleanup.auto_archive.<tenant>`, ON at 30 days when unset; Settings → Messages & alerts), `ARCHIVE_OLD_FAILED_POSTS_SQL` archives FAILED posts older than the days and
+   (`cleanup.auto_archive.<tenant>`, ON at 30 days when unset; Settings → Notifications), `ARCHIVE_OLD_FAILED_POSTS_SQL` archives FAILED posts older than the days and
    `HANDLE_EXPIRED_THREADS_SQL` marks handled the threads of step 2 whose wait began that long ago. One audit row per tenant with something (`cleanup.auto_archive`, actor
    `system:auto-archive`, counts only). Nothing is deleted; a new message from the customer clears `handled_at` by itself.
 

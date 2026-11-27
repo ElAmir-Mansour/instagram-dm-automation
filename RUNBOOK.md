@@ -1402,7 +1402,7 @@ vercel env pull .env.local --environment=production
 Setup, Meta's dashboards, the costs and the go-live rules are in
 [`docs/WHATSAPP_GUIDE.md`](docs/WHATSAPP_GUIDE.md); its §3 has the checks for "nothing shows up".
 Every hop a message takes is FLOWS.md §10. This section works backwards from a symptom. The
-settings are on **Settings → Connections → WhatsApp**: any member reads them, only the owner
+settings are on **Settings → Channels → WhatsApp**: any member reads them, only the owner
 changes them. Its log lines start with `wa.` (messages, sends, alerts) or `whatsapp.` (the
 connection and the settings).
 
@@ -1522,7 +1522,7 @@ from Meta: …* under it. What marks it: Meta refusing the token or a permission
 10) on a send or on the daily read, or a payment problem (131042) on a send. While it stands,
 messages are still stored (Meta sends each once and never again), and nothing is sent.
 
-**Fix:** make a new system-user token (guide §1.4), then **Settings → Connections → WhatsApp →
+**Fix:** make a new system-user token (guide §1.4), then **Settings → Channels → WhatsApp →
 Reconnect with a new token**. **Refresh status** re-reads the number from Meta
 (`POST /api/whatsapp/refresh`); it answers *Meta still refuses the stored token* while the token
 is still bad. A connection that was `invalid` goes back to `active` only when Meta also reports
@@ -1549,8 +1549,8 @@ does not carry them. A customer your assistant could not answer on WhatsApp (win
 messages off, connection refused) is a different alert, a hand-off, and hand-offs go to Telegram
 and email (§16.4). With Telegram off or incomplete, an account alert is not sent at all: the log
 is `wa.alert_not_sent { why: 'alerts_off' }`, and the facts are still on the card (the status,
-quality and limit chips). Switch it on under **Settings → Messages & alerts →
-Handoff alerts** (*Send me alerts on Telegram*, the bot token and your chat id), then press
+quality and limit chips). Switch it on under **Settings → Platform → Alerts to you (the platform)**
+(*Send me alerts on Telegram*, the bot token and your chat id), then press
 **Send test message**. `wa.alert_failed` means Telegram refused it; the alert is given back and
 tried again (the next daily read, or the next event).
 
@@ -1630,7 +1630,7 @@ written by `system:ads-guard`:
 SELECT created_at, detail FROM audit_log WHERE action = 'ads.cap_paused' ORDER BY created_at DESC LIMIT 5;
 ```
 
-**To run ads again:** raise the **Monthly spend cap** (Settings → Connections → Meta ads (Boost);
+**To run ads again:** raise the **Monthly spend cap** (Settings → Channels → Meta ads (Boost);
 above the platform ceiling the save is refused with `OVER_CEILING`), then resume the campaigns in
 **Ads → Campaigns**. A resume needs a confirm and passes the money rule. If the cap is still at or
 below the spend, the guard pauses them again within the hour.
@@ -1651,7 +1651,7 @@ Cause: Meta answered a call with code 190 or 102. The token also dies when its s
 deleted, when its asset assignments are removed, or when the app's secret is reset
 (`docs/TOKEN_GUIDE.md`). `10/1341012` means the Page is not assigned to the system user.
 
-**Check:** Settings → Connections → Meta ads (Boost) → **Test connection**
+**Check:** Settings → Channels → Meta ads (Boost) → **Test connection**
 (`POST /api/ads/settings/test`) lists the scopes the token has and lacks and the assets it
 reaches. `node scripts/ads-probe.mjs` prints the same from a terminal.
 
@@ -1692,7 +1692,7 @@ AI". The next reply Meta accepts clears the notice by itself (`clearNoReplyReaso
 
 A related alert is `window_error`: a reply to an ad conversation was refused for being outside the
 window (`10/2018278` or `551`). The longer-window switch of that platform turns itself off
-(Settings → Connections → Meta ads → *Conversations from ads*) and the alert goes out. Turn the
+(Settings → Channels → Meta ads → *Conversations from ads*) and the alert goes out. Turn the
 switch back on only after a real day-2 reply was accepted (guide, A3).
 
 ### 13.6 Two more checks
@@ -1701,7 +1701,7 @@ switch back on only after a real day-2 reply was accepted (guide, A3).
   and day (`ads.alert_duplicate` means today's already went), and `channels` says `sent`, `failed`
   or `off` for Telegram, email and the admin copy. A channel is used only when the recipient is set
   (**Alert recipients**, then **Send a test**; `POST /api/ads/settings/alerts` with `test: true`)
-  and the deployment has the bot token or the email key (Settings → Messages & alerts).
+  and the deployment has the bot token or the email key (Settings → Platform → Alerts to you (the platform)).
   `ads.alert_telegram_failed` and `ads.alert_email_failed` carry the channel's reason.
   **An ad was rejected** (`ad_rejected`) and **An ad has issues** (`ad_issues`) come from the
   hourly structure sync (`syncStructure`, `src/services/ads/sync.ts`; the rule is `adStatusAlertFor`,
@@ -1727,7 +1727,7 @@ switch back on only after a real day-2 reply was accepted (guide, A3).
 A Short is its own `scheduled_posts` row (`platform = 'youtube'`, `post_type = 'video'`). It is
 made in Posts, or by the Monteur or the infographics, usually beside the Instagram and Facebook
 row of the same video. The ordinary sweep publishes it (§4.1; `publishYouTubePost`,
-`src/services/youtubePublish.ts`). The connection is on **Settings → Connections → YouTube**: any
+`src/services/youtubePublish.ts`). The connection is on **Settings → Channels → YouTube**: any
 member reads it, the owner connects. The Google OAuth
 client and the **Upload Shorts as public** switch are on **Settings → Platform**, platform admin
 only. There is no YouTube guide; the contract is the header of `src/services/youtube.ts` and
@@ -2129,7 +2129,7 @@ first, so the Inbox filter **Needs you** and the badge never depend on the alert
 
 Check in this order:
 
-1. **Is a channel on and complete?** Settings → Messages & alerts → **Handoff alerts** (*Send me
+1. **Is a channel on and complete?** Settings → Platform → **Alerts to you (the platform)** (*Send me
    alerts on Telegram*, the bot token and your chat id) and **Email alerts** (a Resend API key and
    *Send me alerts by email*). **With both off the alert stops with no log line at all:** that
    silence is `notifyOwner` returning `off`. Press **Send test message** or **Send test email**.

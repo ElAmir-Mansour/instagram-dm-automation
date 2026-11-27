@@ -95,12 +95,12 @@ const HelpContent = {
                         ar: [
                             'عشر دقائق تكفي ليبدأ الحساب العمل عنك. امضِ فيها بالترتيب:',
                             { ol: [
-                                'افتح **الإعدادات** وتأكد أن قسم **رمز الوصول** مكتوب فيه **صالح**. وإن رأيت تنبيه **صلاحيات ميتا ناقصة**، فالحل في [[connect-meta#token-health]].',
+                                'افتح **الإعدادات** ← **القنوات** وتأكد أن إنستجرام وفيسبوك متصلان. وإن رأيت تنبيه **صلاحيات ميتا ناقصة**، فالحل في [[connect-meta#token-health]].',
                                 'اذهب إلى **الردود التلقائية** واضغط **ردّ تلقائي جديد**: اكتب الكلمة المفتاحية، ونص الرسالة الخاصة، ورداً علنياً قصيراً. وقبل أن تختار الكلمة اقرأ [[campaigns#matching|كيف تعمل المطابقة]].',
                                 'جرّبها بنفسك: من حساب آخر علّق بالكلمة على أحد منشوراتك، وخلال ثوانٍ تصلك الرسالة في الخاص. وكل ما جرى تجده في **السجل**.',
                                 'افتح **مساعد الرسائل**، فعّل **تشغيل الردّ الآلي**، واكتب في **الشخصية والتعليمات** من هو المساعد وكيف يتكلم. جرّبه في **اختبار المساعد** قبل أن يردّ على أي عميل.',
                                 'من **الجدولة** اضغط **جدوِل منشوراً** وجرّب منشوراً بسيطاً. التفاصيل في [[scheduling]].',
-                                'اختياري: اربط تيك توك من **الإعدادات** ← **اربط تيك توك**، واقرأ [[tiktok]] قبل أول منشور.',
+                                'اختياري: اربط تيك توك من **الإعدادات** ← **القنوات** ← **اربط تيك توك**، واقرأ [[tiktok]] قبل أول منشور.',
                                 'اختياري: إذا كان عندك كورس أو دروس مصوّرة، جهّز **الاستوديو**. البداية من [[studio]].',
                             ] },
                             { tip: 'أي علامة استفهام صغيرة بجانب زر في اللوحة تقودك إلى الشرح الخاص به هنا مباشرة.' },
@@ -108,12 +108,12 @@ const HelpContent = {
                         en: [
                             'Ten minutes is enough to get the account working for you. Go through these in order:',
                             { ol: [
-                                'Open **Settings** and check that the **Access token** section says **Valid**. If you see **Missing Meta permissions**, the fix is in [[connect-meta#token-health]].',
+                                'Open **Settings** → **Channels** and check that Instagram and Facebook are connected. If you see **Missing Meta permissions**, the fix is in [[connect-meta#token-health]].',
                                 'Go to **Keyword replies** and press **New keyword reply**: enter a keyword, the DM text and a short public reply. Before you pick the keyword, read [[campaigns#matching|how matching works]].',
                                 'Test it yourself: from another account, comment the keyword on one of your posts. The DM arrives within seconds, and everything that happened shows up in the **Log**.',
                                 'Open **DM assistant**, switch on **Turn on auto-replies**, and describe in **Voice and instructions** who the assistant is and how it talks. Try it in the **Assistant sandbox** before it answers a real customer.',
                                 'In the **Scheduler**, press **Schedule a post** and try a simple one. The details are in [[scheduling]].',
-                                'Optional: connect TikTok from **Settings** → **Connect TikTok**, and read [[tiktok]] before your first post.',
+                                'Optional: connect TikTok from **Settings** → **Channels** → **Connect TikTok**, and read [[tiktok]] before your first post.',
                                 'Optional: if you have a course or recorded lessons, set up the **Studio**. Start with [[studio]].',
                             ] },
                             { tip: 'The small question-mark links next to buttons around the dashboard bring you straight to the right article here.' },
@@ -135,7 +135,7 @@ const HelpContent = {
                                 ['التحليلات', 'أداء الأتمتة بالأرقام.'],
                                 ['النمو والتسويق', 'أرقام محتواك، وخطة مدرب النمو، وأدوات السيو.'],
                                 ['السجل', 'كل تعليق ورسالة وحالتها، لحظة بلحظة.'],
-                                ['الإعدادات', 'رمز الوصول، ورمز التحقق، وتيك توك، والمظهر واللغة.'],
+                                ['الإعدادات', 'قنواتك، وفريقك، وكيف تُبلَّغ، وحسابك.'],
                                 ['المساعدة', 'هنا: كل الشروحات، بالعربية والإنجليزية.'],
                             ] },
                         ],
@@ -150,7 +150,7 @@ const HelpContent = {
                                 ['Analytics', 'How the automation is performing, in numbers.'],
                                 ['Growth', 'How your content performs, the Growth Coach’s plan, and the SEO tools.'],
                                 ['Log', 'Every comment and message and what happened to it, as it happens.'],
-                                ['Settings', 'The access token, the webhook verify token, TikTok, appearance and language.'],
+                                ['Settings', 'Your channels, your team, how you are told, and your account.'],
                                 ['Help', 'You are here: every guide, in Arabic and English.'],
                             ] },
                         ],
@@ -187,22 +187,22 @@ const HelpContent = {
                     title: { ar: 'من يستطيع فعل ماذا؟', en: 'Who can do what' },
                     body: {
                         ar: [
-                            'في مساحة العمل ثلاثة أدوار. وإن كان دورك يقيّدك فسترى شارته أعلى الصفحة، فتعرف لماذا لا يعمل زر معيّن لك:',
+                            'في مساحة العمل ثلاثة أدوار. وإن كان دورك يقيّدك فسترى شارته أعلى الصفحة، فتعرف لماذا لا يعمل زر معيّن لك. ومالك مساحة العمل يضيف الأشخاص ويغيّر أدوارهم من [[team]]:',
                             { dl: [
-                                ['مالك', 'كل شيء، ومنه ربط ميتا نفسه (رمز وصول الصفحة ورمز التحقق)، وربط تيك توك.'],
-                                ['مشغّل', 'الردود التلقائية والمنشورات المجدولة والرسائل ومساعد الرسائل، من دون لمس رموز ميتا.'],
-                                ['مُطّلع', 'قراءة فقط: الإحصاءات والردود التلقائية والمنشورات والرسائل، دون أي تعديل.'],
+                                ['مالك', 'كل شيء: الفريق والاتصالات وجميع الإعدادات.'],
+                                ['مشغّل', 'يتولى العمل اليومي: الردود والمنشورات والرسائل ومساعد الرسائل، دون تغيير الاتصالات أو الفريق.'],
+                                ['مُطّلع', 'يطّلع ولا يغيّر: الإحصاءات والردود والمنشورات والرسائل.'],
                             ] },
-                            'ويمكنك تبديل لغة اللوحة بين العربية والإنجليزية من الزر أعلى الصفحة، أو من **الإعدادات** ← **المظهر واللغة**.',
+                            'تسجّل الدخول ببريدك الإلكتروني وكلمة مرورك. وإن نسيت كلمة المرور فاطلب رابط إعادة التعيين من مالك مساحة العمل. ويمكنك تبديل لغة اللوحة بين العربية والإنجليزية من الزر أعلى الصفحة، أو من **الإعدادات** ← **حسابك**.',
                         ],
                         en: [
-                            'An account has three roles. When yours limits you, its badge appears at the top of the page, so you know why a button refuses:',
+                            'A workspace has three roles. When yours limits you, its badge appears at the top of the page, so you know why a button refuses. The workspace owner adds people and changes their roles in [[team]]:',
                             { dl: [
-                                ['Owner', 'Everything, including the Meta connection itself (the page access token and the webhook verify token) and connecting TikTok.'],
-                                ['Operator', 'Keyword replies, scheduled posts, the inbox and the AI assistant, without touching the Meta tokens.'],
-                                ['Viewer', 'Read only: stats, keyword replies, posts and messages, with no changes.'],
+                                ['Owner', 'Everything: the team, the connections and every setting.'],
+                                ['Operator', 'Does the daily work: replies, posts, the inbox and the DM assistant. Cannot change the connections or the team.'],
+                                ['Viewer', 'Can look, not change: stats, replies, posts and the inbox.'],
                             ] },
-                            'You can switch the dashboard between Arabic and English with the button at the top of the page, or in **Settings** → **Appearance & language**.',
+                            'You sign in with your email and password. If you forgot the password, ask your workspace owner for a reset link. You can switch the dashboard between Arabic and English with the button at the top of the page, or in **Settings** → **You**.',
                         ],
                     },
                 },
@@ -350,7 +350,7 @@ const HelpContent = {
                                 'تيك توك ويوتيوب اختياريان: اربطهما الآن أو لاحقاً من الإعدادات.',
                                 'تحقق اختياري: اطلب من صديق أن يكتب تعليق «test» على آخر منشور لك، من حساب آخر. وتقول الصفحة «وصل التعليق. التعليقات تصل إلى حسابك.» عندما يصل، وتنتظره 10 دقائق، ويمكنك الضغط على **تحقّق مجددًا**.',
                             ] },
-                            'ويمكنك تخطي الشاشة كلها والربط لاحقاً من **الإعدادات** ← **الاتصالات**: [[connect-meta]].',
+                            'ويمكنك تخطي الشاشة كلها والربط لاحقاً من **الإعدادات** ← **القنوات**: [[connect-meta]].',
                         ],
                         en: [
                             '**Connect your accounts** shows three cards: Instagram & Facebook, TikTok and YouTube. It is only there when the platform administrator has switched on connecting from here (“Connect with Facebook”). Without it you do nothing here: the person who invited you connects your accounts for you, once you give them access to your Page in Meta Business Suite (Settings, then People).',
@@ -359,7 +359,7 @@ const HelpContent = {
                                 'TikTok and YouTube are optional: connect them now, or later in Settings.',
                                 'An optional check: ask a friend to comment “test” on your latest post, from another account. The page says “Got it. Comments reach your account.” when it arrives. It waits for 10 minutes, and you can **Check again**.',
                             ] },
-                            'You can skip the whole screen and connect later in **Settings** → **Connections**: [[connect-meta]].',
+                            'You can skip the whole screen and connect later in **Settings** → **Channels**: [[connect-meta]].',
                         ],
                     },
                 },
@@ -452,6 +452,112 @@ const HelpContent = {
                                 ['The samples say they need an AI key', 'The platform administrator has to add one. Carry on without them: everything else works.'],
                                 ['I closed the page in the middle of the setup', 'Open the dashboard address and sign in: the setup resumes where you stopped, and your answers are kept.'],
                             ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 1c. Your team ───────────────────────────────────────────────────
+        {
+            slug: 'team',
+            group: 'start',
+            icon: 'users',
+            title: { ar: 'فريق مساحة العمل', en: 'Your team' },
+            summary: {
+                ar: 'كيف يدعو مالك مساحة العمل أشخاصًا، ويغيّر أدوارهم، ويزيلهم، ويعطيهم رابط إعادة تعيين كلمة المرور.',
+                en: 'How the workspace owner invites people, changes their roles, removes them, and gives them a password reset link.',
+            },
+            related: ['getting-started', 'onboarding', 'inbox'],
+            sections: [
+                {
+                    id: 'invite',
+                    title: { ar: 'دعوة شخص', en: 'Invite a person' },
+                    body: {
+                        ar: [
+                            'يفتح مالك مساحة العمل **الإعدادات** ← **الفريق** ويضغط **ادعُ شخصًا**. اختر دورًا، وأضف بريد الشخص إن كنت تعرفه (فلا يعمل الرابط حينئذٍ إلا لهذا البريد)، ثم اضغط **أنشئ الرابط**.',
+                            'أرسل الرابط عبر واتساب أو انسخه: يظهر مرة واحدة ويعمل مرة واحدة، ويضع الشخص كلمة مرور حين يفتحه. وإلى أن يفعل يبقى تحت **بانتظار الانضمام**، وهناك يمكنك **إنشاء رابط جديد** أو **إلغاء الرابط**.',
+                            { note: 'لا تصل الدعوة بالبريد الإلكتروني: التطبيق لا يرسل بريدًا، فالرابط ينتقل بيدك.' },
+                        ],
+                        en: [
+                            'The workspace owner opens **Settings** → **Team** and presses **Invite a person**. Choose a role, add the person’s email if you know it (the link then works only for that address), and press **Create link**.',
+                            'Send the link on WhatsApp or copy it: it is shown once, works once, and the person sets a password when they open it. Until they do, they stay under **Waiting to join**, where you can **Regenerate** or **Revoke** the link.',
+                            { note: 'The invitation is not emailed: the app sends no email, so the link travels by your hand.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'roles',
+                    title: { ar: 'الأدوار الثلاثة', en: 'The three roles' },
+                    body: {
+                        ar: [
+                            { dl: [
+                                ['مالك', 'كل شيء: الفريق والاتصالات وجميع الإعدادات.'],
+                                ['مشغّل', 'يتولى العمل اليومي: الردود والمنشورات والرسائل ومساعد الرسائل، دون تغيير الاتصالات أو الفريق.'],
+                                ['مُطّلع', 'يطّلع ولا يغيّر: الإحصاءات والردود والمنشورات والرسائل.'],
+                            ] },
+                            'الدور الأضيق يكفي لمعظم الناس: اجعل من يرد على العملاء مشغّلًا، ومن يكتفي بالمتابعة مُطّلعًا، ولا تمنح دور المالك إلا لمن يحق له تغيير الاتصالات والفريق.',
+                        ],
+                        en: [
+                            { dl: [
+                                ['Owner', 'Everything: the team, the connections and every setting.'],
+                                ['Operator', 'Does the daily work: replies, posts, the inbox and the DM assistant. Cannot change the connections or the team.'],
+                                ['Viewer', 'Can look, not change: stats, replies, posts and the inbox.'],
+                            ] },
+                            'The narrowest role that fits is usually right: make whoever answers customers an operator, whoever only follows along a viewer, and give the owner role only to someone who should change the connections and the team.',
+                        ],
+                    },
+                },
+                {
+                    id: 'change-role',
+                    title: { ar: 'تغيير دور شخص', en: 'Change someone’s role' },
+                    body: {
+                        ar: [
+                            'في **الفريق** يظهر بجانب كل شخص اختيار للدور (إلا مدير الحساب). يسري الدور الجديد حين تختاره، ويعرض الإشعار الذي يظهر بعده **تراجع** إن أخطأت.',
+                            { warn: 'تحتاج مساحة العمل إلى مالك واحد على الأقل. لا يمكنك خفض دور آخر مالك ولا إزالته: اجعل شخصًا آخر مالكًا أولًا.' },
+                        ],
+                        en: [
+                            'In **Team**, each person has a role picker beside them (except the account manager). The new role applies when you pick it, and the notice that follows offers **Undo** if you slipped.',
+                            { warn: 'A workspace needs at least one owner. You cannot demote or remove the last one: make someone else an owner first.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'remove',
+                    title: { ar: 'إزالة شخص', en: 'Remove someone' },
+                    body: {
+                        ar: [
+                            'اضغط **أزل** بجانب اسمه ثم أكّد. يفقد الشخص وصوله إلى مساحة العمل عند التأكيد، ويبقى حسابه، ولا يُحذف شيء مما أنشأه، ولا يتأثر وصوله إلى أي مساحة عمل أخرى.',
+                            'ويمكنك أن تزيل نفسك بالزر **غادر** إن وُجد مالك آخر. ثم تنتقل إلى مساحة عمل أخرى إن كانت لك واحدة، وإلا إلى صفحة تسجيل الدخول.',
+                        ],
+                        en: [
+                            'Press **Remove** beside their name and confirm. The person loses access to the workspace when you confirm; their account stays, nothing they made is deleted, and their access to any other workspace is untouched.',
+                            'You can remove yourself with **Leave** when another owner exists. You are then taken to another workspace if you have one, and to the sign-in page if not.',
+                        ],
+                    },
+                },
+                {
+                    id: 'reset',
+                    title: { ar: 'نسي كلمة المرور', en: 'Someone forgot their password' },
+                    body: {
+                        ar: [
+                            'اضغط **رابط إعادة التعيين** بجانب اسمه وأرسل إليه الرابط. يضع به كلمة مرور جديدة، وبذلك يُسجَّل خروجه من كل مكان آخر. وصفحة تسجيل الدخول تطلب منه أن يسألك عن هذا الرابط.',
+                            'الرابط يظهر مرة واحدة كرابط الدعوة تمامًا، ويعمل مرة واحدة.',
+                        ],
+                        en: [
+                            'Press **Reset link** beside their name and send them the link. They set a new password with it, which also signs them out everywhere else. The sign-in page tells them to ask you for this link.',
+                            'The link is shown once, like an invite link, and works once.',
+                        ],
+                    },
+                },
+                {
+                    id: 'account-manager',
+                    title: { ar: 'مدير الحساب', en: 'The account manager' },
+                    body: {
+                        ar: [
+                            'من تراه موسومًا بـ **مدير الحساب** يدير المنصة نفسها. يفتح كل مساحات العمل دون أن يكون عضوًا فيها، فهو للقراءة فقط هنا: لا تغيّر دوره ولا تزيله، ولا يُنشأ له رابط إعادة تعيين.',
+                        ],
+                        en: [
+                            'Someone marked **Account manager** runs the platform itself. They open every workspace without being a member, so they are read-only here: you cannot change or remove them, and no reset link is made for them.',
                         ],
                     },
                 },
@@ -1070,7 +1176,7 @@ const HelpContent = {
                     title: { ar: 'أسئلة البداية في إنستجرام', en: 'Instagram ice breakers' },
                     body: {
                         ar: [
-                            'أسئلة البداية أزرار تظهر للشخص عندما يفتح محادثة جديدة معك في إنستجرام: يضغط على سؤال، فيصلك كرسالة منه ويجيب عنها المساعد. ويمكنك أن تضيف معها قائمة ثابتة تبقى في المحادثة. تجدها في **الإعدادات** ← **الرسائل والتنبيهات** ← **أسئلة البداية في إنستجرام**، ولمالك مساحة العمل وحده، وبعد ربط إنستجرام: [[connect-meta]].',
+                            'أسئلة البداية أزرار تظهر للشخص عندما يفتح محادثة جديدة معك في إنستجرام: يضغط على سؤال، فيصلك كرسالة منه ويجيب عنها المساعد. ويمكنك أن تضيف معها قائمة ثابتة تبقى في المحادثة. تجدها في صفحة **مساعد الرسائل** ← **أسئلة البداية في إنستجرام**، ولمالك مساحة العمل وحده، وبعد ربط إنستجرام: [[connect-meta]].',
                             { ol: [
                                 'اكتب حتى 4 أسئلة، وطول كل سؤال 80 حرفاً على الأكثر. ليست لديك أفكار؟ اضغط **استخدم الأسئلة المقترحة**. وتضيف سؤالاً بـ **أضف سؤالاً**.',
                                 'لكل سؤال اختر **ما الذي يسأل عنه** ليعرف المساعد كيف يجيب: **ما الذي يتضمنه**، **لمن يناسب**، **السعر**، **يطلب الرابط**، **دعم أو مشكلة**، **التحدث مع شخص**، أو **شيء آخر**.',
@@ -1087,7 +1193,7 @@ const HelpContent = {
                             { note: 'إنستجرام يعرضها في تطبيق الجوال لا على الكمبيوتر، والمحادثات المفتوحة قد تحتاج إلى تحديث الصندوق حتى يظهر التغيير. ويسمح بـ 10 تغييرات للملف كل 10 دقائق.' },
                         ],
                         en: [
-                            'Ice breakers are buttons a person sees when they open a new chat with you on Instagram: they tap a question, it reaches you as their message, and the assistant answers it. You can add a persistent menu that stays in the chat. Find them in **Settings** → **Messages & alerts** → **Instagram ice breakers**, for the workspace owner only, once Instagram is connected: [[connect-meta]].',
+                            'Ice breakers are buttons a person sees when they open a new chat with you on Instagram: they tap a question, it reaches you as their message, and the assistant answers it. You can add a persistent menu that stays in the chat. Find them on the **DM assistant** page → **Instagram ice breakers**, for the workspace owner only, once Instagram is connected: [[connect-meta]].',
                             { ol: [
                                 'Write up to 4 questions, each at most 80 characters. No ideas? Press **Use the suggested questions**. Add one with **Add a question**.',
                                 'For each question pick **What it asks**, so the assistant knows how to answer: **What is included**, **Who it is for**, **The price**, **Asks for the link**, **Support or a problem**, **Talk to a person**, or **Something else**.',
@@ -1447,7 +1553,7 @@ const HelpContent = {
                             'المنشور الفاشل يبقى في الطابور ومعه سبب فشله، ويظل محسوبًا على شارة «الجدولة» وفي شاشة «اليوم» حتى تتصرف فيه. للتصرف طريقان:',
                             { ul: [
                                 '**أرشفة**: من بطاقة المنشور، أو من شاشة «اليوم» لعدة منشورات معًا. لا يُنشر المنشور بعد ذلك ولا يُحسب ضمن ما هو بحاجة إليك، ويبقى تحت **المؤرشفة** في الجدولة، ومنها تستعيده بزر **إلغاء الأرشفة** كما كان تمامًا.',
-                                'من تلقاء النظام: يؤرشف يوميًا ما فشل منذ أكثر من 30 يومًا. لا يحذف شيئًا، ويسجّل ذلك في سجل التدقيق. تغيّر المدة أو توقفه من **الإعدادات** ← **الرسائل والتنبيهات** ← **تنظيف العناصر القديمة تلقائيًا**.',
+                                'من تلقاء النظام: يؤرشف يوميًا ما فشل منذ أكثر من 30 يومًا. لا يحذف شيئًا، ويسجّل ذلك في سجل التدقيق. تغيّر المدة أو توقفه من **الإعدادات** ← **التنبيهات** ← **تنظيف العناصر القديمة تلقائيًا**.',
                             ] },
                             'المحادثات القديمة التي كانت بحاجة إليك ولم يُتعامل معها بعد 30 يومًا تُميَّز بالطريقة نفسها بأنه تم التعامل معها، وتعود إلى قائمتك إن كتب صاحبها مجددًا.',
                         ],
@@ -1455,7 +1561,7 @@ const HelpContent = {
                             'A failed post stays in the queue with the reason it failed, and stays counted on the **Scheduler** badge and on **Today** until you deal with it. There are two ways:',
                             { ul: [
                                 '**Archive:** from the post’s card, or from **Today** for several at once. The post is not published after that and no longer counts as needing you. It stays under **Archived** in the Scheduler, and **Unarchive** puts it back exactly as it was.',
-                                'By itself: once a day the system archives what failed more than 30 days ago. It deletes nothing, and records it in the audit log. Change the days, or switch it off, in **Settings** → **Messages & alerts** → **Clear old items automatically**.',
+                                'By itself: once a day the system archives what failed more than 30 days ago. It deletes nothing, and records it in the audit log. Change the days, or switch it off, in **Settings** → **Notifications** → **Clear old items automatically**.',
                             ] },
                             'Conversations that needed you and were never handled after 30 days are marked handled the same way, and come back to your list if the person writes again.',
                         ],
@@ -2002,7 +2108,7 @@ const HelpContent = {
                         ar: [
                             { ol: [
                                 'يحفظ مسؤول المنصة عميل Google أولاً ([[youtube#operator]]). وقبل ذلك تقول البطاقة «يوتيوب غير جاهز بعد. اطلب من مسؤول المنصة إضافة عميل Google OAuth.»',
-                                'مالك المساحة يفتح **الإعدادات** ← **الاتصالات** ← **يوتيوب** ويضغط **اربط يوتيوب**. الزر يظهر للمالك فقط.',
+                                'مالك المساحة يفتح **الإعدادات** ← **القنوات** ← **يوتيوب** ويضغط **اربط يوتيوب**. الزر يظهر للمالك فقط.',
                                 'تنفتح Google: اختر الحساب الذي فيه القناة، وعلّم على المربعين اللذين تطلبهما: إدارة فيديوهات يوتيوب (من أجل الرفع)، وعرض اسم القناة وصورتها.',
                                 'ترجع إلى الإعدادات وترى اسم القناة وصورتها وبجانبهما **متصل**.',
                             ] },
@@ -2015,7 +2121,7 @@ const HelpContent = {
                         en: [
                             { ol: [
                                 'The platform administrator saves the Google client first ([[youtube#operator]]). Until then the card says “YouTube isn’t set up yet. Ask the platform administrator to add the Google OAuth client.”',
-                                'The workspace owner opens **Settings** → **Connections** → **YouTube** and presses **Connect YouTube**. Only the owner sees the button.',
+                                'The workspace owner opens **Settings** → **Channels** → **YouTube** and presses **Connect YouTube**. Only the owner sees the button.',
                                 'Google opens: choose the account that has the channel, and tick both boxes it asks for: managing your YouTube videos (to upload) and seeing the channel’s name and picture.',
                                 'You come back to Settings and see the channel’s name and picture, marked **Connected**.',
                             ] },
@@ -2522,7 +2628,7 @@ const HelpContent = {
                                 'اضغط **إنشاء رمز جديد** (Generate new token)، واختر التطبيق الذي تحدده لك منصة أوتوريبلاي (يذكر مدير المنصة اسمه).',
                                 'في **انتهاء صلاحية الرمز** اختر **أبداً** (Never).',
                                 'علّم الأذونات الخمسة الآتية ثم أنشئ الرمز وانسخه مباشرة، فلن تعرض ميتا الرمز مرة أخرى.',
-                                'في أوتوريبلاي افتح **الإعدادات** ثم **الاتصالات** ثم **إعلانات ميتا (الترويج)**، والصق الرمز في خانة **رمز إعلانات مستخدم النظام**، وأدخل **معرّف الحساب الإعلاني**، ثم اضغط **احفظ**.',
+                                'في أوتوريبلاي افتح **الإعدادات** ثم **القنوات** ثم **إعلانات ميتا (الترويج)**، والصق الرمز في خانة **رمز إعلانات مستخدم النظام**، وأدخل **معرّف الحساب الإعلاني**، ثم اضغط **احفظ**.',
                                 'اضغط **اختبر الاتصال**. تقرأ أوتوريبلاي ما يستطيع الرمز الوصول إليه، وتعرض الأذونات الناقصة والأصول المُسندة (الحسابات الإعلانية والصفحات وحسابات إنستجرام). إن ظهر نقص فعالجه في ميتا ثم أعد الاختبار.',
                             ] },
                             { dl: [
@@ -2545,7 +2651,7 @@ const HelpContent = {
                                 'Press **Generate new token**, and choose the app that your AutoReply platform names (the platform administrator tells you which).',
                                 'For **Token expiration**, choose **Never**.',
                                 'Tick the five permissions listed below, generate the token and copy it at once. Meta never shows it a second time.',
-                                'In AutoReply open **Settings**, then **Connections**, then **Meta ads (Boost)**, paste the token into **System-user ads token**, enter the **Ad account ID**, and press **Save**.',
+                                'In AutoReply open **Settings**, then **Channels**, then **Meta ads (Boost)**, paste the token into **System-user ads token**, enter the **Ad account ID**, and press **Save**.',
                                 'Press **Test connection**. AutoReply reads what the token can reach and shows the permissions that are missing and the assets assigned to it (ad accounts, Pages and Instagram accounts). If something is missing, fix it in Meta and test again.',
                             ] },
                             { dl: [
@@ -6703,7 +6809,7 @@ const HelpContent = {
                                 ['هل يمكن أن يُنشر شيء دون موافقتي؟', 'لا. يُنشر المنشور حين تجدوله أنت، وتصدر الردود من ردودك التلقائية ومساعدك وتعليماتك.'],
                                 ['هل يعمل مع حساب إنستجرام شخصي؟', 'لا، يلزم حساب احترافي (أعمال أو صانع محتوى) متصل بصفحة فيسبوك: [[connect-meta#needs]].'],
                                 ['هل أستطيع إيقاف الرد الآلي لعميل معيّن؟', 'نعم. في **الرسائل** افتح المحادثة وأطفئ **المساعد في هذه المحادثة**. وأي رد يدوي منك يوقفه تلقائياً في تلك المحادثة.'],
-                                ['هل أستطيع تغيير لغة اللوحة؟', 'نعم، من الزر أعلى الصفحة، أو من **الإعدادات** ← **المظهر واللغة**.'],
+                                ['هل أستطيع تغيير لغة اللوحة؟', 'نعم، من الزر أعلى الصفحة، أو من **الإعدادات** ← **حسابك**.'],
                             ] },
                         ],
                         en: [
@@ -6712,7 +6818,7 @@ const HelpContent = {
                                 ['Can anything be posted without my approval?', 'No. A post goes out when you schedule it, and replies come from your own keyword replies and your assistant, following your instructions.'],
                                 ['Does it work with a personal Instagram account?', 'No: you need a professional (Business or Creator) account connected to a Facebook Page. See [[connect-meta#needs]].'],
                                 ['Can I stop the AI for one customer?', 'Yes. In the **Inbox**, open the conversation and switch off **AI assistant for this conversation**. A manual reply from you pauses it there too.'],
-                                ['Can I change the dashboard’s language?', 'Yes, with the button at the top of the page, or in **Settings** → **Appearance & language**.'],
+                                ['Can I change the dashboard’s language?', 'Yes, with the button at the top of the page, or in **Settings** → **You**.'],
                             ] },
                         ],
                     },

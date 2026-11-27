@@ -167,7 +167,7 @@ function load(lang: 'ar' | 'en' = 'ar', hash = '#/help', extra: string[] = []): 
 const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 const REQUIRED = [
-    'getting-started', 'onboarding', 'connect-meta', 'campaigns', 'dm-assistant', 'inbox', 'scheduling', 'growth', 'seo', 'tiktok', 'youtube', 'whatsapp', 'ads',
+    'getting-started', 'onboarding', 'team', 'connect-meta', 'campaigns', 'dm-assistant', 'inbox', 'scheduling', 'growth', 'seo', 'tiktok', 'youtube', 'whatsapp', 'ads',
     'studio', 'worker', 'library', 'create', 'studio-schedule', 'studio-settings', 'monteur', 'infographics', 'explainers', 'brand', 'media-storage', 'ai-usage', 'troubleshooting', 'faq',
 ];
 

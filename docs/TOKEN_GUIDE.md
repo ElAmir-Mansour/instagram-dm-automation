@@ -201,6 +201,6 @@ is reset.
 
 1. Meta Business Settings → System users → select the user → **Generate new token** (same app, **Never**, the five scopes). The old
    token keeps working until you revoke it, so install the new one first.
-2. AutoReply → Settings → Connections → **Meta ads (Boost)** → paste into **System-user ads token** → **Save** → **Test connection**.
+2. AutoReply → Settings → Channels → **Meta ads (Boost)** → paste into **System-user ads token** → **Save** → **Test connection**.
 3. Only then revoke the old token in Meta (system user → Revoke tokens), if you want it gone.
 4. Never paste a token in chat, email or an issue. `scripts/ads-probe.mjs` never prints it.
