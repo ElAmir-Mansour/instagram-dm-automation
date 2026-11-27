@@ -122,7 +122,7 @@ describe('the campaign card: the outcome split, with red only for what the owner
         const { page } = loadCampaigns('en');
         const card = String(page.renderCard(split({ delivered: 3, by_design: 9, actionable: 0, pending: 0 })));
         assert.equal(card.includes('dot bad'), false);
-        assert.equal(card.includes('status=FAILED'), false, 'no link to an empty list');
+        assert.equal(card.includes('outcome=actionable'), false, 'no link to an empty list');
         assert.ok(card.includes('dot neutral'));
     });
 
@@ -130,7 +130,7 @@ describe('the campaign card: the outcome split, with red only for what the owner
         const { page, t } = loadCampaigns('en');
         const card = String(page.renderCard(split({ delivered: 3, by_design: 0, actionable: 2, pending: 0 })));
         assert.ok(card.includes('data-action="app:navigate" data-target="activity"'));
-        assert.ok(card.includes('data-query="campaign=c-9&amp;status=FAILED"'));
+        assert.ok(card.includes('data-query="campaign=c-9&amp;outcome=actionable"'));
         assert.ok(card.includes(t('campaigns.openFailed')));
     });
 

@@ -34,6 +34,18 @@ const Admin = {
         return undefined;
     },
 
+    /** The days at which something that runs out turns amber and red: the same two numbers as the Settings connections list (`SettingsPage.EXPIRY`). */
+    EXPIRY_AMBER_DAYS: 14,
+    EXPIRY_RED_DAYS: 3,
+
+    /** The text class for a number of days left: danger at 3 or fewer (or past), warning at 14 or fewer, otherwise none. */
+    expiryTone(days) {
+        if (days === null || days === undefined || Number.isNaN(days)) return '';
+        if (days <= Admin.EXPIRY_RED_DAYS) return 'text-danger';
+        if (days <= Admin.EXPIRY_AMBER_DAYS) return 'text-warning';
+        return '';
+    },
+
     /** Numeric, or null — never NaN, and never the string "undefined". */
     num(row, ...keys) {
         const value = Admin.pick(row, ...keys);

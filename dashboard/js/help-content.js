@@ -537,7 +537,7 @@ const HelpContent = {
                             { ol: [
                                 'جنب **رمز الوصول** مكتوب **صالح**، وما في تنبيه صلاحيات ناقصة.',
                                 'من حساب ثاني، علّق بكلمة حملة مفعّلة، وتأكد أن الرسالة وصلت.',
-                                'افتح **النتائج** ثم **السجل**: كل تعليق طابق حملة يظهر هنا مع حالته.',
+                                'افتح **النتائج** ثم **السجل**: كل تعليق طابق حملة يظهر هنا مع ما انتهت إليه رسالته (وصلت، يحتاج إليك، مقصود، قيد الانتظار، رسائله مغلقة).',
                             ] },
                             { note: 'التعليق اللي ما يطابق أي حملة ما يُسجَّل أصلاً. يعني غيابه من السجل مو دليل أن الربط خربان؛ تأكد من الكلمة أول.' },
                         ],
@@ -545,7 +545,7 @@ const HelpContent = {
                             { ol: [
                                 'The **Access token** reads **Valid**, with no missing-permissions warning.',
                                 'From another account, comment the keyword of an active campaign and check the DM arrives.',
-                                'Open **Results**, then **Log**: every comment that matched a campaign is listed with its status.',
+                                'Open **Results**, then **Log**: every comment that matched a campaign is listed with what became of its DM (Delivered, Needs you, By design, Waiting, DMs closed).',
                             ] },
                             { note: 'A comment that matches no campaign is not recorded at all, so its absence from the log does not mean the connection is broken. Check the keyword first.' },
                         ],
@@ -778,14 +778,14 @@ const HelpContent = {
                         ar: [
                             { ul: [
                                 'رسالة وحدة لكل شخص كل 24 ساعة، حتى لو علّق بالكلمة خمس مرات.',
-                                'حد أقصى 180 رسالة في الساعة لكل حساب، تحت سقف ميتا بهامش أمان. لو انتشر منشورك، الزايد يُسجَّل **فشلت** مع السبب في **سجل النشاط**.',
+                                'حد أقصى 180 رسالة في الساعة لكل حساب، تحت سقف ميتا بهامش أمان. لو انتشر منشورك، يُسجَّل الزائد في **سجل النشاط** بحالة **مقصود** مع السبب.',
                                 'تعليقاتك أنت على منشوراتك ما تشغّل الحملات، عشان ما يرد النظام على نفسه.',
                             ] },
                         ],
                         en: [
                             { ul: [
                                 'One DM per person every 24 hours, even if they comment the keyword five times.',
-                                'At most 180 DMs an hour per account, safely under Meta’s own ceiling. If a post goes viral, the overflow is recorded as **Failed**, with the reason, in the **Activity Log**.',
+                                'At most 180 DMs an hour per account, safely under Meta’s own ceiling. If a post goes viral, the overflow is recorded in the **Activity Log** as **By design**, with the reason.',
                                 'Your own comments on your own posts never trigger a campaign, so the system doesn’t answer itself.',
                             ] },
                         ],

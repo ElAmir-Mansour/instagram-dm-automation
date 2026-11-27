@@ -344,9 +344,10 @@ describe('the Settings card: what each state offers', () => {
     });
 
     it('the operator\'s own token connection: shown as that, never offered a Disconnect, and a confirm comes before Reconnect', () => {
-        const markup = card(s, connectedToken());
+        const markup = card(s, connectedToken(), { isAdmin: true });
         assert.doesNotMatch(markup, /meta-disconnect/);
-        assert.ok(markup.includes(s.t('meta.tokenNote')));
+        assert.ok(markup.includes(s.t('meta.tokenNote')), 'the platform admin is told where the token is changed');
+        assert.equal(card(s, connectedToken()).includes(s.t('meta.tokenNote')), false, 'nobody else sees the Access token card, so nobody else is sent to it');
         assert.ok(markup.includes(s.t('meta.via.token')));
         assert.ok(markup.includes(s.t('meta.webhook.byOperator')), 'its webhook is set up in Meta\'s dashboard: not "not subscribed"');
         assert.ok(!markup.includes(s.t('meta.webhook.off')));
@@ -355,8 +356,8 @@ describe('the Settings card: what each state offers', () => {
 
     it('the operator\'s token connection with Login switched off: no Connect, no Reconnect, no Disconnect', () => {
         for (const over of [{ enabled: false }, { appConfigured: false }, { redirectUriConfigured: false }]) {
-            const off = card(s, { ...connectedToken(), ...over });
-            assert.doesNotMatch(off, /<button/, JSON.stringify(over));
+            const off = card(s, { ...connectedToken(), ...over }, { isAdmin: true });
+            for (const id of ['meta-connect', 'meta-disconnect']) assert.equal(off.includes(`id="${id}"`), false, `${id} ${JSON.stringify(over)}`);
             assert.ok(off.includes(s.t('meta.tokenNote')), 'it is still shown for what it is');
             assert.ok(off.includes(s.t('meta.status.ok')));
         }

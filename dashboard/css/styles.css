@@ -1151,7 +1151,9 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
     margin-block-end: var(--space-4);
 }
 .table-title { font-size: var(--fs-400); font-weight: var(--fw-semibold); color: var(--text-strong); }
-.table-wrapper { overflow-x: auto; }
+/* `position: relative` makes the wrapper the containing block of a visually hidden header ("Actions" is `.sr-only`, `position: absolute`): without it
+   the 1px label sits against the page, past the scroller's edge, and widens a 375px phone to 543px (UX U1, SA-03). */
+.table-wrapper { overflow-x: auto; position: relative; }
 .data-table { width: 100%; }
 .data-table th {
     text-align: start;
@@ -1638,6 +1640,10 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
    One notice, used by Settings ("reconnect due") and by the wizard (what a return from a provider said); the three connection
    cards of W4 and the test comment under them; and the Page picker's disabled option. Tokens and logical properties only: the same
    rules are right in Arabic and English, and every button inside is the 44px `.btn`. */
+/* The Instagram & Facebook card's one status line: state, Page name, handle. It wraps as a unit and never pushes the phone wider. */
+.meta-statusline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0; min-inline-size: 0; }
+.meta-statusline-part { min-inline-size: 0; overflow-wrap: anywhere; }
+.meta-statusline-part + .meta-statusline-part::before { content: '·'; margin-inline-end: var(--space-3); color: var(--text-muted); }
 .meta-notice {
     display: flex; align-items: flex-start; gap: var(--space-3); min-inline-size: 0; overflow-wrap: anywhere;
     margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4);

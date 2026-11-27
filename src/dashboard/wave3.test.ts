@@ -233,7 +233,7 @@ function stubAnalytics(s: Loaded, failures: Json = { days: 30, total: 0, reasons
 }
 
 describe('Analytics — the window (A1)', () => {
-    it('defaults to all time, asks Overview’s question, and names the window on every windowed tile and panel', async () => {
+    it('opens on 28 days, asks Overview’s question, and names the window on every windowed tile and panel', async () => {
         const s = load('en');
         const A = s.pages.Analytics;
         A.range = null;
@@ -241,19 +241,36 @@ describe('Analytics — the window (A1)', () => {
         await A.render();
         await settle();
         const byMethod = Object.fromEntries(s.calls.map((c) => [c.method, c.args]));
-        assert.deepEqual(plain(byMethod.getStats), [null], 'all time sends no days');
-        assert.deepEqual(plain(byMethod.getCampaignStats), [null]);
-        assert.deepEqual(plain(byMethod.getDailyStats), [30]);
-        assert.deepEqual(plain(byMethod.getFailureReasons), [30]);
+        assert.deepEqual(plain(byMethod.getStats), [28], 'no remembered choice: 28 days, as Growth opens (DW-R2)');
+        assert.deepEqual(plain(byMethod.getCampaignStats), [28]);
+        assert.deepEqual(plain(byMethod.getDailyStats), [28], 'the strip draws the same window as the tiles');
+        assert.deepEqual(plain(byMethod.getFailureReasons), [30], 'the failures panel is always 30 days, and says so');
         const page = s.dom.get('page-container')!.innerHTML;
         assert.ok(page.includes('role="group" aria-label="Period"'));
-        assert.match(page, /id="analytics-range-all"[^>]*aria-pressed="true"/);
+        assert.match(page, /id="analytics-range-28"[^>]*aria-pressed="true"/);
         assert.match(page, /id="analytics-range-7"[^>]*aria-pressed="false"/);
-        assert.equal((page.match(/<p class="stat-sub" data-window>All time<\/p>/g) || []).length, 3, 'total, rate, people');
-        assert.equal((page.match(/class="text-meta analytics-window">All time</g) || []).length, 2, 'campaigns, platforms');
+        assert.equal((page.match(/<p class="stat-sub" data-window>Last 28 days<\/p>/g) || []).length, 3, 'total, rate, people');
+        assert.equal((page.match(/class="text-meta analytics-window">Last 28 days</g) || []).length, 2, 'campaigns, platforms');
         assert.ok(!page.includes('analytics-split'), 'no sent-vs-failed card: the success-rate tile already says it');
         assert.ok(!page.includes('platform-totals'), 'no totals row repeating the platform legend');
-        assert.ok(page.includes('DMs over the last 30 days'), 'the strip says its own window');
+        assert.ok(page.includes('DMs over the last 28 days'), 'the strip says its own window');
+        assert.ok(!page.includes('over the last 30 days'));
+    });
+
+    it('the strip follows the chosen window; on "All" it says it draws the last 30 days instead of borrowing the tiles\' window', async () => {
+        const s = load('en');
+        const A = s.pages.Analytics;
+        A.range = null;
+        stubAnalytics(s);
+        await A.render();
+        await settle();
+        for (const [range, days] of [['7', 7], ['90', 90], ['all', 30]] as const) {
+            s.calls.length = 0;
+            await A.setRange({ dataset: { range } });
+            await settle();
+            assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getDailyStats').map((c) => c.args)), [[days]], `range ${range}`);
+            assert.ok(s.dom.get('page-container')!.innerHTML.includes(`DMs over the last ${days} days`), `range ${range} names its strip`);
+        }
     });
 
     it('remembers the choice per browser, and a switch re-asks with days and says so', async () => {
@@ -286,7 +303,7 @@ describe('Analytics — the window (A1)', () => {
 
     it('ignores a hand-edited entry, and works with storage switched off', async () => {
         const junk = load('en', { stored: { 'analytics:range': '"; DROP' } });
-        assert.equal(junk.pages.Analytics.loadRange(), 'all');
+        assert.equal(junk.pages.Analytics.loadRange(), '28');
 
         const s = load('en', { storageThrows: true });
         const A = s.pages.Analytics;
@@ -296,7 +313,7 @@ describe('Analytics — the window (A1)', () => {
         await A.setRange({ dataset: { range: '90' } });
         await settle();
         assert.equal(A.range, '90', 'the choice holds for the visit even when it cannot be remembered');
-        assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getStats').map((c) => c.args)), [[null], [90]]);
+        assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getStats').map((c) => c.args)), [[28], [90]]);
     });
 });
 
@@ -327,7 +344,7 @@ describe('Analytics — why DMs fail (A5)', () => {
             await settle();
             const page = s.dom.get('page-container')!.innerHTML;
             assert.ok(page.includes(s.t('analytics.failures.title', { days: A.daysText(30) })));
-            assert.match(page, /data-action="app:navigate" data-target="activity" data-query="status=FAILED"/);
+            assert.match(page, /data-action="app:navigate" data-target="activity" data-query="outcome=actionable"/);
 
             const panel = s.dom.get('analytics-failures')!.innerHTML;
             const words = text(panel);

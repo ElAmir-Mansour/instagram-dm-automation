@@ -548,16 +548,43 @@ const OverviewPage = {
         return Array.isArray(threadsRes.value.data) ? threadsRes.value.data : [];
     },
 
-    /** Threads where the AI is off and the customer spoke last (`Attention.isWaiting`), oldest wait first. */
-    waitingThreads(threadsRes) {
+    /**
+     * Threads a person has to act on (`Attention.needsHuman`): waiting, or handed over, and not marked handled since the customer last wrote.
+     * The one list the nav badge, the Inbox and this screen's "waiting" card and tile all count (UX U1, DW-T1: Today used `Attention.isWaiting`
+     * alone, so a thread marked handled was still "waiting" here, 191 days on, while the badge said 1). Oldest wait first.
+     */
+    needsHumanThreads(threadsRes) {
+        const since = (thread) => {
+            const ms = Attention.lastInboundMs(thread);
+            return ms === null ? (Date.parse(thread.last_message_at) || 0) : ms;
+        };
         return this.threadsOf(threadsRes)
-            .filter((thread) => Attention.isWaiting(thread))
-            .sort((a, b) => String(a.last_message_at || '').localeCompare(String(b.last_message_at || '')));
+            .filter((thread) => Attention.needsHuman(thread))
+            .sort((a, b) => since(a) - since(b));
     },
 
-    /** Threads a person has to act on (`Attention.needsHuman`): waiting, or handed over, and not marked handled. What the nav badge counts. */
-    needsHumanThreads(threadsRes) {
-        return this.threadsOf(threadsRes).filter((thread) => Attention.needsHuman(thread));
+    /** How long the oldest of `threads` (from `needsHumanThreads`) has waited, as words, or null. */
+    oldestWait(threads) {
+        if (!threads.length) return null;
+        const ms = Attention.lastInboundMs(threads[0]);
+        return this.waitAge(ms === null ? threads[0].last_message_at : new Date(ms).toISOString());
+    },
+
+    /** The same list under its old name: every caller that said "waiting" now gets what needs a person. */
+    waitingThreads(threadsRes) {
+        return this.needsHumanThreads(threadsRes);
+    },
+
+    /**
+     * Where the "waiting" card goes (a hash query for `app:navigate`): ONE thread opens that thread (`c=<id>`); several open the Inbox filter
+     * that holds exactly them, "Needs reply" or "Needs you", and a mix of the two opens the whole list, so the card never links to a screen
+     * that shows fewer than it counted.
+     */
+    waitingQuery(threads) {
+        if (threads.length === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(threads[0].id || ''))) return `c=${encodeURIComponent(String(threads[0].id).toLowerCase())}`;
+        if (threads.every((thread) => !Attention.isHandoff(thread))) return 'filter=waiting';
+        if (threads.every((thread) => Attention.isHandoff(thread) && !Attention.isWaiting(thread))) return 'filter=needs_you';
+        return '';
     },
 
     /**
@@ -769,7 +796,7 @@ const OverviewPage = {
                         ? t('overview.alert.failedTodayMore', { n: UI.formatNumber(this.FAILED_TODAY_LIMIT) })
                         : t('overview.alert.failedToday', { count: failedToday }),
                     body: t('overview.alert.failedTodayBody'),
-                    action: t('overview.openActivity'), target: 'activity',
+                    action: t('overview.openActivity'), target: 'activity', query: 'outcome=actionable',
                 });
             }
         }
@@ -858,14 +885,14 @@ const OverviewPage = {
         //    opens the inbox already filtered to them (O10), and the body says
         //    how long the oldest has waited.
         if (threadsRes.status === 'fulfilled' && threadsRes.value) {
-            const waiting = this.waitingThreads(threadsRes);
+            const waiting = this.needsHumanThreads(threadsRes);
             if (waiting.length > 0) {
-                const age = this.waitAge(waiting[0].last_message_at);
+                const age = this.oldestWait(waiting);
                 alerts.push({
                     level: 'warning', icon: 'message-square-dot',
                     title: t('overview.alert.waitingHumans', { count: waiting.length }),
                     body: age ? t('overview.alert.waitingOldest', { age }) : t('overview.alert.waitingHumansBody'),
-                    action: t('overview.openInbox'), target: 'inbox', query: 'filter=waiting',
+                    action: t('overview.openInbox'), target: 'inbox', query: this.waitingQuery(waiting),
                 });
             }
         } else if (threadsRes.status === 'rejected') {
@@ -1134,8 +1161,8 @@ const OverviewPage = {
         const dailyReason = t('overview.alert.trendUnknown');
 
         const threadsOk = threadsRes && threadsRes.status === 'fulfilled';
-        const waiting = this.waitingThreads(threadsRes);
-        const oldest = waiting.length ? this.waitAge(waiting[0].last_message_at) : null;
+        const waiting = this.needsHumanThreads(threadsRes);
+        const oldest = this.oldestWait(waiting);
         let waitingSub = t('overview.stat.waitingUnknown');
         if (threadsOk) waitingSub = waiting.length ? (oldest ? t('overview.stat.waitingOldest', { age: oldest }) : '') : t('overview.stat.waitingNone');
 

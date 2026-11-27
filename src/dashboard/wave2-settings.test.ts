@@ -211,28 +211,32 @@ describe('Settings → webhook handshake and scopes', () => {
 });
 
 describe('Activity — deep links, search, errors, export (V1 V2 V3 V5 V6)', () => {
-    it('seeds the filters from #/activity?campaign=…&status=FAILED and strips them', () => {
-        const { ActivityPage, replaced } = load('ar', { campaign: 'c-1', status: 'failed', platform: 'instagram' });
+    it('seeds the filters from #/activity?campaign=…&outcome=actionable (an old status=FAILED too) and strips them', () => {
+        const { ActivityPage, replaced } = load('ar', { campaign: 'c-1', outcome: 'actionable', platform: 'instagram' });
         ActivityPage.currentSearch = 'stale';
         assert.equal(ActivityPage.seedFromHash(), true);
         assert.equal(ActivityPage.currentCampaignId, 'c-1');
-        assert.equal(ActivityPage.currentStatus, 'FAILED');
+        assert.equal(ActivityPage.currentOutcome, 'actionable');
         assert.equal(ActivityPage.currentPlatform, 'instagram');
         assert.equal(ActivityPage.currentSearch, '', 'a link describes a whole view');
         assert.equal(ActivityPage.currentPage, 1);
         assert.deepEqual(replaced, ['/dashboard#/activity']);
+        // An old link or bookmark with `status=` is read as the outcome that means the same: the filter shows it, so it never filters invisibly.
+        const old = load('ar', { status: 'failed' }).ActivityPage;
+        old.seedFromHash();
+        assert.equal(old.currentOutcome, 'actionable');
     });
 
     it('accepts campaign_id too, ignores values it does not know, and leaves the filters alone without a link', () => {
-        const a = load('ar', { campaign_id: 'c-2', status: 'DROP TABLE', platform: 'myspace' }).ActivityPage;
+        const a = load('ar', { campaign_id: 'c-2', status: 'DROP TABLE', outcome: 'drop', platform: 'myspace' }).ActivityPage;
         a.seedFromHash();
         assert.equal(a.currentCampaignId, 'c-2');
-        assert.equal(a.currentStatus, '');
+        assert.equal(a.currentOutcome, '');
         assert.equal(a.currentPlatform, '');
         const { ActivityPage, replaced } = load('ar');
-        ActivityPage.currentStatus = 'SENT';
+        ActivityPage.currentOutcome = 'delivered';
         assert.equal(ActivityPage.seedFromHash(), false);
-        assert.equal(ActivityPage.currentStatus, 'SENT');
+        assert.equal(ActivityPage.currentOutcome, 'delivered');
         assert.deepEqual(replaced, []);
     });
 
@@ -294,16 +298,16 @@ describe('Campaigns — the failed count opens those failures (C8)', () => {
         };
     };
 
-    it('links to the activity log filtered to this campaign and FAILED', () => {
+    it('links to the activity log filtered to this campaign and what needs the owner', () => {
         const { html, t } = card(4);
         assert.ok(html.includes('data-action="app:navigate" data-target="activity"'));
-        assert.ok(html.includes('data-query="campaign=c-9&amp;status=FAILED"'), html.match(/data-query="[^"]*"/)?.[0]);
+        assert.ok(html.includes('data-query="campaign=c-9&amp;outcome=actionable"'), html.match(/data-query="[^"]*"/)?.[0]);
         assert.ok(html.includes(t('campaigns.openFailed')));
     });
 
     it('stays plain text at zero, where the link would open an empty list', () => {
         const { html } = card(0);
-        assert.equal(html.includes('status=FAILED'), false);
+        assert.equal(html.includes('outcome=actionable'), false);
     });
 });
 
