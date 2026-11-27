@@ -1414,6 +1414,30 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'long-queue',
+                    title: { ar: 'طابور طويل: ما يظهر منه وما لا يظهر', en: 'A long queue: what is drawn and what is not' },
+                    body: {
+                        ar: [
+                            'لا ترسم الشاشة كل المنشورات دفعة واحدة، حتى تفتح بسرعة ولا تُحمَّل وسائط لا تحتاج إليها:',
+                            { ul: [
+                                '**بحاجة إليك** تظهر كاملة ودائمًا في الأعلى. رقمها يعدّ المنشورات لا البطاقات: منشور أُرسل إلى إنستجرام وفيسبوك وله نسخة في تيك توك يُحسب منشورًا واحدًا، كما في شاشة «اليوم»، وإن ظهر في بطاقتين أو ثلاث.',
+                                '**القادمة** تعرض منشورات الأيام الأربعة عشر القادمة. ما بعدها يبقى مخفيًا خلف زر «عرض … من المنشورات اللاحقة»، وكل ضغطة تعرض 30 منشورًا إضافيًا. الرقم بجانب العنوان يعدّ الكل، المعروض وغير المعروض.',
+                                '**تمّ نشرها** و**المؤرشفة** تعرض أول 30 منشورًا، ثم زر «عرض … أخرى».',
+                            ] },
+                            'إن حذف النظام ملف منشور بعد نشره (تنظيف الوسائط)، تعرض البطاقة عبارة **الوسائط لم تعد محفوظة** بدل صورة معطوبة. المنشور نفسه ونصه باقيان. أما منشور ينتظر موعده وقد فُقدت وسائطه، فعدّل وسائطه قبل موعده.',
+                        ],
+                        en: [
+                            'The screen does not draw every post at once, so it opens fast and loads no media you do not need:',
+                            { ul: [
+                                '**Needs you** is always drawn in full, at the top. Its number counts posts, not cards: a post sent to Instagram and Facebook with a TikTok copy is one post, as on **Today**, even when it shows as two or three cards.',
+                                '**Upcoming** draws the next 14 days. The rest waits behind a “Show … later” button, and each press shows 30 more. The number beside the title counts all of them, drawn or not.',
+                                '**Done** and **Archived** draw the first 30, then a “Show … more” button.',
+                            ] },
+                            'If the system deleted a post’s file after it went out (media cleanup), the card says **Media no longer stored** instead of showing a broken picture. The post and its caption stay. For a post still waiting for its time whose media is gone, replace the media before it is due.',
+                        ],
+                    },
+                },
+                {
                     id: 'clear-failed',
                     title: { ar: 'تنظيف المنشورات الفاشلة والقديمة', en: 'Clearing failed and old posts' },
                     body: {

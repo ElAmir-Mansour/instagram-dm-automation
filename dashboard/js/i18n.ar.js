@@ -3882,6 +3882,10 @@
     'posts.needsYou.none': 'لا شيء في الطابور بحاجة إليك.',
     'posts.live.loading': 'جارٍ تحميل المنشورات المنشورة…',
     'posts.group.done': 'تمّ نشرها',
+    'posts.mediaGone': 'الوسائط لم تعد محفوظة',
+    'posts.showLater': 'عرض {n} من المنشورات اللاحقة',
+    'posts.showMore': 'عرض {n} أخرى',
+    'posts.drawnOf': 'معروض {shown} من {total}',
     // ─── UX US1: Archive, the Archived view, and honest times on the queue ──
     'posts.archive': 'أرشفة',
     'posts.unarchive': 'إلغاء الأرشفة',
