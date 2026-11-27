@@ -564,7 +564,11 @@ describe('AI providers card — what it draws', () => {
         // With nothing keyed it says why nothing can answer.
         const none = loaded({ keys: {} });
         const row = (none.View.routeRows(none.Card.ai) as Json[])[0];
-        assert.ok(String(none.Card.nowLine(row)).includes('no_provider'));
+        // QA-08: in the interface's words (the translator's sentence and next step), the server's English behind Details.
+        const said = String(none.Card.nowLine(row));
+        assert.ok(said.includes(t('failure.AI_NO_PROVIDER_READY')), said);
+        assert.ok(said.includes(t('failure.AI_NO_PROVIDER_READY.next').replace(/→/g, '→')));
+        assert.match(said, /<details class="error-details">[\s\S]*No AI provider is ready/);
     });
 
     it('offers Test on a route that matches what is saved and not on one with unsaved changes', () => {

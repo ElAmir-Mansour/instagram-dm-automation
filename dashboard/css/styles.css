@@ -1185,7 +1185,9 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .data-table tbody tr:last-child td { border-block-end: none; }
 .cell-num { text-align: end; font-variant-numeric: tabular-nums; }
 .cell-id { font-size: var(--fs-100); color: var(--text-muted); max-width: 140px; }
-.cell-error { max-width: 220px; font-size: var(--fs-100); color: var(--danger-text); }
+.cell-error { max-width: 220px; font-size: var(--fs-100); color: var(--danger-text); overflow-wrap: anywhere; }
+/* The Log's error cell wraps (QA-17: clipped at 220 px, the reason went with the clip); its Details disclosure keeps Meta's own text. */
+.cell-error--wrap { max-width: 340px; white-space: normal; }
 
 /* ─── Empty / error / loader ─────────────────────────────────────────────── */
 .empty-state > [data-lucide] { inline-size: 44px; block-size: 44px; }
@@ -1231,6 +1233,7 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .error-next { display: block; margin-block-start: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
 .error-details { margin-block-start: var(--space-2); font-size: var(--fs-100); color: var(--text-default); }
 .error-details > summary { cursor: pointer; font-weight: var(--fw-semibold); min-block-size: var(--tap-target); align-content: center; }
+.failure-when { display: block; margin-block-start: var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
 .error-details-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
 
 .loader { display: flex; align-items: center; justify-content: center; padding: var(--space-6); }
@@ -3094,7 +3097,8 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 }
 
 /* ─── Audit ─────────────────────────────────────────────────────────────── */
-.audit-detail { max-width: 320px; font-size: var(--fs-100); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The raw JSON of an audit entry wraps (QA-13: it was cut at 320 px, so the interesting end of it was unreadable). It stays raw: this is the admin's page. */
+.audit-detail { max-width: 320px; font-size: var(--fs-100); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .audit-detail-block { font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; }
 .audit-target-type { font-size: var(--fs-100); color: var(--text-muted); margin-inline-end: var(--space-1); }
 

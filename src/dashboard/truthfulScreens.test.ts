@@ -127,8 +127,8 @@ describe('the Log speaks the outcome vocabulary (DW-R1)', () => {
             // By design is never red: the phone card shows its error line as plain meta text, the actionable one as danger.
             const cards = markup.split('<article class="log-card"').slice(1);
             assert.equal(cards.length, 5);
-            assert.match(cards[1]!, /<p class="text-meta" dir="auto" title="[^"]*private reply/, 'by-design: neutral text');
-            assert.match(cards[2]!, /<p class="text-meta text-danger"/, 'needs you: red');
+            assert.match(cards[1]!, /<div class="text-meta">\s*<div class="error-text failure-text"[\s\S]*private reply/, 'by-design: neutral text');
+            assert.match(cards[2]!, /<div class="text-meta text-danger">/, 'needs you: red');
         });
     }
 

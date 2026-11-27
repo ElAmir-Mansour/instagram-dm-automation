@@ -259,7 +259,7 @@ describe('Explainers: the list', () => {
         // In the detail, the reason is stored on the explainer, and is shown as a sentence.
         const raw = 'storage answered HTTP 503: {"error":{"code":503}}';
         const html = String(P.failureHtml(raw));
-        assert.match(html, /class="error-sentence"[^>]*>[^<]*this step/i, 'the generic sentence');
+        assert.match(html, /class="error-sentence"[^>]*>[^<]*something went wrong/i, 'the generic sentence');
         assert.equal(/<strong class="error-sentence"[^>]*>[^<]*HTTP/.test(html), false);
         assert.ok(html.includes('error-details'));
         // The voice waiting for Gemini's allowance is recognised by its prefix, and said in the server's own sentence (`errors.EXPLAINER_VOICE_LIMIT`).

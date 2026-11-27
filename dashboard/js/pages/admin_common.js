@@ -187,15 +187,17 @@ const Admin = {
     /**
      * Meta's own explanation of why a token is bad. It is on the wire in
      * `tokenError` and was being thrown away, which left the operator with a
-     * red pill and no diagnosis.
+     * red pill and no diagnosis. `raw` is Meta's English: it is translated by
+     * `UI.failure` (a sentence and the next step), and Meta's text is kept
+     * behind Details.
      */
-    tokenError(message) {
-        if (!message) return html``;
+    tokenError(raw) {
+        if (!raw) return html``;
         return html`
-            <p class="health-diagnosis" dir="auto">
+            <div class="health-diagnosis">
                 <i data-lucide="alert-circle" aria-hidden="true"></i>
-                <span>${message}</span>
-            </p>
+                <span>${UI.failure(raw)}</span>
+            </div>
         `;
     },
 
@@ -528,7 +530,7 @@ const HealthStrip = {
                     </div>
                 </div>
 
-                ${tokenErr ? Admin.tokenError(t('health.tokenReason', { message: tokenErr })) : ''}
+                ${tokenErr ? Admin.tokenError(tokenErr) : ''}
 
                 <dl class="health-strip-facts">
                     ${Admin.field(t('health.dmHeadroom'), Admin.meter(dmUsed, dmCeiling,

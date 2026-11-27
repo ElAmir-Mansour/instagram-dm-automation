@@ -1038,16 +1038,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/explainers"\s+aria-current/);
     });
 
-    it('ships at cache version 13.09: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 13.70: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '13.09');
+        assert.equal(version, '13.70');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['13.09']);
+        assert.deepEqual([...new Set(refs)], ['13.70']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.09'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.70'], page);
         }
     });
 });
@@ -1258,7 +1258,7 @@ describe('Monteur — API additions', () => {
         stub(s, monteurView({ lessons }));
         const page = await renderPage(s);
         assert.ok(page.includes('Open on the result, not the question.'));
-        assert.ok(page.includes(escaped(s.t('monteur.lessons.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '30' }) }), message: 'Gemini quota exceeded' }))));
+        assert.ok(page.includes(escaped(s.t('monteur.lessons.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '30' }) }), message: s.t('failure.GEMINI_QUOTA') }))));
         s.Page.destroy();
         const running = s.Page.normalizeView(monteurView({ clips: [], sources: [], lessons: { ...lessons, last_run: { status: 'running', error: null, created_at: minutesAgo(1) } } }));
         assert.equal(s.Page.isPending(running), true);
@@ -1269,7 +1269,8 @@ describe('Monteur — API additions', () => {
         const why = 'The folder is outside the allowed roots; pick it with Choose folder.';
         stub(s, monteurView({ last_scan: { at: minutesAgo(10), added: 0, skipped: 0, missing: false, error: why } }));
         const page = await renderPage(s);
-        assert.ok(page.includes(escaped(s.t('monteur.run.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '10' }) }), error: why }))));
+        assert.ok(page.includes(escaped(s.t('monteur.run.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '10' }) }), error: s.t('failure.generic') }))));
+        assert.match(page, /The folder is outside the allowed roots; pick it with Choose folder\./, 'the server\u2019s sentence is behind Details');
         s.Page.destroy();
     });
 
@@ -1526,8 +1527,10 @@ describe('Monteur — source and mode (MONTEUR.md §1)', () => {
         stub(s, monteurView({ clips: [clip({ error: 'TikTok is not connected. <b>Connect it</b>' })] }));
         const page = await renderPage(s);
         const line = (page.match(/<p [^>]*id="mt-clip-c1-refused"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
-        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: 'TikTok is not connected. <b>Connect it</b>' }))), line);
+        // The server's English is never the sentence (QA-05): the generic one, and the text, escaped, behind Details.
+        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: s.t('failure.generic') }))), line);
         assert.ok(!page.includes('<b>Connect it</b>'), 'escaped');
+        assert.match(page, /TikTok is not connected\. &lt;b&gt;Connect it&lt;\/b&gt;/, 'and behind Details');
         s.Page.destroy();
     });
 
@@ -1861,7 +1864,7 @@ describe('Monteur — a failure is a sentence, with the raw text behind Details'
         });
     }
 
-    it('a failed reel with a technical error says the step did not finish; one with a readable error keeps its words', async () => {
+    it('a failed reel is a sentence in the interface language: a text the translator names says its own, the text is behind Details', async () => {
         const s = loadMonteur('en');
         stub(s, monteurView({
             clips: [
@@ -1871,11 +1874,12 @@ describe('Monteur — a failure is a sentence, with the raw text behind Details'
         }));
         const page = await renderPage(s);
         const technical = around(page, 'mt-clip-f1-reject');
-        assert.ok(technical.includes(s.t('errors.STUDIO_STEP_FAILED')));
+        assert.equal(sentenceOf(technical), s.t('failure.GEMINI_BUSY'));
         assert.match(detailsOf(technical), /The model is overloaded/);
-        assert.ok(!sentenceOf(technical).includes('Gemini'));
-        const readable = around(page, 'mt-clip-f2-reject');
-        assert.ok(readable.includes('Remotion ran out of memory'));
+        assert.ok(!sentenceOf(technical).includes('Gemini answered'));
+        const named = around(page, 'mt-clip-f2-reject');
+        assert.equal(sentenceOf(named), s.t('failure.MAC_OUT_OF_MEMORY'));
+        assert.match(detailsOf(named), /Remotion ran out of memory/);
         s.Page.destroy();
     });
 
@@ -1884,7 +1888,7 @@ describe('Monteur — a failure is a sentence, with the raw text behind Details'
         stub(s, monteurView({ clips: [clip({ error: 'TikTok answered HTTP 500: {"error":"boom"}' })] }));
         const page = await renderPage(s);
         const line = (page.match(/<p [^>]*id="mt-clip-c1-refused"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
-        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: s.t('errors.STUDIO_STEP_FAILED') }))), line);
+        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: s.t('failure.generic') }))), line);
         assert.ok(!line.includes('boom'), 'the technical text is not in the line');
         assert.match(page, /<details class="error-details">[\s\S]*?boom/);
         s.Page.destroy();
@@ -1899,7 +1903,7 @@ describe('Monteur — a failure is a sentence, with the raw text behind Details'
         assert.ok(last.includes(escaped(s.t('monteur.run.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '10' }) }), error: s.t('errors.STORAGE_FILE_TOO_LARGE') }))), last);
         assert.ok(!last.includes('statusCode'));
         const analyst = (page.match(/<p [^>]*id="mt-lessons-failed"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
-        assert.ok(analyst.includes(s.t('errors.STUDIO_STEP_FAILED')), analyst);
+        assert.ok(analyst.includes(s.t('failure.GEMINI_BUSY')), analyst);
         assert.ok(!analyst.includes('overloaded'));
         assert.match(page, /The model is overloaded/, 'but it is on the page, behind Details');
         assert.ok(count(page, '<details class="error-details">') >= 2);

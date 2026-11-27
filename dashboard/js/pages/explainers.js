@@ -829,7 +829,7 @@ const ExplainersPage = {
         if (this.isSignInFailure(raw)) {
             return html`<div class="error-text"><strong class="error-sentence" dir="auto">${t('explainers.failed.macSignedOut')}</strong><span class="error-next" dir="auto">${t('explainers.failed.macSignedOutNext')}</span>${UI.errorDetails({ message: raw })}</div>`;
         }
-        return UI.errorHtml(UI.failureError(raw));
+        return UI.failure(raw);
     },
 
     // ─── The new-explainer form ──────────────────────────────────────────────
@@ -1914,10 +1914,10 @@ const ExplainersPage = {
         return html`${main}${history}${s.draw_note ? html`<p class="form-hint ex-pic-note" dir="auto">${t('explainers.pictures.lastNote', { note: s.draw_note })}</p>` : ''}`;
     },
 
-    /** A stored draw error as one line: the server's own sentence, or the generic one when it is technical text. */
+    /** A stored draw error as one line: the translator's sentence for a failure it names, or the generic "could not be drawn" for any other text. */
     drawErrorText(text) {
-        const f = UI.failureError(text);
-        return f.code ? t('explainers.pictures.failed') : (f.message || t('explainers.pictures.failed'));
+        const said = UI.failureParts(text);
+        return said.translated ? said.sentence : t('explainers.pictures.failed');
     },
 
     picApproveMarkup() {
@@ -2143,7 +2143,7 @@ const ExplainersPage = {
             <span class="badge badge-${html.raw(this.rowTone(row))}">${UI.postStatusLabel(row)}</span>
             ${row.scheduled_time ? html`<span class="form-hint">${UI.formatDateTime(row.scheduled_time, { zone: true })}</span>` : ''}
             <a href="${link.href}"${link.external ? html.raw(' target="_blank" rel="noopener noreferrer"') : ''}>${link.label}${link.external ? html`<span class="sr-only"> ${t('help.link.newTab')}</span>` : ''}</a>
-            ${row.error_log && (row.status === 'FAILED' || UI.heldReason(row)) ? html`<span class="form-hint text-warning" dir="auto">${row.error_log}</span>` : ''}
+            ${row.error_log && (row.status === 'FAILED' || UI.heldReason(row)) ? html`<div class="form-hint text-warning">${UI.failure({ message: row.error_log, at: row.updated_at })}</div>` : ''}
         </li>`;
     },
 

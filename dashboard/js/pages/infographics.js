@@ -323,7 +323,7 @@ const InfographicsPage = {
                         <span class="badge badge-neutral">${t(`infographics.theme.${item.theme}`)}</span>
                         <span class="badge badge-neutral">${t(`infographics.lang.${item.language}`)}</span>
                     </div>
-                    ${item.status === 'failed' && item.error ? html`<div class="ig-error">${UI.errorHtml(UI.failureError(item.error))}</div>` : ''}
+                    ${item.status === 'failed' && item.error ? html`<div class="ig-error">${UI.failure({ message: item.error, at: item.updated_at })}</div>` : ''}
                     ${ready && item.problems && item.problems.length ? html`
                         <ul class="ig-problems" aria-label="${t('infographics.problems')}">
                             ${item.problems.map((p) => html`<li dir="auto"><i data-lucide="alert-circle" aria-hidden="true"></i> ${p}</li>`)}

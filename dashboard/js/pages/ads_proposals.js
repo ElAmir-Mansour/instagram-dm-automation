@@ -287,7 +287,7 @@ const AdsProposalsPage = {
                 ${this.evidenceMarkup(p)}
                 ${this.effectMarkup(p)}
                 ${this.checksMarkup(p)}
-                ${p.state === 'failed' && p.error ? html`<p class="form-error adsprop-error" dir="auto" id="adsprop-error-${id}">${p.error}</p>` : ''}
+                ${p.state === 'failed' && p.error ? html`<div class="form-error adsprop-error" id="adsprop-error-${id}">${UI.failure({ message: p.error, at: p.updated_at })}</div>` : ''}
                 ${p.state === 'rejected' && p.error ? html`<p class="form-hint" dir="auto">${t('ads.proposals.rejectedBecause', { reason: this.isolate(p.error) })}</p>` : ''}
                 ${p.state === 'open' && days !== null ? html`<p class="form-hint adsprop-expiry">${t('ads.proposals.expiresIn', { days: t('analytics.days', { count: days, n: `⁦${days}⁩` }) })}</p>` : ''}
                 ${p.state === 'applying' ? html`<p class="form-hint">${t('ads.proposals.applying.hint')}</p>` : ''}

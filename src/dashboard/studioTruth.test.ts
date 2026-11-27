@@ -423,8 +423,11 @@ describe('Infographics: failures are sentences (T054)', () => {
         const card = String(w.P.cardMarkup({ ...ITEM, status: 'failed', render: null, error: LIVE_413 }));
         assert.equal(sentenceOf(card), w.h.t('errors.STORAGE_FILE_TOO_LARGE'));
         assert.match(detailsOf(card), /&quot;statusCode&quot;/);
-        const readable = String(w.P.cardMarkup({ ...ITEM, status: 'failed', render: null, error: 'Remotion ran out of memory' }));
-        assert.equal(sentenceOf(readable), 'Remotion ran out of memory', 'a readable one stays as it was');
+        const named = String(w.P.cardMarkup({ ...ITEM, status: 'failed', render: null, error: 'Remotion ran out of memory' }));
+        assert.equal(sentenceOf(named), w.h.t('failure.MAC_OUT_OF_MEMORY'), 'a text the translator names says its own sentence');
+        const unknown = String(w.P.cardMarkup({ ...ITEM, status: 'failed', render: null, error: 'Remotion could not find the composition' }));
+        assert.equal(sentenceOf(unknown), w.h.t('failure.generic'), 'any other text is the generic sentence (QA-05)');
+        assert.match(detailsOf(unknown), /Remotion could not find the composition/);
     });
 
     it('a refused request is drawn from the error: the code’s sentence, the extra problem lines kept', () => {
@@ -453,14 +456,16 @@ function studio(lang: 'ar' | 'en' = 'en'): { h: Dashboard; P: Json } {
 }
 
 describe('Studio: failures are sentences, with the raw text behind Details (T054)', () => {
-    it('failureEntry: a technical stored failure is the coded sentence; a readable one keeps its wrapper', () => {
+    it('failureEntry: a stored failure is always a coded error: the translator\u2019s code, STORAGE_FILE_TOO_LARGE, or the generic step failure', () => {
         const { h, P } = studio();
-        const technical = P.failureEntry('studio.new.failed', LIVE_413);
-        assert.equal(technical.code, 'STORAGE_FILE_TOO_LARGE');
-        const readable = P.failureEntry('studio.new.failed', 'Gemini quota exceeded');
-        assert.equal(readable.message, h.t('studio.new.failed', { message: 'Gemini quota exceeded' }));
-        assert.equal(readable.code, undefined);
-        assert.equal(P.failureEntry('studio.new.failed', '').message, h.t('studio.new.failed', { message: h.t('error.unexpected') }));
+        assert.equal(P.failureEntry('studio.new.failed', LIVE_413).code, 'STORAGE_FILE_TOO_LARGE');
+        const quota = P.failureEntry('studio.new.failed', 'Gemini quota exceeded');
+        assert.equal(quota.code, 'GEMINI_QUOTA');
+        assert.equal(h.UI.errorText(quota).sentence, h.t('failure.GEMINI_QUOTA'), 'errorText reads a failure.<CODE>');
+        const other = P.failureEntry('studio.new.failed', 'Something nobody wrote a line for');
+        assert.equal(other.code, 'STUDIO_STEP_FAILED');
+        assert.equal(other.message, 'Something nobody wrote a line for', 'and its text stays for Details');
+        assert.equal(P.failureEntry('studio.new.failed', '').code, 'STUDIO_STEP_FAILED');
     });
 
     it('a carousel that was saved failed shows a sentence in the new-carousel strip, not the JSON', () => {
@@ -468,7 +473,7 @@ describe('Studio: failures are sentences, with the raw text behind Details (T054
         const entry = P.failureEntry('studio.new.failed', TECHNICAL);
         P.newError = { err: entry, message: h.UI.errorText(entry).sentence };
         const strip = String(P.newErrorMarkup());
-        assert.equal(sentenceOf(strip), h.t('errors.STUDIO_STEP_FAILED'));
+        assert.equal(sentenceOf(strip), h.t('failure.GEMINI_BUSY'));
         assert.match(detailsOf(strip), /The model is overloaded/);
     });
 

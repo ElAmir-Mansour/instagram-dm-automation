@@ -411,7 +411,7 @@ const OperationsPage = {
                     </div>
                 </div>
 
-                ${tokenErr ? Admin.tokenError(t('health.tokenReason', { message: tokenErr })) : ''}
+                ${tokenErr ? Admin.tokenError(tokenErr) : ''}
 
                 <dl class="ops-facts">
                     ${Admin.field(t('ops.lastComment'), Admin.agePill(commentAt, Admin.WEBHOOK_AGE))}
