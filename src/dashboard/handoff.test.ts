@@ -149,26 +149,24 @@ describe('Inbox: which threads need you', () => {
         assert.equal(Attention.isHandoff(handed({ handoff_at: 'not a date', last_operator_at: at(HOUR) })), true);
     });
 
-    it('is its own filter, seeded from the address, and the filter keeps only these', () => {
+    it('lands on To do from the old address, and To do keeps every handed-over thread and every waiting one (U2)', () => {
         const s = load();
         const I = s.Inbox;
-        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']);
+        assert.deepEqual(plain(I.FILTERS), ['todo', 'hot', 'all', 'paused', 'ads', 'handled']);
         s.hash['filter'] = 'needs_you';
-        assert.equal(I.filterFromHash(), 'needs_you');
+        assert.equal(I.filterFromHash(), 'todo', 'Today\'s old link still lands, on the view that holds it');
         s.hash['filter'] = 'needs-you';
-        assert.equal(I.filterFromHash(), 'all', 'the address is data: anything else is All');
+        assert.equal(I.filterFromHash(), 'todo', 'the address is data: anything else is the default view');
         I.threads = [
             handed({ id: 'a' }), handed({ id: 'b', last_operator_at: at(60000) }), { id: 'c', is_bot_active: false, last_message_direction: 'inbound' },
             { id: 'd', is_bot_active: true }, handed({ id: 'e', is_bot_active: true }),
         ];
-        I.filter = 'needs_you';
-        assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'e'], 'paused for a person, or an engine failure with the bot on');
-        I.filter = 'waiting';
-        assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['c'], 'Needs reply is as it was');
+        I.filter = 'todo';
+        assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id).sort()), ['a', 'c', 'e'], 'handed over (paused, or an engine failure with the bot on) and waiting');
         I.filter = 'paused';
         assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['a', 'b', 'c']);
-        assert.ok(String(I.layout()).includes('data-action="inbox:setFilter" data-filter="needs_you"'));
-        assert.ok(String(I.emptyMarkup('needs_you')).includes(s.t('inbox.noNeedsYou')));
+        assert.ok(String(I.layout()).includes('data-action="inbox:setFilter" data-filter="todo"'));
+        assert.ok(String(I.emptyMarkup('todo')).includes(s.t('inbox.noTodo')));
     });
 
     it('counts on the nav badge with the threads waiting for a reply, each once', () => {

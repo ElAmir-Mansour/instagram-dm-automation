@@ -1107,6 +1107,98 @@ const HelpContent = {
                 },
             ],
         },
+        // ─── 3b. The Inbox ───────────────────────────────────────────────────
+        {
+            slug: 'inbox',
+            group: 'meta',
+            icon: 'inbox',
+            title: { ar: 'الرسائل: ما المطلوب منك', en: 'The Inbox: what needs you' },
+            summary: {
+                ar: 'عروض الرسائل، وحالة واحدة لكل محادثة، ومهلة الردّ، ومتى تضع علامة «تمّ التعامل».',
+                en: 'The views, the one status on each conversation, the reply window, and when to mark a conversation handled.',
+            },
+            related: ['dm-assistant', 'connect-meta', 'troubleshooting'],
+            sections: [
+                {
+                    id: 'views',
+                    title: { ar: 'العروض', en: 'The views' },
+                    body: {
+                        ar: [
+                            'تفتح الرسائل على **المطلوب**: كل محادثة يلزم أن يتصرّف فيها شخص، وأقربها انتهاءً لمهلة الردّ في الأعلى. إن كان العدد بجانب الاسم صفراً فلا شيء ينتظرك.',
+                            { dl: [
+                                ['المطلوب', 'محادثات بانتظار ردّ أو محوَّلة إليك ولم تضع عليها علامة «تمّ التعامل»، مع المحادثات الساخنة غير المنتهية. هذا العدد يشمل كل ما تعدّه الشارة على قائمة الرسائل.'],
+                                ['ساخنة', 'من فتح شخص رابطك، أو قال إنه جاهز للشراء، أو وسمه المساعد عميلاً جاهزاً.'],
+                                ['الكل', 'كل المحادثات، الأحدث أولاً، وهو المكان الذي تبحث فيه عن شخص بعينه.'],
+                            ] },
+                            'الزر **المزيد** يفتح صفاً ثانياً: **الردّ الآلي متوقف**، و**من الإعلانات**، و**تمّ التعامل**.',
+                            { note: 'البحث يمرّ على كل المحادثات مهما كان العرض المحدَّد، ويكتب تحت الخانة «البحث في كل المحادثات».' },
+                        ],
+                        en: [
+                            'The Inbox opens on **To do**: every conversation a person has to act on, with the one whose reply window closes soonest at the top. If the number beside the name is zero, nothing is waiting for you.',
+                            { dl: [
+                                ['To do', 'Conversations waiting for a reply or handed over to you that you have not marked handled, plus hot ones not yet handled. It holds everything the badge on the Inbox menu counts.'],
+                                ['Hot', 'Someone opened your link, said they are ready to buy, or the assistant flagged them as a hot lead.'],
+                                ['All', 'Every conversation, newest first. This is where you look for one particular person.'],
+                            ] },
+                            '**More** opens a second row: **AI paused**, **From ads** and **Handled**.',
+                            { note: 'A search looks through every conversation, whatever view is selected, and says “Searching all conversations” under the box.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'chips',
+                    title: { ar: 'حالة واحدة لكل محادثة', en: 'One status on each conversation' },
+                    body: {
+                        ar: [
+                            'كل صف يعرض أهمّ شيء عنه فقط، بهذا الترتيب:',
+                            { ol: [
+                                '**بانتظارك**: سلّمها المساعد إليك، مع السبب والوقت المتبقي للردّ.',
+                                '**بحاجة إلى ردّ**: الردّ الآلي متوقف والعميل كتب آخراً، مع الوقت المتبقي.',
+                                '**ساخنة**: لا ينتظر ردّاً الآن لكنه يستحق نظرك.',
+                                '**تمّ التعامل**: وضعتَ عليها العلامة ولم يكتب العميل بعدها.',
+                            ] },
+                            'السطر الخافت تحت الحالة يذكر ما ليس معتاداً فقط: الردّ الآلي متوقفاً في هذه المحادثة، أو أن المساعد متوقف كلياً، أو الإعلان الذي جاءت منه، أو مرحلتها في المبيعات.',
+                        ],
+                        en: [
+                            'Each row shows only the most important thing about it, in this order:',
+                            { ol: [
+                                '**Needs you**: the assistant handed it over, with the reason and the time left to reply.',
+                                '**Needs reply**: the AI is paused for it and the customer wrote last, with the time left.',
+                                '**Hot**: nothing is waiting for a reply, but it is worth a look.',
+                                '**Handled**: you marked it, and the customer has not written since.',
+                            ] },
+                            'The muted line under the status says only what is not the usual: the AI paused for this conversation, the assistant switched off altogether, the ad it came from, or its sales stage.',
+                        ],
+                    },
+                },
+                {
+                    id: 'window',
+                    title: { ar: 'مهلة الردّ (٢٤ ساعة)', en: 'The reply window (24 hours)' },
+                    body: {
+                        ar: [
+                            'تسمح ميتا بالردّ من هنا خلال 24 ساعة من آخر رسالة للعميل. بعدها تظهر «انتهت مهلة الردّ»، ويلزم أن تردّ من تطبيق إنستغرام أو من صندوق صفحتك على فيسبوك، ثم تضغط **تمّ التعامل**.',
+                        ],
+                        en: [
+                            'Meta lets you reply from here for 24 hours after the customer’s last message. After that the row says “Reply window closed”: reply from the Instagram app or your Page inbox on Facebook, then press **Mark handled**.',
+                        ],
+                    },
+                },
+                {
+                    id: 'handled',
+                    title: { ar: 'تمّ التعامل، وإعادة الردّ الآلي', en: 'Mark handled, and handing back to the AI' },
+                    body: {
+                        ar: [
+                            'زرّ العلامة بجانب الصف يُخرج المحادثة من **المطلوب** وفي الحال، ويمكنك التراجع خلال لحظات. إن كتب العميل مرة أخرى عادت إلى قائمتك وحدها.',
+                            'الردّ اليدوي من هنا يوقف الردّ الآلي في تلك المحادثة. اضغط **أعد الردّ الآلي** حين تريد أن يتولاها المساعد من جديد.',
+                        ],
+                        en: [
+                            'The check button beside a row takes the conversation out of **To do** at once, and you can undo it for a few seconds. If the customer writes again it comes back to your list by itself.',
+                            'A manual reply from here pauses the AI in that conversation. Press **Hand back to AI** when you want the assistant to take it again.',
+                        ],
+                    },
+                },
+            ],
+        },
         // ─── 4. Scheduling posts and carousels ───────────────────────────────
         {
             slug: 'scheduling',

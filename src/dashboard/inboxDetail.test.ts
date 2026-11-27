@@ -424,13 +424,13 @@ describe('the thread list — the right preview and the sender’s real name', (
         assert.deepEqual(I.visibleThreads().map((x: Json) => x.id), ['2']);
     });
 
-    it('the filters are what they were: "Needs reply" is a paused AI and the customer last', () => {
+    it('the filters: To do holds a paused AI whose customer spoke last, and AI paused holds every paused one', () => {
         const { I } = load();
         const waiting = { id: 'w', is_bot_active: false, last_message_direction: 'inbound' };
         const answered = { id: 'a', is_bot_active: false, last_message_direction: 'outbound' };
         const live = { id: 'l', is_bot_active: true, last_message_direction: 'inbound' };
         I.threads = [waiting, answered, live];
-        I.filter = 'waiting';
+        I.filter = 'todo';
         assert.deepEqual(I.visibleThreads().map((x: Json) => x.id), ['w']);
         I.filter = 'paused';
         assert.deepEqual(I.visibleThreads().map((x: Json) => x.id), ['w', 'a']);
