@@ -367,7 +367,7 @@ describe('an archived post is never in Needs attention, and is listed under Arch
         assert.ok(!markup.includes('data-id="f1"') && !markup.includes('data-id="h1"'), 'the parked rows are not in the list he works from');
         assert.ok(markup.includes('data-id="ok"') && markup.includes('data-id="bad"'));
         const attention = /<section class="queue-group queue-group--attention"[\s\S]*?<\/section>/.exec(markup)![0];
-        assert.match(text(attention), /Needs attention 1\b/, 'Needs attention counts the one failure that is still his to look at');
+        assert.match(text(attention), /Needs you 1\b/, 'Needs you counts the one failure that is still his to look at');
         // The switch, with counts: 2 active (ok, bad), 2 archived.
         assert.match(markup, /data-action="posts:setQueueView"[^>]*data-key="active"|data-key="active"[^>]*data-action="posts:setQueueView"/);
         assert.match(text(markup), /Active 2/);

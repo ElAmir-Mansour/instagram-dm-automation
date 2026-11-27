@@ -1619,6 +1619,8 @@ const AiSettingsPage = {
     MUSE_SAMPLE_REELS: 70,
     MUSE_SAMPLE_USD: 1.5,
     /** How often the list is asked for again while a reel waits (there is no progress route), and how many times: a page left open for hours is not asked forever. */
+    /** The folded list shows this many reels at a time ("Show 20 more"). */
+    MUSE_LIST_PAGE: 20,
     MUSE_POLL_MS: 20000,
     MUSE_POLL_MAX: 180,
     /** The longest a summary is drawn in the list: the stylesheet shows two lines of it, and the details hold the rest. */
@@ -1642,7 +1644,7 @@ const AiSettingsPage = {
     _museLib: undefined,
 
     museLibState() {
-        if (!this._museLib) this._museLib = { status: 'idle', rows: [], error: '', busy: false, again: new Set(), open: new Map(), notice: null, polls: 0, timer: null, asks: 0 };
+        if (!this._museLib) this._museLib = { status: 'idle', rows: [], error: '', busy: false, again: new Set(), open: new Map(), notice: null, polls: 0, timer: null, asks: 0, listOpen: false, shown: this.MUSE_LIST_PAGE, query: '' };
         return this._museLib;
     },
 
@@ -1692,6 +1694,7 @@ const AiSettingsPage = {
                 status: this.MUSE_REEL_STATUSES.includes(r.status) ? r.status : 'failed',
                 summary: this.museLine(r.summary, this.MUSE_SUMMARY_MAX),
                 postedAt: typeof r.posted_at === 'string' ? r.posted_at : '',
+                updatedAt: typeof r.updated_at === 'string' ? r.updated_at : '',
                 hook: Number.isFinite(r.hook_score) ? Math.round(r.hook_score) : null,
                 error: typeof r.error === 'string' ? r.error : '',
                 link: /^https:\/\//i.test(link) ? link : '',
@@ -1749,8 +1752,17 @@ const AiSettingsPage = {
                     <p class="form-hint" id="muse-library-estimate"></p>
                     <p class="form-hint text-warning hidden" id="muse-library-hint" role="note"></p>
                     <p class="form-hint hidden" id="muse-library-notice" role="status" aria-live="polite"></p>
+                    <!-- One line, then the list only when it is asked for: 139 rows were 44 phone screens of a page whose job is a few switches. -->
                     <p class="form-hint muse-library-count" id="muse-library-count" role="status" aria-live="polite"></p>
-                    <ul class="muse-reels" id="muse-library-list" aria-label="${t('muse.lib.title')}"></ul>
+                    <!-- Written out, not UI.button: the factory has no aria-expanded, and this is a disclosure. -->
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="muse-library-toggle" data-action="muse:toggleList" aria-expanded="false" aria-controls="muse-library-listbox" ${owner ? '' : html.raw('disabled')}><i data-lucide="chevron-down" aria-hidden="true"></i> <span id="muse-library-toggle-label">${t('muse.lib.showList')}</span></button>
+                    <div class="muse-library-listbox hidden" id="muse-library-listbox">
+                        <label class="sr-only" for="muse-library-search">${t('muse.lib.search')}</label>
+                        <input class="field" type="search" id="muse-library-search" dir="auto" placeholder="${t('muse.lib.search')}" autocomplete="off" data-input="muse:searchList" ${owner ? '' : html.raw('disabled')}>
+                        <p class="form-hint" id="muse-library-shown" role="status" aria-live="polite"></p>
+                        <ul class="muse-reels" id="muse-library-list" aria-label="${t('muse.lib.title')}"></ul>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'chevron-down', label: t('muse.lib.more', { n: this.MUSE_LIST_PAGE }), action: 'muse:moreReels', id: 'muse-library-more', className: 'hidden', disabled: !owner })}
+                    </div>
                 </div>
             </section>
         `;
@@ -1789,7 +1801,31 @@ const AiSettingsPage = {
         this.paintMuseLibraryList();
     },
 
-    /** The counts and the list: what is loading, what failed, what is empty, else a line of numbers and a row a reel. A refresh that failed with a list on screen keeps the list. */
+    /** The reels the search keeps: its words (Arabic-normalised, so «أ» and «ا» are one) found in the summary or the date. Empty search keeps all. */
+    museReelsMatching(rows, query) {
+        const words = UI.normalizeArabic(String(query || '')).split(' ').filter(Boolean);
+        if (words.length === 0) return rows;
+        return rows.filter((r) => {
+            const hay = UI.normalizeArabic(`${r.summary} ${r.postedAt ? UI.formatDay(r.postedAt) : ''}`);
+            return words.every((w) => hay.includes(w));
+        });
+    },
+
+    /** The one line: "139 reels remembered · last added 26 Nov · 0 waiting", plus how many could not be watched when some could not. */
+    museSummaryLine(rows) {
+        const ok = rows.filter((r) => r.status === 'ok');
+        const stamps = ok.map((r) => new Date(r.updatedAt || r.postedAt).getTime()).filter((n) => Number.isFinite(n));
+        const last = stamps.length ? UI.formatDay(new Date(Math.max(...stamps)).toISOString()) : t('muse.lib.undated');
+        const failed = rows.filter((r) => r.status === 'failed').length;
+        const pending = rows.filter((r) => r.status === 'pending').length;
+        const line = ok.length === 0 ? t('muse.lib.summaryNone', { pending }) : t('muse.lib.summary', { remembered: ok.length, last, pending });
+        return failed > 0 ? `${line} · ${t('muse.lib.failedN', { failed })}` : line;
+    },
+
+    /**
+     * The summary line, and (when it is open) the searchable list, `MUSE_LIST_PAGE` at a time: what is loading, what failed, what is empty, else one line of numbers and a row a
+     * reel. A refresh that failed with a list on screen keeps the list. Closed, the list holds no rows at all.
+     */
     paintMuseLibraryList() {
         const list = document.getElementById('muse-library-list');
         const count = document.getElementById('muse-library-count');
@@ -1800,14 +1836,65 @@ const AiSettingsPage = {
         else if (lib.status === 'idle' || (lib.status === 'loading' && lib.rows.length === 0)) line = t('muse.lib.loading');
         else if (lib.rows.length === 0) line = t('muse.lib.empty');
         else {
-            const n = (status) => lib.rows.filter((r) => r.status === status).length;
-            line = t('muse.lib.count', { total: lib.rows.length, ok: n('ok'), pending: n('pending'), failed: n('failed') });
+            line = this.museSummaryLine(lib.rows);
             if (lib.error) line = `${line} ${t('muse.lib.refreshFailed')}`;
         }
         count.textContent = line;
         count.classList.toggle('text-warning', lib.status === 'failed' || !!lib.error);
-        list.innerHTML = lib.status === 'failed' ? '' : esc(lib.rows.map((row) => this.museReelRow(row, lib)));
+
+        const hasRows = lib.status !== 'failed' && lib.rows.length > 0;
+        const open = hasRows && lib.listOpen;
+        const put = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
+        put('muse-library-toggle', (el) => {
+            el.classList.toggle('hidden', !hasRows);
+            el.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        put('muse-library-toggle-label', (el) => { el.textContent = t(open ? 'muse.lib.hideList' : 'muse.lib.showList'); });
+        put('muse-library-listbox', (el) => el.classList.toggle('hidden', !open));
+        if (!open) {
+            list.innerHTML = '';
+            put('muse-library-shown', (el) => { el.textContent = ''; });
+            put('muse-library-more', (el) => el.classList.add('hidden'));
+            return;
+        }
+        const found = this.museReelsMatching(lib.rows, lib.query);
+        const shown = found.slice(0, lib.shown);
+        put('muse-library-shown', (el) => {
+            el.textContent = found.length === 0 ? t('muse.lib.noMatch') : t('muse.lib.shown', { shown: shown.length, total: found.length });
+        });
+        put('muse-library-more', (el) => el.classList.toggle('hidden', shown.length >= found.length));
+        list.innerHTML = esc(shown.map((row) => this.museReelRow(row, lib)));
         UI.icons(list);
+    },
+
+    /** "Show the list" / "Hide the list". Focus stays on the button; its label is rewritten in place. */
+    museToggleList() {
+        if (!this.museOwner()) return;
+        const lib = this.museLibState();
+        lib.listOpen = !lib.listOpen;
+        if (!lib.listOpen) lib.shown = this.MUSE_LIST_PAGE;
+        this.paintMuseLibraryList();
+        if (lib.listOpen) {
+            const search = document.getElementById('muse-library-search');
+            if (search && typeof search.focus === 'function') search.focus();
+        }
+    },
+
+    /** The search box: the list is filtered and starts again at the first page. */
+    museSearchList(el) {
+        if (!this.museOwner()) return;
+        const lib = this.museLibState();
+        lib.query = String((el && el.value) || '');
+        lib.shown = this.MUSE_LIST_PAGE;
+        this.paintMuseLibraryList();
+    },
+
+    /** "Show 20 more". */
+    museMoreReels() {
+        if (!this.museOwner()) return;
+        const lib = this.museLibState();
+        lib.shown += this.MUSE_LIST_PAGE;
+        this.paintMuseLibraryList();
     },
 
     /** One reel: its state, date and summary (or why it could not be watched), and what can be done with it. Everything a model or the server wrote is text, never markup. */
@@ -2351,5 +2438,8 @@ UI.registerActions('muse', {
     indexAll: (el) => AiSettingsPage.museIndexAll(el),
     refreshLibrary: () => AiSettingsPage.museRefreshLibrary(),
     toggleReel: (el) => AiSettingsPage.museToggleReel(el && el.dataset ? el.dataset.id : ''),
+    toggleList: () => AiSettingsPage.museToggleList(),
+    searchList: (el) => AiSettingsPage.museSearchList(el),
+    moreReels: () => AiSettingsPage.museMoreReels(),
     reindexReel: (el) => AiSettingsPage.museReindexReel(el && el.dataset ? el.dataset.id : ''),
 });

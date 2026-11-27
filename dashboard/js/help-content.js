@@ -678,8 +678,8 @@ const HelpContent = {
                                 'الحروف الإنجليزية الكبيرة والصغيرة وحدة.',
                             ] },
                             'يعني «دورة» و«دوره» نفس الشي، و«أبغى» و«ابغى» نفس الشي.',
-                            '**في أي موضع من التعليق (الافتراضي):** الحملة تشتغل إذا كانت كلمتك موجودة في أي مكان داخل التعليق، حتى لو كانت جزءاً من كلمة أطول. مريحة، لأن «الكورس» و«كورسك» كلها تطابق «كورس».',
-                            '**كلمة كاملة فقط:** أدق، لأن الكلمة لازم تجي لحالها مو داخل كلمة ثانية. النظام يدعمها لكل حملة لكنها مو الافتراضية، ونموذج الحملة ما فيه مفتاح لها حالياً؛ إذا احتجتها لحملة معيّنة كلّم مدير المنصة. وانتبه أنها أصرم: «كورس» ما تطابق «الكورس».',
+                            '**كلمة كاملة فقط** (تبدأ بها الردود الجديدة): تعمل الحملة فقط إذا وردت كلمتك مستقلة، لا داخل كلمة أخرى، فلا تُطابِق «تم» كلمة «تمام». وهي أدق، لكنها أصرم: «كورس» لا تُطابِق «الكورس»، فيقترح المحرّر «أضف أيضاً: الكورس» لإضافة الصيغة الأخرى بنقرة. ولا يقترح جمعاً، لأن جموع التكسير بلا قاعدة ثابتة، فاكتب ما يكتبه متابعوك.',
+                            '**في أي موضع من التعليق:** تعمل الحملة إذا وُجدت كلمتك في أي مكان داخل التعليق، حتى جزءاً من كلمة أطول، فتُطابِق «كورس» كلاً من «الكورس» و«كورسك». لا تبدأ بها الحملات الجديدة، لكن اخترها من «طريقة المطابقة» عند الحاجة. الحملات القديمة تبقى على ما اخترتها عليه.',
                         ],
                         en: [
                             'Before comparing, AutoReply Pro normalises both the comment and your keyword, so small spelling differences don’t lose you anyone:',
@@ -690,8 +690,8 @@ const HelpContent = {
                                 'Upper and lower case letters are the same.',
                             ] },
                             'So «دورة» and «دوره» are one word, and so are «أبغى» and «ابغى».',
-                            '**Anywhere in the comment (default):** the campaign fires when your keyword appears anywhere in the comment, even inside a longer word. Convenient, because «الكورس» and «كورسك» both match «كورس».',
-                            '**Whole word only:** stricter, because the keyword has to stand on its own. The system supports it per campaign, but it is not the default and the campaign form has no switch for it yet; if you need it for a campaign, ask your platform administrator. Note how strict it is: «كورس» no longer matches «الكورس».',
+                            '**Whole word only** (new keyword replies start here): the campaign fires only when your keyword stands on its own, not inside a longer word, so «تم» no longer fires on «تمام». It is precise but strict: «كورس» does not match «الكورس», so the editor offers “Also add: الكورس” to add the other form in one tap. It never suggests plurals, because Arabic broken plurals follow no rule that is always right: add the forms your followers actually type.',
+                            '**Anywhere in the comment:** the campaign fires when your keyword appears anywhere in the comment, even inside a longer word, so «كورس» matches both «الكورس» and «كورسك». New keyword replies do not start here, but you can pick it under “Match mode”. Existing keyword replies keep the mode they have.',
                         ],
                     },
                 },
@@ -700,7 +700,7 @@ const HelpContent = {
                     title: { ar: 'فخ «تم» داخل «تمام»', en: 'The «تم» inside «تمام» trap' },
                     body: {
                         ar: [
-                            'لأن المطابقة الافتراضية بالاحتواء، الكلمة القصيرة خطر. لو كلمتك «تم» مثلاً، بتطابق «تمام» و«اهتمام» و«يتم»، ويوصل رابطك لناس ما طلبوه. ونفس الشي بالإنجليزي: «ai» تطابق داخل «email» و«said».',
+                            'في طريقة «في أي موضع من التعليق»، الكلمة القصيرة خطر. لو كلمتك «تم» مثلاً، تُطابِق «تمام» و«اهتمام» و«يتم»، ويصل رابطك إلى من لم يطلبه. والأمر نفسه في الإنجليزية: «ai» تُطابِق داخل «email» و«said». لذلك تبدأ الحملات الجديدة بـ«كلمة كاملة فقط»، ولا يصيبها هذا الفخ إلا إن غيّرت الطريقة.',
                             'وش تسوي؟',
                             { ul: [
                                 'اختر كلمة أطول وأوضح: «كورس» أفضل من «تم»، و«رابط الكورس» أفضل من «رابط».',
@@ -710,7 +710,7 @@ const HelpContent = {
                             { warn: 'إذا كانت كلمة حملة داخل كلمة حملة ثانية (مثل «كورس» و«كورسات»)، التعليق الواحد ممكن يشغّل الحملتين، وما تعرف أي رسالة وصلت. خلّ كل حملة بكلمة مستقلة.' },
                         ],
                         en: [
-                            'Because the default is substring matching, a short keyword is dangerous. Take «تم»: it matches «تمام», «اهتمام» and «يتم», so your link goes to people who never asked for it. English has the same problem: “ai” matches inside “email” and “said”.',
+                            'In “Anywhere in the comment” mode a short keyword is dangerous. Take «تم»: it matches «تمام», «اهتمام» and «يتم», so your link goes to people who never asked for it. English has the same problem: “ai” matches inside “email” and “said”. That is why new keyword replies start as “Whole word only”, and only fall into this trap if you change the mode.',
                             'What to do instead:',
                             { ul: [
                                 'Pick a longer, clearer keyword: «كورس» beats «تم», and “course link” beats “link”.',
