@@ -333,7 +333,7 @@ const TenantDetailPage = {
         const dmCeiling = Admin.num(row, 'dmCeiling', 'dm_ceiling');
         const queue = Admin.pick(row, 'queue') || {};
         const postsPending = Admin.num(row, 'postsPending', 'posts_pending');
-        const postsFailed = Admin.num(row, 'postsFailed7d', 'posts_failed_7d');
+        const postsFailed = Admin.num(row, 'postsFailed', 'postsFailed7d', 'posts_failed_7d');
 
         return html`
             <section class="section">

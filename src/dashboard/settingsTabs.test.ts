@@ -117,7 +117,7 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
         const { Settings } = load('en', 'admin');
         const where = (group: string): string[] => Array.from<Json>(Settings.visibleCards(group)).map((c) => c.id);
         assert.deepEqual(where('connections'), ['meta', 'tiktok', 'youtube', 'whatsapp', 'ads']);
-        assert.deepEqual(where('messages'), ['iceb', 'alerts']);
+        assert.deepEqual(where('messages'), ['iceb', 'cleanup', 'alerts']);
         assert.deepEqual(where('appearance'), ['appearance']);
         assert.deepEqual(where('advanced'), ['token', 'webhook', 'account']);
         assert.deepEqual(where('platform'), ['meta-events', 'meta-app', 'tiktok-app', 'youtube-app', 'explainers', 'storage', 'site', 'monitoring', 'onboarding']);
@@ -127,8 +127,9 @@ describe('Settings tabs: who sees which tab and which card (SE-05)', () => {
             assert.equal(ownerCards.includes(developer), false, `a tenant owner never sees ${developer}`);
         }
         assert.ok(ownerCards.includes('iceb'), 'the owner keeps their ice breakers');
+        assert.ok(ownerCards.includes('cleanup'), 'and the 30-day clean-up (U2)');
         const member = load('en', 'member').Settings;
-        assert.equal(Array.from<Json>(member.visibleCards('messages')).length, 0, 'an operator has nothing in Messages');
+        assert.equal(Array.from<Json>(member.visibleCards('messages')).length, 0, 'an operator has nothing in Messages, the clean-up included');
     });
 
     it('every card names its tab, is in exactly one, and the platform ones carry the all-workspaces badge', () => {

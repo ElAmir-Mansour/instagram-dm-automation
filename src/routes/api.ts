@@ -46,6 +46,9 @@ import {
 } from '../services/tokenHealth.js';
 import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
 import { ATTENTION_MIGRATION_HINT, getAttention, isWorkerOfflineWithWork } from '../services/attention.js';
+import {
+    AUTO_ARCHIVE_DEFAULT_DAYS, AUTO_ARCHIVE_MAX_DAYS, AUTO_ARCHIVE_MIN_DAYS, getAutoArchive, runAutoArchiveSweep, saveAutoArchive, validDays,
+} from '../services/autoArchive.js';
 import { checkMacAlarms } from '../services/studio/macHealth.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
@@ -1239,6 +1242,15 @@ router.get('/cron/publish', async (req, res) => {
             if (reels.memoryOn > 0 || reels.failed > 0) log('info', 'cron.muse_reels', { ...reels });
         } catch (reelsErr) {
             log('error', 'cron.muse_reels_failed', describeError(reelsErr));
+        }
+
+        // The 30-day clean-up (src/services/autoArchive.ts, U2): failed posts and expired hand-offs older than each tenant's limit are archived / marked
+        // handled, unless the tenant switched it off. Reversible (Archived view, a new message), audited per tenant. Fail-soft, like the sweeps around it.
+        try {
+            const cleanup = await runAutoArchiveSweep();
+            if (cleanup.posts > 0 || cleanup.threads > 0 || cleanup.failed > 0) log('info', 'cron.auto_archive', { ...cleanup });
+        } catch (cleanupErr) {
+            log('error', 'cron.auto_archive_failed', describeError(cleanupErr));
         }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
@@ -4553,6 +4565,51 @@ router.post('/settings/ai/muse', canAdminister, async (req, res) => {
     } catch (err) {
         log('error', 'api.muse_settings_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the Meta vision settings.' });
+    }
+});
+
+/**
+ * The 30-day clean-up setting (U2, `src/services/autoArchive.ts`): whether failed posts and expired hand-offs older than N days are put away by the daily
+ * sweep. Changing it is the **owner's** (`canAdminister`), like every switch that changes what the dashboard counts; reading it is any member's (no tenant
+ * read is gated by role: `api.test.ts`, and the value is a number and a switch). GET answers what the sweep will use (ON at 30 days when nothing is
+ * saved). POST validates whole (`enabled` a boolean, `days` a whole number 7-365) and writes the SESSION's tenant only; a save that changes nothing
+ * writes no audit row, and one that changes something is `settings.auto_archive_write` with the two values and no content.
+ */
+router.get('/settings/auto-archive', async (req, res) => {
+    try {
+        res.json({ ...(await getAutoArchive(getTenantId(req))), minDays: AUTO_ARCHIVE_MIN_DAYS, maxDays: AUTO_ARCHIVE_MAX_DAYS, defaultDays: AUTO_ARCHIVE_DEFAULT_DAYS });
+    } catch (err) {
+        log('error', 'api.auto_archive_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the clean-up setting.' });
+    }
+});
+
+router.post('/settings/auto-archive', canAdminister, async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body['enabled'] !== 'boolean') {
+        res.status(400).json({ error: 'enabled must be true or false.', code: 'AUTO_ARCHIVE_INVALID', field: 'enabled' });
+        return;
+    }
+    const days = validDays(body['days']);
+    if (days === null) {
+        res.status(400).json({ error: `days must be a whole number from ${AUTO_ARCHIVE_MIN_DAYS} to ${AUTO_ARCHIVE_MAX_DAYS}.`, code: 'AUTO_ARCHIVE_INVALID', field: 'days' });
+        return;
+    }
+    try {
+        const creatorId = getTenantId(req);
+        const before = await getAutoArchive(creatorId);
+        const saved = await saveAutoArchive(creatorId, { enabled: body['enabled'], days }, req.session?.userId ?? null);
+        if (before.enabled !== saved.enabled || before.days !== saved.days) {
+            await writeAudit(await actorFromSession(req.session), {
+                action: AUDIT_ACTIONS.settingsAutoArchiveWrite, targetType: 'tenant', targetId: creatorId,
+                detail: { enabled: saved.enabled, days: saved.days, was_enabled: before.enabled, was_days: before.days },
+            });
+            log('info', 'settings.auto_archive_set', { creator_id: creatorId, enabled: saved.enabled, days: saved.days });
+        }
+        res.json({ ...saved, minDays: AUTO_ARCHIVE_MIN_DAYS, maxDays: AUTO_ARCHIVE_MAX_DAYS, defaultDays: AUTO_ARCHIVE_DEFAULT_DAYS });
+    } catch (err) {
+        log('error', 'api.auto_archive_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the clean-up setting.' });
     }
 });
 

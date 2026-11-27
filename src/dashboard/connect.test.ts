@@ -1296,7 +1296,7 @@ describe('the Overview notice', () => {
     const ok = (value: unknown) => ({ status: 'fulfilled', value });
     const pending = { status: 'pending' };
     const alerts = (token: unknown, meta: unknown) => plain<Array<Record<string, any>>>(
-        O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), token, ok([]), ok({ data: [] }), pending, meta)
+        O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), token, pending, meta)
     );
     const goodToken = ok({ status: 'valid' });
 

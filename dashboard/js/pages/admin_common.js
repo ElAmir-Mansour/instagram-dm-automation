@@ -478,7 +478,7 @@ const HealthStrip = {
         const queueFailed = Admin.num(queue, 'failed');
         const queuePending = Admin.num(queue, 'pending');
         const postsPending = Admin.num(data, 'postsPending', 'posts_pending');
-        const postsFailed = Admin.num(data, 'postsFailed7d', 'posts_failed_7d');
+        const postsFailed = Admin.num(data, 'postsFailed', 'postsFailed7d', 'posts_failed_7d');
 
         const webhookAge = UI.relativeAge(webhookAt, Admin.WEBHOOK_AGE);
         const alarm = webhookAge.level === 'stale' || Admin.tokenState(tokenStatus) === 'invalid';
