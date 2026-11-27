@@ -24,6 +24,8 @@ import type {
 import { pool } from '../../config/db.js';
 import { log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
+import { loadRenderBrand } from '../brand/load.js';
+import type { RenderBrand } from '../brand/resolve.js';
 import { clipText, type Exec, isPlainObject, problemsError, StudioError, UUID_PATTERN, withTransaction } from '../studio/common.js';
 import { deleteUnreferencedUploads, enqueueJob } from '../studio/jobs.js';
 import { getStudioSettings } from '../studio/settings.js';
@@ -722,9 +724,9 @@ async function publicBase(): Promise<string> {
 }
 
 /** Queue a render of the explainer as it is now, after the checks every render needs (`renderReadiness`); the explainer moves to `rendering`. */
-async function queueRender(client: Exec, row: ExplainerRow, from: readonly ExplainerStatus[], base: string, settings: StudioSettings): Promise<void> {
+async function queueRender(client: Exec, row: ExplainerRow, from: readonly ExplainerStatus[], base: string, settings: StudioSettings, brand: RenderBrand): Promise<void> {
     const scenes = await loadScenes(client, row.creator_id, row.id);
-    const payload = renderPayload(row, scenes, settings, base);
+    const payload = renderPayload(row, scenes, settings, base, brand);
     const job = await enqueueJob(client, row.creator_id, 'explainer_render', payload);
     await supersede(client, row.creator_id, row.job_id, 'A newer render was asked for.');
     // The previous render stays on the row until the new one lands (FR-026): the transition does not touch `render`.
@@ -738,11 +740,11 @@ async function queueRender(client: Exec, row: ExplainerRow, from: readonly Expla
  */
 export async function approvePictures(creatorId: string, rawId: unknown): Promise<ExplainerView> {
     const id = explainerIdOf(rawId);
-    const [settings, base] = await Promise.all([getStudioSettings(creatorId), publicBase()]);
+    const [settings, base, brand] = await Promise.all([getStudioSettings(creatorId), publicBase(), loadRenderBrand(creatorId)]);
     return withTransaction(async (client) => {
         const row = await loadLocked(client, creatorId, id);
         requireStatus(row, ['review'], 'have its pictures approved');
-        await queueRender(client, row, ['review'], base, settings);
+        await queueRender(client, row, ['review'], base, settings, brand);
         return loadView(client, creatorId, id);
     });
 }
@@ -750,11 +752,11 @@ export async function approvePictures(creatorId: string, rawId: unknown): Promis
 /** POST /explainers/:id/render: a new render of a `ready` explainer (a label or a picture changed, or the sound): the old files stay until it lands. */
 export async function renderExplainer(creatorId: string, rawId: unknown): Promise<ExplainerView> {
     const id = explainerIdOf(rawId);
-    const [settings, base] = await Promise.all([getStudioSettings(creatorId), publicBase()]);
+    const [settings, base, brand] = await Promise.all([getStudioSettings(creatorId), publicBase(), loadRenderBrand(creatorId)]);
     return withTransaction(async (client) => {
         const row = await loadLocked(client, creatorId, id);
         requireStatus(row, ['ready'], 'be rendered again');
-        await queueRender(client, row, ['ready'], base, settings);
+        await queueRender(client, row, ['ready'], base, settings, brand);
         return loadView(client, creatorId, id);
     });
 }
@@ -766,6 +768,7 @@ export async function retryExplainer(creatorId: string, rawId: unknown, now: num
     const id = explainerIdOf(rawId);
     const settings = await getStudioSettings(creatorId);
     const base = await getPublicBaseUrl(null);
+    const brand = await loadRenderBrand(creatorId);
     const { view, run } = await withTransaction(async (client) => {
         const row = await loadLocked(client, creatorId, id);
         requireStatus(row, ['failed'], 'be retried');
@@ -791,7 +794,7 @@ export async function retryExplainer(creatorId: string, rawId: unknown, now: num
         } else if (step === 'render') {
             if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
             const scenes = await loadScenes(client, creatorId, id);
-            const job = await enqueueJob(client, creatorId, 'explainer_render', renderPayload(row, scenes, settings, base));
+            const job = await enqueueJob(client, creatorId, 'explainer_render', renderPayload(row, scenes, settings, base, brand));
             await transitionExplainer(client, id, ['failed'], RETRY_STATUS.render, { job_id: job.id }, creatorId);
         } else {
             await transitionExplainer(client, id, ['failed'], RETRY_STATUS.schedule, {}, creatorId);

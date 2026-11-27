@@ -120,7 +120,16 @@ const InboxPage = {
     OLDER_TRIGGER_PX: 240,
     /** Further up than this, the "latest messages" button shows. */
     JUMP_BUTTON_PX: 480,
-    FILTERS: Object.freeze(['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']),
+    /**
+     * The views (U2, DW-I1). Three sit in the row: To do (the default: every thread a person has to act on, which is a superset of what the nav
+     * badge counts), Hot and All. The rest are behind "More". An old link keeps working: `filter=waiting` and `filter=needs_you` (Today used to
+     * send both) land on To do, which holds every thread either of them showed.
+     */
+    VIEWS: Object.freeze(['todo', 'hot', 'all']),
+    MORE_VIEWS: Object.freeze(['paused', 'ads', 'handled']),
+    FILTERS: Object.freeze(['todo', 'hot', 'all', 'paused', 'ads', 'handled']),
+    DEFAULT_FILTER: 'todo',
+    LEGACY_FILTERS: Object.freeze({ waiting: 'todo', needs_you: 'todo' }),
     /** What `effective_ai` says (src/services/inboxAssistant.ts: a test fails when these differ). */
     EFFECTIVE_STATES: Object.freeze(['on', 'off_global', 'paused_thread', 'sales_test', 'sales_live']),
     /** The effective state → the state of the `assistant` status pill (components.js). No prototype, so a stranger finds nothing. */
@@ -216,7 +225,7 @@ const InboxPage = {
     /** The server's answer for a search: `{ term, rows }`, the term lower-cased and trimmed. */
     searchMatches: null,
     /** 'all' | 'waiting' | 'needs_you' | 'hot' | 'paused' */
-    filter: 'all',
+    filter: 'todo',
     /**
      * The funnel card: whether it is open, the period shown, what came back, whether it failed, and which request is the live one
      * (`seq`: an answer that arrives after a newer question, or after the page was left, is dropped).
@@ -293,6 +302,9 @@ const InboxPage = {
     _hiddenAt: 0,
     /** What `renderCount()` last wrote. */
     _countMarkup: null,
+    _todoMarkup: null,
+    /** Whether "More" (the second row of views) is showing. */
+    moreOpen: false,
     /** The stale strip has been shown since the list last loaded, so a success is news. */
     _staleShown: false,
 
@@ -324,12 +336,14 @@ const InboxPage = {
                                    placeholder="${t('inbox.searchPlaceholder')}"
                                    autocomplete="off" data-input="inbox:handleSearch">
                         </div>
-                        <div class="segmented" role="group" id="inbox-filter" aria-label="${t('inbox.filter.label')}">
-                            ${this.FILTERS.map((key) => html`
-                                <button type="button" class="btn btn-sm btn-ghost" id="inbox-filter-${key}"
-                                        data-action="inbox:setFilter" data-filter="${key}"
-                                        aria-pressed="${key === current ? 'true' : 'false'}">${t(`inbox.filter.${key}`)}</button>
-                            `)}
+                        <div class="segmented inbox-views" role="group" id="inbox-filter" aria-label="${t('inbox.filter.label')}">
+                            ${this.VIEWS.map((key) => this.viewButton(key, current))}
+                            <button type="button" class="btn btn-sm btn-ghost" id="inbox-filter-more" data-action="inbox:toggleMore"
+                                    aria-expanded="${this.moreOpen ? 'true' : 'false'}" aria-controls="inbox-more"
+                                    aria-pressed="${this.MORE_VIEWS.includes(current) ? 'true' : 'false'}">${t('inbox.filter.more')}<i data-lucide="chevron-down" aria-hidden="true"></i></button>
+                        </div>
+                        <div class="segmented inbox-views inbox-more" role="group" id="inbox-more" aria-label="${t('inbox.filter.moreLabel')}"${this.moreOpen ? '' : ' hidden'}>
+                            ${this.MORE_VIEWS.map((key) => this.viewButton(key, current))}
                         </div>
                         <p class="inbox-count" id="inbox-count"></p>
                     </div>
@@ -366,6 +380,7 @@ const InboxPage = {
 
         this.resetViewState();
         this.filter = this.filterFromHash();
+        this.moreOpen = this.MORE_VIEWS.includes(this.filter);
         this._deepLinkId = this.threadFromHash();
         this.syncFilterButtons();
         this.paintFunnel();
@@ -432,12 +447,14 @@ const InboxPage = {
         this.lastMessageStamp = null;
         this.searchTerm = '';
         this.searchMatches = null;
-        this.filter = 'all';
+        this.filter = this.DEFAULT_FILTER;
+        this.moreOpen = false;
         this._deepLinkId = '';
         this._pollFailures = 0;
         this._unchangedTicks = 0;
         this._listSignature = null;
         this._countMarkup = null;
+        this._todoMarkup = null;
         this._staleShown = false;
         // Closed again, and the request in flight (if any) is no longer the live one: its answer is dropped. Painted too, because a tenant
         // switch resets the page without repainting the layout, and the card must not stay open on the new tenant's numbers.
@@ -651,7 +668,60 @@ const InboxPage = {
     // ─── Filter ──────────────────────────────────────────────────────────────
     filterFromHash() {
         const raw = typeof App !== 'undefined' && typeof App.hashParam === 'function' ? String(App.hashParam('filter') || '') : '';
-        return this.FILTERS.includes(raw) ? raw : 'all';
+        if (Object.prototype.hasOwnProperty.call(this.LEGACY_FILTERS, raw)) return this.LEGACY_FILTERS[raw];
+        return this.FILTERS.includes(raw) ? raw : this.DEFAULT_FILTER;
+    },
+
+    /** One view's button. To do carries its count (`todoCount`), the others only their name. */
+    viewButton(key, current) {
+        return html`<button type="button" class="btn btn-sm btn-ghost" id="inbox-filter-${key}"
+                        data-action="inbox:setFilter" data-filter="${key}"
+                        aria-pressed="${key === current ? 'true' : 'false'}"${key === 'todo' ? html` aria-label="${this.todoLabel()}"` : ''}>${key === 'todo' ? this.todoInner() : t(`inbox.filter.${key}`)}</button>`;
+    },
+
+    /**
+     * To do: a person has to act. Everything the nav badge counts (`Attention.needsHuman`), plus a hot lead nobody has marked handled. The badge
+     * stays the narrower number on purpose (it is "someone is waiting"), and this is a superset of it, so a number on the badge never points at
+     * an empty list.
+     */
+    isTodo(thread) {
+        return Attention.needsHuman(thread) || (Attention.isHot(thread) && !Attention.isHandled(thread));
+    },
+
+    todoCount() {
+        return (Array.isArray(this.threads) ? this.threads : []).filter((x) => this.isTodo(x)).length;
+    },
+
+    /** The To do button's text: its name, and the count when there is one. */
+    todoInner() {
+        const n = this.todoCount();
+        return html`${t('inbox.filter.todo')}${n > 0 ? html` <span class="segment-count" data-todo-count>${UI.formatNumber(n)}</span>` : ''}`;
+    },
+
+    /** What a screen reader hears on the To do button: the name and the number in words. */
+    todoLabel() {
+        const n = this.todoCount();
+        // English has no "zero" plural category, so nothing is said by its own key.
+        return n === 0 ? t('inbox.filter.todoCount_zero') : t('inbox.filter.todoCount', { count: n, n: UI.formatNumber(n) });
+    },
+
+    /**
+     * To do, in the order to work it: threads with an open reply window first, the one closing soonest at the top; then the ones with no clock
+     * (a hot lead); then the ones whose window has closed (they can only be answered from the Instagram app), the newest first within each.
+     */
+    sortTodo(list, now = Date.now()) {
+        const group = (x) => {
+            if (!Attention.needsHuman(x)) return 1;
+            const left = Attention.windowLeftMs(x, now);
+            return left === null ? 1 : left > 0 ? 0 : 2;
+        };
+        const recent = (x) => String(x.last_message_at || '');
+        return list.map((x, i) => ({ x, i, g: group(x), left: Attention.windowLeftMs(x, now) }))
+            .sort((a, b) => (a.g - b.g)
+                || (a.g === 0 ? a.left - b.left : 0)
+                || recent(b.x).localeCompare(recent(a.x))
+                || a.i - b.i)
+            .map((entry) => entry.x);
     },
 
     // The rules for "does this thread need a person" (waiting, handed over, hot, the 24 h window) live in dashboard/js/attention.js,
@@ -744,8 +814,8 @@ const InboxPage = {
     },
 
     matchesFilter(thread) {
-        if (this.filter === 'waiting') return this.needsReply(thread);
-        if (this.filter === 'needs_you') return this.needsYou(thread);
+        if (this.filter === 'todo') return this.isTodo(thread);
+        if (this.filter === 'handled') return Attention.isHandled(thread);
         if (this.filter === 'hot') return Attention.isHot(thread);
         if (this.filter === 'paused') return !!thread && thread.is_bot_active === false;
         if (this.filter === 'ads') return this.fromAd(thread);
@@ -776,19 +846,38 @@ const InboxPage = {
             const btn = document.getElementById(`inbox-filter-${key}`);
             if (btn) btn.setAttribute('aria-pressed', key === this.filter ? 'true' : 'false');
         });
+        const more = document.getElementById('inbox-filter-more');
+        if (more) {
+            more.setAttribute('aria-pressed', this.MORE_VIEWS.includes(this.filter) ? 'true' : 'false');
+            more.setAttribute('aria-expanded', this.moreOpen ? 'true' : 'false');
+        }
+        const panel = document.getElementById('inbox-more');
+        if (panel) {
+            if (this.moreOpen) panel.removeAttribute('hidden');
+            else panel.setAttribute('hidden', '');
+        }
+    },
+
+    /** "More ▾": show or hide the second row of views. */
+    toggleMore() {
+        this.moreOpen = !this.moreOpen;
+        this.syncFilterButtons();
     },
 
     setFilter(value) {
-        const next = this.FILTERS.includes(value) ? value : 'all';
-        if (next === this.filter) return;
+        const next = this.FILTERS.includes(value) ? value : this.DEFAULT_FILTER;
+        // A view from the row closes "More"; one from "More" keeps it open, so the pressed button is in sight.
+        this.moreOpen = this.MORE_VIEWS.includes(next);
+        if (next === this.filter) { this.syncFilterButtons(); return; }
         this.filter = next;
         this.syncFilterButtons();
         // The hash says what is on screen, so a reload or a copied link keeps
         // it — replaced, not pushed, and without a hashchange (which would
-        // re-render the page and drop the open thread).
+        // re-render the page and drop the open thread). To do is what a bare
+        // `#/inbox` opens on, so it is the one view with no parameter.
         try {
             if (typeof history !== 'undefined' && history.replaceState) {
-                history.replaceState(null, '', next === 'all' ? '#/inbox' : `#/inbox?filter=${next}`);
+                history.replaceState(null, '', next === this.DEFAULT_FILTER ? '#/inbox' : `#/inbox?filter=${next}`);
             }
         } catch { /* a sandboxed frame: the filter still applies */ }
         this.renderThreads();
@@ -1022,7 +1111,11 @@ const InboxPage = {
                 list = local;
             }
         }
-        return list.filter((x) => this.matchesFilter(x));
+        // A search looks through EVERY conversation, whatever view is pressed: someone searched for is not lost because To do is the default.
+        // `renderCount` says so under the box.
+        if (term) return list;
+        const shown = list.filter((x) => this.matchesFilter(x));
+        return this.filter === 'todo' ? this.sortTodo(shown) : shown;
     },
 
     /**
@@ -1053,10 +1146,49 @@ const InboxPage = {
         return html`<span class="badge badge-accent" data-hot><i data-lucide="zap" aria-hidden="true"></i>${t('inbox.hot')}</span>`;
     },
 
+    /**
+     * The row's ONE status chip (U2, DW-I2), in this order of priority, so a row never says two things about the same need:
+     *   1. Needs you (the reason it was handed over, the time left)   2. Needs reply (the time left)   3. Hot   4. Handled (muted)   5. nothing.
+     * Hot is for a thread nobody has marked handled: once the owner has, the row says Handled. The time left is `windowText`, which exists only
+     * for a thread that needs a person.
+     * @returns {{kind: string, tone: string, icon: string, text: string}|null}
+     */
+    statusChipSpec(x) {
+        if (this.needsYou(x)) {
+            const reason = this.vocabText('inbox.handoffReason', this.HANDOFF_REASONS, x.handoff_reason);
+            return { kind: 'needs_you', tone: 'warning', icon: 'alert-circle', text: [t('inbox.needsYou'), reason, this.windowText(x)].filter(Boolean).join(' · ') };
+        }
+        if (this.needsReply(x)) {
+            return { kind: 'needs_reply', tone: 'danger', icon: 'reply', text: [t('inbox.needsReply'), this.windowText(x)].filter(Boolean).join(' · ') };
+        }
+        if (Attention.isHot(x) && !Attention.isHandled(x)) return { kind: 'hot', tone: 'accent', icon: 'zap', text: t('inbox.hot') };
+        if (Attention.isHandled(x)) return { kind: 'handled', tone: 'neutral', icon: 'check', text: t('inbox.handled.state') };
+        return null;
+    },
+
+    statusChip(x) {
+        const spec = this.statusChipSpec(x);
+        if (!spec) return '';
+        return html`<span class="badge badge-${spec.tone}" data-status-chip="${spec.kind}"><i data-lucide="${spec.icon}" aria-hidden="true"></i><bdi dir="auto">${spec.text}</bdi></span>`;
+    },
+
+    /**
+     * The muted second line: what is NOT the default for this row. The assistant answering is the default (so "Assistant on" and the sales
+     * assistant answering everyone are not drawn); a paused thread, an assistant switched off and a sales-test sender are. A stage is drawn
+     * unless it is "new" (which read as "new message") or "handoff" (the status chip says it, and once handled it is over).
+     */
+    detailBadges(x) {
+        const state = this.effectiveAi(x);
+        const pill = state === 'on' || state === 'sales_live' ? '' : this.assistantPill(x);
+        const stage = x.stage === 'new' || x.stage === 'handoff' ? '' : this.stageChip(x.stage);
+        return html`${pill}${this.businessAiBadge(x)}${this.adBadge(x)}${stage}`;
+    },
+
     threadRow(x) {
         // I8: which network the thread is on, as the same IG / FB tag the
         // activity log uses. A thread from before v26 has no platform and
         // shows none, rather than a guess.
+        const detail = String(this.detailBadges(x));
         return html`
             <span class="thread-top">
                 <span class="thread-who">
@@ -1065,23 +1197,8 @@ const InboxPage = {
                 <span class="thread-time">${this.threadTime(x.last_message_at)}</span>
             </span>
             <span class="thread-preview" dir="auto">${this.threadPreview(x)}</span>
-            <span class="thread-badges">
-                ${this.assistantPill(x)}
-                ${this.businessAiBadge(x)}
-                ${this.adBadge(x)}
-                ${this.stageChip(x.stage)}
-                ${Attention.isHot(x) ? this.hotBadge() : ''}
-                ${this.needsReply(x)
-                    ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
-                    : ''}
-                ${this.needsYou(x)
-                    ? html`<span class="badge badge-warning"><i data-lucide="alert-circle" aria-hidden="true"></i>${t('inbox.needsYou')}</span>`
-                    : ''}
-                ${Attention.isHandled(x) ? this.handledBadge() : ''}
-                ${this.windowText(x)
-                    ? html`<span class="badge badge-neutral"><i data-lucide="clock" aria-hidden="true"></i>${this.windowText(x)}</span>`
-                    : ''}
-            </span>
+            ${this.statusChip(x) ? html`<span class="thread-badges thread-status">${this.statusChip(x)}</span>` : ''}
+            ${detail ? html`<span class="thread-badges thread-detail">${html.raw(detail)}</span>` : ''}
         `;
     },
 
@@ -1091,7 +1208,7 @@ const InboxPage = {
      * it (a button in a button is not a control a keyboard or a screen reader can use). '' for any other thread, and for a viewer.
      */
     rowActionMarkup(x) {
-        if (!this.canMark() || !Attention.needsHuman(x)) return '';
+        if (!this.canMark() || !this.isTodo(x)) return '';
         const name = `\u2068${this.threadTitle(x)}\u2069`;
         return html`<button type="button" class="icon-button thread-row-action" data-action="inbox:markHandled" data-id="${x.id}"
                             data-focus-key="handled-row-${x.id}" aria-label="${t('inbox.handled.markFor', { name })}"
@@ -1104,15 +1221,26 @@ const InboxPage = {
      * idle poll touches nothing.
      */
     renderCount() {
+        // The To do button carries the count of what a person has to do; its text and its spoken label move with it.
+        const todo = document.getElementById('inbox-filter-todo');
+        if (todo) {
+            const inner = esc(this.todoInner());
+            if (this._todoMarkup !== inner || todo.innerHTML === '') {
+                this._todoMarkup = inner;
+                todo.innerHTML = inner;
+                todo.setAttribute('aria-label', this.todoLabel());
+            }
+        }
         const host = document.getElementById('inbox-count');
         if (!host) return;
-        const waiting = this.threads.filter((x) => this.needsReply(x)).length;
         const shown = this.threads.length;
-        const truncated = !this.searchTerm.trim() && Number(this.total) > shown;
-        const markup = esc(html`<strong>${waiting === 0 ? t('inbox.needReply_zero') : t('inbox.needReply', { count: waiting })}</strong>${truncated ? html` · <span>${t('inbox.showing', { shown: UI.formatNumber(shown), total: UI.formatNumber(this.total) })}</span>` : ''}`);
+        const searching = !!this.searchTerm.trim();
+        const truncated = !searching && Number(this.total) > shown;
+        const markup = searching ? esc(html`<span>${t('inbox.searchingAll')}</span>`)
+            : truncated ? esc(html`<span>${t('inbox.showing', { shown: UI.formatNumber(shown), total: UI.formatNumber(this.total) })}</span>`) : '';
         // Compared with what this page last wrote, not with innerHTML, which the
         // browser re-serialises and would never match.
-        if (this._countMarkup === markup && host.innerHTML !== '') return;
+        if (this._countMarkup === markup && (markup === '' || host.innerHTML !== '')) return;
         this._countMarkup = markup;
         host.innerHTML = markup;
     },
@@ -1126,8 +1254,10 @@ const InboxPage = {
 
     emptyMarkup(kind) {
         if (kind === 'search') return html`<div class="empty-threads" data-empty="search"><p>${t('inbox.noMatch')}</p></div>`;
-        if (kind === 'waiting') return html`<div class="empty-threads" data-empty="waiting"><p>${t('inbox.noWaiting')}</p></div>`;
-        if (kind === 'needs_you') return html`<div class="empty-threads" data-empty="needs_you"><p>${t('inbox.noNeedsYou')}</p></div>`;
+        if (kind === 'todo') {
+            return html`<div class="empty-threads" data-empty="todo"><p>${t('inbox.noTodo')}</p><p class="empty-hint"><button type="button" class="stat-link" data-action="inbox:setFilter" data-filter="all">${t('inbox.showAll')}</button></p></div>`;
+        }
+        if (kind === 'handled') return html`<div class="empty-threads" data-empty="handled"><p>${t('inbox.noHandled')}</p></div>`;
         if (kind === 'hot') return html`<div class="empty-threads" data-empty="hot"><p>${t('inbox.noHot')}</p></div>`;
         if (kind === 'paused') return html`<div class="empty-threads" data-empty="paused"><p>${t('inbox.noPaused')}</p></div>`;
         if (kind === 'ads') return html`<div class="empty-threads" data-empty="ads"><p>${t('inbox.noAds')}</p>${UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help'))}</div>`;
@@ -1194,6 +1324,8 @@ const InboxPage = {
                 this.effectiveAi(x),
                 Attention.isHandled(x) ? '1' : '0',
                 Attention.needsHuman(x) ? '1' : '0',
+                this.isTodo(x) ? '1' : '0',
+                x.handoff_reason || '',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
                 Attention.isHandoff(x) ? '1' : '0',
@@ -1787,7 +1919,7 @@ const InboxPage = {
         if (Attention.isHandled(thread)) {
             return UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('inbox.handled.reopen'), action: 'inbox:unmarkHandled', id: 'chat-mark-handled', data: { id: thread.id } });
         }
-        if (Attention.needsHuman(thread)) {
+        if (this.isTodo(thread)) {
             return UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label: t('inbox.handled.mark'), action: 'inbox:markHandled', id: 'chat-mark-handled', data: { id: thread.id } });
         }
         return '';
@@ -3238,6 +3370,7 @@ UI.registerActions('inbox', {
     sendMessage: (el, e) => InboxPage.sendMessage(el, e),
     handleSearch: (el) => InboxPage.handleSearch(el.value),
     setFilter: (el) => InboxPage.setFilter(el && el.dataset ? el.dataset.filter : 'all'),
+    toggleMore: () => InboxPage.toggleMore(),
     retryThreads: () => InboxPage.retryThreads(),
     handBack: (el) => InboxPage.handBack(el && el.dataset ? el.dataset.id : ''),
     markHandled: (el) => InboxPage.markHandled(el && el.dataset ? el.dataset.id : ''),

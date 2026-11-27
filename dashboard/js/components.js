@@ -656,6 +656,25 @@ const UI = {
         } catch (err) {
             console.warn('Icon rendering failed:', err);
         }
+        UI.revealActiveTabs(node);
+    },
+
+    /**
+     * A tab strip that scrolls inside itself (`.segmented`) opens with its current tab in view. It moves the strip's own scrollLeft by the
+     * distance between the two boxes, which is right in both directions (RTL scrollLeft is signed) and never scrolls the page.
+     */
+    revealActiveTabs(root) {
+        try {
+            const scope = root && root.querySelectorAll ? root : document;
+            scope.querySelectorAll('nav.segmented').forEach((strip) => {
+                if (strip.scrollWidth <= strip.clientWidth) return;
+                const tab = strip.querySelector('[aria-current="page"]');
+                if (!tab) return;
+                const a = strip.getBoundingClientRect();
+                const b = tab.getBoundingClientRect();
+                strip.scrollLeft += (b.left + b.width / 2) - (a.left + a.width / 2);
+            });
+        } catch { /* a scroll position is a nicety */ }
     },
 
     // ─── Toast ───────────────────────────────────────────────────────────────

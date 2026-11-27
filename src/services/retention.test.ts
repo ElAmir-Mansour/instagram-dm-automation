@@ -412,7 +412,7 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         // held by no setting at all: a swept logo is a broken image on every infographic. An offer's sales cover
         // (`offers[].sales.image_url`) lives in a list, so the offers are read whole: an upload's id anywhere in them keeps it.
         const clause = await keepClause();
-        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(cp\.profile->'brand'->>'portrait_url', ''\) \|\| ' ' \|\| COALESCE\(cp\.profile->'brand'->>'logo_url', ''\) \|\| ' ' \|\| COALESCE\(\(cp\.profile->'offers'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(\(cp\.profile->'brand'\)::text, ''\) \|\| ' ' \|\| COALESCE\(\(cp\.profile->'offers'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
     it('keeps every picture of a scene, the chosen one and the last three, whatever the explainer\u2019s status (v59)', async () => {

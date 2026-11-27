@@ -25,7 +25,7 @@
  * 100 conversations to count who waits, and so disagreed with the tenant page (failed posts: 4 here, 2 there) and with the badge (waiting: 2 here, 1
  * there). Now: a heartbeat line on top (last comment, last DM, are events arriving, is the Mac worker online), then one card per item with one verb
  * and the server's own link; a failed-posts card lists why each failed and can "Archive these", a conversation past Meta's 24 h window can be "Marked
- * handled", both with one Undo and no question, and neither is shown to a viewer. FLOWS.md §15 walks it.
+ * handled", both with one Undo and no question, and neither is shown to a viewer. FLOWS.md §16 walks it.
  *
  * ─── Why this page renders in pieces ────────────────────────────────────────
  * The requests go out on load in the same tick, deliberately, because the
@@ -963,7 +963,7 @@ const OverviewPage = {
                 const alert = {
                     key: 'waiting', level: 'warning', icon: 'message-square-dot',
                     title: t('overview.alert.waitingHumans', { count: total }),
-                    body: age ? t('overview.alert.waitingOldest', { age }) : t('overview.alert.waitingHumansBody'),
+                    body: age ? t('overview.alert.waitingOldest', { age, count: total }) : t('overview.alert.waitingHumansBody'),
                     action: verb, href: item.action.href,
                 };
                 if (canClear && ids.length) {

@@ -13,7 +13,7 @@
  */
 import {
     ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
-    PRONOUNS, PROFILE_SECTIONS, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES, THEMES,
+    LOGO_TONES, PRONOUNS, PROFILE_SECTIONS, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES, THEMES,
     type CreatorProfile, type Offer,
 } from './types.js';
 
@@ -79,12 +79,20 @@ export const PROFILE_LIMITS = {
     handoffMessage: 1000,
     /** A goal is a whole number of followers or views; a billion is well past any account (`GROWTH_LIMITS.goalMax`). */
     goalMax: 1_000_000_000,
+    /** The logo (Brand Kit): the file is a PNG upload, 200 to 4096 px on its short and long sides, not thinner than 1:4 nor wider than 8:1. */
+    logoMinSide: 200,
+    logoMaxSide: 4096,
+    logoMinAspect: 0.25,
+    logoMaxAspect: 8,
+    logoBytes: 3_000_000,
     /** The CHECK on `creator_profiles.profile` (01 §3), measured the way Postgres prints jsonb. */
     profileBytes: 131_072,
 } as const;
 
 /** The portrait and the logo are our own uploads: the worker fetches them while rendering (`UPLOAD_URL` in studio/settings.ts). */
 export const UPLOAD_URL = /^https:\/\/[^\s/]+\/api\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jpg)?$/i;
+/** `UPLOAD_URL` without the optional `.jpg`: a logo is a PNG, and its address is the upload's own. */
+export const LOGO_URL = /^https:\/\/[^\s/]+\/api\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
 const LOCAL_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const COUNTRY = /^[A-Z]{2}$/;
@@ -94,6 +102,46 @@ const MAX_PROBLEMS = 20;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const LOGO_KEYS = ['url', 'width', 'height', 'alpha', 'tone', 'colour'] as const;
+
+/**
+ * Every problem in one logo's shape: the six fields a client sends, and `added_at` (the server's, optional unless `stored`, which
+ * is how the profile validator reads a logo that is already saved). Pure, no file is looked at: `checkLogoUpload` reuses it for the
+ * claim, then reads the file. `path` is what the problems are written against.
+ */
+export function logoAssetProblems(value: unknown, path: string, { stored = false }: { stored?: boolean } = {}): string[] {
+    const problems: string[] = [];
+    if (!isObj(value)) return [`${path} must be an object`];
+    for (const key of Object.keys(value)) {
+        if (value[key] !== undefined && key !== 'added_at' && !(LOGO_KEYS as readonly string[]).includes(key)) problems.push(`${path}.${key} is not a profile field`);
+    }
+    for (const key of LOGO_KEYS) if (value[key] === undefined) problems.push(`${path}.${key} is required`);
+    if (stored && value.added_at === undefined) problems.push(`${path}.added_at is required`);
+    const { url, width, height, alpha, tone, colour, added_at: addedAt } = value;
+    if (url !== undefined && (typeof url !== 'string' || !LOGO_URL.test(url))) problems.push(`${path}.url must be one of your uploads (…/api/uploads/<id>)`);
+    const side = (v: unknown, name: string): boolean => {
+        if (v === undefined) return false;
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > PROFILE_LIMITS.logoMaxSide) {
+            problems.push(`${path}.${name} must be a whole number from 1 to ${PROFILE_LIMITS.logoMaxSide}`);
+            return false;
+        }
+        return true;
+    };
+    const wOk = side(width, 'width');
+    const hOk = side(height, 'height');
+    if (wOk && hOk) {
+        const w = width as number;
+        const h = height as number;
+        if (Math.min(w, h) < PROFILE_LIMITS.logoMinSide) problems.push(`${path}: the logo is too small (its short side must be at least ${PROFILE_LIMITS.logoMinSide} px)`);
+        else if (w / h < PROFILE_LIMITS.logoMinAspect || w / h > PROFILE_LIMITS.logoMaxAspect) problems.push(`${path}: the logo is too long or too tall (width to height must be from 1:4 to 8:1)`);
+    }
+    if (alpha !== undefined && typeof alpha !== 'boolean') problems.push(`${path}.alpha must be true or false`);
+    if (tone !== undefined && (typeof tone !== 'string' || !(LOGO_TONES as readonly string[]).includes(tone))) problems.push(`${path}.tone must be one of ${LOGO_TONES.join(', ')}`);
+    if (colour !== undefined && (typeof colour !== 'string' || !HEX_COLOUR.test(colour))) problems.push(`${path}.colour must be a colour like #FFD60A`);
+    if (addedAt !== undefined && (typeof addedAt !== 'string' || addedAt.length > 40 || Number.isNaN(Date.parse(addedAt)))) problems.push(`${path}.added_at must be a date`);
+    return problems;
+}
 
 export function isTimeZone(value: unknown): value is string {
     if (typeof value !== 'string' || !value) return false;
@@ -412,7 +460,7 @@ function problemsOf(raw: unknown): string[] {
     }
 
     // brand
-    const brand = object(profile.brand, 'brand', ['primary', 'accent', 'font_display', 'logo_url', 'portrait_url', 'theme']);
+    const brand = object(profile.brand, 'brand', ['primary', 'accent', 'font_display', 'logo_url', 'portrait_url', 'theme'], ['logos', 'use_brand_colours']);
     if (brand) {
         colour(brand.primary, 'brand.primary');
         colour(brand.accent, 'brand.accent');
@@ -420,6 +468,13 @@ function problemsOf(raw: unknown): string[] {
         upload(brand.logo_url, 'brand.logo_url');
         upload(brand.portrait_url, 'brand.portrait_url');
         oneOf(brand.theme, 'brand.theme', THEMES);
+        if (brand.use_brand_colours !== undefined && typeof brand.use_brand_colours !== 'boolean') add('brand.use_brand_colours must be true or false');
+        const logos = object(brand.logos, 'brand.logos', [], ['main']);
+        if (logos && logos.main !== undefined) {
+            for (const problem of logoAssetProblems(logos.main, 'brand.logos.main', { stored: true })) add(problem);
+            const main = logos.main;
+            if (isObj(main) && typeof main.url === 'string' && brand.logo_url !== main.url) add('brand.logo_url must be brand.logos.main.url');
+        }
     }
 
     // socials

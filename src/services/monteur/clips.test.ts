@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { ClipCopy } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { defaultProfile } from '../profile/defaults.js';
 import { StudioError } from '../studio/common.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { AUTO_APPROVE_SQL, autoApproveClips, MAX_AUTO_APPROVALS } from './auto.js';
@@ -677,5 +678,45 @@ describe('rejectClip', () => {
         db.statements.length = 0;
         await rejectClip(TENANT, CLIP);
         assert.equal(db.ran(/^(UPDATE|DELETE)/).length, 0);
+    });
+});
+
+describe('the reel render and the Brand Kit (docs: contract §4)', () => {
+    const renders = () => db.ran(/^INSERT INTO studio_jobs/);
+    const LOGO = { url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark', colour: '#0E3B5C' };
+    const storeProfile = (brand: Record<string, unknown>): void => {
+        const profile = defaultProfile();
+        Object.assign(profile.brand, brand);
+        db.routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+    };
+    const withLogo = { logo_url: LOGO.url, logos: { main: { ...LOGO, added_at: '2026-12-01T09:30:00.000Z' } } };
+
+    it('a tenant with no stored profile: today\'s brand, key for key', async () => {
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        const brand = JSON.parse(renders()[0]!.params[2]).brand;
+        assert.deepEqual(Object.keys(brand), ['accent', 'font', 'direction', 'style']);
+    });
+
+    it('a logo with the switch off: only brand.logo is added, last; the accent is the one the clip had', async () => {
+        db.routes.unshift([/payload->'brand'->>'accent' AS accent FROM studio_jobs WHERE creator_id = \$1 AND kind = 'monteur_render' AND payload->>'clipId'/, () => ({ rows: [{ accent: '#22C7F0' }] })]);
+        storeProfile(withLogo);
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        const brand = JSON.parse(renders()[0]!.params[2]).brand;
+        assert.deepEqual(Object.keys(brand), ['accent', 'font', 'direction', 'style', 'logo']);
+        assert.deepEqual(brand.logo, LOGO);
+        assert.equal(brand.accent, '#22C7F0');
+    });
+
+    it('the switch on: a clip that was rendered before keeps its accent (I8), and a clip with none gets the brand\'s', async () => {
+        storeProfile({ ...withLogo, use_brand_colours: true, accent: '#F2A33A' });
+        db.routes.unshift([/payload->'brand'->>'accent' AS accent FROM studio_jobs WHERE creator_id = \$1 AND kind = 'monteur_render' AND payload->>'clipId'/, () => ({ rows: [{ accent: '#22C7F0' }] })]);
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        assert.equal(JSON.parse(renders()[0]!.params[2]).brand.accent, '#22C7F0', 'a clip keeps the look it was made with');
+        db.statements.length = 0;
+        db.routes.shift();
+        await patchClip(TENANT, CLIP, { title: 'عنوان آخر' });
+        const brand = JSON.parse(renders()[0]!.params[2]).brand;
+        assert.equal(brand.accent, '#F2A33A', 'no earlier render: the brand\'s own accent');
+        assert.deepEqual(brand.logo, LOGO);
     });
 });

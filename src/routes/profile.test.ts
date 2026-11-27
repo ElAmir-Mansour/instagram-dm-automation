@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { AUDIT_ACTIONS, isAuditAction } from '../services/audit.js';
+import { setLogoCheckDeps } from '../services/brand/logoCheck.js';
 import { campaignSeeds, legacyCampaignFallback, legacyCampaignSeeds, neutralCampaignFallback } from '../services/profile/campaignSeeds.js';
 import { resetProfileTableWarning } from '../services/profile/store.js';
 import { installProfileDb, OTHER, OWNER, type ProfileDb, seededState, setPlatformOwner, type State, USER } from '../services/profile/testDb.js';
@@ -485,5 +486,91 @@ describe('GET /api/profile/campaign-seeds', () => {
         const res = await callSeeds({ tenantId: OTHER });
         assert.equal(res.statusCode, 500);
         assert.deepEqual(res.body, { error: 'Failed to read the campaign seeds.' });
+    });
+});
+
+// ─── The logo (Brand Kit, contract §1.5) ─────────────────────────────────────────────────────
+
+describe('PATCH /api/profile with a logo', () => {
+    const ID = '6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23';
+    const URL = `https://msg-response-auto.vercel.app/api/uploads/${ID}`;
+    const u32 = (n: number): number[] => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const chunk = (type: string, data: number[]): number[] => [...u32(data.length), ...[...type].map((c) => c.charCodeAt(0)), ...data, 0, 0, 0, 0];
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...chunk('IHDR', [...u32(1200), ...u32(400), 8, 6, 0, 0, 0]), ...chunk('IDAT', [1]), ...chunk('IEND', [])]);
+    const COLOUR = '#0E3B5C';
+    const claim = { url: URL, width: 1200, height: 400, alpha: true, tone: 'dark', colour: COLOUR };
+    let restoreCheck: ReturnType<typeof setLogoCheckDeps>;
+
+    beforeEach(() => {
+        restoreCheck = setLogoCheckDeps({
+            readRow: async () => ({ creator_id: OWNER, mime_type: 'image/png', size_bytes: PNG.length, is_private: false }),
+            readBytes: async () => PNG,
+            publicBase: async () => 'https://msg-response-auto.vercel.app',
+            now: () => new Date('2026-12-01T09:30:00.000Z'),
+        });
+    });
+    afterEach(() => setLogoCheckDeps(restoreCheck));
+
+    it('brand.logo_upload is a known audit action', () => {
+        assert.equal(AUDIT_ACTIONS.brandLogoUpload, 'brand.logo_upload');
+        assert.ok(isAuditAction('brand.logo_upload'));
+    });
+
+    it('saves it, answers in GET\'s shape with no logoChange key, and audits profile.write then brand.logo_upload with no URL and no colour', async () => {
+        store(richProfile(), 3);
+        const res = await call('patch', { version: 3, patch: { brand: { logos: { main: claim } } } });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(Object.keys(res.body).sort(), ['activationMissing', 'profile', 'stored', 'version']);
+        assert.equal(res.body.profile.brand.logos.main.url, URL);
+        assert.equal(res.body.profile.brand.logo_url, URL);
+        assert.equal(res.body.profile.brand.logos.main.added_at, '2026-12-01T09:30:00.000Z');
+        const rows = audits();
+        assert.deepEqual(rows.map((r) => r.params[2]), ['profile.write', 'brand.logo_upload']);
+        assert.deepEqual(JSON.parse(rows[0]!.params[5]), { paths: ['brand'], version: 4 });
+        assert.deepEqual(JSON.parse(rows[1]!.params[5]), { change: 'set', version: 4, width: 1200, height: 400, alpha: true });
+        for (const row of rows) {
+            const text = JSON.stringify(row.params);
+            assert.ok(!text.includes(ID) && !text.includes(COLOUR) && !text.includes('msg-response-auto'), 'no URL and no colour in an audit row');
+        }
+    });
+
+    it('taking it away audits `removed`, with no size', async () => {
+        const p = richProfile();
+        p.brand.logos = { main: { ...claim, tone: 'dark', added_at: '2026-12-01T09:30:00.000Z' } };
+        p.brand.logo_url = URL;
+        store(p, 3);
+        const res = await call('patch', { version: 3, patch: { brand: { logos: { main: null } } } });
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.profile.brand.logo_url, null);
+        assert.deepEqual(JSON.parse(audits()[1]!.params[5]), { change: 'removed', version: 4 });
+    });
+
+    it('the switch alone is audited as profile.write only', async () => {
+        store(richProfile(), 3);
+        const res = await call('patch', { version: 3, patch: { brand: { use_brand_colours: true } } });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(audits().map((r) => r.params[2]), ['profile.write']);
+    });
+
+    it('a logo that is not this tenant\'s is a 400 BRAND_LOGO_INVALID with problems: nothing written, nothing audited', async () => {
+        store(richProfile(), 3);
+        setLogoCheckDeps({ readRow: async () => ({ creator_id: OTHER, mime_type: 'image/png', size_bytes: 1, is_private: false }), readBytes: async () => PNG });
+        const res = await call('patch', { version: 3, patch: { brand: { logos: { main: claim } } } });
+        assert.equal(res.statusCode, 400);
+        assert.deepEqual(Object.keys(res.body).sort(), ['code', 'error', 'problems']);
+        assert.equal(res.body.code, 'BRAND_LOGO_INVALID');
+        assert.deepEqual(res.body.problems, ['logo.not_yours']);
+        assert.deepEqual(writes(), []);
+        assert.equal(audits().length, 0);
+    });
+
+    it('a logo whose file cannot be read just now is a 503 BRAND_LOGO_UNREADABLE with problems', async () => {
+        store(richProfile(), 3);
+        setLogoCheckDeps({ readRow: async () => ({ creator_id: OWNER, mime_type: 'image/png', size_bytes: 1, is_private: false }), readBytes: async () => { throw new Error('r2 down'); } });
+        const res = await call('patch', { version: 3, patch: { brand: { logos: { main: claim } } } });
+        assert.equal(res.statusCode, 503);
+        assert.equal(res.body.code, 'BRAND_LOGO_UNREADABLE');
+        assert.deepEqual(res.body.problems, ['logo.unreadable']);
+        assert.deepEqual(writes(), []);
     });
 });

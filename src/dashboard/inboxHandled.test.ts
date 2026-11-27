@@ -103,14 +103,14 @@ describe('Inbox: every badge about the assistant is the EFFECTIVE state (IN-02)'
         assert.ok(!row.includes('الردّ الآلي يعمل'), row);
     });
 
-    it('says "Assistant on" in green only while the assistant is on and the thread\'s own switch is on', () => {
+    it('says nothing about the assistant on a row it is answering as usual (U2: only what is not the default is drawn)', () => {
         const r = load();
         const thread = answered();
         show(r, [thread]);
         const row = String(r.Inbox.threadRow(thread));
-        assert.match(row, /data-status="assistant\.on"/);
-        assert.ok(text(row).includes('Assistant on'));
-        assert.match(row, /data-tone="success"/);
+        assert.doesNotMatch(row, /data-status="assistant\./);
+        assert.ok(!text(row).includes('Assistant on'));
+        assert.equal(r.Inbox.effectiveAi(thread), 'on', 'the state itself is still worked out, for the header');
     });
 
     it('says "Paused here" when the thread\'s own switch is off and the assistant is on', () => {
@@ -126,10 +126,12 @@ describe('Inbox: every badge about the assistant is the EFFECTIVE state (IN-02)'
         const theirs = answered({ id: 'theirs', instagram_user_id: '999' });
         show(r, [mine, theirs], { ...ON, sales_mode: 'test', sales_test_senders: [SENDER] });
         assert.match(String(r.Inbox.threadRow(mine)), /data-status="assistant\.sales_test"/);
-        assert.match(String(r.Inbox.threadRow(theirs)), /data-status="assistant\.on"/);
+        assert.doesNotMatch(String(r.Inbox.threadRow(theirs)), /data-status="assistant\./);
         show(r, [mine, theirs], { ...ON, sales_mode: 'on' });
-        assert.match(String(r.Inbox.threadRow(mine)), /data-status="assistant\.sales_live"/);
-        assert.match(String(r.Inbox.threadRow(theirs)), /data-status="assistant\.sales_live"/);
+        // Sales live answers everyone, so it is the default of a row and is said once, in the strip, not on every row.
+        assert.equal(r.Inbox.effectiveAi(mine), 'sales_live');
+        assert.doesNotMatch(String(r.Inbox.threadRow(mine)), /data-status="assistant\./);
+        assert.doesNotMatch(String(r.Inbox.threadRow(theirs)), /data-status="assistant\./);
     });
 
     it('never reports an unknown setting as off: with no reading of the assistant a thread says what its own switch says', () => {
@@ -552,17 +554,16 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         const handoff = waiting({ id: 'ho', stage: 'handoff', handoff_at: ago(2 * HOUR), last_message_direction: 'outbound' });
         const handoffDone = { ...handoff, id: 'hd', handled_at: new Date().toISOString() };
         show(r, [open, done, handoff, handoffDone]);
-        r.Inbox.filter = 'waiting';
-        assert.deepEqual(plain(r.Inbox.visibleThreads().map((x: Json) => x.id)), ['open']);
-        r.Inbox.filter = 'needs_you';
-        assert.deepEqual(plain(r.Inbox.visibleThreads().map((x: Json) => x.id)), ['ho']);
+        r.Inbox.filter = 'todo';
+        assert.deepEqual(plain(r.Inbox.visibleThreads().map((x: Json) => x.id).sort()), ['ho', 'open'], 'To do holds the open ones and not the handled');
+        r.Inbox.filter = 'handled';
+        assert.deepEqual(plain(r.Inbox.visibleThreads().map((x: Json) => x.id).sort()), ['done', 'hd'], 'Handled holds exactly those');
         r.Inbox.filter = 'all';
         assert.equal(r.Inbox.visibleThreads().length, 4, 'handled threads stay findable');
         r.Inbox.reportWaiting();
         assert.equal(r.badge.at(-1), 2, 'open + the handoff');
-        const count = r.h.el('inbox-count');
         r.Inbox.renderCount();
-        assert.ok(text(count.innerHTML).startsWith('1 need a reply') || text(count.innerHTML).includes('1'), text(count.innerHTML));
+        assert.equal(r.Inbox.todoCount(), 2, 'the To do count is the same two');
     });
 
     it('the header says the thread is handled, and its detail strip loses the countdown and "Needs you"', () => {

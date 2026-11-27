@@ -235,7 +235,23 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         assert.ok(markup.includes(s.t('overview.asOf', { time: s.UI.formatTime(at) })), 'as of HH:MM');
         assert.ok(markup.includes('data-action="overview:refresh"'));
         assert.ok(markup.includes('href="#/inbox?filter=todo"'), 'the server’s own link, to the To do list');
-        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: s.t('overview.age.hours', { count: 5 }) })));
+        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: s.t('overview.age.hours', { count: 5 }), count: 1 })));
+    });
+
+    it('the waiting card says "it" for one conversation and "them" for several, in both languages', () => {
+        const body = (lang: 'ar' | 'en', n: number): string => {
+            const s = load(lang);
+            const O = s.pages.Overview;
+            const item = { type: 'thread_waiting', severity: 'warning', count: n, oldestAt: ago(3600 * 1000), sentence: { key: 'attention.thread_waiting', params: {} }, action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' } };
+            const alerts = O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [{ timestamp: new Date().toISOString() }] }), ok({}), ok(week()), undefined, undefined, ok({ items: [item], counts: { inbox: n } }));
+            const card = alerts.find((x: Json) => x.icon === 'message-square-dot');
+            return String(card.body);
+        };
+        assert.match(body('en', 1), /answered it yet\. It has waited/);
+        assert.match(body('en', 3), /answered them yet\. The oldest has waited/);
+        assert.match(body('ar', 1), /^لم يردّ عليها أحد بعد\. وهي تنتظر/);
+        assert.match(body('ar', 2), /عليهما.*أقدمهما/);
+        assert.match(body('ar', 5), /أقدمها تنتظر/);
     });
 
     it('a FAILED row in the recent table carries its reason as a second line', () => {
@@ -351,21 +367,25 @@ describe('Inbox — find → read → reply → resolve (SH3 I1 I2 I3 I7 I9 I12)
         { id: '3', username: 'lina', is_bot_active: true, last_message_direction: 'inbound', last_message_at: ago(180000), last_message_text: 'hi' },
     ];
 
-    it('filters All · Needs reply · AI paused, seeded from #/inbox?filter=waiting', () => {
+    it('filters To do · All · AI paused, seeded from #/inbox?filter=todo, and the old ?filter=waiting still lands on To do', () => {
         const s = load();
         const I = s.pages.Inbox;
+        s.hash.filter = 'todo';
+        assert.equal(I.filterFromHash(), 'todo');
         s.hash.filter = 'waiting';
-        assert.equal(I.filterFromHash(), 'waiting');
+        assert.equal(I.filterFromHash(), 'todo');
         s.hash.filter = 'nonsense';
-        assert.equal(I.filterFromHash(), 'all', 'the hash is data: anything else is All');
+        assert.equal(I.filterFromHash(), 'todo', 'the hash is data: anything else is the default view');
+        s.hash.filter = 'all';
+        assert.equal(I.filterFromHash(), 'all');
         I.threads = rows();
-        I.filter = 'waiting';
+        I.filter = 'todo';
         assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['1']);
         I.filter = 'paused';
         assert.deepEqual(plain(I.visibleThreads().map((x: Json) => x.id)), ['1', '2']);
         I.filter = 'all';
         assert.equal(I.visibleThreads().length, 3);
-        assert.ok(String(I.layout()).includes('data-action="inbox:setFilter" data-filter="waiting"'));
+        assert.ok(String(I.layout()).includes('data-action="inbox:setFilter" data-filter="todo"'));
     });
 
     it('asks for 100, says how many need a reply and "Showing 100 of N", and feeds the nav count', async () => {
@@ -375,7 +395,8 @@ describe('Inbox — find → read → reply → resolve (SH3 I1 I2 I3 I7 I9 I12)
         s.api.getConversations = () => Promise.resolve({ data: rows(), pagination: { total: 250 } });
         await I.loadThreads();
         assert.deepEqual(plain(s.calls[0]!.args[0]), { limit: 100 });
-        assert.equal(text(count.innerHTML), '1 needs a reply · Showing 3 of 250 — search to reach the rest.');
+        assert.equal(text(count.innerHTML), 'Showing 3 of 250 — search to reach the rest.');
+        assert.equal(I.todoCount(), 1, 'what needs a reply is the To do count on its button now');
         assert.deepEqual(s.waiting, [1]);
         I.destroy();
     });
@@ -432,7 +453,7 @@ describe('Inbox — find → read → reply → resolve (SH3 I1 I2 I3 I7 I9 I12)
         const none = String(I.emptyMarkup('none'));
         assert.ok(none.includes(s.t('inbox.emptyHint')));
         assert.ok(none.includes('href="#/help/troubleshooting#dms"'));
-        assert.ok(String(I.emptyMarkup('waiting')).includes(s.t('inbox.noWaiting')));
+        assert.ok(String(I.emptyMarkup('todo')).includes(s.t('inbox.noTodo')));
     });
 
     it('the stale strip carries a Retry, and a return to the tab after a failure says so at once', async () => {

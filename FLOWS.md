@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Fifteen flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Sixteen flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 Walked elsewhere, not here: the Monteur's pipeline (`MONTEUR.md`), the daily growth sync (`GROWTH.md`), data-subject
@@ -38,7 +38,8 @@ bug it was written to fix.
 [12. Ads → conversation → results](#12-ads--conversation--results-meta-ads-manager-a3) ·
 [13. Explainers: topic → script → voice → pictures → render → schedule](#13-explainers-topic--script--voice--pictures--render--schedule) ·
 [14. Video memory: a published reel → watched once → the library](#14-video-memory-a-published-reel--watched-once--the-library) ·
-[15. Today: what needs you → a card → cleared](#15-today-what-needs-you--a-card--cleared)
+[15. Brand: a logo → checked → on every Studio output](#15-brand-a-logo--checked--on-every-studio-output) ·
+[16. Today: what needs you → a card → cleared](#16-today-what-needs-you--a-card--cleared)
 
 ---
 
@@ -2352,6 +2353,8 @@ inserted, so a failed call leaves the card as it was. Three regenerations a card
 A module that did not load is a step that says the samples are unavailable; the last screen (`doneProofItem`, **welcome.js:872**) says
 whether they were reviewed and whether a first campaign was made.
 
+**The brand section** (`brand.logos`, `brand.use_brand_colours`) is changed by the same `PATCH /api/profile` and read back into every Studio payload: [15](#15-brand-a-logo--checked--on-every-studio-output) walks it.
+
 ---
 
 ## 5. Job lifecycle
@@ -4477,7 +4480,54 @@ The Meta vision card (**`dashboard/js/pages/ai_settings.js`**, Settings → DM a
 - **Details** (`museToggleReel`): `GET …/library/:id`, loaded each time it is opened: what it is about, what is said (line breaks kept), what is on screen, the moments as the m:ss the assistant says, the topics, the first 3 seconds and its hook score, a suggested caption, the best cover frame, and which model watched it and what that cost. Every part only when there is something in it. Only a watched reel has them.
 - **Everything a model wrote is text, never markup**: a summary or a narration that holds tags is shown as characters (`muse.lib` tests draw tags and check none is a tag).
 
-## 15. Today: what needs you → a card → cleared
+## 15. Brand: a logo → checked → on every Studio output
+
+A tenant uploads one logo and, if it wants, switches on "use my brand colours". The browser prepares the picture, the server re-reads it before it is believed, and from then on every payload the Studio builds for the Mac carries it: carousels, infographics, explainers and the reel end card. Two rules hold the whole flow: **no logo means no `logo` key in any payload, and the switch off means no colour moves**, so a tenant with neither (the platform owner today) gets byte-identical payloads; and **a stored choice is never rewritten** (a carousel's own accent and a clip's accent stay what they were made with: the switch only sets the default of a NEW item).
+
+The profile keys are optional on purpose: `upgradeProfile` merges every stored profile over `defaultProfile()`, so a `true` there would switch the colours on for everyone. `POST /api/admin/tenants` stores `newTenantProfile()` (the default plus the switch on); every profile that predates it reads as off, with no logo.
+
+Code: `src/services/brand/` (`resolve.ts` pure, `load.ts` the database half, `logoCheck.ts`, `png.ts`), the profile's `patch.ts`, `validate.ts` and `defaults.ts`, and the payload builders listed in 15.5.
+
+### 15.1 — The browser prepares one PNG
+
+`BrandImage.load` reads an SVG, PNG, JPEG or WebP into a canvas, `trimBounds` cuts the empty edge and measures the picture (its pixels, whether any is transparent, its main colour), and `toPng` writes the PNG the server will accept: long side at most 1600 px and at most 3,000,000 bytes. The page is `#/brand` (the owner edits, an operator reads). Nothing here is trusted by the server: it re-reads the file (15.3).
+
+### 15.2 — The file is stored as any upload
+
+`POST /api/upload` (`src/routes/api.ts`, an operator or owner) takes `{ filename: 'logo.png', mime_type: 'image/png', base64_data }`, writes `media_uploads` (to R2 when `storage.backend` is `r2`) and answers `201 { id, url }`. Nothing changes in this route: 3 MB of PNG is about 4 MB of base64, under Vercel's body cap and `MAX_UPLOAD_BYTES`.
+
+### 15.3 — The profile is patched, and the file is read first
+
+1. `PATCH /api/profile` (`src/routes/profile.ts`, owner only) or `PATCH /api/admin/tenants/:id/profile` (`src/routes/admin.ts`) calls `patchProfile` (`src/services/profile/patch.ts`) with `{ version, patch }`; the patch is `{ brand: { logos: { main: { url, width, height, alpha, tone, colour } } } }`, or `{ brand: { logos: { main: null } } }` to take it away, or `{ brand: { use_brand_colours: true | false } }`.
+2. After the body checks and the first read, `withCheckedLogo` (`patch.ts`) runs `checkLogoUpload` (`src/services/brand/logoCheck.ts`) **only when the patch sets a `main` that differs from the stored one and the version is still the stored one**. It checks the claim's shape (`logoAssetProblems`, `src/services/profile/validate.ts`), reads the upload's row (`media_uploads`: this tenant's, not private, `image/png`), reads the bytes (`getMediaStore().get`), and takes the **width and height from the file** (`readPictureInfo`): short side 200 to 4096 px, aspect 1:4 to 8:1, at most 3,000,000 bytes. `alpha` stays true only when the PNG can hold transparency (`pngCanHoldAlpha`: colour type 4 or 6, or a `tRNS` chunk before the first `IDAT`). `tone` and `colour` are trusted, since they only decide the plate behind this tenant's own logo. The URL is rebuilt on `app.public_base_url`, because an upload's URL is built from the request's Host and a preview's is no address the Mac can open. This runs on the pool, **before the transaction opens**.
+3. A refusal is `BRAND_LOGO_INVALID` (400, with `problems`: one of `logo.not_found`, `logo.not_yours`, `logo.private`, `logo.not_png`, `logo.too_big`, `logo.too_small`, `logo.too_large`, `logo.aspect`, or the shape's own sentences) or `BRAND_LOGO_UNREADABLE` (503, `logo.unreadable`: storage or the R2 allowance could not be read just now: nothing is wrong with the logo). Nothing is written for either.
+4. `plan` merges the patch (`mergePatch`; `brand.logos.main` is removable with `null`), then `withLogoCopy` makes `brand.logo_url` a copy of `logos.main.url` (null after a removal, left as stored when the patch did not touch `logos`), **before** `validateProfile`, so a client sends the logo once and the two cannot disagree. Then the tenant lock, the profile read again under it, and `saveProfile`: a new version in `creator_profile_versions`. The new keys are not lens paths, so the Studio and Growth mirror does not move.
+5. Two audit rows, both without a URL or a colour: `profile.write` (`paths: ['brand']`) always, and `brand.logo_upload` (`{ change: 'set' | 'removed', version, width?, height?, alpha? }`, plus `on_behalf: true` from the admin route) when `PatchOutcome.logoChange` is not null. `logoChange` is taken out of the JSON answer by both routes.
+
+> **Why this order.** The file is read before the transaction because a transaction holds one of the pool's three connections and the check takes another. `withLogoCopy` runs before validation so the validator's backstop (`logo_url` must equal `logos.main.url`) is never the thing a client trips. The profile reader (`upgradeProfile`) drops a stored `logos` whose types are wrong and notes `brand.logos` in `repaired`, so a bad value never reaches a payload.
+
+### 15.4 — Retention keeps it
+
+`KEPT_BY_PROFILE_SQL` (`src/services/retention.ts`) reads the whole `brand` section as text (and the offers), so the logo's upload, the portrait and every URL a later phase adds to the section are kept by the media sweep without the clause naming them.
+
+### 15.5 — Every payload asks the brand
+
+`loadRenderBrand` (`src/services/brand/load.ts`) reads the stored profile (the request's cache, when there is one) and `renderBrandOf` (`src/services/brand/resolve.ts`, pure) turns it into `{ logo, colours }`: `logo` is `logos.main` without `added_at`, else null; `colours` (`brandColours`: the carousel page, a new carousel's accent, a new reel's accent, the explainer's title colour, each lightened until it reads, `readableOn`) only when `use_brand_colours === true`. A tenant with no stored profile is `NO_BRAND`. It is called before any transaction opens, or with the transaction's own client.
+
+| Builder | What it adds |
+|---|---|
+| `renderPayload` (`src/services/studio/drafts.ts`, via `carouselKit`) | `brand.logo` last; switch on: `brand.colors.ink`. Both null: `settings.brand` itself. |
+| `renderPayload` / `payloadBrand` (`src/services/studio/infographics.ts`, `infographicSpec.ts`) | `brand.logo` last. The switch moves nothing (infographics already use the profile's primary and accent). |
+| `renderPayload` (`src/services/explainers/payloads.ts`) | `brand.logo` last; switch on: `title_color`. |
+| `buildRenderPayload` (`src/services/monteur/render.ts`) | `brand.logo` last (the end card only). `accent` stays what it was given. |
+| `buildGenContext` (`src/services/studio/drafts.ts`) | the default-setter for NEW carousels: switch on, the palette is the one readable brand accent; a per-draft accent a person typed still wins. |
+| `accentsFor` (`src/services/monteur/render.ts`) | the default-setter for NEW clips: switch on, every new clip's accent is the brand's; `clipAccent` is asked first, so a re-render keeps its accent. |
+
+### 15.6 — The Mac draws it
+
+The worker's handlers keep `brand.logo` only when its URL starts with `https://` (`httpsLogo`), the templates draw it with `BrandLogo` (never mirrored, stretched, recoloured or rotated: only its position follows the reading direction), and `plateFor` decides whether it sits on a plate: an opaque logo carries its own background, a transparent one gets a white or near-black plate unless its main colour already reads (contrast 3) on the colour behind it, and always over a picture or a video. This half lives in the worker repository; an old worker ignores the key and the job succeeds with no logo.
+
+## 16. Today: what needs you → a card → cleared
 
 U2 (2026-11). One list of "what needs the owner", built once on the server, drawn by Today, counted by the nav badges and cleared where it shows.
 
@@ -4693,6 +4743,9 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 14 | Baseten failed and Meta's hosted model took the reel — `analyse` | `muse.reel_index_fallback` (`warn`), then `muse.reel_indexed` (`fell_back: true`) | yes: `ok` with `model` = the hosted model |
 | 14 | the daily call breaks — `GET /api/cron/publish` | `cron.muse_reels_failed` | no; nothing else in the cron is affected |
 | 14 | a `memory`-on tenant whose Instagram does not answer when the reels are listed — `queueReels` | `muse.reel_list_failed` (`warn`) | no; tried again at the next daily run |
-| 15 | the daily clean-up finds nothing, or a tenant switched it off (`cleanup.auto_archive.<tenant>` `enabled: false`), or one tenant's statement fails — `runAutoArchiveSweep` | `cron.auto_archive` (only when it put something away or a tenant failed), `cron.auto_archive_tenant` (`posts`, `threads`, `days`), `cron.auto_archive_tenant_failed` | an `audit_log` row `cleanup.auto_archive` per tenant that had something; none for a quiet day |
+| 15 | an old worker ignores `brand.logo` | *(none)* | the job is done, with no logo |
+| 15 | `use_brand_colours` absent (every profile that predates the Brand Kit, the owner's included) | *(none)* | — |
+| 15 | a non-https logo is dropped by the handler | `brand: logo dropped` on the Mac | — |
+| 16 | the daily clean-up finds nothing, or a tenant switched it off (`cleanup.auto_archive.<tenant>` `enabled: false`), or one tenant's statement fails — `runAutoArchiveSweep` | `cron.auto_archive` (only when it put something away or a tenant failed), `cron.auto_archive_tenant` (`posts`, `threads`, `days`), `cron.auto_archive_tenant_failed` | an `audit_log` row `cleanup.auto_archive` per tenant that had something; none for a quiet day |
 
 `RUNBOOK.md` works these backwards from the symptom.

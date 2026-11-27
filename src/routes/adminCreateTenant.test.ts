@@ -3,7 +3,7 @@
  *
  * What is pinned, because each is a way a second tenant could silently become the first one:
  *
- *   - the tenant is stored WITH a Creator Profile, version 1, the neutral `defaultProfile()` and never the one the owner's
+ *   - the tenant is stored WITH a Creator Profile, version 1, `newTenantProfile()` (the neutral `defaultProfile()` with the brand-colours switch on) and never the one the owner's
  *     legacy settings describe (`profileFromLegacy` hard-sets his role, domain and pronouns), in the same transaction as its
  *     `creators` row, so there is never a tenant without one;
  *   - an Arabic tenant has the Studio's direction seeded `rtl`, an English one is left alone;
@@ -24,7 +24,7 @@ import type { Request, Response } from 'express';
 import { starterPersona } from '../services/ai.js';
 import { AUDIT_ACTIONS } from '../services/audit.js';
 import { getGrowthSettings } from '../services/growth/settings.js';
-import { defaultProfile } from '../services/profile/defaults.js';
+import { defaultProfile, newTenantProfile } from '../services/profile/defaults.js';
 import { entryText, NEUTRAL_TURN, tenantSurface } from '../services/profile/promptSurface.js';
 import { NO_WOMEN_LINE } from '../services/monteur/editor.js';
 import { loadStoredProfile } from '../services/profile/store.js';
@@ -172,9 +172,19 @@ describe('creating a tenant by name', () => {
         assert.deepEqual(metaCalls, [], 'Meta was not asked about anything');
     });
 
+    it('the new tenant\'s profile has the brand-colours switch ON and no logo (Brand Kit): the only thing newTenantProfile adds to the neutral default', async () => {
+        await create({ name: 'Nour' });
+        assert.equal(storedProfile().brand.use_brand_colours, true);
+        assert.equal('logos' in storedProfile().brand, false);
+        const { use_brand_colours: _on, ...brand } = storedProfile().brand;
+        assert.deepStrictEqual({ ...storedProfile(), brand }, throughJsonb(defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] })));
+        assert.equal(state.versions.length, 1);
+        assert.equal((state.versions[0]!.profile as { brand: { use_brand_colours?: boolean } }).brand.use_brand_colours, true, 'version 1 holds it too');
+    });
+
     it('stores a Creator Profile, version 1, in the same transaction: the neutral default, Arabic, with the default rule pre-ticked, from the admin', async () => {
         await create({ name: 'Nour' });
-        assert.deepStrictEqual(storedProfile(), throughJsonb(defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] })));
+        assert.deepStrictEqual(storedProfile(), throughJsonb(newTenantProfile({ lang: 'ar', rules: ['no_women_imagery'] })));
         const row = state.profiles.get(NEW)!;
         assert.equal(row.version, 1);
         assert.equal(row.activated_at, null, 'finishing the wizard activates a profile, not creating a tenant');
@@ -235,7 +245,7 @@ describe('creating a tenant by name', () => {
         assert.equal(reply.body.language, 'en');
         assert.equal((state.studio.get(NEW)!.brand as { direction: string }).direction, 'ltr');
         const profile = storedProfile();
-        assert.deepStrictEqual(profile, throughJsonb(defaultProfile({ lang: 'en', rules: ['no_women_imagery'] })));
+        assert.deepStrictEqual(profile, throughJsonb(newTenantProfile({ lang: 'en', rules: ['no_women_imagery'] })));
         assert.deepEqual([profile.language.primary, profile.language.register, profile.language.digits, profile.brand.font_display], ['en', null, 'latin', 'Inter']);
     });
 
@@ -595,7 +605,7 @@ describe('the legacy body (a page id and a token) still works, and gets the same
 
     it('and still stores the neutral profile, the rtl seed and the invited onboarding row: a tenant is a tenant however it was made', async () => {
         await create(body);
-        assert.deepStrictEqual(storedProfile(), throughJsonb(defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] })));
+        assert.deepStrictEqual(storedProfile(), throughJsonb(newTenantProfile({ lang: 'ar', rules: ['no_women_imagery'] })));
         assert.equal((state.studio.get(NEW)!.brand as { direction: string }).direction, 'rtl');
         assert.deepEqual(onboarding.get(NEW), { status: 'invited' });
         assert.equal(agents.get(NEW)!.system_prompt, starterPersona('ar'));

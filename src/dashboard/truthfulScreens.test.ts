@@ -518,3 +518,22 @@ describe('Tenant detail counts failed posts the way Today does (U2)', () => {
         assert.match(text(paint(old)), /2 failed/);
     });
 });
+
+// ═══ A tab strip scrolls inside itself, never the page ═════════════════════════════════════════════════════════════════════════════
+
+describe('a segmented tab strip never widens the phone page', () => {
+    const css = readFileSync('dashboard/css/styles.css', 'utf8');
+    const at = css.indexOf('\n.segmented {');
+    const rule = css.slice(at, css.indexOf('\n}', at));
+
+    it('`.segmented` clips its own overflow and scrolls sideways inside its box (9 Ads tabs ran to x=977 on a 375 px phone)', () => {
+        assert.ok(at >= 0, '.segmented has a rule');
+        assert.match(rule, /overflow-x:\s*auto/);
+        assert.match(rule, /max-inline-size:\s*100%/);
+        assert.match(rule, /overscroll-behavior-x:\s*contain/);
+    });
+
+    it('the links do not shrink to nothing: `.segmented .btn` keeps its width, so a long strip scrolls rather than squeezes', () => {
+        assert.match(css, /\.segmented \.btn \{[^}]*flex-shrink:\s*0/);
+    });
+});
