@@ -3700,6 +3700,13 @@ html[lang='en'] .page-toolbar-count {
 
 /* The worker pill's "off": a real state (not seen for 90s), so grey, not red. */
 .health-off { background: var(--surface-glass-hover); color: var(--text-default); }
+
+/* The Mac chip (UI.workerChip): a sentence, not a badge, so it wraps on a phone instead of pushing the page sideways. */
+.worker-chip-wrap { display: inline-flex; align-items: center; gap: var(--space-2); max-inline-size: 100%; }
+.worker-chip { white-space: normal; align-items: baseline; line-height: var(--lh-tight); }
+.worker-chip-glyph { flex-shrink: 0; }
+.studio-mac, .adsprop-mac { margin-block: var(--space-2) var(--space-3); }
+.studio-mac:empty, .adsprop-mac:empty { display: none; }
 .status-pill.scheduled { background: var(--info-soft); color: var(--info-text); }
 
 /* The status is a strip, not a dashboard: it gets loud only when something needs doing. */

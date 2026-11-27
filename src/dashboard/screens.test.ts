@@ -2412,7 +2412,7 @@ describe('StudioPage — the home view, from stubbed responses', () => {
         s.Studio.destroy();
 
         assert.ok(tagOf(page, 'studio-worker-pill').includes('health-fresh'), 'green');
-        assert.ok(page.includes(s.t('studio.worker.online')));
+        assert.ok(page.includes(s.t('workerChip.onlineNoClaude', { n: '0' })), 'the shared Mac chip (the stub says nothing about Claude, so the chip does not either)');
         assert.ok(page.includes('Studio Mac'));
         assert.ok(page.includes(s.t('studio.worker.lastSeen', { when: s.t('common.justNow') })), 'last seen, as a relative age');
         assert.ok(!page.includes('id="studio-worker-hint"'), 'no "start the worker" while it is running');
@@ -2439,10 +2439,9 @@ describe('StudioPage — the home view, from stubbed responses', () => {
         s.Studio.destroy();
 
         assert.ok(tagOf(page, 'studio-worker-pill').includes('health-off'), 'grey, not green and not red');
-        assert.ok(page.includes(s.t('studio.worker.offline')));
+        assert.ok(page.includes(s.t('workerChip.asleepJobs', { since: s.t('common.hours', { n: '3' }), count: 4, n: '4' })), 'asleep since 3h, and the four jobs that wait for it');
         assert.ok(page.includes('id="studio-worker-hint"'));
         assert.ok(page.includes(s.t('studio.worker.startHint')));
-        assert.ok(page.includes(s.t('studio.jobs.waitingForMac')));
         assert.ok(page.includes('30/34'));
         assert.ok(page.includes(s.t('studio.library.failed', { n: '1' })));
         // A disabled button with nothing to do is noise: the TikTok item appears only

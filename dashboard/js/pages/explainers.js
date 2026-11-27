@@ -171,6 +171,8 @@ const ExplainersPage = {
         this.cfgError = null;
         this.platforms = null;
         this.worker = null;
+        this.jobs = null;
+        this.claude = null;
         this.rows = [];
         this.rowsError = null;
         this.rowsLoaded = false;
@@ -574,8 +576,21 @@ const ExplainersPage = {
         }
     },
 
+    /** The queue and Claude's sign-in from the status read; the explainer itself carries its own `worker`, so that is left to it. */
+    acceptMacOnly(result) {
+        if (result && result.status === 'fulfilled' && result.value) {
+            this.jobs = result.value.jobs || null;
+            this.claude = result.value.claude || null;
+            if (!this.worker && result.value.worker) this.worker = result.value.worker;
+        }
+    },
+
     acceptWorker(result) {
-        if (result && result.status === 'fulfilled' && result.value && result.value.worker) this.worker = result.value.worker;
+        if (result && result.status === 'fulfilled' && result.value && result.value.worker) {
+            this.worker = result.value.worker;
+            this.jobs = result.value.jobs || null;
+            this.claude = result.value.claude || null;
+        }
     },
 
     /** Every Explainers route answers 404 `EXPLAINERS_DISABLED` while the platform admin's switch is off for this workspace. */
@@ -622,8 +637,14 @@ const ExplainersPage = {
         `;
     },
 
-    /** Only when it matters: something is waiting and the Mac isn't there to do it. */
+    /** The Mac chip (`UI.workerChip`), then, only when it matters, what the Mac being away means here. */
     workerMarkup() {
+        if (!this.worker) return '';
+        return html`<div class="studio-mac">${UI.workerChip({ worker: this.worker, jobs: this.jobs, claude: this.claude }, { id: 'ex-worker-chip' })}</div>${this.workerNoticeMarkup()}`;
+    },
+
+    /** Only when it matters: something is waiting and the Mac isn't there to do it. */
+    workerNoticeMarkup() {
         const waiting = this.kind === 'detail'
             ? !!(this.detail && this.detail.job && this.detail.job.status === 'pending' && this.isOpen(this.detail))
             : this.items.some((i) => this.isOpen(i));
@@ -665,8 +686,9 @@ const ExplainersPage = {
         if (!this.alive(seq)) return;
         if (this.kind === 'detail') {
             const id = this.id;
-            const [one] = await Promise.allSettled([API.getExplainer(id)]);
+            const [one, status] = await Promise.allSettled([API.getExplainer(id), API.getStudioStatus()]);
             if (!this.alive(seq) || id !== this.id) return;
+            this.acceptMacOnly(status);
             if (one.status === 'fulfilled') this.applyDetail(one.value, { poll: true });
             if (this.detail && this.detail.schedule && this.rowsOpen()) await this.loadRows(seq);
             if (!this.alive(seq)) return;
@@ -961,7 +983,7 @@ const ExplainersPage = {
     async renderDetail(container, seq, want) {
         const id = want.id;
         const gate = Motion.beginLoad(container, () => html`${Motion.cardGrid(1, 4)}${Motion.busy()}`);
-        const [one, settings] = await Promise.allSettled([API.getExplainer(id), API.getStudioSettings()]);
+        const [one, settings, status] = await Promise.allSettled([API.getExplainer(id), API.getStudioSettings(), API.getStudioStatus()]);
         if (!this.alive(seq)) return;
         gate.done();
         if (this.id !== id) {
@@ -981,6 +1003,7 @@ const ExplainersPage = {
             return;
         }
         this.acceptSettings(settings);
+        this.acceptMacOnly(status);
         this.detail = null;
         if (!this.applyDetail(one.value, { first: true, step: want.step })) {
             container.innerHTML = esc(html`${this.toolbarMarkup('videos')}<div class="surface pad-5">${UI.errorBox(new Error(t('error.unexpected')))}</div>`);

@@ -36,6 +36,7 @@ import { scheduleExplainer } from '../services/explainers/schedule.js';
 import { isExplainersEnabled } from '../services/explainers/switch.js';
 import { afterJobFailed } from '../services/explainers/writing.js';
 import { assertAgentReady, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
+import { claudeStatusFor } from '../services/studio/macHealth.js';
 import { refreshLessons } from '../services/monteur/analyst.js';
 import { approveClip, patchClip, rejectClip, rerenderClip } from '../services/monteur/clips.js';
 import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
@@ -281,10 +282,11 @@ studioRouter.use(canOperate);
 
 studioRouter.get('/status', handle('studio.status_failed', 'Failed to read the Studio status.', async (req, res) => {
     const creatorId = getTenantId(req);
-    const [worker, lessons, jobs, flags, queued] = await Promise.all([
-        workerSummary(creatorId), lessonCounts(creatorId), jobCounts(creatorId), getTikTokPostingFlags(), queuedTikTokCount(creatorId),
+    const [worker, lessons, jobs, flags, queued, claude] = await Promise.all([
+        workerSummary(creatorId), lessonCounts(creatorId), jobCounts(creatorId), getTikTokPostingFlags(), queuedTikTokCount(creatorId), claudeStatusFor(creatorId),
     ]);
-    res.json({ worker, lessons, jobs, tiktok: { audited: flags.audited, queued } });
+    // `claude` is what the Mac chip reads (UI.workerChip): the Mac can be online while the Claude CLI on it is signed out.
+    res.json({ worker, lessons, jobs, tiktok: { audited: flags.audited, queued }, claude });
 }));
 
 // ── Settings and workers (§10) ──
