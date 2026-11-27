@@ -250,7 +250,7 @@ describe('Tenant detail shows the real health and counts (SA-01)', () => {
         const markup = paint(tenantAnswer());
         const said = text(markup);
         assert.equal(said.includes(`${h.t('ops.lastWebhook')} ${h.t('common.never')}`), false, 'the last webhook is not "Never"');
-        assert.match(markup, /<dt>Campaigns<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?66</, 'campaigns');
+        assert.match(markup, /<dt>Keyword replies<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?66</, 'campaigns');
         assert.match(markup, /<dt>Scheduled posts<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?344</, 'scheduled posts');
         assert.match(markup, /<dt>Conversations<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?12</, 'conversations');
         // The three "last …" values are ages, from health: 11 h, 30 h (1 d), 4 d.
@@ -265,7 +265,7 @@ describe('Tenant detail shows the real health and counts (SA-01)', () => {
         const { h, paint } = loadTenant();
         const markup = paint({ ...tenantAnswer({ lastWebhookAt: null, lastCommentAt: null, lastInboundDmAt: null }), counts: { ...COUNTS, campaigns: 0 } });
         assert.ok(text(markup).includes(`${h.t('ops.lastWebhook')} ${h.t('common.never')}`));
-        assert.match(markup, /<dt>Campaigns<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?0</);
+        assert.match(markup, /<dt>Keyword replies<\/dt>\s*<dd[^>]*>(<bdi[^>]*>)?0</);
     });
 
     it('shows the data-access expiry with its days, and the 14 / 3 day colours of the connections list', () => {

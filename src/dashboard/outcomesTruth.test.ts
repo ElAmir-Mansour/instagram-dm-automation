@@ -60,7 +60,7 @@ describe('UI.outcomePill — what became of one DM', () => {
     it('says what it means for the person in the title (and by design says nothing needs doing)', () => {
         assert.ok(pill({ outcome: 'by_design' }).includes(`title="${h.t('status.outcome.by_design.hint')}"`));
         assert.match(h.t('status.outcome.by_design.hint'), /Nothing to do/);
-        assert.match(h.t('status.outcome.actionable.hint'), /activity log/);
+        assert.match(h.t('status.outcome.actionable.hint'), /Open the log/);
     });
 
     it('trusts the server’s outcome over the status the row was written with', () => {
@@ -90,7 +90,7 @@ describe('UI.outcomePill — what became of one DM', () => {
     it('speaks Arabic with the same shape', () => {
         const ar = load('ar');
         const out = String(ar.UI.outcomePill({ outcome: 'actionable' }));
-        assert.ok(out.includes('يحتاج إليك'));
+        assert.ok(out.includes('بحاجة إليك'));
         assert.ok(String(ar.UI.outcomePill({ outcome: 'by_design' })).includes('مقصود'));
     });
 });
@@ -535,7 +535,7 @@ describe('Analytics — "Why DMs fail" groups expected against actionable', () =
     it('speaks Arabic', () => {
         const h = load('ar');
         const markup = text(h.A.failuresMarkup(summary));
-        assert.ok(markup.includes('يحتاج إليك') && markup.includes('مقصود'));
+        assert.ok(markup.includes('بحاجة إليك') && markup.includes('مقصود'));
         assert.ok(markup.includes(h.t('analytics.failures.byDesignNote')));
     });
 });

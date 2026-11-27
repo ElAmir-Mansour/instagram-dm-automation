@@ -991,7 +991,7 @@ describe('Monteur — every string in Arabic and English, and the page wired int
             for (const form of ['zero', 'one', 'two', 'few', 'many', 'other']) assert.ok(strings.ar![`${family}_${form}`], `ar:${family}_${form}`);
         }
         assert.equal(s.t('monteur.queue.count', { count: 2, n: '2' }), 'ريلان للمراجعة');
-        assert.equal(s.t('nav.monteur'), 'المونتير');
+        assert.equal(s.t('nav.monteur'), 'الريلز');
     });
 
     it('route: App.pages.monteur loads monteur.js, and #/monteur is the Monteur', () => {
@@ -1038,16 +1038,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/explainers"\s+aria-current/);
     });
 
-    it('ships at cache version 13.08: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 13.09: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '13.08');
+        assert.equal(version, '13.09');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['13.08']);
+        assert.deepEqual([...new Set(refs)], ['13.09']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.08'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.09'], page);
         }
     });
 });

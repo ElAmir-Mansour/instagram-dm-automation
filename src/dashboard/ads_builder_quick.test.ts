@@ -567,7 +567,7 @@ describe('the bot-off warning', () => {
         await review(r);
         const said = text(r.el('adsb-review').innerHTML);
         assert.ok(said.includes(r.h.t('adsBuilder.bot.off', { destination: r.h.t('adsBuilder.dest.instagram') })), said);
-        assert.ok(said.includes('إنستغرام'), said);
+        assert.ok(said.includes('إنستجرام'), said);
     });
 });
 

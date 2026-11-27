@@ -107,9 +107,9 @@ describe('Needs you comes first (DW-S1)', () => {
         assert.ok(need > 0 && need < upcoming && upcoming < done, `${need} ${upcoming} ${done}`);
     });
 
-    it('calls the group "Needs you" in English and «تحتاج إليك» in Arabic', () => {
+    it('calls the group "Needs you" in English and «بحاجة إليك» in Arabic', () => {
         assert.equal(load('en').P.queueGroupMeta('attention').label, 'Needs you');
-        assert.equal(load('ar').P.queueGroupMeta('attention').label, 'تحتاج إليك');
+        assert.equal(load('ar').P.queueGroupMeta('attention').label, 'بحاجة إليك');
     });
 
     it('holds failed, held and overdue posts, and a TikTok draft left for as long as the server counts', () => {

@@ -15,8 +15,8 @@ function words(lang: 'ar' | 'en') {
 }
 
 describe('T057: the copy says what is true', () => {
-    it('Today\'s subtitle is «ما يحتاجك الآن» / "What needs you now", at any hour', () => {
-        assert.match(words('ar')('page.overview.subtitle'), /^ما يحتاجك الآن\.?$/);
+    it('Today\'s subtitle is «ما هو بحاجة إليك الآن» / "What needs you now", at any hour', () => {
+        assert.match(words('ar')('page.overview.subtitle'), /^ما هو بحاجة إليك الآن\.?$/);
         assert.match(words('en')('page.overview.subtitle'), /^What needs you now\.?$/);
         for (const lang of ['ar', 'en'] as const) assert.equal(/morning|الصباح/.test(words(lang)('page.overview.subtitle')), false, lang);
     });

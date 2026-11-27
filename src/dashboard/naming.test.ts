@@ -26,7 +26,7 @@ const LABELS: Array<[string, string, string]> = [
     ['settings', 'الإعدادات', 'Settings'],
     ['help', 'المساعدة', 'Help'],
     ['operations', 'التشغيل', 'Operations'],
-    ['tenants', 'العملاء', 'Clients'],
+    ['tenants', 'مساحات العمل', 'Workspaces'],
     ['users', 'المستخدمون', 'Users'],
     ['jobs', 'طابور المهام', 'Job queue'],
     ['audit', 'سجل التدقيق', 'Audit log'],
@@ -42,6 +42,7 @@ const RETIRED: Array<[string, string, string]> = [
     ['posts', 'جدولة المنشورات', 'Posts Scheduler'],
     ['analytics', 'التحليلات', 'Analytics'],
     ['tenants', 'الحسابات', 'Tenants'],
+    ['tenants', 'العملاء', 'Clients'],
 ];
 
 const ar = loadDashboard({ lang: 'ar', app: true });
@@ -99,7 +100,7 @@ describe('navigation labels name the job, in both languages (T118, SH-02)', () =
             assert.ok(ar.t(`nav.${page}`) && ar.t(`nav.${page}`) !== `nav.${page}`, `ar nav.${page}`);
             assert.ok(en.t(`nav.${page}`) && en.t(`nav.${page}`) !== `nav.${page}`, `en nav.${page}`);
         }
-        assert.equal(en.t('nav.activity'), 'Activity Log');
+        assert.equal(en.t('nav.activity'), 'Log');
     });
 
     it('stops sending people to places by their old names', () => {

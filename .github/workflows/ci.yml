@@ -111,6 +111,12 @@ jobs:
       - name: Check voice
         run: npm run check:voice
 
+      # One name per concept, in both languages (UX plan U5, WA-2): Workspace (not tenant or client), Keyword reply (campaign is for ads),
+      # assistant (not agent), one Arabic spelling of Instagram, «متصل» (not «مربوط»), «بحاجة إليك», Reels, Log. It reads both dictionaries
+      # and the Help. A sentence that must keep an old word is a reasoned entry on ALLOWED, and an entry that matches nothing fails.
+      - name: Check glossary
+        run: npm run check:glossary
+
       # The docs cite code as `path` and `path:line`, and link each other. Nothing else notices a cited file that was renamed or
       # deleted, a line number past the end of its file, or a public doc linking a file that is not in this repo (local notes,
       # specs): those are dead on GitHub. Line numbers that merely drifted are not failures; `npm run docs:reanchor` moves them
