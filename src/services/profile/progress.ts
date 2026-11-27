@@ -12,6 +12,7 @@
 import { queryOne } from '../../db/query.js';
 import { completeness, nextBestActions, type Connections, type MissingField, type NextAction } from './completeness.js';
 import { isGrandfathered, readGateFacts } from './agentGate.js';
+import { readDocModules } from '../modules.js';
 import { loadProfile } from './store.js';
 
 /** One query for the three things that are not in the profile: Meta, TikTok and YouTube, and whether the DM bot is switched on. */
@@ -41,18 +42,20 @@ interface ConnectionRow { meta: boolean | null; tiktok: boolean | null; youtube:
 export async function describeProgress(creatorId: string): Promise<Progress> {
     const facts = await readGateFacts(creatorId);
     const legacy = isGrandfathered(facts);
-    const [loaded, row] = await Promise.all([loadProfile(creatorId), queryOne<ConnectionRow>(CONNECTIONS_SQL, [creatorId])]);
+    // The modules are read with the rest: an action of a module the workspace does not have is not offered (U3), and the meter does not move.
+    const [loaded, row, modules] = await Promise.all([loadProfile(creatorId), queryOne<ConnectionRow>(CONNECTIONS_SQL, [creatorId]), readDocModules(creatorId)]);
     const connections: Connections = { meta: row?.meta === true, tiktok: row?.tiktok === true, youtube: row?.youtube === true };
     const dm = row?.dm === true;
     const opts = { legacy, dm };
     const score = completeness(loaded.profile, opts);
+    const actionOpts = { ...opts, modules };
     return {
         percent: score.percent,
         complete: score.missing.length === 0,
         legacy,
         dm,
         connections,
-        actions: nextBestActions(loaded.profile, connections, opts),
+        actions: nextBestActions(loaded.profile, connections, actionOpts),
         missing: score.missing.map(({ field, paths, weight, filled }) => ({ field, paths, weight, filled })),
     };
 }

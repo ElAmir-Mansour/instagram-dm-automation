@@ -37,6 +37,7 @@
  * never gets a profile action, only a platform he has not connected.
  */
 import { activationMissing, primaryOffer } from './validate.js';
+import type { ModuleId } from '../modules.js';
 import type { CreatorProfile } from './types.js';
 
 export interface CompletenessOptions {
@@ -44,6 +45,11 @@ export interface CompletenessOptions {
     legacy?: boolean;
     /** The DM bot is switched on for this tenant: its hand-off rule counts. Off, it does not. */
     dm?: boolean;
+    /**
+     * The modules the workspace has (U3): an action that belongs to a module that is off is not offered. Only ACTIONS are filtered: the percentage is
+     * the same, so a workspace's meter does not move when a module is switched. Absent or null is everything on.
+     */
+    modules?: readonly string[] | null;
 }
 
 /** Which platforms the tenant has connected. */
@@ -184,6 +190,8 @@ interface ActionRule {
     due: (profile: CreatorProfile, connections: Connections, opts: CompletenessOptions) => boolean;
     /** A profile action: never offered to a tenant that predates profiles, and (for the DM) only while the bot is on. */
     profile: boolean;
+    /** The module the action belongs to (U3): it is offered only while the workspace has it. None: always. */
+    module?: ModuleId;
 }
 
 /** In the order they are offered: what each unlocks, most first. */
@@ -194,12 +202,12 @@ const RULES: readonly ActionRule[] = Object.freeze([
     },
     { id: 'connect_meta', unlocks: 'comments', link: { kind: 'page', target: 'settings' }, paths: [], profile: false, due: (_p, c) => !c.meta },
     { id: 'voice_samples', unlocks: 'captions', link: { kind: 'ask', fields: ['voice.samples'] }, paths: ['voice.samples'], profile: true, due: (p) => fieldDue(p, 'voice_samples') },
-    { id: 'dm_handoff', unlocks: 'dm', link: { kind: 'ask', fields: ['dm.handoff'] }, paths: ['dm.handoff'], profile: true, due: (p, _c, o) => !!o.dm && fieldDue(p, 'dm_handoff') },
-    { id: 'presenter', unlocks: 'reels', link: { kind: 'ask', fields: ['presenter'] }, paths: ['presenter'], profile: true, due: (p) => fieldDue(p, 'presenter') },
-    { id: 'portrait', unlocks: 'infographics', link: { kind: 'page', target: 'infographics' }, paths: ['brand.portrait_url'], profile: false, due: (p) => fieldDue(p, 'portrait') },
-    { id: 'audience', unlocks: 'coach', link: { kind: 'ask', fields: ['audience.description'] }, paths: ['audience.description'], profile: true, due: (p) => fieldDue(p, 'audience') },
-    { id: 'connect_tiktok', unlocks: 'tiktok', link: { kind: 'page', target: 'settings' }, paths: [], profile: false, due: (_p, c) => !c.tiktok },
-    { id: 'connect_youtube', unlocks: 'youtube', link: { kind: 'page', target: 'settings' }, paths: [], profile: false, due: (_p, c) => !c.youtube },
+    { id: 'dm_handoff', unlocks: 'dm', link: { kind: 'ask', fields: ['dm.handoff'] }, paths: ['dm.handoff'], profile: true, module: 'dm_assistant', due: (p, _c, o) => !!o.dm && fieldDue(p, 'dm_handoff') },
+    { id: 'presenter', unlocks: 'reels', link: { kind: 'ask', fields: ['presenter'] }, paths: ['presenter'], profile: true, module: 'studio', due: (p) => fieldDue(p, 'presenter') },
+    { id: 'portrait', unlocks: 'infographics', link: { kind: 'page', target: 'infographics' }, paths: ['brand.portrait_url'], profile: false, module: 'studio', due: (p) => fieldDue(p, 'portrait') },
+    { id: 'audience', unlocks: 'coach', link: { kind: 'ask', fields: ['audience.description'] }, paths: ['audience.description'], profile: true, module: 'growth', due: (p) => fieldDue(p, 'audience') },
+    { id: 'connect_tiktok', unlocks: 'tiktok', link: { kind: 'page', target: 'settings' }, paths: [], profile: false, module: 'tiktok', due: (_p, c) => !c.tiktok },
+    { id: 'connect_youtube', unlocks: 'youtube', link: { kind: 'page', target: 'settings' }, paths: [], profile: false, module: 'youtube', due: (_p, c) => !c.youtube },
 ]);
 
 /**
@@ -214,6 +222,7 @@ export function nextBestActions(profile: CreatorProfile, connections: Connection
     for (const rule of RULES) {
         if (out.length >= MAX_ACTIONS) break;
         if (opts.legacy && rule.profile) continue;
+        if (rule.module && opts.modules && !opts.modules.includes(rule.module)) continue;
         if (!rule.due(profile, connections, opts)) continue;
         out.push({ id: rule.id, unlocks: rule.unlocks, link: rule.link, paths: rule.paths });
     }

@@ -158,6 +158,23 @@ export const ERROR_CODES = {
      * `VOICE_LIMIT:` (what the worker reports, and apply.ts keeps), and the queued voice job's `not_before` says when it is tried again.
      */
     EXPLAINER_VOICE_LIMIT: { status: [429], meaning: 'Recognised in an explainer\'s stored note (it starts with "VOICE_LIMIT:"): Gemini\'s free voice allowance is used up and the voice step is queued again for the reset.' },
+
+    // ─── Modules, team and notices (U3, src/services/modules.ts, team.ts, telegramLink.ts) ───────────────
+    MODULE_OFF: { status: [404], meaning: 'A route of a module this workspace does not have (`tenant.modules.<tenant>`), or a screen that asks for one: hidden and refused, never deleted.', params: ['module'] },
+    MODULE_UNKNOWN: { status: [400], meaning: 'The platform admin named a module that does not exist.', params: ['module'] },
+    MODULE_NOT_AVAILABLE: { status: [400], meaning: 'The platform admin switched on a module that cannot be switched on yet (the knowledge base).', params: ['module'] },
+    MODULE_NEEDS: { status: [400], meaning: 'A module was switched on without the module it requires.', params: ['module', 'needs'] },
+    OWNER_ALL_MODULES: { status: [409], meaning: 'Narrowing the platform owner\'s own workspace: it has every module and cannot be changed.' },
+    CEILING_REQUIRED: { status: [409], meaning: 'Switching Ads on for a client workspace that has no ceiling (max daily budget and monthly cap) yet.' },
+    LAST_OWNER: { status: [409], meaning: 'Demoting or removing the last owner of a workspace: somebody must be left to run it.' },
+    MEMBER_IS_ADMIN: { status: [409], meaning: 'Changing or removing a platform admin from a workspace\'s team: the account manager is read-only there.' },
+    MEMBER_NOT_FOUND: { status: [404], meaning: 'A team member that does not exist in this workspace.' },
+    ROLE_INVALID: { status: [400], meaning: 'A team role that is not owner, operator or viewer.' },
+    NO_USER_ACCOUNT: { status: [400], meaning: 'An action that needs a personal account (linking Telegram, a reset link) from a session that has none (the shared platform password).' },
+    TELEGRAM_BOT_MISSING: { status: [409], meaning: 'Linking Telegram when the platform has no bot token saved.' },
+    TELEGRAM_UNREACHABLE: { status: [502], meaning: 'Telegram did not answer while a link was being made or checked.' },
+    TELEGRAM_LINK_EXPIRED: { status: [410], meaning: 'The one-time Telegram link was used or is older than 10 minutes.' },
+    ROUTING_INVALID: { status: [400], meaning: 'Who is told about a customer names somebody who is not a member of this workspace.' },
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

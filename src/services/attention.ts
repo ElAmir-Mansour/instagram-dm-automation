@@ -30,6 +30,7 @@
 import { queryRows } from '../db/query.js';
 import { getQueueHealth, getSchemaState, getTenantHealth, toIso } from './health.js';
 import { isMacBrainAllowed } from './macBrain.js';
+import { readDocModules, type ModuleId } from './modules.js';
 import { claudeSignedOutAt } from './studio/macHealth.js';
 import { workerSummary } from './studio/worker.js';
 
@@ -59,7 +60,8 @@ export interface AttentionSentence {
  */
 export interface AttentionDetail {
     /** `post_failed*`: why they failed, one entry per reason, most first. `count` is posts (a post on several platforms is one). */
-    reasons?: Array<{ reason: FailureReason; count: number; oldestAt: string | null }>;
+    /** `failedAt` (additive): the latest time a post of that reason was tried, i.e. when the newest of them failed. Absent when no row carried it. */
+    reasons?: Array<{ reason: FailureReason; count: number; oldestAt: string | null; failedAt?: string }>;
     /** `post_failed*`: every row behind the item (all platforms of each post), the ids Archive takes. */
     ids?: string[];
     /** `handoff` and `thread_waiting`: the threads among them whose 24 h window has closed, so a reply can no longer reach them: Mark handled is what is left. */
@@ -221,6 +223,13 @@ export type FailureReason = 'replaced' | 'tiktok_private' | 'token' | 'media' | 
 
 export function failureReason(errorLog: string | null | undefined): FailureReason {
     const text = String(errorLog ?? '');
+    // The failure translator's own names first (`UI.failure`, dashboard/js/components.js FAILURE_PATTERNS): the dashboard and this mapping must call one
+    // text one thing, and the texts below are the ones production holds for a post (src/dashboard/failureTranslator.test.ts).
+    const code = failureCode(text);
+    if (code === 'REPLACED_ON_PURPOSE') return 'replaced';
+    if (code === 'TIKTOK_PRIVATE_ONLY' || code === 'TIKTOK_HELD_APPROVAL') return 'tiktok_private';
+    if (code === 'META_TOKEN_EXPIRED') return 'token';
+    if (code === 'STORAGE_FILE_TOO_LARGE') return 'media';
     if (/^\s*replaced\b/i.test(text)) return 'replaced';
     if (/tiktok/i.test(text) && /approves this app|account is set to private|set to private|only me/i.test(text)) return 'tiktok_private';
     if (/\bcode:?\s*(190|200|10)\b|access token|oauth|session has (expired|been invalidated)|permission/i.test(text)) return 'token';
@@ -228,17 +237,43 @@ export function failureReason(errorLog: string | null | undefined): FailureReaso
     return 'other';
 }
 
+/** The translator's names for the stored failure texts a POST can carry. The same words as `FAILURE_PATTERNS`, in the same order, for the rows that matter here. */
+export type PostFailureCode = 'STORAGE_FILE_TOO_LARGE' | 'TIKTOK_PRIVATE_ONLY' | 'META_TOKEN_EXPIRED' | 'TIKTOK_HELD_APPROVAL' | 'REPLACED_ON_PURPOSE';
+
+const POST_FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, PostFailureCode]> = [
+    [/payload too large|exceeded the maximum allowed size|"statusCode"\s*:\s*"?413\b|\bHTTP\s*413\b/i, 'STORAGE_FILE_TOO_LARGE'],
+    [/tiktok post init|direct posts only work when your tiktok account is (?:set to )?private/i, 'TIKTOK_PRIVATE_ONLY'],
+    [/error validating access token|session has expired|access token (?:has )?(?:expired|been invalidated)|the user has not authorized application/i, 'META_TOKEN_EXPIRED'],
+    [/^held: waiting for tiktok to approve/i, 'TIKTOK_HELD_APPROVAL'],
+    [/^replaced:/i, 'REPLACED_ON_PURPOSE'],
+];
+
+/** The translator's code for a stored post failure text, or null. Pure. */
+export function failureCode(errorLog: string | null | undefined): PostFailureCode | null {
+    const text = String(errorLog ?? '').trim();
+    if (!text) return null;
+    for (const [pattern, code] of POST_FAILURE_PATTERNS) if (pattern.test(text)) return code;
+    return null;
+}
+
 export interface FailedBucket {
     /** Posts, a post on several platforms counted once. */
     count: number;
     oldestAt: string | null;
-    reasons: Array<{ reason: FailureReason; count: number; oldestAt: string | null }>;
+    reasons: Array<{ reason: FailureReason; count: number; oldestAt: string | null; failedAt?: string }>;
     /** Every row of every post in the bucket, capped at `DETAIL_IDS_MAX`. */
     ids: string[];
 }
 
 /** A failed row as `FAILED_POSTS_DETAIL_SQL` returns it. */
-export interface FailedRow { id: string; group_id: string | null; scheduled_time: Date | string | null; error_log: string | null }
+export interface FailedRow {
+    id: string; group_id: string | null; scheduled_time: Date | string | null; error_log: string | null;
+    /**
+     * When the pipeline last tried the post, which is when it failed: the claim stamps `claimed_at` and a failure never clears it. `scheduled_posts` has no
+     * `updated_at` (checked against production, 2026-11-28), so this is the only date a failure has. Absent from a fixture that predates it.
+     */
+    failed_at?: Date | string | null;
+}
 
 const emptyBucket = (): FailedBucket => ({ count: 0, oldestAt: null, reasons: [], ids: [] });
 
@@ -258,7 +293,8 @@ export function bucketFailed(rows: readonly FailedRow[], now: number): { recent:
     const limit = POST_FAILED_OLD_DAYS * 86_400_000;
     const recent = emptyBucket();
     const old = emptyBucket();
-    const reasonAt = { recent: new Map<FailureReason, { count: number; oldestMs: number }>(), old: new Map<FailureReason, { count: number; oldestMs: number }>() };
+    const reasonAt = { recent: new Map<FailureReason, { count: number; oldestMs: number; failedMs: number }>(), old: new Map<FailureReason, { count: number; oldestMs: number; failedMs: number }>() };
+    const failedMs = (row: FailedRow): number => { const ms = row.failed_at ? Date.parse(toIso(row.failed_at as Date | null) ?? String(row.failed_at)) : NaN; return Number.isFinite(ms) ? ms : -Infinity; };
     const oldestMs = { recent: Infinity, old: Infinity };
     for (const members of groups.values()) {
         members.sort((a, b) => when(a) - when(b));
@@ -269,9 +305,10 @@ export function bucketFailed(rows: readonly FailedRow[], now: number): { recent:
         const reason = failureReason(first.error_log);
         bucket.count += 1;
         oldestMs[which] = Math.min(oldestMs[which], at);
-        const seen = reasonAt[which].get(reason) ?? { count: 0, oldestMs: Infinity };
+        const seen = reasonAt[which].get(reason) ?? { count: 0, oldestMs: Infinity, failedMs: -Infinity };
         seen.count += 1;
         seen.oldestMs = Math.min(seen.oldestMs, at);
+        for (const m of members) seen.failedMs = Math.max(seen.failedMs, failedMs(m));
         reasonAt[which].set(reason, seen);
         for (const m of members) if (bucket.ids.length < DETAIL_IDS_MAX) bucket.ids.push(m.id);
     }
@@ -279,7 +316,11 @@ export function bucketFailed(rows: readonly FailedRow[], now: number): { recent:
         const bucket = which === 'old' ? old : recent;
         bucket.oldestAt = Number.isFinite(oldestMs[which]) ? new Date(oldestMs[which]).toISOString() : null;
         bucket.reasons = [...reasonAt[which].entries()]
-            .map(([reason, v]) => ({ reason, count: v.count, oldestAt: new Date(v.oldestMs).toISOString() }))
+            .map(([reason, v]) => ({
+                reason, count: v.count, oldestAt: new Date(v.oldestMs).toISOString(),
+                // Only when a row said when it failed: a fixture without the column keeps the shape it always had.
+                ...(Number.isFinite(v.failedMs) ? { failedAt: new Date(v.failedMs).toISOString() } : {}),
+            }))
             .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
     }
     return { recent, old };
@@ -346,12 +387,15 @@ function failedDetail(bucket: FailedBucket): AttentionDetail {
  * A tenant with no connection yet gets nothing at all: it has the Get-started panel, and a count beside a screen it cannot use yet
  * would be noise. (Whatever it holds could only be left over from before.)
  */
-export function buildAttention(facts: AttentionFacts): { items: AttentionItem[]; counts: Omit<AttentionCounts, 'platform'> } {
+export function buildAttention(facts: AttentionFacts, modules?: readonly string[] | ReadonlySet<string> | null): { items: AttentionItem[]; counts: Omit<AttentionCounts, 'platform'> } {
     if (facts.connections.length === 0) return { items: [], counts: { inbox: 0, studio: 0, scheduler: 0 } };
 
+    // The modules the workspace has (U3, contract §1.3): an item of a module that is off is not built, and its nav count is 0. Absent (or null) is everything
+    // on, so a caller that predates modules, and a workspace that has them all, get exactly what they got before.
+    const has = (id: ModuleId): boolean => modules === undefined || modules === null || (Array.isArray(modules) ? modules.includes(id) : (modules as ReadonlySet<string>).has(id));
     const items: AttentionItem[] = [];
 
-    if (facts.handoff.count > 0) {
+    if (has('inbox') && facts.handoff.count > 0) {
         const reason = dominantReason(facts.handoff.reasons);
         const params: Record<string, string | number> = { n: facts.handoff.count };
         if (reason) params.reason = reason;
@@ -364,7 +408,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
 
     // Threads where the bot is off and the customer spoke last. They were counted into the Inbox (and the nav badge) but had no item, so Today said "all
     // clear" beside a badge that said 1; the same link opens the same To do list (`Inbox.isWaiting`).
-    if (facts.waiting.count > 0) {
+    if (has('inbox') && facts.waiting.count > 0) {
         items.push(withDetail(dated({
             type: 'thread_waiting', severity: 'warning', count: facts.waiting.count,
             sentence: { key: 'attention.thread_waiting', params: { n: facts.waiting.count } },
@@ -373,7 +417,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
     }
 
     // The split needs rows to split: a count with no rows behind it (a statement that came back empty) is still said, as one item.
-    if (facts.failedPosts && facts.failedPosts.recent.count + facts.failedPosts.old.count > 0) {
+    if (has('scheduler') && facts.failedPosts && facts.failedPosts.recent.count + facts.failedPosts.old.count > 0) {
         const { recent, old } = facts.failedPosts;
         if (recent.count > 0) {
             items.push(withDetail(dated({
@@ -390,7 +434,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
                 action: { verb: 'attention.verb.review', href: HREF.postsNeedsYou },
             }, old.oldestAt), failedDetail(old)));
         }
-    } else if (facts.postsFailed.count > 0) {
+    } else if (has('scheduler') && facts.postsFailed.count > 0) {
         items.push(dated({
             type: 'post_failed', severity: 'danger', count: facts.postsFailed.count,
             sentence: { key: 'attention.post_failed', params: { n: facts.postsFailed.count } },
@@ -398,7 +442,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
         }, facts.postsFailed.oldestAt));
     }
 
-    if (facts.postsOverdue.count > 0) {
+    if (has('scheduler') && facts.postsOverdue.count > 0) {
         items.push(dated({
             type: 'post_overdue', severity: 'warning', count: facts.postsOverdue.count,
             sentence: { key: 'attention.post_overdue', params: { n: facts.postsOverdue.count, minutes: OVERDUE_GRACE_MINUTES } },
@@ -409,6 +453,8 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
     // One item per integration, not one for all of them: each is fixed in its own place, and "TikTok needs reconnecting" is an action.
     for (const connection of facts.connections) {
         if (!connection.broken) continue;
+        // A platform's own module decides whether its broken connection is this workspace's business; Meta belongs to no module.
+        if (connection.integration !== 'meta' && !has(connection.integration)) continue;
         items.push(dated({
             type: 'connection_broken', severity: 'danger', count: 1,
             sentence: { key: 'attention.connection_broken', params: { platform: connection.integration } },
@@ -418,7 +464,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
 
     const studio = facts.studio;
     let studioCount = 0;
-    if (studio?.signedOutAt) {
+    if (studio?.signedOutAt && has('studio')) {
         studioCount += 1;
         items.push({
             type: 'mac_signed_out', severity: 'danger', count: 1,
@@ -427,7 +473,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
             oldestAt: studio.signedOutAt,
         });
     }
-    if (studio?.workerOffline) {
+    if (studio?.workerOffline && has('studio')) {
         studioCount += 1;
         const w = studio.workerOffline;
         items.push(dated({
@@ -436,7 +482,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
             action: { verb: 'attention.verb.howToFix', href: HREF.help('worker#worker-offline') },
         }, w.oldestAt));
     }
-    if (studio && studio.tiktokDrafts.count > 0) {
+    if (studio && has('tiktok') && studio.tiktokDrafts.count > 0) {
         studioCount += studio.tiktokDrafts.count;
         items.push(dated({
             type: 'tiktok_draft', severity: 'info', count: studio.tiktokDrafts.count,
@@ -444,7 +490,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
             action: { verb: 'attention.verb.open', href: HREF.postsNeedsYou },
         }, studio.tiktokDrafts.oldestAt));
     }
-    if (studio && studio.reelReview.count > 0) {
+    if (studio && has('studio') && studio.reelReview.count > 0) {
         studioCount += studio.reelReview.count;
         items.push(dated({
             type: 'reel_review', severity: 'warning', count: studio.reelReview.count,
@@ -459,9 +505,9 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
         items,
         counts: {
             // Threads that need a person, each once: handed over, or waiting for a reply.
-            inbox: facts.handoff.count + facts.waiting.count,
-            studio: studioCount,
-            scheduler: facts.postsFailed.count + facts.postsOverdue.count,
+            inbox: has('inbox') ? facts.handoff.count + facts.waiting.count : 0,
+            studio: has('studio') ? studioCount : 0,
+            scheduler: has('scheduler') ? facts.postsFailed.count + facts.postsOverdue.count : 0,
         },
     };
 }
@@ -560,7 +606,7 @@ export const POSTS_ATTENTION_SQL = `
  * Same rule as `POSTS_ATTENTION_SQL` (not archived, FAILED); the count above stays the truth, this is its explanation. `LIMIT` is `FAILED_ROWS_MAX`.
  */
 export const FAILED_POSTS_DETAIL_SQL = `
-    SELECT s.id, s.group_id, s.scheduled_time, LEFT(s.error_log, 400) AS error_log
+    SELECT s.id, s.group_id, s.scheduled_time, s.claimed_at AS failed_at, LEFT(s.error_log, 400) AS error_log
       FROM scheduled_posts s
      WHERE s.creator_id = $1
        AND s.status = 'FAILED'
@@ -781,16 +827,18 @@ export async function getAttention(creatorId: string, options: AttentionOptions 
     const now = options.now ?? Date.now();
     // The Studio's facts take the worker's last call from the heartbeat's own read, so it is one statement and one answer.
     const heartbeatP = loadHeartbeat(creatorId, now);
-    const [heartbeat, threads, posts, connections, studio, platform] = await Promise.all([
+    const [heartbeat, threads, posts, connections, studio, platform, modules] = await Promise.all([
         heartbeatP,
         loadThreads(creatorId),
         loadPosts(creatorId, now),
         loadConnections(creatorId),
         heartbeatP.then((h) => loadStudioFacts(creatorId, now, h.worker.lastSeenAt)),
         options.platformAdmin ? countPlatformProblems() : Promise.resolve(undefined),
+        // One cached read of the workspace's document: an item of a module the workspace does not have is not built (contract §1.3).
+        readDocModules(creatorId),
     ]);
 
-    const { items, counts } = buildAttention({ ...threads, ...posts, connections, studio });
+    const { items, counts } = buildAttention({ ...threads, ...posts, connections, studio }, modules);
 
     return {
         checkedAt: new Date(now).toISOString(),

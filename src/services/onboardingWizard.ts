@@ -30,6 +30,7 @@ import type { OnboardingStatus } from '../db/rows.js';
 import { queryOne } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
+import { readModules } from './modules.js';
 import { recordEvent, type Actor, type EventContext } from './onboardingEvents.js';
 import { confirmedComment, insertFirstCampaign, planFirstCampaign, type FirstCampaignOutcome, type FirstCampaignPlan } from './onboarding/proofCampaign.js';
 import { loadConfirmedComment } from './onboarding/proofStore.js';
@@ -86,14 +87,18 @@ export function stepsFor(flags: Readonly<WizardFlags> = NO_FLAGS): WizardStep[] 
 }
 
 /**
- * Read the flags. Fails CLOSED: a setting that cannot be read (a database that has no `app_settings`, a failed query) is "off", so
+ * Read the flags for a workspace. Fails CLOSED: a setting that cannot be read (a database that has no `app_settings`, a failed query) is "off", so
  * the wizard is the one it was before this existed and nobody is sent to a step the operator never switched on.
+ *
+ * `connect` is the platform's switch AND the workspace's own choice (U3, contract §9): `metaConnect === 'self'`. The switch is platform-wide, so without
+ * the second half the wizard would send every workspace, the owner's included, to a Connect step its operator connects for it.
  */
-export async function readWizardFlags(): Promise<WizardFlags> {
+export async function readWizardFlags(creatorId: string): Promise<WizardFlags> {
     try {
         // The switch alone, as `getMetaLoginSettings` reads it (database only, "true" and nothing else): the configuration id is the
         // connect route's business, not the wizard's.
-        return { connect: (await getSetting(APP_SETTING_KEYS.metaLoginEnabled)) === 'true' };
+        const [switchOn, modules] = await Promise.all([getSetting(APP_SETTING_KEYS.metaLoginEnabled), readModules(creatorId)]);
+        return { connect: switchOn === 'true' && modules.metaConnect === 'self' };
     } catch (err) {
         log('warn', 'onboarding.flags_unreadable', describeError(err));
         return { ...NO_FLAGS };
@@ -242,7 +247,7 @@ export async function describeOnboardingBrief(
         const state = await loadOnboarding(creatorId);
         const status: OnboardingStatus = state?.status ?? 'completed';
         // The flags only change where an UNFINISHED tenant resumes: nothing is asked for one that is completed (or has no row).
-        const flags = status === 'completed' ? NO_FLAGS : await readWizardFlags();
+        const flags = status === 'completed' ? NO_FLAGS : await readWizardFlags(creatorId);
         return {
             status,
             step: resumeStep(state, flags),
@@ -336,7 +341,7 @@ export async function describeWizard(creatorId: string, who: { tenantRole: Tenan
     // No row reads as completed (D14).
     const effective: OnboardingState = state ?? { status: 'completed', current_step: null, steps: {}, filled_by: null, started_at: null, completed_at: null };
     // What the operator switched on is read for a tenant that is still setting up: a finished one is never sent to a step.
-    const flags = given ?? (effective.status === 'completed' ? NO_FLAGS : await readWizardFlags());
+    const flags = given ?? (effective.status === 'completed' ? NO_FLAGS : await readWizardFlags(creatorId));
     return {
         status: effective.status,
         step: resumeStep(state, flags),
@@ -399,7 +404,7 @@ export async function saveStep(
     const step = stepById(stepId);
     // The operator's switches are read only when they can matter: for the one step they gate, and to find where Continue and
     // Skip lead next. An autosave of any other step asks nobody anything.
-    const flags = given ?? (step && (step.id === 'connect' || input.status === 'done' || input.status === 'skipped') ? await readWizardFlags() : NO_FLAGS);
+    const flags = given ?? (step && (step.id === 'connect' || input.status === 'done' || input.status === 'skipped') ? await readWizardFlags(creatorId) : NO_FLAGS);
     const enabled = step ? stepsFor(flags).find((s) => s.id === step.id)?.enabled === true : false;
     if (!step || !enabled || step.id === 'done') throw new WizardError('UNKNOWN_STEP', 404, 'There is no such step.');
 

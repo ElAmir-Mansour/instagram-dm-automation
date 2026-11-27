@@ -82,7 +82,7 @@ onboardingRouter.put('/steps/:step', canEdit, handle('onboarding.step_failed', '
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     // What the operator has switched on (W4 needs "Connect with Facebook"), read once: it decides whether `connect` is a step at
     // all, where Continue leads from W3, and where the page resumes. Unreadable is off, so the wizard is the one it always was.
-    const flags = await readWizardFlags();
+    const flags = await readWizardFlags(getTenantId(req));
     const state = await saveStep(getTenantId(req), req.params.step, { values: body.values, status: body.status, viewed: body.viewed }, actorOf(req), Date.now(), flags);
     res.json({
         status: state?.status ?? 'completed',

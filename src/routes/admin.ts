@@ -74,19 +74,22 @@ import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import { needsCeiling, parseCeiling, readCeiling, saveCeiling, setAdsEnabled } from '../services/ads/settings.js';
 import { seedApiBrain } from '../services/studio/settings.js';
+import {
+    invalidateModulesCache, ModulesError, modulesForNewWorkspace, planModules, readModules, readStoredCeiling, refusalError, saveModules, sendModulesRefusal, type ModulesView,
+} from '../services/modules.js';
 import { adminAdsRouter } from './adminAds.js';
 import { adminExplainersRouter } from './adminExplainers.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
 import { logoAuditDetail, profileErrorBody } from './profile.js';
 import { adminActor, advanceDraftFor, getDraftFor, guard as draftGuard, startDraftFor } from './onboardingDrafts.js';
+import { listInvites, normaliseEmail, readTtl, regenerateInvite, revokeInvite, tenantLanguage } from '../services/invites.js';
+// The invite helpers moved out of this file (U3, PR A) so the workspace owner's Team routes can make a link the same way.
 import {
-    buildInviteUrl, createInvite, InviteError, listInvites, readTtl, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
-    type AdminInvite, type CreatedInvite, type InvitePurpose,
-} from '../services/invites.js';
+    answerInviteFailure, inviteAuditDetail, issueInvite, requestOrigin, shareable, type ShareableInvite,
+} from '../services/inviteIssue.js';
 import {
     describeOnboardingSettings, getOnboardingSettings, isInviteLang, isInviteRole, saveOnboardingSettings, validateOnboardingPatch,
-    type InviteLang, type OnboardingSettings,
 } from '../services/onboardingSettings.js';
 
 const router = Router();
@@ -163,84 +166,6 @@ function failWith(res: Response, err: unknown, event: string, message: string): 
         return;
     }
     res.status(500).json({ error: message });
-}
-
-// ─── Invite links (P17) ─────────────────────────────────────────────────────────────────────────────
-
-/** The origin this request arrived on: `getPublicBaseUrl`'s last resort, after the saved setting and PUBLIC_BASE_URL. */
-function requestOrigin(req: Request): string | null {
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]!.trim();
-    const host = req.headers.host;
-    return host ? `${proto}://${host}` : null;
-}
-
-/** An invite as the card renders it right after it is made: the listed fields, plus the one link and its message. */
-interface ShareableInvite extends AdminInvite {
-    /** The link. Carries the token in its fragment, and exists only in the response of the call that made it. */
-    url: string;
-    whatsapp_text: string;
-    lang: InviteLang;
-}
-
-function shareable(created: CreatedInvite & { tenantName: string | null }, base: string, lang: InviteLang, settings: OnboardingSettings): ShareableInvite {
-    const url = buildInviteUrl(base, created.token, lang);
-    return {
-        ...created.invite,
-        url,
-        lang,
-        ...shareFor(settings, created.tenantName, url, lang, created.invite.purpose),
-    };
-}
-
-/** The refusals the invite service throws, as the status and body the dashboard reads; anything else is a 500. */
-function answerInviteFailure(res: Response, err: unknown, event: string, message: string): void {
-    if (err instanceof InviteError) {
-        res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
-        return;
-    }
-    failWith(res, err, event, message);
-}
-
-/** What an audit row says about an invite: ids and facts, never the link. */
-function inviteAuditDetail(invite: AdminInvite, extra: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-        tenant_id: invite.creator_id,
-        purpose: invite.purpose,
-        membership_role: invite.role,
-        email: invite.email,
-        for_user_id: invite.user_id,
-        expires_at: invite.expires_at,
-        ...extra,
-    };
-}
-
-/**
- * Make a link for a tenant and record it. Used by the invite route and by creating a tenant by name, which hands the operator
- * the link in the same response. The public base is resolved BEFORE the invite is written, so a deployment that cannot build
- * a link never leaves an invite behind that nobody can ever be given.
- */
-async function issueInvite(
-    req: Request,
-    input: { creatorId: string; purpose?: InvitePurpose; role?: unknown; email?: unknown; userId?: string | null; ttlDays?: number | null; ttlHours?: number | null; lang: InviteLang },
-    extra: Record<string, unknown> = {}
-): Promise<ShareableInvite> {
-    const settings = await getOnboardingSettings();
-    const base = await getPublicBaseUrl(requestOrigin(req));
-    if (!base) throw new InviteError(500, 'PUBLIC_URL_UNKNOWN', 'The public site address is not set (Settings → TikTok app → site address), so a link cannot be built.');
-    const created = await createInvite({
-        creatorId: input.creatorId,
-        purpose: input.purpose,
-        role: isInviteRole(input.role) ? input.role : null,
-        email: typeof input.email === 'string' ? input.email : null,
-        userId: input.userId ?? null,
-        ttlDays: input.ttlDays ?? null,
-        ttlHours: input.ttlHours ?? null,
-        createdBy: req.session?.userId ?? null,
-    }, settings);
-    await audit(req, AUDIT_ACTIONS.inviteCreate, 'invite', created.invite.id, inviteAuditDetail(created.invite, { language: input.lang, ...extra }));
-    // The funnel's first stage (P31). A password reset is not onboarding, so only a join link counts.
-    if (input.purpose !== 'reset') await recordEvent({ creatorId: input.creatorId, userId: req.session?.userId ?? null, actor: 'admin' }, 'invite_created');
-    return shareable(created, base, input.lang, settings);
 }
 
 // ─── Ops ────────────────────────────────────────────────────────────────────
@@ -847,6 +772,10 @@ function maskToken(value: string | null): { configured: boolean; preview: string
  *
  * Nothing is created if any of it fails: a tenant is never left without its profile. The starter DM persona follows, in the
  * tenant's language, and is best-effort as it always was.
+ *
+ * A tenant made by name also takes (U3, contract §3.1): `owner_email` (optional; the creation invite then works only for that address) and
+ * `modules` (a `ModulesInput`; absent means the company preset). The modules are validated BEFORE anything is written, so a refusal creates nothing,
+ * and stored inside the creation transaction, so a workspace is never left without them. The first creator ever is the platform owner: it takes no modules.
  */
 router.post('/tenants', async (req, res) => {
     try {
@@ -877,6 +806,29 @@ router.post('/tenants', async (req, res) => {
         if (!handle.ok || !site.ok) {
             res.status(400).json({ error: (!handle.ok ? handle : site as { error: string }).error });
             return;
+        }
+
+        // By name only (a tenant made with credentials is the operator's own, with nobody to invite): who the creation link is for, and what the workspace gets.
+        let ownerEmail: string | null = null;
+        let modulesInput: unknown = null;
+        if (!withCredentials) {
+            if (present(body.owner_email)) {
+                ownerEmail = normaliseEmail(body.owner_email);
+                if (!ownerEmail) {
+                    res.status(400).json({ error: 'owner_email is not a valid address.', code: 'BAD_EMAIL' });
+                    return;
+                }
+            }
+            // With no creator at all, this one becomes the platform owner (everything on, nothing to choose).
+            if ((await getPlatformOwnerId()) !== null) {
+                modulesInput = modulesForNewWorkspace(body.modules);
+                const plan = planModules(modulesInput, { owner: false, hasCeiling: false });
+                if (!plan.ok) {
+                    const refusal = refusalError(plan);
+                    sendModulesRefusal(res, refusal);
+                    return;
+                }
+            }
         }
 
         let igPageId: string | null = null;
@@ -945,6 +897,7 @@ router.post('/tenants', async (req, res) => {
         const rules = await getOnboardingDefaultRules();
         const profile = newTenantProfile({ lang, rules });
 
+        let modules: ModulesView | null = null;
         const created = await withTransaction(async (tx) => {
             const result = await tx.query(
                 `INSERT INTO creators
@@ -975,6 +928,8 @@ router.post('/tenants', async (req, res) => {
             await createProfile(row.id, profile, { source: 'admin', userId: req.session?.userId ?? null, direction: lang === 'ar' ? 'rtl' : undefined }, tx);
             // The Monteur's brain is the AI providers layer (P32): the Mac is the owner's, and a new tenant is never put on it.
             await seedApiBrain(tx, row.id);
+            // The modules the workspace gets (U3): in this transaction, so there is never a workspace without them.
+            if (modulesInput !== null) modules = await saveModules(row.id, modulesInput, { userId: req.session?.userId ?? null }, tx);
             await tx.query(
                 `INSERT INTO onboarding (creator_id, status) VALUES ($1, 'invited') ON CONFLICT (creator_id) DO NOTHING`,
                 [row.id]
@@ -1032,6 +987,9 @@ router.post('/tenants', async (req, res) => {
             profile_version: 1,
             instagram_username: created.instagram_username,
             website_url: created.website_url,
+            modules: (modules as ModulesView | null)?.on ?? null,
+            preset: (modules as ModulesView | null)?.preset ?? null,
+            meta_connect: (modules as ModulesView | null)?.metaConnect ?? null,
         });
 
         // A tenant made by name is handed to a person who is not here yet: the invite link comes back with it, so the success
@@ -1041,7 +999,7 @@ router.post('/tenants', async (req, res) => {
         let invite: ShareableInvite | null = null;
         if (!withCredentials) {
             try {
-                invite = await issueInvite(req, { creatorId: created.id, lang }, { via: 'tenant_create' });
+                invite = await issueInvite(req, { creatorId: created.id, lang, email: ownerEmail }, { via: 'tenant_create' });
             } catch (inviteErr) {
                 log('warn', 'admin.tenant_invite_failed', { creator_id: created.id, ...describeError(inviteErr) });
             }
@@ -1054,11 +1012,16 @@ router.post('/tenants', async (req, res) => {
             meta_connected: checked !== null,
             profile: { version: 1 },
             onboarding: { status: 'invited' },
+            modules,
             invite,
         });
     } catch (err: any) {
         if (err?.code === PG_UNIQUE_VIOLATION) {
             res.status(409).json({ error: 'A creator with that page id already exists.' });
+            return;
+        }
+        if (err instanceof ModulesError) {
+            sendModulesRefusal(res, err);
             return;
         }
         // The profile's own refusals (the tables are missing, the default failed validation): its status and sentence.
@@ -2404,7 +2367,7 @@ router.post('/ads/tenants/:id/enabled', async (req, res) => {
             return;
         }
         if (enabled && (await needsCeiling(id)) && !(await readCeiling(id))) {
-            res.status(409).json({ error: 'Set this tenant\'s ads ceiling (max daily budget and monthly cap) before switching ads on.', code: 'CEILING_REQUIRED' });
+            sendError(res, 409, 'CEILING_REQUIRED', { module: 'ads' }, 'Set this tenant\'s ads ceiling (max daily budget and monthly cap) before switching ads on.');
             return;
         }
         await setAdsEnabled(id, enabled, req.session?.userId ?? null);
@@ -2433,6 +2396,68 @@ router.post('/ads/tenants/:id/ceiling', async (req, res) => {
         res.json({ ceiling });
     } catch (err) {
         failWith(res, err, 'admin.ads_ceiling_failed', 'Failed to save the ads ceiling.');
+    }
+});
+
+// ─── Modules per workspace (U3, src/services/modules.ts) ─────────────────────────────────────────────────────────
+
+/** What the modules screen shows: the view, the tenant id and the stored ads ceiling (null when none). */
+async function modulesAnswer(id: string, view?: ModulesView): Promise<Record<string, unknown>> {
+    const current = view ?? (invalidateModulesCache(id), await readModules(id));
+    return {
+        tenantId: id,
+        on: current.on,
+        owner: current.owner,
+        stored: current.stored,
+        preset: current.preset,
+        metaConnect: current.metaConnect,
+        adsCeiling: await readStoredCeiling(id),
+    };
+}
+
+/** Which modules a workspace has, read fresh (not from this instance's 30-second cache), for the Modules card. */
+router.get('/tenants/:id/modules', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        res.json(await modulesAnswer(id));
+    } catch (err) {
+        failWith(res, err, 'admin.modules_read_failed', 'Failed to read the modules.');
+    }
+});
+
+/**
+ * Change which modules a workspace has. The body is a `ModulesInput` (`preset`, `on`, `metaConnect`, `adsCeiling`); what it leaves out stays as it is.
+ * One transaction writes the document, the ads switch and the ceiling; `explainers` is never written here. The platform owner's own workspace is
+ * refused (409 OWNER_ALL_MODULES). Audited as `tenant.modules_changed` with the modules and the Connect mode before and after.
+ */
+router.put('/tenants/:id/modules', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id) || !(await tenantExists(id))) {
+            res.status(404).json({ error: 'Tenant not found.', code: 'NOT_FOUND' });
+            return;
+        }
+        invalidateModulesCache(id);
+        const before = await readModules(id);
+        const after = await saveModules(id, req.body ?? {}, { userId: req.session?.userId ?? null });
+        await audit(req, AUDIT_ACTIONS.tenantModulesChanged, 'creator', id, {
+            before: before.on,
+            after: after.on,
+            meta_connect_before: before.metaConnect,
+            meta_connect_after: after.metaConnect,
+            preset: after.preset,
+        });
+        res.json(await modulesAnswer(id, after));
+    } catch (err) {
+        if (err instanceof ModulesError) {
+            sendModulesRefusal(res, err);
+            return;
+        }
+        failWith(res, err, 'admin.modules_write_failed', 'Failed to save the modules.');
     }
 });
 

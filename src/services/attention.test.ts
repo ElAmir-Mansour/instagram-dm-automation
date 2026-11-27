@@ -16,9 +16,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { metaHttp } from './http.js';
 import { TENANT_HEALTH_SQL } from './health.js';
+import { invalidateModulesCache } from './modules.js';
 import { invalidateTenantCache } from './tenant.js';
 import {
-    bucketFailed, buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, FAILED_POSTS_DETAIL_SQL, failureReason, getAttention,
+    bucketFailed, buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, FAILED_POSTS_DETAIL_SQL, failureCode, failureReason, getAttention,
     OVERDUE_GRACE_MINUTES, POST_FAILED_OLD_DAYS, POSTS_ATTENTION_SQL, THREADS_NEEDING_PERSON_SQL, threadFacts,
     REEL_REVIEW_ATTENTION_SQL, STUDIO_JOBS_WAITING_SQL, THREADS_ATTENTION_SQL, TIKTOK_DRAFTS_ATTENTION_SQL, TIKTOK_DRAFT_DAYS,
     WORKER_OFFLINE_MINUTES, workerOfflineFact, type AttentionFacts, type AttentionItem, type StudioFacts,
@@ -277,6 +278,8 @@ const originalPost = metaHttp.post;
 beforeEach(() => {
     sent = [];
     graph = [];
+    // The modules read is cached per workspace for 30 s: each test starts from what it arranges, so what a test counts never depends on the one before it.
+    invalidateModulesCache();
     (metaHttp as any).get = async (url: string) => { graph.push(`GET ${url}`); throw new Error('the attention summary must not call Meta'); };
     (metaHttp as any).post = async (url: string) => { graph.push(`POST ${url}`); throw new Error('the attention summary must not call Meta'); };
 });
@@ -371,11 +374,13 @@ describe('getAttention', () => {
     it('scopes every statement to the tenant it was asked about', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 11);
-        // Every statement but two: who the owner is (no parameters) and the Mac's sign-in flag (a platform setting, by its key).
+        assert.equal(sent.length, 12);
+        // Every statement but three: who the owner is (no parameters), the Mac's sign-in flag (a platform setting, by its key), and the workspace's modules
+        // document (a setting, by a key that ends in the tenant's id).
         const tenantless = (sql: string) => /FROM creators ORDER BY created_at/.test(sql) || /FROM app_settings/.test(sql);
         for (const s of sent.filter((x) => !tenantless(x.sql))) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
-        assert.equal(sent.filter((x) => tenantless(x.sql)).length, 2);
+        assert.equal(sent.filter((x) => tenantless(x.sql)).length, 3);
+        assert.deepEqual(sent.filter((x) => /FROM app_settings/.test(x.sql) && String(x.params[0]).endsWith(TENANT)).map((x) => x.params[0]), [`tenant.modules.${TENANT}`], 'only this tenant\'s own row');
     });
 
     it('binds the grace as a parameter, not into the text', async () => {
@@ -388,7 +393,7 @@ describe('getAttention', () => {
     it('is a handful of reads, and every one is the database: no Graph call is ever made', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 11, 'tenant health, worker, threads, posts, the failed rows, connections, the owner, waiting jobs, TikTok drafts, clips to review, the sign-in flag');
+        assert.equal(sent.length, 12, 'tenant health, worker, threads, posts, the failed rows, connections, the owner, waiting jobs, TikTok drafts, clips to review, the sign-in flag, and the workspace\'s modules document');
         assert.deepEqual(graph, []);
     });
 
@@ -748,5 +753,183 @@ describe('the tenant health count of failed posts is the attention count (U2: To
         const attention = flat(POSTS_ATTENTION_SQL);
         assert.match(attention, /FILTER \(WHERE s\.status = 'FAILED'\)/);
         assert.match(attention, /s\.archived_at IS NULL/);
+    });
+});
+
+// ─── Modules (U3, contract §1.3, §12.1 and §12.2) ─────────────────────────────────────────────────────
+
+describe('buildAttention with the workspace\'s modules', () => {
+    const EVERY = ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results', 'growth', 'studio', 'explainers', 'ads', 'tiktok', 'youtube', 'whatsapp', 'muse'];
+    const COMPANY = ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'];
+    const day = 86_400_000;
+    const failed = bucketFailed([
+        { id: 'o1', group_id: null, scheduled_time: new Date(NOW - 40 * day), error_log: 'Media upload failed' },
+        { id: 'r1', group_id: null, scheduled_time: new Date(NOW - 3 * day), error_log: 'Media upload failed' },
+    ], NOW);
+
+    /** Every kind of item at once, so a module that leaks shows. */
+    const LOUD = (): AttentionFacts => facts({
+        handoff: { count: 2, oldestAt: iso(300), reasons: [{ reason: 'refund', count: 2 }], closed: { count: 1, ids: ['c1'], oldestAt: iso(3000) } },
+        waiting: { count: 3, oldestAt: iso(20) },
+        postsFailed: { count: 2, oldestAt: iso(1) },
+        failedPosts: failed,
+        postsOverdue: { count: 1, oldestAt: iso(40) },
+        connections: [
+            { integration: 'meta', broken: true, at: iso(10) }, { integration: 'tiktok', broken: true, at: iso(20) }, { integration: 'youtube', broken: true, at: iso(30) },
+        ],
+        studio: studioFacts({
+            signedOutAt: iso(600), workerOffline: { jobs: 2, oldestAt: iso(120), lastSeenAt: iso(100) },
+            tiktokDrafts: { count: 4, oldestAt: iso(40 * 1440) }, reelReview: { count: 2, oldestAt: iso(90) },
+        }),
+    });
+
+    it('with every module on (as a list, a set, or null), is exactly what it was with no modules at all, on every shape of facts', () => {
+        const fixtures: AttentionFacts[] = [
+            facts(), LOUD(), facts({ postsFailed: { count: 2, oldestAt: iso(2880) } }), facts({ failedPosts: failed, postsFailed: { count: 2, oldestAt: iso(1) } }),
+            facts({ connections: [] }), facts({ studio: studioFacts({ signedOutAt: iso(5) }) }),
+            facts({ handoff: { count: 1, oldestAt: iso(5), reasons: [] }, connections: [{ integration: 'tiktok', broken: true, at: null }] }),
+        ];
+        for (const f of fixtures) {
+            const plain = buildAttention(f);
+            assert.deepEqual(buildAttention(f, EVERY), plain);
+            assert.deepEqual(buildAttention(f, new Set(EVERY)), plain);
+            assert.deepEqual(buildAttention(f, null), plain);
+            assert.deepEqual(buildAttention(f, undefined), plain);
+        }
+    });
+
+    it('a company workspace has no TikTok draft, no reel to review, no Mac item, and `counts.studio` is 0', () => {
+        const out = buildAttention(LOUD(), COMPANY);
+        const found = types(out.items);
+        for (const gone of ['tiktok_draft', 'reel_review', 'mac_signed_out', 'worker_offline']) assert.equal(found.includes(gone as never), false, gone);
+        assert.equal(out.counts.studio, 0);
+        // And what a company does have is still there.
+        for (const kept of ['handoff', 'thread_waiting', 'post_failed', 'post_failed_old', 'post_overdue', 'connection_broken']) assert.equal(found.includes(kept as never), true, kept);
+        assert.equal(out.counts.inbox, 5);
+        assert.equal(out.counts.scheduler, 3);
+    });
+
+    it('a broken Meta connection is every workspace\'s, but TikTok\'s and YouTube\'s only when it has them', () => {
+        const brokenOf = (modules: string[]) => buildAttention(LOUD(), modules).items.filter((i) => i.type === 'connection_broken').map((i) => i.sentence.params['platform']).sort();
+        assert.deepEqual(brokenOf(COMPANY), ['meta']);
+        assert.deepEqual(brokenOf([...COMPANY, 'tiktok']), ['meta', 'tiktok']);
+        assert.deepEqual(brokenOf([...COMPANY, 'youtube']), ['meta', 'youtube']);
+        assert.deepEqual(brokenOf([]), ['meta'], 'no module at all still tells you your Meta connection is broken');
+    });
+
+    it('with the scheduler off there are no post_* items and `counts.scheduler` is 0', () => {
+        const out = buildAttention(LOUD(), EVERY.filter((m) => m !== 'scheduler'));
+        assert.equal(types(out.items).some((t) => t.startsWith('post_')), false);
+        assert.equal(out.counts.scheduler, 0);
+        assert.notEqual(out.counts.inbox, 0, 'the other counts stay');
+    });
+
+    it('with the inbox off there are no handoff or waiting items and `counts.inbox` is 0', () => {
+        const out = buildAttention(LOUD(), EVERY.filter((m) => m !== 'inbox'));
+        assert.equal(types(out.items).some((t) => t === 'handoff' || t === 'thread_waiting'), false);
+        assert.equal(out.counts.inbox, 0);
+    });
+
+    it('with the Studio off its Mac and reel items go, and with TikTok off alone its draft goes while the Studio\'s stay', () => {
+        const noStudio = buildAttention(LOUD(), EVERY.filter((m) => m !== 'studio'));
+        assert.equal(types(noStudio.items).some((t) => t === 'reel_review' || t === 'mac_signed_out' || t === 'worker_offline'), false);
+        assert.equal(types(noStudio.items).includes('tiktok_draft'), true, 'TikTok is its own module');
+        assert.equal(noStudio.counts.studio, 0);
+        const noTikTok = buildAttention(LOUD(), EVERY.filter((m) => m !== 'tiktok'));
+        assert.equal(types(noTikTok.items).includes('tiktok_draft'), false);
+        assert.equal(noTikTok.counts.studio, 4, 'the sign-in, the worker and the two clips: the draft is not counted where it is not shown');
+    });
+
+    it('a workspace with nothing connected still gets nothing, whatever it has', () => {
+        assert.deepEqual(buildAttention(facts({ connections: [], handoff: { count: 2, oldestAt: iso(1), reasons: [] } }), COMPANY), { items: [], counts: { inbox: 0, studio: 0, scheduler: 0 } });
+    });
+});
+
+describe('failureReason reuses the failure translator\'s names (UI.failure)', () => {
+    it('reads the texts production holds for a post the way the dashboard names them', () => {
+        assert.equal(failureReason('Held: waiting for TikTok to approve the app (2026-11-12).'), 'tiktok_private');
+        assert.equal(failureReason('Private Reply Failed: Error validating access token: Session has expired on Monday, 18-May-26 04:00:00 PDT. (Code: 190)'), 'token');
+        assert.equal(failureReason('Error validating access token: The user has not authorized application 847772258381375.'), 'token');
+        assert.equal(failureReason('storage answered HTTP 400 to the upload: {"statusCode":"413","error":"Payload too large"}'), 'media');
+        assert.equal(failureReason('Replaced: the reel is being remade with Claude.'), 'replaced');
+        assert.equal(failureCode('Held: waiting for TikTok to approve the app'), 'TIKTOK_HELD_APPROVAL');
+        assert.equal(failureCode('TikTok post init: Until TikTok approves this app, direct posts only work when your TikTok account is set to private.'), 'TIKTOK_PRIVATE_ONLY');
+        assert.equal(failureCode('something nobody wrote a rule for'), null);
+        assert.equal(failureCode(null), null);
+    });
+
+    it('keeps every answer the mapping gave before (a held TikTok post is a rule, not a fault, like the private-account one)', () => {
+        assert.equal(failureReason('(#190) Invalid OAuth access token (Code: 190)'), 'token');
+        assert.equal(failureReason('Media upload failed: the video could not be processed'), 'media');
+        assert.equal(failureReason('Abandoned after 5 publish attempts — each claim went stale without completing. Check the access token and the media URL.'), 'token');
+    });
+});
+
+describe('a failure is dated (so Today can say when it failed)', () => {
+    const row = (id: string, failedAt: Date | null) => ({ id, group_id: null, scheduled_time: new Date(NOW - 3 * 86_400_000), error_log: 'Media upload failed', failed_at: failedAt });
+
+    it('carries the latest attempt of each reason as `failedAt`, only when a row said when', () => {
+        const { recent } = bucketFailed([row('a', new Date(NOW - 5 * 3_600_000)), row('b', new Date(NOW - 2 * 3_600_000)), row('c', null)], NOW);
+        assert.deepEqual(recent.reasons, [{ reason: 'media', count: 3, oldestAt: new Date(NOW - 3 * 86_400_000).toISOString(), failedAt: new Date(NOW - 2 * 3_600_000).toISOString() }]);
+    });
+
+    it('leaves the shape as it always was for a row without a date', () => {
+        const { recent } = bucketFailed([row('a', null)], NOW);
+        assert.equal('failedAt' in recent.reasons[0]!, false);
+    });
+
+    it('selects `claimed_at` (the last attempt) as `failed_at`: `scheduled_posts` has no `updated_at`', () => {
+        assert.match(FAILED_POSTS_DETAIL_SQL, /s\.claimed_at AS failed_at/);
+        assert.doesNotMatch(FAILED_POSTS_DETAIL_SQL, /updated_at/);
+    });
+});
+
+describe('getAttention for a company workspace reads its modules document and builds nothing of the Studio', () => {
+    it('asks for the document once, and drops the Studio\'s items', async () => {
+        const doc = JSON.stringify({ v: 1, on: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'], preset: 'company', metaConnect: 'self' });
+        install({
+            health: () => [healthRow()],
+            worker: () => [],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+            studioJobs: () => [{ n: 3, oldest_at: new Date(NOW - 3 * 3_600_000) }],
+            tiktok: () => [{ n: 2, oldest_at: new Date(NOW - 40 * 86_400_000) }],
+            reels: () => [{ n: 2, oldest_at: new Date(NOW - 3_600_000) }],
+            // Somebody else is the platform owner: the owner's workspace is never narrowed, whatever its document says.
+            owner: () => [{ id: '99999999-9999-4999-8999-999999999999' }],
+            setting: (_sql, params) => (params[0] === `tenant.modules.${TENANT}` ? [{ value: doc, is_secret: false }] : []),
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        assert.deepEqual(types(out.items), []);
+        assert.equal(out.counts.studio, 0);
+        assert.equal(sent.filter((s) => /FROM app_settings/.test(s.sql) && s.params[0] === `tenant.modules.${TENANT}`).length, 1);
+    });
+
+    it('is unchanged for a workspace with no document: the same Studio things are said', async () => {
+        install({
+            health: () => [healthRow()],
+            worker: () => [],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+            tiktok: () => [{ n: 2, oldest_at: new Date(NOW - 40 * 86_400_000) }],
+            reels: () => [{ n: 2, oldest_at: new Date(NOW - 3_600_000) }],
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        assert.deepEqual(types(out.items).sort(), ['reel_review', 'tiktok_draft']);
+        assert.equal(out.counts.studio, 4);
+    });
+});
+
+describe('the platform owner\'s attention is unchanged by a document', () => {
+    it('says the Studio\'s things for the owner even if a document written by hand leaves the Studio out', async () => {
+        const doc = JSON.stringify({ v: 1, on: ['inbox'], preset: 'custom', metaConnect: 'self' });
+        install({
+            health: () => [healthRow()],
+            worker: () => [],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+            reels: () => [{ n: 2, oldest_at: new Date(NOW - 3_600_000) }],
+            setting: (_sql, params) => (params[0] === `tenant.modules.${TENANT}` ? [{ value: doc, is_secret: false }] : []),
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        assert.deepEqual(types(out.items), ['reel_review']);
+        assert.equal(out.counts.studio, 2);
     });
 });

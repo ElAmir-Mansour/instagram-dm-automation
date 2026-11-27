@@ -81,6 +81,8 @@ export class FakeDb {
     failOn: RegExp | null = null;
     /** `app_settings`, by key. Plain values only (no secret is stored here). */
     settings = new Map<string, string>();
+    /** The platform owner (`getPlatformOwnerId`: the first creator ever made), or null for none. A workspace's modules read asks who it is (U3). */
+    platformOwner: string | null = null;
     /** The database's clock. Move it to expire a state. */
     now = Date.now();
     private original = { query: pool.query, connect: pool.connect };
@@ -292,6 +294,9 @@ export class FakeDb {
             const latest = rows.reduce<Date | null>((m, j) => (m === null || j.created_at > m ? j.created_at : m), null);
             return result([{ count: rows.length, latest }]);
         }
+
+        // ── who the platform owner is (tenant.ts `getPlatformOwnerId`) ──
+        if (/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/.test(sql)) return result(this.platformOwner ? [{ id: this.platformOwner }] : []);
 
         // ── app_settings ──
         if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(sql)) {

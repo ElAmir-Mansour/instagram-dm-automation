@@ -10,7 +10,8 @@
  * never returned to a client — `describeSetting` reports whether one is set and a masked hint.
  */
 import { encryptSecret, decryptSecret } from '../config/crypto.js';
-import { queryOne, queryCount, queryRows } from '../db/query.js';
+import { pool } from '../config/db.js';
+import { queryOne, queryRows } from '../db/query.js';
 import type { AppSettingRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
 import { CONTENT_RULE_PRESETS, type ContentRulePreset } from './profile/types.js';
@@ -377,6 +378,12 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *                   (`src/services/perception/gate.ts`). Written by the code, never by a person. Not a secret.
  *   museProviderNotice the UTC day the owner was last told Meta refused the key, or the account has no credit left (`src/services/perception/alert.ts`):
  *                   once a day, written by the code, never by a person. Not a secret.
+ *   tenantModules   which parts of the product this workspace has, as JSON `{ v, on, preset, metaConnect }` (U3, `src/services/modules.ts`). Absent is
+ *                   everything on (a workspace that predates modules). `ads` and `explainers` are not stored here: they are views of `ads.enabled.<t>` and
+ *                   `explainers.enabled.<t>`. Written by the platform admin only. Not a secret.
+ *   notifyRouting   who in the workspace is told about a handoff and a hot lead, as JSON `{ v, handoff: [userId], hotLeads: [userId] }` (U3, PR D). Absent
+ *                   means every active owner and operator. The workspace owner's. Not a secret.
+ *   goLive          the go-live checklist's own state per workspace, as JSON `{ v, dismissedAt, liveAt, seen }` (U3, PR D). Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
@@ -402,7 +409,26 @@ export const TENANT_SETTING_PREFIXES = {
     museDailyUsd: 'muse.daily_usd.',
     museBudgetNotice: 'muse.budget_notice.',
     museProviderNotice: 'muse.provider_notice.',
+    tenantModules: 'tenant.modules.',
+    notifyRouting: 'notify.routing.',
+    goLive: 'golive.',
 } as const;
+
+/**
+ * Settings that belong to ONE person (a user), whatever the workspace, in the same table: `user.notify.<user uuid>`. Like the tenant families, the key
+ * is built from the session's own user id and `userSettingKey` refuses anything that is not the shape of an id.
+ *
+ *   userNotify   how this person is told: `{ v: 1, telegram: { chatId, linkedAt, name, paused } | null }` (U3, PR D). The chat id is personal data: it is
+ *                never logged, audited or returned, and unlinking deletes it. Not encrypted (it is an id, not a credential).
+ */
+export const USER_SETTING_PREFIXES = {
+    userNotify: 'user.notify.',
+} as const;
+
+export type UserSettingKey = `${(typeof USER_SETTING_PREFIXES)[keyof typeof USER_SETTING_PREFIXES]}${string}`;
+
+/** Every key `getSetting`, `getSettings` and `setSetting` take: the deployment's own, a workspace's, or a person's. */
+export type SettingKey = AppSettingKey | TenantSettingKey | UserSettingKey;
 
 /** Tenant-setting families whose values are secrets: encrypted by `setSetting`, like the keys in SECRET_KEYS. */
 const SECRET_TENANT_PREFIXES: readonly string[] = [TENANT_SETTING_PREFIXES.adsToken];
@@ -415,6 +441,11 @@ const TENANT_ID_PART = /^[A-Za-z0-9-]{1,64}$/;
 export function tenantSettingKey(prefix: (typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES], creatorId: string): TenantSettingKey {
     if (!TENANT_ID_PART.test(creatorId)) throw new Error('tenantSettingKey: not a tenant id.');
     return `${prefix}${creatorId}`;
+}
+
+export function userSettingKey(prefix: (typeof USER_SETTING_PREFIXES)[keyof typeof USER_SETTING_PREFIXES], userId: string): UserSettingKey {
+    if (!TENANT_ID_PART.test(userId)) throw new Error('userSettingKey: not a user id.');
+    return `${prefix}${userId}`;
 }
 
 const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
@@ -436,12 +467,12 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.monitoringPingUrl,
 ]);
 
-export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {
+export function isSecretSetting(key: SettingKey): boolean {
     return SECRET_KEYS.has(key as AppSettingKey) || SECRET_TENANT_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /** The decrypted value, or null when unset. */
-export async function getSetting(key: AppSettingKey | TenantSettingKey): Promise<string | null> {
+export async function getSetting(key: SettingKey): Promise<string | null> {
     const row = await queryOne<Pick<AppSettingRow, 'value' | 'is_secret'>>(
         'SELECT value, is_secret FROM app_settings WHERE key = $1',
         [key]
@@ -454,17 +485,17 @@ export async function getSetting(key: AppSettingKey | TenantSettingKey): Promise
  * Several settings in one round trip: the decrypted value of each key, or null when unset. A key asked for is always in the map.
  * The AI layer reads about a dozen rows per call (`src/services/aiProviders/settings.ts`), so one indexed `ANY` read replaces a dozen.
  */
-export async function getSettings(keys: readonly AppSettingKey[]): Promise<Map<AppSettingKey, string | null>> {
-    const out = new Map<AppSettingKey, string | null>(keys.map((key) => [key, null]));
+export async function getSettings<K extends SettingKey>(keys: readonly K[]): Promise<Map<K, string | null>> {
+    const out = new Map<K, string | null>(keys.map((key) => [key, null]));
     if (keys.length === 0) return out;
     const rows = await queryRows<Pick<AppSettingRow, 'key' | 'value' | 'is_secret'>>(
         'SELECT key, value, is_secret FROM app_settings WHERE key = ANY($1::text[])',
         [keys]
     );
     for (const row of rows) {
-        if (!out.has(row.key as AppSettingKey)) continue;
+        if (!out.has(row.key as K)) continue;
         if (row.value === null || row.value === '') continue;
-        out.set(row.key as AppSettingKey, row.is_secret ? decryptSecret(row.value) : row.value);
+        out.set(row.key as K, row.is_secret ? decryptSecret(row.value) : row.value);
     }
     return out;
 }
@@ -474,16 +505,17 @@ export async function getSettings(keys: readonly AppSettingKey[]): Promise<Map<A
  * Secrets are encrypted here, the one place they are written.
  */
 export async function setSetting(
-    key: AppSettingKey | TenantSettingKey,
+    key: SettingKey,
     value: string | null,
-    updatedBy: string | null
+    updatedBy: string | null,
+    exec: SettingExec = pool
 ): Promise<void> {
     if (value === null || value === '') {
-        await queryCount('DELETE FROM app_settings WHERE key = $1', [key]);
+        await exec.query('DELETE FROM app_settings WHERE key = $1', [key]);
         return;
     }
     const secret = isSecretSetting(key);
-    await queryCount(
+    await exec.query(
         `INSERT INTO app_settings (key, value, is_secret, updated_at, updated_by)
          VALUES ($1, $2, $3, NOW(), $4)
          ON CONFLICT (key) DO UPDATE
@@ -491,6 +523,11 @@ export async function setSetting(
                 updated_at = NOW(), updated_by = EXCLUDED.updated_by`,
         [key, secret ? encryptSecret(value) : value, secret, updatedBy]
     );
+}
+
+/** The pool, or a client inside a transaction (`withTransaction`'s `Exec` fits): what `setSetting` writes through, so a settings write can join one. */
+export interface SettingExec {
+    query(sql: string, params?: unknown[]): Promise<unknown>;
 }
 
 /** A masked hint of a value — enough to recognise it, never enough to use it. */

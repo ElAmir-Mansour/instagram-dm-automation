@@ -17,6 +17,8 @@ import {
     consumeDownloadToken, createDownloadToken, createLegacySession, requireAuth,
 } from '../middleware/auth.js';
 import { invalidateTenantCache, requireLiveSession, resolveTenant } from '../services/tenant.js';
+import { invalidateModulesCache, MODULE_API_PREFIXES, MODULE_IDS, refuseOffPlatforms } from '../services/modules.js';
+import { installFakeDb } from '../services/monteur/testDb.js';
 import { pool } from '../config/db.js';
 import adminRouter from './admin.js';
 import { setLogSink } from '../utils/log.js';
@@ -1022,5 +1024,121 @@ describe('POST /auth/password', () => {
 
         assert.notEqual(reply.status, 401);
         assert.equal(reply.status, 400);
+    });
+});
+
+/**
+ * `GET /api/auth/me` and the module gates (U3, contract §1.7 and §12.1): the two new fields, and that the gates are mounted where they must be.
+ * What the owner sees must not change: every module on, `workspace.owner` true, every other field as it was.
+ */
+describe('GET /api/auth/me: modules and workspace (U3)', () => {
+    const COMPANY_TENANT = '33333333-3333-4333-8333-333333333333';
+    const ADMIN_USER = '44444444-4444-4444-8444-444444444444';
+    const COMPANY_DOC = JSON.stringify({ v: 1, on: ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results'], preset: 'company', metaConnect: 'self' });
+    let settings: Map<string, string>;
+    let db: ReturnType<typeof installFakeDb>;
+    let restoreSink: (() => void) | undefined;
+
+    beforeEach(() => {
+        invalidateModulesCache();
+        invalidateTenantCache();
+        settings = new Map();
+        db = installFakeDb({ platformTenant: TENANT_A });
+        db.routes.push([/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, ([key]) => (settings.has(key) ? { rows: [{ value: settings.get(key), is_secret: false }] } : { rows: [] })]);
+        const previous = setLogSink(() => undefined);
+        restoreSink = () => setLogSink(previous);
+    });
+
+    afterEach(() => {
+        db.restore();
+        restoreSink?.();
+        invalidateModulesCache();
+    });
+
+    async function me(session: Record<string, unknown>) {
+        const layer = (apiRouter as unknown as { stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: Function }> } }> }).stack
+            .find((l) => l.route?.path === '/auth/me' && l.route.methods.get);
+        assert.ok(layer, 'GET /auth/me is mounted');
+        const reply: { status: number; body: any } = { status: 200, body: null };
+        const res = { status(code: number) { reply.status = code; return this; }, json(payload: unknown) { reply.body = payload; return this; } } as unknown as Response;
+        await layer!.route!.stack.at(-1)!.handle({ session, headers: {}, query: {}, params: {}, body: {} } as unknown as Request, res, () => {});
+        return reply;
+    }
+
+    it('the platform owner\'s workspace: every available module, `workspace.owner` true, and Connect as the operator\'s own', async () => {
+        settings.set(`ads.enabled.${TENANT_A}`, 'true');
+        settings.set(`explainers.enabled.${TENANT_A}`, 'true');
+        const { status, body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: TENANT_A });
+        assert.equal(status, 200);
+        assert.deepEqual(body.modules, MODULE_IDS.filter((id) => id !== 'knowledge'));
+        assert.deepEqual(body.workspace, { owner: true, metaConnect: 'operator' });
+        // Nothing else moved.
+        assert.deepEqual(Object.keys(body).sort(), ['modules', 'onboarding', 'role', 'tenantId', 'tenantRole', 'tenants', 'userId', 'workspace']);
+        assert.equal(body.userId, ADMIN_USER);
+        assert.equal(body.tenantId, TENANT_A);
+    });
+
+    it('stays all-on for the owner whatever a document written by hand says', async () => {
+        settings.set(`tenant.modules.${TENANT_A}`, COMPANY_DOC);
+        const { body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: TENANT_A });
+        assert.equal(body.modules.length, 11, 'ads and explainers follow their own (off) switches, as they always did');
+        assert.equal(body.workspace.owner, true);
+    });
+
+    it('a company workspace: its five, not the owner, and the Connect choice it was made with', async () => {
+        settings.set(`tenant.modules.${COMPANY_TENANT}`, COMPANY_DOC);
+        const { body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
+        assert.deepEqual(body.modules, ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results']);
+        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'self' });
+    });
+
+    it('a workspace with no document is legacy: everything it had, so nobody loses a screen on deploy', async () => {
+        const { body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
+        assert.equal(body.modules.length, 11);
+        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'operator' });
+    });
+
+    it('both are null with no tenant, and null (not an error) when the modules cannot be read: the dashboard then hides nothing', async () => {
+        // Only the modules read fails: who the session is still answers.
+        db.routes.unshift([/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, ([key]) => { if (String(key).startsWith('tenant.modules.')) throw new Error('connection terminated'); return { rows: [] }; }]);
+        const broken = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
+        assert.equal(broken.status, 200, 'identity still answers');
+        assert.equal(broken.body.modules, null);
+        assert.equal(broken.body.workspace, null);
+
+        const none = await me({ userId: ADMIN_USER, role: 'platform_admin', tenantId: null });
+        assert.equal(none.body.modules, null);
+        assert.equal(none.body.workspace, null);
+    });
+});
+
+describe('the module gates on the API router (U3)', () => {
+    interface Layer { route?: unknown; handle: any }
+    const stack = (apiRouter as unknown as { stack: Layer[] }).stack;
+    const resolveAt = stack.findIndex((layer) => !layer.route && layer.handle === resolveTenant);
+
+    it('mounts one gate per MODULE_API_PREFIXES row as a non-route layer directly below resolveTenant, each carrying its module id', () => {
+        const mounted = stack.slice(resolveAt + 1, resolveAt + 1 + MODULE_API_PREFIXES.length);
+        assert.deepEqual(mounted.map((l) => !l.route), MODULE_API_PREFIXES.map(() => true));
+        assert.deepEqual(mounted.map((l) => l.handle.moduleId), MODULE_API_PREFIXES.map((r) => r.module));
+        assert.equal(stack[resolveAt + 1 + MODULE_API_PREFIXES.length]!.handle, refuseOffPlatforms);
+    });
+
+    it('calls next() for a workspace that has every module (the owner\'s), and adds no route for the "every mutating route has a guard" rule to trip on', async () => {
+        invalidateModulesCache();
+        invalidateTenantCache();
+        const db = installFakeDb({ platformTenant: TENANT_A });
+        try {
+            for (const layer of stack.slice(resolveAt + 1, resolveAt + 1 + MODULE_API_PREFIXES.length)) {
+                let advanced = false;
+                const req = { method: 'GET', path: '/anything', url: '/anything', body: {}, session: { tenantId: TENANT_A } } as unknown as Request;
+                await layer.handle(req, { status() { return this; }, json() { return this; } }, () => { advanced = true; });
+                assert.equal(advanced, true, layer.handle.moduleId);
+            }
+        } finally {
+            db.restore();
+            invalidateTenantCache();
+            invalidateModulesCache();
+        }
     });
 });

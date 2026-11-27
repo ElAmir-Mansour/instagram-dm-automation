@@ -174,6 +174,21 @@ describe('isAuditAction', () => {
         }
     });
 
+    it('knows the five actions U3 adds, under the names the audit trail will show', () => {
+        assert.deepEqual(
+            [AUDIT_ACTIONS.tenantModulesChanged, AUDIT_ACTIONS.membershipRoleChange, AUDIT_ACTIONS.notifyRoutingWrite, AUDIT_ACTIONS.notifyTelegramLink, AUDIT_ACTIONS.notifyTelegramUnlink],
+            ['tenant.modules_changed', 'membership.role_change', 'notify.routing_write', 'notify.telegram_link', 'notify.telegram_unlink'],
+        );
+        for (const name of ['tenant.modules_changed', 'membership.role_change', 'notify.routing_write', 'notify.telegram_link', 'notify.telegram_unlink']) assert.equal(isAuditAction(name), true, name);
+    });
+
+    it('does not blank the facts of a modules change: before, after and the Connect mode carry no trigger word', () => {
+        const detail = redactDetail({ before: ['inbox'], after: ['inbox', 'results'], meta_connect_before: 'self', meta_connect_after: 'operator', preset: 'custom' })!;
+        assert.deepEqual(detail['after'], ['inbox', 'results']);
+        assert.equal(detail['meta_connect_after'], 'operator');
+        assert.equal(Object.values(detail).includes('[redacted]'), false);
+    });
+
     it('knows the seven actions of illustrated explainers (v59), under the names the audit trail will show', () => {
         const names = [
             AUDIT_ACTIONS.explainerCreated, AUDIT_ACTIONS.explainerApproved, AUDIT_ACTIONS.explainerPicturesApproved, AUDIT_ACTIONS.explainerScheduled,

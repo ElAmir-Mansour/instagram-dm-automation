@@ -277,6 +277,16 @@ export const AUDIT_ACTIONS = {
      * changed, the three switches' states, who it answers (nobody, a list, everyone) with the COUNT of people on the list, and the daily cap: never a sender id.
      */
     museSettingsChanged: 'muse.settings_changed',
+    /** A platform admin changed which modules a workspace has (U3, `PUT /api/admin/tenants/:id/modules`). `detail` holds `before` and `after` (module ids), the Connect mode before and after, and the preset. */
+    tenantModulesChanged: 'tenant.modules_changed',
+    /** A workspace owner changed a team member's role (U3, Team). `detail` holds the user id, the workspace id, the role before and after, and `via: 'team'`. */
+    membershipRoleChange: 'membership.role_change',
+    /** A workspace owner saved who is told about handoffs and hot leads (U3). `detail` holds the two counts, never a user id. */
+    notifyRoutingWrite: 'notify.routing_write',
+    /** A person linked their own Telegram chat to the platform's bot (U3). `detail` holds the user id, never the chat id. */
+    notifyTelegramLink: 'notify.telegram_link',
+    /** A person unlinked their Telegram chat (U3). `detail` holds the user id, never the chat id. */
+    notifyTelegramUnlink: 'notify.telegram_unlink',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
