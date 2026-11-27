@@ -21,6 +21,9 @@ const AdsProposalsPage = {
     view: 'loading',
     /** ProposalView[], newest first, as the server last said. */
     items: [],
+    /** GET /api/studio/status as last read, for the Mac chip (a Claude draft runs on the Mac); null when it could not be read. */
+    mac: null,
+    _macAt: 0,
     /** Drafting proposals being followed: id → { started, timer }. */
     _polls: Object.create(null),
     _seq: 0,
@@ -38,6 +41,8 @@ const AdsProposalsPage = {
         this.destroy();
         this.view = 'loading';
         this.items = [];
+        this.mac = null;
+        this._macAt = 0;
     },
 
     destroy() {
@@ -75,6 +80,7 @@ const AdsProposalsPage = {
         const seq = ++this._seq;
         const gate = Motion.beginLoad(container, () => html`${Motion.tableCard(3, ['', '', ''])}${Motion.busy()}`);
         let answer;
+        const macRead = this.readMac();
         try {
             answer = await API.getAdsProposals(this.SHOWN);
         } catch (err) {
@@ -90,6 +96,7 @@ const AdsProposalsPage = {
             return false;
         }
         gate.done();
+        await macRead;
         if (seq !== this._seq) return false;
         this.items = (answer && Array.isArray(answer.proposals) ? answer.proposals : []).filter((p) => p && p.id);
         this.view = 'ready';
@@ -97,6 +104,24 @@ const AdsProposalsPage = {
         this.items.filter((p) => p.state === 'drafting').forEach((p) => this.startPoll(p.id));
         Motion.announce(t('ads.proposals.loaded'));
         return true;
+    },
+
+    /** The Mac's state for the chip. A failed read leaves the chip out: nothing is claimed about a Mac that could not be asked. */
+    async readMac() {
+        const seq = this._seq;
+        try {
+            const status = await API.getStudioStatus();
+            if (seq === this._seq) { this.mac = status && typeof status === 'object' ? status : null; this._macAt = Date.now(); }
+        } catch {
+            if (seq === this._seq) this.mac = null;
+        }
+    },
+
+    /** The Mac chip, only for a tenant whose Claude drafts run on the Mac. */
+    macMarkup() {
+        const m = this.mac;
+        if (!m || !m.claude || m.claude.applies !== true) return '';
+        return UI.workerChip({ worker: m.worker, jobs: m.jobs, claude: m.claude }, { id: 'adsprop-worker-chip' });
     },
 
     paint() {
@@ -156,6 +181,13 @@ const AdsProposalsPage = {
             }
         }
         if (seq !== this._seq || !this._polls[id]) return;
+        // A draft that waits is the moment the Mac chip matters: look again (at most every 30 s), and repaint only the chip.
+        if (Date.now() - this._macAt > 30000) {
+            await this.readMac();
+            const host = document.getElementById('adsprop-mac');
+            if (host && seq === this._seq) { host.innerHTML = esc(this.macMarkup()); UI.icons(host); }
+            if (seq !== this._seq || !this._polls[id]) return;
+        }
         const p = answer && answer.proposal;
         if (p) this.upsert(p);
         if (p && p.state !== 'drafting') {
@@ -222,6 +254,7 @@ const AdsProposalsPage = {
                     ${UI.helpLink('ads#ai-proposals', t('ads.proposals.help.how'))}
                     · ${UI.helpLink('ads#what-ai-sees', t('ads.proposals.help.sees'))}
                 </p>
+                <div class="adsprop-mac" id="adsprop-mac">${this.macMarkup()}</div>
                 ${live.length ? html`<div class="adsprop-list" id="adsprop-live">${live.map((p) => this.cardMarkup(p))}</div>`
                     : UI.emptyState({ icon: 'sparkles', title: t('ads.proposals.empty.title'), body: t('ads.proposals.empty.body') })}
                 ${earlier.length ? html`

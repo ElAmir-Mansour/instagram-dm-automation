@@ -824,23 +824,15 @@ const MonteurPage = {
         return t('monteur.run.last', { when: age.text, what: parts.join(' · ') });
     },
 
-    /** The worker pill, and — while it is off — what waits for it and how to bring it back. */
+    /** The Mac chip (`UI.workerChip`), and — while the Mac is away — what waits for it and how to bring it back. */
     workerMarkup() {
         const w = this.view.worker;
-        const seen = w.lastSeen ? UI.relativeAge(w.lastSeen) : null;
         const name = this.workerName();
         return html`
             <div class="studio-status-item${w.online ? '' : html.raw(' is-wide')}">
                 <p class="studio-status-head">
-                    <span class="health-pill ${w.online ? html.raw('health-fresh') : html.raw('health-off')}" id="mt-worker-pill">
-                        <span class="health-dot" aria-hidden="true"></span>
-                        ${w.online ? t('studio.worker.online') : t('studio.worker.offline')}
-                    </span>
-                    ${UI.helpLink('worker', t('help.link.worker'), { iconOnly: true })}
+                    ${UI.workerChip({ worker: w, jobs: this.view.jobs, claude: this.view.claude }, { id: 'mt-worker-pill' })}
                     ${w.name ? html`<span class="text-meta" dir="auto">${w.name}</span>` : ''}
-                    <span class="text-meta"${seen ? html` title="${seen.title}"` : ''}>
-                        ${seen ? t('studio.worker.lastSeen', { when: seen.text }) : t('studio.worker.neverSeen')}
-                    </span>
                 </p>
                 ${w.online ? '' : html`
                     <div class="studio-callout is-warning" id="mt-worker-offline">

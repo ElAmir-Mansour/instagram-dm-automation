@@ -9,7 +9,8 @@ import type {
 import { getTikTokPostingFlags } from '../appSettings.js';
 import { toIso } from '../health.js';
 import { type Exec, StudioError, withTransaction } from '../studio/common.js';
-import { enqueueJob } from '../studio/jobs.js';
+import { enqueueJob, jobCounts } from '../studio/jobs.js';
+import { claudeStatusFor, type ClaudeStatusView } from '../studio/macHealth.js';
 import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
 import { nextFreeSlots } from '../studio/slots.js';
 import { workerSummary } from '../studio/worker.js';
@@ -97,6 +98,9 @@ export interface MonteurView {
     /** The latest scan to finish; `error` is a failed one's message (a folder outside the allowed roots, say). */
     last_scan: { at: string; added: number; skipped: number; missing: boolean; error: string | null } | null;
     worker: { online: boolean; lastSeen: string | null; name: string | null };
+    /** What the Mac chip says (UI.workerChip): whether Claude on the Mac is signed out, and how many jobs wait for it. */
+    claude: ClaudeStatusView;
+    jobs: { pending: number; claimed: number; waiting: number };
     pending: { scan: boolean; folder_pick: boolean };
     /** What Approve would take now. */
     next_slot: string | null;
@@ -253,7 +257,7 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
     const timezone = settings.schedule.timezone;
     // A scheduled reel whose posts are gone is back in review before the page is read.
     await releaseOrphanedClips(pool, creatorId);
-    const [lastScan, open, worker, slots, sources, clips, lessons, privacy, exhausted] = await Promise.all([
+    const [lastScan, open, worker, slots, sources, clips, lessons, privacy, exhausted, claude, jobs] = await Promise.all([
         pool.query<{ updated_at: Date; status: string; result: Record<string, unknown> | null; error: string | null }>(
             `SELECT updated_at, status, result, error FROM studio_jobs
               WHERE creator_id = $1 AND kind = 'monteur_scan' AND status IN ('done', 'failed')
@@ -286,6 +290,8 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
         lessonsView(creatorId, now),
         tiktokPrivacyNow(m),
         courseExhausted(pool, creatorId, m),
+        claudeStatusFor(creatorId),
+        jobCounts(creatorId),
     ]);
     const scan = lastScan.rows[0];
     const result = scan?.result ?? {};
@@ -306,6 +312,8 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
             }
             : null,
         worker,
+        claude,
+        jobs,
         pending: { scan: kinds.has('monteur_scan'), folder_pick: kinds.has('pick_folder') },
         next_slot: slots[0] ?? null,
         tiktok_privacy: privacy,

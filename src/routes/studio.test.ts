@@ -428,6 +428,8 @@ describe('operator routes', () => {
             lessons: { total: 34, indexed: 30, indexing: 0, failed: 0 },
             jobs: { pending: 2, claimed: 0, waiting: 0 },
             tiktok: { audited: false, queued: 0 },
+            // Tenant A is not the platform's owner here, so the Mac chip is told nothing about Claude (the flag is the platform's).
+            claude: { applies: false, signedOutAt: null },
         });
         for (const s of statements.filter((s) => /creator_id = \$1/.test(s.sql))) assert.equal(s.params[0], TENANT_A);
     });
