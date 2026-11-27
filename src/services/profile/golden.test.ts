@@ -57,6 +57,8 @@ import type { GrowthSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { AI_DISCLOSURE_LINE } from '../../webhook/meta-payload.js';
 import { starterPersona } from '../ai.js';
+import { loadRenderBrand } from '../brand/load.js';
+import { renderBrandOf, type RenderBrand } from '../brand/resolve.js';
 import { NOW as SALES_NOW, withSales } from '../dmSales/testFixtures.js';
 import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
@@ -239,6 +241,8 @@ type Variant = {
     editor: ProfileContext<'clip_edit'> | undefined;
     /** What the Studio's writer is told about the creator (P9), by the same route: the `carousel` context and whether the built-ins are shown. */
     wording: StudioWording;
+    /** The Brand Kit's logo and switch, by the same route (`renderBrandOf` of the profile that path reads): none, for every fixture. */
+    brand: RenderBrand;
 };
 const FIXTURES = [
     { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
@@ -277,6 +281,25 @@ async function wordingThroughTheReader(settings: StudioSettings, growth: GrowthS
     }
 }
 /**
+ * Path (c) for the Brand Kit: what the real `loadRenderBrand` returns for a tenant whose profile is stored in the stand-in database. Every golden is
+ * built through the brand path, so a payload that moved for a tenant with no logo and the switch off fails here, and no golden file changes.
+ */
+async function brandThroughTheReader(settings: StudioSettings, growth: GrowthSettings | undefined): Promise<RenderBrand> {
+    const state = emptyState();
+    state.profiles.set(OWNER, { profile: throughJsonb(profileFromLegacy(settings, growth)), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    const previousSink = setLogSink(() => {});
+    try {
+        const brand = await loadRenderBrand(OWNER);
+        assert.equal(db.ran(/FROM creator_profiles/).length, 1, 'the loader asked for the stored profile');
+        return brand;
+    } finally {
+        setLogSink(previousSink);
+        db.restore();
+    }
+}
+
+/**
  * His context on the infographic surface (tech educator, tech, فصحى), reached the three ways: described from his rows (today, no
  * stored profile), from his stored profile, and from the real `profileContext`. The writer is handed it by `infographicContext`,
  * so each way must write the same bytes into the same goldens.
@@ -286,20 +309,28 @@ const INFOGRAPHIC_CONTEXT = {
     'through the profile': contextFor(storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH), 'infographic', 1),
     'through the real readers': await infographicContextThroughTheReader(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH),
 } as const;
+/** And the brand each of those three comes by, the same way (the Brand Kit's logo and switch: none). */
+const INFOGRAPHIC_BRAND = {
+    today: renderBrandOf(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)),
+    'through the profile': renderBrandOf(storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)),
+    'through the real readers': await brandThroughTheReader(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH),
+} as const;
 /** Each fixture three times, into the same golden: as it is, through the profile, and through the real reader. */
 const GROWTH_OF = (owner: boolean): GrowthSettings | undefined => (owner ? ELAMIR_GROWTH : undefined);
 const VARIANTS: Variant[] = [];
 // One at a time: each reader swaps the one shared pool for a stand-in, and the platform owner is cached for a moment.
 for (const f of FIXTURES) {
     VARIANTS.push(
-        { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined, wording: wordingOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner)), null) },
+        { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined, wording: wordingOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner)), null), brand: renderBrandOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner))) },
         {
             slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile',
             editor: contextFor(storedProfile(f.settings, GROWTH_OF(f.owner)), 'clip_edit', 1), wording: wordingOf(storedProfile(f.settings, GROWTH_OF(f.owner)), 1),
+            brand: renderBrandOf(storedProfile(f.settings, GROWTH_OF(f.owner))),
         },
         {
             slug: f.slug, settings: READ[f.slug].settings, set: f.set, lang: f.lang, via: 'readers',
             editor: READ[f.slug].editor, wording: await wordingThroughTheReader(f.settings, GROWTH_OF(f.owner), f.owner),
+            brand: await brandThroughTheReader(f.settings, GROWTH_OF(f.owner)),
         },
     );
     // A profile that cannot be read is answered by who asks: the owner keeps his wording (`editorKitFor`, `studioWording`: his legacy
@@ -308,6 +339,7 @@ for (const f of FIXTURES) {
         VARIANTS.push({
             slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'unreadable',
             editor: legacyContext('clip_edit'), wording: await wordingThroughTheReader(f.settings, GROWTH_OF(true), true, true),
+            brand: renderBrandOf(profileFromLegacy(f.settings, GROWTH_OF(true))),
         });
     }
 }
@@ -315,7 +347,7 @@ const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === '
 /** The Studio and Monteur builders' output for a variant, built once: the two sections below each check their half. */
 const surfaces = new Map<Variant, Promise<SurfaceEntry[]>>();
 const studioEntries = (v: Variant, prefixes: readonly string[]): Promise<SurfaceEntry[]> => {
-    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set, editor: v.editor, carousel: v.wording }));
+    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set, editor: v.editor, carousel: v.wording, brand: v.brand }));
     return surfaces.get(v)!.then((all) => all.filter((e) => prefixes.some((p) => e.name.startsWith(p))));
 };
 /**
@@ -448,7 +480,7 @@ describe('Monteur golden prompts', () => {
     // The pick and the copy are written from the profile's contexts: his, however the code comes by them, is the text he always had.
     for (const [via, { kits }] of Object.entries(OWNER_REELS)) {
         it(`pick and copy: the pick's prompts, the copy's prompts and the clip copy, built from his kits (${via})`, async (t) => {
-            const entries = await studioSurface(ELAMIR_SETTINGS, { lang: 'ar', slug: 'elamir', carousel: wordingOf(OWNER_PROFILE, 1), reelKits: kits });
+            const entries = await studioSurface(ELAMIR_SETTINGS, { lang: 'ar', slug: 'elamir', carousel: wordingOf(OWNER_PROFILE, 1), brand: renderBrandOf(OWNER_PROFILE), reelKits: kits });
             await matchEach(t, entries.filter((e) => e.name.startsWith('monteur.pick') || e.name.startsWith('monteur.copy')));
         });
     }
@@ -466,7 +498,7 @@ describe('Infographic golden prompts', () => {
 
     for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)], ['through the real readers', READ.seed.settings]] as const) {
         it(`renderPayload and payloadBrand: the job the Mac gets in write mode and the brand it draws, from his seed settings (${via})`, async (t) => {
-            await matchEach(t, infographicSurface(seed, { slug: 'seed', ctx: INFOGRAPHIC_CONTEXT[via] }));
+            await matchEach(t, infographicSurface(seed, { slug: 'seed', ctx: INFOGRAPHIC_CONTEXT[via], brand: INFOGRAPHIC_BRAND[via] }));
         });
     }
 

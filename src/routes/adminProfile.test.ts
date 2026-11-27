@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
 import { AUDIT_ACTIONS } from '../services/audit.js';
+import { setLogoCheckDeps } from '../services/brand/logoCheck.js';
 import { defaultProfile } from '../services/profile/defaults.js';
 import { resetProfileTableWarning } from '../services/profile/store.js';
 import { installProfileDb, OWNER, PLATFORM_OWNER_SQL, type ProfileDb, seededState, setPlatformOwner, type State, USER } from '../services/profile/testDb.js';
@@ -465,5 +466,53 @@ describe('PATCH /api/admin/tenants/:id/profile', () => {
             assert.equal(reply.status, 503);
             assert.equal(reply.body.code, 'PROFILE_STORAGE_MISSING');
         });
+    });
+});
+
+// ─── The logo, on a tenant's behalf (Brand Kit, contract §1.5, §2) ──────────────────────────
+
+describe('PATCH /tenants/:id/profile with a logo', () => {
+    const ID = '6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23';
+    const URL = `https://msg-response-auto.vercel.app/api/uploads/${ID}`;
+    const u32 = (n: number): number[] => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const chunk = (type: string, data: number[]): number[] => [...u32(data.length), ...[...type].map((c) => c.charCodeAt(0)), ...data, 0, 0, 0, 0];
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...chunk('IHDR', [...u32(600), ...u32(600), 8, 2, 0, 0, 0]), ...chunk('IDAT', [1]), ...chunk('IEND', [])]);
+    const claim = { url: URL, width: 600, height: 600, alpha: false, tone: 'light', colour: '#ffffff' };
+    let restoreCheck: ReturnType<typeof setLogoCheckDeps>;
+    let owner: string;
+
+    beforeEach(() => {
+        owner = NEW;
+        restoreCheck = setLogoCheckDeps({
+            readRow: async () => ({ creator_id: owner, mime_type: 'image/png', size_bytes: PNG.length, is_private: false }),
+            readBytes: async () => PNG,
+            publicBase: async () => 'https://msg-response-auto.vercel.app',
+            now: () => new Date('2026-12-01T09:30:00.000Z'),
+        });
+    });
+    afterEach(() => setLogoCheckDeps(restoreCheck));
+
+    it('is checked against the TENANT\'s uploads, stored, and audited twice with on_behalf; logoChange never reaches the answer', async () => {
+        store(NEW, newTenant(), 1);
+        const reply = await patch(NEW, { version: 1, patch: { brand: { logos: { main: claim } } } });
+        assert.equal(reply.status, 200);
+        assert.ok(!('logoChange' in reply.body));
+        assert.equal(stored(NEW).brand.logos!.main!.url, URL);
+        assert.equal(stored(NEW).brand.logos!.main!.colour, '#FFFFFF');
+        assert.equal(stored(NEW).brand.logo_url, URL);
+        assert.deepEqual(audits.map((a) => a.action), ['profile.write', 'brand.logo_upload']);
+        assert.deepEqual(audits[1]!.detail, { change: 'set', version: 2, width: 600, height: 600, alpha: false, on_behalf: true });
+        assert.ok(!JSON.stringify(audits).includes(ID), 'no URL in any audit row');
+    });
+
+    it('an upload of another tenant (the admin\'s own, say) is refused: a logo on behalf of another workspace is not supported', async () => {
+        store(NEW, newTenant(), 1);
+        owner = OWNER;
+        const reply = await patch(NEW, { version: 1, patch: { brand: { logos: { main: claim } } } });
+        assert.equal(reply.status, 400);
+        assert.equal(reply.body.code, 'BRAND_LOGO_INVALID');
+        assert.deepEqual(reply.body.problems, ['logo.not_yours']);
+        assert.deepEqual(writes(), []);
+        assert.deepEqual(audits, []);
     });
 });

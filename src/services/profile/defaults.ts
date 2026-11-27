@@ -9,7 +9,7 @@
 import { defaultInfographicConfig } from '../studio/settingsTypes.js';
 import type { ContentRulePreset, CreatorProfile, Lang, Offer, OfferCampaign, OfferSales } from './types.js';
 import {
-    ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
+    ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, LOGO_TONES, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
     PRONOUNS, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES, THEMES,
 } from './types.js';
 
@@ -61,6 +61,18 @@ export function defaultProfile({ lang = 'ar', rules = ['no_women_imagery'] }: { 
     };
 }
 
+/**
+ * What `POST /api/admin/tenants` stores for a new tenant: `defaultProfile` plus the "use my brand colours" switch ON, so a new
+ * tenant's carousels, explainers and reels follow its own colours. The switch is NOT in `defaultProfile()`: `upgradeProfile` merges
+ * every stored profile over that, so a `true` there would switch it on for every stored profile that lacks the key, the owner's
+ * included. Absent means off.
+ */
+export function newTenantProfile(opts: { lang?: Lang; rules?: readonly ContentRulePreset[] } = {}): CreatorProfile {
+    const profile = defaultProfile(opts);
+    profile.brand.use_brand_colours = true;
+    return profile;
+}
+
 /** A blank offer: what an offer saved before a field existed reads as. */
 function blankOffer(): Omit<Offer, 'campaign'> {
     return { id: '', kind: 'other', name: '', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: false };
@@ -87,6 +99,7 @@ export function blankSales(): OfferSales {
 type Loose = Record<string, unknown>;
 const isObj = (v: unknown): v is Loose => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isString = (v: unknown): v is string => typeof v === 'string';
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const member = (list: readonly string[]) => (v: unknown): boolean => typeof v === 'string' && list.includes(v);
 
 /** Paths with an index in them are looked up with the index left out: `offers[2].kind` is `offers[].kind`. */
@@ -129,7 +142,15 @@ const ITEMS: Record<string, (v: unknown) => boolean> = {
 const BY_HAND = new Set(['language.surfaces', 'socials.links']);
 
 /** Keys the default has none for because they are optional, with what each must be. */
-const OPTIONAL: Record<string, Record<string, (v: unknown) => boolean>> = { audience: { timezone: isString }, dm: { voice_guide: isString } };
+const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
+const isLogoAssetShape = (v: unknown): boolean =>
+    isObj(v) && isString(v.url) && isNumber(v.width) && isNumber(v.height) && isBoolean(v.alpha) && member(LOGO_TONES)(v.tone) && isString(v.colour)
+    && (v.added_at === undefined || isString(v.added_at));
+/** Types only, like the reader's other predicates: another slot key (a later release's) is kept as stored. */
+const isLogos = (v: unknown): boolean => isObj(v) && (v.main === undefined || isLogoAssetShape(v.main));
+const OPTIONAL: Record<string, Record<string, (v: unknown) => boolean>> = {
+    audience: { timezone: isString }, dm: { voice_guide: isString }, brand: { use_brand_colours: isBoolean, logos: isLogos },
+};
 
 const join = (path: string, key: string): string => (path ? `${path}.${key}` : key);
 

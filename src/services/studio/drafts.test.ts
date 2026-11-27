@@ -15,10 +15,12 @@ import { invalidateTenantCache } from '../tenant.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
 import {
-    buildGenContext, createDraft, parseDraftInput, patchDraft, planDrafts, preferPrimaryKeyword, presentDraft, rewriteDraftSlide, setGeneration,
+    buildGenContext, carouselKit, createDraft, parseDraftInput, patchDraft, planDrafts, preferPrimaryKeyword, presentDraft, renderPayload, rewriteDraftSlide, setGeneration,
     STALE_GENERATION_ERROR, STALE_GENERATION_MS,
 } from './drafts.js';
 import type { GenOptions } from './generate.js';
+import { brandColours, NO_BRAND } from '../brand/resolve.js';
+import { defaultProfile } from '../profile/defaults.js';
 import { defaultStudioSettings } from './settings.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -500,7 +502,7 @@ describe('createDraft — profile_version', () => {
 
     it('still creates the draft, with null, when the version read fails', async () => {
         const { reads, route } = profileReads({ [TENANT]: 7 });
-        reads.failAt = 2; // the first read is getStudioSettings' own, the second the stamp's
+        reads.failAt = 3; // the first two are getStudioSettings' own and the Brand Kit's (`loadRenderBrand`, which has no request cache here), the third the stamp's
         routes.push(route);
         library();
         generate();
@@ -537,5 +539,79 @@ describe('createDraft — profile_version', () => {
         const insert = order.findIndex((s) => /^INSERT INTO carousel_drafts/.test(s));
         assert.ok(stampRead >= 0, 'a second profile read, after the settings’ own: the stamp');
         assert.ok(stampRead < insert && insert < askedAfter, 'stamp read, then the row, then the model');
+    });
+});
+
+// ─── The Brand Kit (docs: contract §3, §4) ──────────────────────────────────────────────
+
+describe('the carousel payload and the Brand Kit', () => {
+    const LOGO = {
+        url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark' as const, colour: '#0E3B5C',
+    };
+    const NO_SHOTS: Carousel = { ...CAROUSEL, slides: [{ kind: 'cover', title: 'عنوان' }, { kind: 'point', title: 'نقطة' }, { kind: 'cta' }] };
+    const settings = defaultStudioSettings();
+
+    it('NO_BRAND gives settings.brand itself: the very object, so the bytes are today\'s (I1)', async () => {
+        const out = await renderPayload(TENANT, DRAFT, NO_SHOTS, {}, settings, NO_BRAND);
+        assert.equal(out.brand, settings.brand);
+        assert.equal(JSON.stringify(out.brand), JSON.stringify(settings.brand));
+        assert.equal(carouselKit(settings.brand, { logo: null, colours: null }), settings.brand);
+    });
+
+    it('a logo with the switch off: only brand.logo is added, last, after theme', async () => {
+        const out = await renderPayload(TENANT, DRAFT, NO_SHOTS, {}, settings, { logo: LOGO, colours: null });
+        assert.deepEqual(Object.keys(out.brand), [...Object.keys(settings.brand), 'logo']);
+        assert.equal(Object.keys(out.brand).at(-2), 'theme');
+        assert.equal(JSON.stringify(out.brand.logo), JSON.stringify(LOGO));
+        const { logo: _logo, ...rest } = out.brand;
+        assert.equal(JSON.stringify(rest), JSON.stringify(settings.brand));
+        assert.equal(out.carousel.accent, NO_SHOTS.accent);
+    });
+
+    it('a logo with the switch on: colors.ink is the brand\'s, in place; paper, muted and the carousel\'s own accent do not move (I8)', async () => {
+        const colours = brandColours('#0E3B5C', '#F2A33A');
+        const out = await renderPayload(TENANT, DRAFT, NO_SHOTS, {}, settings, { logo: LOGO, colours });
+        assert.deepEqual(Object.keys(out.brand.colors), ['ink', 'paper', 'muted']);
+        assert.equal(out.brand.colors.ink, '#030B11');
+        assert.equal(out.brand.colors.paper, settings.brand.colors.paper);
+        assert.equal(out.brand.colors.muted, settings.brand.colors.muted);
+        assert.deepEqual(Object.keys(out.brand), [...Object.keys(settings.brand), 'logo']);
+        assert.equal(out.carousel.accent, '#22C7F0');
+        assert.deepEqual(out.brand.palette, settings.brand.palette);
+        assert.equal(settings.brand.colors.ink, defaultStudioSettings().brand.colors.ink, 'the settings object itself is not changed');
+    });
+
+    it('the switch alone moves the ink and adds no key', async () => {
+        const out = await renderPayload(TENANT, DRAFT, NO_SHOTS, {}, settings, { logo: null, colours: brandColours('#0E3B5C', '#F2A33A') });
+        assert.deepEqual(Object.keys(out.brand), Object.keys(settings.brand));
+        assert.equal(out.brand.colors.ink, '#030B11');
+    });
+
+    it('patchDraft (which queues a render) carries the tenant\'s stored logo into the render job, from the profile', async () => {
+        const profile = defaultProfile();
+        profile.brand.logo_url = LOGO.url;
+        profile.brand.logos = { main: { ...LOGO, added_at: '2026-12-01T09:30:00.000Z' } };
+        profile.brand.use_brand_colours = true;
+        routes.push([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+        library(draftRow({ status: 'ready' }));
+        setGeneration({ validateCarousel: () => [] });
+        await patchDraft(TENANT, DRAFT, { carousel: CAROUSEL });
+        const job = renderJob();
+        assert.deepEqual(job.brand.logo, LOGO);
+        assert.equal(job.brand.colors.ink, '#030B11');
+        assert.equal(Object.keys(job.brand).at(-1), 'logo');
+    });
+
+    it('buildGenContext: the switch makes the palette the one readable brand accent; off, the settings\' own palette (a typed accent still wins in pickAccent)', async () => {
+        routes.push([/FROM studio_settings/, () => ({ rows: [{ brand: { palette: ['#111111', '#222222'] } }] })]);
+        assert.deepEqual((await buildGenContext(TENANT)).palette, ['#111111', '#222222']);
+        const profile = defaultProfile();
+        profile.brand.use_brand_colours = true;
+        profile.brand.accent = '#1B2A41';
+        routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+        const ctx = await buildGenContext(TENANT);
+        assert.equal(ctx.palette!.length, 1);
+        assert.deepEqual(ctx.palette, [brandColours(profile.brand.primary, '#1B2A41').carouselAccent]);
+        assert.notEqual(ctx.palette![0], '#1B2A41', 'a dark accent is lightened until it reads on the carousel page');
     });
 });

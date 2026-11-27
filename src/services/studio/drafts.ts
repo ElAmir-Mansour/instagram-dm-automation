@@ -18,12 +18,14 @@
 import { pool } from '../../config/db.js';
 import { queryRows } from '../../db/query.js';
 import type {
-    CarouselDraftRow, DraftAngle, DraftCampaign, DraftInput, LessonRow, Moment, RenderCarouselPayload, ShotSpec,
+    BrandKit, CarouselDraftRow, DraftAngle, DraftCampaign, DraftInput, LessonRow, Moment, RenderCarouselPayload, ShotSpec,
     StudioSettings,
 } from '../../db/rows.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { seoForWriter } from '../growth/settings.js';
+import { loadRenderBrand } from '../brand/load.js';
+import type { RenderBrand } from '../brand/resolve.js';
 import { inFlightTriggers } from '../monteur/keywords.js';
 import { profileContextOrLegacy, ProfileUnreadableError } from '../profile/context.js';
 import { profileVersionFor } from '../profile/stamp.js';
@@ -364,11 +366,25 @@ export async function fillMomentShots(
 }
 
 /**
+ * The brand the carousel template gets: the settings' own kit, with the Brand Kit laid over it (docs: contract §4). No logo and the
+ * switch off gives `settings.brand` itself, the very object (I1). The switch moves the page `ink` in place; the logo is appended last.
+ * A carousel's own `accent` is never touched here (I8).
+ */
+export function carouselKit(kit: BrandKit, brand: RenderBrand): RenderCarouselPayload['brand'] {
+    if (brand.logo === null && brand.colours === null) return kit;
+    return {
+        ...kit,
+        ...(brand.colours ? { colors: { ...kit.colors, ink: brand.colours.carouselInk } } : {}),
+        ...(brand.logo ? { logo: brand.logo } : {}),
+    };
+}
+
+/**
  * What the worker needs to render: the carousel, each shot the slides use with its video path,
- * and the tenant's brand, CTA words and product facts as they are now.
+ * and the tenant's brand, CTA words and product facts as they are now. `brand` is `loadRenderBrand`'s, read before any transaction.
  */
 export async function renderPayload(
-    creatorId: string, draftId: string, carousel: Carousel, shots: Record<string, ShotSpec>, settings: StudioSettings
+    creatorId: string, draftId: string, carousel: Carousel, shots: Record<string, ShotSpec>, settings: StudioSettings, brand: RenderBrand
 ): Promise<RenderCarouselPayload> {
     const used = unique(carousel.slides.map(slideShotName).filter((n): n is string => Boolean(n)));
     const problems = used.filter((name) => !shots[name]).map((name) => `A slide uses the shot "${name}", which this draft does not have`);
@@ -391,7 +407,7 @@ export async function renderPayload(
     if (problems.length) throw problemsError(problems, 'the shots');
     return {
         draftId, carousel, shots: payloadShots,
-        brand: settings.brand, cta: settings.cta.slide, facts: settings.product.facts,
+        brand: carouselKit(settings.brand, brand), cta: settings.cta.slide, facts: settings.product.facts,
     };
 }
 
@@ -438,8 +454,9 @@ export async function studioWording(creatorId: string): Promise<StudioWording> {
  *     owner has none (nothing can write one for him), so his writer's prompt is the one the goldens pin. No lookup of who the owner is.
  */
 export async function buildGenContext(creatorId: string, settings?: StudioSettings): Promise<GenContext> {
-    const [studio, drafts, captions, accents, campaigns, seo, reels, wording, voiceExamples] = await Promise.all([
+    const [studio, brand, drafts, captions, accents, campaigns, seo, reels, wording, voiceExamples] = await Promise.all([
         settings ?? getStudioSettings(creatorId),
+        loadRenderBrand(creatorId),
         queryRows<{ title: string | null; idea: string | null }>(
             `SELECT carousel->'slides'->0->>'title' AS title, input->>'idea' AS idea
                FROM carousel_drafts WHERE creator_id = $1
@@ -480,7 +497,8 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         recentAccents: unique(accents.map((a) => a.accent).filter((a): a is string => Boolean(a))),
         activeKeywords: unique([...campaigns.flatMap((c) => (c.trigger_keyword ?? '').split(/[,،]/)), ...reels.keywords, ...reels.variants]
             .map((k) => k.trim()).filter(Boolean)),
-        palette: [...studio.brand.palette],
+        // The switch sets the default of a NEW carousel; a per-draft accent the operator typed still wins (`pickAccent`).
+        palette: brand.colours ? [brand.colours.carouselAccent] : [...studio.brand.palette],
         settings: studio,
         wording,
         seo,
@@ -525,9 +543,10 @@ export async function preferPrimaryKeyword<T extends { carousel: Carousel; campa
  */
 export async function createDraft(creatorId: string, raw: unknown): Promise<Draft> {
     const input = parseDraftInput(raw);
-    const [sources, settings] = await Promise.all([
+    const [sources, settings, brand] = await Promise.all([
         loadSources(creatorId, input.lessonIds, true),
         getStudioSettings(creatorId),
+        loadRenderBrand(creatorId),
     ]);
     // The profile the carousel is written under (profile/stamp.ts): read once, before the model is asked.
     const profileVersion = await profileVersionFor(creatorId);
@@ -583,7 +602,7 @@ export async function createDraft(creatorId: string, raw: unknown): Promise<Draf
 
     let payload: RenderCarouselPayload;
     try {
-        payload = await renderPayload(creatorId, draft.id, generated.carousel, shots, settings);
+        payload = await renderPayload(creatorId, draft.id, generated.carousel, shots, settings, brand);
     } catch (err) {
         if (!(err instanceof StudioError)) throw err;
         return fail(err.message, { carousel: generated.carousel, shots, campaign });
@@ -617,14 +636,15 @@ export async function patchDraft(creatorId: string, draftId: string, body: unkno
     const campaign = parseCampaign('campaign' in body ? body.campaign : draft.campaign, carousel, problems);
     if (problems.length) throw problemsError(problems, 'this draft');
 
-    const [shots, settings] = await Promise.all([
+    const [shots, settings, brand] = await Promise.all([
         fillMomentShots(creatorId, carousel as Carousel, parsedShots),
         getStudioSettings(creatorId),
+        loadRenderBrand(creatorId),
     ]);
     const rules = rulesProblems(carousel as Carousel, shots, settings);
     if (rules.length) throw problemsError(rules, 'this carousel');
 
-    const payload = await renderPayload(creatorId, draft.id, carousel as Carousel, shots, settings);
+    const payload = await renderPayload(creatorId, draft.id, carousel as Carousel, shots, settings, brand);
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
             `UPDATE carousel_drafts
@@ -657,9 +677,10 @@ export async function rewriteDraftSlide(creatorId: string, draftId: string, body
     }
     const instruction = typeof b.instruction === 'string' && b.instruction.trim() ? b.instruction.trim().slice(0, 500) : undefined;
 
-    const [sources, settings] = await Promise.all([
+    const [sources, settings, brand] = await Promise.all([
         loadSources(creatorId, draft.input?.lessonIds ?? [], false),
         getStudioSettings(creatorId),
+        loadRenderBrand(creatorId),
     ]);
     let slide: Slide;
     try {
@@ -675,7 +696,7 @@ export async function rewriteDraftSlide(creatorId: string, draftId: string, body
     const rules = rulesProblems(carousel, shots, settings);
     if (rules.length) throw problemsError(rules, 'the rewritten slide', 422);
 
-    const payload = await renderPayload(creatorId, draft.id, carousel, shots, settings);
+    const payload = await renderPayload(creatorId, draft.id, carousel, shots, settings, brand);
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
             `UPDATE carousel_drafts SET carousel = $3::jsonb, shots = $4::jsonb, updated_at = NOW()
@@ -697,11 +718,11 @@ export async function rewriteDraftSlide(creatorId: string, draftId: string, body
 export async function renderDraft(creatorId: string, draftId: string): Promise<StudioJobView> {
     const draft = await loadDraft(pool, creatorId, draftId);
     assertEditable(draft);
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     const problems = carouselShapeProblems(draft.carousel);
     if (problems.length === 0) problems.push(...rulesProblems(draft.carousel!, draft.shots ?? {}, settings));
     if (problems.length) throw problemsError(problems, 'this draft');
-    const payload = await renderPayload(creatorId, draft.id, draft.carousel!, draft.shots ?? {}, settings);
+    const payload = await renderPayload(creatorId, draft.id, draft.carousel!, draft.shots ?? {}, settings, brand);
     return withTransaction(async (client) => (await enqueueRender(client, creatorId, payload)).job);
 }
 

@@ -8,6 +8,7 @@
 import type {
     ExplainerAudio, ExplainerDrawPayload, ExplainerPicture, ExplainerRenderPayload, ExplainerRow, ExplainerSceneRow, ExplainerVoicePayload, ExplainerWritePayload,
 } from '../../db/rows.js';
+import type { RenderBrand } from '../brand/resolve.js';
 import { THINK_MODEL } from '../monteur/think.js';
 import type { ExplainerTrack, StudioSettings } from '../studio/settingsTypes.js';
 import { ExplainerError } from './errors.js';
@@ -139,11 +140,11 @@ export function renderReadiness(
 /**
  * The `explainer_render` payload: the audio, the scenes with their times, labels and pictures, the subtitle words (each scene's narration as written,
  * timed by its spoken words: subtitles.ts), the owner's brand (the
- * infographic settings: his names, handle, site and portrait) and the sound. `base` is the public address the worker downloads from. Throws what
+ * infographic settings: his names, handle, site and portrait, plus the Brand Kit's logo and title colour, `renderBrand`) and the sound. `base` is the public address the worker downloads from. Throws what
  * `renderReadiness` throws.
  */
 export function renderPayload(
-    row: ExplainerRow, scenes: readonly ExplainerSceneRow[], settings: StudioSettings, base: string
+    row: ExplainerRow, scenes: readonly ExplainerSceneRow[], settings: StudioSettings, base: string, renderBrand: RenderBrand
 ): ExplainerRenderPayload {
     const { audio, track } = renderReadiness(row, scenes, settings);
     const brand = settings.infographic;
@@ -159,8 +160,12 @@ export function renderPayload(
         })),
         // The narration as written (OpenAI, not «أوبن إيه آي»), on the spoken words' times: subtitles.ts.
         words: subtitleWordsFor(scenes, row.words ?? {}),
-        brand: { name, handle: brand.handle, site: brand.site, ...(brand.photo_url ? { photo_url: absoluteUrl(brand.photo_url, base) } : {}) },
-        title_color: settings.explainer.title_color,
+        brand: { name, handle: brand.handle, site: brand.site, ...(brand.photo_url ? { photo_url: absoluteUrl(brand.photo_url, base) } : {}),
+            // Brand Kit: last, and only with a logo.
+            ...(renderBrand.logo ? { logo: renderBrand.logo } : {}),
+        },
+        // The switch sets the title's colour at render time; off, it is the setting's own.
+        title_color: renderBrand.colours?.explainerTitle ?? settings.explainer.title_color,
         motion: settings.explainer.motion,
         formats: ['vertical', 'horizontal'],
     };
