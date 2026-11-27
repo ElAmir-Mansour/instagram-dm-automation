@@ -684,7 +684,7 @@ describe('Help Center — the DM assistant', () => {
         assert.match(readFileSync('src/webhook/messaging.ts', 'utf8'), /if \(dmReply\.kind === 'handoff'\) \{\s*await handOver\(\);/, 'the engine failing, with the fallback off, ends the same way');
         for (const lang of LANGS) {
             const text = textOf('dm-assistant', 'engine', lang);
-            assert.ok(text.includes(bold(label(lang, 'inbox.filter.needs_you'))), `${lang}: the Inbox label`);
+            assert.ok(text.includes(bold(label(lang, 'inbox.needsYou'))), `${lang}: the Inbox label`);
             assert.ok(text.includes(bold(label(lang, 'ai.fallbackTitle'))) && text.includes(bold(label(lang, 'ai.engineProviders'))), `${lang}: the two switches, as the page names them`);
         }
     });

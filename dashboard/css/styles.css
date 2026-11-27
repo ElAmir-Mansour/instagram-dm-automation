@@ -5124,11 +5124,26 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 /* I1 + I7: the filter and the count under the search box. */
 .inbox-search .segmented { margin-block-start: var(--space-2); inline-size: 100%; }
 .inbox-search .segmented .btn { flex: 1; }
-/* Four filters since "Needs you" (DM plan S8): at 375px they do not fit on one line, and each label used to wrap inside its own segment
-   (three lines for «الردّ الآلي متوقف»). They take a second row instead, each label on one line. */
-.inbox-search .segmented { flex-wrap: wrap; }
-.inbox-search .segmented .btn { flex: 1 1 auto; white-space: nowrap; }
+/* U2: the views are one row (To do, Hot, All, More) and "More" opens a second row (AI paused, From ads, Handled). A row that does not fit scrolls
+   inside its own box, never the page, and every label stays on one line (three lines for «الردّ الآلي متوقف» once). */
+.inbox-search .segmented { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
+.inbox-search .segmented::-webkit-scrollbar { display: none; }
+.inbox-search .segmented .btn { flex: 1 0 auto; white-space: nowrap; }
+.inbox-more[hidden] { display: none; }
+.inbox-search .inbox-more { margin-block-start: var(--space-1); }
+.inbox-views .btn [data-lucide] { inline-size: var(--icon-xs); block-size: var(--icon-xs); margin-inline-start: var(--space-1); }
+.segment-count {
+    display: inline-block; min-inline-size: 1.5em; padding-inline: var(--space-1);
+    margin-inline-start: var(--space-1); border-radius: var(--radius-pill);
+    background: var(--accent-soft); color: var(--accent-text);
+    font-size: var(--fs-100); font-variant-numeric: tabular-nums; text-align: center;
+}
+/* The row's two lines: the status chip (the one thing to act on) and, muted, what is not the default. */
+.thread-badges.thread-status { margin-block-start: var(--space-1); }
+.thread-badges.thread-detail { margin-block-start: var(--space-1); opacity: 0.85; }
+.thread-status .badge { white-space: normal; text-align: start; }
 .inbox-count { margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
+.inbox-count:empty { display: none; }
 .inbox-count strong { color: var(--text-strong); }
 /* I9: the empty state, with a next step. */
 .empty-threads p { margin: 0; }
