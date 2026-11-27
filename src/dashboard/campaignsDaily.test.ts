@@ -5,7 +5,7 @@
  *
  *   - the CREATE editor opens on "Whole word only" and sends `match_mode: 'word'` explicitly (never leaves it to the server's default, which stays
  *     `substring` for API callers); a choice of "Anywhere" is sent as made; the EDIT editor shows each existing reply's own mode (no migration);
- *   - `otherForm` / `formSuggestions` are the ONE rule that is always right: «كورس» <-> «الكورس», offered only for a single Arabic word whose stem keeps
+ *   - `otherForm` / `formSuggestions` are the ONE rule that is always right: «كتاب» <-> «الكتاب», offered only for a single Arabic word whose stem keeps
  *     3 letters, only in whole-word mode, never twice, and checked against `normalizeArabic` the way the matcher compares (`keywordMatches`).
  *     Plurals are never suggested: Arabic broken plurals follow no rule that is reliably right;
  *   - "Also add" appends the form to the keyword field, asks the inspector again, and puts focus back on the field.
@@ -36,7 +36,7 @@ function load(lang: 'ar' | 'en' = 'en') {
 }
 
 const fields = (over: Record<string, string | null> = {}): Json => ({
-    fields: { trigger_keyword: 'كورس', match_mode: 'word', dm_template: 'hello', public_reply_template: '', post_id: '', ...over },
+    fields: { trigger_keyword: 'كتاب', match_mode: 'word', dm_template: 'hello', public_reply_template: '', post_id: '', ...over },
 });
 const event = { preventDefault: () => undefined };
 
@@ -68,9 +68,9 @@ describe('a new keyword reply starts as Whole word (DW-K3)', () => {
     it('does not change what an existing reply has: the edit editor shows its own mode', () => {
         const { page, modals } = load();
         page.campaigns = [
-            { id: 'a', trigger_keyword: 'كورس', dm_template: 'x', match_mode: 'substring' },
-            { id: 'b', trigger_keyword: 'كورس', dm_template: 'x', match_mode: 'word' },
-            { id: 'c', trigger_keyword: 'كورس', dm_template: 'x' },
+            { id: 'a', trigger_keyword: 'كتاب', dm_template: 'x', match_mode: 'substring' },
+            { id: 'b', trigger_keyword: 'كتاب', dm_template: 'x', match_mode: 'word' },
+            { id: 'c', trigger_keyword: 'كتاب', dm_template: 'x' },
         ];
         page.queueCollisionCheck = () => undefined;
         for (const id of ['a', 'b', 'c']) page.showEditModal(id);
@@ -91,9 +91,9 @@ describe('the other form of an Arabic keyword (DW-K3)', () => {
     const { page } = load();
 
     it('adds ال to a bare word and drops it from a word that has it', () => {
-        assert.equal(page.otherForm('كورس'), 'الكورس');
-        assert.equal(page.otherForm('الكورس'), 'كورس');
-        assert.equal(page.otherForm('  كورس  '), 'الكورس');
+        assert.equal(page.otherForm('كتاب'), 'الكتاب');
+        assert.equal(page.otherForm('الكتاب'), 'كتاب');
+        assert.equal(page.otherForm('  كتاب  '), 'الكتاب');
         assert.equal(page.otherForm('اللغة'), 'لغة');
         assert.equal(page.otherForm('لغة'), 'اللغة');
         assert.equal(page.otherForm('الكتب'), 'كتب');
@@ -106,7 +106,7 @@ describe('the other form of an Arabic keyword (DW-K3)', () => {
     });
 
     it('offers nothing it cannot be sure of', () => {
-        for (const keyword of ['', 'تم', 'الله', 'الف', 'python', 'C#', '2024', 'رابط الكورس', 'كورس python', 'ab', 'كورس1']) {
+        for (const keyword of ['', 'تم', 'الله', 'الف', 'python', 'C#', '2024', 'رابط الكتاب', 'كتاب python', 'ab', 'كتاب1']) {
             assert.equal(page.otherForm(keyword), '', `"${keyword}"`);
         }
     });
@@ -117,7 +117,7 @@ describe('the other form of an Arabic keyword (DW-K3)', () => {
     });
 
     it('the suggestion is exactly what the matcher needs: in whole-word mode each form misses the other, and the pair together catches both', () => {
-        for (const [bare, withAl] of [['كورس', 'الكورس'], ['أدوات', 'الأدوات'], ['دورة', 'الدورة']] as const) {
+        for (const [bare, withAl] of [['كتاب', 'الكتاب'], ['أدوات', 'الأدوات'], ['دورة', 'الدورة']] as const) {
             const a = normalizeArabic(bare);
             const b = normalizeArabic(withAl);
             assert.equal(keywordMatches(normalizeArabic(`ارسل ${withAl} لي`), a, 'word'), false, `${bare} misses ${withAl}`);
@@ -129,13 +129,13 @@ describe('the other form of an Arabic keyword (DW-K3)', () => {
     });
 
     it('is offered in whole-word mode only, never twice, and not when the list has it', () => {
-        assert.deepEqual([...page.formSuggestions('كورس', 'substring')], []);
-        assert.deepEqual([...page.formSuggestions('كورس', 'word')], ['الكورس']);
-        assert.deepEqual([...page.formSuggestions('كورس, الكورس', 'word')], [], 'both forms are already listed');
-        assert.deepEqual([...page.formSuggestions('كورس، دورة, python', 'word')], ['الكورس', 'الدورة']);
-        assert.deepEqual([...page.formSuggestions('كورس, كورس', 'word')], ['الكورس'], 'a repeated keyword gives one button');
-        assert.deepEqual([...page.formSuggestions('الكورس, كورس', 'word')], []);
-        const many = ['كتاب', 'قلم', 'باب', 'نهر', 'جبل', 'بحر', 'سهل', 'وادي'].join(', ');
+        assert.deepEqual([...page.formSuggestions('كتاب', 'substring')], []);
+        assert.deepEqual([...page.formSuggestions('كتاب', 'word')], ['الكتاب']);
+        assert.deepEqual([...page.formSuggestions('كتاب, الكتاب', 'word')], [], 'both forms are already listed');
+        assert.deepEqual([...page.formSuggestions('كتاب، دورة, python', 'word')], ['الكتاب', 'الدورة']);
+        assert.deepEqual([...page.formSuggestions('كتاب, كتاب', 'word')], ['الكتاب'], 'a repeated keyword gives one button');
+        assert.deepEqual([...page.formSuggestions('الكتاب, كتاب', 'word')], []);
+        const many = ['ورد', 'قلم', 'باب', 'نهر', 'جبل', 'بحر', 'سهل', 'وادي'].join(', ');
         assert.equal(page.formSuggestions(many, 'word').length, page.FORM_MAX_SUGGESTIONS);
     });
 });
@@ -144,28 +144,28 @@ describe('the "Also add" buttons (DW-K3)', () => {
     it('are drawn in the inspector with the form to add, in both languages', () => {
         for (const [lang, label] of [['en', 'Also add:'], ['ar', 'أضف أيضاً:']] as const) {
             const { page } = load(lang);
-            const { verdict } = page.matchVerdict('كورس', 'word');
+            const { verdict } = page.matchVerdict('كتاب', 'word');
             const markup = String(verdict);
             assert.match(markup, /data-action="campaigns:addKeywordForm"/);
-            assert.match(markup, /data-form="الكورس"/);
-            assert.ok(text(markup).includes(`${label} الكورس`), text(markup));
-            assert.doesNotMatch(String(page.matchVerdict('كورس', 'substring').verdict), /addKeywordForm/);
+            assert.match(markup, /data-form="الكتاب"/);
+            assert.ok(text(markup).includes(`${label} الكتاب`), text(markup));
+            assert.doesNotMatch(String(page.matchVerdict('كتاب', 'substring').verdict), /addKeywordForm/);
             assert.doesNotMatch(String(page.matchVerdict('python', 'word').verdict), /addKeywordForm/);
         }
     });
 
     it('put the form in the keyword field, ask the inspector again, and give focus back to the field', () => {
         const { page } = load();
-        const input: Json = { value: 'كورس', focused: 0, focus() { this.focused += 1; } };
+        const input: Json = { value: 'كتاب', focused: 0, focus() { this.focused += 1; } };
         const form = { querySelector: (sel: string) => (sel === '#campaign-trigger' ? input : null) };
         const asked: unknown[] = [];
         page.inspectKeywords = (el: unknown) => { asked.push(el); };
-        page.addKeywordForm({ closest: () => form, dataset: { form: 'الكورس' } });
-        assert.equal(input.value, 'كورس, الكورس');
+        page.addKeywordForm({ closest: () => form, dataset: { form: 'الكتاب' } });
+        assert.equal(input.value, 'كتاب, الكتاب');
         assert.deepEqual(asked, [input]);
         assert.equal(input.focused, 1);
-        input.value = 'كورس،  ';
-        page.addKeywordForm({ closest: () => form, dataset: { form: 'الكورس' } });
-        assert.equal(input.value, 'كورس, الكورس', 'a trailing comma is not doubled');
+        input.value = 'كتاب،  ';
+        page.addKeywordForm({ closest: () => form, dataset: { form: 'الكتاب' } });
+        assert.equal(input.value, 'كتاب, الكتاب', 'a trailing comma is not doubled');
     });
 });

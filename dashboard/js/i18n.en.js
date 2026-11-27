@@ -26,7 +26,7 @@
     'campaigns.matchMode': 'Match mode',
     'campaigns.matchMode.substring': 'Anywhere in the comment',
     'campaigns.matchMode.word': 'Whole word only',
-    'campaigns.forms.hint': 'In whole-word mode the keyword must stand on its own, so “الكورس” does not match “كورس”. People type both: add the other form if you want it.',
+    'campaigns.forms.hint': 'In whole-word mode the keyword must stand on its own, so “الكتاب” does not match “كتاب”. People type both: add the other form if you want it.',
     'campaigns.forms.add': 'Also add: {form}',
     'campaigns.matchMode.hint': 'Whole word: the campaign fires only when the keyword stands on its own, so “تم” no longer matches inside “اهتمام”.',
     'campaigns.match.wordMode': 'Whole-word matching: the campaign fires only when the keyword appears as its own word in the comment.',
@@ -7210,8 +7210,7 @@
     'muse.lib.e.REEL_NOT_FOUND': 'That reel is not in the library any more. Press Refresh.',
     'muse.lib.e.NO_MEDIA_ID': 'This reel has no Instagram id, so it cannot be watched again.',
     // One line instead of a 139-row list (UX U1, DW-A1): reels remembered, the last one added, how many wait; the list opens on request, 20 at a time.
-    'muse.lib.summary_one': '1 reel remembered · last added {last} · {pending} waiting',
-    'muse.lib.summary_other': '{count} reels remembered · last added {last} · {pending} waiting',
+    'muse.lib.summary': 'Reels remembered: {remembered} · last added {last} · {pending} waiting',
     'muse.lib.summaryNone': 'No reel remembered yet · {pending} waiting',
     'muse.lib.failedN': '{failed} could not be watched',
     'muse.lib.showList': 'Show the list',

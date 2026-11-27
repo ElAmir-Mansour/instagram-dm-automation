@@ -678,7 +678,7 @@ const HelpContent = {
                                 'الحروف الإنجليزية الكبيرة والصغيرة وحدة.',
                             ] },
                             'يعني «دورة» و«دوره» نفس الشي، و«أبغى» و«ابغى» نفس الشي.',
-                            '**كلمة كاملة فقط (تبدأ بها الردود الجديدة):** تعمل الحملة فقط إذا وردت كلمتك مستقلة، لا داخل كلمة أخرى، فلا تُطابِق «تم» كلمة «تمام». وهي أدق، لكنها أصرم: «كورس» لا تُطابِق «الكورس»، فيقترح المحرّر «أضف أيضاً: الكورس» لإضافة الصيغة الأخرى بنقرة. ولا يقترح جمعاً، لأن جموع التكسير بلا قاعدة ثابتة، فاكتب ما يكتبه متابعوك.',
+                            '**كلمة كاملة فقط** (تبدأ بها الردود الجديدة): تعمل الحملة فقط إذا وردت كلمتك مستقلة، لا داخل كلمة أخرى، فلا تُطابِق «تم» كلمة «تمام». وهي أدق، لكنها أصرم: «كورس» لا تُطابِق «الكورس»، فيقترح المحرّر «أضف أيضاً: الكورس» لإضافة الصيغة الأخرى بنقرة. ولا يقترح جمعاً، لأن جموع التكسير بلا قاعدة ثابتة، فاكتب ما يكتبه متابعوك.',
                             '**في أي موضع من التعليق:** تعمل الحملة إذا وُجدت كلمتك في أي مكان داخل التعليق، حتى جزءاً من كلمة أطول، فتُطابِق «كورس» كلاً من «الكورس» و«كورسك». لا تبدأ بها الحملات الجديدة، لكن اخترها من «طريقة المطابقة» عند الحاجة. الحملات القديمة تبقى على ما اخترتها عليه.',
                         ],
                         en: [
@@ -690,7 +690,7 @@ const HelpContent = {
                                 'Upper and lower case letters are the same.',
                             ] },
                             'So «دورة» and «دوره» are one word, and so are «أبغى» and «ابغى».',
-                            '**Whole word only (new keyword replies start here):** the campaign fires only when your keyword stands on its own, not inside a longer word, so «تم» no longer fires on «تمام». It is precise but strict: «كورس» does not match «الكورس», so the editor offers “Also add: الكورس” to add the other form in one tap. It never suggests plurals, because Arabic broken plurals follow no rule that is always right: add the forms your followers actually type.',
+                            '**Whole word only** (new keyword replies start here): the campaign fires only when your keyword stands on its own, not inside a longer word, so «تم» no longer fires on «تمام». It is precise but strict: «كورس» does not match «الكورس», so the editor offers “Also add: الكورس” to add the other form in one tap. It never suggests plurals, because Arabic broken plurals follow no rule that is always right: add the forms your followers actually type.',
                             '**Anywhere in the comment:** the campaign fires when your keyword appears anywhere in the comment, even inside a longer word, so «كورس» matches both «الكورس» and «كورسك». New keyword replies do not start here, but you can pick it under “Match mode”. Existing keyword replies keep the mode they have.',
                         ],
                     },

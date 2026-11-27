@@ -367,7 +367,7 @@ describe('video library: the list', () => {
 
     it('counts them, and says when there is nothing, when it is loading, and when it could not be loaded', async () => {
         const o = await open({ rows: [item(), item(), item({ status: 'pending', summary: null }), item({ status: 'failed', summary: null, error: 'timeout' })] });
-        assert.match(o.el('muse-library-count').textContent, /^2 reels remembered · last added .+ · 1 waiting · 1 could not be watched$/);
+        assert.match(o.el('muse-library-count').textContent, /^Reels remembered: 2 · last added .+ · 1 waiting · 1 could not be watched$/);
 
         const empty = await open({ rows: [] });
         assert.equal(empty.el('muse-library-count').textContent, empty.t('muse.lib.empty'));
@@ -982,7 +982,7 @@ describe('the library is one line, and a searchable list 20 at a time only when 
 
     it('draws the summary line and NO row until "Show the list" is pressed', async () => {
         const o = await open({ rows: many(139), folded: true });
-        assert.match(o.el('muse-library-count').textContent, /^139 reels remembered · last added .+ · 0 waiting$/);
+        assert.match(o.el('muse-library-count').textContent, /^Reels remembered: 139 · last added .+ · 0 waiting$/);
         assert.equal(o.el('muse-library-list').innerHTML, '', 'no rows in the page');
         assert.ok(hidden(o, 'muse-library-listbox'));
         assert.equal(o.el('muse-library-toggle').attrs.get('aria-expanded'), 'false');
@@ -993,7 +993,7 @@ describe('the library is one line, and a searchable list 20 at a time only when 
     it('shows the newest "last added" date, and waiting and failed counts', async () => {
         const o = await open({ rows: [item({ updated_at: '2026-11-26T08:00:00.000Z' }), item({ updated_at: '2026-11-02T08:00:00.000Z' }), item({ status: 'pending', summary: null }), item({ status: 'failed', summary: null, error: 'timeout' })], folded: true });
         const line = o.el('muse-library-count').textContent;
-        assert.match(line, /^2 reels remembered/);
+        assert.match(line, /^Reels remembered: 2 · last added/);
         assert.ok(line.includes(o.h.UI.formatDay('2026-11-26T08:00:00.000Z')), line);
         assert.ok(line.includes('1 waiting') && line.includes('1 could not be watched'), line);
         const none = await open({ rows: [item({ status: 'pending', summary: null })], folded: true });
@@ -1043,10 +1043,9 @@ describe('the library is one line, and a searchable list 20 at a time only when 
         assert.equal(o.page.museLibState().listOpen, false);
     });
 
-    it('says the line in Arabic with its own plural', async () => {
+    it('says the line in Arabic', async () => {
         const o = await open({ lang: 'ar', rows: many(139), folded: true });
-        assert.ok(o.el('muse-library-count').textContent.includes('139 ريلاً محفوظاً في الذاكرة'), o.el('muse-library-count').textContent);
-        const two = await open({ lang: 'ar', rows: many(2), folded: true });
-        assert.ok(two.el('muse-library-count').textContent.startsWith('ريلان محفوظان'), two.el('muse-library-count').textContent);
+        assert.ok(o.el('muse-library-count').textContent.startsWith('الريلز المحفوظة في الذاكرة: 139 · آخر إضافة'), o.el('muse-library-count').textContent);
+        assert.ok(o.el('muse-library-count').textContent.endsWith('· 0 في الانتظار'), o.el('muse-library-count').textContent);
     });
 });

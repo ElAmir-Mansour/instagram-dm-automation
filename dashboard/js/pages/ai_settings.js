@@ -1755,13 +1755,13 @@ const AiSettingsPage = {
                     <!-- One line, then the list only when it is asked for: 139 rows were 44 phone screens of a page whose job is a few switches. -->
                     <p class="form-hint muse-library-count" id="muse-library-count" role="status" aria-live="polite"></p>
                     <!-- Written out, not UI.button: the factory has no aria-expanded, and this is a disclosure. -->
-                    <button type="button" class="btn btn-ghost btn-sm hidden" id="muse-library-toggle" data-action="muse:toggleList" aria-expanded="false" aria-controls="muse-library-listbox"><i data-lucide="chevron-down" aria-hidden="true"></i> <span id="muse-library-toggle-label">${t('muse.lib.showList')}</span></button>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="muse-library-toggle" data-action="muse:toggleList" aria-expanded="false" aria-controls="muse-library-listbox" ${owner ? '' : html.raw('disabled')}><i data-lucide="chevron-down" aria-hidden="true"></i> <span id="muse-library-toggle-label">${t('muse.lib.showList')}</span></button>
                     <div class="muse-library-listbox hidden" id="muse-library-listbox">
                         <label class="sr-only" for="muse-library-search">${t('muse.lib.search')}</label>
-                        <input class="field" type="search" id="muse-library-search" dir="auto" placeholder="${t('muse.lib.search')}" autocomplete="off" data-input="muse:searchList">
+                        <input class="field" type="search" id="muse-library-search" dir="auto" placeholder="${t('muse.lib.search')}" autocomplete="off" data-input="muse:searchList" ${owner ? '' : html.raw('disabled')}>
                         <p class="form-hint" id="muse-library-shown" role="status" aria-live="polite"></p>
                         <ul class="muse-reels" id="muse-library-list" aria-label="${t('muse.lib.title')}"></ul>
-                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'chevron-down', label: t('muse.lib.more', { n: this.MUSE_LIST_PAGE }), action: 'muse:moreReels', id: 'muse-library-more', className: 'hidden' })}
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'chevron-down', label: t('muse.lib.more', { n: this.MUSE_LIST_PAGE }), action: 'muse:moreReels', id: 'muse-library-more', className: 'hidden', disabled: !owner })}
                     </div>
                 </div>
             </section>
@@ -1818,7 +1818,7 @@ const AiSettingsPage = {
         const last = stamps.length ? UI.formatDay(new Date(Math.max(...stamps)).toISOString()) : t('muse.lib.undated');
         const failed = rows.filter((r) => r.status === 'failed').length;
         const pending = rows.filter((r) => r.status === 'pending').length;
-        const line = ok.length === 0 ? t('muse.lib.summaryNone', { pending }) : t('muse.lib.summary', { count: ok.length, last, pending });
+        const line = ok.length === 0 ? t('muse.lib.summaryNone', { pending }) : t('muse.lib.summary', { remembered: ok.length, last, pending });
         return failed > 0 ? `${line} · ${t('muse.lib.failedN', { failed })}` : line;
     },
 

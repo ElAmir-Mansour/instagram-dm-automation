@@ -192,7 +192,7 @@ describe('Meta vision card: the shell', () => {
 
     it('is an owner\'s: live controls and no note for an owner, locked controls for a viewer, locked controls AND the owner-only note for an operator', () => {
         const controls = (shell: string) => [...shell.matchAll(/<(?:input|select|textarea|button)\b[^>]*>/g)].map((m) => m[0])
-            .filter((c) => /id="muse-/.test(c) && !LIBRARY_CONTROLS.some((id) => c.includes(`id="${id}"`)));
+            .filter((c) => /id="muse-/.test(c) && !/id="muse-library-/.test(c) && !LIBRARY_CONTROLS.some((id) => c.includes(`id="${id}"`)));
         const library = (shell: string) => LIBRARY_CONTROLS.map((id) => [id, new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`).exec(shell)?.[0] ?? '']);
         const state = (role: Role) => {
             const { page } = open({ role, skipAdopt: true });
