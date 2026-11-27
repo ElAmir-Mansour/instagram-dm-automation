@@ -8,7 +8,7 @@
  *   - **the card's outcome split (T044).** Red belongs to the actionable count alone, and only while it is above zero. Without a split
  *     from the server the card shows what it always showed.
  *   - **the editor's collision check (T056).** It asks `POST /campaigns/try` (stubbed here), once per distinct keyword, with the draft;
- *     the old client `campaignCollisions` is gone. It says "«X» answers instead; this campaign never fires on those comments" with the
+ *     the old client `campaignCollisions` is gone. It says "«X» answers instead; this keyword reply never fires on those comments" with the
  *     two actions; and it never says "safe" before every keyword has been answered, or when one could not be.
  *
  * No network and no real DOM: `API` is a stub, the editor is a handful of `FakeEl`s. Layout and focus are verified live.
@@ -245,7 +245,7 @@ describe('the editor asks the server which campaign answers (CA-07)', () => {
     });
 
     for (const lang of ['ar', 'en'] as const) {
-        it(`says "«X» answers instead; this campaign never fires on those comments", with both actions (${lang})`, async () => {
+        it(`says "«X» answers instead; this keyword reply never fires on those comments", with both actions (${lang})`, async () => {
             const { h, page, t } = loadCampaigns(lang, { tryCampaign: async () => answers.shadowed('c-other', ['دورة', 'الدورة']) });
             page.campaigns = [{ id: 'c-other', trigger_keyword: 'دورة، الدورة', dm_template: 'x' }];
             const ed = openEditor(h, { keywords: 'دورة' });
@@ -270,7 +270,7 @@ describe('the editor asks the server which campaign answers (CA-07)', () => {
         const ed = openEditor(h, { keywords: 'دورة' });
         page.queueCollisionCheck(ed.form, { now: true });
         await settle();
-        assert.match(text(ed.verdict.innerHTML), /answers instead; this campaign never fires on those comments/);
+        assert.match(text(ed.verdict.innerHTML), /answers instead; this keyword reply never fires on those comments/);
     });
 
     it('offers whole-word mode only where it is not already the mode', async () => {

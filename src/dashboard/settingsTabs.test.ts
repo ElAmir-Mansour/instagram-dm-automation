@@ -1001,7 +1001,7 @@ describe('Settings: the stylesheet and its registration', () => {
         assert.equal(ar('settings.group.connections'), 'الاتصالات');
         assert.equal(ar('settings.group.messages'), 'الرسائل والتنبيهات');
         assert.equal(ar('settings.group.platform'), 'المنصة');
-        assert.equal(ar('settings.scope.platform'), 'لكل المساحات');
+        assert.equal(ar('settings.scope.platform'), 'لكل مساحات العمل');
     });
 
     it('the reconnect-within sentence agrees in number in Arabic: one, two, a few, many', () => {

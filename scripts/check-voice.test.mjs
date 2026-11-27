@@ -344,7 +344,7 @@ describe('the allow-list', () => {
         const kept = scanPieces(collectCopy('.')).filter((f) => f.rule === 'bot');
         assert.ok(kept.length >= 20, `${kept.length} Telegram hits are excused`);
         assert.ok(kept.every((f) => f.where.startsWith('settings.notify.') || f.file.startsWith('public/landing')), 'every raw "bot" hit is the Telegram setup or the landing\'s sample infographic');
-        const io = withFile(DICT_FILES.en, "'inbox.funnel.reply.median': 'Agent reply time (median)',", "'inbox.funnel.reply.median': 'Bot reply time (median)',");
+        const io = withFile(DICT_FILES.en, "'inbox.funnel.reply.median': 'Assistant reply time (median)',", "'inbox.funnel.reply.median': 'Bot reply time (median)',");
         assert.deepEqual(scanRepo('.', io).findings.map((f) => [f.where, f.rule]), [['inbox.funnel.reply.median', 'bot']]);
         assert.equal(judge([{ file: DICT_FILES.en, rule: 'bot', where: 'settings.notify.token', word: 'bot', text: 'Telegram bot token' }]).findings.length, 0);
     });
