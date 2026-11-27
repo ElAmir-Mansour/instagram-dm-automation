@@ -196,7 +196,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.18',
+    ASSET_VERSION: '13.19',
 
     _modules: Object.create(null),
 
@@ -1660,7 +1660,7 @@ const App = {
                     <ul class="studio-alarm-list">
                         <li class="studio-alarm-item studio-alarm-${html.raw(level)}"${level === 'danger' ? html.raw(' role="alert"') : ''}>
                             <i data-lucide="${icon[level]}" aria-hidden="true"></i>
-                            <span class="studio-alarm-text"><strong dir="auto">${t('nav.studioNeeds', { n: UI.formatNumber(items.length) })}</strong></span>
+                            <span class="studio-alarm-text"><strong dir="auto">${t('nav.studioNeeds', { n: UI.formatNumber(Attention.studioCount(this._studioAttention) || items.length) })}</strong></span>
                             <a class="btn btn-secondary btn-sm" href="#/studio">${t('shell.studioAlarmOpen')}</a>
                         </li>
                     </ul>

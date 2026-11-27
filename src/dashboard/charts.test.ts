@@ -301,3 +301,34 @@ describe('sparkline', () => {
         assert.ok(!out.includes('NaN') && !out.includes('Infinity'));
     });
 });
+
+describe('dayStrip date labels on a narrow screen (QA-14)', () => {
+    const month = Array.from({ length: 30 }, (_, i) => ({ day: `2026-11-${String(i + 1).padStart(2, '0')}`, sent: i, failed: 0 }));
+    const labelSpans = (out: string): string[] => [...out.matchAll(/<span class="chart-strip-day[^"]*"[^>]*>([^<]*)<\/span>/g)].map((m) => m[0]);
+
+    it('marks every other printed date `is-minor` (hidden under 560px), never the last day', () => {
+        const spans = labelSpans(s(Charts.dayStrip(month)));
+        const printed = spans.filter((x) => !/><\/span>$/.test(x));
+        const minor = printed.filter((x) => x.includes('is-minor'));
+        assert.ok(printed.length >= 6 && printed.length <= 9, `printed ${printed.length}`);
+        assert.ok(minor.length >= 2 && minor.length < printed.length, `minor ${minor.length}`);
+        assert.ok(!printed[printed.length - 1]!.includes('is-minor'), 'the latest day always stays');
+    });
+
+    it('does not print the last day over the step label right next to it (28 and 29 of 30)', () => {
+        const spans = labelSpans(s(Charts.dayStrip(month)));
+        const at = spans.map((x, i) => (/><\/span>$/.test(x) ? -1 : i)).filter((i) => i >= 0);
+        for (let k = 1; k < at.length; k++) assert.ok(at[k]! - at[k - 1]! >= 2, `labels at ${at[k - 1]} and ${at[k]} touch`);
+    });
+
+    it('a week keeps every label (47px slots hold them)', () => {
+        const week = month.slice(0, 7);
+        const spans = labelSpans(s(Charts.dayStrip(week)));
+        assert.equal(spans.filter((x) => !/><\/span>$/.test(x)).length, 7);
+        assert.ok(!spans.some((x) => x.includes('is-minor')));
+    });
+
+    it('the stylesheet hides the minor ones on a phone', () => {
+        assert.match(readFileSync('dashboard/css/styles.css', 'utf8'), /\.chart-strip-day\.is-minor \{ visibility: hidden; \}/);
+    });
+});
