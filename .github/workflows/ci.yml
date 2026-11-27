@@ -15,7 +15,7 @@ jobs:
           # which a depth-1 checkout does not contain.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # 22, not 20: the test runner only expands glob patterns in --test from Node 22.
           # On 20 it treats "src/**/*.test.ts" as a literal path and finds nothing.
