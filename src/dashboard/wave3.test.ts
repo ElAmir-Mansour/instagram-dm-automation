@@ -415,7 +415,7 @@ describe('UI.metaErrorText — one copy for Activity and Analytics', () => {
 describe('Overview — DMs failed today (O9)', () => {
     const ok = (value: unknown) => ({ status: 'fulfilled', value });
     const pending = { status: 'rejected', reason: new Error('not under test') };
-    const alertsFor = (s: Loaded, failedRes: Json) => s.pages.Overview.buildAlerts({ activeCampaigns: 1 }, failedRes, ok({ status: 'valid' }), ok([]), ok({ data: [] }), pending);
+    const alertsFor = (s: Loaded, failedRes: Json) => s.pages.Overview.buildAlerts({ activeCampaigns: 1 }, failedRes, ok({ status: 'valid' }), pending);
     const rows = (n: number) => Array.from({ length: n }, () => ({ timestamp: new Date().toISOString() }));
 
     it('asks for today only — since local midnight — and a full page', async () => {

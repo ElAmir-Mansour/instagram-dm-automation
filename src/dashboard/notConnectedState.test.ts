@@ -150,7 +150,7 @@ describe('Today: the token alert (OV-04, OV-08)', () => {
     }
     const ok = (value: unknown) => ({ status: 'fulfilled', value });
     const alertsFor = (page: Json, token: Json | null, rejected = false) =>
-        page.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), rejected ? { status: 'rejected', reason: new Error('x') } : ok(token), ok([]), ok([]), ok([]), ok(null))
+        page.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), rejected ? { status: 'rejected', reason: new Error('x') } : ok(token), ok([]), ok(null))
             .map((a: Json) => ({ ...a }));
 
     for (const lang of ['ar', 'en'] as const) {

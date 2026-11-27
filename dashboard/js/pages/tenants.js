@@ -140,7 +140,7 @@ const TenantsPage = {
         );
 
         const published = this.num(row, 'published_7d', 'posts_published_7d', 'postsPublished7d');
-        const failed = this.num(row, 'failed_7d', 'posts_failed_7d', 'postsFailed7d');
+        const failed = this.num(row, 'failed_open', 'postsFailed', 'failed_7d', 'posts_failed_7d', 'postsFailed7d');
         const campaigns = this.num(row, 'campaign_count', 'campaignCount', 'campaigns');
         const scheduled = this.num(row, 'scheduled_post_count', 'scheduledPostCount', 'scheduled_posts');
         const conversations = this.num(row, 'conversation_count', 'conversationCount', 'conversations');

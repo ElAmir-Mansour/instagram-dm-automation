@@ -477,33 +477,27 @@ describe('an archived post is never in Needs attention, and is listed under Arch
 
 describe('Today\'s alerts leave an archived post out too (the "gone from Today" half of Archive)', () => {
     const ok = (value: unknown) => ({ status: 'fulfilled', value });
-    const pending = { status: 'rejected', reason: new Error('not under test') };
-    const alerts = (rows: Json[]): Json[] => {
-        const O = loadDashboard({ files: ['dashboard/js/pages/overview.js'], globals: { API: {}, App: {}, Admin: {} } }).run('OverviewPage');
-        return plain(O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok(rows), ok({ data: [] }), pending));
-    };
-    const title = (list: Json[], needle: string): string | undefined => list.map((a) => a.title).find((x: string) => x.includes(needle));
-    const parked = '2026-10-19T09:00:00.000Z';
+    const O = () => loadDashboard({ files: ['dashboard/js/pages/overview.js'], globals: { API: {}, App: {}, Admin: {} } }).run('OverviewPage');
+    const failedItem = (count: number, ids: string[]): Json => ({
+        type: 'post_failed', severity: 'danger', count, sentence: { key: 'attention.post_failed', params: { n: count } },
+        action: { verb: 'attention.verb.review', href: '#/posts?filter=needs-you' }, detail: { reasons: [{ reason: 'media', count, oldestAt: null }], ids },
+    });
+    const alerts = (items: Json[]): Json[] => plain(O().buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), undefined, undefined, ok({ items, counts: {}, heartbeat: null })));
 
-    it('counts failed and overdue posts that are not archived, and only those', () => {
-        const rows = [
-            post({ id: 'f1', status: 'FAILED', error_log: 'x' }),
-            post({ id: 'f2', status: 'FAILED', error_log: 'x', archived_at: parked }),
-            post({ id: 'o1', scheduled_time: at(-3 * HOUR) }),
-            post({ id: 'o2', scheduled_time: at(-3 * HOUR), archived_at: parked }),
-            post({ id: 'o3', scheduled_time: at(-5 * DAY), archived_at: parked }),
-        ];
-        const list = alerts(rows);
-        assert.equal(title(list, 'failed to publish'), '1 post failed to publish', 'one failed post, not two');
-        assert.equal(title(list, 'past its time'), '1 post is past its time', 'one overdue post, not three');
+    it('draws exactly what the server counted: an archived post is not in its count, so it is not on this screen (U2: Today reads no post list at all)', () => {
+        const list = alerts([failedItem(1, ['f1'])]);
+        assert.equal(list.find((a) => a.icon === 'image-off')!.title, '1 post failed to publish');
+        assert.equal(list.filter((a) => a.icon === 'image-off').length, 1);
     });
 
-    it('raises no alert at all when every failed or late post is archived', () => {
-        const list = alerts([
-            post({ id: 'f2', status: 'FAILED', error_log: 'x', archived_at: parked }),
-            post({ id: 'o2', scheduled_time: at(-3 * HOUR), archived_at: parked }),
-        ]);
-        assert.deepEqual(list.filter((a) => a.icon === 'image-off' || a.icon === 'calendar-clock'), []);
+    it('raises no alert at all when the server counts none (every failed or late post is archived)', () => {
+        assert.deepEqual(alerts([]).filter((a) => a.icon === 'image-off' || a.icon === 'calendar-clock'), []);
+    });
+
+    it('does not download the scheduled posts to count them (344 rows, 93 KB, to count four)', () => {
+        const source = readFileSync(new URL('../../dashboard/js/pages/overview.js', import.meta.url), 'utf8');
+        assert.equal(source.includes('getScheduledPosts'), false);
+        assert.equal(source.includes('getConversations'), false);
     });
 });
 

@@ -229,7 +229,7 @@ describe('Today', () => {
         return { h, OV: h.run<Json>('OverviewPage') };
     };
     const alerts = (OV: Json, attentionRes?: unknown) => JSON.parse(JSON.stringify(
-        OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok([]), ok(null), ok({}), attentionRes),
+        OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok(null), ok({}), attentionRes),
     )) as Json[];
 
     it('puts each Studio item in the briefing with its sentence, its way to fix it and ONE link, in the right tone', () => {
@@ -246,16 +246,17 @@ describe('Today', () => {
 
     it('sorts the danger above the warnings', () => {
         const { OV } = overview();
-        const sorted = JSON.parse(JSON.stringify(OV.sortAlerts(OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok([]), ok(null), ok({}), ok(summary([REELS, SIGNED_OUT]))))));
+        const sorted = JSON.parse(JSON.stringify(OV.sortAlerts(OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok(null), ok({}), ok(summary([REELS, SIGNED_OUT]))))));
         assert.equal(sorted[0].icon, 'key-round');
     });
 
-    it('adds nothing when the read failed, when there is none, or when the server has no such items', () => {
-        const { OV } = overview();
-        assert.deepEqual(alerts(OV, { status: 'rejected', reason: new Error('x') }), []);
+    it('adds nothing when there is no summary, or the server has no items; a read that FAILED says so (U2: it is not a calm screen)', () => {
+        const { h, OV } = overview();
         assert.deepEqual(alerts(OV, undefined), []);
-        assert.deepEqual(alerts(OV, ok(summary([HANDOFF], 0))), []);
+        assert.deepEqual(alerts(OV, ok(summary([], 0))), []);
         assert.deepEqual(alerts(OV, ok(null)), []);
+        const failed = alerts(OV, { status: 'rejected', reason: new Error('x') });
+        assert.deepEqual(failed.map((a) => [a.icon, a.level, a.title]), [['help-circle', 'warning', h.t('overview.alert.attentionUnknown')]]);
     });
 
     it('draws the link as an anchor to the server’s address, and escapes the sentence', () => {

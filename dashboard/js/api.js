@@ -924,6 +924,9 @@ const API = {
     // ─── Settings → Public site (platform admin) ────────────────────────────
     /** `{ whatsappNumber, contactEmail, eidCouponsExpire, whatsappUrl, source: {…} }` */
     getSiteSettings: () => API.request('/settings/site'),
+    // The 30-day clean-up of old failed posts and expired hand-offs (U2, src/services/autoArchive.ts): `{ enabled, days, minDays, maxDays, defaultDays }`. The owner's.
+    getAutoArchive: () => API.request('/settings/auto-archive'),
+    saveAutoArchive: (data) => API.request('/settings/auto-archive', { method: 'POST', body: JSON.stringify(data) }),
     /** Each field optional; '' clears it. A 400 carries `field` on `err.body`. */
     saveSiteSettings: (data) => API.request('/settings/site', { method: 'POST', body: JSON.stringify(data) }),
     /**

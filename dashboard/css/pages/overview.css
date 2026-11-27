@@ -30,3 +30,32 @@
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
 }
+
+/* The heartbeat (U2): one line under the briefing's head that says whether it is working before the cards say what is wrong. It wraps, so on a
+   375 px phone it is two or three short lines, never a sideways scroll. The icon and the words carry the meaning; the colour only repeats it. */
+.heartbeat {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: 0 0 var(--space-3);
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+}
+.heartbeat-item { display: inline-flex; align-items: center; gap: var(--space-1); min-inline-size: 0; }
+.heartbeat-item [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex: none; }
+.heartbeat-ok { color: var(--success-text); }
+.heartbeat-warn { color: var(--warning-text); }
+
+/* Why each failed post failed, one line per reason, and the one-tap clear under them. */
+.alert-card .alert-reasons {
+    margin: 0 0 var(--space-2);
+    padding-inline-start: var(--space-4);
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+.alert-card .alert-reasons li + li { margin-block-start: var(--space-1); }
+.alert-card .alert-clear { margin-block: var(--space-1) var(--space-2); }
+.alert-card .alert-clear-line { margin-block: 0 var(--space-2); }

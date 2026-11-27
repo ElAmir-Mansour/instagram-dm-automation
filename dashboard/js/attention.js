@@ -29,14 +29,20 @@ const Attention = {
     STUDIO_TYPES: ['mac_signed_out', 'worker_offline', 'tiktok_draft', 'reel_review'],
 
     /**
-     * The Studio's items of an attention summary, in the server's order. Anything that is not an item with a sentence and one action to a screen of
-     * this dashboard (`#/...`) is left out: what the server sends is data, and a link from a response never reaches an `href` unchecked.
+     * The items of an attention summary (`GET /api/attention`) whose type is one of `types`, in the server's order. Anything that is not an item with a
+     * sentence and one action to a screen of this dashboard (`#/...`) is left out: what the server sends is data, and a link from a response never
+     * reaches an `href` unchecked.
      */
-    studioItems(summary) {
+    itemsOfType(summary, types) {
         const items = summary && Array.isArray(summary.items) ? summary.items : [];
-        return items.filter((item) => item && Attention.STUDIO_TYPES.indexOf(item.type) !== -1
+        return items.filter((item) => item && types.indexOf(item.type) !== -1
             && item.sentence && typeof item.sentence.key === 'string'
             && item.action && typeof item.action.verb === 'string' && typeof item.action.href === 'string' && item.action.href.indexOf('#/') === 0);
+    },
+
+    /** The Studio's items of an attention summary, in the server's order. */
+    studioItems(summary) {
+        return Attention.itemsOfType(summary, Attention.STUDIO_TYPES);
     },
 
     /** `counts.studio` as a whole number: the Studio nav item's badge. 0 for a server that does not send it. */

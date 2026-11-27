@@ -131,12 +131,12 @@ describe('GET /attention: who it answers', () => {
     it('carries what the summary found: a handoff, an overdue post and a broken connection', async () => {
         const answer = (sql: string): unknown[] => {
             if (/FROM conversations c/.test(sql)) return [{ kind: 'handoff', reason: 'refund', n: 2, oldest_at: new Date('2026-10-19T04:00:00Z') }, { kind: 'waiting', reason: null, n: 1, oldest_at: new Date('2026-10-19T08:00:00Z') }];
-            if (/FROM scheduled_posts s/.test(sql) && /archived_at/.test(sql)) return [{ failed: 0, failed_oldest_at: null, overdue: 1, overdue_oldest_at: new Date('2026-10-19T08:00:00Z') }];
+            if (/FROM scheduled_posts s/.test(sql) && /archived_at/.test(sql) && !/LIMIT 400/.test(sql)) return [{ failed: 0, failed_oldest_at: null, overdue: 1, overdue_oldest_at: new Date('2026-10-19T08:00:00Z') }];
             if (/FROM creators c\s+WHERE c\.id = \$1 AND c\.page_access_token/.test(sql)) return [{ integration: 'meta', broken: true, at: new Date('2026-10-18T10:00:00Z') }];
             return [];
         };
         const { res } = await get({ userId: 'u-1', role: 'user', tenantId: TENANT }, {}, answer);
-        assert.deepEqual(res.body.items.map((i: any) => i.type), ['connection_broken', 'handoff', 'post_overdue']);
+        assert.deepEqual(res.body.items.map((i: any) => i.type), ['connection_broken', 'handoff', 'post_overdue', 'thread_waiting']);
         assert.deepEqual(res.body.counts, { inbox: 3, studio: 0, scheduler: 1 });
         assert.deepEqual(res.body.items[1].sentence, { key: 'attention.handoff', params: { n: 2, reason: 'refund' } });
         assert.deepEqual(res.body.items[1].action, { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' });

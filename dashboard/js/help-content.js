@@ -155,6 +155,32 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'today',
+                    title: { ar: 'شاشة «اليوم»: ما يحتاج إليك', en: 'Today: what needs you' },
+                    body: {
+                        ar: [
+                            'تبدأ شاشة **اليوم** بسطر واحد يجيب عن سؤال «هل يعمل كل شيء؟»: آخر تعليق وصل، وآخر رسالة خاصة، وهل تصل الأحداث من ميتا، وهل عامل الماك متصل. بعده تأتي البطاقات، وكل بطاقة فعل واحد ورابط يفتح هذه العناصر بالذات.',
+                            'القائمة كلها يبنيها الخادم، فهي الرقم نفسه الذي تراه على شارة «الرسائل» وعلى «الجدولة». لا تحسب الشاشة شيئًا بنفسها.',
+                            { dl: [
+                                ['منشورات فشل نشرها', 'تحت البطاقة سطر لكل سبب مع عدده وعمره: قاعدة تيك توك، أو منشور استبدلته عمدًا، أو مشكلة في الوسائط. «أرشِف هذه» تضعها في «المؤرشفة» بضغطة واحدة ومعها «تراجع».'],
+                                ['فشل قديم', 'الفشل الذي مضى عليه أكثر من 14 يومًا يصير سطرًا هادئًا بعدد فقط، لا بطاقة حمراء. يبقى محسوبًا في الجدولة حتى تؤرشفه.'],
+                                ['محادثات تنتظرك', 'إن كانت نافذة ميتا (24 ساعة) قد أُغلقت على بعضها فلا يستطيع ردٌّ أن يصل إليها. «تم التعامل» تخرجها من قائمتك، وتعود وحدها إن كتب صاحبها مجددًا.'],
+                            ] },
+                            { tip: 'لا تسأل الشاشة «هل أنت متأكد؟»: كل إجراء يمكن التراجع عنه من الإشعار الذي يظهر بعده، والمشاهد لا يرى هذه الأزرار أصلًا.' },
+                        ],
+                        en: [
+                            '**Today** opens with one line that answers “is it working?”: the last comment that came in, the last DM, whether events are arriving from Meta, and whether the Mac worker is online. The cards come after it, each with one verb and a link that opens exactly those items.',
+                            'The whole list is built by the server, so it is the same number the **Inbox** badge and the **Scheduler** show. The screen counts nothing of its own.',
+                            { dl: [
+                                ['Posts that failed', 'Under the card there is one line per reason with its count and age: a TikTok rule, a post you replaced on purpose, a media problem. **Archive these** puts them under Archived in one tap, with an **Undo**.'],
+                                ['Older failures', 'A failure more than 14 days old becomes one quiet line with a number, not a red card. It stays counted in the Scheduler until you archive it.'],
+                                ['Conversations waiting for you', 'When Meta’s 24-hour window has closed on some of them, a reply can no longer reach them. **Mark handled** takes them off your list, and they come back by themselves if the person writes again.'],
+                            ] },
+                            { tip: 'Today never asks “are you sure?”: every action can be taken back from the notice that appears after it, and a viewer is not shown these buttons at all.' },
+                        ],
+                    },
+                },
+                {
                     id: 'roles',
                     title: { ar: 'مين يقدر يسوّي وش؟', en: 'Who can do what' },
                     body: {
@@ -1369,7 +1395,7 @@ const HelpContent = {
                                 ['بالانتظار', 'مجدول وينتظر موعده.'],
                                 ['جارٍ النشر', 'قاعد ينرسل الحين لميتا أو تيك توك.'],
                                 ['نُشر', 'نزل خلاص.'],
-                                ['فشلت', 'ما انحذف شي: المنشور باقي في الطابور ومعه سبب الفشل. أصلح الوسائط أو النص وأعد النشر.'],
+                                ['فشلت', 'ما انحذف شي: المنشور باقي في الطابور ومعه سبب الفشل. أصلح الوسائط أو النص وأعد النشر، أو أرشفه إن لم تعد تريده (انظر [[scheduling#clear-failed]]).'],
                                 ['تيك توك يعالج الفيديو', 'تيك توك استلمه ويجهّزه، وعادة ياخذ أقل من دقيقة.'],
                                 ['في صندوق تيك توك', 'وصل مسودّاتك في تيك توك، وباقي تنشره أنت من التطبيق.'],
                             ] },
@@ -1380,10 +1406,32 @@ const HelpContent = {
                                 ['Pending', 'Scheduled and waiting for its time.'],
                                 ['Publishing', 'Being sent to Meta or TikTok right now.'],
                                 ['Published', 'Live.'],
-                                ['Failed', 'Nothing was deleted: the post is still in the queue with the reason it failed. Fix the media or caption and publish again.'],
+                                ['Failed', 'Nothing was deleted: the post is still in the queue with the reason it failed. Fix the media or caption and publish again, or archive it if you no longer want it (see [[scheduling#clear-failed]]).'],
                                 ['TikTok is processing', 'TikTok has it and is preparing it, which usually takes under a minute.'],
                                 ['In your TikTok inbox', 'It reached your TikTok drafts, and you post it from the app.'],
                             ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'clear-failed',
+                    title: { ar: 'تنظيف المنشورات الفاشلة والقديمة', en: 'Clearing failed and old posts' },
+                    body: {
+                        ar: [
+                            'المنشور الفاشل يبقى في الطابور ومعه سبب فشله، ويظل محسوبًا على شارة «الجدولة» وفي شاشة «اليوم» حتى تتصرف فيه. للتصرف طريقان:',
+                            { ul: [
+                                '**أرشفة**: من بطاقة المنشور، أو من شاشة «اليوم» لعدة منشورات معًا. لا يُنشر المنشور بعد ذلك ولا يُحسب ضمن ما يحتاج إليك، ويبقى تحت **المؤرشفة** في الجدولة، ومنها تستعيده بزر **إلغاء الأرشفة** كما كان تمامًا.',
+                                'من تلقاء النظام: يؤرشف يوميًا ما فشل منذ أكثر من 30 يومًا. لا يحذف شيئًا، ويسجّل ذلك في سجل التدقيق. تغيّر المدة أو توقفه من **الإعدادات** ← **الرسائل والتنبيهات** ← **تنظيف العناصر القديمة تلقائيًا**.',
+                            ] },
+                            'المحادثات القديمة التي احتاجت إليك ولم يُتعامل معها بعد 30 يومًا تُميَّز بالطريقة نفسها بأنه تم التعامل معها، وتعود إلى قائمتك إن كتب صاحبها مجددًا.',
+                        ],
+                        en: [
+                            'A failed post stays in the queue with the reason it failed, and stays counted on the **Scheduler** badge and on **Today** until you deal with it. There are two ways:',
+                            { ul: [
+                                '**Archive:** from the post’s card, or from **Today** for several at once. The post is not published after that and no longer counts as needing you. It stays under **Archived** in the Scheduler, and **Unarchive** puts it back exactly as it was.',
+                                'By itself: once a day the system archives what failed more than 30 days ago. It deletes nothing, and records it in the audit log. Change the days, or switch it off, in **Settings** → **Messages & alerts** → **Clear old items automatically**.',
+                            ] },
+                            'Conversations that needed you and were never handled after 30 days are marked handled the same way, and come back to your list if the person writes again.',
                         ],
                     },
                 },
@@ -5843,6 +5891,150 @@ const HelpContent = {
                                 ['The render stopped and asked for another track', ['The music track you chose was removed from the library. Choose another track, or **Sound effects only**, under the players, then **Try again**.']],
                                 ['The page says Explainers are switched off for this workspace', ['The platform administrator switches them on, in **Settings** → **Platform** → **Explainers**. In this version they can only be on for the platform owner’s workspace.']],
                                 ['The script has too few sources', ['Add source links in “Source links”, or in the script’s sources, then **Rewrite with a note**.']],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 11a-4. Your brand on every post ─────────────────────────────────
+        {
+            slug: 'brand',
+            group: 'studio',
+            icon: 'award',
+            title: { ar: 'هويتك على كل منشور', en: 'Your brand on every post' },
+            summary: {
+                ar: 'شعار واحد على الكاروسيل والإنفوجرافيك والشروح المصوّرة ونهاية الريل، وأين يظهر، ومتى تُضاف خلفية صغيرة خلفه، ومفتاح ألوان هويتك، ومن يملك تعديله.',
+                en: 'One logo on carousels, infographics, explainers and the end of each reel: where it sits, when a small plate is added behind it, the brand colours switch, and who can change it.',
+            },
+            related: ['studio-settings', 'infographics', 'explainers', 'monteur', 'worker'],
+            sections: [
+                {
+                    id: 'what',
+                    title: { ar: 'ما الذي تفعله صفحة هويتك؟', en: 'What the Brand page does' },
+                    body: {
+                        ar: [
+                            'تضع صفحة هويتك شعارًا واحدًا على ما يصنعه الاستوديو: الكاروسيل، والإنفوجرافيك، والشروح المصوّرة، ونهاية كل ريل، وعلى أغلفة هذه المنشورات.',
+                            'لا يتغير شيء في منشوراتك حتى تضيف شعارًا. وغلاف الريل بلا شعار دائمًا: يظهر الشعار في بطاقة النهاية فقط.',
+                            { note: 'المنشورات الجاهزة تحتفظ بما صُنعت به. أما ما يُصنع بعد الحفظ فيحمل الشعار الجديد.' },
+                        ],
+                        en: [
+                            'The Brand page puts one logo on what the Studio makes: carousels, infographics, explainers and the end of each reel, plus the covers that come with them.',
+                            'Nothing changes on your posts until you add a logo. The cover of a reel never has one: the logo appears only on its end card.',
+                            { note: 'Posts that are already made keep what they were made with. What is made after you save carries the new logo.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'logo',
+                    title: { ar: 'إضافة الشعار', en: 'Adding your logo' },
+                    body: {
+                        ar: [
+                            'اضغط **اختر شعارًا** واختر ملف SVG أو PNG أو JPEG أو WebP. يُجهَّز الملف في متصفحك: يُقصّ الهامش الفارغ، ويتحول إلى PNG، ويجب ألا يقل ضلعه الأقصر عن 200 بكسل ولا تزيد نسبة طوله إلى عرضه على 8 إلى 1.',
+                            { ul: [
+                                'إن كان الشعار على خلفية سادة فاضغط **أزل الخلفية**، وحرّك شريط مدى المطابقة حتى تختفي الخلفية ويبقى الشعار.',
+                                'إن كان الشعار شفافًا وتريده أبيض فاضغط **اجعله أبيض**.',
+                                'عند الرضا اضغط **احفظ الشعار**. قبل ذلك لا يُحفظ شيء، والتراجع متاح.',
+                            ] },
+                            { tip: 'أفضل ملف هو PNG بخلفية شفافة.' },
+                            'لحذف الشعار اضغط **أزل الشعار**: تُصنع المنشورات الجديدة دونه.',
+                        ],
+                        en: [
+                            'Press **Choose a logo** and pick an SVG, PNG, JPEG or WebP file. It is prepared in your browser: the empty margin is trimmed, it becomes a PNG, its short side must be at least 200 px, and it can be no more than 8 to 1.',
+                            { ul: [
+                                'If the logo sits on a plain background, press **Remove the background** and move the slider until the background goes and the logo stays.',
+                                'If the logo is transparent and you want it white, press **Make it white**.',
+                                'When you are happy, press **Save logo**. Nothing is saved before that, and Undo is there.',
+                            ] },
+                            { tip: 'A PNG with a transparent background works best.' },
+                            'To take it away, press **Remove logo**: new posts are made without it.',
+                        ],
+                    },
+                },
+                {
+                    id: 'where',
+                    title: { ar: 'أين يظهر الشعار', en: 'Where the logo goes' },
+                    body: {
+                        ar: [
+                            'تُظهر المعاينة في الصفحة موضعه على كل نوع. الزاوية الأولى تتبع لغة المنشور: اليمين بالعربية واليسار بالإنجليزية. والشعار نفسه لا يُقلب ولا يُمطّ ولا تتغير ألوانه أبدًا.',
+                            { dl: [
+                                ['الكاروسيل', 'في صف الرأس على كل شريحة، وأكبر قليلًا في شريحة الدعوة الأخيرة.'],
+                                ['الإنفوجرافيك', 'في الذيل عند بدايته، قبل الصورة الشخصية.'],
+                                ['الشرح المصوّر العمودي', 'في الذيل، في الوسط، مكان الخط القصير.'],
+                                ['الشرح المصوّر 16:9', 'في الزاوية العليا من جهة البداية.'],
+                                ['الريل', 'في بطاقة النهاية فقط، في أعلى الوسط.'],
+                            ] },
+                        ],
+                        en: [
+                            'The preview on the page shows where it lands on each kind. The first corner follows the language of the post: right in Arabic and left in English. The logo itself is never flipped, stretched or recoloured.',
+                            { dl: [
+                                ['Carousel', 'In the header row of every slide, a little larger on the last call-to-action slide.'],
+                                ['Infographic', 'In the footer at its start, before the portrait.'],
+                                ['Vertical explainer', 'In the footer, centred, in place of the short bar.'],
+                                ['16:9 explainer', 'In the top corner at the start.'],
+                                ['Reel', 'On the end card only, at the top centre.'],
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'plate',
+                    title: { ar: 'الخلفية الصغيرة خلف الشعار', en: 'The small plate behind it' },
+                    body: {
+                        ar: [
+                            'قد تظهر خلف الشعار خلفية صغيرة مستديرة الزوايا ليبقى واضحًا. تُضاف إذا كان الشعار شفافًا وكان تباين لونه الرئيسي مع الصفحة أقل من 3 إلى 1، وتُضاف دائمًا فوق الصورة أو الفيديو.',
+                            'لونها أبيض لشعار داكن، وداكن لشعار فاتح. والشعار المصمت الخلفية يحمل خلفيته معه، فلا تُضاف له خلفية.',
+                            'تُظهر المعاينة هذه الخلفية حيث ستظهر.',
+                        ],
+                        en: [
+                            'A small plate with rounded corners can appear behind the logo so it stays visible. It is added when the logo is transparent and its main colour has less than 3 to 1 contrast against the page, and always over a picture or a video.',
+                            'It is white for a dark logo and dark for a light one. A logo with a solid background carries its own, so it gets no plate.',
+                            'The preview shows the plate where it will appear.',
+                        ],
+                    },
+                },
+                {
+                    id: 'colours',
+                    title: { ar: 'ألوان هويتك', en: 'Brand colours' },
+                    body: {
+                        ar: [
+                            'المفتاح **استخدم ألوان هويتك في الكاروسيل والريلز وعناوين الشروحات** يغيّر ثلاثة أشياء: تُلوَّن صفحات الكاروسيل بلونك الأساسي، ويأخذ كل كاروسيل وريل جديد لونك المميِّز، وتأخذ عناوين الشروحات لونك المميِّز أيضًا.',
+                            'ما صُنع من قبل يحتفظ بلونه. والإنفوجرافيك يستخدم ألوانك أصلًا، فلا يتغير بالمفتاح.',
+                            'يُضبط لونك الأساسي ولونك المميِّز من صفحة الإنفوجرافيك: [[infographics]].',
+                        ],
+                        en: [
+                            'The switch **Use my brand colours on carousels, reels and explainer titles** changes three things: carousel pages are tinted with your main colour, new carousels and reels take your accent, and explainer titles take it too.',
+                            'What was made before keeps its colour. Infographics already use your colours, so the switch does not change them.',
+                            'Your main colour and accent are set on the Infographics page: [[infographics]].',
+                        ],
+                    },
+                },
+                {
+                    id: 'who',
+                    title: { ar: 'من يستطيع التعديل', en: 'Who can change it' },
+                    body: {
+                        ar: [
+                            'يستطيع صاحب مساحة العمل وحده تعديل الشعار والمفتاح. المشغّل يرى الصفحة دون أن يستطيع التعديل، ومن دوره «مُطّلع» لا يجد الصفحة في القائمة.',
+                        ],
+                        en: [
+                            'Only the workspace owner can change the logo and the switch. An operator sees the page and cannot change it, and someone with the Viewer role does not find it in the menu.',
+                        ],
+                    },
+                },
+                {
+                    id: 'troubleshooting',
+                    title: { ar: 'إن لم يظهر الشعار', en: 'If the logo does not show' },
+                    body: {
+                        ar: [
+                            { qa: [
+                                ['لم يظهر الشعار على ما صُنع بعد الحفظ', 'برنامج العامل على الماك هو الذي يرسم الشعار، وقد يكون قديمًا. حدّثه وأعد تشغيله ثم اصنع المنشور من جديد: [[worker]].'],
+                                ['رُفض الملف بأنه ليس PNG أو لم يُعثر عليه', 'اختر الملف مرة أخرى ثم احفظ.'],
+                            ] },
+                        ],
+                        en: [
+                            { qa: [
+                                ['No logo on something made after you saved it', 'The worker program on the Mac draws the logo, and it may be out of date. Update it, restart it and make the post again: [[worker]].'],
+                                ['The file was refused as not a PNG, or as not found', 'Choose the file again, then save.'],
                             ] },
                         ],
                     },

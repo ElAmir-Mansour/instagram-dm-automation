@@ -179,13 +179,9 @@ const week = (): Json[] => [10, 12, 14, 8, 16, 12, 12].map((sent, i) => ({ day: 
 describe('Overview — today, not all-time (O4 O5 O6 O12)', () => {
     it('tiles: sent today, failed today, waiting for you, active campaigns — no all-time success rate', () => {
         const s = load();
-        const threads = { data: [
-            { id: 'a', is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(3 * 3600 * 1000) },
-            { id: 'b', is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(2 * DAY) },
-            { id: 'c', is_bot_active: false, last_message_direction: 'outbound', last_message_at: ago(60000) },
-            { id: 'd', is_bot_active: true, last_message_direction: 'inbound', last_message_at: ago(60000) },
-        ] };
-        const markup = String(s.pages.Overview.renderStats({ activeCampaigns: 3, totalInteractions: 900, successRate: 96, sent: 800 }, ok(week()), ok(threads)));
+        // What the server counted (`counts.inbox`): two conversations, the oldest from two days ago. Today no longer counts threads itself.
+        const attention = ok({ items: [{ type: 'thread_waiting', severity: 'warning', count: 2, oldestAt: ago(2 * DAY), sentence: { key: 'attention.thread_waiting', params: {} }, action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' } }], counts: { inbox: 2, studio: 0, scheduler: 0 } });
+        const markup = String(s.pages.Overview.renderStats({ activeCampaigns: 3, totalInteractions: 900, successRate: 96, sent: 800 }, ok(week()), attention));
         const words = text(markup);
         for (const key of ['overview.stat.sentToday', 'overview.stat.failedToday', 'overview.stat.waiting', 'overview.stat.campaigns']) {
             assert.ok(words.includes(s.t(key)), key);
@@ -195,7 +191,7 @@ describe('Overview — today, not all-time (O4 O5 O6 O12)', () => {
         assert.match(markup, /class="stat-value text-danger" id="stat-failed-today">2</, 'a failure today is red');
         assert.ok(words.includes(s.t('overview.stat.inWeek', { n: '84' })), 'the week is the sub-line');
         assert.match(markup, /class="stat-value text-warning" id="stat-waiting">2</, 'AI off + customer spoke last: two');
-        assert.ok(words.includes(s.t('overview.stat.waitingOldest', { age: '2d' })), 'the oldest wait, as a duration');
+        assert.ok(words.includes(s.t('overview.stat.waitingOldest', { age: s.t('overview.age.days', { count: 2 }) })), 'the oldest wait, in words');
     });
 
     it('a failed series or thread list is "—" with the reason, never 0', () => {
@@ -225,9 +221,10 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
             { activeCampaigns: 0 },
             ok({ data: [{ timestamp: new Date().toISOString() }] }),
             failed('token check timed out'),
-            ok([]),
-            ok({ data: [{ is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(5 * 3600 * 1000) }] }),
             ok(week()),
+            undefined,
+            undefined,
+            ok({ items: [{ type: 'thread_waiting', severity: 'warning', count: 1, oldestAt: ago(5 * 3600 * 1000), sentence: { key: 'attention.thread_waiting', params: {} }, action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' } }], counts: { inbox: 1 } }),
         ));
         // Pushed as: token unknown (warning), failed today (danger), waiting (warning), no campaign (info).
         assert.deepEqual(plain(alerts.map((a: Json) => a.level)), ['danger', 'warning', 'warning', 'info']);
@@ -237,17 +234,17 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         assert.ok(markup.includes(s.t('overview.attentionCount', { count: 4 })), 'the heading counts');
         assert.ok(markup.includes(s.t('overview.asOf', { time: s.UI.formatTime(at) })), 'as of HH:MM');
         assert.ok(markup.includes('data-action="overview:refresh"'));
-        assert.match(markup, /data-target="inbox" data-query="filter=waiting"/);
-        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: '5h', count: 1 })));
+        assert.ok(markup.includes('href="#/inbox?filter=todo"'), 'the server’s own link, to the To do list');
+        assert.ok(markup.includes(s.t('overview.alert.waitingOldest', { age: s.t('overview.age.hours', { count: 5 }), count: 1 })));
     });
 
     it('the waiting card says "it" for one conversation and "them" for several, in both languages', () => {
         const body = (lang: 'ar' | 'en', n: number): string => {
             const s = load(lang);
             const O = s.pages.Overview;
-            const rows = Array.from({ length: n }, () => ({ is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(3600 * 1000) }));
-            const alerts = O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [{ timestamp: new Date().toISOString() }] }), ok({}), ok([]), ok({ data: rows }), ok(week()));
-            const card = alerts.find((x: Json) => x.target === 'inbox');
+            const item = { type: 'thread_waiting', severity: 'warning', count: n, oldestAt: ago(3600 * 1000), sentence: { key: 'attention.thread_waiting', params: {} }, action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' } };
+            const alerts = O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [{ timestamp: new Date().toISOString() }] }), ok({}), ok(week()), undefined, undefined, ok({ items: [item], counts: { inbox: n } }));
+            const card = alerts.find((x: Json) => x.icon === 'message-square-dot');
             return String(card.body);
         };
         assert.match(body('en', 1), /answered it yet\. It has waited/);
@@ -273,15 +270,16 @@ describe('Overview — the briefing (O7 O8 O10 O11)', () => {
         s.api.getStats = () => Promise.resolve({ activeCampaigns: 2 });
         s.api.getInteractions = () => Promise.resolve({ data: [] });
         s.api.getTokenStatus = () => Promise.resolve({ status: 'valid' });
-        s.api.getScheduledPosts = () => Promise.resolve([]);
-        s.api.getConversations = () => Promise.resolve({ data: [{ is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(60000) }] });
+        s.api.getAttention = () => Promise.resolve({ items: [], counts: { inbox: 1, studio: 0, scheduler: 0 }, heartbeat: null });
         s.api.getDailyStats = () => Promise.resolve(week());
         s.api.getGrowthOverview = () => Promise.resolve({ kpis: {}, trend: [] });
         s.api.getGrowthSettings = () => Promise.resolve({ settings: { goal_followers: 10000 } });
         const O = s.pages.Overview;
         O.render();
         await settle();
-        assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getConversations').map((c) => c.args[0])), [{ limit: 100 }]);
+        // U2: the list comes from the one summary. Today reads no scheduled post and no conversation list to build it.
+        assert.equal(s.calls.filter((c) => c.method === 'getAttention').length, 1);
+        assert.deepEqual(s.calls.filter((c) => c.method === 'getConversations' || c.method === 'getScheduledPosts'), []);
         // The followers and the skip rate read two weeks; the views tile reads its own seven days (the server's exact comparison).
         assert.deepEqual(plain(s.calls.filter((c) => c.method === 'getGrowthOverview').map((c) => c.args[0])), [14, 7]);
         assert.deepEqual(s.waiting, [1], 'SH3: the count reaches the nav');

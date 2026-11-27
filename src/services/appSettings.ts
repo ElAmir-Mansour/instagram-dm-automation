@@ -367,6 +367,8 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *   adsLeadsCaughtUp when the 6-hourly lead catch-up last ran for the tenant (A10, `src/services/ads/leads.ts`), an ISO instant. Not a secret.
  *   explainersEnabled 'true': the platform admin switched illustrated explainers on for the tenant (v59, `src/services/explainers/switch.ts`). Absent is
  *                   off, and in this version only the platform owner can be switched on. Not a secret.
+ *   autoArchive     whether failed posts and expired hand-offs older than N days are put away by the daily sweep, as JSON `{ "enabled": bool, "days": 7-365 }`
+ *                   (`src/services/autoArchive.ts`, U2). Absent is ON at 30 days (the product default); the owner's, from Settings. Not a secret.
  *   museSwitches    Meta Muse perception, per capability, as JSON: `{ dm_media, voice, memory }`, each only when it is exactly `true`
  *                   (`src/services/perception/switches.ts`). Absent is all off. The owner's, set from the AI settings card. Not a secret.
  *   museAllowSenders who the perception features answer: a JSON list of sender ids, or `["*"]` for everyone. Absent or empty is nobody. Not a secret.
@@ -393,6 +395,7 @@ export const TENANT_SETTING_PREFIXES = {
     adsSync: 'ads.sync.',
     adsMedia: 'ads.media.',
     adsLeadsCaughtUp: 'ads.leads_caught_up.',
+    autoArchive: 'cleanup.auto_archive.',
     explainersEnabled: 'explainers.enabled.',
     museSwitches: 'muse.switches.',
     museAllowSenders: 'muse.allow_senders.',

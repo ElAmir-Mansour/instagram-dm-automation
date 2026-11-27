@@ -1,0 +1,138 @@
+/*
+ * Brand: the rules only this page uses.
+ *
+ * Loaded by App.loadPageModule next to dashboard/js/pages/brand.js, with the same ?v=, because the page's entry in App.pages declares
+ * `css: true`. Cards, buttons, switches, the segmented control and the callouts stay in tokens.css and styles.css.
+ *
+ * Interface colours are tokens. The colours INSIDE a preview tile or a swatch are the tenant's own, and they come from one place only: the
+ * `--bp-*` custom properties that brand.js sets from script (`style.setProperty`), after each value passed /^#[0-9A-F]{6}$/i. A tile is
+ * drawn at the canvas's own pixel numbers (contract §5.3, 1080 wide) scaled by `--bp-k`, so `calc(var(--bp-k) * var(--bp-lw) * 1px)` is
+ * "the logo's width on a 1080-px canvas, as it looks here". Logical properties only: the start corner IS the right one when the tile is
+ * `dir="rtl"`, and the logo itself is never mirrored, rotated or stretched.
+ */
+
+/* ─── The page and its cards ─────────────────────────────────────────────── */
+.brand-page { display: flex; flex-direction: column; gap: var(--space-5); min-inline-size: 0; }
+.brand-card { min-inline-size: 0; }
+.brand-card > .section-title { margin-block-start: 0; }
+.brand-card > .form-hint { margin-block: 0 var(--space-4); }
+.brand-note { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--fs-200); color: var(--text-muted); }
+.brand-note [data-lucide], .brand-note svg { inline-size: var(--icon-sm); block-size: var(--icon-sm); flex: none; }
+.brand-error { margin-block: var(--space-3) 0; }
+.brand-error:empty { display: none; }
+.brand-error p { margin: 0; color: var(--danger-text); font-size: var(--fs-200); overflow-wrap: anywhere; }
+.brand-links { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-block-start: var(--space-3); font-size: var(--fs-200); }
+
+/* ─── The logo card ──────────────────────────────────────────────────────── */
+.brand-swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3); margin-block-end: var(--space-3); }
+.brand-swatch { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; }
+.brand-swatch figcaption { font-size: var(--fs-100); color: var(--text-muted); }
+.bp-swatch-surface {
+    display: flex; align-items: center; justify-content: center;
+    min-block-size: 8.5rem; padding: var(--space-4);
+    background: var(--bp-bg);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+}
+.brand-facts { margin: 0 0 var(--space-3); font-size: var(--fs-200); color: var(--text-default); overflow-wrap: anywhere; }
+.brand-tools { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3) var(--space-4); margin-block-end: var(--space-3); }
+.brand-tolerance { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 11rem; }
+.brand-tolerance label { font-size: var(--fs-100); color: var(--text-muted); }
+.brand-tolerance input[type='range'] { inline-size: 100%; min-block-size: var(--tap-target); accent-color: var(--accent); }
+.brand-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.brand-actions .btn { min-block-size: var(--tap-target); }
+.brand-choose { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+
+/* ─── The colours card ───────────────────────────────────────────────────── */
+.brand-switch { margin-block-end: var(--space-3); }
+.brand-switch .switch-label { font-weight: var(--fw-medium); color: var(--text-strong); }
+.brand-colours-text { margin: 0 0 var(--space-2); font-size: var(--fs-200); color: var(--text-default); line-height: var(--lh-normal); }
+
+/* ─── The preview ────────────────────────────────────────────────────────── */
+.brand-preview-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-4); }
+.brand-preview-head .section-title { margin: 0; }
+.brand-lang { overflow-x: auto; max-inline-size: 100%; }
+.brand-lang .btn { min-block-size: var(--tap-target); min-inline-size: var(--tap-target); }
+
+/* The tiles are a swipe strip on a phone and a wrapped row beside the cards on a desktop. */
+.bp-strip {
+    display: flex; gap: var(--space-4); align-items: flex-start;
+    overflow-x: auto; padding-block-end: var(--space-3);
+    scroll-snap-type: x proximity; overscroll-behavior-x: contain;
+}
+.bp-tile { margin: 0; flex: none; display: flex; flex-direction: column; gap: var(--space-2); scroll-snap-align: start; }
+.bp-tile figcaption { font-size: var(--fs-200); font-weight: var(--fw-medium); color: var(--text-strong); }
+.bp-tile-note { margin: 0; max-inline-size: 12.5rem; font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-normal); }
+@media (min-width: 861px) {
+    .bp-strip { flex-wrap: wrap; overflow-x: visible; }
+}
+
+.bp-canvas {
+    position: relative; overflow: hidden; flex: none;
+    inline-size: calc(var(--bp-cw) * 1px); block-size: calc(var(--bp-ch) * 1px);
+    background: var(--bp-bg);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    box-sizing: content-box;
+}
+
+/* The logo: placed by its outer box (the plate, when there is one). Never flipped: `direction` moves the start edge, not the picture. */
+.bp-logo {
+    position: absolute; display: flex; box-sizing: border-box;
+    inset-block-start: calc(var(--bp-k) * var(--bp-lt) * 1px);
+    inline-size: calc(var(--bp-k) * var(--bp-lw) * 1px); block-size: calc(var(--bp-k) * var(--bp-lh) * 1px);
+    padding: calc(var(--bp-k) * var(--bp-lp) * 1px);
+}
+.bp-logo--start { inset-inline-start: calc(var(--bp-k) * var(--bp-ls) * 1px); }
+.bp-logo--centre { inset-inline: 0; margin-inline: auto; }
+.bp-logo--plate { background: var(--bp-plate); border-radius: calc(var(--bp-k) * var(--bp-lr) * 1px); }
+.bp-logo--shadow { box-shadow: var(--elev-2); }
+.bp-logo img { display: block; inline-size: calc(var(--bp-k) * var(--bp-iw) * 1px); block-size: calc(var(--bp-k) * var(--bp-ih) * 1px); max-inline-size: none; }
+.bp-logo--placeholder > .bp-ph {
+    display: block; inline-size: 100%; block-size: 100%; box-sizing: border-box;
+    border: 1px dashed var(--bp-bar); border-radius: calc(var(--bp-k) * 8px);
+}
+
+/* The swatches draw the same logo at its own size (scale 1), in the page's flow. */
+.bp-swatch-surface .bp-logo { position: static; inline-size: auto; block-size: auto; padding: calc(var(--bp-k) * var(--bp-lp) * 1px); }
+
+/* The stand-ins for text and pictures: bars, in the tile's own colours, at the canvas's own numbers. */
+.bp-bar, .bp-dot, .bp-band, .bp-pic { position: absolute; box-sizing: border-box; }
+.bp-bar { background: var(--bp-bar); border-radius: calc(var(--bp-k) * 8px); block-size: calc(var(--bp-k) * 22px); }
+.bp-bar--faint { background: var(--bp-bar2); }
+.bp-bar--accent { background: var(--bp-accent); }
+.bp-dot { background: var(--bp-bar); border-radius: 50%; inline-size: calc(var(--bp-k) * 52px); block-size: calc(var(--bp-k) * 52px); }
+.bp-pic { background: var(--bp-bar2); border-radius: calc(var(--bp-k) * 24px); }
+.bp-band { background: var(--bp-accent); inset-inline: 0; }
+
+/* The signature that follows a logo in a carousel header */
+.bp-sig {
+    inset-inline-start: calc(var(--bp-k) * var(--bp-sigs) * 1px);
+    inset-block-start: calc(var(--bp-k) * var(--bp-sigt) * 1px);
+    inline-size: calc(var(--bp-k) * 150px); block-size: calc(var(--bp-k) * 16px);
+}
+
+/* Carousel (ig and tt share the same stand-ins; the box differs, so the numbers are the canvas's: ig 92, tt 150 / 84) */
+.bp-t-carousel .bp-b1 { inset-block-start: calc(var(--bp-k) * 420px); inset-inline-start: calc(var(--bp-k) * var(--bp-cs) * 1px); inline-size: calc(var(--bp-k) * 760px); block-size: calc(var(--bp-k) * 44px); }
+.bp-t-carousel .bp-b2 { inset-block-start: calc(var(--bp-k) * 500px); inset-inline-start: calc(var(--bp-k) * var(--bp-cs) * 1px); inline-size: calc(var(--bp-k) * 620px); block-size: calc(var(--bp-k) * 44px); }
+.bp-t-carousel .bp-b3 { inset-block-start: calc(var(--bp-k) * 580px); inset-inline-start: calc(var(--bp-k) * var(--bp-cs) * 1px); inline-size: calc(var(--bp-k) * 300px); block-size: calc(var(--bp-k) * 44px); }
+.bp-t-carousel .bp-b4 { inset-block-start: calc(var(--bp-k) * 720px); inset-inline-start: calc(var(--bp-k) * var(--bp-cs) * 1px); inline-size: calc(var(--bp-k) * 520px); block-size: calc(var(--bp-k) * 22px); }
+.bp-t-carousel .bp-b5 { inset-block-start: calc(var(--bp-k) * 780px); inset-inline-start: calc(var(--bp-k) * var(--bp-cs) * 1px); inline-size: calc(var(--bp-k) * 420px); block-size: calc(var(--bp-k) * 22px); }
+
+/* Infographic: three columns and the footer */
+.bp-t-infographic .bp-col { position: absolute; background: var(--bp-bar2); border-radius: calc(var(--bp-k) * 28px); inset-block: calc(var(--bp-k) * 260px) calc(var(--bp-k) * 190px); inline-size: calc(var(--bp-k) * 290px); }
+.bp-t-infographic .bp-col1 { inset-inline-start: calc(var(--bp-k) * 40px); }
+.bp-t-infographic .bp-col2 { inset-inline-start: calc(var(--bp-k) * 395px); }
+.bp-t-infographic .bp-col3 { inset-inline-start: calc(var(--bp-k) * 750px); }
+.bp-t-infographic .bp-b1 { inset-block-start: calc(var(--bp-k) * 90px); inset-inline-start: calc(var(--bp-k) * 40px); inline-size: calc(var(--bp-k) * 640px); block-size: calc(var(--bp-k) * 48px); background: var(--bp-accent); }
+.bp-t-infographic .bp-dot { inset-block-start: calc(var(--bp-k) * 1255px); inset-inline-start: calc(var(--bp-k) * var(--bp-dotl) * 1px); }
+.bp-t-infographic .bp-b2 { inset-block-start: calc(var(--bp-k) * 1270px); inset-inline-end: calc(var(--bp-k) * 40px); inline-size: calc(var(--bp-k) * 220px); }
+
+/* Explainer: a picture, the title in its colour, and the footer's name and handle under the logo */
+.bp-t-explainer .bp-pic { inset-block: calc(var(--bp-k) * 330px) calc(var(--bp-k) * 460px); inset-inline: calc(var(--bp-k) * 60px); }
+.bp-t-explainer .bp-b1 { inset-block-start: calc(var(--bp-k) * 200px); inset-inline: calc(var(--bp-k) * 120px); block-size: calc(var(--bp-k) * 56px); background: var(--bp-accent); }
+.bp-t-explainer .bp-b2 { inset-block-start: calc(var(--bp-k) * var(--bp-below) * 1px); inset-inline: 0; margin-inline: auto; inline-size: calc(var(--bp-k) * 300px); }
+.bp-t-explainer .bp-b3 { inset-block-start: calc(var(--bp-k) * var(--bp-below) * 1px + var(--bp-k) * 40px); inset-inline: 0; margin-inline: auto; inline-size: calc(var(--bp-k) * 190px); }
+
+/* Reel: a video, the captions, and the end card's band */
+.bp-t-reel .bp-b1 { inset-block-start: calc(var(--bp-k) * 1030px); inset-inline: calc(var(--bp-k) * 120px); block-size: calc(var(--bp-k) * 40px); background: var(--bp-bar); }
+.bp-t-reel .bp-b2 { inset-block-start: calc(var(--bp-k) * 1100px); inset-inline: calc(var(--bp-k) * 200px); block-size: calc(var(--bp-k) * 40px); background: var(--bp-bar); }
+.bp-t-reel .bp-band { inset-block-start: calc(var(--bp-k) * 1236px); block-size: calc(var(--bp-k) * 264px); opacity: 0.9; }

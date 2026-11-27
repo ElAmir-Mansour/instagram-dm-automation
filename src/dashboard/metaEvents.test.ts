@@ -406,7 +406,7 @@ describe('HealthStrip.webhookNotice: a notice only for a definite "no"', () => {
 
 describe('Today: the alert', () => {
     const ok = (value: unknown) => ({ status: 'fulfilled', value });
-    const alerts = (w: World, health: unknown) => plain<Json[]>(w.OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok([]), ok(null), health));
+    const alerts = (w: World, health: unknown) => plain<Json[]>(w.OV.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok(null), health));
     const webhookAlert = (list: Json[]) => list.find((a) => a.icon === 'plug-zap');
 
     for (const lang of ['en', 'ar'] as const) {
@@ -447,7 +447,7 @@ describe('Today: the alert', () => {
 
     it('leaves every other alert as it was, and is sorted with the dangers', () => {
         const w = load('en');
-        const list = plain<Json[]>(w.OV.sortAlerts(w.OV.buildAlerts({ activeCampaigns: 0 }, ok({ data: [] }), { status: 'fulfilled', value: { status: 'invalid' } }, ok([]), ok({ data: [] }), ok([]), ok(null), ok({ webhooks: SUMMARY_BROKEN }))));
+        const list = plain<Json[]>(w.OV.sortAlerts(w.OV.buildAlerts({ activeCampaigns: 0 }, ok({ data: [] }), { status: 'fulfilled', value: { status: 'invalid' } }, ok([]), ok(null), ok({ webhooks: SUMMARY_BROKEN }))));
         assert.deepEqual(list.map((a) => a.level), ['danger', 'danger', 'info']);
         assert.equal(list[0]!.icon, 'key-round', 'the dead token stays first: the checks run in the order they always did');
         assert.equal(list[1]!.icon, 'plug-zap');

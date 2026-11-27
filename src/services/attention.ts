@@ -14,7 +14,7 @@
  *     Get-started panel instead) produce no item and no count.
  *   - **Say "all clear" when it could not look.** A query that fails fails the whole summary: a half-answer reads as "nothing needs you".
  *
- * Implemented here: the heartbeat; `handoff`, `post_failed`, `post_overdue` and `connection_broken` items; the Inbox's "waiting" count; and
+ * Implemented here: the heartbeat; `handoff`, `thread_waiting`, `post_failed`, `post_failed_old`, `post_overdue` and `connection_broken` items; the Inbox's "waiting" count; and
  * the Studio's four (research USE-1 and USE-4, 2026-11-27): `mac_signed_out` (Claude on the Mac answered "signed out", the stored flag of
  * `studio/macHealth.ts`), `worker_offline` (no worker call for `WORKER_OFFLINE_MINUTES` while Studio jobs have waited as long), `tiktok_draft`
  * (a TikTok video left in the creator's inbox for `TIKTOK_DRAFT_DAYS`) and `reel_review` (clips waiting for the owner's review). They fill
@@ -43,7 +43,7 @@ export const ATTENTION_MIGRATION_HINT =
 export type AttentionType =
     | 'webhook_silent' | 'handoff' | 'hot_lead' | 'window_closing' | 'post_failed' | 'tiktok_draft'
     | 'post_overdue' | 'reel_review' | 'worker_offline' | 'connection_expiring' | 'connection_broken'
-    | 'timezone_unset' | 'platform' | 'mac_signed_out';
+    | 'timezone_unset' | 'platform' | 'mac_signed_out' | 'thread_waiting' | 'post_failed_old';
 
 export type AttentionSeverity = 'danger' | 'warning' | 'info';
 
@@ -51,6 +51,19 @@ export type AttentionSeverity = 'danger' | 'warning' | 'info';
 export interface AttentionSentence {
     key: string;
     params: Record<string, string | number>;
+}
+
+/**
+ * What an item carries so the screen it lands on can CLEAR it without asking for the rows (U2, DW-T3). Ids are row ids of this tenant, never a name or
+ * a message; each list is capped at `DETAIL_IDS_MAX`. Additive to the contract: an item without it is exactly as before.
+ */
+export interface AttentionDetail {
+    /** `post_failed*`: why they failed, one entry per reason, most first. `count` is posts (a post on several platforms is one). */
+    reasons?: Array<{ reason: FailureReason; count: number; oldestAt: string | null }>;
+    /** `post_failed*`: every row behind the item (all platforms of each post), the ids Archive takes. */
+    ids?: string[];
+    /** `handoff` and `thread_waiting`: the threads among them whose 24 h window has closed, so a reply can no longer reach them: Mark handled is what is left. */
+    closed?: { count: number; ids: string[]; oldestAt: string | null };
 }
 
 export interface AttentionItem {
@@ -63,6 +76,7 @@ export interface AttentionItem {
     action: { verb: string; href: string };
     /** When the oldest thing behind this item started waiting: "oldest waited ...", and the sort key within a severity. */
     oldestAt?: string;
+    detail?: AttentionDetail;
 }
 
 export interface Heartbeat {
@@ -107,6 +121,15 @@ export const WORKER_OFFLINE_MINUTES = 30;
 /** A TikTok video left in the creator's inbox this long is a draft the owner forgot: TikTok posts only when the owner does. */
 export const TIKTOK_DRAFT_DAYS = 3;
 
+/** A failed post older than this (by its scheduled time) is an old failure: one quiet line, not a red card. Posts dated in the future are never old. */
+export const POST_FAILED_OLD_DAYS = 14;
+
+/** Meta's standard messaging window (`Attention.WINDOW_MS`): after this long since the customer's last message a reply is refused. */
+export const THREAD_WINDOW_HOURS = 24;
+
+/** The most ids one item carries. A tenant with more failures archives these, and the summary then shows the rest. */
+export const DETAIL_IDS_MAX = 100;
+
 /** Where each item sends the owner. The deep-link targets are specs/001-dashboard-ux tasks T071. */
 const HREF = {
     inboxTodo: '#/inbox?filter=todo',
@@ -121,8 +144,16 @@ const SEVERITY_RANK: Record<AttentionSeverity, number> = { danger: 0, warning: 1
 // ─── Facts: what the queries return ──────────────────────────────────────────────────────────
 
 export interface WaitingFact {
+    /** Threads among them whose 24 h window has closed. Absent: not asked. */
+    closed?: ClosedFact;
     count: number;
     /** When the oldest of them started waiting (ISO). */
+    oldestAt: string | null;
+}
+
+export interface ClosedFact {
+    count: number;
+    ids: string[];
     oldestAt: string | null;
 }
 
@@ -146,6 +177,8 @@ export interface AttentionFacts {
     handoff: HandoffFact;
     waiting: WaitingFact;
     postsFailed: WaitingFact;
+    /** The failed posts split into recent and older than `POST_FAILED_OLD_DAYS`, with why and which rows. Absent: one `post_failed` item for all of them, as before. */
+    failedPosts?: { recent: FailedBucket; old: FailedBucket };
     postsOverdue: WaitingFact;
     /** One row per connected integration, broken or not. Empty: nothing is connected yet. */
     connections: ConnectionFact[];
@@ -161,6 +194,85 @@ export interface StudioFacts {
     workerOffline: { jobs: number; oldestAt: string | null; lastSeenAt: string | null } | null;
     tiktokDrafts: WaitingFact;
     reelReview: WaitingFact;
+}
+
+// ─── Why a post failed ───────────────────────────────────────────────────────────────────────
+
+/**
+ * What the owner can DO about a failed post, from its `error_log` (the words the pipeline wrote, in English, so never shown as they are in Arabic):
+ *   `replaced`        the owner or the Monteur replaced it on purpose ("Replaced: the reel is being remade"): nothing to fix, Archive it.
+ *   `tiktok_private`  TikTok refuses a direct post until its audit, unless the account is private (`tiktok.ts`): a rule, not a fault.
+ *   `token`           Meta refused the access token or a permission (codes 190, 200, 10): Settings, not the post.
+ *   `media`           the file, the cover or the container was refused or never finished.
+ *   `other`           anything else: the post's own card has the message.
+ * Pure. The first match wins, so a TikTok rule is not mistaken for a media problem by the word "video" in it.
+ */
+export type FailureReason = 'replaced' | 'tiktok_private' | 'token' | 'media' | 'other';
+
+export function failureReason(errorLog: string | null | undefined): FailureReason {
+    const text = String(errorLog ?? '');
+    if (/^\s*replaced\b/i.test(text)) return 'replaced';
+    if (/tiktok/i.test(text) && /approves this app|account is set to private|set to private|only me/i.test(text)) return 'tiktok_private';
+    if (/\bcode:?\s*(190|200|10)\b|access token|oauth|session has (expired|been invalidated)|permission/i.test(text)) return 'token';
+    if (/\b(media|video|image|photo|cover|container|aspect|duration|codec|resolution|file|upload)\b/i.test(text)) return 'media';
+    return 'other';
+}
+
+export interface FailedBucket {
+    /** Posts, a post on several platforms counted once. */
+    count: number;
+    oldestAt: string | null;
+    reasons: Array<{ reason: FailureReason; count: number; oldestAt: string | null }>;
+    /** Every row of every post in the bucket, capped at `DETAIL_IDS_MAX`. */
+    ids: string[];
+}
+
+/** A failed row as `FAILED_POSTS_DETAIL_SQL` returns it. */
+export interface FailedRow { id: string; group_id: string | null; scheduled_time: Date | string | null; error_log: string | null }
+
+const emptyBucket = (): FailedBucket => ({ count: 0, oldestAt: null, reasons: [], ids: [] });
+
+/**
+ * The failed rows as the two buckets Today shows. A post that went to several platforms is one (`group_id`, else the row); its reason is the one its
+ * oldest row carries, and its age its earliest time. "Old" is `POST_FAILED_OLD_DAYS` past the scheduled time: a post dated in the future (a
+ * placeholder, a reel replaced before its slot) is recent. Pure; `now` is the clock.
+ */
+export function bucketFailed(rows: readonly FailedRow[], now: number): { recent: FailedBucket; old: FailedBucket } {
+    const groups = new Map<string, FailedRow[]>();
+    for (const row of rows) {
+        const key = row.group_id ?? row.id;
+        const list = groups.get(key);
+        if (list) list.push(row); else groups.set(key, [row]);
+    }
+    const when = (row: FailedRow): number => { const ms = Date.parse(toIso(row.scheduled_time as Date | null) ?? String(row.scheduled_time ?? '')); return Number.isFinite(ms) ? ms : now; };
+    const limit = POST_FAILED_OLD_DAYS * 86_400_000;
+    const recent = emptyBucket();
+    const old = emptyBucket();
+    const reasonAt = { recent: new Map<FailureReason, { count: number; oldestMs: number }>(), old: new Map<FailureReason, { count: number; oldestMs: number }>() };
+    const oldestMs = { recent: Infinity, old: Infinity };
+    for (const members of groups.values()) {
+        members.sort((a, b) => when(a) - when(b));
+        const first = members[0]!;
+        const at = when(first);
+        const which: 'recent' | 'old' = now - at >= limit ? 'old' : 'recent';
+        const bucket = which === 'old' ? old : recent;
+        const reason = failureReason(first.error_log);
+        bucket.count += 1;
+        oldestMs[which] = Math.min(oldestMs[which], at);
+        const seen = reasonAt[which].get(reason) ?? { count: 0, oldestMs: Infinity };
+        seen.count += 1;
+        seen.oldestMs = Math.min(seen.oldestMs, at);
+        reasonAt[which].set(reason, seen);
+        for (const m of members) if (bucket.ids.length < DETAIL_IDS_MAX) bucket.ids.push(m.id);
+    }
+    for (const which of ['recent', 'old'] as const) {
+        const bucket = which === 'old' ? old : recent;
+        bucket.oldestAt = Number.isFinite(oldestMs[which]) ? new Date(oldestMs[which]).toISOString() : null;
+        bucket.reasons = [...reasonAt[which].entries()]
+            .map(([reason, v]) => ({ reason, count: v.count, oldestAt: new Date(v.oldestMs).toISOString() }))
+            .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+    }
+    return { recent, old };
 }
 
 /** The reason most of the handed-over threads carry, ties broken by name so the answer is the same every time. null when none names one. */
@@ -192,6 +304,18 @@ function dated<T extends object>(item: T, oldestAt: string | null): T & { oldest
     return oldestAt ? { ...item, oldestAt } : item;
 }
 
+function withDetail<T extends AttentionItem>(item: T, detail: AttentionDetail | null): T {
+    return detail ? { ...item, detail } : item;
+}
+
+function closedDetail(closed: ClosedFact | undefined): AttentionDetail | null {
+    return closed && closed.count > 0 ? { closed: { count: closed.count, ids: closed.ids.slice(0, DETAIL_IDS_MAX), oldestAt: closed.oldestAt } } : null;
+}
+
+function failedDetail(bucket: FailedBucket): AttentionDetail {
+    return { reasons: bucket.reasons, ids: bucket.ids.slice(0, DETAIL_IDS_MAX) };
+}
+
 /**
  * Items and nav counts from the facts. Pure.
  *
@@ -207,14 +331,42 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
         const reason = dominantReason(facts.handoff.reasons);
         const params: Record<string, string | number> = { n: facts.handoff.count };
         if (reason) params.reason = reason;
-        items.push(dated({
+        items.push(withDetail(dated({
             type: 'handoff', severity: 'warning', count: facts.handoff.count,
             sentence: { key: 'attention.handoff', params },
             action: { verb: 'attention.verb.reply', href: HREF.inboxTodo },
-        }, facts.handoff.oldestAt));
+        }, facts.handoff.oldestAt), closedDetail(facts.handoff.closed)));
     }
 
-    if (facts.postsFailed.count > 0) {
+    // Threads where the bot is off and the customer spoke last. They were counted into the Inbox (and the nav badge) but had no item, so Today said "all
+    // clear" beside a badge that said 1; the same link opens the same To do list (`Inbox.isWaiting`).
+    if (facts.waiting.count > 0) {
+        items.push(withDetail(dated({
+            type: 'thread_waiting', severity: 'warning', count: facts.waiting.count,
+            sentence: { key: 'attention.thread_waiting', params: { n: facts.waiting.count } },
+            action: { verb: 'attention.verb.reply', href: HREF.inboxTodo },
+        }, facts.waiting.oldestAt), closedDetail(facts.waiting.closed)));
+    }
+
+    // The split needs rows to split: a count with no rows behind it (a statement that came back empty) is still said, as one item.
+    if (facts.failedPosts && facts.failedPosts.recent.count + facts.failedPosts.old.count > 0) {
+        const { recent, old } = facts.failedPosts;
+        if (recent.count > 0) {
+            items.push(withDetail(dated({
+                type: 'post_failed', severity: 'danger', count: recent.count,
+                sentence: { key: 'attention.post_failed', params: { n: recent.count } },
+                action: { verb: 'attention.verb.review', href: HREF.postsNeedsYou },
+            }, recent.oldestAt), failedDetail(recent)));
+        }
+        // Old failures stay counted (the Scheduler badge, the link) but are one quiet line: red for a month stops being read.
+        if (old.count > 0) {
+            items.push(withDetail(dated({
+                type: 'post_failed_old', severity: 'info', count: old.count,
+                sentence: { key: 'attention.post_failed_old', params: { n: old.count, days: POST_FAILED_OLD_DAYS } },
+                action: { verb: 'attention.verb.review', href: HREF.postsNeedsYou },
+            }, old.oldestAt), failedDetail(old)));
+        }
+    } else if (facts.postsFailed.count > 0) {
         items.push(dated({
             type: 'post_failed', severity: 'danger', count: facts.postsFailed.count,
             sentence: { key: 'attention.post_failed', params: { n: facts.postsFailed.count } },
@@ -306,10 +458,10 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
  *     could qualify and not every thread the tenant has ever had.
  *   - `since` is when the wait started: the handoff, or the customer's last message.
  */
-export const THREADS_ATTENTION_SQL = `
-    SELECT t.kind, t.reason, COUNT(*)::int AS n, MIN(t.since) AS oldest_at
-      FROM (
+/** Each thread that could need a person, as `kind` / `reason` / `since` / `last_inbound_at` (the shared inner statement: counted below, swept by `autoArchive.ts`). `$1` is the tenant. */
+export const THREADS_NEEDING_PERSON_SQL = `
           SELECT
+              c.id AS id,
               CASE
                   WHEN c.stage = 'handoff'
                    AND NOT (c.handoff_at IS NOT NULL AND fx.last_operator_at IS NOT NULL AND fx.last_operator_at >= c.handoff_at)
@@ -318,7 +470,8 @@ export const THREADS_ATTENTION_SQL = `
                       THEN 'waiting'
               END AS kind,
               CASE WHEN c.stage = 'handoff' THEN c.handoff_reason END AS reason,
-              CASE WHEN c.stage = 'handoff' THEN COALESCE(c.handoff_at, lm.created_at) ELSE lm.created_at END AS since
+              CASE WHEN c.stage = 'handoff' THEN COALESCE(c.handoff_at, lm.created_at) ELSE lm.created_at END AS since,
+              li.last_inbound_at AS last_inbound_at
             FROM conversations c
             LEFT JOIN LATERAL (
                 SELECT m.direction, m.created_at
@@ -332,9 +485,22 @@ export const THREADS_ATTENTION_SQL = `
                   FROM messages m3
                  WHERE m3.conversation_id = c.id AND m3.direction = 'outbound' AND m3.sender = 'operator'
             ) fx ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT MAX(m4.created_at) AS last_inbound_at
+                  FROM messages m4
+                 WHERE m4.conversation_id = c.id AND m4.direction = 'inbound'
+            ) li ON TRUE
            WHERE c.creator_id = $1
              AND c.handled_at IS NULL
              AND (c.stage = 'handoff' OR c.is_bot_active = false)
+`;
+
+export const THREADS_ATTENTION_SQL = `
+    SELECT t.kind, t.reason, COUNT(*)::int AS n, MIN(t.since) AS oldest_at,
+           COUNT(*) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS}))::int AS closed_n,
+           MIN(t.last_inbound_at) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS})) AS closed_oldest_at,
+           (ARRAY_AGG(t.id ORDER BY t.last_inbound_at) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS})))[1:${DETAIL_IDS_MAX}] AS closed_ids
+      FROM (${THREADS_NEEDING_PERSON_SQL}
       ) t
      WHERE t.kind IS NOT NULL
      GROUP BY t.kind, t.reason
@@ -360,6 +526,20 @@ export const POSTS_ATTENTION_SQL = `
      WHERE s.creator_id = $1
        AND s.archived_at IS NULL
        AND s.status IN ('FAILED', 'PENDING')
+`;
+
+/**
+ * The failed posts themselves, for the reason lines and for Archive: oldest first, capped, each message cut to what a classifier needs. `$1` is the tenant.
+ * Same rule as `POSTS_ATTENTION_SQL` (not archived, FAILED); the count above stays the truth, this is its explanation. `LIMIT` is `FAILED_ROWS_MAX`.
+ */
+export const FAILED_POSTS_DETAIL_SQL = `
+    SELECT s.id, s.group_id, s.scheduled_time, LEFT(s.error_log, 400) AS error_log
+      FROM scheduled_posts s
+     WHERE s.creator_id = $1
+       AND s.status = 'FAILED'
+       AND s.archived_at IS NULL
+     ORDER BY s.scheduled_time, s.id
+     LIMIT 400
 `;
 
 /**
@@ -411,11 +591,22 @@ export const REEL_REVIEW_ATTENTION_SQL = `
      WHERE creator_id = $1 AND status = 'review'
 `;
 
-interface ThreadRow { kind: 'handoff' | 'waiting'; reason: string | null; n: number; oldest_at: Date | null }
+interface ThreadRow {
+    kind: 'handoff' | 'waiting'; reason: string | null; n: number; oldest_at: Date | null;
+    closed_n?: number | null; closed_oldest_at?: Date | null; closed_ids?: string[] | null;
+}
 
 function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waiting: WaitingFact } {
     const handoff: HandoffFact = { count: 0, oldestAt: null, reasons: [] };
     const waiting: WaitingFact = { count: 0, oldestAt: null };
+    const addClosed = (fact: WaitingFact, row: ThreadRow): void => {
+        const n = Number(row.closed_n) || 0;
+        if (n <= 0) return;
+        const closed = fact.closed ?? (fact.closed = { count: 0, ids: [], oldestAt: null });
+        closed.count += n;
+        closed.oldestAt = older(closed.oldestAt, row.closed_oldest_at ?? null);
+        for (const id of Array.isArray(row.closed_ids) ? row.closed_ids : []) if (closed.ids.length < DETAIL_IDS_MAX) closed.ids.push(String(id));
+    };
     const older = (current: string | null, next: Date | null): string | null => {
         const iso = toIso(next);
         return iso && (!current || Date.parse(iso) < Date.parse(current)) ? iso : current;
@@ -427,9 +618,11 @@ function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waitin
             handoff.count += n;
             handoff.oldestAt = older(handoff.oldestAt, row.oldest_at);
             if (row.reason) handoff.reasons.push({ reason: row.reason, count: n });
+            addClosed(handoff, row);
         } else if (row.kind === 'waiting') {
             waiting.count += n;
             waiting.oldestAt = older(waiting.oldestAt, row.oldest_at);
+            addClosed(waiting, row);
         }
     }
     return { handoff, waiting };
@@ -439,12 +632,14 @@ async function loadThreads(creatorId: string) {
     return threadFacts(await queryRows<ThreadRow>(THREADS_ATTENTION_SQL, [creatorId]));
 }
 
-async function loadPosts(creatorId: string): Promise<{ postsFailed: WaitingFact; postsOverdue: WaitingFact }> {
-    const [row] = await queryRows<{ failed: number; failed_oldest_at: Date | null; overdue: number; overdue_oldest_at: Date | null }>(
-        POSTS_ATTENTION_SQL, [creatorId, OVERDUE_GRACE_MINUTES]
-    );
+async function loadPosts(creatorId: string, now: number): Promise<{ postsFailed: WaitingFact; failedPosts: { recent: FailedBucket; old: FailedBucket }; postsOverdue: WaitingFact }> {
+    const [[row], failedRows] = await Promise.all([
+        queryRows<{ failed: number; failed_oldest_at: Date | null; overdue: number; overdue_oldest_at: Date | null }>(POSTS_ATTENTION_SQL, [creatorId, OVERDUE_GRACE_MINUTES]),
+        queryRows<FailedRow>(FAILED_POSTS_DETAIL_SQL, [creatorId]),
+    ]);
     return {
         postsFailed: { count: Number(row?.failed) || 0, oldestAt: toIso(row?.failed_oldest_at) },
+        failedPosts: bucketFailed(failedRows, now),
         postsOverdue: { count: Number(row?.overdue) || 0, oldestAt: toIso(row?.overdue_oldest_at) },
     };
 }
@@ -550,7 +745,7 @@ export async function getAttention(creatorId: string, options: AttentionOptions 
     const [heartbeat, threads, posts, connections, studio, platform] = await Promise.all([
         heartbeatP,
         loadThreads(creatorId),
-        loadPosts(creatorId),
+        loadPosts(creatorId, now),
         loadConnections(creatorId),
         heartbeatP.then((h) => loadStudioFacts(creatorId, now, h.worker.lastSeenAt)),
         options.platformAdmin ? countPlatformProblems() : Promise.resolve(undefined),

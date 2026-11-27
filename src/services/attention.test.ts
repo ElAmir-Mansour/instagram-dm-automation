@@ -15,9 +15,11 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { metaHttp } from './http.js';
+import { TENANT_HEALTH_SQL } from './health.js';
 import { invalidateTenantCache } from './tenant.js';
 import {
-    buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, getAttention, OVERDUE_GRACE_MINUTES, POSTS_ATTENTION_SQL,
+    bucketFailed, buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, FAILED_POSTS_DETAIL_SQL, failureReason, getAttention,
+    OVERDUE_GRACE_MINUTES, POST_FAILED_OLD_DAYS, POSTS_ATTENTION_SQL, THREADS_NEEDING_PERSON_SQL,
     REEL_REVIEW_ATTENTION_SQL, STUDIO_JOBS_WAITING_SQL, THREADS_ATTENTION_SQL, TIKTOK_DRAFTS_ATTENTION_SQL, TIKTOK_DRAFT_DAYS,
     WORKER_OFFLINE_MINUTES, workerOfflineFact, type AttentionFacts, type AttentionItem, type StudioFacts,
 } from './attention.js';
@@ -85,10 +87,24 @@ describe('buildAttention: handoff', () => {
         assert.equal(counts.inbox, 5);
     });
 
-    it('waiting threads raise the Inbox count but are not an item of their own', () => {
+    it('waiting threads are an item of their own (U2): the Inbox count and the nav badge include them, so Today must say them too', () => {
         const out = buildAttention(facts({ waiting: { count: 4, oldestAt: iso(20) } }));
-        assert.deepEqual(out.items, []);
+        assert.deepEqual(out.items, [{
+            type: 'thread_waiting', severity: 'warning', count: 4,
+            sentence: { key: 'attention.thread_waiting', params: { n: 4 } },
+            action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' },
+            oldestAt: iso(20),
+        }]);
         assert.equal(out.counts.inbox, 4);
+    });
+
+    it('carries the threads whose 24 h window has closed, as ids, so Today can Mark them handled (U2, DW-T3)', () => {
+        const closed = { count: 2, ids: ['a', 'b'], oldestAt: iso(5000) };
+        const out = buildAttention(facts({
+            handoff: { count: 3, oldestAt: iso(6000), reasons: [], closed }, waiting: { count: 1, oldestAt: iso(20), closed: { count: 0, ids: [], oldestAt: null } },
+        }));
+        assert.deepEqual(out.items.find((i) => i.type === 'handoff')!.detail, { closed });
+        assert.equal('detail' in out.items.find((i) => i.type === 'thread_waiting')!, false, 'nothing closed, nothing carried');
     });
 });
 
@@ -272,7 +288,7 @@ afterEach(() => {
 
 /** Route each statement to the answer for it, by what it reads. Anything not arranged answers no rows. */
 function install(answer: Partial<Record<
-    'health' | 'worker' | 'threads' | 'posts' | 'connections' | 'queue' | 'schema' | 'studioJobs' | 'tiktok' | 'reels' | 'owner' | 'setting', Answer
+    'health' | 'worker' | 'threads' | 'posts' | 'failedRows' | 'connections' | 'queue' | 'schema' | 'studioJobs' | 'tiktok' | 'reels' | 'owner' | 'setting', Answer
 >>) {
     // The owner is cached for 30 s across tests; each install starts from what it arranges.
     invalidateTenantCache();
@@ -282,6 +298,7 @@ function install(answer: Partial<Record<
         const kind =
             text === flat(THREADS_ATTENTION_SQL) ? 'threads'
             : text === flat(POSTS_ATTENTION_SQL) ? 'posts'
+            : text === flat(FAILED_POSTS_DETAIL_SQL) ? 'failedRows'
             : text === flat(CONNECTIONS_ATTENTION_SQL) ? 'connections'
             : text === flat(STUDIO_JOBS_WAITING_SQL) ? 'studioJobs'
             : text === flat(TIKTOK_DRAFTS_ATTENTION_SQL) ? 'tiktok'
@@ -344,7 +361,7 @@ describe('getAttention', () => {
 
         assert.deepEqual(out.counts, { inbox: 7, studio: 0, scheduler: 3 });
         assert.deepEqual(out.items.map((i) => [i.type, i.count]), [
-            ['post_failed', 1], ['connection_broken', 1], ['handoff', 3], ['post_overdue', 2],
+            ['post_failed', 1], ['connection_broken', 1], ['handoff', 3], ['post_overdue', 2], ['thread_waiting', 4],
         ]);
         const handoff = out.items.find((i) => i.type === 'handoff')!;
         assert.deepEqual(handoff.sentence.params, { n: 3, reason: 'refund' });
@@ -354,7 +371,7 @@ describe('getAttention', () => {
     it('scopes every statement to the tenant it was asked about', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 10);
+        assert.equal(sent.length, 11);
         // Every statement but two: who the owner is (no parameters) and the Mac's sign-in flag (a platform setting, by its key).
         const tenantless = (sql: string) => /FROM creators ORDER BY created_at/.test(sql) || /FROM app_settings/.test(sql);
         for (const s of sent.filter((x) => !tenantless(x.sql))) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
@@ -371,7 +388,7 @@ describe('getAttention', () => {
     it('is a handful of reads, and every one is the database: no Graph call is ever made', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 10, 'tenant health, worker, threads, posts, connections, the owner, waiting jobs, TikTok drafts, clips to review, the sign-in flag');
+        assert.equal(sent.length, 11, 'tenant health, worker, threads, posts, the failed rows, connections, the owner, waiting jobs, TikTok drafts, clips to review, the sign-in flag');
         assert.deepEqual(graph, []);
     });
 
@@ -408,7 +425,7 @@ describe('getAttention', () => {
     });
 
     it('fails whole when any read fails: a half-answer would read as "nothing needs you"', async () => {
-        for (const broken of ['health', 'worker', 'threads', 'posts', 'connections'] as const) {
+        for (const broken of ['health', 'worker', 'threads', 'posts', 'failedRows', 'connections'] as const) {
             install({ health: () => [healthRow()], [broken]: () => new Error(`${broken} is down`) });
             await assert.rejects(getAttention(TENANT, { now: NOW }), new RegExp(`${broken} is down`), broken);
         }
@@ -550,5 +567,141 @@ describe('getAttention: the Studio facts', () => {
             install({ health: () => [healthRow()], [broken]: () => new Error(`${broken} is down`) });
             await assert.rejects(getAttention(TENANT, { now: NOW }), new RegExp(`${broken} is down`), broken);
         }
+    });
+});
+
+// ─── U2: why a post failed, old versus recent, and what the closed threads are ───────────────
+
+describe('failureReason: what the owner can do about a failed post', () => {
+    it('reads the pipeline’s own words, and the first match wins', () => {
+        assert.equal(failureReason('Replaced: the reel is being remade with Claude.'), 'replaced');
+        assert.equal(failureReason('TikTok post init: Until TikTok approves this app, direct posts only work when your TikTok account is set to private. Switch it.'), 'tiktok_private');
+        assert.equal(failureReason('(#190) Invalid OAuth access token (Code: 190)'), 'token');
+        assert.equal(failureReason('Media upload failed: the video could not be processed'), 'media');
+        assert.equal(failureReason('Something nobody wrote a rule for'), 'other');
+        assert.equal(failureReason(null), 'other');
+        assert.equal(failureReason(''), 'other');
+    });
+});
+
+describe('bucketFailed: recent against older than 14 days, one post per group', () => {
+    const day = 86_400_000;
+    const row = (id: string, group: string | null, daysAgo: number, error: string) =>
+        ({ id, group_id: group, scheduled_time: new Date(NOW - daysAgo * day), error_log: error });
+    const TT = 'TikTok post init: Until TikTok approves this app, direct posts only work when your TikTok account is set to private.';
+    const rows = [
+        row('t1', 'g1', 35, TT), row('t2', 'g2', 33, TT),
+        row('p1', 'g3', -70, 'Replaced: the reel is being remade with Claude.'), row('p2', 'g3', -70, 'Replaced: the reel is being remade with Claude.'),
+        row('m1', null, 2, 'Media upload failed'),
+    ];
+
+    it('splits at the cut by scheduled time: a post dated in the future is recent, never old', () => {
+        const { recent, old } = bucketFailed(rows, NOW);
+        assert.equal(POST_FAILED_OLD_DAYS, 14);
+        assert.equal(old.count, 2);
+        assert.equal(recent.count, 2);
+        assert.deepEqual(old.reasons.map((r) => [r.reason, r.count]), [['tiktok_private', 2]]);
+        assert.deepEqual(recent.reasons.map((r) => [r.reason, r.count]).sort(), [['media', 1], ['replaced', 1]]);
+    });
+
+    it('counts a post that went to several platforms once, and keeps every row of it for Archive', () => {
+        const { recent } = bucketFailed(rows, NOW);
+        assert.equal(recent.reasons.find((r) => r.reason === 'replaced')!.count, 1, 'two rows, one post');
+        assert.deepEqual([...recent.ids].sort(), ['m1', 'p1', 'p2']);
+    });
+
+    it('dates each bucket and each reason by its earliest post', () => {
+        const { old } = bucketFailed(rows, NOW);
+        assert.equal(old.oldestAt, new Date(NOW - 35 * day).toISOString());
+        assert.equal(old.reasons[0]!.oldestAt, new Date(NOW - 35 * day).toISOString());
+    });
+
+    it('is empty for no rows', () => {
+        const { recent, old } = bucketFailed([], NOW);
+        assert.deepEqual([recent.count, old.count, recent.ids, old.reasons], [0, 0, [], []]);
+    });
+});
+
+describe('buildAttention: failed posts split (U2, DW-T2)', () => {
+    const day = 86_400_000;
+    const split = bucketFailed([
+        { id: 'o1', group_id: null, scheduled_time: new Date(NOW - 40 * day), error_log: 'TikTok approves this app, set to private' },
+        { id: 'r1', group_id: null, scheduled_time: new Date(NOW - 3 * day), error_log: 'Media upload failed' },
+    ], NOW);
+
+    it('a recent failure is the red card; older ones are one quiet info line with their count, and each carries why and which rows', () => {
+        const out = buildAttention(facts({ postsFailed: { count: 2, oldestAt: iso(1) }, failedPosts: split }));
+        const recent = out.items.find((i) => i.type === 'post_failed')!;
+        const old = out.items.find((i) => i.type === 'post_failed_old')!;
+        assert.equal(recent.severity, 'danger');
+        assert.equal(old.severity, 'info');
+        assert.deepEqual(old.sentence, { key: 'attention.post_failed_old', params: { n: 1, days: 14 } });
+        assert.deepEqual(recent.detail, { reasons: [{ reason: 'media', count: 1, oldestAt: new Date(NOW - 3 * day).toISOString() }], ids: ['r1'] });
+        assert.deepEqual(old.detail!.ids, ['o1']);
+        assert.equal(old.action.href, '#/posts?filter=needs-you');
+    });
+
+    it('both stay in the Scheduler badge: the count is the same truth as before the split', () => {
+        const out = buildAttention(facts({ postsFailed: { count: 2, oldestAt: iso(1) }, failedPosts: split }));
+        assert.equal(out.counts.scheduler, 2);
+    });
+
+    it('only old failures: no red card at all', () => {
+        const onlyOld = bucketFailed([{ id: 'o1', group_id: null, scheduled_time: new Date(NOW - 40 * day), error_log: null }], NOW);
+        const out = buildAttention(facts({ postsFailed: { count: 1, oldestAt: iso(1) }, failedPosts: onlyOld }));
+        assert.deepEqual(types(out.items), ['post_failed_old']);
+    });
+
+    it('a count with no rows behind it is still said, as the one item it always was', () => {
+        const out = buildAttention(facts({ postsFailed: { count: 3, oldestAt: iso(1) }, failedPosts: bucketFailed([], NOW) }));
+        assert.deepEqual(out.items.map((i) => [i.type, i.count]), [['post_failed', 3]]);
+        assert.equal('detail' in out.items[0]!, false);
+    });
+});
+
+describe('getAttention: U2 statements and facts', () => {
+    it('reads the failed rows, groups them into the two items, and carries the closed threads', async () => {
+        const day = 86_400_000;
+        install({
+            health: () => [healthRow()],
+            threads: () => [{ kind: 'handoff', reason: 'refund', n: 2, oldest_at: new Date(iso(9000)), closed_n: 1, closed_oldest_at: new Date(iso(9000)), closed_ids: ['c1'] }],
+            posts: () => [{ failed: 2, failed_oldest_at: new Date(NOW - 40 * day), overdue: 0, overdue_oldest_at: null }],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+            failedRows: () => [
+                { id: 'o1', group_id: null, scheduled_time: new Date(NOW - 40 * day), error_log: 'Replaced: remade' },
+                { id: 'r1', group_id: null, scheduled_time: new Date(NOW - 1 * day), error_log: 'Media upload failed' },
+            ],
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        assert.deepEqual(out.items.map((i) => i.type).sort(), ['handoff', 'post_failed', 'post_failed_old']);
+        assert.deepEqual(out.items.find((i) => i.type === 'handoff')!.detail, { closed: { count: 1, ids: ['c1'], oldestAt: iso(9000) } });
+        assert.equal(out.counts.scheduler, 2);
+        assert.equal(sent.some((s) => s.sql === flat(FAILED_POSTS_DETAIL_SQL) && s.params[0] === TENANT), true);
+    });
+
+    it('the failed-rows statement follows the count’s rule: this tenant, FAILED, not archived', () => {
+        const sql = flat(FAILED_POSTS_DETAIL_SQL);
+        assert.match(sql, /s\.creator_id = \$1/);
+        assert.match(sql, /s\.status = 'FAILED'/);
+        assert.match(sql, /s\.archived_at IS NULL/);
+        assert.match(sql, /LIMIT 400$/);
+    });
+
+    it('the threads statement counts a closed window from the customer’s LAST inbound message, 24 h back, and shares its inner select with the sweep', () => {
+        const sql = flat(THREADS_ATTENTION_SQL);
+        assert.match(sql, /closed_n/);
+        assert.match(sql, /m4\.direction = 'inbound'/);
+        assert.match(sql, /make_interval\(hours => 24\)/);
+        assert.ok(sql.includes(flat(THREADS_NEEDING_PERSON_SQL)), 'one rule, written once');
+    });
+});
+
+describe('the tenant health count of failed posts is the attention count (U2: Today said 4, the tenant page said 2)', () => {
+    it('the health statement counts FAILED, not archived, a post on several platforms once: the words of POSTS_ATTENTION_SQL', () => {
+        const health = flat(TENANT_HEALTH_SQL);
+        assert.match(health, /COUNT\(DISTINCT COALESCE\(s\.group_id, s\.id\)\) FILTER \(WHERE s\.status = 'FAILED' AND s\.archived_at IS NULL\)::int AS posts_failed_open/);
+        const attention = flat(POSTS_ATTENTION_SQL);
+        assert.match(attention, /FILTER \(WHERE s\.status = 'FAILED'\)/);
+        assert.match(attention, /s\.archived_at IS NULL/);
     });
 });

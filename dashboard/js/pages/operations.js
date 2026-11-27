@@ -334,7 +334,7 @@ const OperationsPage = {
 
         const queue = Admin.pick(row, 'queue') || {};
         if (Admin.num(queue, 'failed')) score += 40;
-        if (Admin.num(row, 'postsFailed7d', 'posts_failed_7d')) score += 30;
+        if (Admin.num(row, 'postsFailed', 'postsFailed7d', 'posts_failed_7d')) score += 30;
 
         // An inactive tenant is not broken, it is switched off. Sink it.
         if (Admin.pick(row, 'is_active', 'isActive') === false) score -= 500;
@@ -364,7 +364,7 @@ const OperationsPage = {
 
         const queue = Admin.pick(row, 'queue') || {};
         const postsPending = Admin.num(row, 'postsPending', 'posts_pending');
-        const postsFailed = Admin.num(row, 'postsFailed7d', 'posts_failed_7d');
+        const postsFailed = Admin.num(row, 'postsFailed', 'postsFailed7d', 'posts_failed_7d');
 
         const webhookAge = UI.relativeAge(webhookAt, Admin.WEBHOOK_AGE);
         const alarm = webhookAge.level === 'stale' || Admin.tokenState(tokenStatus) === 'invalid';

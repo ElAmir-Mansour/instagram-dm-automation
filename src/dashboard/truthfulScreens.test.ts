@@ -29,55 +29,50 @@ const ok = (value: unknown) => ({ status: 'fulfilled', value });
 const text = (markup: unknown): string => String(markup).replace(/<[^>]+>/g, ' ').replace(/[⁦⁩]/g, '').replace(/\s+/g, ' ').trim();
 
 const UUID_A = '0b0a6a80-1111-4222-8333-444455556666';
-const UUID_B = '1c1b7b91-2222-4333-8444-555566667777';
-const UUID_C = '2d2c8ca2-3333-4444-8555-666677778888';
 
 // ═══ DW-T1: Today counts "waiting" the way the badge does ══════════════════════════════════════════════════════════════════════════
 
-/** A thread with the AI off whose last message is the customer's (waiting for a reply), as `/conversations` lists it. */
-const waiting = (over: Json = {}): Json => ({
-    id: UUID_A, is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(2 * HOUR), last_inbound_message_at: ago(2 * HOUR), ...over,
-});
-/** A thread the bot handed to a person. */
-const handed = (over: Json = {}): Json => ({
-    id: UUID_B, is_bot_active: true, stage: 'handoff', handoff_at: ago(3 * HOUR), last_operator_at: null,
-    last_message_direction: 'outbound', last_message_at: ago(2 * HOUR), last_inbound_message_at: ago(3 * HOUR), ...over,
-});
-
-describe('Today: "waiting" is what needs a person, the number on the nav badge (DW-T1)', () => {
+describe('Today: "waiting" is the server\'s count, the number on the nav badge (DW-T1, then U2 DW-T2)', () => {
     const h = loadDashboard({ files: ['dashboard/js/pages/overview.js'] });
     const O = h.run<Json>('OverviewPage');
-    const alertsFor = (threads: Json[]): Json[] => plain(O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), ok({ data: threads }), ok([])));
-    const waitingAlert = (threads: Json[]): Json | undefined => alertsFor(threads).find((a) => a.icon === 'message-square-dot');
+    const item = (type: string, count: number, over: Json = {}): Json => ({
+        type, severity: 'warning', count, sentence: { key: `attention.${type}`, params: { n: count } },
+        action: { verb: 'attention.verb.reply', href: '#/inbox?filter=todo' }, oldestAt: ago(2 * DAY), ...over,
+    });
+    const summary = (items: Json[], inbox: number): Json => ({ status: 'fulfilled', value: { items, counts: { inbox, studio: 0, scheduler: 0 }, heartbeat: null } });
+    const alertsFor = (res: Json): Json[] => plain(O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [] }), ok({ status: 'valid' }), ok([]), undefined, undefined, res));
+    const waitingAlert = (res: Json): Json | undefined => alertsFor(res).find((a) => a.icon === 'message-square-dot');
 
-    it('does not count a thread the owner marked handled (the case that said "2 waiting … 191d" while the badge said 1)', () => {
-        const handledOld = waiting({ id: UUID_C, last_message_at: ago(191 * DAY), last_inbound_message_at: ago(191 * DAY), handled_at: ago(190 * DAY) });
-        const threads = [waiting(), handledOld];
-        const alert = waitingAlert(threads)!;
-        assert.equal(alert.title, h.t('overview.alert.waitingHumans', { count: 1 }), 'one conversation, as the badge says');
-        assert.equal(alert.body.includes('191'), false, 'and the handled thread no longer sets "the oldest has waited"');
-        // The tile says the same number.
-        const tile = String(O.renderStats({ activeCampaigns: 1 }, ok([]), ok({ data: threads })));
-        assert.match(tile, /id="stat-waiting">1</);
-        assert.equal(waitingAlert([handledOld]), undefined, 'only a handled thread: nothing is waiting');
-        assert.match(String(O.renderStats({ activeCampaigns: 1 }, ok([]), ok({ data: [handledOld] }))), /id="stat-waiting">0</);
+    it('says what the server counted: one card for handed-over and waiting threads together, titled with their sum, and the tile and the badge say the same number', () => {
+        const res = summary([item('handoff', 1), item('thread_waiting', 2, { oldestAt: ago(9 * DAY) })], 3);
+        const alert = waitingAlert(res)!;
+        assert.equal(alert.title, h.t('overview.alert.waitingHumans', { count: 3 }));
+        assert.equal(alertsFor(res).filter((a) => a.icon === 'message-square-dot').length, 1, 'ONE card, not one per kind');
+        assert.match(String(O.renderStats({ activeCampaigns: 1 }, ok([]), res)), /id="stat-waiting">3</);
+        assert.equal(O.attentionCount(res, 'inbox'), 3, 'the number App.setInboxWaiting gets');
     });
 
-    it('counts exactly the badge\'s threads: waiting or handed over, not handled (the Attention predicate, not a copy of it)', () => {
-        const threads = [waiting(), handed(), waiting({ id: UUID_C, is_bot_active: true }), waiting({ id: 'x', handled_at: ago(60_000) })];
-        const badge = threads.filter((x) => h.Attention.needsHuman(x)).length;
-        assert.equal(badge, 2);
-        assert.equal(waitingAlert(threads)!.title, h.t('overview.alert.waitingHumans', { count: badge }));
+    it('names the oldest wait across both kinds, in words (days), not the dictionary\'s short form', () => {
+        const alert = waitingAlert(summary([item('handoff', 1, { oldestAt: ago(2 * DAY) }), item('thread_waiting', 1, { oldestAt: ago(9 * DAY) })], 2))!;
+        assert.equal(alert.body, h.t('overview.alert.waitingOldest', { age: h.t('overview.age.days', { count: 9 }) }));
     });
 
-    it('links to the one thread it counted, and to the filter that holds the several (never to a screen that shows fewer)', () => {
-        assert.equal(waitingAlert([waiting()])!.query, `c=${UUID_A}`, 'one thread: that thread opens');
-        assert.equal(waitingAlert([handed()])!.query, `c=${UUID_B}`);
-        const two = [waiting(), waiting({ id: UUID_C })];
-        assert.equal(waitingAlert(two)!.query, 'filter=waiting', 'several waiting: the Needs reply filter holds exactly them');
-        assert.equal(waitingAlert([handed(), handed({ id: UUID_C })])!.query, 'filter=needs_you');
-        assert.equal(waitingAlert([waiting(), handed()])!.query, '', 'a mix: the whole list, which holds both');
-        assert.equal(waitingAlert([waiting({ id: 'not-a-uuid' })])!.query, 'filter=waiting', 'an id the Inbox would ignore is never put in a link');
+    it('goes to the To do list, with ONE verb, from the server\'s own link', () => {
+        const alert = waitingAlert(summary([item('handoff', 2)], 2))!;
+        assert.equal(alert.href, '#/inbox?filter=todo');
+        assert.equal(alert.action, h.t('attention.verb.reply'));
+    });
+
+    it('is quiet when the server counts none, and says "no one is waiting" in the tile', () => {
+        const res = summary([], 0);
+        assert.equal(waitingAlert(res), undefined);
+        assert.match(String(O.renderStats({ activeCampaigns: 1 }, ok([]), res)), /id="stat-waiting">0</);
+    });
+
+    it('does not guess when the summary could not be read: "—" in the tile, and a card that says so rather than a calm screen', () => {
+        const failed = { status: 'rejected', reason: new Error('down') };
+        assert.match(String(O.renderStats({ activeCampaigns: 1 }, ok([]), failed)), /id="stat-waiting">—</);
+        assert.equal(alertsFor(failed).some((a) => a.title === h.t('overview.alert.attentionUnknown')), true);
     });
 });
 
@@ -171,7 +166,7 @@ describe('the Log speaks the outcome vocabulary (DW-R1)', () => {
         const h = loadDashboard({ files: ['dashboard/js/pages/overview.js'] });
         const O = h.run<Json>('OverviewPage');
         const alerts = plain(O.buildAlerts({ activeCampaigns: 1 }, ok({ data: [{ timestamp: new Date().toISOString(), outcome: 'actionable' }], pagination: { total: 1 } }),
-            ok({ status: 'valid' }), ok([]), ok({ data: [] }), ok([])));
+            ok({ status: 'valid' }), ok([])));
         const failed = alerts.find((a: Json) => a.icon === 'send-horizontal');
         assert.equal(failed.target, 'activity');
         assert.equal(failed.query, 'outcome=actionable');
@@ -219,7 +214,7 @@ describe('Results: one window on the screen (DW-R2)', () => {
 const HEALTH: TenantHealth = {
     tenantId: UUID_A, tokenStatus: 'valid', tokenLastCheckedAt: ago(3 * HOUR), tokenError: null, tokenExpiresAt: null, dataAccessExpiresAt: inDays(61),
     lastWebhookAt: ago(11 * HOUR), lastCommentAt: ago(30 * HOUR), lastInboundDmAt: ago(4 * DAY), dmThisHour: 3, dmCeiling: 180,
-    queue: { pending: 1, running: 0, failed: 2, oldestPendingAt: null }, postsPending: 344, postsFailed7d: 4,
+    queue: { pending: 1, running: 0, failed: 2, oldestPendingAt: null }, postsPending: 344, postsFailed7d: 2, postsFailed: 3,
 };
 const COUNTS: TenantCounts = { campaigns: 66, activeCampaigns: 59, scheduledPosts: 344, conversations: 12, interactions: 111, messages: 800 };
 const tenantAnswer = (health: Partial<TenantHealth> = {}): Json => ({
@@ -505,6 +500,22 @@ describe('the Instagram & Facebook card: one status line, ids behind a button, h
         const markup = String(M.settingsBody(conn(), { canAdminister: true, health: { lastWebhookAt: ago(HOUR) } }));
         assert.ok(markup.includes(h.t('meta.copyIds')));
         assert.ok(text(markup).includes('Nour Shop'));
+    });
+});
+
+describe('Tenant detail counts failed posts the way Today does (U2)', () => {
+    it('shows the open failures (not archived, a post on several platforms once), not the 7-day figure that read 2 where Today read 4', () => {
+        const { paint } = loadTenant();
+        const said = text(paint(tenantAnswer({ queue: { pending: 1, running: 0, failed: 9, oldestPendingAt: null } })));
+        assert.match(said, /3 failed/);
+        assert.equal(/2 failed/.test(said), false);
+    });
+
+    it('falls back to the old key for a server that does not send the new one', () => {
+        const { paint } = loadTenant();
+        const old = tenantAnswer();
+        delete old.health.postsFailed;
+        assert.match(text(paint(old)), /2 failed/);
     });
 });
 
