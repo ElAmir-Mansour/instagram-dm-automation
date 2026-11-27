@@ -64,6 +64,12 @@ export interface AttentionDetail {
     ids?: string[];
     /** `handoff` and `thread_waiting`: the threads among them whose 24 h window has closed, so a reply can no longer reach them: Mark handled is what is left. */
     closed?: { count: number; ids: string[]; oldestAt: string | null };
+    /**
+     * `handoff` and `thread_waiting` (QA-02): the reply window, counted from the customer's LAST message: the same timestamp the Inbox reads
+     * (`last_inbound_message_at`), never from the handoff, which can be weeks older. `lastInboundAt` is the newest such message among the threads;
+     * `open` how many windows are still open; `closesAt` when the soonest of those closes (null when none is open).
+     */
+    window?: { lastInboundAt: string; open: number; closesAt: string | null };
 }
 
 export interface AttentionItem {
@@ -147,8 +153,12 @@ export interface WaitingFact {
     /** Threads among them whose 24 h window has closed. Absent: not asked. */
     closed?: ClosedFact;
     count: number;
-    /** When the oldest of them started waiting (ISO). */
+    /** When the oldest of them started waiting (ISO). For a handed-over thread that is the handoff, which can be far older than the customer's last message. */
     oldestAt: string | null;
+    /** The newest customer message among them (ISO), the Inbox's own "last message". Absent: not asked. */
+    lastInboundAt?: string | null;
+    /** Threads among them whose 24 h window is still open, and the oldest customer message among those (the one that closes first). */
+    open?: { count: number; oldestInboundAt: string | null };
 }
 
 export interface ClosedFact {
@@ -312,6 +322,20 @@ function closedDetail(closed: ClosedFact | undefined): AttentionDetail | null {
     return closed && closed.count > 0 ? { closed: { count: closed.count, ids: closed.ids.slice(0, DETAIL_IDS_MAX), oldestAt: closed.oldestAt } } : null;
 }
 
+/** The reply-window facts of a thread item, or null when no customer message is known (an item from before the fact existed). */
+function windowDetail(fact: WaitingFact): AttentionDetail | null {
+    if (!fact.lastInboundAt) return null;
+    const open = fact.open?.count ?? 0;
+    const oldestOpen = open > 0 ? time(fact.open?.oldestInboundAt) : NaN;
+    const closesAt = Number.isFinite(oldestOpen) ? new Date(oldestOpen + THREAD_WINDOW_HOURS * 3_600_000).toISOString() : null;
+    return { window: { lastInboundAt: fact.lastInboundAt, open, closesAt } };
+}
+
+function mergeDetail(...parts: Array<AttentionDetail | null>): AttentionDetail | null {
+    const found = parts.filter((p): p is AttentionDetail => p !== null);
+    return found.length ? Object.assign({}, ...found) : null;
+}
+
 function failedDetail(bucket: FailedBucket): AttentionDetail {
     return { reasons: bucket.reasons, ids: bucket.ids.slice(0, DETAIL_IDS_MAX) };
 }
@@ -335,7 +359,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
             type: 'handoff', severity: 'warning', count: facts.handoff.count,
             sentence: { key: 'attention.handoff', params },
             action: { verb: 'attention.verb.reply', href: HREF.inboxTodo },
-        }, facts.handoff.oldestAt), closedDetail(facts.handoff.closed)));
+        }, facts.handoff.oldestAt), mergeDetail(closedDetail(facts.handoff.closed), windowDetail(facts.handoff))));
     }
 
     // Threads where the bot is off and the customer spoke last. They were counted into the Inbox (and the nav badge) but had no item, so Today said "all
@@ -345,7 +369,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
             type: 'thread_waiting', severity: 'warning', count: facts.waiting.count,
             sentence: { key: 'attention.thread_waiting', params: { n: facts.waiting.count } },
             action: { verb: 'attention.verb.reply', href: HREF.inboxTodo },
-        }, facts.waiting.oldestAt), closedDetail(facts.waiting.closed)));
+        }, facts.waiting.oldestAt), mergeDetail(closedDetail(facts.waiting.closed), windowDetail(facts.waiting))));
     }
 
     // The split needs rows to split: a count with no rows behind it (a statement that came back empty) is still said, as one item.
@@ -497,6 +521,9 @@ export const THREADS_NEEDING_PERSON_SQL = `
 
 export const THREADS_ATTENTION_SQL = `
     SELECT t.kind, t.reason, COUNT(*)::int AS n, MIN(t.since) AS oldest_at,
+           MAX(t.last_inbound_at) AS last_inbound_at,
+           COUNT(*) FILTER (WHERE t.last_inbound_at >= NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS}))::int AS open_n,
+           MIN(t.last_inbound_at) FILTER (WHERE t.last_inbound_at >= NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS})) AS open_oldest_inbound_at,
            COUNT(*) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS}))::int AS closed_n,
            MIN(t.last_inbound_at) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS})) AS closed_oldest_at,
            (ARRAY_AGG(t.id ORDER BY t.last_inbound_at) FILTER (WHERE t.last_inbound_at < NOW() - make_interval(hours => ${THREAD_WINDOW_HOURS})))[1:${DETAIL_IDS_MAX}] AS closed_ids
@@ -591,12 +618,13 @@ export const REEL_REVIEW_ATTENTION_SQL = `
      WHERE creator_id = $1 AND status = 'review'
 `;
 
-interface ThreadRow {
+export interface ThreadRow {
     kind: 'handoff' | 'waiting'; reason: string | null; n: number; oldest_at: Date | null;
     closed_n?: number | null; closed_oldest_at?: Date | null; closed_ids?: string[] | null;
+    last_inbound_at?: Date | null; open_n?: number | null; open_oldest_inbound_at?: Date | null;
 }
 
-function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waiting: WaitingFact } {
+export function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waiting: WaitingFact } {
     const handoff: HandoffFact = { count: 0, oldestAt: null, reasons: [] };
     const waiting: WaitingFact = { count: 0, oldestAt: null };
     const addClosed = (fact: WaitingFact, row: ThreadRow): void => {
@@ -611,6 +639,15 @@ function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waitin
         const iso = toIso(next);
         return iso && (!current || Date.parse(iso) < Date.parse(current)) ? iso : current;
     };
+    const addWindow = (fact: WaitingFact, row: ThreadRow): void => {
+        const last = toIso(row.last_inbound_at ?? null);
+        if (last && (!fact.lastInboundAt || Date.parse(last) > Date.parse(fact.lastInboundAt))) fact.lastInboundAt = last;
+        const openN = Number(row.open_n) || 0;
+        if (openN <= 0) return;
+        const open = fact.open ?? (fact.open = { count: 0, oldestInboundAt: null });
+        open.count += openN;
+        open.oldestInboundAt = older(open.oldestInboundAt, row.open_oldest_inbound_at ?? null);
+    };
     for (const row of rows) {
         const n = Number(row.n) || 0;
         if (n <= 0) continue;
@@ -619,10 +656,12 @@ function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waitin
             handoff.oldestAt = older(handoff.oldestAt, row.oldest_at);
             if (row.reason) handoff.reasons.push({ reason: row.reason, count: n });
             addClosed(handoff, row);
+            addWindow(handoff, row);
         } else if (row.kind === 'waiting') {
             waiting.count += n;
             waiting.oldestAt = older(waiting.oldestAt, row.oldest_at);
             addClosed(waiting, row);
+            addWindow(waiting, row);
         }
     }
     return { handoff, waiting };

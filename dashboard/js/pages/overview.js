@@ -569,7 +569,51 @@ const OverviewPage = {
             .filter((item) => item && (item.type === 'handoff' || item.type === 'thread_waiting') && item.oldestAt)
             .map((item) => Date.parse(item.oldestAt))
             .filter((ms) => Number.isFinite(ms));
-        return { count, oldestAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null };
+        const lastAt = this.windowOf(summary.items.filter((item) => item && (item.type === 'handoff' || item.type === 'thread_waiting'))).lastInboundAt;
+        return { count, oldestAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null, lastInboundAt: lastAt };
+    },
+
+    /**
+     * The reply window of a group of thread items (QA-02), from the server's `detail.window`: counted from the customer's LAST message, the timestamp the Inbox
+     * reads, and not from the handoff (a thread handed over 16 days ago whose customer wrote yesterday has a window, and it is the Inbox's). `known` is false
+     * unless EVERY item carries it (an answer from before the fact existed says nothing, and the old wording stays). `lastInboundAt`: the newest message (ISO);
+     * `open`: windows still open; `closesAt`: ms when the soonest open one closes, or null.
+     */
+    windowOf(items) {
+        const list = (Array.isArray(items) ? items : []).map((i) => (i && i.detail && i.detail.window) || null);
+        const none = { known: false, lastInboundAt: null, open: 0, closesAt: null };
+        if (!list.length || list.some((w) => !w || !Number.isFinite(Date.parse(w.lastInboundAt)))) return none;
+        const last = Math.max(...list.map((w) => Date.parse(w.lastInboundAt)));
+        const closes = list.map((w) => Date.parse(w.closesAt)).filter((ms) => Number.isFinite(ms));
+        return {
+            known: true,
+            lastInboundAt: new Date(last).toISOString(),
+            open: list.reduce((n, w) => n + (Math.max(0, Math.floor(Number(w.open)) || 0)), 0),
+            closesAt: closes.length ? Math.min(...closes) : null,
+        };
+    },
+
+    /** How much of a reply window is left, as a plural-aware phrase: «ساعتين», "2 hours", "under a minute". Whole hours above an hour, minutes below. */
+    leftWords(ms) {
+        const minute = 60000;
+        const hour = 60 * minute;
+        if (!(ms >= minute)) return t('overview.window.lt1');
+        if (ms < hour) return t('overview.age.minutes', { count: Math.floor(ms / minute) });
+        return t('overview.age.hours', { count: Math.floor(ms / hour) });
+    },
+
+    /**
+     * What the waiting-conversations card says about time, leading with the reply window like the Inbox chip: "Last message 22 hours ago · 2 hours left to
+     * reply", or "· the reply window has closed". null when the server did not say (then the old "has waited" line is used).
+     */
+    waitingWindowBody(items, total) {
+        const w = this.windowOf(items);
+        if (!w.known) return null;
+        const ago = this.spanWords(w.lastInboundAt);
+        if (w.open > 0 && w.closesAt !== null && w.closesAt - Date.now() > 0) {
+            return t('overview.alert.waitingWindow', { count: total, ago, left: this.leftWords(w.closesAt - Date.now()) });
+        }
+        return t('overview.alert.waitingWindowClosed', { count: total, ago });
     },
 
     // ─── Durations, in words ─────────────────────────────────────────────────
@@ -908,9 +952,16 @@ const OverviewPage = {
     failureAge(iso) {
         const at = iso ? Date.parse(iso) : NaN;
         if (!Number.isFinite(at)) return '';
-        if (at > Date.now()) return t('overview.failed.dated', { date: UI.formatDate(iso) });
+        if (at > Date.now()) return t('overview.failed.dated', { date: this.datedWords(iso) });
         const span = this.spanWords(iso);
         return span ? t('overview.failed.ago', { age: span }) : '';
+    },
+
+    /** "1 Jan 2027" for a date outside this year, "1 Jan" inside it (QA-04: a date read as "Jan 1" does not say which year it is). Latin digits, like every date. */
+    datedWords(iso) {
+        const at = new Date(iso);
+        const sameYear = at.getFullYear() === new Date().getFullYear();
+        return UI._fmt(iso, sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
     },
 
     /** One line per reason a post failed: "2 TikTok direct posts need a private TikTok account · 35 days ago". The server counts posts (one per group), so these add up to the card. */
@@ -963,7 +1014,7 @@ const OverviewPage = {
                 const alert = {
                     key: 'waiting', level: 'warning', icon: 'message-square-dot',
                     title: t('overview.alert.waitingHumans', { count: total }),
-                    body: age ? t('overview.alert.waitingOldest', { age, count: total }) : t('overview.alert.waitingHumansBody'),
+                    body: this.waitingWindowBody(group, total) || (age ? t('overview.alert.waitingOldest', { age, count: total }) : t('overview.alert.waitingHumansBody')),
                     action: verb, href: item.action.href,
                 };
                 if (canClear && ids.length) {
@@ -1351,8 +1402,10 @@ const OverviewPage = {
         const threadsOk = waitingFact !== null;
         const waiting = { length: threadsOk ? waitingFact.count : 0 };
         const oldest = threadsOk ? this.spanWords(waitingFact.oldestAt) : null;
+        // The last message, not the handoff, when the server says it (QA-02): the same moment the Inbox counts its window from.
+        const lastWords = threadsOk && waitingFact.lastInboundAt ? this.spanWords(waitingFact.lastInboundAt) : null;
         let waitingSub = t('overview.stat.waitingUnknown');
-        if (threadsOk) waitingSub = waiting.length ? (oldest ? t('overview.stat.waitingOldest', { age: oldest }) : '') : t('overview.stat.waitingNone');
+        if (threadsOk) waitingSub = waiting.length ? (lastWords ? t('overview.stat.waitingLast', { age: lastWords }) : (oldest ? t('overview.stat.waitingOldest', { age: oldest }) : '')) : t('overview.stat.waitingNone');
 
         return html`
             <div class="stats-grid">

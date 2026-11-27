@@ -162,9 +162,9 @@ const HelpContent = {
                             'تبدأ شاشة **اليوم** بسطر واحد يجيب عن سؤال «هل يعمل كل شيء؟»: آخر تعليق وصل، وآخر رسالة خاصة، وهل تصل الأحداث من ميتا، وهل عامل الماك متصل. بعده تأتي البطاقات، وكل بطاقة فعل واحد ورابط يفتح هذه العناصر بالذات.',
                             'القائمة كلها يبنيها الخادم، فهي الرقم نفسه الذي تراه على شارة «الرسائل» وعلى «الجدولة». لا تحسب الشاشة شيئًا بنفسها.',
                             { dl: [
-                                ['منشورات فشل نشرها', 'تحت البطاقة سطر لكل سبب مع عدده وعمره: قاعدة تيك توك، أو منشور استبدلته عمدًا، أو مشكلة في الوسائط. «أرشِف هذه» تضعها في «المؤرشفة» بضغطة واحدة ومعها «تراجع».'],
+                                ['منشورات فشل نشرها', 'تحت البطاقة سطر لكل سبب مع عدده وعمره (أو تاريخه بالسنة إن كان موعده لم يحن بعد): قاعدة تيك توك، أو منشور استبدلته عمدًا (لا شيء لإصلاحه، أرشِفه)، أو مشكلة في الوسائط. «أرشِف هذه» تضعها في «المؤرشفة» بضغطة واحدة ومعها «تراجع».'],
                                 ['فشل قديم', 'الفشل الذي مضى عليه أكثر من 14 يومًا يصير سطرًا هادئًا بعدد فقط، لا بطاقة حمراء. يبقى محسوبًا في الجدولة حتى تؤرشفه.'],
-                                ['محادثات تنتظرك', 'إن كانت نافذة ميتا (24 ساعة) قد أُغلقت على بعضها فلا يستطيع ردٌّ أن يصل إليها. «تم التعامل» تخرجها من قائمتك، وتعود وحدها إن كتب صاحبها مجددًا.'],
+                                ['محادثات تنتظرك', 'تبدأ البطاقة بمهلة الردّ كما في «الرسائل»: «آخر رسالة منذ 22 ساعة · المتبقي للردّ: ساعتان». العدّ من آخر رسالة كتبها العميل، لا من لحظة تحويل المحادثة إليك. إن كانت المهلة (24 ساعة) قد انتهت فلا يستطيع ردٌّ من هنا أن يصل إليها: ردّ من تطبيق إنستجرام ثم اضغط «تم التعامل» لتخرج من قائمتك، وتعود وحدها إن كتب صاحبها مجددًا.'],
                             ] },
                             { tip: 'لا تسأل الشاشة «هل أنت متأكد؟»: كل إجراء يمكن التراجع عنه من الإشعار الذي يظهر بعده، والمشاهد لا يرى هذه الأزرار أصلًا.' },
                         ],
@@ -172,9 +172,9 @@ const HelpContent = {
                             '**Today** opens with one line that answers “is it working?”: the last comment that came in, the last DM, whether events are arriving from Meta, and whether the Mac worker is online. The cards come after it, each with one verb and a link that opens exactly those items.',
                             'The whole list is built by the server, so it is the same number the **Inbox** badge and the **Scheduler** show. The screen counts nothing of its own.',
                             { dl: [
-                                ['Posts that failed', 'Under the card there is one line per reason with its count and age: a TikTok rule, a post you replaced on purpose, a media problem. **Archive these** puts them under Archived in one tap, with an **Undo**.'],
+                                ['Posts that failed', 'Under the card there is one line per reason with its count and age (or its date, with the year, for one whose time is still ahead): a TikTok rule, a post you replaced on purpose (nothing to fix: archive it), a media problem. **Archive these** puts them under Archived in one tap, with an **Undo**.'],
                                 ['Older failures', 'A failure more than 14 days old becomes one quiet line with a number, not a red card. It stays counted in the Scheduler until you archive it.'],
-                                ['Conversations waiting for you', 'When Meta’s 24-hour window has closed on some of them, a reply can no longer reach them. **Mark handled** takes them off your list, and they come back by themselves if the person writes again.'],
+                                ['Conversations waiting for you', 'The card leads with the reply window, as the **Inbox** does: “Last message 22 hours ago · 2 hours left to reply”. It counts from the customer’s last message, not from when the chat was handed to you. When Meta’s 24-hour window has closed, a reply from here can no longer reach them: reply from the Instagram app, then **Mark handled** takes them off your list, and they come back by themselves if the person writes again.'],
                             ] },
                             { tip: 'Today never asks “are you sure?”: every action can be taken back from the notice that appears after it, and a viewer is not shown these buttons at all.' },
                         ],

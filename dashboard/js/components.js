@@ -547,9 +547,21 @@ const UI = {
         if (!ms) return t('common.never');
         const diff = Math.max(0, Date.now() - ms.getTime());
         const minute = 60000;
-        if (diff < 60 * minute) return t('common.minutes', { n: UI.formatNumber(Math.max(1, Math.floor(diff / minute))) });
-        if (diff < 24 * 60 * minute) return t('common.hours', { n: UI.formatNumber(Math.floor(diff / (60 * minute))) });
-        return t('common.days', { n: UI.formatNumber(Math.floor(diff / (24 * 60 * minute))) });
+        return UI._unitWords(diff);
+    },
+
+    /**
+     * A duration in its biggest whole unit, as the dictionary writes it: «12 د» / "12m". It passes `count`, so Arabic picks the plural form (one «ساعة»,
+     * two «ساعتين», few «3 ساعات», many «11 ساعة»: «منذ ساعة», «منذ ساعتين», «منذ 48 يومًا») and English, which has no plural keys here, its short form.
+     */
+    _unitWords(ms) {
+        const minute = 60000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+        const pick = (key, count) => t(key, { n: UI.formatNumber(count), count });
+        if (ms < hour) return pick('common.minutes', Math.max(1, Math.floor(ms / minute)));
+        if (ms < day) return pick('common.hours', Math.floor(ms / hour));
+        return pick('common.days', Math.floor(ms / day));
     },
 
     formatNumber(value) {
@@ -760,6 +772,57 @@ const UI = {
             collect(host);
             return observer;
         } catch { return null; }
+    },
+
+    // ─── Remote avatars ──────────────────────────────────────────────────────
+    /** Up to two letters from a name: the first letters of its first two words, or the first two of one word. '' when nothing is a letter or a digit. */
+    initialsOfName(name) {
+        const words = String(name || '').trim().replace(/^@/, '').split(/[\s._-]+/u).map((w) => w.replace(/^[^\p{L}\p{N}]+/u, '')).filter(Boolean);
+        if (words.length === 0) return '';
+        const letters = (word) => Array.from(word);
+        const pair = words.length > 1 ? letters(words[0])[0] + letters(words[1])[0] : letters(words[0]).slice(0, 2).join('');
+        return pair.toLocaleUpperCase();
+    },
+
+    /**
+     * A picture another site serves (a TikTok or YouTube avatar): the person's initials under it (or `icon` when the name has no letter), the picture over
+     * them. Those links are signed and expire within days (QA-07: the TikTok card showed a broken image), so a picture that does not load is expected, and
+     * `UI.watchAvatarFallbacks` removes it, leaving the initials. `size` is 'sm' (24 px) or 'lg' (44 px). `src` must already be a safe URL ('' draws only the fallback).
+     */
+    remoteAvatar({ src, name, icon, size } = {}) {
+        const initials = UI.initialsOfName(name);
+        const face = initials
+            ? html`<span class="avatar-initials"><bdi dir="auto">${initials}</bdi></span>`
+            : html`<i data-lucide="${icon || 'user'}" aria-hidden="true"></i>`;
+        const picture = src
+            ? html`<img class="avatar-img" data-avatar-fallback src="${src}" alt="" width="44" height="44" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+            : '';
+        return html`<span class="avatar avatar--${size === 'sm' ? 'sm' : 'lg'}">${face}${picture}</span>`;
+    },
+
+    /**
+     * The fallback for every remote avatar, from one capturing listener (error events do not bubble, and this dashboard has no inline handlers, so there is
+     * no `onerror`): an `<img data-avatar-fallback>` that fails is removed and the initials under it show; the older `img.tiktok-avatar` (the Scheduler's, which
+     * has no name to draw) is swapped for a TikTok glyph in a circle. Idempotent; returns the handler.
+     */
+    handleAvatarError(event) {
+        const img = event && event.target;
+        if (!img || img.tagName !== 'IMG' || !img.classList) return;
+        if (img.hasAttribute('data-avatar-fallback')) { img.remove(); return; }
+        if (img.classList.contains('tiktok-avatar') && img.parentNode && typeof document !== 'undefined') {
+            const holder = document.createElement('span');
+            holder.className = 'avatar avatar--sm';
+            holder.innerHTML = '<i data-lucide="music-2" aria-hidden="true"></i>';
+            img.replaceWith(holder);
+            try { UI.icons(holder); } catch { /* the glyph is a nicety */ }
+        }
+    },
+
+    watchAvatarFallbacks() {
+        if (typeof document === 'undefined' || UI._avatarWatch) return UI._avatarWatch || null;
+        UI._avatarWatch = (event) => UI.handleAvatarError(event);
+        document.addEventListener('error', UI._avatarWatch, true);
+        return UI._avatarWatch;
     },
 
     // ─── Toast ───────────────────────────────────────────────────────────────
@@ -1302,21 +1365,15 @@ const UI = {
 
         const diff = Date.now() - d.getTime();
         const abs = Math.abs(diff);
-        const minute = 60000;
-        const hour = 60 * minute;
-        const day = 24 * hour;
 
-        let unit;
-        if (abs < minute) {
+        if (abs < 60000) {
             return {
                 text: t('common.justNow'),
                 level: diff < 0 ? 'warn' : 'fresh',
                 title: UI.formatDateTime(d),
             };
         }
-        if (abs < hour) unit = t('common.minutes', { n: UI.formatNumber(Math.floor(abs / minute)) });
-        else if (abs < day) unit = t('common.hours', { n: UI.formatNumber(Math.floor(abs / hour)) });
-        else unit = t('common.days', { n: UI.formatNumber(Math.floor(abs / day)) });
+        const unit = UI._unitWords(abs);
 
         const text = diff < 0 ? t('common.inFuture', { value: unit }) : t('common.ago', { value: unit });
 
