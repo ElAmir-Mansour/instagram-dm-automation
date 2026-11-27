@@ -35,32 +35,11 @@ for (const file of ['dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboar
 const STRINGS = vm.runInContext('I18N.strings', ctx) as Record<Lang, Record<string, string>>;
 const CONTENT = vm.runInContext(`${readFileSync('dashboard/js/help-content.js', 'utf8')}\n;HelpContent`, ctx, { filename: 'help-content.js' }) as Json;
 
-/**
- * help pending SA-08: labels the Help still quotes under their OLD names, because U5 (one glossary) renamed them in the dictionaries
- * (Workspace, Keyword reply, assistant, Log, Reels, «متصل», «بحاجة إليك», «إنستجرام») and the Help is being rewritten in another PR.
- * Each is kept on NOT_UI below, so the two checks still guard them: the entry fails once the Help stops quoting the old label, and
- * once it is an interface string again. THE HELP PR DELETES EVERY ENTRY CARRYING THIS REASON.
- */
-const PENDING_SA08 = 'help pending SA-08: renamed in the interface by U5; the Help rewrite changes it. Delete this entry in that PR';
-
 /** Deliberate non-UI emphasis, per language: the bold text (as `clean` leaves it) → why. */
 // «Gemini» left both lists on 2026-10-25: the Explainers settings name the writer «Gemini» (explainers.writerSetting.gemini), so it is an interface string.
 const NOT_UI: Record<Lang, Record<string, string>> = {
     ar: {
-        'سجل النشاط': PENDING_SA08,
-        'اختبار الوكيل': PENDING_SA08,
-        'افتح مساحتي': PENDING_SA08,
-        'حسابك على إنستغرام': PENDING_SA08,
-        'مربوط': PENDING_SA08,
-        'تفعيل الحملة': PENDING_SA08,
-        'متى يسلّمك الوكيل المحادثة': PENDING_SA08,
-        'بانتظارك': PENDING_SA08,
-        'المونتير': PENDING_SA08,
-        'روابط الحملات ورموز QR': PENDING_SA08,
-        'جهّز المونتير': PENDING_SA08,
-        'الردّ الآلي في هذه المحادثة': PENDING_SA08,
         'ردود الكلمات المفتاحية': 'feature name leading a list item',
-        'وكيل ذكي للرسائل': 'feature name leading a list item',
         'استوديو الكاروسيل': 'feature name leading a list item',
         'احترافي': 'emphasis: the Instagram account type',
         'رمز وصول للصفحة': 'a Meta concept, not a control',
@@ -69,11 +48,11 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'JPEG فقط': 'carousel rule stated for emphasis',
         'الصورة الأولى تحدد القصّ': 'carousel rule stated for emphasis',
         'الترتيب هنا هو ترتيب الشرائح': 'carousel rule stated for emphasis',
-        'مع كل الأذونات اللي عندك الآن': 'in Meta’s Graph API Explorer, not this interface',
+        'مع كل الأذونات التي لديك الآن': 'in Meta’s Graph API Explorer, not this interface',
         'منشوراتك أنت': 'emphasis',
-        'سنة وحدة': 'emphasis',
-        'النشر المباشر ينزل بخصوصية «أنا فقط»': 'TikTok rule stated for emphasis',
-        'حسابك لازم يكون خاصاً وقت النشر': 'TikTok rule stated for emphasis',
+        'سنة واحدة': 'emphasis',
+        'النشر المباشر يتم بخصوصية «أنا فقط»': 'TikTok rule stated for emphasis',
+        'يجب أن يكون حسابك خاصاً وقت النشر': 'TikTok rule stated for emphasis',
         '⋯': 'a control in the TikTok app',
         'الخصوصية': 'a control in the TikTok app, and the lead of a privacy note',
         'عامة تلقائياً': 'emphasis',
@@ -81,14 +60,14 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'تعديل الملف الشخصي': 'a control in the TikTok app',
         'ماك': 'emphasis: the platform the worker runs on',
         'فيديوهاتك كبيرة': 'reason leading a list item',
-        'الرسم يحتاج جهازاً': 'reason leading a list item',
+        'الرسم يحتاج إلى جهاز': 'reason leading a list item',
         'خصوصيتك': 'reason leading a list item',
-        'يقدر': 'list heading',
-        'ما يقدر': 'list heading',
-        'يتصل للخارج بس': 'security property leading a list item',
+        'يستطيع': 'list heading',
+        'لا يستطيع': 'list heading',
+        'يتصل بالخارج فقط': 'security property leading a list item',
         'رمز خاص لكل عامل': 'security property leading a list item',
         'تلغيه بضغطة': 'security property leading a list item',
-        'بس نسخ صغيرة تروح لـ Google': 'security property leading a list item',
+        'لا يصل إلى Google إلا نسخ صغيرة': 'security property leading a list item',
         'Node 22': 'a program the worker needs',
         'ffmpeg': 'a program the worker needs',
         'لقطة': 'emphasis',
@@ -113,14 +92,6 @@ const NOT_UI: Record<Lang, Record<string, string>> = {
         'Start': 'a control in Telegram',
     },
     en: {
-        'Activity Log': PENDING_SA08,
-        'Agent sandbox': PENDING_SA08,
-        'Campaign active': PENDING_SA08,
-        'When should the agent hand a chat to you': PENDING_SA08,
-        'Monteur': PENDING_SA08,
-        'Campaign links and QR codes': PENDING_SA08,
-        'Set up the Monteur': PENDING_SA08,
-        'An AI agent for DMs': 'feature name leading a list item',
         'Post scheduling': 'feature name leading a list item',
         'Carousel Studio': 'feature name leading a list item',
         'professional': 'emphasis: the Instagram account type',

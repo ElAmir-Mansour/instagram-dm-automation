@@ -887,7 +887,7 @@ describe('Meta vision card: the Help section it links to', () => {
             assert.equal(terms.length, 8, 'the switches, voice notes, when they ask first, who it answers, the daily cap, what is kept, Instagram only, Standard models only');
             assert.ok(body.includes(`**${labels['muse.voice']}**`) && terms.includes(lang === 'en' ? 'Voice notes' : 'الرسائل الصوتية'), `${lang}: voice notes have a row of their own`);
             // senses.ts: asked whether a voice note or a photo is fine, the assistant says yes, and only where the gate would read it.
-            assert.ok(terms.includes(lang === 'en' ? 'When they ask first' : 'إذا سألوا قبل ما يرسلوا'), `${lang}: what it says when asked before anything is sent`);
+            assert.ok(terms.includes(lang === 'en' ? 'When they ask first' : 'إذا سألوا قبل أن يرسلوا'), `${lang}: what it says when asked before anything is sent`);
         });
     }
 
@@ -918,10 +918,10 @@ describe('Meta vision card: the Help section it links to', () => {
 
     it('says the same in Arabic, and in the Help Center\'s own voice, without the words the product never says', () => {
         const body = textOf('ar');
-        assert.match(body, /ما نحفظ الملف/);
+        assert.match(body, /ولا نحفظ الملف/);
         assert.match(body, /مدة الرسالة تصل إلى 3 دقائق/);
         assert.match(body, /0\.18 دولار لكل ساعة صوت/);
-        assert.match(body, /\*\*الرسائل الصوتية\*\* و\*\*ذاكرة الفيديو\*\* كلها تشتغل اليوم/);
+        assert.match(body, /\*\*الرسائل الصوتية\*\* و\*\*ذاكرة الفيديو\*\* كلها تعمل اليوم/);
         assert.match(body, /ماسنجر وواتساب/);
         assert.match(body, /النماذج القياسية/);
         for (const banned of [/بوت/, /ذكي/, /\bbots?\b/i, /instant/i]) {

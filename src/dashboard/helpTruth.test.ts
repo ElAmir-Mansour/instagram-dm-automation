@@ -145,9 +145,7 @@ describe('Help Center — what "public automatically" covers once TikTok has app
             const everyone = bold(label(lang, 'posts.tiktok.privacy.public'));
             const automatic = items[0]!;
             assert.ok(automatic.includes(bold(lang === 'en' ? 'public automatically' : 'عامة تلقائياً')), 'the first bullet keeps its emphasis');
-            // help pending SA-08: the Help still bolds the old page name; delete the `||` alternative in the Help rewrite PR.
-            const oldReelsName = bold(lang === 'en' ? 'Monteur' : 'المونتير');
-            assert.ok(automatic.includes(bold(label(lang, 'nav.monteur'))) || automatic.includes(oldReelsName), 'and names where the reels come from');
+            assert.ok(automatic.includes(bold(label(lang, 'nav.monteur'))), 'and names where the reels come from');
             assert.ok(automatic.includes(everyone), `and says the app chooses ${everyone}`);
 
             const composer = items[1]!;
@@ -396,7 +394,7 @@ describe('Help Center — the Monteur', () => {
         for (const lang of LANGS) {
             const text = textOf('monteur', 'folder', lang);
             for (const ext of SCAN_EXTENSIONS) assert.ok(text.includes(`\`${ext}\``), `${lang}: ${ext}`);
-            assert.ok(lang === 'en' ? text.includes('in the folder for a minute') : text.includes('يمر عليه دقيقة'), `${lang}: a file is taken once it is a minute old`);
+            assert.ok(lang === 'en' ? text.includes('in the folder for a minute') : text.includes('تمر عليه دقيقة'), `${lang}: a file is taken once it is a minute old`);
             assert.ok(lang === 'en' ? text.includes(`If ${PICK_FOLDER_TTL_MINUTES} minutes pass`) : text.includes(`مرّت ${PICK_FOLDER_TTL_MINUTES} دقائق`), `${lang}: the window expires`);
         }
         // The 5 minutes the dialog waits are the worker's (MONTEUR.md §3), and the page says them in its own words.
@@ -414,7 +412,7 @@ describe('Help Center — the Monteur', () => {
         assert.match(approve, /'REEL_DAY_TAKEN'/, 'two reels of one video never share a day');
         for (const lang of LANGS) {
             const text = textOf('monteur', 'approve', lang);
-            assert.ok(text.includes(lang === 'en' ? 'matches the keyword as a whole word' : 'وتطابق الكلمة كاملة'), `${lang}: whole word`);
+            assert.ok(text.includes(lang === 'en' ? 'matches the keyword as a whole word' : 'ويطابق الكلمة كاملة'), `${lang}: whole word`);
             assert.ok(text.includes(lang === 'en' ? 'with no public reply' : 'بدون رد علني'), `${lang}: no public reply`);
             assert.ok(text.includes('[[youtube#disconnected]]'), `${lang}: YouTube failing later, not at the click`);
         }
@@ -451,7 +449,7 @@ describe('Help Center — infographics', () => {
         assert.doesNotMatch(schedule, /\bgif\b|\bgif_|_gif\b|\.gif\b/i, 'and the GIF is nowhere in it');
         for (const lang of LANGS) {
             const gif = (listOf('infographics', 'what', lang, 'dl') as string[][]).find((r) => r[0] === 'GIF')![1]!;
-            assert.ok(lang === 'en' ? gif.includes('never posted for you') : gif.includes('ما يُنشر عنك أبداً'), `${lang}: the GIF is yours to download`);
+            assert.ok(lang === 'en' ? gif.includes('never posted for you') : gif.includes('لا يُنشر عنك أبداً'), `${lang}: the GIF is yours to download`);
         }
     });
 
@@ -467,7 +465,7 @@ describe('Help Center — infographics', () => {
         assert.match(tenant, /\*\*Nothing falls back\.\*\*/, 'and the file says it never falls back');
         for (const lang of LANGS) {
             const text = textOf('infographics', 'who', lang);
-            assert.ok(lang === 'en' ? text.includes('It never falls back to a Mac.') : text.includes('وما يرجع للماك بدالاً عنه أبداً'), `${lang}: never the Mac instead`);
+            assert.ok(lang === 'en' ? text.includes('It never falls back to a Mac.') : text.includes('ولا يعود إلى الماك بدلاً منه أبداً'), `${lang}: never the Mac instead`);
         }
     });
 });
@@ -550,7 +548,7 @@ describe('Help Center — YouTube', () => {
             assert.ok(text.includes(message), `${lang}: the article quotes the reason as the code words it`);
             assert.ok(text.includes(bold(label(lang, 'posts.publishNow'))), `${lang}: Publish now is the way to retry`);
             assert.ok(text.includes(bold(label(lang, 'state.failed'))), `${lang}: the post shows ${label(lang, 'state.failed')}`);
-            assert.ok(lang === 'en' ? text.includes('Nothing retries it by itself here either') : text.includes('ولا شي يعيد المحاولة لحاله هنا كذلك'), `${lang}: and says nothing retries it`);
+            assert.ok(lang === 'en' ? text.includes('Nothing retries it by itself here either') : text.includes('ولا شيء يعيد المحاولة من تلقاء نفسه هنا كذلك'), `${lang}: and says nothing retries it`);
             const stale = lang === 'en' ? /it will be retried/ : /سيُعاد المحاولة|ستُعاد/;
             assert.equal(stale.test(text), false, `${lang}: and no longer promises it`);
             // The troubleshooting row that points at the section names it too.
@@ -621,7 +619,7 @@ describe('Help Center — the limits of the setup', () => {
         assert.equal(REGENERATIONS_PER_CARD, 3);
         assert.match(readFileSync('dashboard/js/pages/welcome.js', 'utf8'), /CHECK_GIVE_UP_MS: 10 \* 60 \* 1000,/, 'the page waits 10 minutes for the comment');
         assert.ok(textOf('onboarding', 'draft', 'en').includes(`ask for suggestions ${DRAFTS_PER_DAY} times a day`));
-        assert.ok(textOf('onboarding', 'draft', 'ar').includes(`تطلب الاقتراحات ${DRAFTS_PER_DAY} مرات في اليوم`));
+        assert.ok(textOf('onboarding', 'draft', 'ar').includes(`يمكنك طلب الاقتراحات ${DRAFTS_PER_DAY} مرات في اليوم`));
         assert.ok(textOf('onboarding', 'samples', 'en').includes(`up to ${REGENERATIONS_PER_CARD} times, and samples can be written ${PROOFS_PER_DAY} times a day`));
         assert.ok(textOf('onboarding', 'samples', 'ar').includes(`حتى ${REGENERATIONS_PER_CARD} مرات، والعيّنات تُكتب ${PROOFS_PER_DAY} مرات في اليوم`));
         assert.ok(textOf('onboarding', 'accounts', 'en').includes('It waits for 10 minutes'));
@@ -686,8 +684,7 @@ describe('Help Center — the DM assistant', () => {
         assert.match(readFileSync('src/webhook/messaging.ts', 'utf8'), /if \(dmReply\.kind === 'handoff'\) \{\s*await handOver\(\);/, 'the engine failing, with the fallback off, ends the same way');
         for (const lang of LANGS) {
             const text = textOf('dm-assistant', 'engine', lang);
-            // help pending SA-08: the Arabic Help still bolds the old chip word «بانتظارك»; delete the `||` alternative in the Help rewrite PR.
-            assert.ok(text.includes(bold(label(lang, 'inbox.needsYou'))) || (lang === 'ar' && text.includes(bold('بانتظارك'))), `${lang}: the Inbox label`);
+            assert.ok(text.includes(bold(label(lang, 'inbox.needsYou'))), `${lang}: the Inbox label`);
             assert.ok(text.includes(bold(label(lang, 'ai.fallbackTitle'))) && text.includes(bold(label(lang, 'ai.engineProviders'))), `${lang}: the two switches, as the page names them`);
         }
     });
@@ -699,7 +696,7 @@ describe('Help Center — the DM assistant', () => {
         assert.equal(MAX_FOLLOWUPS_PER_CONVERSATION, 1);
         assert.equal(FOLLOWUP_WINDOW_MS, 23 * 60 * 60 * 1000);
         for (const lang of LANGS) {
-            has('dm-assistant', 'followup', lang, lang === 'en' ? '4 hours later (the default)' : 'بعد 4 ساعات (الافتراضي)', lang === 'en' ? 'from 0 to 1,320 minutes' : 'من 0 إلى 1320 دقيقة', lang === 'en' ? '240 by default' : 'والافتراضي 240', lang === 'en' ? 'after 23 hours' : 'بعد مرور 23 ساعة', lang === 'en' ? 'only one is ever sent per conversation' : 'ما يُرسل إلا واحدة لكل محادثة');
+            has('dm-assistant', 'followup', lang, lang === 'en' ? '4 hours later (the default)' : 'بعد 4 ساعات (الافتراضي)', lang === 'en' ? 'from 0 to 1,320 minutes' : 'من 0 إلى 1320 دقيقة', lang === 'en' ? '240 by default' : 'والافتراضي 240', lang === 'en' ? 'after 23 hours' : 'بعد مرور 23 ساعة', lang === 'en' ? 'only one is ever sent per conversation' : 'ولا تُرسل إلا واحدة لكل محادثة');
             assert.ok(textOf('dm-assistant', 'followup', lang).includes(bold(label(lang, 'ai.salesFollowup'))), `${lang}: the field's own name`);
         }
     });
@@ -713,7 +710,7 @@ describe('Help Center — the DM assistant', () => {
             assert.ok(desc('ai.variantShare').includes(lang === 'en' ? 'from 0 to 100' : 'من 0 إلى 100'), `${lang}: share`);
             assert.ok(desc('ai.variantOpening').includes(lang === 'en' ? '300 characters' : '300 حرف'), `${lang}: opening`);
             assert.ok(desc('ai.variantCta').includes(lang === 'en' ? '300 characters' : '300 حرف'), `${lang}: offer`);
-            has('dm-assistant', 'variants', lang, lang === 'en' ? 'until a variant has 30 conversations' : 'قبل ما تصل الصيغة إلى 30 محادثة', lang === 'en' ? 'at least two variants' : 'صيغتان على الأقل');
+            has('dm-assistant', 'variants', lang, lang === 'en' ? 'until a variant has 30 conversations' : 'قبل أن تصل الصيغة إلى 30 محادثة', lang === 'en' ? 'at least two variants' : 'صيغتان على الأقل');
         }
     });
 
