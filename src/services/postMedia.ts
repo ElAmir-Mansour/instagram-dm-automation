@@ -194,3 +194,52 @@ export async function validatePostMedia(input: {
 
     return { ok: true, mediaUrl: (input.mediaUrl || null) as string | null, mediaUrls: null };
 }
+
+// ─── Which of a queue's media no longer exists (QA-01) ────────────────────────
+
+/** The fields of a `scheduled_posts` row that name media. */
+export interface MediaNamingRow { media_url?: string | null; media_urls?: unknown; cover_url?: string | null }
+
+/** What the queue adds to each row: whether any of its media is gone, and which URLs. */
+export interface MediaMissingFields { media_missing: boolean; media_missing_urls: string[] }
+
+/** Every `/api/uploads/<uuid>` URL a row names (media, slides, cover), as `[url, uuid]`; other sites' URLs cannot be checked and are left out. */
+function ownUploadsOf(row: MediaNamingRow): Array<[string, string]> {
+    const urls: unknown[] = [row.media_url, row.cover_url, ...(Array.isArray(row.media_urls) ? row.media_urls : [])];
+    const found: Array<[string, string]> = [];
+    for (const url of urls) {
+        if (typeof url !== 'string') continue;
+        const id = uploadIdFromUrl(url);
+        if (id) found.push([url, id]);
+    }
+    return found;
+}
+
+/**
+ * Says, per row, whether the media it names still exists, with ONE query for the whole list. The retention sweep deletes a file once its post
+ * has gone out, but the row keeps the URL: the dashboard drew a `<video>` for each and the browser asked for it, 101 of 166 requests answering
+ * 404 on one live load. `media_missing` is true when the row's picture, video or any slide is gone; `media_missing_urls` names which, so a
+ * carousel can mark only the slide that is gone and a video can drop only a dead cover. Media on another site cannot be checked: never missing.
+ * Rows are changed in place and returned.
+ */
+export async function annotateMissingMedia<T extends MediaNamingRow>(
+    rows: T[],
+    query: (sql: string, params: unknown[]) => Promise<{ rows: Array<{ id: string }> }>,
+): Promise<Array<T & MediaMissingFields>> {
+    const ids = new Set<string>();
+    for (const row of rows) for (const [, id] of ownUploadsOf(row)) ids.add(id);
+    let present = new Set<string>();
+    if (ids.size > 0) {
+        const found = await query('SELECT id FROM media_uploads WHERE id = ANY($1::uuid[])', [[...ids]]);
+        present = new Set(found.rows.map((r) => String(r.id).toLowerCase()));
+    }
+    return rows.map((row) => {
+        const gone = ownUploadsOf(row).filter(([, id]) => !present.has(id)).map(([url]) => url);
+        const out = row as T & MediaMissingFields;
+        out.media_missing_urls = [...new Set(gone)];
+        // A dead cover alone does not make the media missing: the video still plays.
+        const own = new Set<unknown>([row.media_url, ...(Array.isArray(row.media_urls) ? row.media_urls : [])]);
+        out.media_missing = out.media_missing_urls.some((u) => own.has(u));
+        return out;
+    });
+}

@@ -3612,6 +3612,10 @@
     'posts.needsYou.none': 'Nothing in the queue needs you.',
     'posts.live.loading': 'Loading the published feed…',
     'posts.group.done': 'Done',
+    'posts.mediaGone': 'Media no longer stored',
+    'posts.showLater': 'Show {n} later',
+    'posts.showMore': 'Show {n} more',
+    'posts.drawnOf': '{shown} of {total} shown',
     // ─── UX US1: Archive, the Archived view, and honest times on the queue ──
     'posts.archive': 'Archive',
     'posts.unarchive': 'Unarchive',

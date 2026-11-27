@@ -151,27 +151,37 @@ describe('what each rule lets through', () => {
 });
 
 describe('the allow-list and the mutations', () => {
-    it('names the "help pending SA-08" entry, and nothing else covers the Help', () => {
-        const pending = ALLOWED.filter((e) => e.file === HELP_FILE);
-        assert.equal(pending.length, 1);
-        assert.match(pending[0].reason, /^help pending SA-08/);
-        assert.equal(pending[0].rule, '*');
+    it('covers the Help only with reasoned entries, each for one rule in one article, and none for everything', () => {
+        const help = ALLOWED.filter((e) => e.file === HELP_FILE);
+        assert.ok(help.length > 0 && help.length <= 8, `${help.length} Help entries`);
+        for (const e of help) {
+            assert.notEqual(e.rule, '*', 'no blanket entry for the Help');
+            assert.match(e.key, /^help:[a-z-]+/);
+            assert.ok(e.reason && e.reason.length > 20, e.key);
+        }
+        assert.ok(!help.some((e) => /pending/i.test(e.reason)), 'the "help pending SA-08" entry is gone');
     });
 
-    it('the old Help is green only because of that entry: without it the Help breaks the rules', () => {
-        const without = ALLOWED.filter((e) => e.file !== HELP_FILE);
-        const { findings } = scanRepo('.', undefined, without);
-        const inHelp = findings.filter((f) => f.file === HELP_FILE);
-        assert.ok(inHelp.length > 50, `${inHelp.length} findings in the Help`);
-        assert.ok(inHelp.every((f) => f.where.startsWith('help:')));
-        assert.deepEqual(findings.filter((f) => f.file !== HELP_FILE), [], 'and nothing else is left');
+    it('the Help breaks no rule once the reasoned entries are applied, and every entry still covers something', () => {
+        const { findings, stale } = scanRepo('.');
+        assert.deepEqual(findings.map((f) => `${f.file}:${f.line} [${f.rule}] ${f.word}`), []);
+        assert.deepEqual(stale, []);
     });
 
-    it('a Help that is clean makes the pending entry stale, so the Help PR cannot forget to delete it', () => {
-        const clean = { file: HELP_FILE, line: 1, where: 'help:a#b', lang: 'en', text: 'Open the log.' };
-        const { findings, stale } = judge(scanPieces([clean]), ALLOWED);
-        assert.deepEqual(findings, []);
-        assert.ok(stale.some((e) => e.file === HELP_FILE), 'the entry covers nothing, so it is reported');
+    it('a retired word planted in the Help is a finding that names the article', () => {
+        const clean = { file: HELP_FILE, line: 1, where: 'help:a#b', lang: 'en', text: 'Open the Log.' };
+        assert.deepEqual(judge(scanPieces([clean]), ALLOWED).findings, []);
+        for (const [lang, text, rule] of [['en', 'Press New campaign.', 'campaign'], ['ar', 'اضغط حملة جديدة', 'campaign'], ['ar', 'الرابط مربوط', 'connected'], ['en', 'Try the Agent sandbox', 'agent']]) {
+            const { findings } = judge(scanPieces([{ ...clean, lang, text }]), ALLOWED);
+            assert.deepEqual(findings.map((f) => f.rule), [rule], text);
+        }
+    });
+
+    it('does not read a link target: [[campaigns#how]] is an id, its label is copy', () => {
+        const src = `const HelpContent = { groups: [], articles: [{ slug: 'a', group: 'g', icon: 'x', title: { ar: 'ع', en: 'T' }, summary: { ar: 'م', en: 'S' }, related: [], sections: [{ id: 's', title: { ar: 'ق', en: 'Sec' }, body: { ar: [], en: ['Read [[campaigns#how]] and [[campaigns#matching|how matching works]].'] } }] }] };`;
+        const texts = helpEntries(src, 'x.js').map((e) => e.text).filter((t) => t.startsWith('Read'));
+        assert.deepEqual(texts, ['Read  and how matching works.']);
+        assert.deepEqual(scanPieces(helpEntries(src, 'x.js')), []);
     });
 
     it('reads Help strings by language and ignores ids, slugs and icons', () => {
