@@ -696,6 +696,7 @@ describe('InboxPage.resetViewState — what a returning operator inherits', () =
         assert.equal(Inbox.visibleThreads().length, 1);
 
         Inbox.resetViewState();
+        (Inbox as unknown as { filter: string }).filter = 'all';
         assert.equal(Inbox.visibleThreads().length, 2);
     });
 });

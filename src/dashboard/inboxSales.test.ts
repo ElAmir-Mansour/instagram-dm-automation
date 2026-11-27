@@ -168,7 +168,7 @@ describe('Inbox sales view: the stage chip', () => {
         const row = (stage: unknown) => String(L.Inbox.threadRow({ id: 'a', username: 'sara_dev', is_bot_active: true, stage, last_message_at: at(HOUR) }));
         assert.match(row('link'), /data-stage="link"/);
         assert.equal(text(row('link')).includes(L.t('inbox.stage.link')), true);
-        assert.match(row('new'), /data-stage="new"/, 'a new thread has its stage too');
+        assert.doesNotMatch(row('new'), /data-stage=/, 'U2: "New" read as "new message" and is the default, so it is not drawn');
         assert.doesNotMatch(row(undefined), /data-stage=/);
         assert.doesNotMatch(row('<img src=x onerror=alert(1)>'), /data-stage=|<img/);
     });
@@ -190,6 +190,7 @@ describe('Inbox sales view: the stage chip', () => {
         L.motion.patchList = (_container: unknown, _rows: unknown, given: Json) => { options = given; };
         const base = { id: 'a', username: 'sara_dev', is_bot_active: true, last_message_direction: 'inbound', last_message_at: at(HOUR), stage: 'qualify' };
         L.Inbox.threads = [base];
+        L.Inbox.filter = 'all';
         L.Inbox.renderThreads();
         assert.ok(options, 'the list was patched');
         const sig = (x: Json): string => options.signature(x);
@@ -233,9 +234,9 @@ describe('Inbox sales view: Hot', () => {
         assert.equal(L.Attention.isHot({ id: 'a', link_clicks: { clicks: '2' } }), true, 'a count that arrives as text is still a count');
     });
 
-    it('is its own filter, between Needs you and AI paused, and keeps only these threads', () => {
+    it('is its own filter, beside To do and All, and keeps only these threads', () => {
         const I = load().Inbox;
-        assert.deepEqual(plain(I.FILTERS), ['all', 'waiting', 'needs_you', 'hot', 'paused', 'ads']);
+        assert.deepEqual(plain(I.FILTERS), ['todo', 'hot', 'all', 'paused', 'ads', 'handled']);
         I.threads = [
             { id: 'a', link_clicks: click(2), stage: 'link' }, { id: 'b', stage: 'link', link_clicks: click(0) }, { id: 'c', last_intent: 'ready_to_buy' },
             { id: 'd', stage: 'closed', link_clicks: click(5) }, { id: 'e', is_bot_active: false },
@@ -273,7 +274,7 @@ describe('Inbox sales view: Hot', () => {
         s.hash['filter'] = 'hot';
         assert.equal(s.Inbox.filterFromHash(), 'hot');
         s.hash['filter'] = 'Hot ';
-        assert.equal(s.Inbox.filterFromHash(), 'all');
+        assert.equal(s.Inbox.filterFromHash(), 'todo', 'anything else is the default view');
         assert.ok(String(s.Inbox.layout()).includes('data-action="inbox:setFilter" data-filter="hot"'), 'a button for it');
     });
 
@@ -293,8 +294,8 @@ describe('Inbox sales view: Hot', () => {
     it('marks a hot thread in the list and in the header, and no other', () => {
         const s = load();
         const hot = { id: 'a', username: 'sara_dev', stage: 'link', link_clicks: click(2), last_message_at: at(HOUR) };
-        assert.match(String(s.Inbox.threadRow(hot)), /data-hot/);
-        assert.doesNotMatch(String(s.Inbox.threadRow({ ...hot, link_clicks: click(0) })), /data-hot/);
+        assert.match(String(s.Inbox.threadRow(hot)), /data-status-chip="hot"/);
+        assert.doesNotMatch(String(s.Inbox.threadRow({ ...hot, link_clicks: click(0) })), /data-status-chip="hot"/);
         assert.ok(text(s.Inbox.metaMarkup(hot)).includes(s.t('inbox.hot')));
     });
 });
