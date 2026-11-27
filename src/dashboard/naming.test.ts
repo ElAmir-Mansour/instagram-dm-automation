@@ -19,6 +19,7 @@ const LABELS: Array<[string, string, string]> = [
     ['campaigns', 'الردود التلقائية', 'Keyword replies'],
     ['ai_settings', 'مساعد الرسائل', 'DM assistant'],
     ['studio', 'الاستوديو', 'Studio'],
+    ['brand', 'هويتك', 'Brand'],
     ['posts', 'الجدولة', 'Scheduler'],
     ['analytics', 'النتائج', 'Results'],
     ['growth', 'النمو والتسويق', 'Growth'],
