@@ -121,7 +121,7 @@
                The hash is attacker-controllable, so it is matched against the
                known page list rather than interpolated into a path. */
             try {
-                var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'monteur', 'infographics', 'explainers', 'inbox', 'ai_settings',
+                var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'monteur', 'infographics', 'explainers', 'brand', 'inbox', 'ai_settings',
                              'analytics', 'growth', 'ads', 'activity', 'settings', 'help', 'operations', 'tenants',
                              'tenant_detail', 'admin_ads', 'users', 'jobs', 'audit', 'erasure', 'invite', 'welcome'];
                 /* The page is the first segment: #/help/worker#security is "help". */
@@ -309,6 +309,11 @@
                         <li><a href="#/studio" class="nav-item" data-page="studio">
                             <i data-lucide="layers" aria-hidden="true"></i>
                             <span data-i18n="nav.studio">الاستوديو</span>
+                        </a></li>
+                        <!-- Your brand (#/brand): the logo and the colours the Studio draws with. Hidden for a viewer (`data-operator-only`, applyChrome). -->
+                        <li class="hidden" data-operator-only><a href="#/brand" class="nav-item" data-page="brand">
+                            <i data-lucide="award" aria-hidden="true"></i>
+                            <span data-i18n="nav.brand">هويتك</span>
                         </a></li>
                         <li><a href="#/posts" class="nav-item" data-page="posts">
                             <i data-lucide="calendar-days" aria-hidden="true"></i>

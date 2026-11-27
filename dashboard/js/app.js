@@ -100,6 +100,9 @@ const App = {
         // The Studio's fourth tab (#/explainers): researched, narrated, illustrated videos (v59). The owner's alone, behind the platform admin's switch.
         // It owns its own stylesheet (css/pages/explainers.css) and its own Settings view (`?tab=settings`); Studio's item is current here too.
         explainers: { src: 'explainers', page: () => ExplainersPage, navAs: 'studio', css: true },
+        // Your brand (#/brand): one logo and the "use my brand colours" switch, with a preview of where the logo lands. The owner edits, an operator reads, a viewer has
+        // no menu item (`data-operator-only`). It owns its stylesheet (css/pages/brand.css); the logo's preparation (`brand_image`) is loaded the first time it is needed.
+        brand: { src: 'brand', page: () => BrandPage, css: true },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -177,6 +180,8 @@ const App = {
         // The Instagram ice breakers and persistent menu editor (DM plan S13) on Settings: the owner's questions, Save, and the one Publish button. Loaded by Settings on
         // first use (for the tenant's owner only). It holds no state of its own across renders: Settings hands it the server's answer every time it draws the card.
         ice_breakers: { src: 'ice_breakers', page: () => IceBreakersCard, routable: false },
+        // The Brand page's logo preparation (trim, measure, remove the background, PNG): pure pixel functions and the plate rule, loaded by Brand on first use.
+        brand_image: { src: 'brand_image', page: () => BrandImage, routable: false },
         // The ad builder's quick mode (A4): the dialog Posts' Boost button opens, with the post chosen. Loaded by Posts on first use; if it cannot be, Posts opens the older Boost form.
         ads_builder: { src: 'ads_builder', page: () => AdsBuilder, routable: false },
         // The WhatsApp card on Settings (T025): connect a number (the access token is read once and never kept), its health and free-replies meter, who the
@@ -1336,6 +1341,12 @@ const App = {
         const owner = this.canAdminister();
         document.querySelectorAll('[data-owner-only]').forEach((el) => {
             el.classList.toggle('hidden', !owner);
+        });
+
+        // Items an operator or an owner can use but a viewer cannot (Brand): the link is not there rather than there and refused.
+        const operator = this.canOperate();
+        document.querySelectorAll('[data-operator-only]').forEach((el) => {
+            el.classList.toggle('hidden', !operator);
         });
 
         // Affordances that need a real user account rather than the shared

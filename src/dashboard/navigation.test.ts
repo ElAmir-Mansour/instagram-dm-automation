@@ -5,7 +5,7 @@
  * What a screenshot cannot say, pinned against the REAL shipped files (`dashboard/index.html`, `app.js`, `components.js`, the catalogues,
  * `styles.css`) through `_harness.ts`:
  *   - the structure: four job groups, each a list named by its visible heading, then Administration, then Settings, Help and the
- *     account area; ten creator items, and no item for what moved inside another screen (SC-005);
+ *     account area; twelve creator items (eleven until Brand), and no item for what moved inside another screen (SC-005);
  *   - the behaviour the markup cannot carry: which item reads as current for a page that has none of its own, the Administration group
  *     opening for an admin page and remembering the viewer, its status dot, the identity line, the modified click, the drawer's `inert`,
  *     the marker landing on the right item in both directions, the first frame of a stored session;
@@ -69,7 +69,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
     it('is Today, Replies, Content, Results, in that order, and Administration after them', () => {
         const found = groups();
         assert.deepEqual(found.map((g) => g.labelKey), ['nav.group.today', 'nav.group.replies', 'nav.group.content', 'nav.group.results', 'nav.group.admin']);
-        assert.deepEqual(found.slice(0, 4).map((g) => g.pages), [['overview', 'inbox'], ['campaigns', 'ai_settings'], ['studio', 'posts'], ['analytics', 'growth', 'ads']]);
+        assert.deepEqual(found.slice(0, 4).map((g) => g.pages), [['overview', 'inbox'], ['campaigns', 'ai_settings'], ['studio', 'brand', 'posts'], ['analytics', 'growth', 'ads']]);
         assert.deepEqual(found[4]!.pages, ['operations', 'tenants', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']);
         assert.deepEqual(footPages(), ['settings', 'help']);
     });
@@ -88,12 +88,12 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         }
     });
 
-    it('has eleven creator items (9 job items, Settings, Help; Ads is the owner\'s alone): SC-005, down from thirteen', () => {
+    it('has twelve creator items (10 job items, Settings, Help; Ads is the owner\'s alone, Brand is the owner\'s to edit): SC-005 said eleven, and Brand makes it twelve on purpose (Brand Kit, contract R9)', () => {
         const job = groups().slice(0, 4).flatMap((g) => g.pages);
-        assert.equal(job.length, 9);
-        assert.equal(job.length + footPages().length, 11);
+        assert.equal(job.length, 10);
+        assert.equal(job.length + footPages().length, 12);
         const all = [...INDEX.matchAll(/<a href="#\/[a-z_]+" class="nav-item(?: active)?" data-page="([a-z_]+)"/g)].map((m) => m[1]!);
-        assert.equal(all.length, 11 + 7, 'every sidebar link: eleven for the creator, seven for the platform admin');
+        assert.equal(all.length, 12 + 7, 'every sidebar link: twelve for the creator, seven for the platform admin');
         assert.equal(new Set(all).size, all.length, 'no page twice');
     });
 
@@ -109,7 +109,7 @@ describe('sidebar: four job groups, Administration, then the foot (T114)', () =>
         const ar = loadDashboard({ lang: 'ar' });
         const en = loadDashboard({ lang: 'en' });
         const links = [...INDEX.matchAll(/<a href="#\/([a-z_]+)" class="nav-item(?: active)?" data-page="([a-z_]+)">[\s\S]*?<span data-i18n="([^"]+)">([^<]*)<\/span>/g)];
-        assert.equal(links.length, 18);
+        assert.equal(links.length, 19);
         for (const [, href, page, key, text] of links) {
             assert.equal(href, page, `${page}: the address is the page`);
             assert.equal(key, `nav.${page}`, `${page}: the label IS the page title, so the two cannot drift`);
@@ -170,7 +170,7 @@ function rig(options: { lang?: 'ar' | 'en'; admin?: boolean; globals?: Record<st
     const h = loadDashboard({ app: true, lang: options.lang ?? 'en', globals: { Admin: { confirm: () => {} }, ...(options.globals ?? {}) } });
     for (const id of ['page-title', 'page-subtitle', 'page-container', 'sidebar', 'main-content', 'mobile-menu-btn']) h.el(id);
     const items: Record<string, FakeEl> = {};
-    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'posts', 'analytics', 'growth', 'ads', 'settings', 'help', 'operations', 'tenants', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']) {
+    for (const page of ['overview', 'inbox', 'campaigns', 'ai_settings', 'studio', 'brand', 'posts', 'analytics', 'growth', 'ads', 'settings', 'help', 'operations', 'tenants', 'admin_ads', 'users', 'jobs', 'audit', 'erasure']) {
         items[page] = new FakeEl('', 'a');
         items[page]!.dataset = { page };
     }
@@ -520,7 +520,7 @@ describe('nav links: the browser keeps Cmd, Ctrl, Shift and middle clicks (SH-24
         r.App.go = (page: string): void => { went.push(page); };
         r.App.prefetchPageModule = (): void => {};
         r.App.bindNavLinks();
-        assert.equal(bound.size, 19, '18 links and the brand mark');
+        assert.equal(bound.size, 20, '19 links and the brand mark');
         bound.get(r.items.help!)![0]!(click());
         bound.get(home)![0]!(click());
         bound.get(r.items.studio!)![0]!(click({ ctrlKey: true }));
