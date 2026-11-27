@@ -1363,3 +1363,28 @@ describe('sweepMonteur — the creator\'s profile (P11)', () => {
         assert.equal(failed().length, 0);
     });
 });
+
+describe('sweepMonteur — the Brand Kit reaches the reel\'s render (docs: contract §4)', () => {
+    const LOGO = { url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark', colour: '#0E3B5C' };
+    const storeBrand = (brand: Record<string, unknown>): void => {
+        const profile = profileFromLegacy(ELAMIR_SETTINGS);
+        Object.assign(profile.brand, brand);
+        db.routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile: JSON.parse(JSON.stringify(profile)), version: 2, activated_at: null }] })]);
+    };
+
+    it('no logo and no switch: today\'s brand keys, and the palette picks the accent', async () => {
+        await sweepMonteur(later());
+        const [payload] = renderPayloads();
+        assert.deepEqual(Object.keys(payload.brand), ['accent', 'font', 'direction', 'style']);
+        assert.ok(ELAMIR_SETTINGS.brand.palette.includes(payload.brand.accent));
+    });
+
+    it('a logo and the switch: the logo is last in brand, and a NEW clip\'s accent is the brand\'s own', async () => {
+        storeBrand({ logo_url: LOGO.url, logos: { main: { ...LOGO, added_at: '2026-12-01T09:30:00.000Z' } }, use_brand_colours: true, accent: '#F2A33A' });
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        const [payload] = renderPayloads();
+        assert.deepEqual(Object.keys(payload.brand), ['accent', 'font', 'direction', 'style', 'logo']);
+        assert.deepEqual(payload.brand.logo, LOGO);
+        assert.equal(payload.brand.accent, '#F2A33A');
+    });
+});

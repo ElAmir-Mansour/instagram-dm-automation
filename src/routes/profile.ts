@@ -14,7 +14,7 @@
  *
  * The answers to a refusal are `{ error, code, … }`: `PROFILE_INVALID` 400 with `problems`, `PROFILE_VERSION_CONFLICT`
  * and `PROFILE_NEWER_SCHEMA` 409 with `currentVersion`, `OWNER_RULE_LOCKED` 409 (a change that removes the platform owner's
- * `no_women_imagery` rule, unless the body says `confirm_remove_owner_rule: true`), `PROFILE_STORAGE_MISSING` 503. A change is audited as
+ * `no_women_imagery` rule, unless the body says `confirm_remove_owner_rule: true`), `PROFILE_STORAGE_MISSING` 503, `BRAND_LOGO_INVALID` 400 with `problems` and `BRAND_LOGO_UNREADABLE` 503 (a logo, `services/brand/logoCheck.ts`). A change is audited as
  * `profile.write` with the names of the sections it changed and never their values; a request that changed nothing
  * writes nothing and is not audited.
  */
@@ -25,6 +25,7 @@ import { readCampaignSeeds } from '../services/profile/campaignSeeds.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { describeProgress } from '../services/profile/progress.js';
 import { ProfileError } from '../services/profile/store.js';
+import type { CreatorProfile } from '../services/profile/types.js';
 import { getTenantId, requireTenantRole, type TenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -58,6 +59,15 @@ function handle(event: string, fallback: string, fn: Handler) {
             log('error', event, describeError(err));
             res.status(500).json({ error: fallback });
         }
+    };
+}
+
+/** What the logo's audit row says: that it was set or removed, and the file's size: never the address or the colour. */
+export function logoAuditDetail(change: 'set' | 'removed', state: { version: number | null; profile: CreatorProfile }): Record<string, unknown> {
+    const main = state.profile.brand.logos?.main;
+    return {
+        change, version: state.version,
+        ...(change === 'set' && main ? { width: main.width, height: main.height, alpha: main.alpha } : {}),
     };
 }
 
@@ -96,12 +106,18 @@ profileRouter.get('/campaign-seeds', canOperate, handle('profile.campaign_seeds_
 
 profileRouter.patch('/', canEdit, handle('profile.save_failed', 'Failed to save the profile.', async (req, res) => {
     const creatorId = getTenantId(req);
-    const { changed, ...state } = await patchProfile(creatorId, req.body, { userId: req.session?.userId ?? null });
+    const { changed, logoChange, ...state } = await patchProfile(creatorId, req.body, { userId: req.session?.userId ?? null });
     if (changed.length > 0) {
+        const actor = await actorFromSession(req.session);
         // Section names only: what the profile says is never written to the audit trail.
-        await writeAudit(await actorFromSession(req.session), {
+        await writeAudit(actor, {
             action: AUDIT_ACTIONS.profileWrite, targetType: 'creator', targetId: creatorId, detail: { paths: changed, version: state.version },
         });
+        if (logoChange !== null) {
+            await writeAudit(actor, {
+                action: AUDIT_ACTIONS.brandLogoUpload, targetType: 'creator', targetId: creatorId, detail: logoAuditDetail(logoChange, state),
+            });
+        }
     }
     res.json(state);
 }));

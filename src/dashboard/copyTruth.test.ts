@@ -197,7 +197,7 @@ describe('Interface copy — who writes the infographic the form asks for', () =
         };
         assert.match(between('export async function createInfographic', 'async function insertWritten'), /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, 'writing', \$7\) RETURNING id/, 'the Mac path: the row waits as writing while Claude writes it inside the render job');
         assert.match(between('async function insertWritten', 'async function createOnServer'), /VALUES \(\$1, \$2, \$3, \$4, \$5, 'rendering', \$6::jsonb, \$7, \$8::jsonb, \$9\) RETURNING id/, 'the server path: written before the row exists, so born rendering with its spec');
-        assert.match(between('async function createOnServer', 'async function rewriteOnServer'), /await queue\(client, creatorId, id, renderPayload\(id, first, theme, settings, written\.spec\), 'rendering'\);/, 'and only the drawing is queued for the worker');
+        assert.match(between('async function createOnServer', 'async function rewriteOnServer'), /await queue\(client, creatorId, id, renderPayload\(id, first, theme, settings, brand, written\.spec\), 'rendering'\);/, 'and only the drawing is queued for the worker');
         // The page draws the worker's notice for any open row, whoever wrote it: so it may say only what is true of both.
         const page = readFileSync('dashboard/js/pages/infographics.js', 'utf8');
         const start = page.indexOf('workerMarkup() {');

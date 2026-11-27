@@ -166,7 +166,7 @@ Jobs:
   - Result: `{ notes: LessonNotes, moments: [{ t, description, kind, clean, thumb_url }] }`, with 12–30 moments.
   - Server side: replace the moments, set `notes`, set status `indexed` and `indexed_at`.
 - **`render_carousel`**
-  - Payload: `{ draftId, carousel, shots: { [name]: ShotSpec & { video_path } } }`.
+  - Payload: `{ draftId, carousel, shots: { [name]: ShotSpec & { video_path } }, brand: BrandKit & { logo?: RenderLogo }, cta, facts }`. `brand.logo` is the Brand Kit's logo (`{ url, width, height, alpha, tone, colour }`, appended last), present only when the tenant has one: a worker that does not know it ignores it. With the tenant's "use my brand colours" switch on, `brand.colors.ink` is the brand's (FLOWS.md §15).
   - Result: `{ ig: string[], tt: string[] }`, the upload URLs in slide order.
   - Server side: set `render = { ig, tt, rendered_at, job_id }` and status `ready`. Delete the previous render's uploads unless a `scheduled_posts` row references them.
 
@@ -354,7 +354,7 @@ product). ElAmir's tenant gets today's exact values from a seed script run once 
 - **Scan**: `scan_library` payload root = `library.root` (400 "set your library folder first" when null).
 - **Render**: `render_carousel` payload adds `brand: BrandKit`, `cta: CtaConfig['slide']`, `facts: string[]`.
   The templates read colors, fonts, signature, direction and every CTA word from these (a `BrandContext`
-  whose defaults are today's constants), so ElAmir's renders stay pixel-identical.
+  whose defaults are today's constants), so ElAmir's renders stay pixel-identical. `brand.logo?` is optional and absent without a logo.
 - **Dashboard**: a Studio **Settings** tab: Brand kit (signature, palette editor, colors, fonts),
   Voice (language, digits, guide), Product & CTAs (all strings above, with live previews of the DM and
   caption lines), Schedule (timezone, slots), Library folder, Workers (create → copy token once, revoke,

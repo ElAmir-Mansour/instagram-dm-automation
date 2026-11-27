@@ -32,6 +32,7 @@ import {
 import {
     cancelClipRenders, deleteUnreferencedUploads, enqueueMonteurRender, markSourceDoneIfRendered,
 } from '../studio/jobs.js';
+import { loadRenderBrand } from '../brand/load.js';
 import { tiktokLine } from '../studio/prompts.js';
 import { assertDirectPostReady, studioTikTokOptions } from '../studio/schedule.js';
 import { getStudioSettings } from '../studio/settings.js';
@@ -215,9 +216,10 @@ async function queueRender(exec: Exec, creatorId: string, clip: ClipDraftRow, ti
         'SELECT id, path, words FROM monteur_sources WHERE id = $1 AND creator_id = $2', [clip.source_id, creatorId]
     );
     if (!rows[0]) throw new StudioError(409, 'This reel\'s video is gone, so it cannot be rendered again.');
-    const accent = await clipAccent(exec, creatorId, clip.id) ?? (await accentsFor(exec, creatorId, settings, 1))[0]!;
+    const brand = await loadRenderBrand(creatorId, exec);
+    const accent = await clipAccent(exec, creatorId, clip.id) ?? (await accentsFor(exec, creatorId, settings, 1, brand))[0]!;
     await enqueueMonteurRender(exec, creatorId, buildRenderPayload({
-        clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword, accent, settings,
+        clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword, accent, settings, brand,
         // The Editor's edits are the clip's, written once at the pick: every render carries them.
         edits: Array.isArray(clip.edits) ? clip.edits : [],
         // So are its human touches; buildRenderPayload leaves them out while `monteur.human` is off.

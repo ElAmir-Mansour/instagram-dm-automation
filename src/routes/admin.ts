@@ -68,7 +68,7 @@ import { dmModelsInUse, starterPersona } from '../services/ai.js';
 import { clearProfileCache } from '../services/profile/cache.js';
 import { recordEvent } from '../services/onboardingEvents.js';
 import { contextFor } from '../services/profile/context.js';
-import { defaultProfile } from '../services/profile/defaults.js';
+import { newTenantProfile } from '../services/profile/defaults.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
@@ -78,7 +78,7 @@ import { adminAdsRouter } from './adminAds.js';
 import { adminExplainersRouter } from './adminExplainers.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
-import { profileErrorBody } from './profile.js';
+import { logoAuditDetail, profileErrorBody } from './profile.js';
 import { adminActor, advanceDraftFor, getDraftFor, guard as draftGuard, startDraftFor } from './onboardingDrafts.js';
 import {
     buildInviteUrl, createInvite, InviteError, listInvites, readTtl, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
@@ -835,7 +835,7 @@ function maskToken(value: string | null): { configured: boolean; preview: string
  *
  * Either way a new tenant gets, in ONE transaction with its `creators` row:
  *
- *   - a stored Creator Profile, version 1: `defaultProfile({ lang, rules })`, the neutral one, with `onboarding.default_rules`
+ *   - a stored Creator Profile, version 1: `newTenantProfile({ lang, rules })` (`defaultProfile`, the neutral one, plus the brand-colours switch on), with `onboarding.default_rules`
  *     pre-ticked (D9). Without it the tenant is described by its legacy settings, and a tenant with none is described as the
  *     owner (his role, domain, pronouns: `profileFromLegacy`); it has to exist before anything reads the tenant (P16, plan §4b);
  *   - for an Arabic tenant, the Studio's text direction `rtl` (not a profile field, so it is seeded into `studio_settings`);
@@ -941,7 +941,7 @@ router.post('/tenants', async (req, res) => {
         // Read before the transaction opens: a setting that cannot be read fails the create, rather than a tenant being stored
         // without the rule it was meant to have.
         const rules = await getOnboardingDefaultRules();
-        const profile = defaultProfile({ lang, rules });
+        const profile = newTenantProfile({ lang, rules });
 
         const created = await withTransaction(async (tx) => {
             const result = await tx.query(
@@ -1701,7 +1701,7 @@ router.patch('/tenants/:id/profile', async (req, res) => {
             return;
         }
 
-        const { changed, ...state } = await patchProfile(id, req.body, {
+        const { changed, logoChange, ...state } = await patchProfile(id, req.body, {
             userId: req.session?.userId ?? null,
             source: 'admin',
             onSaved: async (tx) => {
@@ -1711,6 +1711,7 @@ router.patch('/tenants/:id/profile', async (req, res) => {
         if (changed.length > 0) {
             // Section names only: what the profile says is never written to the audit trail.
             await audit(req, AUDIT_ACTIONS.profileWrite, 'creator', id, { paths: changed, version: state.version, on_behalf: true });
+            if (logoChange !== null) await audit(req, AUDIT_ACTIONS.brandLogoUpload, 'creator', id, { ...logoAuditDetail(logoChange, state), on_behalf: true });
         }
         res.json(await profileAnswer(id, state));
     } catch (err) {

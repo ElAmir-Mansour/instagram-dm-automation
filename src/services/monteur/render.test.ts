@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ClipDirection } from '../../db/rows.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
-import { buildRenderPayload, touchFields } from './render.js';
+import { brandColours, NO_BRAND, type RenderBrand } from '../brand/resolve.js';
+import { accentsFor, buildRenderPayload, touchFields } from './render.js';
 
 const PLAN: ClipDirection = {
     cuts: [{ t: 2.5, shot: 'close' }, { t: 8, shot: 'wide' }],
@@ -23,6 +24,7 @@ const payload = (direction: ClipDirection | null | undefined, human = true) => b
     title: 'عنوان', keyword: 'دفتر', accent: '#FFD60A', edits: [],
     settings: { ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, human } },
     ...(direction === undefined ? {} : { direction }),
+    brand: NO_BRAND,
 });
 const BEFORE = ['brand', 'clipId', 'cover_at', 'cta', 'cta_tiktok', 'edits', 'end', 'path', 'sourceId', 'start', 'title', 'words'];
 
@@ -52,5 +54,55 @@ describe('buildRenderPayload — the human touches', () => {
         assert.deepEqual(touchFields({ emphasis: [4] } as unknown as ClipDirection), {
             direction: { cuts: [], doodles: [], freezes: [], transitions: [] }, emphasis: [4], behind: [],
         });
+    });
+});
+
+describe('buildRenderPayload and accentsFor — the Brand Kit (docs: contract §3, §4)', () => {
+    const LOGO = { url: 'https://msg-response-auto.vercel.app/api/uploads/6f1c2a90-3b7e-4d21-9a55-0c8e7d4b1f23', width: 1200, height: 400, alpha: true, tone: 'dark' as const, colour: '#0E3B5C' };
+    const build = (brand: RenderBrand) => buildRenderPayload({
+        clipId: 'clip', source: { id: 'src', path: '/v/a.mp4', words: [[10, 10.4, 'كلمة']] }, start: 9.85, end: 34.8,
+        title: 'عنوان', keyword: 'دفتر', accent: '#FFD60A', edits: [], settings: ELAMIR_SETTINGS, brand,
+    });
+
+    it('NO_BRAND is today\'s payload, byte for byte, and the same key order', () => {
+        const out = build(NO_BRAND);
+        assert.equal(JSON.stringify(out), JSON.stringify(build({ logo: null, colours: null })));
+        assert.deepEqual(Object.keys(out.brand), ['accent', 'font', 'direction', 'style']);
+        assert.equal(out.brand.accent, '#FFD60A');
+        assert.equal(JSON.stringify(out).includes('logo'), false);
+    });
+
+    it('a logo with the switch off: only brand.logo is added, last', () => {
+        const plain = build(NO_BRAND);
+        const out = build({ logo: LOGO, colours: null });
+        assert.deepEqual(Object.keys(out.brand), ['accent', 'font', 'direction', 'style', 'logo']);
+        assert.equal(JSON.stringify(out.brand.logo), JSON.stringify(LOGO));
+        const { logo: _logo, ...rest } = out.brand;
+        assert.equal(JSON.stringify({ ...out, brand: rest }), JSON.stringify(plain));
+    });
+
+    it('a logo with the switch on: the payload\'s accent is still the one it was given (the switch acts in accentsFor)', () => {
+        const out = build({ logo: LOGO, colours: brandColours('#0E3B5C', '#F2A33A') });
+        assert.equal(out.brand.accent, '#FFD60A');
+        assert.deepEqual(out.brand.logo, LOGO);
+    });
+
+    it('accentsFor with the switch on: the brand\'s reel accent for every new clip, and no read of the recent ones', async () => {
+        const asked: string[] = [];
+        const exec = { query: async (sql: string) => { asked.push(sql); return { rows: [] }; } } as never;
+        const out = await accentsFor(exec, 'tenant', ELAMIR_SETTINGS, 3, { logo: null, colours: brandColours('#0E3B5C', '#1B2A41') });
+        const accent = brandColours('#0E3B5C', '#1B2A41').reelAccent;
+        assert.deepEqual(out, [accent, accent, accent]);
+        assert.deepEqual(asked, []);
+    });
+
+    it('accentsFor with the switch off (a logo or not): the palette and the recent accents, as before', async () => {
+        const exec = { query: async () => ({ rows: [{ accent: ELAMIR_SETTINGS.brand.palette[0] }] }) } as never;
+        for (const brand of [NO_BRAND, { logo: LOGO, colours: null }]) {
+            const out = await accentsFor(exec, 'tenant', ELAMIR_SETTINGS, 2, brand);
+            assert.equal(out.length, 2);
+            assert.ok(out.every((a) => ELAMIR_SETTINGS.brand.palette.includes(a)));
+            assert.notEqual(out[0], ELAMIR_SETTINGS.brand.palette[0], 'it avoids the recent accent');
+        }
     });
 });

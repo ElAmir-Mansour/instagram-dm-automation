@@ -42,7 +42,7 @@ import { changedPaths, growthView, scheduleTimezone, studioView } from './views.
 
 // ─── Errors ──────────────────────────────────────────────────────────────────────────────────
 
-export type ProfileErrorCode = 'PROFILE_NEWER_SCHEMA' | 'PROFILE_INVALID' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_STORAGE_MISSING' | 'OWNER_RULE_LOCKED';
+export type ProfileErrorCode = 'PROFILE_NEWER_SCHEMA' | 'PROFILE_INVALID' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_STORAGE_MISSING' | 'OWNER_RULE_LOCKED' | 'BRAND_LOGO_INVALID' | 'BRAND_LOGO_UNREADABLE';
 
 /**
  * A refusal a route answers as-is: `status`, `code` and the message. Thrown rather than returned, so a check made

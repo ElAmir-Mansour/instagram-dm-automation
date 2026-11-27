@@ -33,6 +33,7 @@ import { setLogSink } from '../../utils/log.js';
 import { dmFallbackReply } from '../../webhook/errors.js';
 import { disclosureLine } from '../../webhook/meta-payload.js';
 import { dmResponseSchema, dmSystemInstruction, type DmContext, starterPersona } from '../ai.js';
+import { renderBrandOf, type RenderBrand } from '../brand/resolve.js';
 import { buildSalesPrompt } from '../dmSales/prompt.js';
 import { salesReplySchema } from '../dmSales/schema.js';
 import type { SalesFacts } from '../dmSales/types.js';
@@ -295,6 +296,12 @@ export interface StudioSurfaceOptions {
      * It may be a function that makes it (`Wording`), so a tenant whose profile cannot be made into one fails those entries by name.
      */
     carousel: Wording<StudioWording>;
+    /**
+     * The Brand Kit's logo and switch (`renderBrandOf` of the profile the caller reads the tenant through), handed to the render payload the way
+     * the draft's own call does. No default, like `carousel`: every golden is built THROUGH the brand path, so a payload that moved for a tenant
+     * with no logo and the switch off fails here.
+     */
+    brand: Wording<RenderBrand>;
     /** The fixture's suffix in the golden names (`elamir`, `seed`, `english`). None for a live tenant. */
     slug?: string;
     /** The golden set these belong to. */
@@ -318,7 +325,7 @@ export interface StudioSurfaceOptions {
  * Every builder that reads the Studio settings and nothing else of the tenant: the writer's prompts, the CTA lines,
  * the DM, the caption normalisers, the carousel payload, and the Monteur's pick, copy, Editor, Analyst and render.
  */
-export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording, reelKits, turn = OWNER_TURN }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
+export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording, brand, reelKits, turn = OWNER_TURN }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
     const { say, activeKeywords, seo } = turn(lang);
     const out: SurfaceEntry[] = [];
     const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
@@ -353,7 +360,7 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
         ],
         captions: { instagram: say.igCaption, tiktokTitle: say.idea, tiktok: say.ttCaption },
     };
-    out.push(await builtAsync(named('studio.carousel-render-payload', slug), 'json', set, () => carouselRenderPayload('creator', 'draft', carousel, {}, settings)));
+    out.push(await builtAsync(named('studio.carousel-render-payload', slug), 'json', set, () => carouselRenderPayload('creator', 'draft', carousel, {}, settings, wordingOf(brand))));
 
     // The Monteur. The pick and the Marketer are written from the creator's profile context (P11): his, here, is what his profile says.
     const reels = lazy(() => wordingOf(reelKits ?? (() => reelKitsOf(profileFromLegacy(settings)))));
@@ -384,7 +391,7 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     j('monteur.render-payload', () => buildRenderPayload({
         clipId: 'clip', source: { id: 'src', path: '/v/a.mp4', words: [[10, 10.4, 'كلمة'], [10.5, 11, 'ثانية']] },
         start: 9.85, end: 34.8, title: say.copy.first_line, keyword: say.keyword, accent: '#FFD60A', edits: [],
-        settings, direction: PLAN,
+        settings, direction: PLAN, brand: wordingOf(brand),
     }));
     return out;
 }
@@ -402,16 +409,18 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
  * default for it, so a path that forgot to give one fails to compile instead of quietly writing the owner's text. It may be a
  * function that makes it (`Wording`), so a tenant whose profile cannot be made into one fails these entries by name.
  */
-export function infographicSurface(settings: StudioSettings, { slug, ctx }: { slug?: string; ctx: Wording<InfographicWriterContext> }): SurfaceEntry[] {
+export function infographicSurface(
+    settings: StudioSettings, { slug, ctx, brand }: { slug?: string; ctx: Wording<InfographicWriterContext>; brand: Wording<RenderBrand> }
+): SurfaceEntry[] {
     const mid = slug ? `.${slug}` : '';
     const job = (language: SurfaceLang, notes: string | null) => () => infographicRenderPayload(
         '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
-        settings.infographic.theme, settings, null, wordingOf(ctx),
+        settings.infographic.theme, settings, wordingOf(brand), null, wordingOf(ctx),
     );
     return [
         built(`infographic.render-payload${mid}.ar`, 'json', 'elamir', job('ar', 'ركّز على التكلفة وسرعة الاستجابة')),
         built(`infographic.render-payload${mid}.en`, 'json', 'control', job('en', null)),
-        built(named('infographic.brand', slug), 'json', 'elamir', () => payloadBrand(settings.infographic)),
+        built(named('infographic.brand', slug), 'json', 'elamir', () => payloadBrand(settings.infographic, wordingOf(brand).logo)),
     ];
 }
 
@@ -683,9 +692,10 @@ export async function tenantSurface(rows: TenantRows, options: WithRowsOptions =
     const dm = () => contextFor(profile(), 'dm', null);
     const comments = () => contextFor(profile(), 'comment_reply', null);
     const carousel = (): StudioWording => contextFor(profile(), 'carousel', null);
+    const brand = (): RenderBrand => renderBrandOf(profile());
     return [
-        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel, reelKits: () => reelKitsOf(profile()), turn: rows.turn }),
-        ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
+        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel, brand, reelKits: () => reelKitsOf(profile()), turn: rows.turn }),
+        ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null), brand }),
         ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
         ...dmContextSurface(dm),
         ...dmFallbackSurface(rows.studio, comments, rows.turn),

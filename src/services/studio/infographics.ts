@@ -28,6 +28,8 @@ import crypto from 'crypto';
 import { pool } from '../../config/db.js';
 import type { InfographicRow, InfographicSchedule, RenderInfographicPayload, ScheduledPostRow } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
+import { loadRenderBrand } from '../brand/load.js';
+import { NO_BRAND, type RenderBrand } from '../brand/resolve.js';
 import { isMacBrainAllowed } from '../macBrain.js';
 import { insertVideoPost, metaPlatformFor } from '../monteur/clips.js';
 import { THINK_MODEL } from '../monteur/think.js';
@@ -152,12 +154,12 @@ type RenderRow = Pick<InfographicRow, 'topic' | 'notes' | 'language'>;
  * (`infographicContext`) and rendering reads none, which the two signatures say: asking Claude to write without a
  * context does not compile.
  */
-export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: SpecToRender): RenderInfographicPayload;
-export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: null, ctx: InfographicWriterContext): RenderInfographicPayload;
+export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, brand: RenderBrand, spec: SpecToRender): RenderInfographicPayload;
+export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, brand: RenderBrand, spec: null, ctx: InfographicWriterContext): RenderInfographicPayload;
 export function renderPayload(
-    id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: SpecToRender | null, ctx?: InfographicWriterContext
+    id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, brand: RenderBrand, spec: SpecToRender | null, ctx?: InfographicWriterContext
 ): RenderInfographicPayload {
-    const base: RenderInfographicPayload = { infographicId: id, theme, language: row.language, brand: payloadBrand(settings.infographic) };
+    const base: RenderInfographicPayload = { infographicId: id, theme, language: row.language, brand: payloadBrand(settings.infographic, brand.logo) };
     if (spec) return { ...base, spec };
     // The signatures keep a typed caller from here; this is for the one that is not (a cast, a plain JS caller).
     if (!ctx) throw new Error('renderPayload: asking Claude to write an infographic needs the writer\'s context (infographicContext)');
@@ -209,7 +211,7 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
     // written on the server through the AI providers layer (P32): the Mac is never asked for them.
     if (!(await isMacBrainAllowed(creatorId))) return createOnServer(creatorId, { topic: topic!, notes, body: b });
 
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     const { language, theme, pair } = newInfographicChoices(b, settings);
     // What the writer's prompt is built from (the profile's role, domain and register), read through the pool BEFORE the
     // transaction opens: a plain SELECT takes no row lock, so the lock order is untouched. Its version is the stamp
@@ -223,7 +225,7 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
             [creatorId, topic, notes, language, theme, pair, ctx.version]
         );
         const id = rows[0]!.id;
-        await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null, ctx), 'writing');
+        await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, brand, null, ctx), 'writing');
         log('info', 'studio.infographic_created', { infographic_id: id, language, theme, pair_theme: pair });
         return loadView(client, creatorId, id);
     });
@@ -251,18 +253,18 @@ async function insertWritten(
  * `theme: 'both'` writes once and makes both rows now: the written spec is in hand, so there is no `pair_theme` to wait for.
  */
 async function createOnServer(creatorId: string, { topic, notes, body }: { topic: string; notes: string | null; body: Record<string, unknown> }): Promise<InfographicView> {
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     const { language, theme, pair } = newInfographicChoices(body, settings);
     const ctx = await infographicContext(creatorId);
     const written = await writeInfographicOnServer({ creatorId, topic, notes, language, avoid: settings.voice.avoid ?? [], ctx });
     return withTransaction(async (client) => {
         const first = { topic, notes, language, theme, profileVersion: ctx.version };
         const id = await insertWritten(client, creatorId, first, written);
-        await queue(client, creatorId, id, renderPayload(id, first, theme, settings, written.spec), 'rendering');
+        await queue(client, creatorId, id, renderPayload(id, first, theme, settings, brand, written.spec), 'rendering');
         if (pair) {
             const other = { ...first, theme: pair };
             const pairId = await insertWritten(client, creatorId, other, written);
-            await queue(client, creatorId, pairId, renderPayload(pairId, other, pair, settings, written.spec), 'rendering');
+            await queue(client, creatorId, pairId, renderPayload(pairId, other, pair, settings, brand, written.spec), 'rendering');
         }
         log('info', 'studio.infographic_created', {
             infographic_id: id, language, theme, pair_theme: pair, written_on: 'server', provider: written.provider, model: written.model, usd: written.usd,
@@ -280,7 +282,7 @@ async function rewriteOnServer(creatorId: string, id: string, b: Record<string, 
     const before = await loadView(pool, creatorId, id);
     assertIdle(before);
     const theme = parseTheme(b.theme, before.theme);
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     const ctx = await infographicContext(creatorId);
     const written = await writeInfographicOnServer({
         creatorId, topic: before.topic, notes: before.notes, language: before.language, avoid: settings.voice.avoid ?? [], ctx,
@@ -293,7 +295,7 @@ async function rewriteOnServer(creatorId: string, id: string, b: Record<string, 
               WHERE id = $1 AND creator_id = $2`,
             [id, creatorId, JSON.stringify(written.spec), written.caption, written.review ? JSON.stringify(written.review) : null, ctx.version]
         );
-        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, written.spec), 'rendering');
+        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, brand, written.spec), 'rendering');
         log('info', 'studio.infographic_rewritten', { infographic_id: id, written_on: 'server', provider: written.provider, model: written.model, usd: written.usd });
         return loadView(client, creatorId, id);
     });
@@ -321,7 +323,7 @@ export async function updateInfographic(creatorId: string, rawId: unknown, body:
     const b = isPlainObject(body) ? body : {};
     if (b.spec === undefined && b.caption === undefined) throw new StudioError(400, 'Send the spec, the caption, or both.');
     if (b.caption !== undefined && typeof b.caption !== 'string') throw new StudioError(400, 'caption must be text.');
-    const settings = b.spec !== undefined ? await getStudioSettings(creatorId) : null;
+    const [settings, brand] = b.spec !== undefined ? await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]) : [null, NO_BRAND];
     return withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);
         assertIdle(row);
@@ -329,7 +331,7 @@ export async function updateInfographic(creatorId: string, rawId: unknown, body:
         if (b.spec !== undefined) {
             const spec = normaliseSpec(b.spec, row.language);
             await client.query('UPDATE infographics SET spec = $3::jsonb, caption = $4 WHERE id = $1 AND creator_id = $2', [id, creatorId, JSON.stringify(spec), caption]);
-            await queue(client, creatorId, id, renderPayload(id, row, row.theme, settings!, spec), 'rendering');
+            await queue(client, creatorId, id, renderPayload(id, row, row.theme, settings!, brand, spec), 'rendering');
         } else {
             if (!row.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: there is no caption to edit.', undefined, 'INFOGRAPHIC_NOT_WRITTEN');
             // A ready row's error is its list of problems, so it is worked out again; a failed row keeps why it failed.
@@ -355,20 +357,20 @@ export async function rerenderInfographic(creatorId: string, rawId: unknown, bod
     // written on the server instead (P32), and the Mac is never asked. A row with no spec yet is a rewrite whatever the body says
     // (below). A render alone needs none.
     if (b.rewrite === true && !(await isMacBrainAllowed(creatorId))) return rewriteOnServer(creatorId, id, b);
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     const attempt = (ctx: ProfileContext<'infographic'> | undefined): Promise<InfographicView> => withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);
         assertIdle(row);
         const theme = parseTheme(b.theme, row.theme);
         const spec = row.spec;
         if (b.rewrite !== true && spec) {
-            await queue(client, creatorId, id, renderPayload(id, row, theme, settings, spec), 'rendering');
+            await queue(client, creatorId, id, renderPayload(id, row, theme, settings, brand, spec), 'rendering');
             return loadView(client, creatorId, id);
         }
         // A rewrite: a new generation. The context is read before a transaction opens (the pool is small), so it is here
         // already, unless the row is a rewrite by having no spec, which is only known now: stop before writing anything.
         if (!ctx) throw new NeedsContext();
-        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, null, ctx), 'writing');
+        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, brand, null, ctx), 'writing');
         // It restamps, with the version of the profile its prompt was built from; a re-render of the same spec keeps the
         // stamp (profile/stamp.ts). After the queue, which is where `enqueueJob` refuses a tenant the Mac is not for (G1): a
         // refused rewrite writes nothing.
@@ -391,7 +393,7 @@ export async function rerenderInfographic(creatorId: string, rawId: unknown, bod
 export async function copyInfographic(creatorId: string, rawId: unknown, body: unknown): Promise<InfographicView> {
     const id = requireId(rawId, 'infographic');
     const b = isPlainObject(body) ? body : {};
-    const settings = await getStudioSettings(creatorId);
+    const [settings, brand] = await Promise.all([getStudioSettings(creatorId), loadRenderBrand(creatorId)]);
     return withTransaction(async (client) => {
         const source = await lockRow(client, creatorId, id);
         if (!source.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: wait for it, then copy it.', undefined, 'INFOGRAPHIC_NOT_WRITTEN');
@@ -405,7 +407,7 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
                 source.review ? JSON.stringify(source.review) : null, source.profile_version ?? null]
         );
         const copyId = rows[0]!.id;
-        await queue(client, creatorId, copyId, renderPayload(copyId, source, theme, settings, source.spec), 'rendering');
+        await queue(client, creatorId, copyId, renderPayload(copyId, source, theme, settings, brand, source.spec), 'rendering');
         return loadView(client, creatorId, copyId);
     });
 }
