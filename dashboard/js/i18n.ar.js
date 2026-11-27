@@ -527,6 +527,8 @@
     'overview.attentionCount_few': '{count} أشياء تحتاج انتباهك',
     'overview.attentionCount_many': '{count} شيئاً يحتاج انتباهك',
     'overview.attentionCount_other': '{count} شيء يحتاج انتباهك',
+    'overview.alert.waitingOldest_one': 'لم يردّ عليها أحد بعد. وهي تنتظر منذ {age}.',
+    'overview.alert.waitingOldest_two': 'لم يردّ عليهما أحد بعد. أقدمهما تنتظر منذ {age}.',
     'overview.alert.waitingOldest': 'لم يردّ عليها أحد بعد. أقدمها تنتظر منذ {age}.',
     'overview.alert.failedTodayMore': 'أكثر من {n} رسالة لم تُرسل اليوم',
     'overview.growth.title': 'المحتوى هذا الأسبوع',
