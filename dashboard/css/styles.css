@@ -896,8 +896,16 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     padding: var(--space-1);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border-subtle);
+    /* A tab strip scrolls inside itself and never widens the page: without a clip its links ran past the box (9 Ads tabs: x=977 on a
+       375 px phone), and Chrome widened the layout viewport to fit them. The padding keeps a focus ring (2px outline + offset 2px) inside
+       the clip; a strip that fits shows no scrollbar. */
+    max-inline-size: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
 }
-.segmented .btn { box-shadow: none; border: none; }
+.segmented::-webkit-scrollbar { display: none; }
+.segmented .btn { box-shadow: none; border: none; flex-shrink: 0; }
 /* The pressed segment is a solid tile lifted off the sunken track, whatever
    `.btn-*` variant the page happened to emit: (0,3,0) outranks `.btn-primary`
    and `.btn-ghost`, and sits after their `:hover`/`:active` rules of equal
