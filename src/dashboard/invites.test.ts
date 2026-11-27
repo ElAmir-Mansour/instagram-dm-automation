@@ -69,7 +69,7 @@ function load(options: { hash?: string } = {}): Loaded {
     const elements: Record<string, Record<string, any>> = {
         'login-screen': element(['hidden']), app: element(['hidden']), 'invite-screen': element(['hidden']),
         'login-error': element(['hidden']), 'login-password': element(), 'login-email': element(), 'login-email-group': element(['hidden']),
-        'login-email-toggle': element(), 'login-keep': element(),
+        'login-email-toggle': element(['hidden']), 'login-keep': element(), 'login-password-label': element(),
     };
     const stubEl = {
         addEventListener: noop, removeEventListener: noop,
@@ -436,28 +436,31 @@ describe('the app routes an invite hash to the invite page, before it looks for 
     });
 });
 
-describe('the login screen opens as the person last used it', () => {
-    it('with the email field showing and filled when an address was remembered', () => {
+describe('the login screen opens on email, and as the person last used it (U3, SA-06)', () => {
+    it('with the email field showing and required, filled when an address was remembered', () => {
         const { App, elements } = load();
         App.rememberEmail('Nour@Example.com');
         App.showLogin();
         assert.equal(elements['login-email']!.value, 'nour@example.com');
         assert.equal(elements['login-email-group']!.classes.has('hidden'), false);
-        assert.equal(elements['login-email-toggle']!.classes.has('hidden'), true, 'the "use an account" link has nothing left to do');
+        assert.equal(elements['login-email']!.required, true, 'an empty address is the field\'s own refusal');
+        assert.equal(elements['login-email-toggle']!.classes.has('hidden'), true, 'the way back to email has nothing left to do');
+        assert.equal(elements['login-password-label']!.textContent, 'login.password', 'the label says "Password" on the email form');
         assert.equal(elements['login-keep']!.checked, false, 'never ticked for them');
         assert.equal(elements['login-screen']!.classes.has('hidden'), false);
         assert.equal(elements['invite-screen']!.classes.has('hidden'), true);
     });
 
-    it('as the one-field shared-password form, exactly as it always was, when nothing was remembered', () => {
+    it('and on email even when nothing was remembered: that is the default now, the shared password is one link below', () => {
         const { App, elements } = load();
         App.showLogin();
         assert.equal(elements['login-email']!.value, '');
-        assert.equal(elements['login-email-group']!.classes.has('hidden'), true);
-        assert.equal(elements['login-email-toggle']!.classes.has('hidden'), false);
+        assert.equal(elements['login-email-group']!.classes.has('hidden'), false);
+        assert.equal(elements['login-email']!.required, true);
+        assert.equal(elements['login-email-toggle']!.classes.has('hidden'), true);
     });
 
-    it('and "use the dashboard password instead" puts it back to the one-field form, address cleared', () => {
+    it('"sign in with the platform password" is the one-field form, address cleared, and the choice is remembered', () => {
         const { App, ctx, elements } = load();
         App.rememberEmail('nour@example.com');
         App.showLogin();
@@ -466,7 +469,36 @@ describe('the login screen opens as the person last used it', () => {
         action();
         assert.equal(elements['login-email']!.value, '', 'an empty address is what makes the login send the body it always sent');
         assert.equal(elements['login-email-group']!.classes.has('hidden'), true);
+        assert.equal(elements['login-email']!.required, false, 'a hidden field must not refuse the form');
+        assert.equal(elements['login-email-toggle']!.classes.has('hidden'), false, 'now the link back to email shows');
+        assert.equal(elements['login-password-label']!.textContent, 'login.sharedPassword', 'and "Dashboard password" on the platform one');
+        assert.equal(App.loginMode(), 'platform');
+        assert.equal(ctx.localStorage.getItem('login_mode'), 'platform');
+    });
+
+    it('the next visit opens on the platform form for the owner who used it, and the link back to email forgets it', () => {
+        const { App, ctx, elements } = load();
+        ctx.localStorage.setItem('login_mode', 'platform');
+        App.showLogin();
+        assert.equal(elements['login-email-group']!.classes.has('hidden'), true);
+        assert.equal(elements['login-email']!.required, false);
         assert.equal(elements['login-email-toggle']!.classes.has('hidden'), false);
+        const back = vm.runInContext('UI._actions.app.revealEmailField', ctx) as () => void;
+        back();
+        assert.equal(elements['login-email-group']!.classes.has('hidden'), false);
+        assert.equal(elements['login-email']!.required, true);
+        assert.equal(App.loginMode(), 'email');
+        assert.equal(ctx.localStorage.getItem('login_mode'), 'email');
+    });
+
+    it('an unreadable or unknown stored mode is email; a browser that will not store it opens on email', () => {
+        const { App, ctx } = load();
+        ctx.localStorage.setItem('login_mode', 'something-else');
+        assert.equal(App.loginMode(), 'email');
+        ctx.localStorage.getItem = () => { throw new Error('blocked'); };
+        ctx.localStorage.setItem = () => { throw new Error('blocked'); };
+        assert.equal(App.loginMode(), 'email');
+        assert.doesNotThrow(() => App.rememberLoginMode('platform'));
     });
 });
 

@@ -229,6 +229,40 @@ export function installInviteWorld(): InviteWorld {
     });
     route(/^SELECT status FROM onboarding WHERE creator_id = \$1$/, ([creatorId]) => ({ rows: world.onboarding.has(creatorId) ? [{ status: world.onboarding.get(creatorId)!.status }] : [] }));
 
+    // ── Team (U3): the people of a workspace ──
+    route(/^SELECT u\.id AS user_id, u\.email, u\.role AS user_role, m\.role AS membership_role, u\.is_active, u\.last_login_at FROM memberships m JOIN users u ON u\.id = m\.user_id WHERE m\.creator_id = \$1 ORDER BY u\.email$/, ([creatorId]) => ({
+        rows: world.memberships.filter((m) => m.creator_id === creatorId && world.users.has(m.user_id)).map((m) => {
+            const u = world.users.get(m.user_id)!;
+            return { user_id: u.id, email: u.email, user_role: u.role, membership_role: m.role, is_active: u.is_active, last_login_at: u.last_login_at };
+        }).sort((a, b) => a.email.localeCompare(b.email)),
+    }));
+    route(/^SELECT m\.user_id, m\.role, u\.role AS user_role FROM memberships m JOIN users u ON u\.id = m\.user_id WHERE m\.creator_id = \$1 FOR UPDATE OF m$/, ([creatorId]) => ({
+        rows: world.memberships.filter((m) => m.creator_id === creatorId && world.users.has(m.user_id))
+            .map((m) => ({ user_id: m.user_id, role: m.role, user_role: world.users.get(m.user_id)!.role })),
+    }));
+    route(/^UPDATE memberships SET role = \$3 WHERE user_id = \$1 AND creator_id = \$2$/, ([userId, creatorId, role]) => {
+        const m = world.memberships.find((x) => x.user_id === userId && x.creator_id === creatorId);
+        if (m) m.role = role;
+        return { rows: [], rowCount: m ? 1 : 0 };
+    });
+    route(/^DELETE FROM memberships WHERE user_id = \$1 AND creator_id = \$2$/, ([userId, creatorId]) => {
+        const at = world.memberships.findIndex((x) => x.user_id === userId && x.creator_id === creatorId);
+        if (at >= 0) world.memberships.splice(at, 1);
+        return { rows: [], rowCount: at >= 0 ? 1 : 0 };
+    });
+    route(/^SELECT u\.role AS user_role FROM memberships m JOIN users u ON u\.id = m\.user_id WHERE m\.creator_id = \$1 AND m\.user_id = \$2$/, ([creatorId, userId]) => {
+        const m = world.memberships.find((x) => x.user_id === userId && x.creator_id === creatorId);
+        const u = m ? world.users.get(userId) : undefined;
+        return { rows: u ? [{ user_role: u.role }] : [] };
+    });
+    // Sign out everywhere (U3): the version bump, and the answer's new version.
+    route(/^UPDATE users SET token_version = token_version \+ 1 WHERE id = \$1 RETURNING token_version$/, ([id]) => {
+        const u = world.users.get(id);
+        if (!u) return { rows: [] };
+        u.token_version += 1;
+        return { rows: [{ token_version: u.token_version }] };
+    });
+
     // ── Invites ──
     route(/^INSERT INTO invites \(token_hash,/, ([hash, creatorId, email, role, purpose, userId, createdBy, expiresAt]) => {
         if (world.invites.some((r) => r.token_hash === hash)) throw Object.assign(new Error('duplicate key'), { code: '23505' });
@@ -272,20 +306,24 @@ export function installInviteWorld(): InviteWorld {
         if (r) r.used_by = userId;
         return { rows: [] };
     });
-    route(/^UPDATE invites SET revoked_at = NOW\(\) WHERE id = \$1/, ([id], sql) => {
+    route(/^UPDATE invites SET revoked_at = NOW\(\) WHERE id = \$1/, ([id, scopeId], sql) => {
         const r = byId(id);
         if (!r) return { rows: [] };
+        // The Team screen's scope (a workspace owner), read out of the SQL like the other guards.
+        if (sql.includes('creator_id = $2') && r.creator_id !== scopeId) return { rows: [] };
         if (sql.includes('used_at IS NULL') && r.used_at) return { rows: [] };
         if (sql.includes('revoked_at IS NULL') && r.revoked_at) return { rows: [] };
         r.revoked_at = new Date();
         return { rows: [{ id: r.id, creator_id: r.creator_id, purpose: r.purpose }] };
     });
-    route(/^SELECT id, creator_id, purpose, used_at FROM invites WHERE id = \$1$/, ([id]) => {
+    route(/^SELECT id, creator_id, purpose, used_at FROM invites WHERE id = \$1( AND creator_id = \$2)?$/, ([id, scopeId], sql) => {
         const r = byId(id);
+        if (r && sql.includes('creator_id = $2') && r.creator_id !== scopeId) return { rows: [] };
         return { rows: r ? [{ id: r.id, creator_id: r.creator_id, purpose: r.purpose, used_at: r.used_at }] : [] };
     });
-    route(/^SELECT id, creator_id, email, membership_role, purpose, user_id, used_at, revoked_at, expires_at FROM invites WHERE id = \$1 FOR UPDATE$/, ([id]) => {
+    route(/^SELECT id, creator_id, email, membership_role, purpose, user_id, used_at, revoked_at, expires_at FROM invites WHERE id = \$1( AND creator_id = \$2)? FOR UPDATE$/, ([id, scopeId], sql) => {
         const r = byId(id);
+        if (r && sql.includes('creator_id = $2') && r.creator_id !== scopeId) return { rows: [] };
         return { rows: r ? [{ ...r }] : [] };
     });
     route(/^UPDATE invites SET revoked_at = COALESCE\(revoked_at, NOW\(\)\) WHERE id = \$1$/, ([id]) => {

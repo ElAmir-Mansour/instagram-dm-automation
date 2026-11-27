@@ -326,6 +326,18 @@ const API = {
         method: 'POST', body: JSON.stringify({ currentPassword, newPassword }),
     }),
 
+    // Sign out everywhere (U3): every other session of this account ends; the answer carries the token that keeps THIS one.
+    signOutEverywhere: () => API.request('/account/sign-out-everywhere', { method: 'POST' }),
+
+    // Team (U3): the workspace owner's people. `createTeamInvite` and `createResetLink` answer with the link ONCE, in `invite.url`.
+    getTeam: () => API.request('/team'),
+    createTeamInvite: (data) => API.request('/team/invites', { method: 'POST', body: JSON.stringify(data) }),
+    regenerateTeamInvite: (id, data) => API.request(`/team/invites/${encodeURIComponent(id)}/regenerate`, { method: 'POST', body: JSON.stringify(data || {}) }),
+    revokeTeamInvite: (id) => API.request(`/team/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    changeTeamRole: (userId, role) => API.request(`/team/members/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+    removeTeamMember: (userId) => API.request(`/team/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    createResetLink: (userId, data) => API.request(`/team/members/${encodeURIComponent(userId)}/reset-link`, { method: 'POST', body: JSON.stringify(data || {}) }),
+
     // Job queue
     getAdminJobs: (params = {}) => {
         const query = new URLSearchParams(

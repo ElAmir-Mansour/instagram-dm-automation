@@ -1,12 +1,18 @@
 /**
- * Settings: five tabs, one open at a time, so nothing here is a ten-screen scroll (UX US10; audit SE-02, SE-04, SE-05, ST-02).
+ * Settings: tabs by job, one open at a time, so nothing here is a ten-screen scroll (UX US10; audit SE-02, SE-04, SE-05, ST-02; U3 SA-10, WA-3).
  *
- *   Connections        a health summary first (one row per integration: one status, one detail, one action), then
- *                      Instagram & Facebook, TikTok, YouTube and WhatsApp
- *   Messages & alerts  Instagram ice breakers, handoff alerts
- *   Appearance         language and theme
- *   Advanced           (platform admin) the access token, the webhook verify token, the page ids
- *   Platform           (platform admin) what every workspace shares: where Meta sends each kind of event, the provider apps, media storage, the public site, onboarding
+ *   Channels        a health summary first (one row per integration: one status, one detail, one action), then Instagram & Facebook,
+ *                   TikTok, YouTube, WhatsApp and Ads. A channel whose module is off for the workspace has no row and no card (U3)
+ *   Team            (the workspace owner) who is in the workspace: invite, change a role, remove, reset link
+ *   Notifications   how YOU are told (`notify_card.js`), who covers handoffs (the owner), the 30-day clean-up (the owner)
+ *   You             language and theme, your password, sign out everywhere
+ *   Advanced        (platform admin) the access token, the webhook verify token, the page ids
+ *   Platform        (platform admin) what every workspace shares: the platform's own handoff alerts, where Meta sends each kind of event,
+ *                   the provider apps, media storage, the public site, onboarding
+ *
+ * Three scopes (WA-3): YOU (Notifications → "You", You), THIS WORKSPACE (Channels, Team, Notifications → "This workspace", Advanced) and
+ * THE PLATFORM (Platform, badged «لكل مساحات العمل»). The old tabs still resolve (`LEGACY_GROUPS`): `?s=connections`, `?s=messages`,
+ * `?s=appearance`, and `?s=iceb`, which now lives on the DM assistant page (`resolveView` answers a `redirect`).
  *
  * The tab is the address: `#/settings?s=<tab>` (`App.route` writes it, `App.hashParams` reads it), so it survives a reload, Back works and
  * another screen can link to a tab, or to a card: `?s=meta` and `?s=<tab>&card=<id>` both open the card and put focus on it.
@@ -68,37 +74,50 @@ const SettingsPage = {
 
     /** The tabs, in order. A tab is shown only to a viewer who has a card in it. `platform`: what it holds applies to every workspace. */
     GROUPS: Object.freeze([
-        Object.freeze({ id: 'connections' }),
-        Object.freeze({ id: 'messages' }),
-        Object.freeze({ id: 'appearance' }),
+        Object.freeze({ id: 'channels' }),
+        Object.freeze({ id: 'team' }),
+        Object.freeze({ id: 'notifications' }),
+        Object.freeze({ id: 'you' }),
         Object.freeze({ id: 'advanced' }),
         Object.freeze({ id: 'platform', platform: true }),
     ]),
 
-    DEFAULT_GROUP: 'connections',
+    DEFAULT_GROUP: 'channels',
+
+    /** The tabs before U3, and where an old address goes (`?s=connections` in an old alert or bookmark). */
+    LEGACY_GROUPS: Object.freeze({ connections: 'channels', messages: 'notifications', appearance: 'you' }),
+
+    /** A card that moved to another PAGE: `?s=iceb` and `?card=iceb` open it there. */
+    MOVED_CARDS: Object.freeze({ iceb: '#/ai_settings?card=iceb' }),
 
     /**
      * Every card, in the order it is drawn inside its tab.
      *   id      the address (`?card=meta`, and `?s=meta`) and `data-settings-card`
-     *   who     'all' | 'owner' (the workspace owner: `App.canAdminister()`) | 'admin' (the platform admin: `App.isAdmin()`)
+     *   who     'all' | 'owner' (the workspace owner: `App.canAdminister()`) | 'admin' (the platform admin: `App.isAdmin()`) | 'user' (a person with
+     *           an account of their own: `App.canChangeOwnPassword()`)
+     *   module  the workspace module that draws it (`App.hasModule`, fail-open: absent means on)
      *   dom     the element a deep link scrolls to; the card's own `<section id>` when `inner`, else the wrapper this page draws
      *   focus   the control a row's Connect / Reconnect puts focus on, when the card has one
      *   platform  deployment-wide: it carries the «لكل المساحات» badge
+     *   note    a small scope line above the card, for a tab that mixes scopes (Notifications): 'you' | 'workspace'
      *   details   the card is a collapsed `<details>`, opened when it is the target
      */
     CARDS: Object.freeze([
-        Object.freeze({ id: 'meta', group: 'connections', who: 'all', dom: 'settings-meta', inner: true, focus: 'meta-connect' }),
-        Object.freeze({ id: 'tiktok', group: 'connections', who: 'all', dom: 'settings-tiktok', focus: 'settings-tiktok-connect' }),
-        Object.freeze({ id: 'youtube', group: 'connections', who: 'all', dom: 'settings-youtube', focus: 'settings-youtube-connect' }),
-        Object.freeze({ id: 'whatsapp', group: 'connections', who: 'all', dom: 'wa-card', inner: true, focus: 'wa-waba' }),
-        Object.freeze({ id: 'ads', group: 'connections', who: 'owner', dom: 'settings-ads' }),
-        Object.freeze({ id: 'iceb', group: 'messages', who: 'owner', dom: 'iceb-card', inner: true }),
-        Object.freeze({ id: 'cleanup', group: 'messages', who: 'owner', dom: 'settings-cleanup' }),
-        Object.freeze({ id: 'alerts', group: 'messages', who: 'admin', dom: 'settings-notify', platform: true }),
-        Object.freeze({ id: 'appearance', group: 'appearance', who: 'all', dom: 'settings-appearance', focus: 'settings-lang' }),
+        Object.freeze({ id: 'meta', group: 'channels', who: 'all', dom: 'settings-meta', inner: true, focus: 'meta-connect' }),
+        Object.freeze({ id: 'tiktok', group: 'channels', who: 'all', module: 'tiktok', dom: 'settings-tiktok', focus: 'settings-tiktok-connect' }),
+        Object.freeze({ id: 'youtube', group: 'channels', who: 'all', module: 'youtube', dom: 'settings-youtube', focus: 'settings-youtube-connect' }),
+        Object.freeze({ id: 'whatsapp', group: 'channels', who: 'all', module: 'whatsapp', dom: 'wa-card', inner: true, focus: 'wa-waba' }),
+        Object.freeze({ id: 'ads', group: 'channels', who: 'owner', module: 'ads', dom: 'settings-ads' }),
+        Object.freeze({ id: 'team', group: 'team', who: 'owner', dom: 'settings-team' }),
+        Object.freeze({ id: 'notify-me', group: 'notifications', who: 'all', module: 'inbox', dom: 'settings-notify-me', note: 'you' }),
+        Object.freeze({ id: 'notify-routing', group: 'notifications', who: 'owner', module: 'inbox', dom: 'settings-notify-routing', note: 'workspace' }),
+        Object.freeze({ id: 'cleanup', group: 'notifications', who: 'owner', dom: 'settings-cleanup', note: 'workspace' }),
+        Object.freeze({ id: 'appearance', group: 'you', who: 'all', dom: 'settings-appearance', focus: 'settings-lang' }),
+        Object.freeze({ id: 'signin', group: 'you', who: 'user', dom: 'settings-signin' }),
         Object.freeze({ id: 'token', group: 'advanced', who: 'admin', dom: 'settings-token' }),
         Object.freeze({ id: 'webhook', group: 'advanced', who: 'admin', dom: 'settings-webhook' }),
         Object.freeze({ id: 'account', group: 'advanced', who: 'admin', dom: 'settings-account' }),
+        Object.freeze({ id: 'alerts', group: 'platform', who: 'admin', dom: 'settings-notify', platform: true }),
         Object.freeze({ id: 'meta-events', group: 'platform', who: 'admin', dom: 'settings-meta-events', platform: true }),
         Object.freeze({ id: 'meta-app', group: 'platform', who: 'admin', dom: 'settings-meta-app', platform: true, details: true }),
         Object.freeze({ id: 'tiktok-app', group: 'platform', who: 'admin', dom: 'settings-tiktok-app', platform: true, details: true }),
@@ -110,14 +129,21 @@ const SettingsPage = {
         Object.freeze({ id: 'onboarding', group: 'platform', who: 'admin', dom: 'settings-onboarding', platform: true }),
     ]),
 
+    /** Is the workspace's module on? Fail-open until the shell can answer (a session with no `modules`, a page before PR B's `App.hasModule`): every module is on. */
+    moduleOn(id) {
+        return !id || typeof App.hasModule !== 'function' || App.hasModule(id);
+    },
+
     cardById(id) {
         return this.CARDS.find((card) => card.id === id) || null;
     },
 
-    /** May this viewer see the card? The same rules the cards always had: the owner's, the platform admin's, or everyone's. */
+    /** May this viewer see the card? The rules the cards always had (the owner's, the platform admin's, everyone's), and now the workspace's modules. */
     cardVisible(card) {
+        if (card.module && !this.moduleOn(card.module)) return false;
         if (card.who === 'admin') return App.isAdmin();
         if (card.who === 'owner') return App.canAdminister();
+        if (card.who === 'user') return typeof App.canChangeOwnPassword === 'function' && App.canChangeOwnPassword();
         return true;
     },
 
@@ -131,19 +157,24 @@ const SettingsPage = {
     },
 
     /**
-     * What the address asks for, as `{ group, card }`. `?s=` names a tab, or a card (`?s=meta`, the form the alerts link with); `?card=`
-     * names a card inside the tab. A name this viewer cannot see, or that does not exist, is the default tab: an address never leads nowhere.
+     * What the address asks for, as `{ group, card }` (plus `redirect`, when the card now lives on another page). `?s=` names a tab, or a card
+     * (`?s=meta`, the form the alerts link with); `?card=` names a card inside the tab. An OLD tab name (`connections`, `messages`,
+     * `appearance`) is its new tab. A name this viewer cannot see, or that does not exist, is the default tab: an address never leads nowhere.
      */
     resolveView(params) {
         const p = params || {};
         const groups = this.visibleGroups().map((group) => group.id);
+        const own = (map, key) => (Object.prototype.hasOwnProperty.call(map, key) ? map[key] : '');
         const s = String(p.s || '');
         const wanted = String(p.card || '');
+        const moved = own(this.MOVED_CARDS, wanted) || own(this.MOVED_CARDS, s);
+        if (moved) return { group: groups.includes(this.DEFAULT_GROUP) ? this.DEFAULT_GROUP : (groups[0] || this.DEFAULT_GROUP), card: '', redirect: moved };
         const visibleCard = (id) => {
             const card = id ? this.cardById(id) : null;
             return card && this.cardVisible(card) ? card : null;
         };
-        let group = groups.includes(s) ? s : '';
+        const named = groups.includes(s) ? s : (groups.includes(own(this.LEGACY_GROUPS, s)) ? own(this.LEGACY_GROUPS, s) : '');
+        let group = named;
         let card = visibleCard(wanted);
         if (!group && !card) card = visibleCard(s);
         if (card && !group) group = card.group;
@@ -219,9 +250,10 @@ const SettingsPage = {
             meta: null, metaError: null, metaApp: null, metaAppError: null,
             // Where Meta sends each kind of event (src/services/metaWebhooks.ts): a LIVE read of the Meta app's subscriptions, platform admin only.
             metaEvents: null, metaEventsError: null,
-            // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses
-            // them anyway). Reading them sends nothing to Instagram.
-            iceBreakers: null, iceBreakersError: null,
+            // Team (U3): the workspace OWNER's people and invites, so nobody else is asked (the server refuses it anyway).
+            team: null, teamError: null,
+            // The Notifications tab's cards are `notify_card.js` (PR D): null until it is on this deployment, and the tab then says so in one line.
+            notifyCard: null,
             // WhatsApp (T025): any member reads it (the owner writes), with the module that draws the card (loaded on first use).
             whatsapp: null, whatsappError: null,
             // Boost (Meta ads): the tenant OWNER's, so nobody else is asked. A 403 or a 404 (not deployed here) hides the card: no error panel for a
@@ -230,15 +262,17 @@ const SettingsPage = {
             // The ad accounts the last connection test found (stored, no Meta call): null = not asked (no token), [] = none yet; `adsAccountsFailed` = asked and refused.
             adsAccounts: null, adsAccountsFailed: false,
         };
-        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule, wa, waModule, ad, ex, mev, mon, aa] = await Promise.allSettled([
+        // A channel whose module is off for the workspace is not asked about: its card and its health row are not there (U3, I4).
+        const on = (id) => this.moduleOn(id);
+        const [tk, wh, th, tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, tm, nc, wa, waModule, ad, ex, mev, mon, aa, ic] = await Promise.allSettled([
             API.getTokenStatus(),
             ctx.isAdmin ? API.getWebhookToken() : Promise.resolve(null),
             API.getTenantHealth(),
-            API.getTikTokConnection(),
+            on('tiktok') ? API.getTikTokConnection() : Promise.resolve(null),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
             App.isAdmin() ? API.getSiteSettings() : Promise.resolve(null),
-            API.getYouTubeConnection(),
+            on('youtube') ? API.getYouTubeConnection() : Promise.resolve(null),
             App.isAdmin() ? API.getYouTubeAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaCleanup() : Promise.resolve(null),
             App.isAdmin() ? API.getOnboardingSettings() : Promise.resolve(null),
@@ -246,11 +280,11 @@ const SettingsPage = {
             App.isAdmin() ? API.getMetaAppSettings() : Promise.resolve(null),
             App.loadPageModule('meta_connect'),
             App.isAdmin() ? API.getNotifySettings() : Promise.resolve(null),
-            App.canAdminister() ? API.getIceBreakers() : Promise.resolve(null),
-            App.canAdminister() ? App.loadPageModule('ice_breakers') : Promise.resolve(null),
-            API.getWhatsAppConnection(),
-            App.loadPageModule('whatsapp_card'),
-            App.canAdminister() ? API.getAdsSettings().then(async (settings) => {
+            App.canAdminister() ? API.getTeam() : Promise.resolve(null),
+            App.loadPageModule('notify_card'),
+            on('whatsapp') ? API.getWhatsAppConnection() : Promise.resolve(null),
+            on('whatsapp') ? App.loadPageModule('whatsapp_card') : Promise.resolve(null),
+            App.canAdminister() && on('ads') ? API.getAdsSettings().then(async (settings) => {
                 // Asked in the same breath as the rest, and only with a token to ask with. A failure is the free-text field, never a broken card.
                 if (settings && settings.token && settings.token.set) {
                     try {
@@ -264,20 +298,22 @@ const SettingsPage = {
             App.isAdmin() ? API.getMetaWebhooks() : Promise.resolve(null),
             App.isAdmin() ? API.getMonitoringSettings() : Promise.resolve(null),
             App.canAdminister() ? API.getAutoArchive() : Promise.resolve(null),
+            // The invite card draws the Team's open invites (and makes the links): its module is fetched in the same breath.
+            App.canAdminister() ? App.loadPageModule('invite_card') : Promise.resolve(null),
         ]);
         if (tk.status === 'fulfilled') ctx.tokenStatus = tk.value; else ctx.tokenError = tk.reason;
         if (wh.status === 'fulfilled') ctx.webhookToken = wh.value; else ctx.webhookError = wh.reason;
         if (th.status === 'fulfilled') ctx.health = th.value;
         if (wa.status === 'fulfilled') ctx.whatsapp = wa.value; else ctx.whatsappError = wa.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
-        if (!ctx.whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) ctx.whatsappError = new Error(t('wa.moduleFailed'));
-        if (ib.status === 'fulfilled') ctx.iceBreakers = ib.value; else ctx.iceBreakersError = ib.reason;
-        if (!App.canAdminister()) ctx.adsHidden = true;
+        if (on('whatsapp') && !ctx.whatsappError && !(waModule.status === 'fulfilled' && waModule.value)) ctx.whatsappError = new Error(t('wa.moduleFailed'));
+        if (tm.status === 'fulfilled') ctx.team = tm.value; else ctx.teamError = tm.reason;
+        if (nc.status === 'fulfilled') ctx.notifyCard = nc.value || null;
+        if (ic.status === 'rejected') ctx.teamError = ctx.teamError || ic.reason;
+        if (!App.canAdminister() || !on('ads')) ctx.adsHidden = true;
         else if (ad.status === 'fulfilled') ctx.ads = ad.value;
         else if (ad.reason && (ad.reason.status === 403 || ad.reason.status === 404)) ctx.adsHidden = true; // 404: ADS_DISABLED for this workspace
         else ctx.adsError = ad.reason;
-        // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
-        if (!ctx.iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) ctx.iceBreakersError = new Error(t('iceb.moduleFailed'));
         if (mc.status === 'fulfilled') ctx.meta = mc.value; else ctx.metaError = mc.reason;
         if (mcApp.status === 'fulfilled') ctx.metaApp = mcApp.value; else ctx.metaAppError = mcApp.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
@@ -325,6 +361,7 @@ const SettingsPage = {
         this._saving.clear();
 
         const view = this.resolveView(App.hashParams());
+        if (view.redirect) { this.followRedirect(view.redirect); return; }
         this._view = view;
 
         // The live elements of the cards to keep, taken BEFORE the page is replaced: the new markup holds an empty stand-in for each.
@@ -341,6 +378,7 @@ const SettingsPage = {
         });
 
         this.bindEdits(container);
+        this.mountNotifications(container, ctx);
         if (!ctx.adsHidden) App.loadPageModule('ads_client_card').then((card) => card && card.mount()).catch(() => {}); // A11: the account manager's ceiling + share-spend switch
         this.syncDirtyDots();
         UI.restoreFocus(focus);
@@ -364,7 +402,7 @@ const SettingsPage = {
                 <div class="settings-tabbar" id="settings-tabbar">${this.tabsMarkup(view.group)}</div>
                 ${groups.map((group) => html`
                     <div class="settings-panel" data-group="${group.id}" ${group.id === view.group ? '' : html.raw('hidden')}>
-                        ${group.id === 'connections' ? this.connectionsLead(ctx) : ''}
+                        ${group.id === 'channels' ? this.connectionsLead(ctx) : ''}
                         ${group.platform ? html`<p class="form-hint settings-lead">${t('settings.platform.lead')}</p>` : ''}
                         ${this.visibleCards(group.id).map((card) => this.cardItem(card, carried.includes(card.id) ? null : this.renderCard(card.id, ctx)))}
                     </div>
@@ -381,6 +419,7 @@ const SettingsPage = {
         return html`
             <div class="settings-item" data-settings-card="${card.id}"${card.inner ? '' : html` id="${card.dom}"`}>
                 ${card.platform ? html`<p class="settings-scope"><span class="badge badge-neutral">${t('settings.scope.platform')}</span></p>` : ''}
+                ${card.note ? html`<p class="settings-scope-note">${t(`settings.scopeNote.${card.note}`)}</p>` : ''}
                 ${inner}
             </div>
         `;
@@ -393,10 +432,13 @@ const SettingsPage = {
             case 'youtube': return this.youtubeSection({ youtube: ctx.youtube, youtubeError: ctx.youtubeError });
             case 'whatsapp': return this.whatsappSection(ctx.whatsapp, ctx.whatsappError);
             case 'ads': return ctx.adsHidden ? '' : this.adsSection(ctx.ads, ctx.adsError, { accounts: ctx.adsAccounts, failed: ctx.adsAccountsFailed }, this.metaConnectable(ctx));
-            case 'iceb': return this.iceBreakersSection(ctx.iceBreakers, ctx.iceBreakersError);
+            case 'team': return this.teamSection(ctx.team, ctx.teamError);
+            case 'notify-me': return this.notifyMeSection(ctx.notifyCard);
+            case 'notify-routing': return ctx.notifyCard ? this.notifyRoutingSection() : '';
             case 'cleanup': return this.cleanupSection(ctx.autoArchive, ctx.autoArchiveError);
             case 'alerts': return this.notifySection(ctx.notify, ctx.notifyError);
             case 'appearance': return this.appearanceSection();
+            case 'signin': return this.signInSection();
             case 'token': return this.accessTokenSection(ctx);
             case 'webhook': return this.webhookSection(ctx);
             case 'account': return this.accountSection(ctx);
@@ -433,8 +475,17 @@ const SettingsPage = {
         this.applyView();
     },
 
+    /** A card that moved to another page (`?s=iceb`): go there, replacing this address, so Back does not return to a link that only redirects. */
+    followRedirect(hash) {
+        if (typeof location === 'undefined') return;
+        if (typeof history !== 'undefined' && typeof history.replaceState === 'function') history.replaceState(null, '', hash);
+        if (typeof App.navigate === 'function') App.navigate(String(hash).replace(/^#\/?/, '').split('?')[0]);
+        else location.hash = hash;
+    },
+
     applyView() {
         const view = this.resolveView(App.hashParams());
+        if (view.redirect) { this.followRedirect(view.redirect); return view; }
         const before = this._view;
         this._view = view;
         const container = document.getElementById('page-container');
@@ -539,6 +590,7 @@ const SettingsPage = {
 
     /** The router's leave guard, and the shared `beforeunload` (a reload, a closed tab, the language switch): is any card holding edits? */
     canLeave() {
+        if (typeof NotifyCard !== 'undefined' && NotifyCard && typeof NotifyCard.canLeave === 'function' && NotifyCard.canLeave() === false) return false;
         return this.dirtyCards().length === 0;
     },
 
@@ -705,7 +757,13 @@ const SettingsPage = {
      */
     connectionRows(ctx) {
         const now = typeof ctx.now === 'number' ? ctx.now : Date.now();
-        const rows = [this.metaRow(ctx, now), this.tiktokRow(ctx, now), this.youtubeRow(ctx, now), this.whatsappRow(ctx, now)];
+        // A channel whose module is off is not a row: there is nothing of it to connect, and its card is not on the page either.
+        const rows = [
+            this.metaRow(ctx, now),
+            this.moduleOn('tiktok') ? this.tiktokRow(ctx, now) : null,
+            this.moduleOn('youtube') ? this.youtubeRow(ctx, now) : null,
+            this.moduleOn('whatsapp') ? this.whatsappRow(ctx, now) : null,
+        ];
         if (ctx.isAdmin) rows.push(this.storageRow(ctx), this.alertsRow(ctx));
         return rows.filter(Boolean)
             .map((row, order) => ({ row, order }))
@@ -1207,6 +1265,238 @@ const SettingsPage = {
         `;
     },
 
+    // ─── You: language and theme, your password, sign out everywhere (U3) ───────────────────────────────
+
+    signInSection() {
+        return html`
+            <section class="section" id="settings-signin-card">
+                <h2 class="section-title">${t('settings.you.signin.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.you.signin.intro')}</p>
+                    <div class="form-actions">
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'key-round', label: t('password.change'), action: 'app:showPasswordModal', id: 'settings-change-password' })}
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'log-out', label: t('settings.you.signin.everywhere'), action: 'settings:signOutEverywhere', id: 'settings-sign-out-everywhere' })}
+                    </div>
+                    <p class="form-hint mbs-3">${t('settings.you.signin.everywhereHint')}</p>
+                </div>
+            </section>
+        `;
+    },
+
+    /** Sign out everywhere: every OTHER session of this account ends; the answer's token keeps this one. Asked first: it ends the session on their phone too. */
+    signOutEverywhere() {
+        UI.confirm({
+            title: t('settings.you.signin.confirmTitle'),
+            body: t('settings.you.signin.confirmBody'),
+            hint: t('settings.you.signin.confirmHint'),
+            confirmLabel: t('settings.you.signin.everywhere'),
+            confirmIcon: 'log-out',
+            onConfirm: async () => {
+                const result = await API.signOutEverywhere();
+                if (result && result.token) API.setToken(result.token);
+                UI.toast(t('settings.you.signin.done'), 'success');
+            },
+        });
+    },
+
+    // ─── Notifications: how you are told, and who covers a customer (U3; the cards are `notify_card.js`, PR D) ──────────
+
+    /** The card's host. Until `notify_card.js` is on this deployment, one line says where the notices are (the Inbox and Today), which is always true. */
+    notifyMeSection(card) {
+        if (!card || typeof card.mountMine !== 'function') {
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.notify.meTitle')}</h2>
+                    <div class="settings-card surface"><p class="form-hint" id="settings-notify-inapp">${t('settings.notify.inApp')}</p></div>
+                </section>
+            `;
+        }
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.notify.meTitle')}</h2>
+                <div class="settings-card surface" id="notify-me-host"></div>
+            </section>
+        `;
+    },
+
+    notifyRoutingSection() {
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.notify.routingTitle')}</h2>
+                <div class="settings-card surface" id="notify-routing-host"></div>
+            </section>
+        `;
+    },
+
+    /** Hand the two hosts to `NotifyCard`, once the page is painted. Fail-open: no module, no mount, and the card above said so. */
+    mountNotifications(container, ctx) {
+        const card = ctx && ctx.notifyCard;
+        if (!card || !container || typeof container.querySelector !== 'function') return;
+        const me = container.querySelector('#notify-me-host');
+        if (me && typeof card.mountMine === 'function') card.mountMine(me, { hasAccount: App.canChangeOwnPassword() });
+        const routing = container.querySelector('#notify-routing-host');
+        if (routing && App.canAdminister() && typeof card.mountRouting === 'function') card.mountRouting(routing, { canAdminister: App.canAdminister() });
+    },
+
+    // ─── Team: the workspace owner's people (U3, CO-2; src/routes/team.ts) ───────────────────────────────
+
+    /** A refusal of a Team call, in the interface language by its code; the server's English only as a last resort. */
+    teamError(err) {
+        const code = (err && (err.code || (err.body && err.body.code))) || '';
+        if (['LAST_OWNER', 'MEMBER_IS_ADMIN', 'MEMBER_NOT_FOUND', 'ROLE_INVALID', 'NO_USER_ACCOUNT'].includes(code)) return t(`settings.team.err.${code}`);
+        return (err && err.message) || t('settings.team.err.generic');
+    },
+
+    /** One person: who, their role (a picker for anyone but the account manager), when they last came in, and what can be done. */
+    teamMemberRow(member) {
+        const seen = member.lastLoginAt ? t('settings.team.lastSeen', { age: UI.relativeAge(member.lastLoginAt).text }) : t('settings.team.neverSeen');
+        const status = [member.you ? t('settings.team.you') : '', member.isActive ? seen : t('settings.team.inactive')].filter(Boolean).join(' · ');
+        const who = html`<strong class="team-member-email" dir="ltr">${member.email}</strong>`;
+        if (member.accountManager) {
+            return html`
+                <li class="team-member" data-member="${member.userId}">
+                    <div class="team-member-main">${who}<span class="chip">${t('settings.team.accountManager')}</span></div>
+                    <p class="team-member-meta">${t('settings.team.accountManagerNote')}</p>
+                </li>
+            `;
+        }
+        const selectId = `team-role-${member.userId}`;
+        return html`
+            <li class="team-member" data-member="${member.userId}">
+                <div class="team-member-main">${who}</div>
+                <p class="team-member-meta">${status}</p>
+                <div class="team-member-actions">
+                    <label class="sr-only" for="${selectId}">${t('settings.team.roleFor', { email: member.email })}</label>
+                    <select class="select team-role-select" id="${selectId}" data-change="settings:teamRole" data-user="${member.userId}" data-current="${member.role}" data-email="${member.email}">
+                        ${Admin.roleOptions(member.role)}
+                    </select>
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'key-round', label: t('settings.team.reset'), ariaLabel: t('settings.team.resetFor', { email: member.email }), action: 'settings:teamReset', data: { user: member.userId } })}
+                    ${UI.button({ variant: 'danger', size: 'sm', icon: 'trash-2', label: t('settings.team.remove'), ariaLabel: t('settings.team.removeFor', { email: member.email }), action: 'settings:teamRemove', data: { user: member.userId, email: member.email, you: member.you ? '1' : '' } })}
+                </div>
+            </li>
+        `;
+    },
+
+    /** The Team card: the people, a legend of what each role is, and the invites that have not been used. */
+    teamSection(data, error) {
+        if (error || !data) {
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.team.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.team.loadFailed', { message: this.teamError(error) })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        const members = Array.isArray(data.members) ? data.members : [];
+        const open = (Array.isArray(data.invites) ? data.invites : []).filter((invite) => invite.status !== 'used' && invite.status !== 'revoked');
+        const card = typeof InviteCard !== 'undefined' ? InviteCard : null;
+        return html`
+            <section class="section">
+                <div class="row row--between row--wrap gap-3 mbe-3">
+                    <h2 class="section-title">${t('settings.team.title')} <span class="team-count">· ${t('settings.team.count', { count: members.length })}</span></h2>
+                    ${UI.button({ variant: 'primary', size: 'sm', icon: 'user-plus', label: t('settings.team.invite'), action: 'settings:teamInvite', id: 'team-invite-btn' })}
+                </div>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-3">${t('settings.team.intro')}</p>
+                    <ul class="team-list">${members.map((member) => this.teamMemberRow(member))}</ul>
+                    ${open.length > 0 && card ? html`
+                        <h3 class="subsection-title mbs-5 mbe-3">${t('settings.team.pending')}</h3>
+                        <ul class="invite-list">${open.map((invite) => card.itemView(invite))}</ul>
+                    ` : ''}
+                    <h3 class="subsection-title mbs-5 mbe-3">${t('settings.team.roles')}</h3>
+                    ${Admin.roleLegend()}
+                </div>
+            </section>
+        `;
+    },
+
+    /** What the invite card needs to act for the Team: its endpoints (`scope`), the workspace's name, and a repaint when anything changed. */
+    teamContext() {
+        const current = typeof App.currentTenant === 'function' ? App.currentTenant() : null;
+        const context = { scope: 'team', tenantName: (current && current.name) || '', onChange: () => this.render() };
+        if (typeof InviteCard !== 'undefined') InviteCard.listContext = context;
+        return context;
+    },
+
+    async teamInvite() {
+        const card = await App.loadPageModule('invite_card');
+        if (!card) { UI.toast(t('settings.team.err.generic'), 'error'); return; }
+        card.openCreate(this.teamContext());
+    },
+
+    async teamReset(el) {
+        const card = await App.loadPageModule('invite_card');
+        if (!card) { UI.toast(t('settings.team.err.generic'), 'error'); return; }
+        await card.openReset(this.teamContext(), { userId: el.dataset.user });
+    },
+
+    /**
+     * A new role applies when it is picked, and says so with an Undo (a role is easy to give back, so no question first). The server refuses the
+     * last owner's demotion and the account manager; the picker then goes back to what it was, and the refusal is said in words.
+     */
+    async teamRole(el) {
+        const userId = el.dataset.user;
+        const from = el.dataset.current;
+        const to = el.value;
+        if (!userId || to === from) return;
+        const email = el.dataset.email || '';
+        el.disabled = true;
+        try {
+            await API.changeTeamRole(userId, to);
+        } catch (err) {
+            el.value = from;
+            el.disabled = false;
+            UI.toast(this.teamError(err), 'error');
+            return;
+        }
+        UI.toast(t('settings.team.roleChanged', { email, role: t(`roles.${to}`) }), {
+            type: 'success',
+            action: {
+                label: t('ui.undo'),
+                onClick: async () => {
+                    try { await API.changeTeamRole(userId, from); } catch (err) { UI.toast(this.teamError(err), 'error'); }
+                    this.render();
+                },
+            },
+        });
+        this.render();
+    },
+
+    /** Remove asks first, with a verb on the button. Removing yourself ends your access to this workspace, so it is said, and afterwards you are taken out of it. */
+    teamRemove(el) {
+        const userId = el.dataset.user;
+        const you = el.dataset.you === '1';
+        const email = el.dataset.email || '';
+        UI.confirm({
+            title: you ? t('settings.team.leaveTitle') : t('settings.team.removeTitle'),
+            body: you ? t('settings.team.leaveBody') : t('settings.team.removeBody', { email }),
+            hint: t('settings.team.removeHint'),
+            confirmLabel: you ? t('settings.team.leave') : t('settings.team.remove'),
+            confirmIcon: 'trash-2',
+            onConfirm: async () => {
+                const result = await API.removeTeamMember(userId);
+                UI.toast(t('settings.team.removed'), 'success');
+                if (result && result.you) await this.afterLeaving();
+                else this.render();
+            },
+        });
+    },
+
+    /** The person removed THEMSELVES: this workspace no longer answers them. Another workspace if they have one, else the sign-in. */
+    async afterLeaving() {
+        await App.refreshSession();
+        const here = App.session && App.session.tenantId;
+        const others = ((App.session && App.session.tenants) || []).filter((tenant) => String(tenant.id) !== String(here));
+        if (others.length === 0) { App.logout(); return; }
+        await App.switchTenant(others[0].id);
+    },
+
     // ─── The provider apps (platform admin): drawn in the Platform tab ───────────────────────────────────
 
     /** A provider's app block as a card of its own. It is a `<details>` that opens when it is the target, so it names itself: no extra title. */
@@ -1372,30 +1662,6 @@ const SettingsPage = {
     },
 
     // ─── Instagram ice breakers and persistent menu (DM plan S13) ─────────────
-
-    /**
-     * The card's words, editor and buttons are `IceBreakersCard`'s (`ice_breakers.js`, loaded on first use); this hands it the server's answer, or
-     * says why there is none. Owner only: the caller does not ask for it otherwise.
-     */
-    iceBreakersSection(data, error) {
-        // The error card is drawn HERE, not by the module: a module that could not be fetched is the very case it is for.
-        if (error || !data || typeof IceBreakersCard === 'undefined') {
-            const message = (error && error.message) || t('iceb.moduleFailed');
-            return html`
-                <section class="section" id="iceb-card">
-                    <h2 class="section-title">${t('iceb.title')}</h2>
-                    <div class="settings-card surface">
-                        <div class="inline-error" role="alert">
-                            <i data-lucide="alert-circle" aria-hidden="true"></i>
-                            <div><strong dir="auto">${t('iceb.loadFailed', { message })}</strong></div>
-                        </div>
-                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
-                    </div>
-                </section>
-            `;
-        }
-        return IceBreakersCard.section(data);
-    },
 
     // ─── The access token's state (SE-01, OV-08) ─────────────────────────────
 
@@ -4780,4 +5046,9 @@ UI.registerActions('settings', {
     testNotifyEmail: (el) => SettingsPage.testNotifyEmail(el),
     removeNotifyEmailKey: (el) => SettingsPage.removeNotifyEmailKey(el),
     saveOnboardingSettings: (el, e) => SettingsPage.saveOnboardingSettings(el, e),
+    teamInvite: () => Admin.report(SettingsPage.teamInvite()),
+    teamReset: (el) => Admin.report(SettingsPage.teamReset(el)),
+    teamRole: (el) => Admin.report(SettingsPage.teamRole(el)),
+    teamRemove: (el) => SettingsPage.teamRemove(el),
+    signOutEverywhere: () => SettingsPage.signOutEverywhere(),
 });

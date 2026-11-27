@@ -1,6 +1,6 @@
 /**
- * The dashboard's half of DM plan S13: the Settings card where the owner edits his Instagram ice breakers and persistent menu, saves a draft,
- * and presses the one button that publishes it.
+ * The dashboard's half of DM plan S13: the card where the owner edits his Instagram ice breakers and persistent menu, saves a draft,
+ * and presses the one button that publishes it. Since U3 it is on the DM assistant page (`ai_settings.js` mounts it), not in Settings.
  *
  * Loaded like the other dashboard tests: the REAL shipped files in a `node:vm` context with a fake DOM, so these test what ships. What is pinned,
  * because a screenshot cannot check it:
@@ -33,8 +33,10 @@ class FakeFormData {
 }
 
 interface Loaded {
+    ctx: Json;
     Card: Json;
     Settings: Json;
+    Ai: Json;
     UI: Json;
     t: (key: string, params?: Record<string, unknown>) => string;
     api: Record<string, (...args: Json[]) => unknown>;
@@ -80,6 +82,8 @@ function load(lang: 'ar' | 'en' = 'en', withCard = true): Loaded {
         App: {
             currentTheme: () => 'auto', navigate: noop, session: { tenantId: 't1' }, hashParam: () => '',
             canOperate: () => true, canAdminister: () => owner, isAdmin: () => true,
+            // The DM assistant page asks for the module the way Settings used to; a page whose script never arrived gets null.
+            loadPageModule: async (name: string) => (name === 'ice_breakers' && withCard ? vm.runInContext('IceBreakersCard', ctx) : null),
         },
     };
     ctx.globalThis = ctx;
@@ -87,10 +91,10 @@ function load(lang: 'ar' | 'en' = 'en', withCard = true): Loaded {
     // `withCard: false` is a page whose module never arrived (the script failed to load): Settings must say so, not throw.
     for (const f of [
         'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js',
-        ...(withCard ? ['dashboard/js/pages/ice_breakers.js'] : []), 'dashboard/js/pages/settings.js',
+        ...(withCard ? ['dashboard/js/pages/ice_breakers.js'] : []), 'dashboard/js/pages/settings.js', 'dashboard/js/pages/ai_settings.js',
     ]) vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     vm.runInContext(`I18N.lang = ${JSON.stringify(lang)};`, ctx);
-    const got = vm.runInContext(`({ Card: ${withCard ? 'IceBreakersCard' : 'null'}, Settings: SettingsPage, UI, t })`, ctx);
+    const got = vm.runInContext(`({ Card: ${withCard ? 'IceBreakersCard' : 'null'}, Settings: SettingsPage, Ai: AiSettingsPage, UI, t })`, ctx);
     const toasts: string[] = [];
     got.UI.toast = (m: unknown) => { toasts.push(String(m)); };
     const host = (id: string, over: Json = {}): Json => {
@@ -98,7 +102,7 @@ function load(lang: 'ar' | 'en' = 'en', withCard = true): Loaded {
         dom.set(id, el);
         return el;
     };
-    return { Card: got.Card, Settings: got.Settings, UI: got.UI, t: got.t, api, calls, confirms, toasts, dom, host };
+    return { ctx, Card: got.Card, Settings: got.Settings, Ai: got.Ai, UI: got.UI, t: got.t, api, calls, confirms, toasts, dom, host };
 }
 
 const plain = (v: unknown): Json => JSON.parse(JSON.stringify(v));
@@ -225,22 +229,56 @@ describe('the ice breakers card: what it shows', () => {
         }
     });
 
-    it('the Settings card is drawn for the owner and carries a Retry when it could not be loaded, even when its module never arrived', () => {
+    it('the card is drawn on the DM assistant page for the owner, and carries a Retry when it could not be loaded', async () => {
         const s = load();
-        assert.ok(String(s.Settings.iceBreakersSection(answer(), null)).includes('id="iceb-card"'));
-        const failed = String(s.Settings.iceBreakersSection(null, new Error('boom <b>')));
+        s.api.getIceBreakers = async () => answer();
+        const host = s.host('iceb-host');
+        await s.Ai.mountIceBreakers();
+        assert.ok(host.innerHTML.includes('id="iceb-card"'), 'the module\'s own card');
+        assert.ok(host.innerHTML.includes(s.t('iceb.publish')));
+
+        const failed = String(s.Ai.iceBreakersFailure(new Error('boom <b>')));
         assert.ok(failed.includes('boom &lt;b&gt;') && !failed.includes('<b>'), 'the reason is shown, escaped');
-        assert.ok(failed.includes('data-action="settings:render"'), 'Retry');
+        assert.ok(failed.includes('data-action="ai:mountIceBreakers"'), 'Retry asks again, without redrawing the page');
         assert.ok(failed.includes(s.t('iceb.title')));
+
+        s.api.getIceBreakers = async () => { throw new Error('offline'); };
+        await s.Ai.mountIceBreakers();
+        assert.ok(host.innerHTML.includes('offline') && host.innerHTML.includes('data-action="ai:mountIceBreakers"'), 'a failed read is that card\'s error, with Retry');
     });
 
-    it('a page whose module never arrived gets the same card with its reason, and no exception', () => {
+    it('a page whose module never arrived gets the same card with its reason, and no exception', async () => {
         const bare = load('en', false);
         assert.equal(bare.Card, null, 'the module is not in this page');
-        const card = String(bare.Settings.iceBreakersSection(answer(), null));
-        assert.ok(card.includes(bare.t('iceb.loadFailed', { message: bare.t('iceb.moduleFailed') })));
-        assert.ok(card.includes('data-action="settings:render"'));
+        bare.api.getIceBreakers = async () => answer();
+        const host = bare.host('iceb-host');
+        await bare.Ai.mountIceBreakers();
+        assert.ok(host.innerHTML.includes(bare.t('iceb.loadFailed', { message: bare.t('iceb.moduleFailed') })));
+        assert.ok(host.innerHTML.includes('data-action="ai:mountIceBreakers"'));
     });
+
+    it('the host is on the page only for the owner, and the card is no longer one of Settings\'', () => {
+        const s = load();
+        assert.ok(String(s.Ai.shell()).includes('id="iceb-host"'), 'the owner\'s page has the host, after the Meta vision card');
+        const at = (needle: string): number => String(s.Ai.shell()).indexOf(needle);
+        assert.ok(at('id="muse-card"') > -1 && at('id="muse-card"') < at('id="iceb-host"'), 'right after the Meta vision card');
+        const cards = Array.from(s.Settings.CARDS as Array<{ id: string }>).map((c) => c.id);
+        assert.equal(cards.includes('iceb'), false);
+    });
+
+    it('the Meta vision card is drawn only with the muse module, and the ice breakers only with the DM assistant module (U3)', () => {
+        const s = load();
+        const shell = (modules: string[] | null): string => {
+            vm.runInContext(`App.hasModule = ${modules === null ? 'undefined' : `(id) => ${JSON.stringify(modules)}.includes(id)`};`, (s.Ai as Json).__ctx ?? s.ctx);
+            return String(s.Ai.shell());
+        };
+        assert.ok(shell(null).includes('id="muse-card"') && shell(null).includes('id="iceb-host"'), 'a session with no modules: everything (fail-open)');
+        const without = shell(['inbox', 'dm_assistant']);
+        assert.equal(without.includes('id="muse-card"'), false, 'no muse: no Meta vision card');
+        assert.ok(without.includes('id="iceb-host"'));
+        assert.equal(shell(['inbox']).includes('id="iceb-host"'), false, 'no DM assistant: no ice breakers either');
+    });
+
 });
 
 // ─── Nothing goes to Instagram without a press and a yes ─────────────────────────────────────────────
@@ -607,14 +645,17 @@ describe('the ice breakers card: the client, the registration and who loads it',
         assert.ok(existsSync('dashboard/js/pages/ice_breakers.js'));
     });
 
-    it('Settings asks for the card, and loads its module, for the tenant\'s owner only', () => {
+    it('the DM assistant page asks for the card, and loads its module, for the tenant\'s owner only', () => {
+        const ai = readFileSync('dashboard/js/pages/ai_settings.js', 'utf8');
+        assert.match(ai, /canEditIceBreakers\(\) \{\s*const owner = [^;]*App\.canAdminister\(\);\s*return owner && this\.moduleOn\('dm_assistant'\);/);
+        assert.match(ai, /if \(!host \|\| !this\.canEditIceBreakers\(\)\) return;/, 'nobody else is asked');
+        assert.match(ai, /\[data, card\] = await Promise\.all\(\[API\.getIceBreakers\(\), App\.loadPageModule\('ice_breakers'\)\]\);/);
+        // Nothing of it is left in Settings, and the old address goes to the new place (resolveView answers a redirect).
         const settings = readFileSync('dashboard/js/pages/settings.js', 'utf8');
-        assert.match(settings, /App\.canAdminister\(\) \? API\.getIceBreakers\(\) : Promise\.resolve\(null\)/);
-        assert.match(settings, /App\.canAdminister\(\) \? App\.loadPageModule\('ice_breakers'\) : Promise\.resolve\(null\)/);
-        // Who sees the card is the card map's (UX US10): the tenant's owner only, in Messages & alerts.
-        assert.match(settings, /case 'iceb': return this\.iceBreakersSection\(ctx\.iceBreakers, ctx\.iceBreakersError\);/);
-        const card = Array.from(load().Settings.CARDS as Array<{ id: string; group: string; who: string }>).find((c) => c.id === 'iceb')!;
-        assert.deepEqual({ group: card.group, who: card.who }, { group: 'messages', who: 'owner' });
+        assert.doesNotMatch(settings, /getIceBreakers|loadPageModule\('ice_breakers'\)/);
+        const view = plain(load().Settings.resolveView({ s: 'iceb' }));
+        assert.equal(view.redirect, '#/ai_settings?card=iceb');
+        assert.equal(plain(load().Settings.resolveView({ card: 'iceb' })).redirect, '#/ai_settings?card=iceb');
     });
 
     it('the card never calls Publish, Remove or Read except from a handler a person triggers: no timer, no load-time call', () => {
