@@ -530,6 +530,8 @@ bdi { unicode-bidi: isolate; }
    a glass value here renders unpredictably per platform. Always opaque. */
 .chip-select select option { background: var(--surface-solid); color: var(--text-strong); font-weight: var(--fw-regular); }
 .chip-select select:disabled { opacity: 0.5; cursor: progress; }
+/* The workspace's initial: only the phone layout shows it (see the 560px block). */
+.chip-select .chip-initial { display: none; font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); line-height: 1; }
 
 /* ─── Page container ─────────────────────────────────────────────────────── */
 .page-container {
@@ -3163,7 +3165,10 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     .page-header { padding-inline: var(--space-4); }
     .header-start { min-width: 0; }
     .header-start > div { min-width: 0; }
-    .page-title, .page-subtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* A title wraps instead of being cut ("Keyword re…" told nobody which page this was). The subtitle may take two lines. */
+    .page-title, .page-subtitle { overflow-wrap: anywhere; }
+    .page-subtitle { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+    .header-end { flex-shrink: 0; }
 }
 
 @media (max-width: 768px) {
@@ -3204,7 +3209,44 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
    badge gone there is far more of it, so the language toggle — two words, and
    duplicated in Settings — can now stay; only the tenant name gets shortened. */
 @media (max-width: 560px) {
-    .chip-select select { max-width: 110px; }
+    /* The top bar is two rows: the menu button at one end and the controls (role, workspace, language) at the other, then the
+       page title across the full width, free to wrap. One row could not hold a title and three controls at 320px, and
+       the workspace pill shrank (min-width: 0) until its text printed over the language toggle. `.header-start` stops
+       being a box (display: contents) so its two children are placed on the header's own grid; the grid areas follow
+       the page direction, so Arabic mirrors with no extra rule. */
+    .page-header {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-areas: "menu end" "title title";
+        align-items: center;
+        row-gap: var(--space-1);
+        padding-block: var(--space-2) var(--space-3);
+        min-height: 0; /* app.js writes the measured height into --header-height; a min-height from it could never shrink back */
+    }
+    .header-start { display: contents; }
+    .menu-button { grid-area: menu; }
+    .header-start > div { grid-area: title; min-inline-size: 0; }
+    .header-end { grid-area: end; justify-self: end; max-inline-size: 100%; }
+    /* The title wraps; the subtitle is the secondary line and keeps to one, so a sticky bar stays a fraction of a small screen. */
+    .page-subtitle { -webkit-line-clamp: 1; line-clamp: 1; }
+
+    /* The workspace becomes one 44px circle holding its initial; the native <select> is stretched over it, invisible, so a tap
+       still opens the real list (full names) and the label, keyboard and screen-reader behaviour are the select's own.
+       16px stops iOS zooming the page when the control takes focus. */
+    .chip-select {
+        position: relative;
+        inline-size: var(--tap-target); block-size: var(--tap-target);
+        padding: 0; gap: 0;
+        justify-content: center; flex-shrink: 0;
+    }
+    .chip-select > svg, .chip-select > [data-lucide] { display: none; }
+    .chip-select .chip-initial { display: inline; }
+    .chip-select select {
+        position: absolute; inset: 0;
+        inline-size: 100%; max-width: none; block-size: 100%;
+        margin: 0; padding: 0;
+        opacity: 0; font-size: 16px;
+    }
     .lang-toggle { padding-inline: var(--space-2); }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .stat-card { padding: var(--space-4); }
