@@ -29,6 +29,7 @@ import {
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
 import { flattenTurns, THINK_MODEL, toJsonSchema, type ThinkTry } from './think.js';
+import { SIGNED_OUT_MESSAGE } from '../studio/macHealth.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const SOURCE = '66666666-6666-4666-8666-666666666666';
@@ -770,9 +771,23 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.equal(job.model, 'claude-opus-5-5');
         assert.match(job.user, /^L3 \[00:10\.0\] جملة3\.$/m, 'the same prompt Gemini gets');
         const [release] = released();
-        assert.deepEqual(release!.params, [SOURCE, 1]);
-        assert.match(release!.sql, /claimed_at = NULL, updated_at = NOW\(\) WHERE id = \$1 AND status = 'picking' AND attempts = \$2/);
+        assert.deepEqual(release!.params, [SOURCE, 1, null], 'a plain wait leaves the error as it was');
+        assert.match(release!.sql, /claimed_at = NULL, updated_at = NOW\(\), error = COALESCE\(\$3::text, error\) WHERE id = \$1 AND status = 'picking' AND attempts = \$2/);
         assert.equal(db.ran(/^UPDATE monteur_sources SET (error = \$2|status = 'failed', error = \$2)/).length, 0, 'no attempt failed, none burned');
+        assert.equal(calls.length, 0);
+    });
+
+    it('a pick whose try failed signed out WAITS and says so on the source: no try spent, nothing asked, never Gemini (research USE-1)', async () => {
+        const signIn = 'claude answered with an error: Failed to authenticate: OAuth session expired and could not be refreshed';
+        thinks = { 'monteur.pick': failedTries(1, signIn) };
+        db.routes.unshift([/^SELECT value, is_secret FROM app_settings WHERE key = \$1/, (p) => ({
+            rows: p[0] === 'mac.claude_signed_out_at' ? [{ value: '2026-11-27T05:00:00.000Z', is_secret: false }] : [],
+        })]);
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'waiting');
+        assert.equal(queued().length, 0, 'not a second try, not a fourth');
+        assert.equal(released()[0]!.params[2], SIGNED_OUT_MESSAGE);
+        assert.equal(db.ran(/^UPDATE monteur_sources SET (error = \$2|status = 'failed', error = \$2)/).length, 0, 'the item is not failed');
         assert.equal(calls.length, 0);
     });
 

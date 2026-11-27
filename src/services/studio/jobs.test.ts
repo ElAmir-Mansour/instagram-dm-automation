@@ -11,6 +11,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
 import { MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { SIGNED_OUT_MESSAGE } from './macHealth.js';
 import { invalidateTenantCache } from '../tenant.js';
 import { StudioError } from './common.js';
 import {
@@ -267,6 +268,50 @@ describe('the Mac is the owner’s: Claude’s work reaches a worker only for th
         pending = [infographic(NEWER_JOB, true)];
         assert.equal((await claimJob(TENANT))?.id, NEWER_JOB);
         assert.equal(failures().length, 0);
+    });
+
+    describe('Claude signed out (research USE-1)', () => {
+        const SIGN_IN = 'claude answered with an error: Failed to authenticate: OAuth session expired and could not be refreshed';
+        const flagWrites = () => ran(/^INSERT INTO app_settings/).filter((w) => w.params[0] === 'mac.claude_signed_out_at');
+        const flagClears = () => ran(/^DELETE FROM app_settings/).filter((w) => w.params[0] === 'mac.claude_signed_out_at');
+
+        it('a think that failed signed out sets the flag; a think that failed for another reason does not', async () => {
+            pending = [think(JOB)];
+            await claimJob(TENANT);
+            await failJob(TENANT, JOB, 'You have hit your limit');
+            assert.equal(flagWrites().length, 0);
+            pending = [think(NEWER_JOB)];
+            await claimJob(TENANT);
+            await failJob(TENANT, NEWER_JOB, SIGN_IN);
+            assert.equal(flagWrites().length, 1);
+        });
+
+        it('an infographic Claude was writing says plainly that Claude is signed out, and is what the re-queue finds', async () => {
+            pending = [infographic(JOB, true)];
+            await claimJob(TENANT);
+            await failJob(TENANT, JOB, SIGN_IN);
+            const [row] = ran(/^UPDATE infographics SET status = 'failed'/);
+            assert.equal(row!.params[2], SIGNED_OUT_MESSAGE);
+            assert.equal(flagWrites().length, 1);
+        });
+
+        it('an infographic that only renders (no Claude) keeps the error it got, and sets no flag', async () => {
+            pending = [infographic(JOB, false)];
+            await claimJob(TENANT);
+            await failJob(TENANT, JOB, SIGN_IN);
+            assert.equal(ran(/^UPDATE infographics SET status = 'failed'/)[0]!.params[2], SIGN_IN);
+            assert.equal(flagWrites().length, 0);
+        });
+
+        it('a Claude job that completes clears the flag, once it has committed', async () => {
+            pending = [think(JOB)];
+            await claimJob(TENANT);
+            await completeJob(TENANT, JOB, { output: { ok: true }, model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 } });
+            assert.equal(flagClears().length, 1);
+            const statementsAtClear = statements.findIndex((x) => /^DELETE FROM app_settings/.test(x.sql));
+            const statementsAtDone = statements.findIndex((x) => /SET status = 'done'/.test(x.sql));
+            assert.ok(statementsAtDone >= 0 && statementsAtClear > statementsAtDone, 'the flag is cleared after the job is stored done');
+        });
     });
 
     const explainer = (id: string, kind: string) => ({ id, kind, payload: { explainer_id: 'e' } });

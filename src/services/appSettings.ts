@@ -162,6 +162,16 @@ export const APP_SETTING_KEYS = {
     /** JSON `{day, kinds}`: which R2 limit warnings the owner was already emailed today (src/services/r2Usage.ts). */
     r2Alerted: 'storage.r2_alerted',
     /**
+     * An ISO time: Claude on the owner's Mac answered "signed out" (the sign-in failure `isSignInFailure` knows) and no Claude job has succeeded since.
+     * Set by the first such failure, cleared by the next successful Claude job of any kind, which re-queues what it blocked (src/services/studio/macHealth.ts).
+     * While it is set the Monteur waits and does not spend tries, and Today and the Studio say so. Not a secret.
+     */
+    macClaudeSignedOutAt: 'mac.claude_signed_out_at',
+    /** A UTC day (YYYY-MM-DD): the day the owner was last emailed that Claude is signed out on the Mac. One email a day per problem. */
+    macAlertedSignedOut: 'mac.alerted_signed_out',
+    /** A UTC day (YYYY-MM-DD): the day the owner was last emailed that the Mac's Studio worker is offline with work waiting. */
+    macAlertedOffline: 'mac.alerted_offline',
+    /**
      * 'true': the daily sweep deletes a file as soon as the post that used it is PUBLISHED and
      * nothing else still needs it (Meta, TikTok and YouTube keep their own copies), and any file
      * nothing names after a week (src/services/retention.ts). The owner asked for it on 2026-10-04,

@@ -1159,7 +1159,7 @@ export interface MonteurRenderPayload {
 export interface MonteurThinkPayload {
     request: string;
     try: number;
-    step: 'pick' | 'copy' | 'edit' | 'analyst';
+    step: 'pick' | 'copy' | 'edit' | 'analyst' | 'probe';
     purpose: string;
     model: string;
     system: string;

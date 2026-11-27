@@ -14,16 +14,23 @@
  *     Get-started panel instead) produce no item and no count.
  *   - **Say "all clear" when it could not look.** A query that fails fails the whole summary: a half-answer reads as "nothing needs you".
  *
- * Implemented here: the heartbeat; `handoff`, `post_failed`, `post_overdue` and `connection_broken` items; the Inbox's "waiting" count.
- * The other item types of `AttentionType` (`webhook_silent`, `hot_lead`, `window_closing`, `tiktok_draft`, `reel_review`,
- * `worker_offline`, `connection_expiring`, `timezone_unset`, `platform`) belong to later changes, and `counts.studio` stays 0 until
- * `reel_review` exists to fill it.
+ * Implemented here: the heartbeat; `handoff`, `post_failed`, `post_overdue` and `connection_broken` items; the Inbox's "waiting" count; and
+ * the Studio's four (research USE-1 and USE-4, 2026-11-27): `mac_signed_out` (Claude on the Mac answered "signed out", the stored flag of
+ * `studio/macHealth.ts`), `worker_offline` (no worker call for `WORKER_OFFLINE_MINUTES` while Studio jobs have waited as long), `tiktok_draft`
+ * (a TikTok video left in the creator's inbox for `TIKTOK_DRAFT_DAYS`) and `reel_review` (clips waiting for the owner's review). They fill
+ * `counts.studio`. The other item types of `AttentionType` (`webhook_silent`, `hot_lead`, `window_closing`, `connection_expiring`,
+ * `timezone_unset`, `platform`) belong to later changes.
+ *
+ * The two Mac items are shown only to a tenant the Mac works for (`isMacBrainAllowed`): the flag is the platform's, and a tenant whose Claude
+ * work is not on the Mac must not be told to sign in on a computer it does not have.
  *
  * The thread rules mirror `Inbox.isWaiting` / `Inbox.isNeedsYou` (dashboard/js/pages/inbox.js) clause for clause, and a thread that is
  * both counts once, as a handoff: the Inbox's `needsHuman` is the union of the two, and the nav badge is its size.
  */
 import { queryRows } from '../db/query.js';
 import { getQueueHealth, getSchemaState, getTenantHealth, toIso } from './health.js';
+import { isMacBrainAllowed } from './macBrain.js';
+import { claudeSignedOutAt } from './studio/macHealth.js';
 import { workerSummary } from './studio/worker.js';
 
 /** What the route says when a statement fails because migration v45 is not applied yet (`archived_at`, `handled_at`). */
@@ -36,7 +43,7 @@ export const ATTENTION_MIGRATION_HINT =
 export type AttentionType =
     | 'webhook_silent' | 'handoff' | 'hot_lead' | 'window_closing' | 'post_failed' | 'tiktok_draft'
     | 'post_overdue' | 'reel_review' | 'worker_offline' | 'connection_expiring' | 'connection_broken'
-    | 'timezone_unset' | 'platform';
+    | 'timezone_unset' | 'platform' | 'mac_signed_out';
 
 export type AttentionSeverity = 'danger' | 'warning' | 'info';
 
@@ -75,7 +82,7 @@ export interface Heartbeat {
 
 export interface AttentionCounts {
     inbox: number;
-    /** 0 until `reel_review` and failed renders are counted (a later change). */
+    /** Studio things that need the owner: clips to review, TikTok drafts left in the inbox, Claude signed out, the worker offline. Failed renders are not counted yet. */
     studio: number;
     scheduler: number;
     /** Present for platform admins only. */
@@ -94,10 +101,18 @@ export interface AttentionSummary {
 /** A post still `PENDING` this long after its time is overdue: the sweeps run every few minutes, so less than this is just waiting for the next one. */
 export const OVERDUE_GRACE_MINUTES = 15;
 
+/** No worker call for this long, with Studio jobs that have waited as long: the Mac is asleep or its worker stopped. The same window the owner's email uses. */
+export const WORKER_OFFLINE_MINUTES = 30;
+
+/** A TikTok video left in the creator's inbox this long is a draft the owner forgot: TikTok posts only when the owner does. */
+export const TIKTOK_DRAFT_DAYS = 3;
+
 /** Where each item sends the owner. The deep-link targets are specs/001-dashboard-ux tasks T071. */
 const HREF = {
     inboxTodo: '#/inbox?filter=todo',
     postsNeedsYou: '#/posts?filter=needs-you',
+    monteur: '#/monteur',
+    help: (slug: string) => `#/help/${slug}`,
     settings: (section: string) => `#/settings?s=${section}`,
 } as const;
 
@@ -134,6 +149,18 @@ export interface AttentionFacts {
     postsOverdue: WaitingFact;
     /** One row per connected integration, broken or not. Empty: nothing is connected yet. */
     connections: ConnectionFact[];
+    /** Absent (a caller that predates the Studio items) reads as "nothing to say". */
+    studio?: StudioFacts;
+}
+
+/** What the Studio's four items are built from. */
+export interface StudioFacts {
+    /** When Claude on the Mac was first seen signed out (ISO), or null. Always null for a tenant the Mac does not work for. */
+    signedOutAt: string | null;
+    /** Studio jobs the worker could claim now (or is running), how long the oldest has waited, and when a worker last called. null: no such jobs. */
+    workerOffline: { jobs: number; oldestAt: string | null; lastSeenAt: string | null } | null;
+    tiktokDrafts: WaitingFact;
+    reelReview: WaitingFact;
 }
 
 /** The reason most of the handed-over threads carry, ties broken by name so the answer is the same every time. null when none names one. */
@@ -213,6 +240,43 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
         }, connection.at));
     }
 
+    const studio = facts.studio;
+    let studioCount = 0;
+    if (studio?.signedOutAt) {
+        studioCount += 1;
+        items.push({
+            type: 'mac_signed_out', severity: 'danger', count: 1,
+            sentence: { key: 'attention.mac_signed_out', params: {} },
+            action: { verb: 'attention.verb.howToFix', href: HREF.help('worker#claude-signed-out') },
+            oldestAt: studio.signedOutAt,
+        });
+    }
+    if (studio?.workerOffline) {
+        studioCount += 1;
+        const w = studio.workerOffline;
+        items.push(dated({
+            type: 'worker_offline', severity: 'warning', count: 1,
+            sentence: { key: 'attention.worker_offline', params: { n: w.jobs, minutes: WORKER_OFFLINE_MINUTES } },
+            action: { verb: 'attention.verb.howToFix', href: HREF.help('worker#worker-offline') },
+        }, w.oldestAt));
+    }
+    if (studio && studio.tiktokDrafts.count > 0) {
+        studioCount += studio.tiktokDrafts.count;
+        items.push(dated({
+            type: 'tiktok_draft', severity: 'info', count: studio.tiktokDrafts.count,
+            sentence: { key: 'attention.tiktok_draft', params: { n: studio.tiktokDrafts.count, days: TIKTOK_DRAFT_DAYS } },
+            action: { verb: 'attention.verb.open', href: HREF.postsNeedsYou },
+        }, studio.tiktokDrafts.oldestAt));
+    }
+    if (studio && studio.reelReview.count > 0) {
+        studioCount += studio.reelReview.count;
+        items.push(dated({
+            type: 'reel_review', severity: 'warning', count: studio.reelReview.count,
+            sentence: { key: 'attention.reel_review', params: { n: studio.reelReview.count } },
+            action: { verb: 'attention.verb.review', href: HREF.monteur },
+        }, studio.reelReview.oldestAt));
+    }
+
     items.sort(compareItems);
 
     return {
@@ -220,7 +284,7 @@ export function buildAttention(facts: AttentionFacts): { items: AttentionItem[];
         counts: {
             // Threads that need a person, each once: handed over, or waiting for a reply.
             inbox: facts.handoff.count + facts.waiting.count,
-            studio: 0,
+            studio: studioCount,
             scheduler: facts.postsFailed.count + facts.postsOverdue.count,
         },
     };
@@ -314,6 +378,39 @@ export const CONNECTIONS_ATTENTION_SQL = `
      WHERE pc.creator_id = $1
 `;
 
+/**
+ * Studio jobs the worker could claim now, or is running: `pending` once their `not_before` has passed (a drawing paused to the next day is nobody's
+ * backlog), and `claimed`. `$1` is the tenant. Their count and how long the oldest has waited; the rule compares both with the worker's last call.
+ */
+export const STUDIO_JOBS_WAITING_SQL = `
+    SELECT COUNT(*)::int AS n, MIN(created_at) AS oldest_at
+      FROM studio_jobs
+     WHERE creator_id = $1
+       AND (status = 'claimed' OR (status = 'pending' AND not_before <= NOW()))
+`;
+
+/**
+ * TikTok videos sitting in the creator's inbox past `$2` days: uploaded, never posted. `$1` is the tenant. The time is the post's scheduled time
+ * (the upload follows it by seconds): `status_checked_at` is refreshed by every status check, so it says nothing about how long a draft waited.
+ * An archived row is the owner's decision and is not counted.
+ */
+export const TIKTOK_DRAFTS_ATTENTION_SQL = `
+    SELECT COUNT(*)::int AS n, MIN(s.scheduled_time) AS oldest_at
+      FROM scheduled_posts s
+     WHERE s.creator_id = $1
+       AND s.platform = 'tiktok'
+       AND s.status = 'IN_INBOX'
+       AND s.archived_at IS NULL
+       AND s.scheduled_time < NOW() - make_interval(days => $2)
+`;
+
+/** Clips the Monteur rendered that wait for the owner to approve or reject them. `$1` is the tenant. Since = when the render landed. */
+export const REEL_REVIEW_ATTENTION_SQL = `
+    SELECT COUNT(*)::int AS n, MIN(updated_at) AS oldest_at
+      FROM clip_drafts
+     WHERE creator_id = $1 AND status = 'review'
+`;
+
 interface ThreadRow { kind: 'handoff' | 'waiting'; reason: string | null; n: number; oldest_at: Date | null }
 
 function threadFacts(rows: readonly ThreadRow[]): { handoff: HandoffFact; waiting: WaitingFact } {
@@ -361,6 +458,55 @@ async function loadConnections(creatorId: string): Promise<ConnectionFact[]> {
         .map((row) => ({ integration: row.integration as ConnectionIntegration, broken: row.broken === true, at: toIso(row.at) }));
 }
 
+const waitingOf = (row: { n: number; oldest_at: Date | null } | undefined): WaitingFact => ({ count: Number(row?.n) || 0, oldestAt: toIso(row?.oldest_at) });
+
+/**
+ * The worker is offline with work waiting: its last call is older than `WORKER_OFFLINE_MINUTES` (or it never called) AND the oldest job has waited as
+ * long, so a job queued a moment ago, for a Mac asleep since last night, is not an alarm yet. Pure; `lastSeenAt` is what `workerSummary` reports.
+ */
+export function workerOfflineFact(
+    jobs: { n: number; oldestAt: string | null }, lastSeenAt: string | null, now: number
+): StudioFacts['workerOffline'] {
+    if (jobs.n <= 0) return null;
+    const limit = WORKER_OFFLINE_MINUTES * 60_000;
+    const seen = time(lastSeenAt);
+    if (Number.isFinite(seen) && now - seen < limit) return null;
+    const oldest = time(jobs.oldestAt);
+    if (Number.isFinite(oldest) && now - oldest < limit) return null;
+    return { jobs: jobs.n, oldestAt: jobs.oldestAt, lastSeenAt };
+}
+
+/** The Studio's facts for one tenant: four small statements and one settings read, none of which leaves the database. */
+export async function loadStudioFacts(creatorId: string, now: number, lastSeenAt?: string | null): Promise<StudioFacts> {
+    const [macTenant, jobs, tiktok, reels, seen] = await Promise.all([
+        isMacBrainAllowed(creatorId),
+        queryRows<{ n: number; oldest_at: Date | null }>(STUDIO_JOBS_WAITING_SQL, [creatorId]),
+        queryRows<{ n: number; oldest_at: Date | null }>(TIKTOK_DRAFTS_ATTENTION_SQL, [creatorId, TIKTOK_DRAFT_DAYS]),
+        queryRows<{ n: number; oldest_at: Date | null }>(REEL_REVIEW_ATTENTION_SQL, [creatorId]),
+        lastSeenAt === undefined ? workerSummary(creatorId, now).then((w) => w.lastSeen) : Promise.resolve(lastSeenAt),
+    ]);
+    const waiting = waitingOf(jobs[0]);
+    return {
+        signedOutAt: macTenant ? await claudeSignedOutAt() : null,
+        workerOffline: workerOfflineFact({ n: waiting.count, oldestAt: waiting.oldestAt }, seen, now),
+        tiktokDrafts: waitingOf(tiktok[0]),
+        reelReview: waitingOf(reels[0]),
+    };
+}
+
+/**
+ * Whether this tenant's worker is offline with work waiting: the attention rule alone, for the drain's daily email (`macHealth.ts checkMacAlarms`), which has
+ * no use for the other statements. Two small reads.
+ */
+export async function isWorkerOfflineWithWork(creatorId: string, now: number = Date.now()): Promise<boolean> {
+    const [jobs, worker] = await Promise.all([
+        queryRows<{ n: number; oldest_at: Date | null }>(STUDIO_JOBS_WAITING_SQL, [creatorId]),
+        workerSummary(creatorId, now),
+    ]);
+    const waiting = waitingOf(jobs[0]);
+    return workerOfflineFact({ n: waiting.count, oldestAt: waiting.oldestAt }, worker.lastSeen, now) !== null;
+}
+
 async function loadHeartbeat(creatorId: string, now: number): Promise<Heartbeat> {
     const [health, worker] = await Promise.all([getTenantHealth(creatorId), workerSummary(creatorId, now)]);
     return {
@@ -399,15 +545,18 @@ export interface AttentionOptions {
  */
 export async function getAttention(creatorId: string, options: AttentionOptions = {}): Promise<AttentionSummary> {
     const now = options.now ?? Date.now();
-    const [heartbeat, threads, posts, connections, platform] = await Promise.all([
-        loadHeartbeat(creatorId, now),
+    // The Studio's facts take the worker's last call from the heartbeat's own read, so it is one statement and one answer.
+    const heartbeatP = loadHeartbeat(creatorId, now);
+    const [heartbeat, threads, posts, connections, studio, platform] = await Promise.all([
+        heartbeatP,
         loadThreads(creatorId),
         loadPosts(creatorId),
         loadConnections(creatorId),
+        heartbeatP.then((h) => loadStudioFacts(creatorId, now, h.worker.lastSeenAt)),
         options.platformAdmin ? countPlatformProblems() : Promise.resolve(undefined),
     ]);
 
-    const { items, counts } = buildAttention({ ...threads, ...posts, connections });
+    const { items, counts } = buildAttention({ ...threads, ...posts, connections, studio });
 
     return {
         checkedAt: new Date(now).toISOString(),

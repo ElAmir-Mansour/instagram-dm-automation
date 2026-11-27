@@ -36,7 +36,7 @@ import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../s
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
-    requireTenantRole, MetaNotConnectedError, NOT_CONNECTED_MESSAGE
+    requireTenantRole, MetaNotConnectedError, NOT_CONNECTED_MESSAGE, getPlatformOwnerId
 } from '../services/tenant.js';
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
@@ -45,7 +45,8 @@ import {
     describeInspection, inspectionStatus, isDebugTokenAnswer, noteMetaFailure, recheckTenantToken, TOKEN_CHECK_UNANSWERED_MESSAGE,
 } from '../services/tokenHealth.js';
 import { getTenantHealth, isMissingSchema, isMissingTable, MIGRATION_HINT } from '../services/health.js';
-import { ATTENTION_MIGRATION_HINT, getAttention } from '../services/attention.js';
+import { ATTENTION_MIGRATION_HINT, getAttention, isWorkerOfflineWithWork } from '../services/attention.js';
+import { checkMacAlarms } from '../services/studio/macHealth.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
@@ -487,6 +488,21 @@ router.get('/jobs/drain', async (req, res) => {
     } catch (err) {
         monteurError = err instanceof Error ? err.message : String(err);
         log('error', 'monteur.sweep_failed', describeError(err));
+    }
+
+    // Claude on the Mac and its worker (src/services/studio/macHealth.ts): while Claude is signed out, one tiny probe every half hour finds out when it is
+    // over; and the owner is emailed once a day per problem (signed out; the worker offline with work waiting). One settings read when all is well. Never throws.
+    try {
+        const mac = await checkMacAlarms({
+            baseUrl: await getPublicBaseUrl(null),
+            offline: async () => {
+                const owner = await getPlatformOwnerId();
+                return owner ? isWorkerOfflineWithWork(owner) : false;
+            },
+        });
+        if (mac.probe === 'queued' || mac.alerted.length > 0) log('info', 'mac.alarm_sweep', { probe: mac.probe, alerted: mac.alerted.join(',') });
+    } catch (err) {
+        log('error', 'mac.alarm_sweep_failed', describeError(err));
     }
 
     // Cloudflare R2 (src/services/r2Copy.ts, r2Usage.ts), after everything else so it only ever uses what is left: a batch of "Copy existing files to R2"

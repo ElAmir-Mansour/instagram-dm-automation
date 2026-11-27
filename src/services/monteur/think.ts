@@ -16,6 +16,9 @@
  *   the latest try failed     a new try after 10 min, 30 min, then 2 h                 → waiting
  *   4 tries failed            "Claude on the Mac didn't answer: …", and the item stops. Its Retry
  *                             retires the tries, so the next one starts again from try 1.
+ *   a try failed SIGNED OUT   not a try (research USE-1: 176 of them in one outage). While the flag `mac.claude_signed_out_at` is set the
+ *                             request WAITS (`ThinkSignedOut`), spending nothing and never falling back to another model; once Claude
+ *                             answers again somewhere the flag is gone and the next try is asked at once, with no backoff.
  *
  * `ThinkWaiting` and `ThinkExhausted` are how a waiting or a stopped call reaches the sweep: they
  * are thrown through the step (pick.ts, copy.ts, editor.ts, analyst.ts) like any failed call, and the
@@ -28,6 +31,7 @@ import { log } from '../../utils/log.js';
 import { toJsonSchema } from '../llm/geminiSchema.js';
 import { assertMacBrainAllowed } from '../macBrain.js';
 import { isFiniteNumber, isPlainObject } from '../studio/common.js';
+import { isClaudeSignedOut, isSignInFailure, SIGNED_OUT_MESSAGE } from '../studio/macHealth.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import type { CallCost } from './model.js';
 
@@ -86,6 +90,14 @@ export class ThinkWaiting extends Error {
     constructor(message: string) {
         super(message);
         this.name = 'ThinkWaiting';
+    }
+}
+
+/** Waiting because Claude on the Mac is signed out: a `ThinkWaiting` that says why, so the sweep can put it on the item. */
+export class ThinkSignedOut extends ThinkWaiting {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ThinkSignedOut';
     }
 }
 
@@ -166,13 +178,17 @@ export const sourceThinkPattern = (sourceId: string): string => `source/${source
 
 export type ThinkNext =
     | { kind: 'answer'; try: ThinkTry }
+    | { kind: 'signed_out' }
     | { kind: 'stale'; try: ThinkTry }
     | { kind: 'ask'; try: number }
     | { kind: 'wait'; why: string }
     | { kind: 'exhausted'; error: string };
 
-/** What to do about a request, from its tries (newest first). Pure. */
-export function nextThinkStep(tries: readonly ThinkTry[]): ThinkNext {
+/**
+ * What to do about a request, from its tries (newest first). Pure. `signedOut` is the stored flag, read only when it matters (the latest try failed
+ * with a sign-in error). A sign-in failure is not counted toward `MAX_THINK_TRIES`, has no backoff, and is never "exhausted".
+ */
+export function nextThinkStep(tries: readonly ThinkTry[], signedOut = false): ThinkNext {
     const latest = tries[0];
     if (!latest) return { kind: 'ask', try: 1 };
     if (latest.status === 'done') return { kind: 'answer', try: latest };
@@ -180,7 +196,8 @@ export function nextThinkStep(tries: readonly ThinkTry[]): ThinkNext {
         if (latest.quiet_s >= THINK_STALE_MINUTES * 60) return { kind: 'stale', try: latest };
         return { kind: 'wait', why: `try ${latest.try} is ${latest.status === 'pending' ? 'queued for the Mac' : 'with Claude on the Mac'}` };
     }
-    const failed = tries.filter((t) => t.status === 'failed').length;
+    if (isSignInFailure(latest.error)) return signedOut ? { kind: 'signed_out' } : { kind: 'ask', try: latest.try + 1 };
+    const failed = tries.filter((t) => t.status === 'failed' && !isSignInFailure(t.error)).length;
     if (failed >= MAX_THINK_TRIES) return { kind: 'exhausted', error: `${THINK_FAILED}${latest.error || 'no reason was given.'}` };
     const wait = THINK_BACKOFF_MINUTES[Math.min(failed, THINK_BACKOFF_MINUTES.length) - 1]! * 60;
     if (latest.since_s < wait) {
@@ -246,7 +263,10 @@ export async function think(route: ThinkRoute, req: ThinkRequest, cost: CallCost
     await assertMacBrainAllowed(route.creatorId);
     // A try failed here (stale, or an unusable answer) is decided on again at once: at most twice.
     for (let round = 0; round < 3; round++) {
-        const next = nextThinkStep(await loadTries(route));
+        const tries = await loadTries(route);
+        const latest = tries[0];
+        const signedOut = latest?.status === 'failed' && isSignInFailure(latest.error) ? await isClaudeSignedOut() : false;
+        const next = nextThinkStep(tries, signedOut);
         const fields = { request: route.request, step: route.step, creator_id: route.creatorId };
         if (next.kind === 'answer') {
             const answer = readThinkAnswer(next.try.result);
@@ -266,6 +286,10 @@ export async function think(route: ThinkRoute, req: ThinkRequest, cost: CallCost
             await pool.query(THINK_FAIL_SQL, [next.try.id, THINK_STALE_ERROR, ['pending', 'claimed']]);
             log('warn', 'monteur.think_stale', { ...fields, try: next.try.try });
             continue;
+        }
+        if (next.kind === 'signed_out') {
+            log('info', 'monteur.think_signed_out', fields);
+            throw new ThinkSignedOut(`Waiting for Claude on the Mac: ${req.purpose}. ${SIGNED_OUT_MESSAGE}`);
         }
         if (next.kind === 'exhausted') {
             log('warn', 'monteur.think_exhausted', { ...fields, error: next.error });

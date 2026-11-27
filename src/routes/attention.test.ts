@@ -146,8 +146,11 @@ describe('GET /attention: who it answers', () => {
 describe('GET /attention: tenant scope', () => {
     it('reads for the session’s tenant, in every statement', async () => {
         const { sent } = await get({ userId: 'u-1', role: 'user', tenantId: TENANT }, {}, connectedTenant);
-        assert.equal(sent.length, 5);
-        for (const s of sent) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
+        // Every statement but the ones that are not about one tenant: who the owner is, and the platform settings read for "does the Mac work for this tenant"
+        // (the list of tenants it works for, and the sign-in flag).
+        const tenantless = (sql: string) => /FROM creators ORDER BY created_at/.test(sql) || /FROM app_settings/.test(sql);
+        assert.ok(sent.filter((s) => !tenantless(s.sql)).length >= 8, 'health, worker, threads, posts, connections, waiting jobs, TikTok drafts, clips to review');
+        for (const s of sent.filter((x) => !tenantless(x.sql))) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
     });
 
     it('ignores a tenant named in the query or the path: the session decides', async () => {
@@ -157,7 +160,7 @@ describe('GET /attention: tenant scope', () => {
             connectedTenant
         );
         for (const s of sent) {
-            assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
+            if (!/FROM creators ORDER BY created_at/.test(s.sql) && !/FROM app_settings/.test(s.sql)) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
             assert.ok(!s.params.includes(OTHER));
         }
     });

@@ -53,7 +53,8 @@ import { pickClips, type PickOutcome } from './pick.js';
 import { loadReelEvidence, type ReelEvidenceSet } from './reelEvidence.js';
 import { type ApiOn, MIN_CALL_MS, usageFields } from './model.js';
 import { isAiError } from '../llm/errors.js';
-import { clipsThinkKey, isThinkSignal, sourceThinkKey, ThinkExhausted, ThinkWaiting, type ThinkOn } from './think.js';
+import { clipsThinkKey, isThinkSignal, sourceThinkKey, ThinkExhausted, ThinkSignedOut, ThinkWaiting, type ThinkOn } from './think.js';
+import { SIGNED_OUT_MESSAGE } from '../studio/macHealth.js';
 import { accentsFor, buildRenderPayload } from './render.js';
 import { groupLines, type PickedClip } from './transcript.js';
 
@@ -201,9 +202,11 @@ async function claimSource(seen: readonly string[] = []): Promise<ClaimedSource 
  */
 async function releaseWaiting(source: ClaimedSource, err: ThinkWaiting): Promise<MonteurSweepResult['pick']> {
     const { rowCount } = await pool.query(
-        `UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1, claimed_at = NULL, updated_at = NOW()
+        `UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1, claimed_at = NULL, updated_at = NOW(),
+                error = COALESCE($3::text, error)
           WHERE id = $1 AND status = 'picking' AND attempts = $2`,
-        [source.id, source.attempts]
+        // Waiting for a Claude that is signed out says so on the item (cleared at the hand-off); any other wait leaves the error as it was.
+        [source.id, source.attempts, err instanceof ThinkSignedOut ? SIGNED_OUT_MESSAGE : null]
     );
     log('info', 'monteur.think_waiting', { source_id: source.id, creator_id: source.creator_id, attempt: source.attempts, why: err.message });
     return { source_id: source.id, outcome: rowCount ? 'waiting' : 'lost', clips: 0 };

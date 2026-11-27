@@ -15,9 +15,11 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { metaHttp } from './http.js';
+import { invalidateTenantCache } from './tenant.js';
 import {
     buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, getAttention, OVERDUE_GRACE_MINUTES, POSTS_ATTENTION_SQL,
-    THREADS_ATTENTION_SQL, type AttentionFacts, type AttentionItem,
+    REEL_REVIEW_ATTENTION_SQL, STUDIO_JOBS_WAITING_SQL, THREADS_ATTENTION_SQL, TIKTOK_DRAFTS_ATTENTION_SQL, TIKTOK_DRAFT_DAYS,
+    WORKER_OFFLINE_MINUTES, workerOfflineFact, type AttentionFacts, type AttentionItem, type StudioFacts,
 } from './attention.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -269,7 +271,11 @@ afterEach(() => {
 });
 
 /** Route each statement to the answer for it, by what it reads. Anything not arranged answers no rows. */
-function install(answer: Partial<Record<'health' | 'worker' | 'threads' | 'posts' | 'connections' | 'queue' | 'schema', Answer>>) {
+function install(answer: Partial<Record<
+    'health' | 'worker' | 'threads' | 'posts' | 'connections' | 'queue' | 'schema' | 'studioJobs' | 'tiktok' | 'reels' | 'owner' | 'setting', Answer
+>>) {
+    // The owner is cached for 30 s across tests; each install starts from what it arranges.
+    invalidateTenantCache();
     (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
         sent.push({ sql: flat(sql), params });
         const text = flat(sql);
@@ -277,13 +283,19 @@ function install(answer: Partial<Record<'health' | 'worker' | 'threads' | 'posts
             text === flat(THREADS_ATTENTION_SQL) ? 'threads'
             : text === flat(POSTS_ATTENTION_SQL) ? 'posts'
             : text === flat(CONNECTIONS_ATTENTION_SQL) ? 'connections'
+            : text === flat(STUDIO_JOBS_WAITING_SQL) ? 'studioJobs'
+            : text === flat(TIKTOK_DRAFTS_ATTENTION_SQL) ? 'tiktok'
+            : text === flat(REEL_REVIEW_ATTENTION_SQL) ? 'reels'
+            : /FROM creators ORDER BY created_at/.test(text) ? 'owner'
+            : /FROM app_settings WHERE key = \$1/.test(text) ? 'setting'
             : /FROM studio_workers/.test(sql) ? 'worker'
             : /FROM schema_migrations/.test(sql) ? 'schema'
             : /FROM jobs\s*$/.test(sql.trim()) ? 'queue'
             : /FROM creators c\s+LEFT JOIN LATERAL/.test(sql) ? 'health'
             : null;
         assert.ok(kind, `an unexpected statement: ${flat(sql).slice(0, 120)}`);
-        const out = answer[kind]?.(sql, params);
+        // The owner is the tenant under test unless a test says otherwise: the Mac works for it.
+        const out = (answer[kind] ?? (kind === 'owner' ? () => [{ id: TENANT }] : undefined))?.(sql, params);
         if (out instanceof Error) throw out;
         const rows = out ?? [];
         return { rows, rowCount: rows.length };
@@ -342,8 +354,11 @@ describe('getAttention', () => {
     it('scopes every statement to the tenant it was asked about', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 5);
-        for (const s of sent) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
+        assert.equal(sent.length, 10);
+        // Every statement but two: who the owner is (no parameters) and the Mac's sign-in flag (a platform setting, by its key).
+        const tenantless = (sql: string) => /FROM creators ORDER BY created_at/.test(sql) || /FROM app_settings/.test(sql);
+        for (const s of sent.filter((x) => !tenantless(x.sql))) assert.equal(s.params[0], TENANT, s.sql.slice(0, 80));
+        assert.equal(sent.filter((x) => tenantless(x.sql)).length, 2);
     });
 
     it('binds the grace as a parameter, not into the text', async () => {
@@ -356,7 +371,7 @@ describe('getAttention', () => {
     it('is a handful of reads, and every one is the database: no Graph call is ever made', async () => {
         install({ health: () => [healthRow()] });
         await getAttention(TENANT, { now: NOW });
-        assert.equal(sent.length, 5, 'tenant health, worker, threads, posts, connections');
+        assert.equal(sent.length, 10, 'tenant health, worker, threads, posts, connections, the owner, waiting jobs, TikTok drafts, clips to review, the sign-in flag');
         assert.deepEqual(graph, []);
     });
 
@@ -394,6 +409,144 @@ describe('getAttention', () => {
 
     it('fails whole when any read fails: a half-answer would read as "nothing needs you"', async () => {
         for (const broken of ['health', 'worker', 'threads', 'posts', 'connections'] as const) {
+            install({ health: () => [healthRow()], [broken]: () => new Error(`${broken} is down`) });
+            await assert.rejects(getAttention(TENANT, { now: NOW }), new RegExp(`${broken} is down`), broken);
+        }
+    });
+});
+
+// ─── The Studio's items (research USE-1, USE-4) ──────────────────────────────────────────────
+
+const studioFacts = (over: Partial<StudioFacts> = {}): StudioFacts => ({
+    signedOutAt: null, workerOffline: null, tiktokDrafts: none, reelReview: none, ...over,
+});
+const studioItems = (over: Partial<StudioFacts>) => buildAttention(facts({ studio: studioFacts(over) }));
+
+describe('buildAttention: the Studio', () => {
+    it('says nothing, and counts nothing, when the Studio has nothing for the owner (or the caller sends no Studio facts)', () => {
+        assert.deepEqual(studioItems({}), { items: [], counts: { inbox: 0, studio: 0, scheduler: 0 } });
+        assert.deepEqual(buildAttention(facts()), { items: [], counts: { inbox: 0, studio: 0, scheduler: 0 } });
+    });
+
+    it('Claude signed out on the Mac is a danger with one action, the way to fix it, dated from the first failure', () => {
+        const out = studioItems({ signedOutAt: iso(600) });
+        assert.deepEqual(out.items, [{
+            type: 'mac_signed_out', severity: 'danger', count: 1,
+            sentence: { key: 'attention.mac_signed_out', params: {} },
+            action: { verb: 'attention.verb.howToFix', href: '#/help/worker#claude-signed-out' },
+            oldestAt: iso(600),
+        }]);
+        assert.equal(out.counts.studio, 1);
+    });
+
+    it('the worker being offline is a warning that names how many jobs wait and the window', () => {
+        const out = studioItems({ workerOffline: { jobs: 3, oldestAt: iso(120), lastSeenAt: iso(100) } });
+        assert.deepEqual(out.items, [{
+            type: 'worker_offline', severity: 'warning', count: 1,
+            sentence: { key: 'attention.worker_offline', params: { n: 3, minutes: WORKER_OFFLINE_MINUTES } },
+            action: { verb: 'attention.verb.howToFix', href: '#/help/worker#worker-offline' },
+            oldestAt: iso(120),
+        }]);
+        assert.equal(out.counts.studio, 1, 'one problem, however many jobs wait');
+    });
+
+    it('TikTok drafts and clips to review count one each, and link to where they are handled', () => {
+        const out = studioItems({ tiktokDrafts: { count: 4, oldestAt: iso(35 * 1440) }, reelReview: { count: 2, oldestAt: iso(90) } });
+        const tiktok = out.items.find((i) => i.type === 'tiktok_draft')!;
+        const reels = out.items.find((i) => i.type === 'reel_review')!;
+        assert.deepEqual(tiktok.sentence, { key: 'attention.tiktok_draft', params: { n: 4, days: TIKTOK_DRAFT_DAYS } });
+        assert.equal(tiktok.severity, 'info');
+        assert.deepEqual(reels.sentence, { key: 'attention.reel_review', params: { n: 2 } });
+        assert.deepEqual(reels.action, { verb: 'attention.verb.review', href: '#/monteur' });
+        assert.equal(out.counts.studio, 6);
+    });
+
+    it('puts the sign-in danger first, and counts every Studio thing into counts.studio only', () => {
+        const out = buildAttention(facts({
+            postsFailed: { count: 1, oldestAt: iso(10) },
+            studio: studioFacts({ signedOutAt: iso(5), workerOffline: { jobs: 1, oldestAt: iso(60), lastSeenAt: null }, reelReview: { count: 1, oldestAt: iso(30) } }),
+        }));
+        assert.equal(out.items[0]!.type, 'post_failed', 'danger, oldest first (a post that failed 10 min ago is older than a sign-in 5 min ago)');
+        assert.deepEqual(types(out.items), ['post_failed', 'mac_signed_out', 'worker_offline', 'reel_review']);
+        assert.deepEqual(out.counts, { inbox: 0, studio: 3, scheduler: 1 });
+    });
+
+    it('a tenant with nothing connected still gets nothing', () => {
+        assert.deepEqual(
+            buildAttention(facts({ connections: [], studio: studioFacts({ signedOutAt: iso(5), reelReview: { count: 3, oldestAt: iso(5) } }) })),
+            { items: [], counts: { inbox: 0, studio: 0, scheduler: 0 } },
+        );
+    });
+});
+
+describe('workerOfflineFact: the 30-minute rule', () => {
+    const jobs = (minutesAgo: number, n = 2) => ({ n, oldestAt: iso(minutesAgo) });
+
+    it('is null with no waiting jobs, however long the worker has been silent', () => {
+        assert.equal(workerOfflineFact({ n: 0, oldestAt: null }, iso(5000), NOW), null);
+    });
+
+    it('is null while the worker called within the window', () => {
+        assert.equal(workerOfflineFact(jobs(300), iso(WORKER_OFFLINE_MINUTES - 1), NOW), null);
+    });
+
+    it('is null for a job queued moments ago, even for a Mac that has been asleep for hours', () => {
+        assert.equal(workerOfflineFact(jobs(2), iso(600), NOW), null);
+    });
+
+    it('is raised once the worker AND the oldest job have both been quiet for the window', () => {
+        const fact = workerOfflineFact(jobs(WORKER_OFFLINE_MINUTES + 1), iso(WORKER_OFFLINE_MINUTES + 1), NOW);
+        assert.deepEqual(fact, { jobs: 2, oldestAt: iso(WORKER_OFFLINE_MINUTES + 1), lastSeenAt: iso(WORKER_OFFLINE_MINUTES + 1) });
+    });
+
+    it('a worker that never called is offline too', () => {
+        assert.ok(workerOfflineFact(jobs(120), null, NOW));
+    });
+});
+
+describe('getAttention: the Studio facts', () => {
+    it('reads each rule from its own statement, binds the days as a parameter, and calls nobody', async () => {
+        install({
+            health: () => [healthRow()],
+            worker: () => [{ name: 'Mac', last_seen_at: new Date(NOW - 3 * 3600_000) }],
+            studioJobs: () => [{ n: 2, oldest_at: new Date(iso(200)) }],
+            tiktok: () => [{ n: 4, oldest_at: new Date(iso(35 * 1440)) }],
+            reels: () => [{ n: 1, oldest_at: new Date(iso(50)) }],
+            setting: () => [{ value: iso(400), is_secret: false }],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        assert.deepEqual(types(out.items).sort(), ['mac_signed_out', 'reel_review', 'tiktok_draft', 'worker_offline']);
+        assert.equal(out.counts.studio, 1 + 1 + 4 + 1);
+        const tiktok = sent.find((s) => s.sql === flat(TIKTOK_DRAFTS_ATTENTION_SQL))!;
+        assert.deepEqual(tiktok.params, [TENANT, TIKTOK_DRAFT_DAYS]);
+        assert.deepEqual(graph, []);
+    });
+
+    it('does not tell a tenant the Mac does not work for to sign in on it, and does not read the flag for it', async () => {
+        const OTHER = '22222222-2222-4222-8222-222222222222';
+        install({
+            health: () => [healthRow()],
+            owner: () => [{ id: TENANT }],
+            setting: () => [{ value: iso(400), is_secret: false }],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+        });
+        const out = await getAttention(OTHER, { now: NOW });
+        assert.deepEqual(out.items, []);
+        assert.equal(sent.some((s) => s.sql === flat('SELECT value, is_secret FROM app_settings WHERE key = $1') && s.params[0] === 'mac.claude_signed_out_at'), false);
+    });
+
+    it('the statements exclude what is not the owner’s to do: archived TikTok rows, jobs not due yet, other states', () => {
+        assert.match(flat(TIKTOK_DRAFTS_ATTENTION_SQL), /s\.creator_id = \$1/);
+        assert.match(flat(TIKTOK_DRAFTS_ATTENTION_SQL), /s\.status = 'IN_INBOX'/);
+        assert.match(flat(TIKTOK_DRAFTS_ATTENTION_SQL), /s\.archived_at IS NULL/);
+        assert.match(flat(STUDIO_JOBS_WAITING_SQL), /not_before <= NOW\(\)/);
+        assert.match(flat(STUDIO_JOBS_WAITING_SQL), /creator_id = \$1/);
+        assert.match(flat(REEL_REVIEW_ATTENTION_SQL), /creator_id = \$1 AND status = 'review'/);
+    });
+
+    it('fails whole when a Studio read fails', async () => {
+        for (const broken of ['studioJobs', 'tiktok', 'reels'] as const) {
             install({ health: () => [healthRow()], [broken]: () => new Error(`${broken} is down`) });
             await assert.rejects(getAttention(TENANT, { now: NOW }), new RegExp(`${broken} is down`), broken);
         }
