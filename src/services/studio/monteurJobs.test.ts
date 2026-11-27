@@ -360,8 +360,10 @@ describe('completeJob — monteur_think', () => {
             output: { topic: 't', clips: [] }, model: 'claude-opus-5-5',
             usage: { input_tokens: 9, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
         });
-        assert.equal(writes().length, 1);
-        assert.match(writes()[0]!.sql, /^UPDATE studio_jobs SET status = 'done', result = \$2::jsonb/);
+        // Besides the one row it stores, an answer from Claude clears "signed out" if that was set (macHealth.ts): a delete that finds nothing, otherwise.
+        const own = writes().filter((w) => !/app_settings/.test(w.sql));
+        assert.equal(own.length, 1);
+        assert.match(own[0]!.sql, /^UPDATE studio_jobs SET status = 'done', result = \$2::jsonb/);
     });
 
     it('refuses a result with no answer, so the job stays claimed and the worker fails it', async () => {

@@ -26,6 +26,7 @@ import { waitUntil } from '../../utils/waitUntil.js';
 import { pool } from '../../config/db.js';
 import { type Exec, isPlainObject, withTransaction } from '../studio/common.js';
 import { completeJob, enqueueJob, failJob, MAX_ATTEMPTS, reportProgress } from '../studio/jobs.js';
+import { isSignInFailure } from '../studio/macHealth.js';
 import { getStudioSettings } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
 import { workerSummary } from '../studio/worker.js';
@@ -41,24 +42,8 @@ export const STALLED_RUN_MINUTES = 5;
 
 // ─── The Mac's sign-in failure ─────────────────────────────────────────────────────────────────
 
-/**
- * What the Claude CLI says when it is signed out, as the worker reports it: `claude answered with an error: Failed to authenticate: OAuth session expired and
- * could not be refreshed` (the worker's log, 2026-10-01 and 2026-10-22), and the older and shorter forms of the same refusal. Conservative on purpose: each
- * phrase is a whole sign-in message, and a bare "OAuth" or "401" is not one (a draft about OAuth, a failed page, a rate limit and a spent weekly allowance are
- * failures of their own, and the owner is told what they are instead of being sent to Gemini).
- */
-const SIGN_IN_FAILURES: readonly RegExp[] = [
-    /failed to authenticate/i,
-    /oauth (?:session|token) (?:has )?expired/i,
-    /\bnot logged in\b/i,
-    /please run \/login/i,
-    /invalid api key\s*[·\-–—]\s*please run/i,
-    /\bauthentication_error\b/i,
-];
-
-export function isSignInFailure(message: string | null | undefined): boolean {
-    return typeof message === 'string' && SIGN_IN_FAILURES.some((pattern) => pattern.test(message));
-}
+// The rule lives in studio/macHealth.ts (research USE-1): the Monteur, infographics and ad proposals use it too. Re-exported so this file's callers read it where they always did.
+export { isSignInFailure };
 
 // ─── Queueing a write ──────────────────────────────────────────────────────────────────────────
 

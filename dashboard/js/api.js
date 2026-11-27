@@ -575,6 +575,8 @@ const API = {
     // only ever queue work for it or read what it has finished. A 400 carries
     // `problems: string[]` from validateCarousel on `err.body`.
     getStudioStatus: () => API.request('/studio/status'),
+    /** What needs the owner, from columns only (src/services/attention.ts): the Studio's items and `counts.studio` are read from it. */
+    getAttention: () => API.request('/attention'),
     getStudioLessons: () => API.request('/studio/lessons'),
     getStudioLesson: (id) => API.request(`/studio/lessons/${encodeURIComponent(id)}`),
     scanStudioLibrary: () => API.request('/studio/scan', { method: 'POST' }),

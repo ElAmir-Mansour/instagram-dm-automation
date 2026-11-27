@@ -238,6 +238,49 @@ describe('a Mac-brain tenant (the owner)', () => {
     });
 });
 
+describe('a Mac that is signed out (research USE-1)', () => {
+    const SIGN_IN = 'claude answered with an error: Failed to authenticate: OAuth session expired and could not be refreshed';
+    let flag: string | null;
+    beforeEach(() => {
+        flag = null;
+        db.routes.push([/^SELECT value, is_secret FROM app_settings WHERE key = \$1/, (p) => ({
+            rows: p[0] === 'mac.claude_signed_out_at' && flag ? [{ value: flag, is_secret: false }] : [],
+        })]);
+    });
+
+    it('does not fail the draft while Claude is signed out: it waits, asks nothing new, and says nothing is lost', async () => {
+        const view = await requestProposal(OWNER, { request: 'x', userId: null });
+        await advanceProposal(OWNER, view.id);
+        Object.assign(studioJobs[0]!, { status: 'failed', error: SIGN_IN });
+        flag = '2026-11-27T05:00:00.000Z';
+        await advanceProposal(OWNER, view.id);
+        await advanceProposal(OWNER, view.id);
+        assert.equal((await getProposal(OWNER, view.id))!.state, 'drafting');
+        assert.equal(studioJobs.length, 1, 'no second job while it is signed out');
+    });
+
+    it('asks Claude again, once, when it is signed in again: the flag is gone, so the re-queue advances it', async () => {
+        const view = await requestProposal(OWNER, { request: 'x', userId: null });
+        await advanceProposal(OWNER, view.id);
+        Object.assign(studioJobs[0]!, { status: 'failed', error: SIGN_IN });
+        await advanceProposal(OWNER, view.id);
+        assert.equal(studioJobs.length, 2);
+        assert.equal(studioJobs[1]!.payload.attempt, studioJobs[0]!.payload.attempt, 'the same attempt: a sign-in is not a bad answer');
+        assert.equal((await getProposal(OWNER, view.id))!.state, 'drafting');
+        await advanceProposal(OWNER, view.id);
+        assert.equal(studioJobs.length, 2, 'a pending job is not asked for twice');
+    });
+
+    it('still fails the draft for any other reason the job failed', async () => {
+        flag = '2026-11-27T05:00:00.000Z';
+        const view = await requestProposal(OWNER, { request: 'x', userId: null });
+        await advanceProposal(OWNER, view.id);
+        Object.assign(studioJobs[0]!, { status: 'failed', error: 'You have hit your limit' });
+        await advanceProposal(OWNER, view.id);
+        assert.equal((await getProposal(OWNER, view.id))!.state, 'failed');
+    });
+});
+
 describe('any other tenant', () => {
     it('is refused AI_NOT_CONFIGURED without a key, before a row is written', async () => {
         await assert.rejects(requestProposal(TENANT, { request: 'x', userId: null }), (err: unknown) => err instanceof ProposalError && err.code === 'AI_NOT_CONFIGURED' && err.status === 409);

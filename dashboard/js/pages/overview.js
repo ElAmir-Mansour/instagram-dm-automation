@@ -239,6 +239,9 @@ const OverviewPage = {
         // Where Meta sends the events, as the hourly check last stored it (no call to Meta): another project that uses the same Meta app can take Instagram away
         // while every connection above still reads "Connected" (src/services/metaWebhooks.ts).
         const healthP = this._settle(API.getTenantHealth());
+        // What in the Studio needs the owner (src/services/attention.ts): Claude signed out on the Mac, the worker offline, TikTok drafts, clips to review.
+        // Columns only on the server, no call to Meta. A failed read adds nothing here: the Studio's own strip and nav badge ask again.
+        const attentionP = this._settle(API.getAttention());
         const postsP = this._settle(API.getScheduledPosts());
         // 100, the route's cap: the default of 20 undercounted who is waiting.
         const threadsP = this._settle(API.getConversations({ limit: 100 }));
@@ -307,12 +310,12 @@ const OverviewPage = {
         // dailyP joins the wait here too: buildAlerts() reads it for the
         // trailing 7-day rate, and it was already being fetched in the same
         // tick for the chart, so this adds no extra round trip.
-        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP, healthP]).then(
-            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes]) => {
+        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP, healthP, attentionP]).then(
+            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes]) => {
                 if (!live()) return;
                 const host = this.region('briefing');
                 if (!host || statsRes.status !== 'fulfilled') return;
-                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes));
+                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes));
                 // Refresh lives inside the region it rewrites; keep focus on it.
                 const focus = UI.captureFocus(host);
                 host.innerHTML = esc(this.renderBriefing(alerts, new Date()));
@@ -633,7 +636,7 @@ const OverviewPage = {
      * Pushed in the order the checks run; `sortAlerts()` then puts what is
      * broken before what is late before what is merely worth knowing.
      */
-    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes) {
+    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes, healthRes, attentionRes) {
         const alerts = [];
         const startOfToday = this.localMidnight();
 
@@ -730,6 +733,20 @@ const OverviewPage = {
                 action: t('overview.alert.r2Fix'), target: 'settings', query: 's=platform&card=storage',
             });
         }
+
+        // 1e. The Studio's alarms (research USE-1, USE-4): Claude on the Mac signed out (the Monteur is waiting, and a stall of 12 days once went unnoticed), the
+        //     worker offline with work waiting, TikTok videos left in the inbox, clips waiting for review. From `GET /api/attention`, which reads columns only; a
+        //     failed read, or a server that does not have these items, adds nothing. Each is one alert with the server's sentence and ONE action.
+        const studioItems = attentionRes && attentionRes.status === 'fulfilled' && typeof Attention !== 'undefined' ? Attention.studioItems(attentionRes.value) : [];
+        const studioIcon = { mac_signed_out: 'key-round', worker_offline: 'laptop', tiktok_draft: 'music-2', reel_review: 'scissors' };
+        studioItems.forEach((item) => {
+            alerts.push({
+                level: Attention.studioLevel(item), icon: studioIcon[item.type] || 'info',
+                title: t(item.sentence.key, Attention.studioParams(item, (n) => UI.formatNumber(n))),
+                body: t(`${item.sentence.key}.body`),
+                action: t(item.action.verb), href: item.action.href,
+            });
+        });
 
         // 2. DMs that failed today. Asked for with `since` = local midnight
         //    (O9), so every row is today's; the client-side date check stays as
@@ -919,7 +936,10 @@ const OverviewPage = {
                                     ${a.target ? html`<button type="button" class="alert-link" data-action="app:navigate" data-target="${a.target}"${a.query ? html` data-query="${a.query}"` : ''}>
                                         ${a.action}
                                         <i data-lucide="arrow-right" aria-hidden="true"></i>
-                                    </button>` : ''}
+                                    </button>` : a.href ? html`<a class="alert-link" href="${a.href}">
+                                        ${a.action}
+                                        <i data-lucide="arrow-right" aria-hidden="true"></i>
+                                    </a>` : ''}
                                 </div>
                             </div>
                         `)}

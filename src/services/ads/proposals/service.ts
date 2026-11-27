@@ -29,6 +29,7 @@ import { jsonSchemaFor } from '../../llm/schema.js';
 import { isMacBrainAllowed } from '../../macBrain.js';
 import { THINK_MODEL } from '../../monteur/think.js';
 import { enqueueJob } from '../../studio/jobs.js';
+import { isClaudeSignedOut, isSignInFailure } from '../../studio/macHealth.js';
 import { publishedPlatforms } from '../../publishedIds.js';
 import { validateSpec } from '../spec.js';
 import { queueAdvance } from './advance.js';
@@ -179,6 +180,17 @@ export async function advanceProposal(creatorId: string, proposalId: string): Pr
             return;
         }
         if (job.status === 'pending' || job.status === 'claimed') return;
+        if (job.status === 'failed' && isSignInFailure(job.error)) {
+            // Claude is signed out: the draft waits (it expires after 24 h like any draft nobody moved), and is drafted again once Claude answers, not failed now:
+            // the flag's clearing advances it again (macHealth.ts `requeueSignInBlocked`), and then the flag is gone, so a new job is asked below.
+            if (await isClaudeSignedOut()) { log('info', 'ads.proposal_waiting_for_claude', { creator_id: creatorId, proposal_id: row.id }); return; }
+            await enqueueJob(pool, creatorId, 'ads_think', {
+                proposalId: row.id, attempt: row.attempt, task, purpose: purposeOf(task), model: THINK_MODEL,
+                system: prompt.system, user: prompt.user, schema: jsonSchemaFor(schema),
+            });
+            log('info', 'ads.proposal_mac_requeued', { creator_id: creatorId, proposal_id: row.id, attempt: row.attempt });
+            return;
+        }
         if (job.status === 'failed') { await fail(row, `Claude on the Mac could not draft it: ${job.error ?? 'the job failed'}`); return; }
         raw = job.result?.output;
         model = { via: 'mac', provider: 'anthropic', model: typeof job.result?.model === 'string' ? job.result.model : THINK_MODEL, effort: null, usd: null };

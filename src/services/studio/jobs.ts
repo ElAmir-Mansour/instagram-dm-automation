@@ -24,6 +24,7 @@ import { describeError, log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { isSignInFailure, noteMacJobDone, noteMacJobFailed, SIGNED_OUT_MESSAGE } from './macHealth.js';
 import { queueAdvance } from '../ads/proposals/advance.js';
 import { applyExplainerFailure, applyExplainerResult, isExplainerJobKind, type ExplainerApplyDeps } from '../explainers/apply.js';
 import {
@@ -412,6 +413,8 @@ export type CompleteOutcome = 'applied' | 'dropped' | 'already_done';
  */
 export async function completeJob(creatorId: string, jobId: string, result: unknown): Promise<CompleteOutcome> {
     let proposalId: string | null = null;
+    // An object, so what the transaction's callback sets is seen after it (a `let` assigned in a closure is narrowed to its initial null).
+    const finished: { job?: { kind: StudioJobKind; payload: unknown } } = {};
     const done = await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'done') return 'already_done';
@@ -468,10 +471,13 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
             [job.id, JSON.stringify(stored)]
         );
         log('info', 'studio.job_completed', { job_id: job.id, kind: job.kind, outcome });
+        finished.job = { kind: job.kind, payload: job.payload };
         return outcome;
     });
     // After the commit, never inside it: the advance reads the stored result, and may read Meta for the money rule.
     if (proposalId) queueAdvance(creatorId, proposalId, 'mac_done');
+    // Claude answered: if it was signed out it is not now, and what that blocked is put back (macHealth.ts). Never throws.
+    if (finished.job && done !== 'already_done') await noteMacJobDone(finished.job.kind, finished.job.payload);
     return done;
 }
 
@@ -1053,6 +1059,7 @@ async function applyMonteurRender(
 /** The worker gave up. Terminal: the operator re-presses the button once the cause is fixed. */
 export async function failJob(creatorId: string, jobId: string, error: string): Promise<void> {
     let proposalId: string | null = null;
+    const reported: { job?: { kind: StudioJobKind; payload: unknown } } = {};
     await withTransaction(async (client) => {
         const job = await lockJob(client, creatorId, jobId);
         if (job.status === 'failed') return;
@@ -1060,6 +1067,7 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
         if (job.status !== 'claimed') {
             throw new StudioError(409, `This job is ${job.status}; only a claimed job can fail.`);
         }
+        reported.job = { kind: job.kind, payload: job.payload };
         await client.query(
             `UPDATE studio_jobs SET status = 'failed', error = $2, progress = NULL, updated_at = NOW() WHERE id = $1`,
             [job.id, error]
@@ -1067,6 +1075,8 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
         await applyFailure(client, job, error);
         log('warn', 'studio.job_failed', { job_id: job.id, kind: job.kind });
     });
+    // Claude on the Mac is signed out: say so (the flag), once, before anything reacts to the failure (macHealth.ts). Never throws.
+    if (reported.job) await noteMacJobFailed(reported.job.kind, reported.job.payload, error);
     // The proposal is failed (or asked again) by its own advance, after this commits.
     if (proposalId) queueAdvance(creatorId, proposalId, 'mac_failed');
 }
@@ -1121,11 +1131,12 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
     } else if (job.kind === 'render_infographic') {
         const id = payloadId(job, 'infographicId');
         if (!id) return;
-        // Only while this job is the infographic's latest: a newer render is still on its way.
+        // Only while this job is the infographic's latest: a newer render is still on its way. A sign-in failure is said plainly, and is
+        // what puts the infographic back when Claude is signed in again (macHealth.ts `requeueSignInBlocked`).
         await exec.query(
             `UPDATE infographics SET status = 'failed', error = $3, updated_at = NOW()
               WHERE id = $1 AND creator_id = $2 AND job_id = $4 AND status IN ('writing', 'rendering')`,
-            [id, job.creator_id, error, job.id]
+            [id, job.creator_id, isMacBrainJob(job.kind, job.payload) && isSignInFailure(error) ? SIGNED_OUT_MESSAGE : error, job.id]
         );
     } else if (isExplainerJobKind(job.kind)) {
         // The explainer goes failed at the step this job was for, or a voice that hit Gemini's limit is queued again (explainers/apply.ts).

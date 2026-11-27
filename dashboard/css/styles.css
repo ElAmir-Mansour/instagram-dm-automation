@@ -2798,6 +2798,24 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
    supplies its own top padding, and doubling them would push the page down. */
 .page-prelude { padding: var(--space-5) var(--space-6) 0; }
 
+/* The Studio's alarm strip (App.renderStudioAlarm): Claude signed out on the Mac, the worker offline, TikTok drafts, clips to review. Same gutter as the
+   prelude above it. What is broken carries the danger edge, what is late the warning one; a list that wraps to one column at phone width. */
+.studio-alarm-host { padding: var(--space-5) var(--space-6) 0; }
+.studio-alarm-host[hidden] { display: none; }
+.studio-alarm { padding: var(--space-2) var(--space-4); }
+.studio-alarm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.studio-alarm-item {
+    display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+    padding-block: var(--space-2); padding-inline-start: var(--space-3);
+    border-inline-start: 3px solid var(--border-subtle);
+}
+.studio-alarm-item > [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex: none; }
+.studio-alarm-text { display: grid; gap: var(--space-1); flex: 1 1 18rem; min-inline-size: 0; }
+.studio-alarm-danger { border-inline-start-color: var(--danger); }
+.studio-alarm-danger > [data-lucide] { color: var(--danger-text); }
+.studio-alarm-warning { border-inline-start-color: var(--warning); }
+.studio-alarm-warning > [data-lucide] { color: var(--warning-text); }
+
 .health-strip { padding: var(--space-5); }
 .health-strip-head {
     display: flex; align-items: center; justify-content: space-between;
@@ -3236,6 +3254,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 
 @media (max-width: 768px) {
     .page-prelude { padding: var(--space-4) var(--space-4) 0; }
+    .studio-alarm-host { padding: var(--space-4) var(--space-4) 0; }
     .health-strip, .ops-card, .user-card { padding: var(--space-4); }
 
     /* Jobs and audit stop being wide tables and become cards. */
@@ -3278,6 +3297,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 
 @media (max-width: 400px) {
     .page-prelude { padding: var(--space-3) var(--space-3) 0; }
+    .studio-alarm-host { padding: var(--space-3) var(--space-3) 0; }
     .ops-card-actions, .user-card-actions { flex-direction: column; align-items: stretch; }
     /* At 375px the top bar holds a title, a role badge and the language toggle.
        The badge keeps its colour and its icon and drops the word — it is a

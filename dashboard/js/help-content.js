@@ -4022,6 +4022,66 @@ const HelpContent = {
                     },
                 },
                 {
+                    id: 'claude-signed-out',
+                    title: { ar: 'تنبيه: Claude على الماك مسجَّل الخروج', en: 'Alarm: Claude on the Mac is signed out' },
+                    body: {
+                        ar: [
+                            'ظهر لك في «اليوم» وفي رأس الاستوديو أن «Claude على جهاز الماك مسجَّل الخروج». معناها أن العامل شغّال وعلى الإنترنت، لكن برنامج Claude اللي يكتب عنه طلب منك تسجيل الدخول من جديد (يحصل لما تنتهي الجلسة). لهذا ما يقدر الاستوديو يكتب شي: لا اختيار المقاطع ولا الكابشن ولا الإنفوجرافيك ولا اقتراحات الإعلانات.',
+                            { ul: [
+                                'المونتور ينتظر ولا يغيّر النموذج. ما ينتقل إلى Gemini أو أي نموذج ثاني، ولا يحرق محاولاته: فيديوهاتك تبقى في مكانها لين يرجع Claude.',
+                                'أول إجابة ناجحة من Claude تشيل التنبيه وحدها، وترجّع الأعمال اللي وقفت بسبب الدخول (الإنفوجرافيك والاقتراحات والشروحات اللي فشلت قبل أقل من 3 أيام).',
+                                'وصلك إيميل مرة وحدة في اليوم ما دام التنبيه قائماً.',
+                            ] },
+                            { h: 'الحل' },
+                            { ol: [
+                                'على الماك افتح Terminal.',
+                                'اكتب الأمر التالي واتبع الصفحة اللي تفتح لتسجيل الدخول بحساب Claude.',
+                            ] },
+                            { code: 'claude /login', caption: 'تسجيل الدخول من جديد' },
+                            { code: 'launchctl kickstart -k gui/$(id -u)/com.aicourse.studio-worker', caption: 'ثم أعد تشغيل العامل إن لم يرجع العمل خلال دقائق' },
+                            { note: 'التطبيق يسأل Claude سؤالاً صغيراً كل نصف ساعة وهو مسجَّل الخروج، فيعرف وحده أنك دخلت. ما تحتاج تضغط شي.' },
+                        ],
+                        en: [
+                            'Today and the Studio header say “Claude on the Mac is signed out”. That means the worker is running and online, but the Claude program it writes with asked to be signed in again (it happens when the session expires). So the Studio can write nothing: no clip picks, captions, infographics or ad drafts.',
+                            { ul: [
+                                'The Monteur waits; it never switches models. It does not fall back to Gemini or any other model, and it does not burn its tries: your videos stay where they are until Claude is back.',
+                                'The first answer Claude gives clears the alarm by itself, and puts back the work the sign-in stopped (infographics, proposals and explainers that failed in the last 3 days).',
+                                'You get one email a day while the alarm stands.',
+                            ] },
+                            { h: 'How to fix it' },
+                            { ol: [
+                                'On the Mac open Terminal.',
+                                'Run the command below and follow the page it opens to sign in with your Claude account.',
+                            ] },
+                            { code: 'claude /login', caption: 'Sign in again' },
+                            { code: 'launchctl kickstart -k gui/$(id -u)/com.aicourse.studio-worker', caption: 'Then restart the worker if work does not resume within a few minutes' },
+                            { note: 'While signed out, the app asks Claude one tiny question every half hour, so it notices by itself that you signed in. There is nothing to press.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'worker-offline',
+                    title: { ar: 'تنبيه: عامل الاستوديو متوقف وفي أعمال تنتظره', en: 'Alarm: the worker is offline with work waiting' },
+                    body: {
+                        ar: [
+                            'يظهر هذا التنبيه لما ما يتصل العامل لأكثر من 30 دقيقة وفي نفس الوقت في أعمال انتظرته أكثر من 30 دقيقة. غالباً الماك نايم أو العامل واقف.',
+                            { ul: [
+                                'أيقظ الماك. العامل يكمّل لحاله ويأخذ الأعمال المنتظرة (راجع «لما ينام الجهاز» فوق).',
+                                'إذا الماك صاحي ولسا التنبيه موجود، أعد تشغيل العامل بالأمر في قسم التثبيت، وشوف السجل: `tail -f ~/Library/Logs/aicourse-studio-worker.log`.',
+                                'ما يضيع شي من الطابور. وترسل لك الخدمة إيميل مرة وحدة في اليوم ما دام الوضع كذا.',
+                            ] },
+                        ],
+                        en: [
+                            'This alarm shows when the worker has not called in for over 30 minutes **and** jobs have waited for it for over 30 minutes. Usually the Mac is asleep or the worker stopped.',
+                            { ul: [
+                                'Wake the Mac. The worker carries on by itself and takes the waiting jobs (see “When the computer sleeps” above).',
+                                'If the Mac is awake and the alarm stays, restart the worker with the command in the install section, and read the log: `tail -f ~/Library/Logs/aicourse-studio-worker.log`.',
+                                'Nothing in the queue is lost. You get one email a day while it lasts.',
+                            ] },
+                        ],
+                    },
+                },
+                {
                     id: 'several',
                     title: { ar: 'أكثر من عامل', en: 'Several workers' },
                     body: {

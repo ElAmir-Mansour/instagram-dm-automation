@@ -22,6 +22,45 @@ const Attention = {
     /** Meta's standard messaging window: a reply is allowed for 24 h after the customer's last message (DM plan §2). */
     WINDOW_MS: 24 * 60 * 60 * 1000,
 
+    /**
+     * The Studio's items in a `GET /api/attention` answer (src/services/attention.ts, research USE-1 and USE-4): Claude signed out on the Mac, the
+     * worker offline, TikTok drafts left in the inbox, clips waiting for review. The server sorts them (danger first, then the longest wait).
+     */
+    STUDIO_TYPES: ['mac_signed_out', 'worker_offline', 'tiktok_draft', 'reel_review'],
+
+    /**
+     * The Studio's items of an attention summary, in the server's order. Anything that is not an item with a sentence and one action to a screen of
+     * this dashboard (`#/...`) is left out: what the server sends is data, and a link from a response never reaches an `href` unchecked.
+     */
+    studioItems(summary) {
+        const items = summary && Array.isArray(summary.items) ? summary.items : [];
+        return items.filter((item) => item && Attention.STUDIO_TYPES.indexOf(item.type) !== -1
+            && item.sentence && typeof item.sentence.key === 'string'
+            && item.action && typeof item.action.verb === 'string' && typeof item.action.href === 'string' && item.action.href.indexOf('#/') === 0);
+    },
+
+    /** `counts.studio` as a whole number: the Studio nav item's badge. 0 for a server that does not send it. */
+    studioCount(summary) {
+        const n = summary && summary.counts ? Math.floor(Number(summary.counts.studio)) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+
+    /** The sentence's values for `t()`: numbers formatted with `format` (the page's own number formatter), the rest as text. Pure. */
+    studioParams(item, format) {
+        const out = {};
+        const params = item && item.sentence && item.sentence.params && typeof item.sentence.params === 'object' ? item.sentence.params : {};
+        Object.keys(params).forEach((key) => {
+            const value = params[key];
+            out[key] = typeof value === 'number' ? format(value) : String(value);
+        });
+        return out;
+    },
+
+    /** The one tone of a Studio item on screen: what is broken is danger, what is late is warning, what is merely waiting is info. */
+    studioLevel(item) {
+        return item && (item.severity === 'danger' || item.severity === 'warning') ? item.severity : 'info';
+    },
+
     /** The customer spoke last and nobody is going to answer unless a human does: the AI is off for this thread and the last message is theirs. */
     isWaiting(thread) {
         return !!thread && thread.is_bot_active === false && thread.last_message_direction === 'inbound';

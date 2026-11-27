@@ -189,7 +189,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.95',
+    ASSET_VERSION: '12.96',
 
     _modules: Object.create(null),
 
@@ -1336,6 +1336,8 @@ const App = {
         this.syncAdminGroup(this.currentPage || this.pageFromHash());
         if (admin) this.startAdminStatusPoll();
         else this.stopAdminStatusPoll();
+        // The Studio's alarms (Claude signed out, the worker offline, drafts and clips waiting) are every session's, not the admin's.
+        this.startStudioAttentionPoll();
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
@@ -1480,6 +1482,125 @@ const App = {
             this._adminStatusTimer = null;
         }
         this.renderAdminStatus(0);
+        // The Studio's alarm poll goes with it: every place that signs a session out (login, invite, the wizard) stops both, and a tab with no session has no alarms.
+        this.stopStudioAttentionPoll();
+    },
+
+    // ─── The Studio's alarms (research USE-1, USE-4) ─────────────────────────
+
+    /**
+     * How often the shell asks what in the Studio needs the owner, while the tab is visible. Slower than the admin dot: these are things that last
+     * hours (a Mac signed out, a draft left in the TikTok inbox), and the Overview and the Studio ask again themselves when opened.
+     */
+    STUDIO_ATTENTION_MS: 300000,
+    /** The screens the alarm strip is drawn on: the Studio and its tabs. */
+    STUDIO_PAGES: ['studio', 'monteur', 'infographics', 'explainers'],
+    /** An answer younger than this is not asked for again when a Studio screen opens. */
+    STUDIO_ATTENTION_FRESH_MS: 60000,
+    _studioTimer: null,
+    _studioAttention: null,
+    _studioAttentionAt: 0,
+    _studioAttentionSeq: 0,
+
+    /** The Studio's items of the last answer, in the server's order: `Attention.studioItems`, or none while nothing has been read. */
+    studioAlarmItems() {
+        return typeof Attention !== 'undefined' ? Attention.studioItems(this._studioAttention) : [];
+    },
+
+    /** The count on the Studio nav item: `counts.studio`. Hidden at zero, like the Inbox's, and the same accent: it is work waiting, not a failure. */
+    renderStudioNeeds() {
+        const n = typeof Attention !== 'undefined' ? Attention.studioCount(this._studioAttention) : 0;
+        const item = document.querySelector('.nav-item[data-page="studio"]');
+        if (!item) return;
+        let badge = item.querySelector('.nav-count');
+        if (!badge) {
+            if (n === 0) return;
+            badge = document.createElement('span');
+            badge.className = 'nav-count';
+            item.appendChild(badge);
+        }
+        badge.hidden = n === 0;
+        badge.innerHTML = esc(html`<span aria-hidden="true">${n > 99 ? '99+' : UI.formatNumber(n)}</span><span class="sr-only">${t('nav.studioNeeds', { n: UI.formatNumber(n) })}</span>`);
+    },
+
+    /**
+     * The strip above a Studio screen: one line per item with its sentence and its ONE action. Drawn only on the Studio's own screens, and removed
+     * everywhere else; a danger (Claude signed out) is announced as an alert, the rest are a quiet list.
+     */
+    renderStudioAlarm() {
+        const host = document.getElementById('studio-alarm');
+        if (!host) return;
+        const items = this.STUDIO_PAGES.indexOf(this.currentPage) !== -1 ? this.studioAlarmItems() : [];
+        if (items.length === 0) {
+            host.hidden = true;
+            host.innerHTML = '';
+            return;
+        }
+        const icon = { danger: 'key-round', warning: 'alert-triangle', info: 'info' };
+        host.hidden = false;
+        host.innerHTML = esc(html`
+            <section class="studio-alarm surface" aria-label="${t('studio.alarm.label')}">
+                <ul class="studio-alarm-list">
+                    ${items.map((item) => {
+                        const level = Attention.studioLevel(item);
+                        const params = Attention.studioParams(item, (n) => UI.formatNumber(n));
+                        return html`
+                            <li class="studio-alarm-item studio-alarm-${html.raw(level)}"${level === 'danger' ? html.raw(' role="alert"') : ''}>
+                                <i data-lucide="${icon[level]}" aria-hidden="true"></i>
+                                <span class="studio-alarm-text">
+                                    <strong dir="auto">${t(item.sentence.key, params)}</strong>
+                                    <span class="text-meta" dir="auto">${t(`${item.sentence.key}.body`)}</span>
+                                </span>
+                                <a class="btn btn-secondary btn-sm" href="${item.action.href}">${t(item.action.verb)}</a>
+                            </li>
+                        `;
+                    })}
+                </ul>
+            </section>
+        `);
+        UI.icons(host);
+    },
+
+    /** Ask the server, then redraw the badge and the strip. A failed read leaves what was shown: this is an alarm, and a failed read is not "all clear". */
+    async refreshStudioAttention() {
+        const seq = ++this._studioAttentionSeq;
+        try {
+            const summary = await API.request('/attention');
+            if (seq !== this._studioAttentionSeq) return;
+            this._studioAttention = summary;
+            this._studioAttentionAt = Date.now();
+            this.renderStudioNeeds();
+            this.renderStudioAlarm();
+        } catch { /* keep what was shown */ }
+    },
+
+    /** Opening a Studio screen: ask again unless the answer is fresh. */
+    refreshStudioAttentionIfStale() {
+        if (Date.now() - this._studioAttentionAt >= this.STUDIO_ATTENTION_FRESH_MS) this.refreshStudioAttention();
+    },
+
+    /** Start asking, once: now, then every STUDIO_ATTENTION_MS while the tab is visible. */
+    startStudioAttentionPoll() {
+        if (this._studioTimer) return;
+        this.refreshStudioAttention();
+        this._studioTimer = setInterval(() => {
+            if (document.visibilityState === 'visible') this.refreshStudioAttention();
+        }, this.STUDIO_ATTENTION_MS);
+        // A page's timer is a number, which has no unref; a test's is a Timeout, and must not keep its process alive for five minutes.
+        if (this._studioTimer && typeof this._studioTimer.unref === 'function') this._studioTimer.unref();
+    },
+
+    /** Stop asking and forget the answer: a signed-out tab, the wizard and another tenant have none to show. */
+    stopStudioAttentionPoll() {
+        if (this._studioTimer) {
+            clearInterval(this._studioTimer);
+            this._studioTimer = null;
+        }
+        this._studioAttentionSeq += 1;
+        this._studioAttention = null;
+        this._studioAttentionAt = 0;
+        this.renderStudioNeeds();
+        this.renderStudioAlarm();
     },
 
     /**
@@ -1633,6 +1754,9 @@ const App = {
     resetTenantState() {
         // The waiting count is the previous tenant's; the next inbox or Overview read restates it.
         this.setInboxWaiting(0);
+        // So are the Studio's alarms: forget them, and ask again for the new tenant.
+        this.stopStudioAttentionPoll();
+        this.startStudioAttentionPoll();
         Object.keys(this.pages).forEach((key) => {
             let instance;
             try {
@@ -2108,6 +2232,10 @@ const App = {
                 console.warn('Health strip failed:', err);
             });
         }
+
+        // The Studio's alarm strip, the same way: above the page, outside what the page replaces, and gone on every other screen.
+        this.renderStudioAlarm();
+        if (this.STUDIO_PAGES.indexOf(page) !== -1) this.refreshStudioAttentionIfStale();
 
         try {
             // Most pages' render() is async; a throw after its first await
