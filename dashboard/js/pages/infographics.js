@@ -178,23 +178,11 @@ const InfographicsPage = {
     },
 
     // ─── Markup: toolbar, worker, new ────────────────────────────────────────
-    /** The Studio's tab bar with Infographics current; studio.js, monteur.js and explainers.js list the same links. */
+    /** The Studio's tab bar with Infographics current, from the one registry (`Shell.AREAS.studio`). */
     toolbarMarkup() {
-        const tab = (key, href, icon, label) => html`
-            <a class="btn btn-sm btn-ghost" href="${href}"
-               ${key === 'infographics' ? html.raw('aria-current="page"') : ''}>
-                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
-            </a>
-        `;
         return html`
             <div class="page-toolbar studio-toolbar">
-                <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
-                    ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
-                    ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
-                    ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
-                    ${tab('explainers', '#/explainers', 'lightbulb', t('studio.tabs.explainers'))}
-                    ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
-                </nav>
+                ${Shell.areaNav('studio', 'infographics')}
             </div>
         `;
     },

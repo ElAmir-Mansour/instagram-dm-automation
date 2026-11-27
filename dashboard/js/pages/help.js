@@ -115,9 +115,19 @@ const HelpPage = {
         return value[this.lang()] || value.ar || value.en || '';
     },
 
-    articles() {
+    /** Every article the content file has, whoever is looking: only `articles()` below is what a session may open. */
+    allArticles() {
         const c = this.content();
         return c && Array.isArray(c.articles) ? c.articles : [];
+    },
+
+    /**
+     * The articles THIS workspace has: the module map (`Shell.HELP_MODULES`) hides the ones about a module that is off, and the platform's own
+     * (`Shell.HELP_PLATFORM`) are the admin's. With every module on, and as the platform admin, that is all of them.
+     */
+    articles() {
+        const ctx = typeof App !== 'undefined' && App && typeof App.shellContext === 'function' ? App.shellContext() : null;
+        return this.allArticles().filter((a) => Shell.helpVisible(a.slug, ctx));
     },
 
     groups() {
@@ -174,7 +184,9 @@ const HelpPage = {
         const r = route || this.route;
         const article = r.slug ? this.article(r.slug) : null;
         const section = article ? this.sectionOf(article, r.section) : null;
-        return { article, section, missing: !!r.slug && !article };
+        // `hidden`: the article exists, but about a module this workspace has not got (or the platform's): a note that says so, not "not found".
+        const hidden = !!r.slug && !article && this.allArticles().some((a) => a.slug === r.slug);
+        return { article, section, missing: !!r.slug && !article, hidden };
     },
 
     href(slug, section) {
@@ -208,7 +220,9 @@ const HelpPage = {
     /** `label` arrives already escaped (it came out of esc()'s output). */
     linkHtml(slug, section, label) {
         const target = this.article(slug);
-        const title = target ? esc(this.text(target.title)) : '';
+        // A link to an article this workspace does not have is its words, not a link (a hidden one still has a title to say).
+        const known = target || this.allArticles().find((a) => a.slug === slug) || null;
+        const title = known ? esc(this.text(known.title)) : '';
         const text = label || title || esc(slug);
         if (!target) return text;
         const sec = this.sectionOf(target, section) ? section : '';
@@ -219,7 +233,7 @@ const HelpPage = {
     plain(value) {
         return String(value === null || value === undefined ? '' : value)
             .replace(this.LINK_RE, (match, slug, section, label) => {
-                const target = this.article(slug);
+                const target = this.article(slug) || this.allArticles().find((a) => a.slug === slug) || null;
                 return label || (target ? this.text(target.title) : slug);
             })
             .replace(/\*\*/g, '')
@@ -478,9 +492,9 @@ const HelpPage = {
     listMarkup() {
         if (this.tokens(this.query).length) return this.resultsMarkup(this.search(this.query));
         const current = this.resolve().article;
-        const missing = this.resolve().missing;
+        const { missing, hidden } = this.resolve();
         return html`
-            ${missing ? html`<p class="help-notice" role="status">${t('help.notFound')}</p>` : ''}
+            ${missing ? html`<p class="help-notice" role="status">${hidden ? t('shell.helpNotInWorkspace') : t('help.notFound')}</p>` : ''}
             ${this.groups().map((g) => {
                 const list = this.articles().filter((a) => a.group === g.id);
                 if (!list.length) return '';
@@ -546,6 +560,12 @@ const HelpPage = {
     welcomeMarkup() {
         const c = this.content();
         const popular = ((c && c.popular) || []).map((slug) => this.article(slug)).filter(Boolean);
+        // A workspace without Studio or TikTok would see a front page of two cards: top it up from the articles every workspace has.
+        for (const slug of Shell.POPULAR_FALLBACK) {
+            if (popular.length >= Shell.POPULAR_COUNT) break;
+            const more = this.article(slug);
+            if (more && !popular.includes(more)) popular.push(more);
+        }
         return html`
             <section class="help-welcome surface" aria-labelledby="help-welcome-title">
                 <h2 class="help-article-title" id="help-welcome-title">${t('help.welcome.title')}</h2>

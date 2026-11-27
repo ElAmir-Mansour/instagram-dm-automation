@@ -508,8 +508,9 @@ describe('Ads tests: the routed tab', () => {
     it('is #/ads_tests, an Ads page (the Ads item stays current), and a tab in the shared Ads bar', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         assert.match(app, /ads_tests: \{ src: 'ads_tests', page: \(\) => AdsTestsPage, navAs: 'ads' \}/);
-        const tabs = readFileSync('dashboard/js/pages/ads_campaigns.js', 'utf8');
-        assert.match(tabs, /key: 'tests', href: '#\/ads_tests', icon: 'split', label: 'ads\.tabs\.tests'/);
+        // The nine Ads tabs now live in the shell registry (`Shell.AREAS.ads`), which `AdsTabs` reads.
+        const tabs = readFileSync('dashboard/js/shell.js', 'utf8');
+        assert.match(tabs, /key: 'tests', page: 'ads_tests', href: '#\/ads_tests', icon: 'split', label: 'ads\.tabs\.tests'/);
         const page = readFileSync(PAGE, 'utf8');
         assert.match(page, /AdsTabs\.markup\('tests'\)/);
         assert.match(page, /AdsTests\.mount\(document\.getElementById\('ads-tests-host'\)\)/);

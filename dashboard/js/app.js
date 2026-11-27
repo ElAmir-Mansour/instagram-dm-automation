@@ -194,7 +194,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.13',
+    ASSET_VERSION: '13.22',
 
     _modules: Object.create(null),
 
@@ -1202,12 +1202,16 @@ const App = {
                 // Where this tenant is in the setup wizard, and whether this session is sent to it. Null when the server could
                 // not say (an older deployment): the dashboard then gates nothing.
                 onboarding: (me && me.onboarding && typeof me.onboarding === 'object') ? me.onboarding : null,
+                // The modules this workspace has (`inbox`, `studio`, `ads` ...) and what kind of workspace it is. Null when the server did not say:
+                // the shell then shows everything (fail open, `Shell.hasModule`), because a guess of "off" would take screens from people who have them.
+                modules: (me && Array.isArray(me.modules)) ? me.modules : null,
+                workspace: (me && me.workspace && typeof me.workspace === 'object') ? me.workspace : null,
                 available: true,
             };
             this.rememberGated(this.mustOnboard());
         } catch (err) {
             if (err && err.status === 401) return false;
-            this.session = { userId: null, email: '', role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
+            this.session = { userId: null, email: '', role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, modules: null, workspace: null, available: false };
         }
         return true;
     },
@@ -1326,6 +1330,33 @@ const App = {
         return !!(this.session && this.session.available && this.session.role === 'platform_admin');
     },
 
+    /** What this session can see, for the shell registry (`Shell.*`): `{ modules, role, admin }`. `modules` null = everything on. */
+    shellContext() {
+        return Shell.context(this.session, { role: this.tenantRole(), admin: this.isAdmin() });
+    },
+
+    /** Does this workspace have the module? True when the server named none (fail open). */
+    hasModule(id) {
+        return Shell.hasModule(this.shellContext(), id);
+    },
+
+    /**
+     * An API call answered 404 MODULE_OFF (or the Ads / Explainers switch's own code): the workspace lost a module while this page was
+     * open. Re-read the session at most once every 10 s, and if the page on screen is no longer visible, say so and go Today.
+     */
+    async moduleWentOff() {
+        const now = Date.now();
+        if (this._moduleOffAt && now - this._moduleOffAt < 10000) return;
+        this._moduleOffAt = now;
+        const ok = await this.refreshSession();
+        if (!ok) return;
+        const page = this.currentPage;
+        if (page && !Shell.canSee(page, this.shellContext())) {
+            UI.toast(t('shell.moduleOffNow'));
+            this.go(this.DEFAULT_PAGE);
+        }
+    },
+
     /** No tenants exist yet — a fresh deployment with nothing but a password. */
     needsSetup() {
         return !!(this.session && this.session.available && this.session.tenants.length === 0);
@@ -1354,17 +1385,9 @@ const App = {
             el.classList.toggle('hidden', !admin);
         });
 
-        // Items only the workspace owner can use (Ads): the link is not there rather than there and refused.
-        const owner = this.canAdminister();
-        document.querySelectorAll('[data-owner-only]').forEach((el) => {
-            el.classList.toggle('hidden', !owner);
-        });
-
-        // Items an operator or an owner can use but a viewer cannot (Brand): the link is not there rather than there and refused.
-        const operator = this.canOperate();
-        document.querySelectorAll('[data-operator-only]').forEach((el) => {
-            el.classList.toggle('hidden', !operator);
-        });
+        // The menu: one registry decides it from the workspace's modules and the person's role (Shell.PAGES). A link that is not theirs
+        // is not there rather than there and refused: Ads is the owner's, Brand an operator's, and a module the workspace has not got is none.
+        Shell.applyNav(document, this.shellContext());
 
         // Affordances that need a real user account rather than the shared
         // dashboard password — currently just "change my password".
@@ -1573,8 +1596,10 @@ const App = {
     },
 
     /**
-     * The strip above a Studio screen: one line per item with its sentence and its ONE action. Drawn only on the Studio's own screens, and removed
-     * everywhere else; a danger (Claude signed out) is announced as an alert, the rest are a quiet list.
+     * The strip above a Studio screen: one line per item with its sentence and its ONE action. The whole list is drawn ONCE, on the Studio's
+     * first tab (Carousels, `#/studio`); on the other Studio screens it is a single line that says how many and links there (QA-12: it took a
+     * third of a phone's first screen on all five tabs). Removed everywhere else; a danger (Claude signed out) is announced as an alert, the rest
+     * are a quiet list.
      */
     renderStudioAlarm() {
         const host = document.getElementById('studio-alarm');
@@ -1587,6 +1612,23 @@ const App = {
         }
         const icon = { danger: 'key-round', warning: 'alert-triangle', info: 'info' };
         host.hidden = false;
+        if (this.currentPage !== 'studio' || this.hashParam('tab') === 'settings') {
+            const levels = items.map((item) => Attention.studioLevel(item));
+            const level = levels.includes('danger') ? 'danger' : (levels.includes('warning') ? 'warning' : 'info');
+            host.innerHTML = esc(html`
+                <section class="studio-alarm studio-alarm-line surface" aria-label="${t('studio.alarm.label')}">
+                    <ul class="studio-alarm-list">
+                        <li class="studio-alarm-item studio-alarm-${html.raw(level)}"${level === 'danger' ? html.raw(' role="alert"') : ''}>
+                            <i data-lucide="${icon[level]}" aria-hidden="true"></i>
+                            <span class="studio-alarm-text"><strong dir="auto">${t('nav.studioNeeds', { n: UI.formatNumber(items.length) })}</strong></span>
+                            <a class="btn btn-secondary btn-sm" href="#/studio">${t('shell.studioAlarmOpen')}</a>
+                        </li>
+                    </ul>
+                </section>
+            `);
+            UI.icons(host);
+            return;
+        }
         host.innerHTML = esc(html`
             <section class="studio-alarm surface" aria-label="${t('studio.alarm.label')}">
                 <ul class="studio-alarm-list">
@@ -2159,6 +2201,13 @@ const App = {
         // A platform-admin page reached by typing the hash, by an account that
         // is not one: send them home rather than to a guaranteed 403.
         if (this.pages[page].adminOnly && !this.isAdmin()) {
+            page = this.DEFAULT_PAGE;
+            if (location.hash !== `#/${page}`) history.replaceState(null, '', `#/${page}`);
+        }
+
+        // A page of a module this workspace has not got (typed, bookmarked, or from an old link), or above this person's role: say so, and go Today.
+        if (!Shell.canSee(page, this.shellContext())) {
+            UI.toast(t('shell.moduleOff'));
             page = this.DEFAULT_PAGE;
             if (location.hash !== `#/${page}`) history.replaceState(null, '', `#/${page}`);
         }

@@ -141,6 +141,7 @@ function load(lang: 'ar' | 'en' = 'ar', hash = '#/help', extra: string[] = []): 
         'dashboard/js/components.js',
         'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
+        'dashboard/js/shell.js',
         'dashboard/js/help-content.js',
         'dashboard/js/pages/help.js',
         ...extra,
