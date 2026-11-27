@@ -65,6 +65,11 @@ export interface ExplainerSummary {
     updated_at: Date | string;
     /** The first scene's chosen picture. */
     thumb_url: string | null;
+    /**
+     * ISO time, set only on a `scheduled` explainer whose every post is `PUBLISHED`: the latest of their times. The status stays `scheduled`
+     * (the state machine has no later step); the screens say "Posted <date>" instead of "Scheduled". Null while any post is still to go or failed.
+     */
+    posted_at: string | null;
 }
 
 export interface SceneView {
@@ -131,7 +136,7 @@ const DETAIL_SQL = `
      WHERE e.id = $1 AND e.creator_id = $2`;
 
 const SUMMARY_SQL = `
-    SELECT e.id, e.status, e.title, e.topic, e.language, e.length_tier, (e.draft->>'est_seconds')::float8 AS est_seconds, e.updated_at,
+    SELECT e.id, e.status, e.title, e.topic, e.language, e.length_tier, (e.draft->>'est_seconds')::float8 AS est_seconds, e.updated_at, e.schedule,
            (SELECT s.picture->>'url' FROM explainer_scenes s WHERE s.explainer_id = e.id AND s.creator_id = e.creator_id AND s.position = 0) AS thumb_url,
            CASE WHEN e.status = 'drawing' THEN (SELECT COUNT(*)::int FROM explainer_scenes s WHERE s.explainer_id = e.id AND s.creator_id = e.creator_id AND s.draw_status = 'done') END AS drawn,
            CASE WHEN e.status = 'drawing' THEN (SELECT COUNT(*)::int FROM explainer_scenes s WHERE s.explainer_id = e.id AND s.creator_id = e.creator_id) END AS total
@@ -142,8 +147,35 @@ const SUMMARY_SQL = `
 
 /** GET /explainers: the newest ones, as the list shows them. */
 export async function listExplainers(creatorId: string): Promise<ExplainerSummary[]> {
-    const { rows } = await pool.query<Omit<ExplainerSummary, 'progress'> & { drawn: number | null; total: number | null }>(SUMMARY_SQL, [creatorId]);
-    return rows.map(({ drawn, total, ...rest }) => ({ ...rest, progress: drawn !== null && total !== null ? { done: drawn, total } : null }));
+    const { rows } = await pool.query<Omit<ExplainerSummary, 'progress' | 'posted_at'> & { drawn: number | null; total: number | null; schedule: ExplainerSchedule | null }>(SUMMARY_SQL, [creatorId]);
+    const posted = await postedAtOf(pool, creatorId, rows);
+    return rows.map(({ drawn, total, schedule: _schedule, ...rest }) => ({
+        ...rest, progress: drawn !== null && total !== null ? { done: drawn, total } : null, posted_at: posted.get(rest.id) ?? null,
+    }));
+}
+
+/**
+ * The scheduled explainers among `items` whose posts have ALL gone out, with the time of the last one. One read of `scheduled_posts` for the lot. A post that
+ * was deleted from the Scheduler, or is still pending, held or failed, means "not posted": the explainer keeps saying Scheduled.
+ */
+export async function postedAtOf(
+    exec: Exec, creatorId: string, items: readonly { id: string; status: ExplainerStatus; schedule: ExplainerSchedule | null }[],
+): Promise<Map<string, string>> {
+    const wanted = items.filter((i) => i.status === 'scheduled' && Array.isArray(i.schedule?.row_ids) && i.schedule!.row_ids.length > 0);
+    const out = new Map<string, string>();
+    if (!wanted.length) return out;
+    const ids = [...new Set(wanted.flatMap((i) => i.schedule!.row_ids))];
+    const { rows } = await exec.query<{ id: string; status: string; scheduled_time: Date | string }>(
+        'SELECT id, status, scheduled_time FROM scheduled_posts WHERE creator_id = $1 AND id = ANY($2::uuid[])', [creatorId, ids]
+    );
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (const item of wanted) {
+        const posts = item.schedule!.row_ids.map((rid) => byId.get(rid));
+        if (posts.some((p) => !p || p.status !== 'PUBLISHED')) continue;
+        const last = Math.max(...posts.map((p) => new Date(p!.scheduled_time).getTime()));
+        if (Number.isFinite(last)) out.set(item.id, new Date(last).toISOString());
+    }
+    return out;
 }
 
 /** What a scene needs to be held to the draft rules: the stored row and the owner's edit of it both have it. */
@@ -174,13 +206,14 @@ function busyMacNote(row: DetailRow, worker: ExplainerView['worker'], now: numbe
 
 /** The explainer and its scenes as the dashboard reads them. Pure: what is read from elsewhere (the worker, the allowance, the clock) is handed in. */
 export function presentExplainer(
-    row: DetailRow, scenes: readonly ExplainerSceneRow[], extras: { worker?: ExplainerView['worker']; allowance?: unknown; now?: number } = {}
+    row: DetailRow, scenes: readonly ExplainerSceneRow[], extras: { worker?: ExplainerView['worker']; allowance?: unknown; now?: number; posted_at?: string | null } = {}
 ): ExplainerView {
     const problems = row.draft ? checkDraft(draftInputOf(row, scenes), { tier: row.length_tier, language: row.language }).problems : [];
     const drawn = scenes.filter((s) => s.draw_status === 'done').length;
     return {
         id: row.id, status: row.status, title: row.title, topic: row.topic, language: row.language, length_tier: row.length_tier, est_seconds: row.draft?.est_seconds ?? null,
         progress: row.status === 'drawing' ? { done: drawn, total: scenes.length } : null, updated_at: row.updated_at, thumb_url: scenes[0]?.picture?.url ?? null,
+        posted_at: extras.posted_at ?? null,
         failed_step: row.failed_step, error: row.error, sound_mode: row.sound_mode, music_track_id: row.music_track_id, subtitles: row.subtitles, notes: row.notes,
         source_links: row.source_links, draft: row.draft, draft_version: row.draft_version, audio: row.audio, audio_stale: isAudioStale(row), render: row.render,
         render_stale: row.render !== null && (row.render.version !== row.draft_version || row.render.sound_mode !== row.sound_mode), schedule: row.schedule,
@@ -196,7 +229,8 @@ export function presentExplainer(
 export async function loadView(exec: Exec, creatorId: string, id: string, extras: { worker?: ExplainerView['worker']; allowance?: unknown; now?: number } = {}): Promise<ExplainerView> {
     const { rows } = await exec.query<DetailRow>(DETAIL_SQL, [id, creatorId]);
     if (!rows[0]) throw notFound();
-    return presentExplainer(rows[0], await loadScenes(exec, creatorId, id), extras);
+    const posted = await postedAtOf(exec, creatorId, [rows[0]]);
+    return presentExplainer(rows[0], await loadScenes(exec, creatorId, id), { ...extras, posted_at: posted.get(id) ?? null });
 }
 
 const notFound = (): ExplainerError => new ExplainerError('EXPLAINER_NOT_FOUND', 'No such explainer.');

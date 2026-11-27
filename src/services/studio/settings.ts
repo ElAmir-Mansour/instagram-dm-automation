@@ -177,6 +177,7 @@ export function settingsProblems(s: StudioSettings): string[] {
 
     if (!isTimeZone(schedule?.timezone)) problems.push('schedule.timezone must be a timezone like Europe/London or America/New_York');
     times(schedule?.slots, 'schedule.slots', 1, 8);
+    if (schedule?.tiktok_default !== undefined && typeof schedule.tiktok_default !== 'boolean') problems.push('schedule.tiktok_default must be true or false');
 
     if (!isPlainObject(library)) problems.push('library must be an object');
     else if (library.root !== null) {

@@ -72,6 +72,8 @@ interface World {
     container: Json;
 }
 
+const escapedText = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 function world(options: { lang?: 'ar' | 'en'; hash?: string; api?: Record<string, (...args: Json[]) => unknown>; admin?: boolean; files?: string[] } = {}): World {
     const lang = options.lang ?? 'en';
     const calls: World['calls'] = [];
@@ -208,6 +210,34 @@ describe('Explainers: the list', () => {
             assert.equal(words.size, 9, 'nine different words');
         });
     }
+
+    for (const lang of ['en', 'ar'] as const) {
+        it(`a scheduled explainer whose every post is out says Posted with the date, not Scheduled (${lang})`, () => {
+            const { P, t, h } = world({ lang });
+            const base = { id: 'i-s', status: 'scheduled', title: 'T', topic: 't', language: 'ar', length_tier: 'medium', est_seconds: 200, updated_at: '2026-11-20T10:00:00Z' };
+            const posted = String(P.cardMarkup({ ...base, posted_at: '2026-11-20T10:05:00Z' }));
+            const when = h.UI.formatDay('2026-11-20T10:05:00Z');
+            assert.ok(posted.includes(escapedText(t('explainers.status.posted', { when: P.lri(when) }))), 'says Posted <date>');
+            assert.ok(!posted.includes(`>${t('explainers.status.scheduled')}<`), 'no "Scheduled" badge');
+            assert.match(posted, /badge-success/);
+            const waiting = String(P.cardMarkup({ ...base, posted_at: null }));
+            assert.ok(waiting.includes(`>${t('explainers.status.scheduled')}<`), 'still scheduled while a post is to go');
+            const notScheduled = String(P.cardMarkup({ ...base, status: 'ready', posted_at: '2026-11-20T10:05:00Z' }));
+            assert.ok(!notScheduled.includes(t('explainers.status.posted', { when })), 'posted_at only means something on a scheduled one');
+        });
+    }
+
+    it('the detail says "Posted <when>" instead of "Scheduled for <when>" once it is out', () => {
+        const w = world();
+        const sched = { scheduled_time: '2026-11-20T10:00:00Z', group_id: 'g', row_ids: ['p1'] };
+        open(w, { status: 'scheduled', schedule: sched, posted_at: '2026-11-20T10:05:00Z' }, 'publish');
+        w.P.rowsLoaded = true;
+        const out = String(w.P.scheduledMarkup());
+        assert.ok(!/Scheduled for/.test(out), 'no "Scheduled for" once it is out');
+        assert.match(out, /Posted/);
+        open(w, { status: 'scheduled', schedule: sched, posted_at: null }, 'publish');
+        assert.match(String(w.P.scheduledMarkup()), /Scheduled for/);
+    });
 
     it('a running step says what it is doing: its own progress line, the Mac offline, or the allowance', () => {
         const { P, t } = world();

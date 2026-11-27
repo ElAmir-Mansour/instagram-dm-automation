@@ -282,6 +282,7 @@ clip goes back to `rendering`). A caption-only change doesn't.
 type MonteurView = {
   settings: MonteurConfig; timezone: string;
   next_run: string | null;                       // ISO; null when off, or in folder mode with no folder
+  course_exhausted: boolean;                     // course mode and no lesson left to take (the rule `scanFor` uses: `courseExhausted`, daily.ts)
   last_scan: { at: string; added: number; skipped: number; missing: boolean } | null;
   worker: { online: boolean; lastSeen: string | null; name: string | null };
   pending: { scan: boolean; folder_pick: boolean };
@@ -689,6 +690,8 @@ This gives three behaviours:
 - A Run now after 07:00 counts as today's run.
 
 `next_run` is the next `run_at` instant after `now`.
+
+In course mode with every lesson already cut, the daily run queues nothing (`scanFor` returns null) and Run now answers 409. The view says so with `course_exhausted` (`courseExhausted` in `daily.ts`, the same `nextCourseLessons` read), and the page shows an amber "Nothing new to cut" pill instead of "Daily run on · Next run …". The page's subtitle follows `settings.mode`: "You approve each one" only in review mode.
 
 ## 8. The Analyst: `src/services/monteur/analyst.ts`
 

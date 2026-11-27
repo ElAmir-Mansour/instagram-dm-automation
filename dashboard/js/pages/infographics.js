@@ -236,9 +236,9 @@ const InfographicsPage = {
                     <div class="form-group">
                         <label class="form-label" for="ig-theme">${t('infographics.new.theme')}</label>
                         <select class="select" id="ig-theme" name="theme">
-                            ${option('both', t('infographics.theme.both'), true)}
-                            ${option('dark', t('infographics.theme.dark'), false)}
-                            ${option('light', t('infographics.theme.light'), false)}
+                            ${option('both', t('infographics.theme.both'), b.theme !== 'dark' && b.theme !== 'light')}
+                            ${option('dark', t('infographics.theme.dark'), b.theme === 'dark')}
+                            ${option('light', t('infographics.theme.light'), b.theme === 'light')}
                         </select>
                     </div>
                 </div>

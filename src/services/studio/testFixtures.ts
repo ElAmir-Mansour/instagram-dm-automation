@@ -86,7 +86,7 @@ export const ELAMIR_SETTINGS: StudioSettings = {
             swipe: 'اسحب',
         },
     },
-    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
+    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'], tiktok_default: false },
     library: { root: '/Users/elamir/Desktop/AI Course' },
     // His row holds his three reference carousels (P14: the built-in fallback they came from is gone), marked `reference: true`.
     examples: OWNER_REFERENCE_EXAMPLES(),
@@ -231,7 +231,7 @@ export const ELAMIR_SEED_SETTINGS: StudioSettings = {
             swipe: 'اسحب',
         },
     },
-    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
+    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'], tiktok_default: false },
     library: { root: '/Users/elamir/Desktop/AI Course' },
     examples: null,
     // MONTEUR.md §1. Off until the folder is chosen from the dashboard; the daily run at 07:00 and

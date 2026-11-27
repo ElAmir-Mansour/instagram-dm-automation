@@ -971,7 +971,7 @@ describe('Monteur — every string in Arabic and English, and the page wired int
     it('has every key the page asks for, in both dictionaries, with Arabic’s plural forms', () => {
         const s = loadMonteur('ar');
         const strings = s.I18N.strings as Record<string, Record<string, string>>;
-        const keys = new Set<string>(['nav.monteur', 'page.monteur.subtitle', 'studio.tabs.monteur']);
+        const keys = new Set<string>(['nav.monteur', 'page.monteur.subtitle', 'studio.tabs.monteur', 'monteur.subtitle.review', 'monteur.subtitle.auto']);
         const src = readFileSync('dashboard/js/pages/monteur.js', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
         for (const m of src.matchAll(/\bt\('([a-zA-Z0-9_.]+)'/g)) keys.add(m[1]!);
         for (const state of s.Page.SOURCE_STATES) keys.add(`monteur.source.state.${state}`);
@@ -1038,16 +1038,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/explainers"\s+aria-current/);
     });
 
-    it('ships at cache version 13.02: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 13.03: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '13.02');
+        assert.equal(version, '13.03');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['13.02']);
+        assert.deepEqual([...new Set(refs)], ['13.03']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.02'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['13.03'], page);
         }
     });
 });
@@ -1968,5 +1968,50 @@ describe('Monteur — a failure is a sentence, with the raw text behind Details'
         assert.equal(plain.message, 'Plain.', 'an uncoded refusal is what it was');
         assert.equal(plain.hint, 'HTTP 500', 'with the status as the hint when there is no next step');
         s.Page.destroy();
+    });
+});
+
+describe('Monteur — status that tells the truth (CP-S3)', () => {
+    it('course library used up: an amber pill and the reason, no next run, and Run now is off', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ source: 'course', folder: null }), course_exhausted: true }));
+        const page = await renderPage(s);
+        const pill = tagOf(page, 'mt-run-pill');
+        assert.ok(pill.includes('health-warn') && !pill.includes('health-fresh'), 'amber, not green');
+        assert.ok(page.includes(s.t('monteur.run.exhaustedPill')));
+        assert.ok(!page.includes(s.t('monteur.run.on')), 'no "Daily run on"');
+        assert.ok(page.includes(escaped(s.t('monteur.run.exhausted'))));
+        assert.ok(!page.includes(escaped(s.t('monteur.run.next', { when: s.Page.zoneLabel(RIYADH_NEXT_RUN) }))), 'no promised next run');
+        assert.ok(/\sdisabled\b/.test(tagOf(page, 'mt-run-now')), 'a run would only be refused');
+        s.Page.destroy();
+    });
+
+    it('lessons left, or a folder source, or switched off: nothing changes', async () => {
+        for (const view of [
+            monteurView({ settings: settings({ source: 'course', folder: null }), course_exhausted: false }),
+            monteurView({ settings: settings({ source: 'folder' }), course_exhausted: true }),
+            monteurView({ settings: settings({ source: 'course', enabled: false }), course_exhausted: true }),
+        ]) {
+            const s = loadMonteur('en');
+            stub(s, view);
+            const page = await renderPage(s);
+            assert.ok(!tagOf(page, 'mt-run-pill').includes('health-warn'));
+            assert.ok(!page.includes(escaped(s.t('monteur.run.exhausted'))));
+            s.Page.destroy();
+        }
+    });
+
+    it('the subtitle follows the saved mode: "You approve each one" only in review', async () => {
+        for (const [mode, lang] of [['review', 'en'], ['auto', 'en'], ['review', 'ar'], ['auto', 'ar']] as const) {
+            const s = loadMonteur(lang);
+            const sub = s.host('page-subtitle');
+            stub(s, monteurView({ settings: settings({ mode }) }));
+            await renderPage(s);
+            assert.equal(sub.textContent, `${s.t('page.monteur.subtitle')} ${s.t(`monteur.subtitle.${mode}`)}`, `${lang} ${mode}`);
+            if (mode === 'auto') assert.ok(!sub.textContent.includes(s.t('monteur.subtitle.review')), 'automatic mode promises no approval');
+            else assert.ok(sub.textContent.includes(s.t('monteur.subtitle.review')));
+            s.Page.destroy();
+        }
+        assert.ok(!loadMonteur('en').t('page.monteur.subtitle').includes('approve'), 'the neutral base says nothing about approval');
     });
 });

@@ -65,8 +65,13 @@ export type CtaConfig = {
     };
 };
 
-/** e.g. `{ timezone: 'Europe/London', slots: ['12:00', '18:00'] }`. */
-export type ScheduleConfig = { timezone: string; slots: string[] };
+/**
+ * e.g. `{ timezone: 'Europe/London', slots: ['12:00', '18:00'], tiktok_default: false }`.
+ * `tiktok_default` is what Studio's schedule dialog pre-selects for TikTok: true = send it (queued as an inbox draft, or at the same time once
+ * TikTok has audited the app), false = "Don't post to TikTok". Off by default: the owner posts TikTok by hand. Not profile-owned: only
+ * `schedule.timezone` is (`STUDIO_PROFILE_PATHS`), so this is stored in the row and survives every profile save.
+ */
+export type ScheduleConfig = { timezone: string; slots: string[]; tiktok_default: boolean };
 
 /** The folder the worker scans; `null` = not set. */
 export type LibraryConfig = { root: string | null };
@@ -357,7 +362,7 @@ export function defaultStudioSettings(): StudioSettings {
                 swipe: 'Swipe',
             },
         },
-        schedule: { timezone: 'UTC', slots: ['12:00', '18:00'] },
+        schedule: { timezone: 'UTC', slots: ['12:00', '18:00'], tiktok_default: false },
         library: { root: null },
         examples: null,
         monteur: defaultMonteurConfig(),

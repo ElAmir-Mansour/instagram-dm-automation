@@ -49,7 +49,7 @@ const basesFor = (s: StudioSettings): readonly [string, CreatorProfile][] => [
 
 /** Settings fields the profile does not own: how the agents work, the carousel template, the CTA words, the look of illustrated explainers (v59). */
 const STUDIO_KEPT = [
-    'brand.signature', 'brand.palette', 'brand.colors', 'brand.fonts.mono', 'brand.direction', 'brand.theme', 'cta', 'schedule.slots', 'library', 'examples',
+    'brand.signature', 'brand.palette', 'brand.colors', 'brand.fonts.mono', 'brand.direction', 'brand.theme', 'cta', 'schedule.slots', 'schedule.tiktok_default', 'library', 'examples',
     'monteur', 'infographic.platforms', 'explainer',
 ];
 const GROWTH_KEPT = ['keywords', 'hashtag_sets', 'competitors'];

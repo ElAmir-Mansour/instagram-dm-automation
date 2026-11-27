@@ -4375,6 +4375,7 @@ The render payload carries `motion` (`layers` by default, or `still`; the studio
    A platform that is not connected is **not checked** here: its row fails in Posts, saying so, and does not keep the others off (**`schedule.ts:137`**).
 6. **The credit line.** When the track the sound used requires credit (`credit_required`), its `credit` goes at the **end of every caption** (`withCredit`, **`schedule.ts:57`**, applied at **`schedule.ts:126-130`**). The credit goes in whole: when body and credit do not fit a platform's limit (2,200 characters; 5,000 for a YouTube description) the **body** is cut at a word and ends in an ellipsis, never the credit, and the outcome lists which captions were `trimmed`.
 7. `ready → scheduled`, with `{ scheduled_time, group_id, row_ids }` (**`schedule.ts:151-152`**). The audit row `explainer.scheduled` names the platforms, the time and the group (**`studio.ts:631`**).
+8. **"Posted" is read, never stored.** `scheduled` is the machine's last state: nothing moves it when the posts go out. Both views carry `posted_at` instead (`postedAtOf`, `src/services/explainers/explainers.ts`; the list, `loadView`): for a `scheduled` explainer, one read of its `row_ids` in `scheduled_posts`, and when EVERY row is `PUBLISHED` it is the latest of their times, else null (a pending, held or failed post, or one deleted from the Scheduler, keeps it "Scheduled"). The dashboard then shows "Posted Nov 20" on the card, the head badge and the publish step.
 
 ### 13.14 — Retry and delete
 

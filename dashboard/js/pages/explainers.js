@@ -422,8 +422,16 @@ const ExplainersPage = {
         return { writing: 'info', voicing: 'info', drawing: 'info', rendering: 'info', draft: 'accent', review: 'accent', ready: 'success', scheduled: 'neutral', failed: 'danger' }[status] || 'neutral';
     },
 
+    /** The server's `posted_at`: set only on a scheduled explainer whose every post is published. */
+    postedAt(item) {
+        return item && item.status === 'scheduled' && typeof item.posted_at === 'string' && item.posted_at ? item.posted_at : '';
+    },
+
     statusBadge(item) {
         const status = this.STATUSES.includes(item && item.status) ? item.status : 'draft';
+        const posted = this.postedAt(item);
+        // Scheduled is the last state the machine has; once every post is out the screen says so ("Posted Nov 20").
+        if (posted) return html`<span class="badge badge-success">${t('explainers.status.posted', { when: this.lri(UI.formatDay(posted)) })}</span>`;
         return html`<span class="badge badge-${html.raw(this.statusTone(status))}">${t(`explainers.status.${status}`)}</span>`;
     },
 
@@ -2119,9 +2127,11 @@ const ExplainersPage = {
     scheduledMarkup() {
         const d = this.detail;
         const when = d.schedule && d.schedule.scheduled_time ? UI.formatDateTime(d.schedule.scheduled_time, { zone: true, weekday: true }) : '';
+        const posted = this.postedAt(d);
         return html`
             <div class="ex-scheduled">
-                ${when ? html`<p class="ex-when"><i data-lucide="calendar-check" aria-hidden="true"></i> ${t('explainers.publish.scheduledFor', { when: this.lri(when) })}</p>` : ''}
+                ${posted ? html`<p class="ex-when"><i data-lucide="check-circle" aria-hidden="true"></i> ${t('explainers.publish.postedOn', { when: this.lri(UI.formatDateTime(posted, { zone: true, weekday: true })) })}</p>`
+                    : (when ? html`<p class="ex-when"><i data-lucide="calendar-check" aria-hidden="true"></i> ${t('explainers.publish.scheduledFor', { when: this.lri(when) })}</p>` : '')}
                 ${this.rowsError ? html`<p class="form-hint text-warning">${t('explainers.rows.failed')}</p>`
                     : (this.rows.length
                         ? html`<ul class="ex-rows" aria-label="${t('explainers.rows.label')}">${this.rows.map((r) => this.rowMarkup(r))}</ul>`

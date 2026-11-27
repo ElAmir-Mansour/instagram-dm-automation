@@ -86,6 +86,25 @@ describe('getMonteurView', () => {
         assert.equal((await getMonteurView(TENANT, NOW)).next_run, null);
     });
 
+    it('says the course library is used up when no lesson is left, from the rule the daily run uses', async () => {
+        let left: Record<string, unknown>[] = [{ video_path: '/c/1.1.mp4', lesson_no: '1.1', title: 'One' }];
+        db.routes.unshift([/^SELECT l\.video_path, l\.lesson_no, l\.title FROM course_lessons l/, () => ({ rows: left })]);
+        monteur = { ...monteur, source: 'course', folder: null };
+        assert.equal((await getMonteurView(TENANT, NOW)).course_exhausted, false, 'a lesson is left');
+        left = [];
+        const view = await getMonteurView(TENANT, NOW);
+        assert.equal(view.course_exhausted, true, 'every lesson already has its reels, or the library is empty');
+        assert.ok(view.next_run, 'next_run stays: the page decides what to say');
+    });
+
+    it('never calls a folder run used up, and does not read the library for it', async () => {
+        db.routes.unshift([/^SELECT l\.video_path, l\.lesson_no, l\.title FROM course_lessons l/, () => ({ rows: [] })]);
+        monteur = { ...monteur, source: 'folder', folder: '/v' };
+        db.statements.length = 0;
+        assert.equal((await getMonteurView(TENANT, NOW)).course_exhausted, false);
+        assert.equal(db.ran(/FROM course_lessons/).length, 0);
+    });
+
     it('lists each clip’s edits (MONTEUR.md §6.2), and [] for a clip that has none', async () => {
         const edits = [{ t: 4.2, kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }, { t: 9, kind: 'punch' }];
         clips = [clipRow({ edits }), clipRow({ id: 'c2', edits: null })];
