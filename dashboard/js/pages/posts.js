@@ -44,6 +44,13 @@ const PostsPage = {
     livePosts: [],
     scheduledError: null,
     liveError: null,
+    /**
+     * The Published feed is read when it is first opened, not with the queue: `GET /posts/live` asks Meta and took ~3 s, and the
+     * queue (what the owner came for) waited for it. `liveLoaded` is false until it has answered (or failed); `render()` resets it,
+     * so a refresh after a publish reads the feed again if the tab is open.
+     */
+    liveLoaded: false,
+    liveLoading: false,
     publishError: null,
     /**
      * The tenant's TikTok connection summary (GET /tiktok/connection), or null
@@ -124,6 +131,10 @@ const PostsPage = {
     QUEUE_POLL_MS: 15000,
     /** A row still in flight (publishing, processing, in TikTok's inbox) this long after its time no longer keeps the queue's poll alive. */
     STALE_IN_FLIGHT_MS: 2 * 24 * 60 * 60 * 1000,
+    /** The address whose `?filter=needs-you` has already been acted on, so a repaint of the same page does not scroll again. */
+    _filterHandled: '',
+    /** A TikTok video in the creator's inbox this long is a draft waiting for the owner: `TIKTOK_DRAFT_DAYS` in src/services/attention.ts, restated here because this is a lazily loaded module. A test pins both. */
+    TIKTOK_DRAFT_MS: 3 * 24 * 60 * 60 * 1000,
     /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
     _doneOpen: false,
     /**
@@ -146,6 +157,7 @@ const PostsPage = {
 
     destroy() {
         this._seq++;
+        this._filterHandled = '';
         this.stopQueuePoll();
         this.ads.checked = false;
     },
@@ -159,6 +171,8 @@ const PostsPage = {
     resetTenantState() {
         this.posts = [];
         this.livePosts = [];
+        this.liveLoaded = false;
+        this.liveLoading = false;
         this.scheduledError = null;
         this.liveError = null;
         this.publishError = null;
@@ -229,9 +243,11 @@ const PostsPage = {
         // in-place refresh, so a fast response never flashes a skeleton.
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
-        const [scheduled, live, tiktok, studio] = await Promise.allSettled([
+        // The Published feed is not asked for here (see `liveLoaded`): the queue is drawn as soon as it answers.
+        this.liveLoaded = false;
+        this.liveLoading = false;
+        const [scheduled, tiktok, studio] = await Promise.allSettled([
             API.getScheduledPosts(),
-            API.getLivePosts(),
             API.getTikTokConnection(),
             API.getStudioSettings(),
             // Never rejects: no Boost is the answer to every failure.
@@ -255,6 +271,62 @@ const PostsPage = {
             this.scheduledError = scheduled.reason;
         }
 
+        this.livePosts = [];
+        this.liveError = null;
+
+        // Not an error panel of its own: without it the composer simply does
+        // not offer TikTok, and Settings is where a broken connection is shown.
+        this.tiktok = tiktok.status === 'fulfilled' ? tiktok.value : null;
+
+        // `#/posts?filter=needs-you` (the link in Today's items) opens the queue on the group that needs the owner.
+        const wantsNeedsYou = this.wantsNeedsYou();
+        if (wantsNeedsYou) { this.activeTab = 'scheduled'; this.queueView = 'active'; }
+
+        this.renderLayout();
+        this.syncQueuePoll(seq);
+        if (this.activeTab === 'scheduled') {
+            Motion.announce(`${t('posts.tabQueue')} — ${UI.formatNumber(this.posts.length)}`);
+            if (wantsNeedsYou) this.focusNeedsYou();
+        } else {
+            // The feed tab was the one open: its read starts now, after the queue is already on screen.
+            this.ensureLive();
+        }
+    },
+
+    /** Is the address asking for the "Needs you" group, and has this address not been acted on yet? */
+    wantsNeedsYou() {
+        if (typeof App === 'undefined' || typeof App.hashParam !== 'function') return false;
+        if (String(App.hashParam('filter') || '') !== 'needs-you') return false;
+        const address = String(location.hash || '');
+        if (this._filterHandled === address) return false;
+        this._filterHandled = address;
+        return true;
+    },
+
+    /** Scroll to the "Needs you" group and put focus on its heading; with nothing in it, say so instead of leaving the owner at the top wondering. */
+    focusNeedsYou() {
+        const heading = document.getElementById('posts-group-attention-title');
+        if (!heading) {
+            UI.toast(t('posts.needsYou.none'));
+            return;
+        }
+        heading.scrollIntoView({ block: 'start' });
+        if (typeof heading.focus === 'function') heading.focus({ preventScroll: true });
+    },
+
+    /** Read the Published feed once per render, the first time it is wanted, and paint it when it answers. */
+    async ensureLive() {
+        if (this.liveLoaded || this.liveLoading) return;
+        const seq = this._seq;
+        this.liveLoading = true;
+        let live;
+        try {
+            [live] = await Promise.allSettled([API.getLivePosts()]);
+        } finally {
+            this.liveLoading = false;
+        }
+        // A render or a tenant switch since the request left owns the feed now: its answer is not this one's.
+        if (!this.isLive(seq)) return;
         if (live.status === 'fulfilled') {
             this.livePosts = Array.isArray(live.value) ? live.value : [];
             this.liveError = null;
@@ -262,16 +334,11 @@ const PostsPage = {
             this.livePosts = [];
             this.liveError = live.reason;
         }
-
-        // Not an error panel of its own: without it the composer simply does
-        // not offer TikTok, and Settings is where a broken connection is shown.
-        this.tiktok = tiktok.status === 'fulfilled' ? tiktok.value : null;
-
-        this.renderLayout();
-        this.syncQueuePoll(seq);
-        Motion.announce(this.activeTab === 'scheduled'
-            ? `${t('posts.tabQueue')} — ${UI.formatNumber(this.posts.length)}`
-            : `${t('posts.tabLive')} — ${UI.formatNumber(this.livePosts.length)}`);
+        this.liveLoaded = true;
+        if (this.activeTab === 'live') {
+            this.renderLayout();
+            Motion.announce(`${t('posts.tabLive')} — ${UI.formatNumber(this.livePosts.length)}`);
+        }
     },
 
     /**
@@ -498,6 +565,7 @@ const PostsPage = {
     switchTab(tab) {
         this.activeTab = tab;
         this.renderLayout();
+        if (tab === 'live') this.ensureLive();
     },
 
     errorHost(error, title) {
@@ -575,14 +643,14 @@ const PostsPage = {
 
     // ─── The queue in groups ─────────────────────────────────────────────────
     /**
-     * Upcoming, Needs attention, Done — in that order, because that is the order
-     * the operator reads them in. A group with nothing in it is not drawn.
+     * Needs you, Upcoming, Done — in that order: what waits for the owner comes first (it was 99 cards down, on screen 73 of a phone),
+     * then what is coming, then the record. A group with nothing in it is not drawn.
      *
      * Archived is not one of them: it is the other view of the queue (`queueView`),
      * so a post the owner put away is never in the list he is working from, and
      * never in "Needs attention".
      */
-    QUEUE_GROUPS: Object.freeze(['upcoming', 'attention', 'done']),
+    QUEUE_GROUPS: Object.freeze(['attention', 'upcoming', 'done']),
 
     // ─── What a row's state is: pure, so the rule is pinned by the test ──────
     /** Has the owner put this post away (Archive)? */
@@ -607,6 +675,13 @@ const PostsPage = {
         return this.overdueMs(post, now) > 0;
     },
 
+    /** In TikTok's inbox for `TIKTOK_DRAFT_MS` or more, counted from the post's time (the day it went to the inbox). */
+    isStaleDraft(post, now) {
+        const at = new Date(post && post.scheduled_time).getTime();
+        if (Number.isNaN(at)) return false;
+        return (typeof now === 'number' ? now : Date.now()) - at >= this.TIKTOK_DRAFT_MS;
+    },
+
     /** Which group a row belongs in. */
     queueGroupOf(post, now) {
         if (this.isArchived(post)) return 'archived';
@@ -616,6 +691,8 @@ const PostsPage = {
         // an Instagram container still processing): the operator should look at it.
         // So is one that is overdue: its time has passed by more than the sweeps explain.
         if (status === 'FAILED' || (status === 'PENDING' && post.error_log) || this.isOverdue(post, now)) return 'attention';
+        // A TikTok draft that has sat in the creator's inbox for days is waiting for the owner to post it by hand.
+        if (status === 'IN_INBOX' && this.isStaleDraft(post, now)) return 'attention';
         return 'upcoming';
     },
 
@@ -697,7 +774,7 @@ const PostsPage = {
         }
         return html`
             <section class="queue-group queue-group--${html.raw(key)}" aria-labelledby="${titleId}">
-                <h3 class="queue-group-title" id="${titleId}">${title}</h3>
+                <h3 class="queue-group-title" id="${titleId}" tabindex="-1">${title}</h3>
                 ${key === 'archived' ? html`<p class="form-hint">${t('posts.archived.hint')}</p>` : ''}
                 ${cards}
             </section>
@@ -1245,6 +1322,10 @@ const PostsPage = {
     },
 
     renderLiveFeed() {
+        // Not answered yet: say it is being read, not "nothing published".
+        if (!this.liveLoaded && !this.liveError) {
+            return html`<div class="surface pad-5" role="status" aria-busy="true"><p class="text-meta">${t('posts.live.loading')}</p></div>`;
+        }
         if (this.liveError) {
             return this.errorHost(this.liveError, t('posts.liveErrorTitle'));
         }
